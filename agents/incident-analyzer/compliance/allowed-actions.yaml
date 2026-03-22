@@ -1,0 +1,47 @@
+version: 0.1.0
+description: Actions the incident-analyzer agent is permitted to perform
+
+allowed:
+  - action: read_logs
+    datasource: elasticsearch
+    scope: all_deployments
+    confirmation: false
+
+  - action: read_consumer_groups
+    datasource: kafka
+    scope: all_topics
+    confirmation: false
+
+  - action: read_cluster_health
+    datasource: couchbase
+    scope: all_buckets
+    confirmation: false
+
+  - action: read_api_analytics
+    datasource: konnect
+    scope: all_control_planes
+    confirmation: false
+
+  - action: run_n1ql_query
+    datasource: couchbase
+    scope: select_only
+    confirmation: false
+
+  - action: notify_slack
+    datasource: slack
+    scope: configured_channels
+    confirmation: true
+
+  - action: create_ticket
+    datasource: ticketing
+    scope: incident_project
+    confirmation: true
+
+prohibited:
+  - action: write_to_database
+  - action: produce_kafka_message
+  - action: delete_index
+  - action: modify_api_gateway
+  - action: restart_service
+  - action: scale_deployment
+  - action: modify_kubernetes_resources

@@ -1,0 +1,39 @@
+name: create-ticket
+description: >
+  Create an incident tracking ticket in the configured ticketing system.
+  Requires human approval before execution.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    title:
+      type: string
+      description: Ticket title summarizing the incident
+    description:
+      type: string
+      description: Detailed incident description with findings
+    severity:
+      type: string
+      enum: [critical, high, medium, low]
+      description: Incident severity
+    affected_services:
+      type: array
+      items: { type: string }
+      description: List of affected service names
+    datasources_queried:
+      type: array
+      items: { type: string }
+      description: Datasources that were analyzed
+  required: [title, description, severity]
+output_schema:
+  type: object
+  properties:
+    ticket_id: { type: string }
+    url: { type: string }
+annotations:
+  requires_confirmation: true
+  read_only: false
+  cost: low
+
+related_tools:
+  - "Use notify-slack to send a Slack notification referencing the created ticket"

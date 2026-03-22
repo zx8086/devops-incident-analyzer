@@ -1,0 +1,74 @@
+spec_version: "0.1.0"
+name: incident-analyzer
+version: 0.1.0
+description: >
+  DevOps incident analysis orchestrator that correlates logs, events,
+  datastore health, and API gateway metrics to help humans triage incidents safely.
+
+model:
+  preferred: claude-sonnet-4-6
+  fallback:
+    - claude-haiku-4-5
+  constraints:
+    temperature: 0.2
+    max_tokens: 4096
+
+runtime:
+  max_turns: 50
+  timeout: 300
+
+skills:
+  - normalize-incident
+  - aggregate-findings
+  - propose-mitigation
+
+tools:
+  - elastic-logs
+  - kafka-introspect
+  - couchbase-health
+  - konnect-gateway
+  - notify-slack
+  - create-ticket
+
+agents:
+  elastic-agent:
+    delegation: auto
+  kafka-agent:
+    delegation: auto
+  capella-agent:
+    delegation: auto
+  konnect-agent:
+    delegation: auto
+
+delegation:
+  mode: router
+
+compliance:
+  risk_tier: medium
+  supervision:
+    human_in_the_loop: conditional
+    escalation_triggers:
+      - action_type: mutate_production
+      - confidence_below: 0.6
+      - error_detected: true
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+    log_format: structured_json
+    retention_period: 1y
+    log_contents:
+      - prompts_and_responses
+      - tool_calls
+      - decision_pathways
+      - model_version
+      - timestamps
+    immutable: true
+  data_governance:
+    pii_handling: redact
+    data_classification: internal
+
+tags:
+  - devops
+  - incident-analysis
+  - observability
+  - multi-datasource

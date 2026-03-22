@@ -1,0 +1,18 @@
+spec_version: "0.1.0"
+name: elastic-agent
+version: 0.1.0
+description: Read-only Elasticsearch log and cluster analysis specialist.
+
+model:
+  preferred: claude-haiku-4-5
+  constraints:
+    temperature: 0.1
+    max_tokens: 2048
+
+tools:
+  - elastic-logs
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact

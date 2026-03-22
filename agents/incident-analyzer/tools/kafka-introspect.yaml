@@ -1,0 +1,43 @@
+name: kafka-introspect
+description: >
+  Inspect Kafka cluster state including consumer group lag, topic throughput,
+  and dead-letter queue contents for incident diagnosis.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic]
+      description: Type of Kafka inspection to perform
+    consumer_group:
+      type: string
+      description: Consumer group ID (required for consumer_lag)
+    topic:
+      type: string
+      description: Topic name (required for topic_throughput, dlq_messages, describe_topic)
+    max_messages:
+      type: integer
+      default: 10
+      description: Maximum messages to return for DLQ inspection
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    action: { type: string }
+    data: { type: object }
+    timestamp: { type: string }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Inspect Kafka cluster state for incident diagnosis.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use elastic-search-logs to check if consumer lag correlates with application error spikes"
+  - "Use couchbase-cluster-health to check if database slowness is causing Kafka backpressure"
+  - "Use konnect-api-requests to check if upstream API errors are generating DLQ messages"

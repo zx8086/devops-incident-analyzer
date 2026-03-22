@@ -1,0 +1,34 @@
+{
+  "name": "@devops-agent/web",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "bun test",
+    "typecheck": "bunx svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@devops-agent/agent": "workspace:*",
+    "@devops-agent/shared": "workspace:*",
+    "@devops-agent/observability": "workspace:*",
+    "marked": "catalog:",
+    "highlight.js": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "svelte": "catalog:svelte",
+    "@sveltejs/kit": "catalog:svelte",
+    "@sveltejs/adapter-auto": "catalog:svelte",
+    "@sveltejs/vite-plugin-svelte": "catalog:svelte",
+    "vite": "catalog:svelte",
+    "svelte-check": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "@types/bun": "catalog:dev",
+    "bun-types": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "private": true
+}

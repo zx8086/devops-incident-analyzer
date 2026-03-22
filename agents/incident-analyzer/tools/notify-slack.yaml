@@ -1,0 +1,35 @@
+name: notify-slack
+description: >
+  Send an incident notification or status update to a Slack channel.
+  Requires human approval before execution.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    channel:
+      type: string
+      description: Slack channel name or ID
+    message:
+      type: string
+      description: Notification message content (markdown supported)
+    severity:
+      type: string
+      enum: [critical, high, medium, low, info]
+      description: Incident severity level for message formatting
+    thread_ts:
+      type: string
+      description: Thread timestamp to reply in existing thread
+  required: [channel, message, severity]
+output_schema:
+  type: object
+  properties:
+    sent: { type: boolean }
+    timestamp: { type: string }
+    channel: { type: string }
+annotations:
+  requires_confirmation: true
+  read_only: false
+  cost: low
+
+related_tools:
+  - "Use create-ticket to create a tracking ticket alongside the Slack notification"

@@ -1,0 +1,21 @@
+{
+  "name": "@devops-agent/mcp-server-konnect",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:dev",
+    "bun-types": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "private": true
+}

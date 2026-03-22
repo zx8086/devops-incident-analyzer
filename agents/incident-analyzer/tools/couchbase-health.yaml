@@ -1,0 +1,40 @@
+name: couchbase-cluster-health
+description: >
+  Query Couchbase Capella cluster health, performance metrics, and
+  N1QL query analysis for database-related incident diagnosis.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status]
+      description: Type of health check to perform
+    bucket:
+      type: string
+      description: Target bucket name (optional, uses default if not specified)
+    limit:
+      type: integer
+      default: 10
+      description: Maximum results to return
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    action: { type: string }
+    data: { type: object }
+    timestamp: { type: string }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Query Couchbase Capella health and performance for incident diagnosis.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use elastic-search-logs to check if database errors appear in application logs"
+  - "Use kafka-consumer-lag to check if database slowness is causing event processing delays"
+  - "Use konnect-api-requests to check if API latency correlates with database performance"

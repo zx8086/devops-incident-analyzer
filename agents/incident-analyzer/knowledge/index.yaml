@@ -1,0 +1,14 @@
+name: incident-analyzer-knowledge
+description: Domain knowledge for DevOps incident analysis
+version: 0.1.0
+
+categories:
+  runbooks:
+    path: runbooks/
+    description: Operational runbooks for common incident patterns
+  systems-map:
+    path: systems-map/
+    description: Service dependency maps and topology
+  slo-policies:
+    path: slo-policies/
+    description: SLO/SLA definitions and thresholds

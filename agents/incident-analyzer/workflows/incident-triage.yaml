@@ -1,0 +1,47 @@
+name: incident-triage
+version: 0.1.0
+description: Standard incident triage workflow
+
+steps:
+  - name: normalize
+    skill: normalize-incident
+    description: Parse and structure the incoming incident
+
+  - name: classify
+    node: classifier
+    description: Determine if query is simple or complex
+
+  - name: extract_entities
+    node: entity-extractor
+    description: Extract services, time windows, severity
+    depends_on: [classify]
+
+  - name: route_to_agents
+    node: supervisor
+    description: Fan-out to relevant datasource agents
+    depends_on: [extract_entities]
+
+  - name: query_datasources
+    node: sub-agents
+    description: Parallel queries to elastic/kafka/capella/konnect agents
+    depends_on: [route_to_agents]
+
+  - name: align_results
+    node: alignment
+    description: Check cross-datasource consistency
+    depends_on: [query_datasources]
+
+  - name: aggregate
+    skill: aggregate-findings
+    description: Correlate findings into unified report
+    depends_on: [align_results]
+
+  - name: validate
+    node: validator
+    description: Anti-hallucination check
+    depends_on: [aggregate]
+
+  - name: propose
+    skill: propose-mitigation
+    description: Suggest safe remediation steps
+    depends_on: [validate]

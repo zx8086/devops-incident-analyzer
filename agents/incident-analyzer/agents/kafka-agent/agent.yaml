@@ -1,0 +1,18 @@
+spec_version: "0.1.0"
+name: kafka-agent
+version: 0.1.0
+description: Read-only Kafka event stream analysis specialist.
+
+model:
+  preferred: claude-haiku-4-5
+  constraints:
+    temperature: 0.1
+    max_tokens: 2048
+
+tools:
+  - kafka-introspect
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact

@@ -1,0 +1,63 @@
+name: elastic-search-logs
+description: >
+  Search Elasticsearch logs within a time window for a specific service.
+  Returns matching log entries with timestamps, levels, and messages.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    service_name:
+      type: string
+      description: Service name to filter logs by
+    time_from:
+      type: string
+      format: date-time
+      description: Start of time window (ISO 8601)
+    time_to:
+      type: string
+      format: date-time
+      description: End of time window (ISO 8601)
+    level:
+      type: string
+      enum: [error, warn, info, debug]
+      description: Minimum log level
+    query:
+      type: string
+      description: Free-text search query
+    deployment:
+      type: string
+      description: Target Elasticsearch deployment ID
+    max_results:
+      type: integer
+      default: 100
+      description: Maximum number of log entries to return
+  required: [service_name, time_from, time_to]
+output_schema:
+  type: object
+  properties:
+    logs:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp: { type: string }
+          level: { type: string }
+          message: { type: string }
+          service: { type: string }
+    total_hits: { type: integer }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Search Elasticsearch logs within a time window for a specific service.
+  Returns matching log entries with timestamps, levels, and messages.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use kafka-consumer-lag to check if log spikes correlate with Kafka backpressure"
+  - "Use couchbase-cluster-health to verify database health during the same time window"
+  - "Use konnect-api-requests to check if API gateway errors correlate with log patterns"
+  - "Use aggregate-findings skill to correlate logs with events and datastore metrics"

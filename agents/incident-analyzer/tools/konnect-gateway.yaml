@@ -1,0 +1,47 @@
+name: konnect-api-gateway
+description: >
+  Query Kong Konnect API gateway for request analytics, service configuration,
+  plugin chain inspection, and data plane health for gateway-layer incident diagnosis.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status]
+      description: Type of gateway inspection to perform
+    service_name:
+      type: string
+      description: Service name or ID to inspect
+    time_from:
+      type: string
+      format: date-time
+      description: Start of analytics time window (ISO 8601)
+    time_to:
+      type: string
+      format: date-time
+      description: End of analytics time window (ISO 8601)
+    control_plane:
+      type: string
+      description: Control plane name or ID
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    action: { type: string }
+    data: { type: object }
+    timestamp: { type: string }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Query Kong Konnect API gateway for incident diagnosis at the API layer.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use elastic-search-logs to check if backend service errors correlate with gateway error spikes"
+  - "Use kafka-consumer-lag to check if event processing issues are caused by gateway routing changes"
+  - "Use couchbase-cluster-health to check if database issues are causing upstream timeouts"
