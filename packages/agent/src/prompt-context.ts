@@ -1,14 +1,12 @@
 // agent/src/prompt-context.ts
 import { loadAgent, buildSystemPrompt, type LoadedAgent } from "@devops-agent/gitagent-bridge";
-import { join } from "node:path";
-
-const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+import { getAgentsDir } from "./paths.ts";
 
 let cachedAgent: LoadedAgent | null = null;
 
 function getAgent(): LoadedAgent {
   if (!cachedAgent) {
-    cachedAgent = loadAgent(AGENTS_DIR);
+    cachedAgent = loadAgent(getAgentsDir());
   }
   return cachedAgent;
 }

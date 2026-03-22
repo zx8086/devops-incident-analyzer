@@ -1,8 +1,7 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { getGraph } from "$lib/server/agent";
-import { HumanMessage } from "@langchain/core/messages";
+import { invokeAgent } from "$lib/server/agent";
 import { z } from "zod";
 
 const StreamRequestSchema = z.object({
@@ -20,7 +19,6 @@ const StreamRequestSchema = z.object({
 export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = StreamRequestSchema.parse(await request.json());
-    const graph = await getGraph();
     const threadId = body.threadId ?? crypto.randomUUID();
 
     const encoder = new TextEncoder();
@@ -31,20 +29,13 @@ export const POST: RequestHandler = async ({ request }) => {
         };
 
         try {
-          const langchainMessages = body.messages.map((m) => new HumanMessage(m.content));
           const startTime = Date.now();
 
-          const eventStream = await graph.streamEvents(
-            {
-              messages: langchainMessages,
-              targetDataSources: body.dataSources ?? [],
-              isFollowUp: body.isFollowUp ?? false,
-            },
-            {
-              configurable: { thread_id: threadId },
-              version: "v2",
-            },
-          );
+          const eventStream = await invokeAgent(body.messages, {
+            threadId,
+            dataSources: body.dataSources,
+            isFollowUp: body.isFollowUp,
+          });
 
           for await (const event of eventStream) {
             if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {

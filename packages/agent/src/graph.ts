@@ -10,14 +10,12 @@ import { aggregate } from "./aggregator.ts";
 import { checkAlignment } from "./alignment.ts";
 import { validate, shouldRetryValidation } from "./validator.ts";
 import { createCheckpointer } from "@devops-agent/checkpointer";
-import type { AgentConfig } from "@devops-agent/shared";
 
 export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) {
   const graph = new StateGraph(AgentState)
     .addNode("classify", classify)
     .addNode("responder", respond)
     .addNode("entityExtractor", extractEntities)
-    .addNode("supervisor", supervise)
     .addNode("queryDataSource", queryDataSource)
     .addNode("align", (state) => {
       const result = checkAlignment(state);
@@ -38,11 +36,9 @@ export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) 
     // Simple path ends
     .addEdge("responder", END)
 
-    // Complex path
-    .addEdge("entityExtractor", "supervisor")
-
-    // Supervisor fans out via Send[]
-    .addConditionalEdges("supervisor", supervise)
+    // EntityExtractor fans out to sub-agents via Send[]
+    // (supervisor logic is the conditional edge function, not a separate node)
+    .addConditionalEdges("entityExtractor", supervise)
 
     // Sub-agent results flow to alignment
     .addEdge("queryDataSource", "align")

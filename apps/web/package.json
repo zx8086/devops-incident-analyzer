@@ -11,10 +11,17 @@
   },
   "dependencies": {
     "@devops-agent/agent": "workspace:*",
-    "@devops-agent/shared": "workspace:*",
     "@devops-agent/observability": "workspace:*",
-    "marked": "catalog:",
+    "@devops-agent/shared": "workspace:*",
+    "@langchain/aws": "^1.3.3",
+    "@langchain/core": "^1.1.35",
+    "@langchain/langgraph": "^1.2.5",
+    "@langchain/langgraph-checkpoint": "^1.0.1",
+    "@langchain/mcp-adapters": "^1.1.3",
     "highlight.js": "catalog:",
+    "marked": "catalog:",
+    "pino": "^10.3.1",
+    "yaml": "^2.8.3",
     "zod": "catalog:"
   },
   "devDependencies": {

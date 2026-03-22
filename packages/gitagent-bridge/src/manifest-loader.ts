@@ -1,5 +1,5 @@
 // gitagent-bridge/src/manifest-loader.ts
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 import { join } from "node:path";
 import { AgentManifestSchema, ToolDefinitionSchema, type AgentManifest, type ToolDefinition } from "./types.ts";
@@ -24,8 +24,8 @@ export function loadAgent(agentDir: string): LoadedAgent {
   const tools: ToolDefinition[] = [];
   const toolsDir = join(agentDir, "tools");
   if (isDirectory(toolsDir)) {
-    const glob = new Bun.Glob("*.yaml");
-    for (const file of glob.scanSync(toolsDir)) {
+    const yamlFiles = readdirSync(toolsDir).filter((f) => f.endsWith(".yaml"));
+    for (const file of yamlFiles) {
       const toolYaml = parse(readFileSync(join(toolsDir, file), "utf-8"));
       tools.push(ToolDefinitionSchema.parse(toolYaml));
     }

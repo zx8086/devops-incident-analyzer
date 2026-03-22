@@ -1,9 +1,7 @@
 // agent/src/prompt-overlay.ts
 // SIO-576: Layer gitagent dynamic prompts onto existing MCP server tools
 import { loadAgent, buildAllToolPrompts, buildRelatedToolsMap } from "@devops-agent/gitagent-bridge";
-import { join } from "node:path";
-
-const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+import { getAgentsDir } from "./paths.ts";
 
 let cachedToolPrompts: Map<string, string> | null = null;
 let cachedRelatedToolsMap: Map<string, string[]> | null = null;
@@ -18,7 +16,7 @@ const TOOL_NAME_MAP: Record<string, string[]> = {
 
 export function getToolPrompts(): Map<string, string> {
   if (!cachedToolPrompts) {
-    const agent = loadAgent(AGENTS_DIR);
+    const agent = loadAgent(getAgentsDir());
     cachedToolPrompts = buildAllToolPrompts(agent, {
       datasources: ["elastic", "kafka", "couchbase", "konnect"],
     });
@@ -28,7 +26,7 @@ export function getToolPrompts(): Map<string, string> {
 
 export function getRelatedToolsMap(): Map<string, string[]> {
   if (!cachedRelatedToolsMap) {
-    const agent = loadAgent(AGENTS_DIR);
+    const agent = loadAgent(getAgentsDir());
     cachedRelatedToolsMap = buildRelatedToolsMap(agent);
   }
   return cachedRelatedToolsMap;

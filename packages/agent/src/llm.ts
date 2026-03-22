@@ -1,15 +1,13 @@
 // agent/src/llm.ts
 import { ChatBedrockConverse } from "@langchain/aws";
 import { resolveBedrockConfig, loadAgent, type BedrockModelConfig } from "@devops-agent/gitagent-bridge";
-import { join } from "node:path";
-
-const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+import { getAgentsDir } from "./paths.ts";
 
 let cachedRootAgent: ReturnType<typeof loadAgent> | null = null;
 
 function getRootAgent() {
   if (!cachedRootAgent) {
-    cachedRootAgent = loadAgent(AGENTS_DIR);
+    cachedRootAgent = loadAgent(getAgentsDir());
   }
   return cachedRootAgent;
 }

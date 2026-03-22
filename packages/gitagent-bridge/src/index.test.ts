@@ -72,7 +72,7 @@ describe("model-factory", () => {
   test("resolves claude-sonnet-4-6 to Bedrock ID", () => {
     const config = resolveBedrockConfig({ preferred: "claude-sonnet-4-6" });
     expect(config.model).toBe("eu.anthropic.claude-sonnet-4-6");
-    expect(config.region).toBe("eu-west-1");
+    expect(config.region).toMatch(/^eu-/); // eu-west-1 or eu-central-1 depending on env
   });
 
   test("resolves claude-haiku-4-5 to Bedrock ID", () => {

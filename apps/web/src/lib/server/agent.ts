@@ -18,3 +18,27 @@ export async function getGraph() {
   }
   return graphPromise;
 }
+
+export async function invokeAgent(
+  messages: Array<{ role: string; content: string }>,
+  options: { threadId: string; dataSources?: string[]; isFollowUp?: boolean },
+) {
+  const { HumanMessage } = await import("@langchain/core/messages");
+  const graph = await getGraph();
+
+  const langchainMessages = messages
+    .filter((m) => m.role === "user")
+    .map((m) => new HumanMessage(m.content));
+
+  return graph.streamEvents(
+    {
+      messages: langchainMessages,
+      targetDataSources: options.dataSources ?? [],
+      isFollowUp: options.isFollowUp ?? false,
+    },
+    {
+      configurable: { thread_id: options.threadId },
+      version: "v2",
+    },
+  );
+}

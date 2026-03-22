@@ -1,16 +1,23 @@
 // observability/src/logger.ts
 import pino from "pino";
 
-function createBaseLogger(): pino.Logger {
-  const level = Bun.env.LOG_LEVEL ?? "info";
+function getEnv(key: string): string | undefined {
+  // Support both Bun and Node.js environments (Vite SSR runs under Node)
+  if (typeof globalThis.Bun !== "undefined") {
+    return globalThis.Bun.env[key];
+  }
+  return process.env[key];
+}
 
-  // pino-pretty is optional -- use plain JSON if not available
-  if (Bun.env.NODE_ENV !== "production") {
+function createBaseLogger(): pino.Logger {
+  const level = getEnv("LOG_LEVEL") ?? "info";
+
+  if (getEnv("NODE_ENV") !== "production") {
     try {
       require.resolve("pino-pretty");
       return pino({ level, transport: { target: "pino-pretty", options: { colorize: true } } });
     } catch {
-      // pino-pretty not installed, use plain output
+      // pino-pretty not installed
     }
   }
 

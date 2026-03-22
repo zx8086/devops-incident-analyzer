@@ -17,7 +17,24 @@ export default defineConfig(({ mode }) => {
       },
     },
     ssr: {
-      noExternal: ["@devops-agent/agent", "@devops-agent/shared", "@devops-agent/checkpointer", "@devops-agent/observability"],
+      // Workspace packages: bundle as source code
+      noExternal: [
+        "@devops-agent/agent",
+        "@devops-agent/shared",
+        "@devops-agent/checkpointer",
+        "@devops-agent/observability",
+        "@devops-agent/gitagent-bridge",
+      ],
+      // External packages: run in Node.js, don't bundle
+      external: [
+        "@langchain/core",
+        "@langchain/langgraph",
+        "@langchain/langgraph-checkpoint",
+        "@langchain/aws",
+        "@langchain/mcp-adapters",
+        "pino",
+        "yaml",
+      ],
     },
   };
 });
