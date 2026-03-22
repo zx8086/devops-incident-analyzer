@@ -1,5 +1,5 @@
 export const portalManagementPrompts = {
-  "list-portals": `## List Developer Portals
+	"list-portals": `## List Developer Portals
 
 List all developer portals in your Kong Konnect organization. Developer portals enable you to publish APIs for internal and external developers.
 
@@ -18,7 +18,7 @@ List all developer portals in your Kong Konnect organization. Developer portals 
 - "Show me the portals with their usage statistics"
 - "What portals do we have configured?"`,
 
-  "create-portal": `## Create Developer Portal
+	"create-portal": `## Create Developer Portal
 
 Create a new developer portal for publishing APIs to internal or external developers. Portals provide a centralized location for API documentation, registration, and management.
 
@@ -43,7 +43,7 @@ Create a new developer portal for publishing APIs to internal or external develo
 - "Set up a public portal for external developers"
 - "Create an internal portal with custom domain portal.company.com"`,
 
-  "get-portal": `## Get Portal Details
+	"get-portal": `## Get Portal Details
 
 Retrieve comprehensive information about a specific developer portal, including configuration, statistics, and metadata.
 
@@ -61,7 +61,7 @@ Retrieve comprehensive information about a specific developer portal, including 
 - "Show me the configuration of the flight-api-portal"
 - "What's the status of our main developer portal?"`,
 
-  "update-portal": `## Update Portal Configuration
+	"update-portal": `## Update Portal Configuration
 
 Update developer portal settings, configuration, and metadata. Allows modification of portal behavior and appearance.
 
@@ -88,7 +88,7 @@ Update developer portal settings, configuration, and metadata. Allows modificati
 - "Update portal description to include Flight API information"
 - "Configure custom domain portal.flightapi.com for the portal"`,
 
-  "delete-portal": `## Delete Developer Portal
+	"delete-portal": `## Delete Developer Portal
 
 WARNING: **DESTRUCTIVE OPERATION** WARNING:
 
@@ -113,7 +113,7 @@ Permanently delete a developer portal and all associated data including develope
 - "Delete the test portal 3cb352a1-9f97-4a4c-87bc-94aefd3200d8"
 - "Remove the unused development portal"`,
 
-  "list-portal-products": `## List Portal Published Products
+	"list-portal-products": `## List Portal Published Products
 
 List API products that have been published to a developer portal. Published products are available for developers to discover and register applications against.
 
@@ -133,7 +133,7 @@ List API products that have been published to a developer portal. Published prod
 - "List all products available in our main developer portal"
 - "Show me the published APIs with their registration counts"`,
 
-  "publish-portal-product": `## Publish API Product to Portal
+	"publish-portal-product": `## Publish API Product to Portal
 
 Publish an API product to a developer portal, making it available for developers to discover, explore, and register applications against.
 
@@ -154,7 +154,7 @@ Publish an API product to a developer portal, making it available for developers
 - "Make the booking API available in the public portal"
 - "Add the Flight API v2.0 to the flight-api-portal"`,
 
-  "unpublish-portal-product": `## Unpublish API Product from Portal
+	"unpublish-portal-product": `## Unpublish API Product from Portal
 
 Remove an API product from a developer portal, making it no longer available for new developer registrations. Existing application registrations remain active.
 

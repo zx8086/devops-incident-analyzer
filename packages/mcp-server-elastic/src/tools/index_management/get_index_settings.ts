@@ -15,125 +15,125 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getIndexSettingsValidator = z.object({
-  index: z.string().min(1, "Index cannot be empty"),
-  name: z.string().optional(),
-  ignoreUnavailable: coerceBoolean.optional(),
-  allowNoIndices: coerceBoolean.optional(),
-  expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-  flatSettings: coerceBoolean.optional(),
-  includeDefaults: coerceBoolean.optional(),
-  local: coerceBoolean.optional(),
-  masterTimeout: z.string().optional(),
+	index: z.string().min(1, "Index cannot be empty"),
+	name: z.string().optional(),
+	ignoreUnavailable: coerceBoolean.optional(),
+	allowNoIndices: coerceBoolean.optional(),
+	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
+	flatSettings: coerceBoolean.optional(),
+	includeDefaults: coerceBoolean.optional(),
+	local: coerceBoolean.optional(),
+	masterTimeout: z.string().optional(),
 });
 
 type _GetIndexSettingsParams = z.infer<typeof getIndexSettingsValidator>;
 
 // MCP error handling
 function createGetIndexSettingsMcpError(
-  error: Error | string,
-  context: { type: "validation" | "execution" | "index_not_found"; details?: any },
+	error: Error | string,
+	context: { type: "validation" | "execution" | "index_not_found"; details?: any },
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-    index_not_found: ErrorCode.InvalidParams,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+		index_not_found: ErrorCode.InvalidParams,
+	};
 
-  return new McpError(
-    errorCodeMap[context.type] || ErrorCode.InternalError,
-    `[elasticsearch_get_index_settings] ${message}`,
-    context.details,
-  );
+	return new McpError(
+		errorCodeMap[context.type] || ErrorCode.InternalError,
+		`[elasticsearch_get_index_settings] ${message}`,
+		context.details,
+	);
 }
 
 // Tool implementation
 export const registerGetIndexSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const getIndexSettingsHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
+	const getIndexSettingsHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
 
-    try {
-      // Validate parameters
-      const params = getIndexSettingsValidator.parse(args);
+		try {
+			// Validate parameters
+			const params = getIndexSettingsValidator.parse(args);
 
-      const result = await esClient.indices.getSettings({
-        index: params.index,
-        name: params.name,
-        ignore_unavailable: params.ignoreUnavailable,
-        allow_no_indices: params.allowNoIndices,
-        expand_wildcards: params.expandWildcards,
-        flat_settings: params.flatSettings,
-        include_defaults: params.includeDefaults,
-        local: params.local,
-        master_timeout: params.masterTimeout,
-      });
+			const result = await esClient.indices.getSettings({
+				index: params.index,
+				name: params.name,
+				ignore_unavailable: params.ignoreUnavailable,
+				allow_no_indices: params.allowNoIndices,
+				expand_wildcards: params.expandWildcards,
+				flat_settings: params.flatSettings,
+				include_defaults: params.includeDefaults,
+				local: params.local,
+				master_timeout: params.masterTimeout,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow index settings retrieval operation", { duration, index: params.index });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow index settings retrieval operation", { duration, index: params.index });
+			}
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      // Error handling
-      if (error instanceof z.ZodError) {
-        throw createGetIndexSettingsMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(result, null, 2),
+					},
+				],
+			};
+		} catch (error) {
+			// Error handling
+			if (error instanceof z.ZodError) {
+				throw createGetIndexSettingsMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      // Handle index not found error
-      if (error instanceof Error && error.message.includes("index_not_found_exception")) {
-        throw createGetIndexSettingsMcpError(`Index not found: ${args.index}`, {
-          type: "index_not_found",
-          details: { index: args.index },
-        });
-      }
+			// Handle index not found error
+			if (error instanceof Error && error.message.includes("index_not_found_exception")) {
+				throw createGetIndexSettingsMcpError(`Index not found: ${args.index}`, {
+					type: "index_not_found",
+					details: { index: args.index },
+				});
+			}
 
-      throw createGetIndexSettingsMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createGetIndexSettingsMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Tool registration
-  // Tool registration using modern registerTool method
+	// Tool registration
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_get_index_settings",
+	server.registerTool(
+		"elasticsearch_get_index_settings",
 
-    {
-      title: "Get Index Settings",
+		{
+			title: "Get Index Settings",
 
-      description:
-        "Get index settings from Elasticsearch. Best for configuration review, performance analysis, troubleshooting. Use when you need to inspect index-level settings and configurations in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
+			description:
+				"Get index settings from Elasticsearch. Best for configuration review, performance analysis, troubleshooting. Use when you need to inspect index-level settings and configurations in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-      inputSchema: {
-        index: z.string(), // Name of the index to get settings for
-        name: z.string().optional(), // Specific setting name to retrieve
-        ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-        allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-        expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-        flatSettings: z.boolean().optional(), // Return settings in flat format
-        includeDefaults: z.boolean().optional(), // Include default settings
-        local: z.boolean().optional(), // Return local information only
-        masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-      },
-    },
+			inputSchema: {
+				index: z.string(), // Name of the index to get settings for
+				name: z.string().optional(), // Specific setting name to retrieve
+				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
+				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
+				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
+				flatSettings: z.boolean().optional(), // Return settings in flat format
+				includeDefaults: z.boolean().optional(), // Include default settings
+				local: z.boolean().optional(), // Return local information only
+				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
+			},
+		},
 
-    withReadOnlyCheck("elasticsearch_get_index_settings", getIndexSettingsHandler, OperationType.READ),
-  );
+		withReadOnlyCheck("elasticsearch_get_index_settings", getIndexSettingsHandler, OperationType.READ),
+	);
 };

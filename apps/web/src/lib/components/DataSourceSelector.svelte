@@ -1,31 +1,34 @@
 <script lang="ts">
-  let { dataSources, selected = $bindable([]) }: {
-    dataSources: string[];
-    selected: string[];
-  } = $props();
+let {
+	dataSources,
+	selected = $bindable([]),
+}: {
+	dataSources: string[];
+	selected: string[];
+} = $props();
 
-  const labels: Record<string, string> = {
-    elastic: "Elastic",
-    kafka: "Kafka",
-    couchbase: "Capella",
-    konnect: "Konnect",
-  };
+const labels: Record<string, string> = {
+	elastic: "Elastic",
+	kafka: "Kafka",
+	couchbase: "Capella",
+	konnect: "Konnect",
+};
 
-  function toggle(id: string) {
-    if (selected.includes(id)) {
-      selected = selected.filter((s) => s !== id);
-    } else {
-      selected = [...selected, id];
-    }
-  }
+function toggle(id: string) {
+	if (selected.includes(id)) {
+		selected = selected.filter((s) => s !== id);
+	} else {
+		selected = [...selected, id];
+	}
+}
 
-  function selectAll() {
-    selected = [...dataSources];
-  }
+function selectAll() {
+	selected = [...dataSources];
+}
 
-  function selectNone() {
-    selected = [];
-  }
+function selectNone() {
+	selected = [];
+}
 </script>
 
 {#if dataSources.length > 0}

@@ -5,225 +5,213 @@ import { getLogger } from "../logging/container.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 
 interface HttpTransportConfig {
-  port: number;
-  host: string;
-  path: string;
-  sessionMode: "stateless" | "stateful";
-  idleTimeout: number;
-  apiKey?: string;
-  allowedOrigins?: string[];
+	port: number;
+	host: string;
+	path: string;
+	sessionMode: "stateless" | "stateful";
+	idleTimeout: number;
+	apiKey?: string;
+	allowedOrigins?: string[];
 }
 
 type ServerFactory = () => McpServer;
 
 interface SessionEntry {
-  transport: WebStandardStreamableHTTPServerTransport;
-  server: McpServer;
+	transport: WebStandardStreamableHTTPServerTransport;
+	server: McpServer;
 }
 
 export interface HttpTransportResult {
-  server: ReturnType<typeof Bun.serve>;
-  close(): Promise<void>;
+	server: ReturnType<typeof Bun.serve>;
+	close(): Promise<void>;
 }
 
 function methodNotAllowed(): Response {
-  return Response.json(
-    { jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null },
-    { status: 405, headers: { Allow: "POST" } },
-  );
+	return Response.json(
+		{ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null },
+		{ status: 405, headers: { Allow: "POST" } },
+	);
 }
 
 function badRequest(message: string): Response {
-  return Response.json(
-    { jsonrpc: "2.0", error: { code: -32000, message }, id: null },
-    { status: 400 },
-  );
+	return Response.json({ jsonrpc: "2.0", error: { code: -32000, message }, id: null }, { status: 400 });
 }
 
 function createStatelessHandler(serverFactory: ServerFactory) {
-  return async (req: Request): Promise<Response> => {
-    const logger = getLogger();
-    const server = serverFactory();
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+	return async (req: Request): Promise<Response> => {
+		const logger = getLogger();
+		const server = serverFactory();
+		const transport = new WebStandardStreamableHTTPServerTransport({
+			sessionIdGenerator: undefined,
+		});
 
-    await server.connect(transport);
+		await server.connect(transport);
 
-    try {
-      return await transport.handleRequest(req);
-    } catch (error) {
-      logger.error("Stateless request error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return Response.json(
-        { jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
-        { status: 500 },
-      );
-    }
-  };
+		try {
+			return await transport.handleRequest(req);
+		} catch (error) {
+			logger.error("Stateless request error", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return Response.json(
+				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
+				{ status: 500 },
+			);
+		}
+	};
 }
 
 function createStatefulHandlers(serverFactory: ServerFactory) {
-  const sessions = new Map<string, SessionEntry>();
+	const sessions = new Map<string, SessionEntry>();
 
-  async function handlePost(req: Request): Promise<Response> {
-    const logger = getLogger();
-    const sessionId = req.headers.get("mcp-session-id");
+	async function handlePost(req: Request): Promise<Response> {
+		const logger = getLogger();
+		const sessionId = req.headers.get("mcp-session-id");
 
-    // Existing session: delegate to its transport
-    const existingSession = sessionId ? sessions.get(sessionId) : undefined;
-    if (existingSession) {
-      return existingSession.transport.handleRequest(req);
-    }
+		// Existing session: delegate to its transport
+		const existingSession = sessionId ? sessions.get(sessionId) : undefined;
+		if (existingSession) {
+			return existingSession.transport.handleRequest(req);
+		}
 
-    // New session: create transport and server
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
-      onsessioninitialized: (id) => {
-        logger.info("Session initialized", { sessionId: id });
-      },
-    });
+		// New session: create transport and server
+		const transport = new WebStandardStreamableHTTPServerTransport({
+			sessionIdGenerator: () => crypto.randomUUID(),
+			onsessioninitialized: (id) => {
+				logger.info("Session initialized", { sessionId: id });
+			},
+		});
 
-    const server = serverFactory();
-    await server.connect(transport);
+		const server = serverFactory();
+		await server.connect(transport);
 
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        sessions.delete(transport.sessionId);
-        logger.info("Session closed", { sessionId: transport.sessionId });
-      }
-    };
+		transport.onclose = () => {
+			if (transport.sessionId) {
+				sessions.delete(transport.sessionId);
+				logger.info("Session closed", { sessionId: transport.sessionId });
+			}
+		};
 
-    const response = await transport.handleRequest(req);
+		const response = await transport.handleRequest(req);
 
-    if (transport.sessionId) {
-      sessions.set(transport.sessionId, { transport, server });
-    }
+		if (transport.sessionId) {
+			sessions.set(transport.sessionId, { transport, server });
+		}
 
-    return response;
-  }
+		return response;
+	}
 
-  async function handleGet(req: Request): Promise<Response> {
-    const sessionId = req.headers.get("mcp-session-id");
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-    if (!session) {
-      return badRequest("Bad request: no valid session");
-    }
-    return session.transport.handleRequest(req);
-  }
+	async function handleGet(req: Request): Promise<Response> {
+		const sessionId = req.headers.get("mcp-session-id");
+		const session = sessionId ? sessions.get(sessionId) : undefined;
+		if (!session) {
+			return badRequest("Bad request: no valid session");
+		}
+		return session.transport.handleRequest(req);
+	}
 
-  async function handleDelete(req: Request): Promise<Response> {
-    const sessionId = req.headers.get("mcp-session-id");
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-    if (!session || !sessionId) {
-      return badRequest("Bad request: no valid session");
-    }
-    await session.transport.close();
-    await session.server.close();
-    sessions.delete(sessionId);
-    return new Response(null, { status: 200 });
-  }
+	async function handleDelete(req: Request): Promise<Response> {
+		const sessionId = req.headers.get("mcp-session-id");
+		const session = sessionId ? sessions.get(sessionId) : undefined;
+		if (!session || !sessionId) {
+			return badRequest("Bad request: no valid session");
+		}
+		await session.transport.close();
+		await session.server.close();
+		sessions.delete(sessionId);
+		return new Response(null, { status: 200 });
+	}
 
-  async function closeAll(): Promise<void> {
-    const logger = getLogger();
-    const count = sessions.size;
-    for (const [id, session] of sessions) {
-      try {
-        await session.transport.close();
-        await session.server.close();
-      } catch {
-        // Best effort cleanup
-      }
-      sessions.delete(id);
-    }
-    if (count > 0) {
-      logger.info("All sessions closed", { count });
-    }
-  }
+	async function closeAll(): Promise<void> {
+		const logger = getLogger();
+		const count = sessions.size;
+		for (const [id, session] of sessions) {
+			try {
+				await session.transport.close();
+				await session.server.close();
+			} catch {
+				// Best effort cleanup
+			}
+			sessions.delete(id);
+		}
+		if (count > 0) {
+			logger.info("All sessions closed", { count });
+		}
+	}
 
-  return { handlePost, handleGet, handleDelete, closeAll };
+	return { handlePost, handleGet, handleDelete, closeAll };
 }
 
 export async function startHttpTransport(
-  serverFactory: ServerFactory,
-  config: HttpTransportConfig,
+	serverFactory: ServerFactory,
+	config: HttpTransportConfig,
 ): Promise<HttpTransportResult> {
-  const logger = getLogger();
-  const isStateful = config.sessionMode === "stateful";
+	const logger = getLogger();
+	const isStateful = config.sessionMode === "stateful";
 
-  let postHandler: (req: Request) => Promise<Response>;
-  let getHandler: (req: Request) => Promise<Response> | Response;
-  let deleteHandler: (req: Request) => Promise<Response> | Response;
-  let closeAllSessions: (() => Promise<void>) | undefined;
+	let postHandler: (req: Request) => Promise<Response>;
+	let getHandler: (req: Request) => Promise<Response> | Response;
+	let deleteHandler: (req: Request) => Promise<Response> | Response;
+	let closeAllSessions: (() => Promise<void>) | undefined;
 
-  if (isStateful) {
-    const handlers = createStatefulHandlers(serverFactory);
-    postHandler = handlers.handlePost;
-    getHandler = handlers.handleGet;
-    deleteHandler = handlers.handleDelete;
-    closeAllSessions = handlers.closeAll;
-  } else {
-    postHandler = createStatelessHandler(serverFactory);
-    getHandler = methodNotAllowed;
-    deleteHandler = methodNotAllowed;
-  }
+	if (isStateful) {
+		const handlers = createStatefulHandlers(serverFactory);
+		postHandler = handlers.handlePost;
+		getHandler = handlers.handleGet;
+		deleteHandler = handlers.handleDelete;
+		closeAllSessions = handlers.closeAll;
+	} else {
+		postHandler = createStatelessHandler(serverFactory);
+		getHandler = methodNotAllowed;
+		deleteHandler = methodNotAllowed;
+	}
 
-  // Apply security middleware
-  const securedPost = withApiKeyAuth(
-    withOriginValidation(postHandler, config.allowedOrigins),
-    config.apiKey,
-  );
-  const securedGet = withApiKeyAuth(
-    withOriginValidation(getHandler, config.allowedOrigins),
-    config.apiKey,
-  );
-  const securedDelete = withApiKeyAuth(
-    withOriginValidation(deleteHandler, config.allowedOrigins),
-    config.apiKey,
-  );
+	// Apply security middleware
+	const securedPost = withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey);
+	const securedGet = withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey);
+	const securedDelete = withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey);
 
-  const httpServer = Bun.serve({
-    port: config.port,
-    hostname: config.host,
-    idleTimeout: config.idleTimeout,
+	const httpServer = Bun.serve({
+		port: config.port,
+		hostname: config.host,
+		idleTimeout: config.idleTimeout,
 
-    routes: {
-      [config.path]: {
-        POST: securedPost,
-        GET: securedGet,
-        DELETE: securedDelete,
-      },
-    },
+		routes: {
+			[config.path]: {
+				POST: securedPost,
+				GET: securedGet,
+				DELETE: securedDelete,
+			},
+		},
 
-    fetch: () => {
-      return Response.json({ error: "Not found" }, { status: 404 });
-    },
+		fetch: () => {
+			return Response.json({ error: "Not found" }, { status: 404 });
+		},
 
-    error: (error) => {
-      logger.error("HTTP server error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return Response.json(
-        { jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
-        { status: 500 },
-      );
-    },
-  });
+		error: (error) => {
+			logger.error("HTTP server error", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return Response.json(
+				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
+				{ status: 500 },
+			);
+		},
+	});
 
-  logger.info(`MCP server started (HTTP ${config.sessionMode} mode)`, {
-    url: `http://${config.host}:${httpServer.port}${config.path}`,
-    sessionMode: config.sessionMode,
-  });
+	logger.info(`MCP server started (HTTP ${config.sessionMode} mode)`, {
+		url: `http://${config.host}:${httpServer.port}${config.path}`,
+		sessionMode: config.sessionMode,
+	});
 
-  return {
-    server: httpServer,
-    async close() {
-      if (closeAllSessions) {
-        await closeAllSessions();
-      }
-      httpServer.stop(true);
-      logger.info("HTTP transport closed");
-    },
-  };
+	return {
+		server: httpServer,
+		async close() {
+			if (closeAllSessions) {
+				await closeAllSessions();
+			}
+			httpServer.stop(true);
+			logger.info("HTTP transport closed");
+		},
+	};
 }

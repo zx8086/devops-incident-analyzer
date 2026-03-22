@@ -9,35 +9,35 @@ import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
 export function registerWriteTools(server: McpServer, service: KafkaService): void {
-  const config = getConfig();
+	const config = getConfig();
 
-  server.tool(
-    "kafka_produce_message",
-    prompts.PRODUCE_MESSAGE_DESCRIPTION,
-    params.ProduceMessageParams.shape,
-    wrapHandler("kafka_produce_message", config, async (args) => {
-      const result = await ops.produceMessage(service, args);
-      return ResponseBuilder.success(result);
-    }),
-  );
+	server.tool(
+		"kafka_produce_message",
+		prompts.PRODUCE_MESSAGE_DESCRIPTION,
+		params.ProduceMessageParams.shape,
+		wrapHandler("kafka_produce_message", config, async (args) => {
+			const result = await ops.produceMessage(service, args);
+			return ResponseBuilder.success(result);
+		}),
+	);
 
-  server.tool(
-    "kafka_create_topic",
-    prompts.CREATE_TOPIC_DESCRIPTION,
-    params.CreateTopicParams.shape,
-    wrapHandler("kafka_create_topic", config, async (args) => {
-      const result = await ops.createTopic(service, args);
-      return ResponseBuilder.success(result);
-    }),
-  );
+	server.tool(
+		"kafka_create_topic",
+		prompts.CREATE_TOPIC_DESCRIPTION,
+		params.CreateTopicParams.shape,
+		wrapHandler("kafka_create_topic", config, async (args) => {
+			const result = await ops.createTopic(service, args);
+			return ResponseBuilder.success(result);
+		}),
+	);
 
-  server.tool(
-    "kafka_alter_topic_config",
-    prompts.ALTER_TOPIC_CONFIG_DESCRIPTION,
-    params.AlterTopicConfigParams.shape,
-    wrapHandler("kafka_alter_topic_config", config, async (args) => {
-      const result = await ops.alterTopicConfig(service, args);
-      return ResponseBuilder.success(result);
-    }),
-  );
+	server.tool(
+		"kafka_alter_topic_config",
+		prompts.ALTER_TOPIC_CONFIG_DESCRIPTION,
+		params.AlterTopicConfigParams.shape,
+		wrapHandler("kafka_alter_topic_config", config, async (args) => {
+			const result = await ops.alterTopicConfig(service, args);
+			return ResponseBuilder.success(result);
+		}),
+	);
 }

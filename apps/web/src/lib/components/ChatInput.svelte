@@ -1,31 +1,35 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
+import Icon from "./Icon.svelte";
 
-  let { onSend, isStreaming = false, onStop }: { onSend: (msg: string) => void; isStreaming?: boolean; onStop?: () => void } = $props();
+let {
+	onSend,
+	isStreaming = false,
+	onStop,
+}: { onSend: (msg: string) => void; isStreaming?: boolean; onStop?: () => void } = $props();
 
-  let value = $state("");
-  let textarea: HTMLTextAreaElement;
+let value = $state("");
+let textarea: HTMLTextAreaElement;
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  }
+function handleKeydown(e: KeyboardEvent) {
+	if (e.key === "Enter" && !e.shiftKey) {
+		e.preventDefault();
+		submit();
+	}
+}
 
-  function submit() {
-    const trimmed = value.trim();
-    if (!trimmed || isStreaming) return;
-    onSend(trimmed);
-    value = "";
-    if (textarea) textarea.style.height = "auto";
-  }
+function submit() {
+	const trimmed = value.trim();
+	if (!trimmed || isStreaming) return;
+	onSend(trimmed);
+	value = "";
+	if (textarea) textarea.style.height = "auto";
+}
 
-  function autoResize() {
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-  }
+function autoResize() {
+	if (!textarea) return;
+	textarea.style.height = "auto";
+	textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+}
 </script>
 
 <div class="border-t border-gray-200 bg-white p-4">

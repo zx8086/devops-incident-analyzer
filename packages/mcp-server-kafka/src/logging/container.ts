@@ -6,16 +6,16 @@ import type { ILogger } from "./ports/logger.port.ts";
 let _logger: ILogger | null = null;
 
 export function getLogger(): ILogger {
-  if (!_logger) {
-    _logger = createLogger();
-  }
-  return _logger;
+	if (!_logger) {
+		_logger = createLogger();
+	}
+	return _logger;
 }
 
 export function setLogger(logger: ILogger): void {
-  _logger = logger;
+	_logger = logger;
 }
 
 export function resetLoggerContainer(): void {
-  _logger = null;
+	_logger = null;
 }

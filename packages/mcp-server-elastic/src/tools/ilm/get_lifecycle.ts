@@ -15,53 +15,53 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition (no complex Zod conversion)
 const _getLifecycleSchema = {
-  type: "object",
-  properties: {
-    policy: {
-      type: "string",
-      description:
-        "Policy name(s) to retrieve. Supports comma-separated list for multiple policies (e.g., 'policy1,policy2,policy3')",
-    },
-    masterTimeout: {
-      type: "string",
-      description: "Master node timeout",
-    },
-    timeout: {
-      type: "string",
-      description: "Request timeout",
-    },
-    limit: {
-      type: "number",
-      minimum: 1,
-      maximum: 100,
-      description: "Maximum number of policies to return. Range: 1-100",
-    },
-    summary: {
-      type: "boolean",
-      description: "Return summarized policy information instead of full details",
-    },
-    includeIndices: {
-      type: "boolean",
-      description: "Include list of indices using each policy",
-    },
-    sortBy: {
-      type: "string",
-      enum: ["name", "modified_date", "version", "indices_count"],
-      description: "Sort policies by specified field",
-    },
-  },
-  additionalProperties: false,
+	type: "object",
+	properties: {
+		policy: {
+			type: "string",
+			description:
+				"Policy name(s) to retrieve. Supports comma-separated list for multiple policies (e.g., 'policy1,policy2,policy3')",
+		},
+		masterTimeout: {
+			type: "string",
+			description: "Master node timeout",
+		},
+		timeout: {
+			type: "string",
+			description: "Request timeout",
+		},
+		limit: {
+			type: "number",
+			minimum: 1,
+			maximum: 100,
+			description: "Maximum number of policies to return. Range: 1-100",
+		},
+		summary: {
+			type: "boolean",
+			description: "Return summarized policy information instead of full details",
+		},
+		includeIndices: {
+			type: "boolean",
+			description: "Include list of indices using each policy",
+		},
+		sortBy: {
+			type: "string",
+			enum: ["name", "modified_date", "version", "indices_count"],
+			description: "Sort policies by specified field",
+		},
+	},
+	additionalProperties: false,
 };
 
 // Simple Zod validator for runtime validation only
 const getLifecycleValidator = z.object({
-  policy: z.string().optional(),
-  masterTimeout: z.string().optional(),
-  timeout: z.string().optional(),
-  limit: z.number().min(1).max(100).optional(),
-  summary: z.boolean().optional(),
-  includeIndices: z.boolean().optional(),
-  sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
+	policy: z.string().optional(),
+	masterTimeout: z.string().optional(),
+	timeout: z.string().optional(),
+	limit: z.number().min(1).max(100).optional(),
+	summary: z.boolean().optional(),
+	includeIndices: z.boolean().optional(),
+	sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
 });
 
 type _GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
@@ -71,22 +71,22 @@ type _GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
 // =============================================================================
 
 function createIlmMcpError(
-  error: Error | string,
-  context: {
-    type: "validation" | "execution" | "not_found" | "permission";
-    details?: any;
-  },
+	error: Error | string,
+	context: {
+		type: "validation" | "execution" | "not_found" | "permission";
+		details?: any;
+	},
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-    not_found: ErrorCode.InvalidRequest,
-    permission: ErrorCode.InvalidRequest,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+		not_found: ErrorCode.InvalidRequest,
+		permission: ErrorCode.InvalidRequest,
+	};
 
-  return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_get_lifecycle] ${message}`, context.details);
+	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_get_lifecycle] ${message}`, context.details);
 }
 
 // =============================================================================
@@ -94,256 +94,256 @@ function createIlmMcpError(
 // =============================================================================
 
 export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const getLifecycleHandler = async (args: any, extra?: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
-    let params: z.infer<typeof getLifecycleValidator> | undefined;
+	const getLifecycleHandler = async (args: any, extra?: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
+		let params: z.infer<typeof getLifecycleValidator> | undefined;
 
-    try {
-      logger.debug("ILM Handler received", {
-        argsType: typeof args,
-        argsKeys: args ? Object.keys(args) : "NO ARGS",
-        hasExtra: !!extra,
-        extraKeys: extra ? Object.keys(extra) : "NO EXTRA",
-        fullArgs: args,
-        fullExtra: extra,
-      });
+		try {
+			logger.debug("ILM Handler received", {
+				argsType: typeof args,
+				argsKeys: args ? Object.keys(args) : "NO ARGS",
+				hasExtra: !!extra,
+				extraKeys: extra ? Object.keys(extra) : "NO EXTRA",
+				fullArgs: args,
+				fullExtra: extra,
+			});
 
-      // Simple validation - no complex parameter extraction
-      params = getLifecycleValidator.parse(args);
+			// Simple validation - no complex parameter extraction
+			params = getLifecycleValidator.parse(args);
 
-      logger.debug("Getting ILM lifecycle policies (simplified)", {
-        policy: params.policy,
-        limit: params.limit,
-        summary: params.summary,
-        sortBy: params.sortBy,
-        originalArgs: args,
-        paramsKeys: Object.keys(params),
-      });
+			logger.debug("Getting ILM lifecycle policies (simplified)", {
+				policy: params.policy,
+				limit: params.limit,
+				summary: params.summary,
+				sortBy: params.sortBy,
+				originalArgs: args,
+				paramsKeys: Object.keys(params),
+			});
 
-      // Fetch policies from Elasticsearch
-      const result = await esClient.ilm.getLifecycle({
-        name: params.policy,
-        master_timeout: params.masterTimeout,
-        timeout: params.timeout,
-      });
+			// Fetch policies from Elasticsearch
+			const result = await esClient.ilm.getLifecycle({
+				name: params.policy,
+				master_timeout: params.masterTimeout,
+				timeout: params.timeout,
+			});
 
-      // Convert response to array of policies
-      let policies = Object.entries(result).map(([name, policy]) => ({
-        name,
-        ...policy,
-      }));
+			// Convert response to array of policies
+			let policies = Object.entries(result).map(([name, policy]) => ({
+				name,
+				...policy,
+			}));
 
-      // If specific policies were requested, filter results
-      if (params.policy) {
-        // Handle comma-separated policy names
-        const requestedPolicies = params.policy.split(",").map((p) => p.trim());
-        const foundPolicies = policies.filter((policy) => requestedPolicies.includes(policy.name));
+			// If specific policies were requested, filter results
+			if (params.policy) {
+				// Handle comma-separated policy names
+				const requestedPolicies = params.policy.split(",").map((p) => p.trim());
+				const foundPolicies = policies.filter((policy) => requestedPolicies.includes(policy.name));
 
-        // Check if all requested policies were found
-        const foundPolicyNames = foundPolicies.map((p) => p.name);
-        const missingPolicies = requestedPolicies.filter((name) => !foundPolicyNames.includes(name));
+				// Check if all requested policies were found
+				const foundPolicyNames = foundPolicies.map((p) => p.name);
+				const missingPolicies = requestedPolicies.filter((name) => !foundPolicyNames.includes(name));
 
-        if (missingPolicies.length > 0) {
-          throw createIlmMcpError(
-            `${missingPolicies.length === 1 ? "Policy" : "Policies"} '${missingPolicies.join(", ")}' not found`,
-            {
-              type: "not_found",
-              details: {
-                requestedPolicies,
-                foundPolicies: foundPolicyNames,
-                missingPolicies,
-              },
-            },
-          );
-        }
+				if (missingPolicies.length > 0) {
+					throw createIlmMcpError(
+						`${missingPolicies.length === 1 ? "Policy" : "Policies"} '${missingPolicies.join(", ")}' not found`,
+						{
+							type: "not_found",
+							details: {
+								requestedPolicies,
+								foundPolicies: foundPolicyNames,
+								missingPolicies,
+							},
+						},
+					);
+				}
 
-        policies = foundPolicies;
-      }
+				policies = foundPolicies;
+			}
 
-      // Calculate retention days and usage metrics
-      const enrichedPolicies = policies.map((policy) => {
-        const deletePhase = policy.policy?.phases?.delete;
-        let retentionDays: number | undefined;
+			// Calculate retention days and usage metrics
+			const enrichedPolicies = policies.map((policy) => {
+				const deletePhase = policy.policy?.phases?.delete;
+				let retentionDays: number | undefined;
 
-        if (deletePhase?.min_age) {
-          const minAge = String(deletePhase.min_age);
-          const match = minAge.match(/(\d+)d/);
-          if (match) {
-            retentionDays = Number.parseInt(match[1], 10);
-          }
-        }
+				if (deletePhase?.min_age) {
+					const minAge = String(deletePhase.min_age);
+					const match = minAge.match(/(\d+)d/);
+					if (match) {
+						retentionDays = Number.parseInt(match[1], 10);
+					}
+				}
 
-        const policyAny = policy as any;
-        return {
-          ...policy,
-          retention_days: retentionDays,
-          indices_count: policyAny.in_use_by?.indices?.length || 0,
-          data_streams_count: policyAny.in_use_by?.data_streams?.length || 0,
-        };
-      });
+				const policyAny = policy as any;
+				return {
+					...policy,
+					retention_days: retentionDays,
+					indices_count: policyAny.in_use_by?.indices?.length || 0,
+					data_streams_count: policyAny.in_use_by?.data_streams?.length || 0,
+				};
+			});
 
-      // Sort policies
-      const sortedPolicies = enrichedPolicies.sort((a, b) => {
-        switch (params?.sortBy) {
-          case "modified_date":
-            return new Date(b.modified_date || 0).getTime() - new Date(a.modified_date || 0).getTime();
-          case "version":
-            return (b.version || 0) - (a.version || 0);
-          case "indices_count":
-            return b.indices_count - a.indices_count;
-          default:
-            return a.name.localeCompare(b.name);
-        }
-      });
+			// Sort policies
+			const sortedPolicies = enrichedPolicies.sort((a, b) => {
+				switch (params?.sortBy) {
+					case "modified_date":
+						return new Date(b.modified_date || 0).getTime() - new Date(a.modified_date || 0).getTime();
+					case "version":
+						return (b.version || 0) - (a.version || 0);
+					case "indices_count":
+						return b.indices_count - a.indices_count;
+					default:
+						return a.name.localeCompare(b.name);
+				}
+			});
 
-      // Apply pagination
-      const { results: limitedPolicies, metadata } = paginateResults(sortedPolicies, {
-        limit: params.limit,
-        defaultLimit: responsePresets.list.defaultLimit,
-        maxLimit: responsePresets.list.maxLimit,
-      });
+			// Apply pagination
+			const { results: limitedPolicies, metadata } = paginateResults(sortedPolicies, {
+				limit: params.limit,
+				defaultLimit: responsePresets.list.defaultLimit,
+				maxLimit: responsePresets.list.maxLimit,
+			});
 
-      // Build response content
-      const responseContent: string[] = [];
-      responseContent.push(createPaginationHeader(metadata, "ILM Policies"));
+			// Build response content
+			const responseContent: string[] = [];
+			responseContent.push(createPaginationHeader(metadata, "ILM Policies"));
 
-      // Process each policy
-      for (const policy of limitedPolicies) {
-        if (params.summary) {
-          // Summary mode - key information only
-          const phases = Object.keys(policy.policy?.phases || {});
+			// Process each policy
+			for (const policy of limitedPolicies) {
+				if (params.summary) {
+					// Summary mode - key information only
+					const phases = Object.keys(policy.policy?.phases || {});
 
-          responseContent.push(`### ${policy.name}`);
-          responseContent.push(`- **Version**: ${policy.version || 0}`);
-          responseContent.push(`- **Modified**: ${new Date(policy.modified_date || 0).toISOString().split("T")[0]}`);
-          responseContent.push(`- **Phases**: ${phases.join(" → ")}`);
+					responseContent.push(`### ${policy.name}`);
+					responseContent.push(`- **Version**: ${policy.version || 0}`);
+					responseContent.push(`- **Modified**: ${new Date(policy.modified_date || 0).toISOString().split("T")[0]}`);
+					responseContent.push(`- **Phases**: ${phases.join(" → ")}`);
 
-          if (policy.retention_days) {
-            responseContent.push(`- **Retention**: ${policy.retention_days} days`);
-          }
-          if (policy.indices_count > 0) {
-            responseContent.push(`- **Indices**: ${policy.indices_count}`);
-          }
-          if (policy.data_streams_count > 0) {
-            responseContent.push(`- **Data Streams**: ${policy.data_streams_count}`);
-          }
-          if (policy.policy?._meta?.description) {
-            responseContent.push(`- **Description**: ${policy.policy._meta.description}`);
-          }
-          responseContent.push("");
-        } else {
-          // Detailed mode - full policy details
-          const detail = {
-            name: policy.name,
-            version: policy.version || 0,
-            modified_date: policy.modified_date || "unknown",
-            phases: Object.keys(policy.policy?.phases || {}),
-            retention_days: policy.retention_days,
-            policy_definition: policy.policy?.phases,
-            ...(params.includeIndices &&
-              (policy as any).in_use_by && {
-                in_use_by: {
-                  indices: (policy as any).in_use_by.indices?.slice(0, 10), // Limit for readability
-                  data_streams: (policy as any).in_use_by.data_streams?.slice(0, 10),
-                  composable_templates: (policy as any).in_use_by.composable_templates,
-                },
-              }),
-          };
+					if (policy.retention_days) {
+						responseContent.push(`- **Retention**: ${policy.retention_days} days`);
+					}
+					if (policy.indices_count > 0) {
+						responseContent.push(`- **Indices**: ${policy.indices_count}`);
+					}
+					if (policy.data_streams_count > 0) {
+						responseContent.push(`- **Data Streams**: ${policy.data_streams_count}`);
+					}
+					if (policy.policy?._meta?.description) {
+						responseContent.push(`- **Description**: ${policy.policy._meta.description}`);
+					}
+					responseContent.push("");
+				} else {
+					// Detailed mode - full policy details
+					const detail = {
+						name: policy.name,
+						version: policy.version || 0,
+						modified_date: policy.modified_date || "unknown",
+						phases: Object.keys(policy.policy?.phases || {}),
+						retention_days: policy.retention_days,
+						policy_definition: policy.policy?.phases,
+						...(params.includeIndices &&
+							(policy as any).in_use_by && {
+								in_use_by: {
+									indices: (policy as any).in_use_by.indices?.slice(0, 10), // Limit for readability
+									data_streams: (policy as any).in_use_by.data_streams?.slice(0, 10),
+									composable_templates: (policy as any).in_use_by.composable_templates,
+								},
+							}),
+					};
 
-          responseContent.push(`### ${detail.name}\n`);
-          responseContent.push("```json");
-          responseContent.push(JSON.stringify(detail, null, 2));
-          responseContent.push("```\n");
-        }
-      }
+					responseContent.push(`### ${detail.name}\n`);
+					responseContent.push("```json");
+					responseContent.push(JSON.stringify(detail, null, 2));
+					responseContent.push("```\n");
+				}
+			}
 
-      // Add phase distribution summary for multiple policies
-      if (params.summary && limitedPolicies.length > 5) {
-        responseContent.push("\n## Phase Distribution");
-        const phaseCount: Record<string, number> = {};
+			// Add phase distribution summary for multiple policies
+			if (params.summary && limitedPolicies.length > 5) {
+				responseContent.push("\n## Phase Distribution");
+				const phaseCount: Record<string, number> = {};
 
-        for (const policy of limitedPolicies) {
-          for (const phase of Object.keys(policy.policy?.phases || {})) {
-            phaseCount[phase] = (phaseCount[phase] || 0) + 1;
-          }
-        }
+				for (const policy of limitedPolicies) {
+					for (const phase of Object.keys(policy.policy?.phases || {})) {
+						phaseCount[phase] = (phaseCount[phase] || 0) + 1;
+					}
+				}
 
-        for (const [phase, count] of Object.entries(phaseCount).sort(([, a], [, b]) => b - a)) {
-          responseContent.push(`- **${phase}**: ${count} policies`);
-        }
-      }
+				for (const [phase, count] of Object.entries(phaseCount).sort(([, a], [, b]) => b - a)) {
+					responseContent.push(`- **${phase}**: ${count} policies`);
+				}
+			}
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow ILM operation: get_lifecycle", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow ILM operation: get_lifecycle", { duration });
+			}
 
-      // MCP-compliant response
-      return {
-        content: [{ type: "text", text: responseContent.join("\n") }],
-      };
-    } catch (error) {
-      // Standardized MCP error handling
-      if (error instanceof z.ZodError) {
-        throw createIlmMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			// MCP-compliant response
+			return {
+				content: [{ type: "text", text: responseContent.join("\n") }],
+			};
+		} catch (error) {
+			// Standardized MCP error handling
+			if (error instanceof z.ZodError) {
+				throw createIlmMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      if (error instanceof McpError) {
-        throw error; // Re-throw MCP errors
-      }
+			if (error instanceof McpError) {
+				throw error; // Re-throw MCP errors
+			}
 
-      if (error instanceof Error) {
-        if (error.message.includes("security_exception")) {
-          throw createIlmMcpError("Insufficient permissions to access ILM policies", {
-            type: "permission",
-            details: { originalError: error.message },
-          });
-        }
+			if (error instanceof Error) {
+				if (error.message.includes("security_exception")) {
+					throw createIlmMcpError("Insufficient permissions to access ILM policies", {
+						type: "permission",
+						details: { originalError: error.message },
+					});
+				}
 
-        if (error.message.includes("resource_not_found")) {
-          throw createIlmMcpError(`ILM policy not found: ${params?.policy || "unknown"}`, {
-            type: "not_found",
-            details: { policy: params?.policy },
-          });
-        }
-      }
+				if (error.message.includes("resource_not_found")) {
+					throw createIlmMcpError(`ILM policy not found: ${params?.policy || "unknown"}`, {
+						type: "not_found",
+						details: { policy: params?.policy },
+					});
+				}
+			}
 
-      throw createIlmMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createIlmMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Test with Zod schema instead of JSON schema
-  // Tool registration using modern registerTool method
+	// Test with Zod schema instead of JSON schema
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_ilm_get_lifecycle",
+	server.registerTool(
+		"elasticsearch_ilm_get_lifecycle",
 
-    {
-      title: "Ilm Get Lifecycle",
+		{
+			title: "Ilm Get Lifecycle",
 
-      description:
-        "Get ILM policies. PARAMETERS: 'policy' (string, optional - supports comma-separated list for multiple policies), 'limit' (number 1-100), 'summary' (boolean), 'sortBy' (enum). Examples: {limit: 50, summary: true} or {policy: 'policy1,policy2,policy3'}. Uses Zod Schema for proper MCP parameter handling.",
+			description:
+				"Get ILM policies. PARAMETERS: 'policy' (string, optional - supports comma-separated list for multiple policies), 'limit' (number 1-100), 'summary' (boolean), 'sortBy' (enum). Examples: {limit: 50, summary: true} or {policy: 'policy1,policy2,policy3'}. Uses Zod Schema for proper MCP parameter handling.",
 
-      inputSchema: {
-        policy: z.string().optional(),
-        limit: z.number().min(1).max(100).optional(),
-        summary: z.boolean().optional(),
-        sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
-      },
-    },
+			inputSchema: {
+				policy: z.string().optional(),
+				limit: z.number().min(1).max(100).optional(),
+				summary: z.boolean().optional(),
+				sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
+			},
+		},
 
-    // Use Zod schema instead
-    getLifecycleHandler,
-  );
+		// Use Zod schema instead
+		getLifecycleHandler,
+	);
 };
 
 // =============================================================================

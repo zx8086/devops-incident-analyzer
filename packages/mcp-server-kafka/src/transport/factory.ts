@@ -9,59 +9,56 @@ import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
 
 export interface TransportResult {
-  stdio?: StdioTransportResult;
-  http?: HttpTransportResult;
-  closeAll(): Promise<void>;
+	stdio?: StdioTransportResult;
+	http?: HttpTransportResult;
+	closeAll(): Promise<void>;
 }
 
 export function resolveTransportMode(mode: string): { stdio: boolean; http: boolean } {
-  switch (mode) {
-    case "http":
-      return { stdio: false, http: true };
-    case "both":
-      return { stdio: true, http: true };
-    default:
-      return { stdio: true, http: false };
-  }
+	switch (mode) {
+		case "http":
+			return { stdio: false, http: true };
+		case "both":
+			return { stdio: true, http: true };
+		default:
+			return { stdio: true, http: false };
+	}
 }
 
-export async function createTransport(
-  config: AppConfig,
-  serverFactory: () => McpServer,
-): Promise<TransportResult> {
-  const logger = getLogger();
-  const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
+export async function createTransport(config: AppConfig, serverFactory: () => McpServer): Promise<TransportResult> {
+	const logger = getLogger();
+	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
 
-  const result: TransportResult = {
-    async closeAll() {
-      if (result.http) await result.http.close();
-      if (result.stdio) await result.stdio.close();
-    },
-  };
+	const result: TransportResult = {
+		async closeAll() {
+			if (result.http) await result.http.close();
+			if (result.stdio) await result.stdio.close();
+		},
+	};
 
-  if (useHttp) {
-    const allowedOrigins = splitCommaSeparated(config.transport.allowedOrigins || undefined);
-    result.http = await startHttpTransport(serverFactory, {
-      port: config.transport.port,
-      host: config.transport.host,
-      path: config.transport.path,
-      sessionMode: config.transport.sessionMode,
-      idleTimeout: config.transport.idleTimeout,
-      apiKey: config.transport.apiKey || undefined,
-      allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
-    });
-  }
+	if (useHttp) {
+		const allowedOrigins = splitCommaSeparated(config.transport.allowedOrigins || undefined);
+		result.http = await startHttpTransport(serverFactory, {
+			port: config.transport.port,
+			host: config.transport.host,
+			path: config.transport.path,
+			sessionMode: config.transport.sessionMode,
+			idleTimeout: config.transport.idleTimeout,
+			apiKey: config.transport.apiKey || undefined,
+			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
+		});
+	}
 
-  if (useStdio) {
-    const server = serverFactory();
-    result.stdio = await startStdioTransport(server);
-  }
+	if (useStdio) {
+		const server = serverFactory();
+		result.stdio = await startStdioTransport(server);
+	}
 
-  logger.info("Transport initialized", {
-    mode: config.transport.mode,
-    stdio: useStdio,
-    http: useHttp,
-  });
+	logger.info("Transport initialized", {
+		mode: config.transport.mode,
+		stdio: useStdio,
+		http: useHttp,
+	});
 
-  return result;
+	return result;
 }

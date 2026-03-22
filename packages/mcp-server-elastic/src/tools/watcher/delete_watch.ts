@@ -14,101 +14,101 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const deleteWatchValidator = z.object({
-  id: z.string().min(1, "Watch ID cannot be empty"),
+	id: z.string().min(1, "Watch ID cannot be empty"),
 });
 
 type _DeleteWatchParams = z.infer<typeof deleteWatchValidator>;
 
 // MCP error handling
 function createDeleteWatchMcpError(
-  error: Error | string,
-  context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
+	error: Error | string,
+	context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-    watch_not_found: ErrorCode.InvalidParams,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+		watch_not_found: ErrorCode.InvalidParams,
+	};
 
-  return new McpError(
-    errorCodeMap[context.type] || ErrorCode.InternalError,
-    `[elasticsearch_watcher_delete_watch] ${message}`,
-    context.details,
-  );
+	return new McpError(
+		errorCodeMap[context.type] || ErrorCode.InternalError,
+		`[elasticsearch_watcher_delete_watch] ${message}`,
+		context.details,
+	);
 }
 
 // Tool implementation
 export const registerWatcherDeleteWatchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const deleteWatchHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
+	const deleteWatchHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
 
-    try {
-      // Validate parameters
-      const params = deleteWatchValidator.parse(args);
+		try {
+			// Validate parameters
+			const params = deleteWatchValidator.parse(args);
 
-      const result = await esClient.watcher.deleteWatch({
-        id: params.id,
-      });
+			const result = await esClient.watcher.deleteWatch({
+				id: params.id,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow watcher operation", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow watcher operation", { duration });
+			}
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      // Error handling
-      if (error instanceof z.ZodError) {
-        throw createDeleteWatchMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(result, null, 2),
+					},
+				],
+			};
+		} catch (error) {
+			// Error handling
+			if (error instanceof z.ZodError) {
+				throw createDeleteWatchMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      // Add specific watch error handling
-      if (error instanceof Error && error.message.includes("watch_not_found")) {
-        throw createDeleteWatchMcpError(error.message, {
-          type: "watch_not_found",
-          details: { watchId: args.id },
-        });
-      }
+			// Add specific watch error handling
+			if (error instanceof Error && error.message.includes("watch_not_found")) {
+				throw createDeleteWatchMcpError(error.message, {
+					type: "watch_not_found",
+					details: { watchId: args.id },
+				});
+			}
 
-      throw createDeleteWatchMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createDeleteWatchMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Tool registration
-  // Tool registration using modern registerTool method
+	// Tool registration
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_watcher_delete_watch",
+	server.registerTool(
+		"elasticsearch_watcher_delete_watch",
 
-    {
-      title: "Watcher Delete Watch",
+		{
+			title: "Watcher Delete Watch",
 
-      description:
-        "Delete a watch from Elasticsearch Watcher. Best for watch cleanup, configuration management, removing unused monitors. Use when you need to permanently remove watch definitions from Elasticsearch alerting system. IMPORTANT: Use only this API, not direct index deletion. Uses direct JSON Schema and standardized MCP error codes.",
+			description:
+				"Delete a watch from Elasticsearch Watcher. Best for watch cleanup, configuration management, removing unused monitors. Use when you need to permanently remove watch definitions from Elasticsearch alerting system. IMPORTANT: Use only this API, not direct index deletion. Uses direct JSON Schema and standardized MCP error codes.",
 
-      inputSchema: {
-        id: z.string(), // Watch ID to delete
-      },
-    },
+			inputSchema: {
+				id: z.string(), // Watch ID to delete
+			},
+		},
 
-    withReadOnlyCheck("elasticsearch_watcher_delete_watch", deleteWatchHandler, OperationType.WRITE),
-  );
+		withReadOnlyCheck("elasticsearch_watcher_delete_watch", deleteWatchHandler, OperationType.WRITE),
+	);
 };

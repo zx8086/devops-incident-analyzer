@@ -1,53 +1,53 @@
 /* src/lib/types.ts */
 
-import type { Bucket } from 'couchbase';
+import type { Bucket } from "couchbase";
 
 export interface DocumentContent {
-  [key: string]: unknown;
+	[key: string]: unknown;
 }
 
 export interface QueryResult {
-  rows: unknown[];
-  meta?: Record<string, unknown>;
+	rows: unknown[];
+	meta?: Record<string, unknown>;
 }
 
 export interface DatabaseOperation {
-  scope: string;
-  collection: string;
-  id: string;
-  content?: DocumentContent;
+	scope: string;
+	collection: string;
+	id: string;
+	content?: DocumentContent;
 }
 
 export interface QueryParams {
-  scope_name: string;
-  query: string;
+	scope_name: string;
+	query: string;
 }
 
 export interface BucketInfo {
-  name: string;
-  scopes: ScopeInfo[];
+	name: string;
+	scopes: ScopeInfo[];
 }
 
 export interface ScopeInfo {
-  name: string;
-  collections: CollectionInfo[];
+	name: string;
+	collections: CollectionInfo[];
 }
 
 export interface CollectionInfo {
-  name: string;
-  type: string;
+	name: string;
+	type: string;
 }
 
 export interface DatabaseContext {
-  bucket: Bucket;
+	bucket: Bucket;
 }
 
 export interface OperationContext {
-  lifespanContext: DatabaseContext;
+	lifespanContext: DatabaseContext;
 }
 
 export type OperationResult<T = unknown> = {
-  success: boolean;
-  data?: T;
-  error?: Error;
-}; 
+	success: boolean;
+	data?: T;
+	error?: Error;
+};

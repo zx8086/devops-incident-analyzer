@@ -12,26 +12,26 @@ import { registerSchemaTools } from "./schema/tools.ts";
 import { registerWriteTools } from "./write/tools.ts";
 
 export interface ToolRegistrationOptions {
-  schemaRegistryService?: SchemaRegistryService;
-  ksqlService?: KsqlService;
+	schemaRegistryService?: SchemaRegistryService;
+	ksqlService?: KsqlService;
 }
 
 export function registerAllTools(
-  server: McpServer,
-  service: KafkaService,
-  config: AppConfig,
-  options?: ToolRegistrationOptions,
+	server: McpServer,
+	service: KafkaService,
+	config: AppConfig,
+	options?: ToolRegistrationOptions,
 ): void {
-  registerReadTools(server, service, config);
-  registerExtendedReadTools(server, service, config);
-  registerWriteTools(server, service);
-  registerDestructiveTools(server, service);
+	registerReadTools(server, service, config);
+	registerExtendedReadTools(server, service, config);
+	registerWriteTools(server, service);
+	registerDestructiveTools(server, service);
 
-  if (options?.schemaRegistryService) {
-    registerSchemaTools(server, options.schemaRegistryService);
-  }
+	if (options?.schemaRegistryService) {
+		registerSchemaTools(server, options.schemaRegistryService);
+	}
 
-  if (options?.ksqlService) {
-    registerKsqlTools(server, options.ksqlService);
-  }
+	if (options?.ksqlService) {
+		registerKsqlTools(server, options.ksqlService);
+	}
 }

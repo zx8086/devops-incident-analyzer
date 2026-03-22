@@ -39,8 +39,6 @@
  */
 declare module '$env/static/private' {
 	export const NVM_INC: string;
-	export const NoDefaultCurrentDirectoryInExePath: string;
-	export const CLAUDE_CODE_ENTRYPOINT: string;
 	export const TERM_PROGRAM: string;
 	export const NODE: string;
 	export const _P9K_TTY: string;
@@ -55,7 +53,6 @@ declare module '$env/static/private' {
 	export const TERM_SESSION_ID: string;
 	export const npm_config_local_prefix: string;
 	export const ZSH: string;
-	export const GIT_EDITOR: string;
 	export const USER: string;
 	export const NVM_DIR: string;
 	export const LS_COLORS: string;
@@ -71,7 +68,6 @@ declare module '$env/static/private' {
 	export const _: string;
 	export const __CFBundleIdentifier: string;
 	export const PWD: string;
-	export const OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: string;
 	export const P9K_SSH: string;
 	export const npm_package_name: string;
 	export const P9K_TTY: string;
@@ -85,7 +81,6 @@ declare module '$env/static/private' {
 	export const LESS: string;
 	export const ALACRITTY_WINDOW_ID: string;
 	export const LC_CTYPE: string;
-	export const COREPACK_ENABLE_AUTO_PIN: string;
 	export const ZED_TERM: string;
 	export const NVM_BIN: string;
 	export const BUN_INSTALL: string;
@@ -94,7 +89,6 @@ declare module '$env/static/private' {
 	export const HOMEBREW_CELLAR: string;
 	export const _P9K_SSH_TTY: string;
 	export const OSLogRateLimit: string;
-	export const CLAUDECODE: string;
 	export const npm_node_execpath: string;
 	export const COLORTERM: string;
 	export const NODE_ENV: string;
@@ -113,6 +107,7 @@ declare module '$env/static/private' {
 	export const KONNECT_REGION: string;
 	export const ELASTIC_MCP_URL: string;
 	export const KAFKA_MCP_URL: string;
+	export const COUCHBASE_MCP_URL: string;
 	export const OTEL_SERVICE_NAME: string;
 	export const TELEMETRY_MODE: string;
 	export const OTEL_EXPORTER_OTLP_ENDPOINT: string;
@@ -209,8 +204,6 @@ declare module '$env/static/public' {
 declare module '$env/dynamic/private' {
 	export const env: {
 		NVM_INC: string;
-		NoDefaultCurrentDirectoryInExePath: string;
-		CLAUDE_CODE_ENTRYPOINT: string;
 		TERM_PROGRAM: string;
 		NODE: string;
 		_P9K_TTY: string;
@@ -225,7 +218,6 @@ declare module '$env/dynamic/private' {
 		TERM_SESSION_ID: string;
 		npm_config_local_prefix: string;
 		ZSH: string;
-		GIT_EDITOR: string;
 		USER: string;
 		NVM_DIR: string;
 		LS_COLORS: string;
@@ -241,7 +233,6 @@ declare module '$env/dynamic/private' {
 		_: string;
 		__CFBundleIdentifier: string;
 		PWD: string;
-		OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: string;
 		P9K_SSH: string;
 		npm_package_name: string;
 		P9K_TTY: string;
@@ -255,7 +246,6 @@ declare module '$env/dynamic/private' {
 		LESS: string;
 		ALACRITTY_WINDOW_ID: string;
 		LC_CTYPE: string;
-		COREPACK_ENABLE_AUTO_PIN: string;
 		ZED_TERM: string;
 		NVM_BIN: string;
 		BUN_INSTALL: string;
@@ -264,7 +254,6 @@ declare module '$env/dynamic/private' {
 		HOMEBREW_CELLAR: string;
 		_P9K_SSH_TTY: string;
 		OSLogRateLimit: string;
-		CLAUDECODE: string;
 		npm_node_execpath: string;
 		COLORTERM: string;
 		NODE_ENV: string;
@@ -283,6 +272,7 @@ declare module '$env/dynamic/private' {
 		KONNECT_REGION: string;
 		ELASTIC_MCP_URL: string;
 		KAFKA_MCP_URL: string;
+		COUCHBASE_MCP_URL: string;
 		OTEL_SERVICE_NAME: string;
 		TELEMETRY_MODE: string;
 		OTEL_EXPORTER_OTLP_ENDPOINT: string;

@@ -1,16 +1,17 @@
 // gitagent-bridge/src/index.ts
-export { loadAgent, type LoadedAgent } from "./manifest-loader.ts";
-export { resolveBedrockConfig, getRecursionLimit, type BedrockModelConfig } from "./model-factory.ts";
-export { buildSystemPrompt } from "./skill-loader.ts";
-export { buildToolPrompt, buildAllToolPrompts, buildContextFromAgent, type ToolPromptContext } from "./tool-prompt.ts";
-export { getRelatedTools, buildRelatedToolsMap, withRelatedTools } from "./related-tools.ts";
+
 export { complianceToMetadata, requiresApproval } from "./compliance.ts";
+export { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
+export { type BedrockModelConfig, getRecursionLimit, resolveBedrockConfig } from "./model-factory.ts";
+export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
+export { buildSystemPrompt } from "./skill-loader.ts";
+export { buildAllToolPrompts, buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";
 export { validateToolSchemas } from "./tool-schema.ts";
 export {
-  AgentManifestSchema,
-  ToolDefinitionSchema,
-  type AgentManifest,
-  type ToolDefinition,
-  type ComplianceConfig,
-  type ModelConfig,
+	type AgentManifest,
+	AgentManifestSchema,
+	type ComplianceConfig,
+	type ModelConfig,
+	type ToolDefinition,
+	ToolDefinitionSchema,
 } from "./types.ts";

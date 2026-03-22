@@ -1,2 +1,2 @@
 // observability/src/index.ts
-export { getLogger, getChildLogger } from "./logger.ts";
+export { getChildLogger, getLogger } from "./logger.ts";

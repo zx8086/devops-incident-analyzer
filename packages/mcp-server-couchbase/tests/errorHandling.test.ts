@@ -1,32 +1,32 @@
 /* tests/errorHandling.test.ts */
 
-import { expect, test, describe, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { logger } from "../src/lib/logger";
-import { mockConnection, mockServer } from "./test.utils";
 import toolRegistry from "../src/tools";
+import { mockConnection, mockServer } from "./test.utils";
 
 describe("Error Handling Tests", () => {
-    const TEST_DOC_ID = "error_handling_test_doc";
+	const TEST_DOC_ID = "error_handling_test_doc";
 
-    beforeAll(async () => {
-        Object.values(toolRegistry).forEach(registerTool => {
-            registerTool(mockServer as any, mockConnection.defaultBucket);
-        });
-    });
+	beforeAll(async () => {
+		Object.values(toolRegistry).forEach((registerTool) => {
+			registerTool(mockServer as any, mockConnection.defaultBucket);
+		});
+	});
 
-    afterAll(async () => {
-        if (mockConnection.defaultBucket) {
-            const collection = mockConnection.defaultBucket.scope("_default").collection("_default");
-            try {
-                await collection.remove(TEST_DOC_ID);
-            } catch (error) {
-                logger.info(`No test document to clean up: ${TEST_DOC_ID}`);
-            }
-            if (mockConnection.cluster) {
-                await mockConnection.cluster.close();
-            }
-        }
-    });
+	afterAll(async () => {
+		if (mockConnection.defaultBucket) {
+			const collection = mockConnection.defaultBucket.scope("_default").collection("_default");
+			try {
+				await collection.remove(TEST_DOC_ID);
+			} catch (error) {
+				logger.info(`No test document to clean up: ${TEST_DOC_ID}`);
+			}
+			if (mockConnection.cluster) {
+				await mockConnection.cluster.close();
+			}
+		}
+	});
 
-    // ... rest of the tests ...
-}); 
+	// ... rest of the tests ...
+});

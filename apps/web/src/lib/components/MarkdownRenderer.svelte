@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { marked } from "marked";
+import { marked } from "marked";
 
-  let { content }: { content: string } = $props();
+let { content }: { content: string } = $props();
 
-  const rendered = $derived(marked.parse(content, { async: false }) as string);
+const rendered = $derived(marked.parse(content, { async: false }) as string);
 </script>
 
 <div class="markdown-content">

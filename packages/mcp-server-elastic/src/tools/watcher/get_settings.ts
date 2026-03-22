@@ -14,92 +14,92 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getWatcherSettingsValidator = z.object({
-  masterTimeout: z.string().optional(),
+	masterTimeout: z.string().optional(),
 });
 
 type _GetWatcherSettingsParams = z.infer<typeof getWatcherSettingsValidator>;
 
 // MCP error handling
 function createGetWatcherSettingsMcpError(
-  error: Error | string,
-  context: { type: "validation" | "execution"; details?: any },
+	error: Error | string,
+	context: { type: "validation" | "execution"; details?: any },
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+	};
 
-  return new McpError(
-    errorCodeMap[context.type] || ErrorCode.InternalError,
-    `[elasticsearch_watcher_get_settings] ${message}`,
-    context.details,
-  );
+	return new McpError(
+		errorCodeMap[context.type] || ErrorCode.InternalError,
+		`[elasticsearch_watcher_get_settings] ${message}`,
+		context.details,
+	);
 }
 
 // Tool implementation
 export const registerWatcherGetSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const getWatcherSettingsHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
+	const getWatcherSettingsHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
 
-    try {
-      // Validate parameters
-      const params = getWatcherSettingsValidator.parse(args);
+		try {
+			// Validate parameters
+			const params = getWatcherSettingsValidator.parse(args);
 
-      const result = await esClient.watcher.getSettings({
-        master_timeout: params.masterTimeout,
-      });
+			const result = await esClient.watcher.getSettings({
+				master_timeout: params.masterTimeout,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow watcher operation", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow watcher operation", { duration });
+			}
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      // Error handling
-      if (error instanceof z.ZodError) {
-        throw createGetWatcherSettingsMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(result, null, 2),
+					},
+				],
+			};
+		} catch (error) {
+			// Error handling
+			if (error instanceof z.ZodError) {
+				throw createGetWatcherSettingsMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      throw createGetWatcherSettingsMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createGetWatcherSettingsMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Tool registration
-  // Tool registration using modern registerTool method
+	// Tool registration
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_watcher_get_settings",
+	server.registerTool(
+		"elasticsearch_watcher_get_settings",
 
-    {
-      title: "Watcher Get Settings",
+		{
+			title: "Watcher Get Settings",
 
-      description:
-        "Get Elasticsearch Watcher index settings for .watches index. Best for configuration review, troubleshooting, system analysis. Use when you need to inspect Watcher internal index settings in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
+			description:
+				"Get Elasticsearch Watcher index settings for .watches index. Best for configuration review, troubleshooting, system analysis. Use when you need to inspect Watcher internal index settings in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-      inputSchema: {
-        masterTimeout: z.string().optional(), // Explicit operation timeout for connection to master node
-      },
-    },
+			inputSchema: {
+				masterTimeout: z.string().optional(), // Explicit operation timeout for connection to master node
+			},
+		},
 
-    withReadOnlyCheck("elasticsearch_watcher_get_settings", getWatcherSettingsHandler, OperationType.READ),
-  );
+		withReadOnlyCheck("elasticsearch_watcher_get_settings", getWatcherSettingsHandler, OperationType.READ),
+	);
 };

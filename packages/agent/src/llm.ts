@@ -1,43 +1,42 @@
 // agent/src/llm.ts
+
+import { type BedrockModelConfig, loadAgent, resolveBedrockConfig } from "@devops-agent/gitagent-bridge";
 import { ChatBedrockConverse } from "@langchain/aws";
-import { resolveBedrockConfig, loadAgent, type BedrockModelConfig } from "@devops-agent/gitagent-bridge";
 import { getAgentsDir } from "./paths.ts";
 
 let cachedRootAgent: ReturnType<typeof loadAgent> | null = null;
 
 function getRootAgent() {
-  if (!cachedRootAgent) {
-    cachedRootAgent = loadAgent(getAgentsDir());
-  }
-  return cachedRootAgent;
+	if (!cachedRootAgent) {
+		cachedRootAgent = loadAgent(getAgentsDir());
+	}
+	return cachedRootAgent;
 }
 
 export type LlmRole = "orchestrator" | "classifier" | "subAgent" | "aggregator" | "responder" | "entityExtractor";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
-  orchestrator: {},
-  classifier: { temperature: 0 },
-  subAgent: {},
-  aggregator: { temperature: 0.1 },
-  responder: { temperature: 0.3 },
-  entityExtractor: { temperature: 0 },
+	orchestrator: {},
+	classifier: { temperature: 0 },
+	subAgent: {},
+	aggregator: { temperature: 0.1 },
+	responder: { temperature: 0.3 },
+	entityExtractor: { temperature: 0 },
 };
 
 export function createLlm(role: LlmRole): ChatBedrockConverse {
-  const agent = getRootAgent();
-  const isLightweight = role === "classifier" || role === "entityExtractor";
+	const agent = getRootAgent();
+	const isLightweight = role === "classifier" || role === "entityExtractor";
 
-  const modelConfig = isLightweight
-    ? agent.subAgents.get("elastic-agent")?.manifest.model
-    : agent.manifest.model;
+	const modelConfig = isLightweight ? agent.subAgents.get("elastic-agent")?.manifest.model : agent.manifest.model;
 
-  const bedrockConfig = resolveBedrockConfig(modelConfig);
-  const overrides = ROLE_OVERRIDES[role];
+	const bedrockConfig = resolveBedrockConfig(modelConfig);
+	const overrides = ROLE_OVERRIDES[role];
 
-  return new ChatBedrockConverse({
-    model: bedrockConfig.model,
-    region: bedrockConfig.region,
-    temperature: overrides.temperature ?? bedrockConfig.temperature,
-    maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
-  });
+	return new ChatBedrockConverse({
+		model: bedrockConfig.model,
+		region: bedrockConfig.region,
+		temperature: overrides.temperature ?? bedrockConfig.temperature,
+		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
+	});
 }

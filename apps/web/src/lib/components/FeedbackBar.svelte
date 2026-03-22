@@ -1,19 +1,23 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
+import Icon from "./Icon.svelte";
 
-  let { feedback, content, onFeedback }: {
-    feedback?: "up" | "down" | null;
-    content: string;
-    onFeedback: (score: "up" | "down") => void;
-  } = $props();
+let {
+	feedback,
+	content,
+	onFeedback,
+}: {
+	feedback?: "up" | "down" | null;
+	content: string;
+	onFeedback: (score: "up" | "down") => void;
+} = $props();
 
-  let copied = $state(false);
+let copied = $state(false);
 
-  async function copyContent() {
-    await navigator.clipboard.writeText(content);
-    copied = true;
-    setTimeout(() => copied = false, 2000);
-  }
+async function copyContent() {
+	await navigator.clipboard.writeText(content);
+	copied = true;
+	setTimeout(() => (copied = false), 2000);
+}
 </script>
 
 <div class="flex items-center gap-2 mt-2 text-gray-400">

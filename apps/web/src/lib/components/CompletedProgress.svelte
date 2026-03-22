@@ -1,14 +1,19 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
+import Icon from "./Icon.svelte";
 
-  let { nodes, dataSourceResults, responseTime, toolsUsed }: {
-    nodes?: Map<string, { duration: number }>;
-    dataSourceResults?: Map<string, { status: string; message?: string }>;
-    responseTime?: number;
-    toolsUsed?: string[];
-  } = $props();
+let {
+	nodes,
+	dataSourceResults,
+	responseTime,
+	toolsUsed,
+}: {
+	nodes?: Map<string, { duration: number }>;
+	dataSourceResults?: Map<string, { status: string; message?: string }>;
+	responseTime?: number;
+	toolsUsed?: string[];
+} = $props();
 
-  let expanded = $state(false);
+let expanded = $state(false);
 </script>
 
 {#if nodes && nodes.size > 0}

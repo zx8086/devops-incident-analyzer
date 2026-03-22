@@ -8,49 +8,49 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Define the parameter schema
 const GetAutoscalingCapacityParams = z.object({
-  masterTimeout: z.string().optional(),
+	masterTimeout: z.string().optional(),
 });
 
 type GetAutoscalingCapacityParamsType = z.infer<typeof GetAutoscalingCapacityParams>;
 
 export const registerAutoscalingGetCapacityTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  // Tool registration using modern registerTool method
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_autoscaling_get_capacity",
+	server.registerTool(
+		"elasticsearch_autoscaling_get_capacity",
 
-    {
-      title: "Autoscaling Get Capacity",
+		{
+			title: "Autoscaling Get Capacity",
 
-      description:
-        "Get the current autoscaling capacity from Elasticsearch. Best for capacity planning, resource monitoring, cluster scaling analysis. Use when you need to monitor Elasticsearch cluster autoscaling decisions and capacity recommendations. NOTE: Designed for Elasticsearch Service, ECE, and ECK.",
+			description:
+				"Get the current autoscaling capacity from Elasticsearch. Best for capacity planning, resource monitoring, cluster scaling analysis. Use when you need to monitor Elasticsearch cluster autoscaling decisions and capacity recommendations. NOTE: Designed for Elasticsearch Service, ECE, and ECK.",
 
-      inputSchema: {
-        masterTimeout: z.string().optional(),
-      },
-    },
+			inputSchema: {
+				masterTimeout: z.string().optional(),
+			},
+		},
 
-    async (params: GetAutoscalingCapacityParamsType): Promise<SearchResult> => {
-      try {
-        const result = await esClient.autoscaling.getAutoscalingCapacity({
-          master_timeout: params.masterTimeout,
-        });
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        logger.error("Failed to get autoscaling capacity:", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
-      }
-    },
-  );
+		async (params: GetAutoscalingCapacityParamsType): Promise<SearchResult> => {
+			try {
+				const result = await esClient.autoscaling.getAutoscalingCapacity({
+					master_timeout: params.masterTimeout,
+				});
+				return {
+					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				};
+			} catch (error) {
+				logger.error("Failed to get autoscaling capacity:", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+				};
+			}
+		},
+	);
 };

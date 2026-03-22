@@ -1,19 +1,26 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
-  import MarkdownRenderer from "./MarkdownRenderer.svelte";
-  import FeedbackBar from "./FeedbackBar.svelte";
-  import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
-  import CompletedProgress from "./CompletedProgress.svelte";
-  import type { ChatMessage } from "$lib/stores/agent.svelte";
+import type { ChatMessage } from "$lib/stores/agent.svelte";
+import CompletedProgress from "./CompletedProgress.svelte";
+import FeedbackBar from "./FeedbackBar.svelte";
+import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
+import Icon from "./Icon.svelte";
+import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
-  let { message, index, isLast = false, isStreaming = false, onSuggestionClick, onFeedback }: {
-    message: ChatMessage;
-    index: number;
-    isLast?: boolean;
-    isStreaming?: boolean;
-    onSuggestionClick?: (s: string) => void;
-    onFeedback?: (index: number, score: "up" | "down") => void;
-  } = $props();
+let {
+	message,
+	index,
+	isLast = false,
+	isStreaming = false,
+	onSuggestionClick,
+	onFeedback,
+}: {
+	message: ChatMessage;
+	index: number;
+	isLast?: boolean;
+	isStreaming?: boolean;
+	onSuggestionClick?: (s: string) => void;
+	onFeedback?: (index: number, score: "up" | "down") => void;
+} = $props();
 </script>
 
 {#if message.role === "user"}

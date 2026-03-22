@@ -20,9 +20,9 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Simple Zod validator for runtime validation only
 const deleteLifecycleValidator = z.object({
-  policy: z.string().min(1, "Policy identifier cannot be empty"),
-  masterTimeout: z.string().optional(),
-  timeout: z.string().optional(),
+	policy: z.string().min(1, "Policy identifier cannot be empty"),
+	masterTimeout: z.string().optional(),
+	timeout: z.string().optional(),
 });
 
 type DeleteLifecycleParams = z.infer<typeof deleteLifecycleValidator>;
@@ -32,23 +32,23 @@ type DeleteLifecycleParams = z.infer<typeof deleteLifecycleValidator>;
 // =============================================================================
 
 function createIlmDeleteMcpError(
-  error: Error | string,
-  context: {
-    type: "validation" | "execution" | "not_found" | "in_use" | "permission";
-    details?: any;
-  },
+	error: Error | string,
+	context: {
+		type: "validation" | "execution" | "not_found" | "in_use" | "permission";
+		details?: any;
+	},
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-    not_found: ErrorCode.InvalidRequest,
-    in_use: ErrorCode.InvalidRequest,
-    permission: ErrorCode.InvalidRequest,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+		not_found: ErrorCode.InvalidRequest,
+		in_use: ErrorCode.InvalidRequest,
+		permission: ErrorCode.InvalidRequest,
+	};
 
-  return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_delete_lifecycle] ${message}`, context.details);
+	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_delete_lifecycle] ${message}`, context.details);
 }
 
 // =============================================================================
@@ -56,150 +56,150 @@ function createIlmDeleteMcpError(
 // =============================================================================
 
 export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const deleteLifecycleHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
-    let params: DeleteLifecycleParams | undefined;
+	const deleteLifecycleHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
+		let params: DeleteLifecycleParams | undefined;
 
-    try {
-      // Simple validation - no complex parameter extraction
-      params = deleteLifecycleValidator.parse(args);
+		try {
+			// Simple validation - no complex parameter extraction
+			params = deleteLifecycleValidator.parse(args);
 
-      logger.debug("Deleting ILM lifecycle policy (simplified)", {
-        policy: params.policy,
-        masterTimeout: params.masterTimeout,
-        timeout: params.timeout,
-      });
+			logger.debug("Deleting ILM lifecycle policy (simplified)", {
+				policy: params.policy,
+				masterTimeout: params.masterTimeout,
+				timeout: params.timeout,
+			});
 
-      // First, check if policy exists by trying to get it
-      try {
-        await esClient.ilm.getLifecycle({
-          name: params.policy,
-        });
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("resource_not_found")) {
-          throw createIlmDeleteMcpError(`Policy '${params.policy}' does not exist`, {
-            type: "not_found",
-            details: { policy: params.policy },
-          });
-        }
-        // Re-throw other errors for main error handler
-        throw error;
-      }
+			// First, check if policy exists by trying to get it
+			try {
+				await esClient.ilm.getLifecycle({
+					name: params.policy,
+				});
+			} catch (error) {
+				if (error instanceof Error && error.message.includes("resource_not_found")) {
+					throw createIlmDeleteMcpError(`Policy '${params.policy}' does not exist`, {
+						type: "not_found",
+						details: { policy: params.policy },
+					});
+				}
+				// Re-throw other errors for main error handler
+				throw error;
+			}
 
-      // Delete the lifecycle policy
-      const result = await esClient.ilm.deleteLifecycle({
-        name: params.policy,
-        master_timeout: params.masterTimeout,
-        timeout: params.timeout,
-      });
+			// Delete the lifecycle policy
+			const result = await esClient.ilm.deleteLifecycle({
+				name: params.policy,
+				master_timeout: params.masterTimeout,
+				timeout: params.timeout,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow ILM operation: delete_lifecycle", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow ILM operation: delete_lifecycle", { duration });
+			}
 
-      logger.info(`Successfully deleted ILM policy: ${params.policy}`);
+			logger.info(`Successfully deleted ILM policy: ${params.policy}`);
 
-      // MCP-compliant success response
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Successfully deleted ILM policy: **${params.policy}**\n\nThe policy has been removed and is no longer available for new indices.`,
-          },
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                acknowledged: result.acknowledged || true,
-                policy: params.policy,
-                operation: "delete_lifecycle",
-                timestamp: new Date().toISOString(),
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    } catch (error) {
-      // Standardized MCP error handling
-      if (error instanceof z.ZodError) {
-        throw createIlmDeleteMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			// MCP-compliant success response
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Successfully deleted ILM policy: **${params.policy}**\n\nThe policy has been removed and is no longer available for new indices.`,
+					},
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								acknowledged: result.acknowledged || true,
+								policy: params.policy,
+								operation: "delete_lifecycle",
+								timestamp: new Date().toISOString(),
+							},
+							null,
+							2,
+						),
+					},
+				],
+			};
+		} catch (error) {
+			// Standardized MCP error handling
+			if (error instanceof z.ZodError) {
+				throw createIlmDeleteMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      if (error instanceof McpError) {
-        throw error; // Re-throw MCP errors
-      }
+			if (error instanceof McpError) {
+				throw error; // Re-throw MCP errors
+			}
 
-      if (error instanceof Error) {
-        if (error.message.includes("security_exception")) {
-          throw createIlmDeleteMcpError("Insufficient permissions to delete ILM policies", {
-            type: "permission",
-            details: { originalError: error.message },
-          });
-        }
+			if (error instanceof Error) {
+				if (error.message.includes("security_exception")) {
+					throw createIlmDeleteMcpError("Insufficient permissions to delete ILM policies", {
+						type: "permission",
+						details: { originalError: error.message },
+					});
+				}
 
-        if (error.message.includes("resource_not_found")) {
-          const policyName = params?.policy || "unknown";
-          throw createIlmDeleteMcpError(`Policy '${policyName}' not found`, {
-            type: "not_found",
-            details: { policy: policyName },
-          });
-        }
+				if (error.message.includes("resource_not_found")) {
+					const policyName = params?.policy || "unknown";
+					throw createIlmDeleteMcpError(`Policy '${policyName}' not found`, {
+						type: "not_found",
+						details: { policy: policyName },
+					});
+				}
 
-        // Check for policy in use error
-        if (error.message.includes("cannot delete policy") || error.message.includes("in use")) {
-          const policyName = params?.policy || "unknown";
-          throw createIlmDeleteMcpError(
-            `Policy '${policyName}' cannot be deleted because it is currently in use by indices or templates`,
-            {
-              type: "in_use",
-              details: {
-                policy: policyName,
-                suggestion: "Remove the policy from all indices and templates before deleting it",
-              },
-            },
-          );
-        }
-      }
+				// Check for policy in use error
+				if (error.message.includes("cannot delete policy") || error.message.includes("in use")) {
+					const policyName = params?.policy || "unknown";
+					throw createIlmDeleteMcpError(
+						`Policy '${policyName}' cannot be deleted because it is currently in use by indices or templates`,
+						{
+							type: "in_use",
+							details: {
+								policy: policyName,
+								suggestion: "Remove the policy from all indices and templates before deleting it",
+							},
+						},
+					);
+				}
+			}
 
-      throw createIlmDeleteMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          policy: params?.policy || "unknown",
-          args,
-        },
-      });
-    }
-  };
+			throw createIlmDeleteMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					policy: params?.policy || "unknown",
+					args,
+				},
+			});
+		}
+	};
 
-  // Direct tool registration with JSON Schema + read-only protection
-  // Tool registration using modern registerTool method
+	// Direct tool registration with JSON Schema + read-only protection
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_ilm_delete_lifecycle",
+	server.registerTool(
+		"elasticsearch_ilm_delete_lifecycle",
 
-    {
-      title: "Ilm Delete Lifecycle",
+		{
+			title: "Ilm Delete Lifecycle",
 
-      description:
-        "Delete an ILM policy. DESTRUCTIVE OPERATION: Cannot be undone. Policy must not be in use by any indices or templates. Examples: {policy: old-logs-policy}. Uses direct JSON Schema and standardized MCP error codes.",
+			description:
+				"Delete an ILM policy. DESTRUCTIVE OPERATION: Cannot be undone. Policy must not be in use by any indices or templates. Examples: {policy: old-logs-policy}. Uses direct JSON Schema and standardized MCP error codes.",
 
-      inputSchema: {
-        policy: z.string().min(1).describe("Policy name to delete (required)"),
-        masterTimeout: z.string().optional().describe("Master node timeout"),
-        timeout: z.string().optional().describe("Request timeout"),
-      },
-    },
+			inputSchema: {
+				policy: z.string().min(1).describe("Policy name to delete (required)"),
+				masterTimeout: z.string().optional().describe("Master node timeout"),
+				timeout: z.string().optional().describe("Request timeout"),
+			},
+		},
 
-    // Direct JSON Schema - no Zod conversion
-    withReadOnlyCheck("elasticsearch_ilm_delete_lifecycle", deleteLifecycleHandler, OperationType.DELETE),
-  );
+		// Direct JSON Schema - no Zod conversion
+		withReadOnlyCheck("elasticsearch_ilm_delete_lifecycle", deleteLifecycleHandler, OperationType.DELETE),
+	);
 };
 
 // =============================================================================

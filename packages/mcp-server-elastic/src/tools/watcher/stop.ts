@@ -14,92 +14,92 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const stopWatcherValidator = z.object({
-  master_timeout: z.string().optional(),
+	master_timeout: z.string().optional(),
 });
 
 type _StopWatcherParams = z.infer<typeof stopWatcherValidator>;
 
 // MCP error handling
 function createStopWatcherMcpError(
-  error: Error | string,
-  context: { type: "validation" | "execution"; details?: any },
+	error: Error | string,
+	context: { type: "validation" | "execution"; details?: any },
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+	};
 
-  return new McpError(
-    errorCodeMap[context.type] || ErrorCode.InternalError,
-    `[elasticsearch_watcher_stop] ${message}`,
-    context.details,
-  );
+	return new McpError(
+		errorCodeMap[context.type] || ErrorCode.InternalError,
+		`[elasticsearch_watcher_stop] ${message}`,
+		context.details,
+	);
 }
 
 // Tool implementation
 export const registerWatcherStopTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const stopWatcherHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
+	const stopWatcherHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
 
-    try {
-      // Validate parameters
-      const params = stopWatcherValidator.parse(args);
+		try {
+			// Validate parameters
+			const params = stopWatcherValidator.parse(args);
 
-      const result = await esClient.watcher.stop({
-        master_timeout: params.master_timeout,
-      });
+			const result = await esClient.watcher.stop({
+				master_timeout: params.master_timeout,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow watcher operation", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow watcher operation", { duration });
+			}
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      // Error handling
-      if (error instanceof z.ZodError) {
-        throw createStopWatcherMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(result, null, 2),
+					},
+				],
+			};
+		} catch (error) {
+			// Error handling
+			if (error instanceof z.ZodError) {
+				throw createStopWatcherMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      throw createStopWatcherMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createStopWatcherMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Tool registration
-  // Tool registration using modern registerTool method
+	// Tool registration
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_watcher_stop",
+	server.registerTool(
+		"elasticsearch_watcher_stop",
 
-    {
-      title: "Watcher Stop",
+		{
+			title: "Watcher Stop",
 
-      description:
-        "Stop the Elasticsearch Watcher service. Best for service management, monitoring deactivation, maintenance operations. Use when you need to disable the Watcher service for Elasticsearch maintenance or troubleshooting. Uses direct JSON Schema and standardized MCP error codes.",
+			description:
+				"Stop the Elasticsearch Watcher service. Best for service management, monitoring deactivation, maintenance operations. Use when you need to disable the Watcher service for Elasticsearch maintenance or troubleshooting. Uses direct JSON Schema and standardized MCP error codes.",
 
-      inputSchema: {
-        master_timeout: z.string().optional(), // Explicit operation timeout for connection to master node
-      },
-    },
+			inputSchema: {
+				master_timeout: z.string().optional(), // Explicit operation timeout for connection to master node
+			},
+		},
 
-    withReadOnlyCheck("elasticsearch_watcher_stop", stopWatcherHandler, OperationType.WRITE),
-  );
+		withReadOnlyCheck("elasticsearch_watcher_stop", stopWatcherHandler, OperationType.WRITE),
+	);
 };

@@ -4,389 +4,389 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { logger } from "./logger.js";
 
 interface SecurityConfig {
-  maxInputSize: number;
-  enableInjectionDetection: boolean;
-  enableXssProtection: boolean;
-  enableCommandInjectionProtection: boolean;
-  allowedIpRanges?: string[];
-  sensitiveFields: string[];
-  maxQueryComplexity: number;
+	maxInputSize: number;
+	enableInjectionDetection: boolean;
+	enableXssProtection: boolean;
+	enableCommandInjectionProtection: boolean;
+	allowedIpRanges?: string[];
+	sensitiveFields: string[];
+	maxQueryComplexity: number;
 }
 
 interface SecurityViolation {
-  type: "injection" | "xss" | "command_injection" | "size_limit" | "complexity" | "access_denied";
-  field?: string;
-  value?: string;
-  severity: "low" | "medium" | "high" | "critical";
-  blocked: boolean;
+	type: "injection" | "xss" | "command_injection" | "size_limit" | "complexity" | "access_denied";
+	field?: string;
+	value?: string;
+	severity: "low" | "medium" | "high" | "critical";
+	blocked: boolean;
 }
 
 export class SecurityEnhancer {
-  private config: SecurityConfig;
-  private suspiciousPatterns!: Map<string, RegExp[]>;
+	private config: SecurityConfig;
+	private suspiciousPatterns!: Map<string, RegExp[]>;
 
-  constructor(config: Partial<SecurityConfig> = {}) {
-    this.config = {
-      maxInputSize: 1024 * 1024, // 1MB
-      enableInjectionDetection: true,
-      enableXssProtection: true,
-      enableCommandInjectionProtection: true,
-      sensitiveFields: ["password", "api_key", "apiKey", "secret", "token", "auth"],
-      maxQueryComplexity: 100,
-      ...config,
-    };
+	constructor(config: Partial<SecurityConfig> = {}) {
+		this.config = {
+			maxInputSize: 1024 * 1024, // 1MB
+			enableInjectionDetection: true,
+			enableXssProtection: true,
+			enableCommandInjectionProtection: true,
+			sensitiveFields: ["password", "api_key", "apiKey", "secret", "token", "auth"],
+			maxQueryComplexity: 100,
+			...config,
+		};
 
-    this.initializeSuspiciousPatterns();
-  }
+		this.initializeSuspiciousPatterns();
+	}
 
-  private initializeSuspiciousPatterns(): void {
-    this.suspiciousPatterns = new Map([
-      [
-        "sql_injection",
-        [
-          /(\b(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\b)/gi,
-          /(UNION\s+SELECT|OR\s+1\s*=\s*1|'.*OR.*'|".*OR.*")/gi,
-          /(;\s*(DROP|DELETE|TRUNCATE|ALTER))/gi,
-          /('|"|\||%|;|--|\||&&|\|\|)/g,
-        ],
-      ],
-      [
-        "nosql_injection",
-        [
-          /(\$where|\$ne|\$gt|\$lt|\$gte|\$lte|\$in|\$nin|\$exists|\$regex)/gi,
-          /({"?\$[a-z]+":?\s*{)/gi,
-          /(\$\$|\$function|\$accumulator)/gi,
-        ],
-      ],
-      [
-        "xss",
-        [
-          /<script[^>]*>.*?<\/script>/gi,
-          /<iframe[^>]*>.*?<\/iframe>/gi,
-          /javascript:/gi,
-          /on\w+\s*=/gi,
-          /<[^>]+on\w+="[^"]*"/gi,
-        ],
-      ],
-      [
-        "command_injection",
-        [
-          /(\|\||&&|;|`|\$\(|\$\{)/g, // Removed single | and comma from dangerous patterns
-          /(nc|netcat|wget|curl|bash|sh|cmd|powershell)/gi,
-          /(>>|<<)/g, // Removed single < > as they can be in Elasticsearch queries
-          /(\.\.|\/etc\/|\/bin\/|\/usr\/)/gi,
-        ],
-      ],
-      ["path_traversal", [/(\.\.\/)|(\.\.\\)/g, /(%2e%2e%2f)|(%2e%2e%5c)/gi, /(\/etc\/|\/bin\/|\/usr\/|\/var\/)/gi]],
-    ]);
-  }
+	private initializeSuspiciousPatterns(): void {
+		this.suspiciousPatterns = new Map([
+			[
+				"sql_injection",
+				[
+					/(\b(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\b)/gi,
+					/(UNION\s+SELECT|OR\s+1\s*=\s*1|'.*OR.*'|".*OR.*")/gi,
+					/(;\s*(DROP|DELETE|TRUNCATE|ALTER))/gi,
+					/('|"|\||%|;|--|\||&&|\|\|)/g,
+				],
+			],
+			[
+				"nosql_injection",
+				[
+					/(\$where|\$ne|\$gt|\$lt|\$gte|\$lte|\$in|\$nin|\$exists|\$regex)/gi,
+					/({"?\$[a-z]+":?\s*{)/gi,
+					/(\$\$|\$function|\$accumulator)/gi,
+				],
+			],
+			[
+				"xss",
+				[
+					/<script[^>]*>.*?<\/script>/gi,
+					/<iframe[^>]*>.*?<\/iframe>/gi,
+					/javascript:/gi,
+					/on\w+\s*=/gi,
+					/<[^>]+on\w+="[^"]*"/gi,
+				],
+			],
+			[
+				"command_injection",
+				[
+					/(\|\||&&|;|`|\$\(|\$\{)/g, // Removed single | and comma from dangerous patterns
+					/(nc|netcat|wget|curl|bash|sh|cmd|powershell)/gi,
+					/(>>|<<)/g, // Removed single < > as they can be in Elasticsearch queries
+					/(\.\.|\/etc\/|\/bin\/|\/usr\/)/gi,
+				],
+			],
+			["path_traversal", [/(\.\.\/)|(\.\.\\)/g, /(%2e%2e%2f)|(%2e%2e%5c)/gi, /(\/etc\/|\/bin\/|\/usr\/|\/var\/)/gi]],
+		]);
+	}
 
-  validateAndSanitizeInput(
-    toolName: string,
-    input: any,
-  ): {
-    sanitized: any;
-    violations: SecurityViolation[];
-  } {
-    const violations: SecurityViolation[] = [];
-    const sanitized = this.deepClone(input);
+	validateAndSanitizeInput(
+		toolName: string,
+		input: any,
+	): {
+		sanitized: any;
+		violations: SecurityViolation[];
+	} {
+		const violations: SecurityViolation[] = [];
+		const sanitized = this.deepClone(input);
 
-    try {
-      // Size check
-      const inputSize = JSON.stringify(input).length;
-      if (inputSize > this.config.maxInputSize) {
-        violations.push({
-          type: "size_limit",
-          severity: "high",
-          blocked: true,
-        });
+		try {
+			// Size check
+			const inputSize = JSON.stringify(input).length;
+			if (inputSize > this.config.maxInputSize) {
+				violations.push({
+					type: "size_limit",
+					severity: "high",
+					blocked: true,
+				});
 
-        logger.warn("Input size exceeds limit", {
-          tool: toolName,
-          size: inputSize,
-          limit: this.config.maxInputSize,
-        });
+				logger.warn("Input size exceeds limit", {
+					tool: toolName,
+					size: inputSize,
+					limit: this.config.maxInputSize,
+				});
 
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Input size (${inputSize} bytes) exceeds maximum allowed size (${this.config.maxInputSize} bytes)`,
-        );
-      }
+				throw new McpError(
+					ErrorCode.InvalidParams,
+					`Input size (${inputSize} bytes) exceeds maximum allowed size (${this.config.maxInputSize} bytes)`,
+				);
+			}
 
-      // Recursive validation and sanitization
-      this.processObject(sanitized, violations, toolName);
+			// Recursive validation and sanitization
+			this.processObject(sanitized, violations, toolName);
 
-      // Query complexity check for search operations
-      if (toolName.includes("search") && this.config.maxQueryComplexity > 0) {
-        const complexity = this.calculateQueryComplexity(sanitized);
-        if (complexity > this.config.maxQueryComplexity) {
-          violations.push({
-            type: "complexity",
-            severity: "medium",
-            blocked: true,
-          });
+			// Query complexity check for search operations
+			if (toolName.includes("search") && this.config.maxQueryComplexity > 0) {
+				const complexity = this.calculateQueryComplexity(sanitized);
+				if (complexity > this.config.maxQueryComplexity) {
+					violations.push({
+						type: "complexity",
+						severity: "medium",
+						blocked: true,
+					});
 
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Query complexity (${complexity}) exceeds maximum allowed (${this.config.maxQueryComplexity})`,
-          );
-        }
-      }
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`Query complexity (${complexity}) exceeds maximum allowed (${this.config.maxQueryComplexity})`,
+					);
+				}
+			}
 
-      // Log security violations
-      if (violations.length > 0) {
-        const criticalViolations = violations.filter((v) => v.severity === "critical" || v.blocked);
-        if (criticalViolations.length > 0) {
-          logger.error("Critical security violations detected", {
-            tool: toolName,
-            violations: criticalViolations,
-            input: this.redactSensitiveData(input),
-          });
-        } else {
-          logger.warn("Security violations detected but allowed", {
-            tool: toolName,
-            violations,
-            input: this.redactSensitiveData(input),
-          });
-        }
-      }
+			// Log security violations
+			if (violations.length > 0) {
+				const criticalViolations = violations.filter((v) => v.severity === "critical" || v.blocked);
+				if (criticalViolations.length > 0) {
+					logger.error("Critical security violations detected", {
+						tool: toolName,
+						violations: criticalViolations,
+						input: this.redactSensitiveData(input),
+					});
+				} else {
+					logger.warn("Security violations detected but allowed", {
+						tool: toolName,
+						violations,
+						input: this.redactSensitiveData(input),
+					});
+				}
+			}
 
-      return { sanitized, violations };
-    } catch (error) {
-      logger.error("Security validation failed", {
-        tool: toolName,
-        error: error instanceof Error ? error.message : String(error),
-        input: this.redactSensitiveData(input),
-      });
-      throw error;
-    }
-  }
+			return { sanitized, violations };
+		} catch (error) {
+			logger.error("Security validation failed", {
+				tool: toolName,
+				error: error instanceof Error ? error.message : String(error),
+				input: this.redactSensitiveData(input),
+			});
+			throw error;
+		}
+	}
 
-  private processObject(obj: any, violations: SecurityViolation[], toolName: string, path = ""): void {
-    if (obj === null || obj === undefined) return;
+	private processObject(obj: any, violations: SecurityViolation[], toolName: string, path = ""): void {
+		if (obj === null || obj === undefined) return;
 
-    if (Array.isArray(obj)) {
-      obj.forEach((item, index) => {
-        this.processObject(item, violations, toolName, `${path}[${index}]`);
-      });
-      return;
-    }
+		if (Array.isArray(obj)) {
+			obj.forEach((item, index) => {
+				this.processObject(item, violations, toolName, `${path}[${index}]`);
+			});
+			return;
+		}
 
-    if (typeof obj === "object") {
-      for (const [key, value] of Object.entries(obj)) {
-        const currentPath = path ? `${path}.${key}` : key;
+		if (typeof obj === "object") {
+			for (const [key, value] of Object.entries(obj)) {
+				const currentPath = path ? `${path}.${key}` : key;
 
-        // Check for sensitive fields
-        if (this.isSensitiveField(key) && typeof value === "string") {
-          obj[key] = this.redactValue(value);
-          continue;
-        }
+				// Check for sensitive fields
+				if (this.isSensitiveField(key) && typeof value === "string") {
+					obj[key] = this.redactValue(value);
+					continue;
+				}
 
-        this.processObject(value, violations, toolName, currentPath);
-      }
-      return;
-    }
+				this.processObject(value, violations, toolName, currentPath);
+			}
+			return;
+		}
 
-    if (typeof obj === "string") {
-      const stringViolations = this.validateString(obj, path);
-      violations.push(...stringViolations);
+		if (typeof obj === "string") {
+			const stringViolations = this.validateString(obj, path);
+			violations.push(...stringViolations);
 
-      // Block critical violations
-      const criticalViolations = stringViolations.filter((v) => v.severity === "critical");
-      if (criticalViolations.length > 0) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Security violation detected in field ${path}: ${criticalViolations[0].type}`,
-        );
-      }
-    }
-  }
+			// Block critical violations
+			const criticalViolations = stringViolations.filter((v) => v.severity === "critical");
+			if (criticalViolations.length > 0) {
+				throw new McpError(
+					ErrorCode.InvalidParams,
+					`Security violation detected in field ${path}: ${criticalViolations[0].type}`,
+				);
+			}
+		}
+	}
 
-  private validateString(value: string, field: string): SecurityViolation[] {
-    const violations: SecurityViolation[] = [];
+	private validateString(value: string, field: string): SecurityViolation[] {
+		const violations: SecurityViolation[] = [];
 
-    // Elasticsearch-specific exemptions - expanded to cover more field types
-    const isElasticsearchField =
-      field.toLowerCase().includes("index") ||
-      field.toLowerCase().includes("pattern") ||
-      field.toLowerCase().includes("query") ||
-      field.toLowerCase().includes("alias") ||
-      field.toLowerCase().includes("repository") ||
-      field.toLowerCase().includes("snapshot") ||
-      field.toLowerCase().includes("policy") ||
-      field.toLowerCase().includes("template") ||
-      field.toLowerCase().includes("name") ||
-      field.toLowerCase().includes("id");
+		// Elasticsearch-specific exemptions - expanded to cover more field types
+		const isElasticsearchField =
+			field.toLowerCase().includes("index") ||
+			field.toLowerCase().includes("pattern") ||
+			field.toLowerCase().includes("query") ||
+			field.toLowerCase().includes("alias") ||
+			field.toLowerCase().includes("repository") ||
+			field.toLowerCase().includes("snapshot") ||
+			field.toLowerCase().includes("policy") ||
+			field.toLowerCase().includes("template") ||
+			field.toLowerCase().includes("name") ||
+			field.toLowerCase().includes("id");
 
-    // Expanded patterns for legitimate Elasticsearch values
-    const isElasticsearchValue =
-      // Index patterns with wildcards, commas, hyphens, dots
-      /^[a-zA-Z0-9\-_*,.\s]+$/.test(value) ||
-      // Repository/snapshot names with hyphens
-      /^[a-zA-Z0-9\-_]+$/.test(value) ||
-      // Policy/template names
-      /^[a-zA-Z0-9\-_.]+$/.test(value);
+		// Expanded patterns for legitimate Elasticsearch values
+		const isElasticsearchValue =
+			// Index patterns with wildcards, commas, hyphens, dots
+			/^[a-zA-Z0-9\-_*,.\s]+$/.test(value) ||
+			// Repository/snapshot names with hyphens
+			/^[a-zA-Z0-9\-_]+$/.test(value) ||
+			// Policy/template names
+			/^[a-zA-Z0-9\-_.]+$/.test(value);
 
-    // Check each pattern category
-    for (const [category, patterns] of this.suspiciousPatterns.entries()) {
-      // Skip command injection checks for legitimate Elasticsearch patterns
-      if (category === "command_injection" && isElasticsearchField && isElasticsearchValue) {
-        continue;
-      }
+		// Check each pattern category
+		for (const [category, patterns] of this.suspiciousPatterns.entries()) {
+			// Skip command injection checks for legitimate Elasticsearch patterns
+			if (category === "command_injection" && isElasticsearchField && isElasticsearchValue) {
+				continue;
+			}
 
-      for (const pattern of patterns) {
-        if (pattern.test(value)) {
-          const severity = this.getSeverityForCategory(category);
+			for (const pattern of patterns) {
+				if (pattern.test(value)) {
+					const severity = this.getSeverityForCategory(category);
 
-          violations.push({
-            type: this.mapCategoryToType(category),
-            field,
-            value: this.truncateValue(value),
-            severity,
-            blocked: severity === "critical",
-          });
+					violations.push({
+						type: this.mapCategoryToType(category),
+						field,
+						value: this.truncateValue(value),
+						severity,
+						blocked: severity === "critical",
+					});
 
-          // Reset regex index for global patterns
-          pattern.lastIndex = 0;
-        }
-      }
-    }
+					// Reset regex index for global patterns
+					pattern.lastIndex = 0;
+				}
+			}
+		}
 
-    return violations;
-  }
+		return violations;
+	}
 
-  private getSeverityForCategory(category: string): "low" | "medium" | "high" | "critical" {
-    switch (category) {
-      case "sql_injection":
-      case "command_injection":
-        return "critical";
-      case "nosql_injection":
-      case "path_traversal":
-        return "high";
-      case "xss":
-        return "medium";
-      default:
-        return "low";
-    }
-  }
+	private getSeverityForCategory(category: string): "low" | "medium" | "high" | "critical" {
+		switch (category) {
+			case "sql_injection":
+			case "command_injection":
+				return "critical";
+			case "nosql_injection":
+			case "path_traversal":
+				return "high";
+			case "xss":
+				return "medium";
+			default:
+				return "low";
+		}
+	}
 
-  private mapCategoryToType(category: string): SecurityViolation["type"] {
-    switch (category) {
-      case "sql_injection":
-      case "nosql_injection":
-      case "path_traversal":
-        return "injection";
-      case "xss":
-        return "xss";
-      case "command_injection":
-        return "command_injection";
-      default:
-        return "injection";
-    }
-  }
+	private mapCategoryToType(category: string): SecurityViolation["type"] {
+		switch (category) {
+			case "sql_injection":
+			case "nosql_injection":
+			case "path_traversal":
+				return "injection";
+			case "xss":
+				return "xss";
+			case "command_injection":
+				return "command_injection";
+			default:
+				return "injection";
+		}
+	}
 
-  private calculateQueryComplexity(query: any): number {
-    if (typeof query !== "object" || query === null) return 1;
+	private calculateQueryComplexity(query: any): number {
+		if (typeof query !== "object" || query === null) return 1;
 
-    let complexity = 0;
+		let complexity = 0;
 
-    const traverse = (obj: any, depth = 0): void => {
-      if (depth > 10) return; // Prevent infinite recursion
+		const traverse = (obj: any, depth = 0): void => {
+			if (depth > 10) return; // Prevent infinite recursion
 
-      if (Array.isArray(obj)) {
-        complexity += obj.length;
-        for (const item of obj) {
-          traverse(item, depth + 1);
-        }
-      } else if (typeof obj === "object") {
-        complexity += Object.keys(obj).length;
-        for (const value of Object.values(obj)) {
-          traverse(value, depth + 1);
-        }
-      } else {
-        complexity += 1;
-      }
-    };
+			if (Array.isArray(obj)) {
+				complexity += obj.length;
+				for (const item of obj) {
+					traverse(item, depth + 1);
+				}
+			} else if (typeof obj === "object") {
+				complexity += Object.keys(obj).length;
+				for (const value of Object.values(obj)) {
+					traverse(value, depth + 1);
+				}
+			} else {
+				complexity += 1;
+			}
+		};
 
-    traverse(query);
-    return complexity;
-  }
+		traverse(query);
+		return complexity;
+	}
 
-  private isSensitiveField(fieldName: string): boolean {
-    const lowerFieldName = fieldName.toLowerCase();
-    return this.config.sensitiveFields.some((sensitive) => lowerFieldName.includes(sensitive.toLowerCase()));
-  }
+	private isSensitiveField(fieldName: string): boolean {
+		const lowerFieldName = fieldName.toLowerCase();
+		return this.config.sensitiveFields.some((sensitive) => lowerFieldName.includes(sensitive.toLowerCase()));
+	}
 
-  private redactValue(value: string): string {
-    if (value.length <= 4) return "***";
-    return value.substring(0, 2) + "*".repeat(value.length - 4) + value.substring(value.length - 2);
-  }
+	private redactValue(value: string): string {
+		if (value.length <= 4) return "***";
+		return value.substring(0, 2) + "*".repeat(value.length - 4) + value.substring(value.length - 2);
+	}
 
-  private truncateValue(value: string): string {
-    return value.length > 100 ? `${value.substring(0, 100)}...` : value;
-  }
+	private truncateValue(value: string): string {
+		return value.length > 100 ? `${value.substring(0, 100)}...` : value;
+	}
 
-  redactSensitiveData(obj: any): any {
-    if (obj === null || obj === undefined) return obj;
+	redactSensitiveData(obj: any): any {
+		if (obj === null || obj === undefined) return obj;
 
-    const redacted = this.deepClone(obj);
+		const redacted = this.deepClone(obj);
 
-    const traverse = (current: any): void => {
-      if (Array.isArray(current)) {
-        current.forEach(traverse);
-      } else if (typeof current === "object") {
-        for (const [key, value] of Object.entries(current)) {
-          if (this.isSensitiveField(key) && typeof value === "string") {
-            current[key] = this.redactValue(value);
-          } else {
-            traverse(value);
-          }
-        }
-      }
-    };
+		const traverse = (current: any): void => {
+			if (Array.isArray(current)) {
+				current.forEach(traverse);
+			} else if (typeof current === "object") {
+				for (const [key, value] of Object.entries(current)) {
+					if (this.isSensitiveField(key) && typeof value === "string") {
+						current[key] = this.redactValue(value);
+					} else {
+						traverse(value);
+					}
+				}
+			}
+		};
 
-    traverse(redacted);
-    return redacted;
-  }
+		traverse(redacted);
+		return redacted;
+	}
 
-  validateIpAccess(clientIp: string): boolean {
-    if (!this.config.allowedIpRanges || this.config.allowedIpRanges.length === 0) {
-      return true; // No restrictions
-    }
+	validateIpAccess(clientIp: string): boolean {
+		if (!this.config.allowedIpRanges || this.config.allowedIpRanges.length === 0) {
+			return true; // No restrictions
+		}
 
-    // Simple IP range check (could be enhanced with proper CIDR support)
-    for (const allowedRange of this.config.allowedIpRanges) {
-      if (clientIp.startsWith(allowedRange) || allowedRange === "*") {
-        return true;
-      }
-    }
+		// Simple IP range check (could be enhanced with proper CIDR support)
+		for (const allowedRange of this.config.allowedIpRanges) {
+			if (clientIp.startsWith(allowedRange) || allowedRange === "*") {
+				return true;
+			}
+		}
 
-    logger.warn("IP access denied", { clientIp, allowedRanges: this.config.allowedIpRanges });
-    return false;
-  }
+		logger.warn("IP access denied", { clientIp, allowedRanges: this.config.allowedIpRanges });
+		return false;
+	}
 
-  getSecurityHeaders(): Record<string, string> {
-    return {
-      "X-Content-Type-Options": "nosniff",
-      "X-Frame-Options": "DENY",
-      "X-XSS-Protection": "1; mode=block",
-      "Referrer-Policy": "strict-origin-when-cross-origin",
-      "Content-Security-Policy": "default-src 'none'; connect-src 'self'",
-      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-    };
-  }
+	getSecurityHeaders(): Record<string, string> {
+		return {
+			"X-Content-Type-Options": "nosniff",
+			"X-Frame-Options": "DENY",
+			"X-XSS-Protection": "1; mode=block",
+			"Referrer-Policy": "strict-origin-when-cross-origin",
+			"Content-Security-Policy": "default-src 'none'; connect-src 'self'",
+			"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		};
+	}
 
-  private deepClone(obj: any): any {
-    if (obj === null || typeof obj !== "object") return obj;
-    if (obj instanceof Date) return new Date(obj);
-    if (Array.isArray(obj)) return obj.map(this.deepClone.bind(this));
+	private deepClone(obj: any): any {
+		if (obj === null || typeof obj !== "object") return obj;
+		if (obj instanceof Date) return new Date(obj);
+		if (Array.isArray(obj)) return obj.map(this.deepClone.bind(this));
 
-    const cloned: any = {};
-    for (const [key, value] of Object.entries(obj)) {
-      cloned[key] = this.deepClone(value);
-    }
-    return cloned;
-  }
+		const cloned: any = {};
+		for (const [key, value] of Object.entries(obj)) {
+			cloned[key] = this.deepClone(value);
+		}
+		return cloned;
+	}
 }
 
 // Create default security enhancer instance
@@ -394,22 +394,22 @@ export const defaultSecurityEnhancer = new SecurityEnhancer();
 
 // Security wrapper for tool handlers
 export function withSecurityValidation<_T extends any[], R>(
-  toolName: string,
-  toolFunction: (toolArgs: any, extra: any) => Promise<R>,
-  securityConfig?: Partial<SecurityConfig>,
+	toolName: string,
+	toolFunction: (toolArgs: any, extra: any) => Promise<R>,
+	securityConfig?: Partial<SecurityConfig>,
 ) {
-  const enhancer = securityConfig ? new SecurityEnhancer(securityConfig) : defaultSecurityEnhancer;
+	const enhancer = securityConfig ? new SecurityEnhancer(securityConfig) : defaultSecurityEnhancer;
 
-  return async (toolArgs: any, extra: any): Promise<R> => {
-    const { sanitized, violations } = enhancer.validateAndSanitizeInput(toolName, toolArgs);
+	return async (toolArgs: any, extra: any): Promise<R> => {
+		const { sanitized, violations } = enhancer.validateAndSanitizeInput(toolName, toolArgs);
 
-    // Log security metrics
-    logger.debug("Security validation completed", {
-      tool: toolName,
-      violationCount: violations.length,
-      blocked: violations.some((v) => v.blocked),
-    });
+		// Log security metrics
+		logger.debug("Security validation completed", {
+			tool: toolName,
+			violationCount: violations.length,
+			blocked: violations.some((v) => v.blocked),
+		});
 
-    return toolFunction(sanitized, extra);
-  };
+		return toolFunction(sanitized, extra);
+	};
 }

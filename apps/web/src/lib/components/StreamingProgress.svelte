@@ -1,12 +1,15 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
+import Icon from "./Icon.svelte";
 
-  let { activeNodes, completedNodes }: {
-    activeNodes: Set<string>;
-    completedNodes: Map<string, { duration: number }>;
-  } = $props();
+let {
+	activeNodes,
+	completedNodes,
+}: {
+	activeNodes: Set<string>;
+	completedNodes: Map<string, { duration: number }>;
+} = $props();
 
-  const pipeline = ["classify", "entityExtractor", "supervisor", "queryDataSource", "align", "aggregate", "validate"];
+const pipeline = ["classify", "entityExtractor", "supervisor", "queryDataSource", "align", "aggregate", "validate"];
 </script>
 
 {#if activeNodes.size > 0 || completedNodes.size > 0}

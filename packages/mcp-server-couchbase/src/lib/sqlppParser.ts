@@ -1,179 +1,166 @@
 /* src/lib/sqlppParser.ts */
 
-import type { SQLPPParser, ASTNode } from "../types";
+import type { ASTNode, SQLPPParser } from "../types";
 import { logger } from "./logger";
 
 export class SQLPPParserImpl implements SQLPPParser {
-  private readonly dataModificationKeywords = new Set([
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "UPSERT",
-    "MERGE",
-  ]);
+	private readonly dataModificationKeywords = new Set(["INSERT", "UPDATE", "DELETE", "UPSERT", "MERGE"]);
 
-  private readonly structureModificationKeywords = new Set([
-    "CREATE",
-    "DROP",
-    "ALTER",
-    "GRANT",
-    "REVOKE",
-  ]);
+	private readonly structureModificationKeywords = new Set(["CREATE", "DROP", "ALTER", "GRANT", "REVOKE"]);
 
-  private readonly queryKeywords = new Set([
-    "SELECT",
-    "FROM",
-    "WHERE",
-    "GROUP BY",
-    "HAVING",
-    "ORDER BY",
-    "LIMIT",
-    "OFFSET",
-    "JOIN",
-    "LEFT JOIN",
-    "RIGHT JOIN",
-    "INNER JOIN",
-    "UNION",
-    "INTERSECT",
-    "EXCEPT",
-  ]);
+	private readonly queryKeywords = new Set([
+		"SELECT",
+		"FROM",
+		"WHERE",
+		"GROUP BY",
+		"HAVING",
+		"ORDER BY",
+		"LIMIT",
+		"OFFSET",
+		"JOIN",
+		"LEFT JOIN",
+		"RIGHT JOIN",
+		"INNER JOIN",
+		"UNION",
+		"INTERSECT",
+		"EXCEPT",
+	]);
 
-  parse(query: string): ASTNode {
-    const cleanedQuery = this.removeComments(query);
-    logger.debug("Parsing SQL++ query", { queryLength: query.length });
+	parse(query: string): ASTNode {
+		const cleanedQuery = this.removeComments(query);
+		logger.debug("Parsing SQL++ query", { queryLength: query.length });
 
-    const tokens = this.tokenize(cleanedQuery);
-    const ast = this.buildAST(tokens);
+		const tokens = this.tokenize(cleanedQuery);
+		const ast = this.buildAST(tokens);
 
-    logger.debug("Query parsed successfully", { 
-      queryType: ast.type,
-      hasWhere: ast.hasWhere,
-      hasLimit: ast.hasLimit
-    });
+		logger.debug("Query parsed successfully", {
+			queryType: ast.type,
+			hasWhere: ast.hasWhere,
+			hasLimit: ast.hasLimit,
+		});
 
-    return ast;
-  }
+		return ast;
+	}
 
-  modifiesData(parsedQuery: ASTNode): boolean {
-    if (!parsedQuery.rawQuery) return false;
+	modifiesData(parsedQuery: ASTNode): boolean {
+		if (!parsedQuery.rawQuery) return false;
 
-    const query = parsedQuery.rawQuery.toUpperCase();
-    const firstToken = this.tokenize(query)[0];
+		const query = parsedQuery.rawQuery.toUpperCase();
+		const firstToken = this.tokenize(query)[0];
 
-    // Check if the first token is a data modification keyword
-    const result = this.dataModificationKeywords.has(firstToken);
+		// Check if the first token is a data modification keyword
+		const result = this.dataModificationKeywords.has(firstToken);
 
-    if (result) {
-      logger.debug("Query identified as data modification query", { 
-        operation: firstToken 
-      });
-    }
+		if (result) {
+			logger.debug("Query identified as data modification query", {
+				operation: firstToken,
+			});
+		}
 
-    return result;
-  }
+		return result;
+	}
 
-  modifiesStructure(parsedQuery: ASTNode): boolean {
-    if (!parsedQuery.rawQuery) return false;
+	modifiesStructure(parsedQuery: ASTNode): boolean {
+		if (!parsedQuery.rawQuery) return false;
 
-    const query = parsedQuery.rawQuery.toUpperCase();
-    const firstToken = this.tokenize(query)[0];
+		const query = parsedQuery.rawQuery.toUpperCase();
+		const firstToken = this.tokenize(query)[0];
 
-    // Check if the first token is a structure modification keyword
-    const result = this.structureModificationKeywords.has(firstToken);
+		// Check if the first token is a structure modification keyword
+		const result = this.structureModificationKeywords.has(firstToken);
 
-    if (result) {
-      logger.debug("Query identified as structure modification query", { 
-        operation: firstToken 
-      });
-    }
+		if (result) {
+			logger.debug("Query identified as structure modification query", {
+				operation: firstToken,
+			});
+		}
 
-    return result;
-  }
+		return result;
+	}
 
-  private tokenize(query: string): string[] {
-    // Split on whitespace but preserve quoted strings
-    const tokens: string[] = [];
-    let currentToken = '';
-    let inQuotes = false;
-    let quoteChar = '';
+	private tokenize(query: string): string[] {
+		// Split on whitespace but preserve quoted strings
+		const tokens: string[] = [];
+		let currentToken = "";
+		let inQuotes = false;
+		let quoteChar = "";
 
-    for (let i = 0; i < query.length; i++) {
-      const char = query[i];
-      
-      if ((char === '"' || char === "'" || char === '`') && 
-          (i === 0 || query[i - 1] !== '\\')) {
-        if (!inQuotes) {
-          inQuotes = true;
-          quoteChar = char;
-        } else if (char === quoteChar) {
-          inQuotes = false;
-        }
-      }
+		for (let i = 0; i < query.length; i++) {
+			const char = query[i];
 
-      if (char === ' ' && !inQuotes) {
-        if (currentToken) {
-          tokens.push(currentToken);
-          currentToken = '';
-        }
-      } else {
-        currentToken += char;
-      }
-    }
+			if ((char === '"' || char === "'" || char === "`") && (i === 0 || query[i - 1] !== "\\")) {
+				if (!inQuotes) {
+					inQuotes = true;
+					quoteChar = char;
+				} else if (char === quoteChar) {
+					inQuotes = false;
+				}
+			}
 
-    if (currentToken) {
-      tokens.push(currentToken);
-    }
+			if (char === " " && !inQuotes) {
+				if (currentToken) {
+					tokens.push(currentToken);
+					currentToken = "";
+				}
+			} else {
+				currentToken += char;
+			}
+		}
 
-    return tokens;
-  }
+		if (currentToken) {
+			tokens.push(currentToken);
+		}
 
-  private buildAST(tokens: string[]): ASTNode {
-    const ast: ASTNode = {
-      type: "ROOT",
-      rawQuery: tokens.join(" "),
-      hasWhere: false,
-      hasLimit: false,
-      children: []
-    };
+		return tokens;
+	}
 
-    let currentClause = "";
-    let currentClauseTokens: string[] = [];
+	private buildAST(tokens: string[]): ASTNode {
+		const ast: ASTNode = {
+			type: "ROOT",
+			rawQuery: tokens.join(" "),
+			hasWhere: false,
+			hasLimit: false,
+			children: [],
+		};
 
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i].toUpperCase();
-      
-      if (this.queryKeywords.has(token)) {
-        if (currentClause && currentClauseTokens.length > 0) {
-          ast.children?.push({
-            type: currentClause,
-            value: currentClauseTokens.join(" ")
-          });
-          currentClauseTokens = [];
-        }
-        currentClause = token;
-      } else {
-        currentClauseTokens.push(tokens[i]);
-      }
+		let currentClause = "";
+		let currentClauseTokens: string[] = [];
 
-      if (token === "WHERE") ast.hasWhere = true;
-      if (token === "LIMIT") ast.hasLimit = true;
-    }
+		for (let i = 0; i < tokens.length; i++) {
+			const token = tokens[i].toUpperCase();
 
-    if (currentClause && currentClauseTokens.length > 0) {
-      ast.children?.push({
-        type: currentClause,
-        value: currentClauseTokens.join(" ")
-      });
-    }
+			if (this.queryKeywords.has(token)) {
+				if (currentClause && currentClauseTokens.length > 0) {
+					ast.children?.push({
+						type: currentClause,
+						value: currentClauseTokens.join(" "),
+					});
+					currentClauseTokens = [];
+				}
+				currentClause = token;
+			} else {
+				currentClauseTokens.push(tokens[i]);
+			}
 
-    return ast;
-  }
+			if (token === "WHERE") ast.hasWhere = true;
+			if (token === "LIMIT") ast.hasLimit = true;
+		}
 
-  private removeComments(query: string): string {
-    let cleaned = query.replace(/--.*$/gm, ""); // Remove single-line comments
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, ""); // Remove multi-line comments
-    return cleaned.trim();
-  }
+		if (currentClause && currentClauseTokens.length > 0) {
+			ast.children?.push({
+				type: currentClause,
+				value: currentClauseTokens.join(" "),
+			});
+		}
+
+		return ast;
+	}
+
+	private removeComments(query: string): string {
+		let cleaned = query.replace(/--.*$/gm, ""); // Remove single-line comments
+		cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, ""); // Remove multi-line comments
+		return cleaned.trim();
+	}
 }
 
 export const sqlppParser = new SQLPPParserImpl();

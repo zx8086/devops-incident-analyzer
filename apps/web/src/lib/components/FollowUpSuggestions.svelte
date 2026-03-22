@@ -1,10 +1,13 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
+import Icon from "./Icon.svelte";
 
-  let { suggestions, onSelect }: {
-    suggestions: string[];
-    onSelect: (s: string) => void;
-  } = $props();
+let {
+	suggestions,
+	onSelect,
+}: {
+	suggestions: string[];
+	onSelect: (s: string) => void;
+} = $props();
 </script>
 
 {#if suggestions.length > 0}

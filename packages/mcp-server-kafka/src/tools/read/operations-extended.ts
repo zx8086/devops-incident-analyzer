@@ -3,16 +3,16 @@
 import type { KafkaService } from "../../services/kafka-service.ts";
 
 export async function getConsumerGroupLag(service: KafkaService, params: { groupId: string }) {
-  return service.getConsumerGroupLag(params.groupId);
+	return service.getConsumerGroupLag(params.groupId);
 }
 
 export async function describeCluster(service: KafkaService) {
-  return service.describeCluster();
+	return service.describeCluster();
 }
 
 export async function getMessageByOffset(
-  service: KafkaService,
-  params: { topic: string; partition: number; offset: number },
+	service: KafkaService,
+	params: { topic: string; partition: number; offset: number },
 ) {
-  return service.getMessageByOffset(params.topic, params.partition, params.offset);
+	return service.getMessageByOffset(params.topic, params.partition, params.offset);
 }

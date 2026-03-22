@@ -3,13 +3,13 @@ import { z } from "zod";
 import { GroupIdParam, TopicNameParam } from "../shared/parameters.ts";
 
 export const GetConsumerGroupLagParams = z.object({
-  groupId: GroupIdParam.describe("Consumer group ID to calculate lag for"),
+	groupId: GroupIdParam.describe("Consumer group ID to calculate lag for"),
 });
 
 export const DescribeClusterParams = z.object({});
 
 export const GetMessageByOffsetParams = z.object({
-  topic: TopicNameParam,
-  partition: z.number().int().min(0).describe("Partition number"),
-  offset: z.number().int().min(0).describe("Message offset to retrieve"),
+	topic: TopicNameParam,
+	partition: z.number().int().min(0).describe("Partition number"),
+	offset: z.number().int().min(0).describe("Message offset to retrieve"),
 });

@@ -1,39 +1,39 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { agentStore } from "$lib/stores/agent.svelte";
-  import Icon from "$lib/components/Icon.svelte";
-  import ChatMessage from "$lib/components/ChatMessage.svelte";
-  import ChatInput from "$lib/components/ChatInput.svelte";
-  import StreamingProgress from "$lib/components/StreamingProgress.svelte";
-  import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
+import { onMount } from "svelte";
+import ChatInput from "$lib/components/ChatInput.svelte";
+import ChatMessage from "$lib/components/ChatMessage.svelte";
+import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
+import Icon from "$lib/components/Icon.svelte";
+import StreamingProgress from "$lib/components/StreamingProgress.svelte";
+import { agentStore } from "$lib/stores/agent.svelte";
 
-  let messagesContainer: HTMLDivElement;
-  let availableDataSources = $state<string[]>([]);
+let messagesContainer: HTMLDivElement;
+let availableDataSources = $state<string[]>([]);
 
-  onMount(async () => {
-    await agentStore.loadDataSources();
-    try {
-      const res = await fetch("/api/datasources");
-      const data = await res.json();
-      availableDataSources = data.dataSources ?? [];
-    } catch {
-      availableDataSources = [];
-    }
-  });
+onMount(async () => {
+	await agentStore.loadDataSources();
+	try {
+		const res = await fetch("/api/datasources");
+		const data = await res.json();
+		availableDataSources = data.dataSources ?? [];
+	} catch {
+		availableDataSources = [];
+	}
+});
 
-  $effect(() => {
-    if (agentStore.messages.length > 0 || agentStore.currentContent) {
-      messagesContainer?.scrollTo({ top: messagesContainer.scrollHeight, behavior: "smooth" });
-    }
-  });
+$effect(() => {
+	if (agentStore.messages.length > 0 || agentStore.currentContent) {
+		messagesContainer?.scrollTo({ top: messagesContainer.scrollHeight, behavior: "smooth" });
+	}
+});
 
-  function handleSend(content: string) {
-    agentStore.sendMessage(content);
-  }
+function handleSend(content: string) {
+	agentStore.sendMessage(content);
+}
 
-  function handleSuggestionClick(suggestion: string) {
-    agentStore.sendMessage(suggestion);
-  }
+function handleSuggestionClick(suggestion: string) {
+	agentStore.sendMessage(suggestion);
+}
 </script>
 
 <div class="flex flex-col h-screen bg-white">

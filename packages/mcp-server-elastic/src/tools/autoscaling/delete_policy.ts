@@ -8,57 +8,57 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Define Zod schema for validation
 const DeleteAutoscalingPolicyParams = z.object({
-  name: z.string().min(1, "Policy name cannot be empty"),
-  masterTimeout: z.string().optional(),
-  timeout: z.string().optional(),
+	name: z.string().min(1, "Policy name cannot be empty"),
+	masterTimeout: z.string().optional(),
+	timeout: z.string().optional(),
 });
 
 export const registerAutoscalingDeletePolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  // Tool registration using modern registerTool method
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_autoscaling_delete_policy",
+	server.registerTool(
+		"elasticsearch_autoscaling_delete_policy",
 
-    {
-      title: "Autoscaling Delete Policy",
+		{
+			title: "Autoscaling Delete Policy",
 
-      description:
-        "Delete an autoscaling policy in Elasticsearch. Best for policy cleanup, configuration management, resource optimization. Use when you need to remove autoscaling policies in Elasticsearch Service, ECE, or ECK environments. NOTE: Designed for indirect use.",
+			description:
+				"Delete an autoscaling policy in Elasticsearch. Best for policy cleanup, configuration management, resource optimization. Use when you need to remove autoscaling policies in Elasticsearch Service, ECE, or ECK environments. NOTE: Designed for indirect use.",
 
-      inputSchema: DeleteAutoscalingPolicyParams.shape,
-    },
+			inputSchema: DeleteAutoscalingPolicyParams.shape,
+		},
 
-    async (
-      params: z.infer<typeof DeleteAutoscalingPolicyParams>,
-      _extra: Record<string, unknown>,
-    ): Promise<SearchResult> => {
-      try {
-        const result = await esClient.autoscaling.deleteAutoscalingPolicy(
-          {
-            name: params.name,
-            master_timeout: params.masterTimeout,
-            timeout: params.timeout,
-          },
-          {
-            opaqueId: "elasticsearch_autoscaling_delete_policy",
-          },
-        );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (error) {
-        logger.error("Failed to delete autoscaling policy:", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
-      }
-    },
-  );
+		async (
+			params: z.infer<typeof DeleteAutoscalingPolicyParams>,
+			_extra: Record<string, unknown>,
+		): Promise<SearchResult> => {
+			try {
+				const result = await esClient.autoscaling.deleteAutoscalingPolicy(
+					{
+						name: params.name,
+						master_timeout: params.masterTimeout,
+						timeout: params.timeout,
+					},
+					{
+						opaqueId: "elasticsearch_autoscaling_delete_policy",
+					},
+				);
+				return {
+					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				};
+			} catch (error) {
+				logger.error("Failed to delete autoscaling policy:", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+				};
+			}
+		},
+	);
 };

@@ -1,29 +1,29 @@
 {
-  "name": "@devops-agent/agent",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
-  "scripts": {
-    "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
-  },
-  "dependencies": {
-    "@devops-agent/gitagent-bridge": "workspace:*",
-    "@devops-agent/shared": "workspace:*",
-    "@devops-agent/checkpointer": "workspace:*",
-    "@devops-agent/observability": "workspace:*",
-    "@langchain/langgraph": "catalog:",
-    "@langchain/langgraph-checkpoint": "catalog:",
-    "@langchain/mcp-adapters": "catalog:",
-    "@langchain/aws": "catalog:",
-    "@langchain/core": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@types/bun": "catalog:dev",
-    "bun-types": "catalog:dev",
-    "typescript": "catalog:dev"
-  },
-  "private": true
+	"name": "@devops-agent/agent",
+	"version": "0.1.0",
+	"type": "module",
+	"main": "src/index.ts",
+	"types": "src/index.ts",
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "bunx tsc --noEmit"
+	},
+	"dependencies": {
+		"@devops-agent/gitagent-bridge": "workspace:*",
+		"@devops-agent/shared": "workspace:*",
+		"@devops-agent/checkpointer": "workspace:*",
+		"@devops-agent/observability": "workspace:*",
+		"@langchain/langgraph": "catalog:",
+		"@langchain/langgraph-checkpoint": "catalog:",
+		"@langchain/mcp-adapters": "catalog:",
+		"@langchain/aws": "catalog:",
+		"@langchain/core": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:dev",
+		"bun-types": "catalog:dev",
+		"typescript": "catalog:dev"
+	},
+	"private": true
 }

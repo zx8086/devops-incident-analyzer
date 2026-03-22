@@ -20,8 +20,8 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Simple Zod validator for runtime validation only
 const startValidator = z.object({
-  masterTimeout: z.string().optional(),
-  timeout: z.string().optional(),
+	masterTimeout: z.string().optional(),
+	timeout: z.string().optional(),
 });
 
 type _StartParams = z.infer<typeof startValidator>;
@@ -31,22 +31,22 @@ type _StartParams = z.infer<typeof startValidator>;
 // =============================================================================
 
 function createIlmStartMcpError(
-  error: Error | string,
-  context: {
-    type: "validation" | "execution" | "permission" | "already_started";
-    details?: any;
-  },
+	error: Error | string,
+	context: {
+		type: "validation" | "execution" | "permission" | "already_started";
+		details?: any;
+	},
 ): McpError {
-  const message = error instanceof Error ? error.message : error;
+	const message = error instanceof Error ? error.message : error;
 
-  const errorCodeMap = {
-    validation: ErrorCode.InvalidParams,
-    execution: ErrorCode.InternalError,
-    permission: ErrorCode.InvalidRequest,
-    already_started: ErrorCode.InvalidRequest,
-  };
+	const errorCodeMap = {
+		validation: ErrorCode.InvalidParams,
+		execution: ErrorCode.InternalError,
+		permission: ErrorCode.InvalidRequest,
+		already_started: ErrorCode.InvalidRequest,
+	};
 
-  return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_start] ${message}`, context.details);
+	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_start] ${message}`, context.details);
 }
 
 // =============================================================================
@@ -54,109 +54,109 @@ function createIlmStartMcpError(
 // =============================================================================
 
 export const registerStartTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-  const startHandler = async (args: any): Promise<SearchResult> => {
-    const perfStart = performance.now();
+	const startHandler = async (args: any): Promise<SearchResult> => {
+		const perfStart = performance.now();
 
-    try {
-      // Simple validation - no complex parameter extraction
-      const params = startValidator.parse(args);
+		try {
+			// Simple validation - no complex parameter extraction
+			const params = startValidator.parse(args);
 
-      logger.debug("Starting ILM", {
-        masterTimeout: params.masterTimeout,
-        timeout: params.timeout,
-      });
+			logger.debug("Starting ILM", {
+				masterTimeout: params.masterTimeout,
+				timeout: params.timeout,
+			});
 
-      const result = await esClient.ilm.start({
-        master_timeout: params.masterTimeout,
-        timeout: params.timeout,
-      });
+			const result = await esClient.ilm.start({
+				master_timeout: params.masterTimeout,
+				timeout: params.timeout,
+			});
 
-      const duration = performance.now() - perfStart;
-      if (duration > 5000) {
-        logger.warn("Slow ILM operation: start", { duration });
-      }
+			const duration = performance.now() - perfStart;
+			if (duration > 5000) {
+				logger.warn("Slow ILM operation: start", { duration });
+			}
 
-      logger.info("ILM started successfully");
+			logger.info("ILM started successfully");
 
-      // MCP-compliant success response
-      return {
-        content: [
-          {
-            type: "text",
-            text: `**ILM Started Successfully**
+			// MCP-compliant success response
+			return {
+				content: [
+					{
+						type: "text",
+						text: `**ILM Started Successfully**
 
 Index Lifecycle Management is now running and will begin processing policies.
 
 Operation completed at: ${new Date().toISOString()}`,
-          },
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                acknowledged: result.acknowledged || true,
-                operation: "start_ilm",
-                timestamp: new Date().toISOString(),
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    } catch (error) {
-      // Standardized MCP error handling
-      if (error instanceof z.ZodError) {
-        throw createIlmStartMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-          type: "validation",
-          details: { validationErrors: error.issues, providedArgs: args },
-        });
-      }
+					},
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								acknowledged: result.acknowledged || true,
+								operation: "start_ilm",
+								timestamp: new Date().toISOString(),
+							},
+							null,
+							2,
+						),
+					},
+				],
+			};
+		} catch (error) {
+			// Standardized MCP error handling
+			if (error instanceof z.ZodError) {
+				throw createIlmStartMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
+					type: "validation",
+					details: { validationErrors: error.issues, providedArgs: args },
+				});
+			}
 
-      if (error instanceof Error) {
-        if (error.message.includes("security_exception")) {
-          throw createIlmStartMcpError("Insufficient permissions to start ILM", {
-            type: "permission",
-            details: { originalError: error.message },
-          });
-        }
+			if (error instanceof Error) {
+				if (error.message.includes("security_exception")) {
+					throw createIlmStartMcpError("Insufficient permissions to start ILM", {
+						type: "permission",
+						details: { originalError: error.message },
+					});
+				}
 
-        if (error.message.includes("already_started") || error.message.includes("already running")) {
-          throw createIlmStartMcpError("ILM is already running", {
-            type: "already_started",
-            details: { suggestion: "Use get_status to check current ILM state" },
-          });
-        }
-      }
+				if (error.message.includes("already_started") || error.message.includes("already running")) {
+					throw createIlmStartMcpError("ILM is already running", {
+						type: "already_started",
+						details: { suggestion: "Use get_status to check current ILM state" },
+					});
+				}
+			}
 
-      throw createIlmStartMcpError(error instanceof Error ? error.message : String(error), {
-        type: "execution",
-        details: {
-          duration: performance.now() - perfStart,
-          args,
-        },
-      });
-    }
-  };
+			throw createIlmStartMcpError(error instanceof Error ? error.message : String(error), {
+				type: "execution",
+				details: {
+					duration: performance.now() - perfStart,
+					args,
+				},
+			});
+		}
+	};
 
-  // Direct tool registration with JSON Schema + read-only protection
-  // Tool registration using modern registerTool method
+	// Direct tool registration with JSON Schema + read-only protection
+	// Tool registration using modern registerTool method
 
-  server.registerTool(
-    "elasticsearch_ilm_start",
+	server.registerTool(
+		"elasticsearch_ilm_start",
 
-    {
-      title: "Ilm Start",
+		{
+			title: "Ilm Start",
 
-      description:
-        "Start ILM. Start the Index Lifecycle Management plugin to resume automated operations. Uses direct JSON Schema and standardized MCP error codes. Examples: {} (no params needed), {masterTimeout: 30s}.",
+			description:
+				"Start ILM. Start the Index Lifecycle Management plugin to resume automated operations. Uses direct JSON Schema and standardized MCP error codes. Examples: {} (no params needed), {masterTimeout: 30s}.",
 
-      inputSchema: {
-        masterTimeout: z.string().optional(), // Master node timeout
-        timeout: z.string().optional(), // Request timeout
-      },
-    },
+			inputSchema: {
+				masterTimeout: z.string().optional(), // Master node timeout
+				timeout: z.string().optional(), // Request timeout
+			},
+		},
 
-    // Direct JSON Schema - no Zod conversion
-    withReadOnlyCheck("elasticsearch_ilm_start", startHandler, OperationType.WRITE),
-  );
+		// Direct JSON Schema - no Zod conversion
+		withReadOnlyCheck("elasticsearch_ilm_start", startHandler, OperationType.WRITE),
+	);
 };

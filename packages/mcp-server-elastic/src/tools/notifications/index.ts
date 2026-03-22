@@ -9,6 +9,6 @@ import type { ToolRegistrationFunction } from "../types.js";
  * Tools that demonstrate notification and progress capabilities
  */
 export const notificationTools: ToolRegistrationFunction[] = [
-  registerBulkIndexWithProgress,
-  registerReindexWithNotifications,
+	registerBulkIndexWithProgress,
+	registerReindexWithNotifications,
 ];
