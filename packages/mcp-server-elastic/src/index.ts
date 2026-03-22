@@ -1,14 +1,11 @@
 #!/usr/bin/env bun
 
-/* src/index.ts */
-
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+// src/index.ts
 import { clearConfigWarnings, config, getConfigWarnings } from "./config.js";
-import { createElasticsearchMcpServer } from "./server.js";
-import { SSETransportManager } from "./transport/sseTransport.js";
+import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
+import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
-import { createSessionContext, runWithSession } from "./utils/sessionContext.js";
-import { detectClient, initializeTracing, traceConnection } from "./utils/tracing.js";
+import { initializeTracing } from "./utils/tracing.js";
 
 async function main() {
 	try {
@@ -21,7 +18,7 @@ async function main() {
 			for (const warning of configWarnings) {
 				logger.warn(warning);
 			}
-			clearConfigWarnings(); // Clear warnings after logging
+			clearConfigWarnings();
 		}
 
 		// Configuration is already loaded and validated in config.ts
@@ -39,131 +36,66 @@ async function main() {
 			port: config.server.port,
 		});
 
-		// Create MCP server using the centralized config
-		const server = await createElasticsearchMcpServer(config);
+		// Initialize ES client once at startup (async)
+		const esClient = await initializeElasticsearchClient(config);
 
-		// Create transport based on configuration
-		if (config.server.transportMode === "sse") {
-			logger.info("Using SSE transport mode");
+		// Sync factory for per-request McpServer creation
+		const serverFactory = () => createMcpServerInstance(config, esClient);
 
-			// Create and start SSE transport manager
-			const sseTransport = new SSETransportManager(server, config);
-			await sseTransport.start();
+		const transportConfig = {
+			transport: {
+				mode: config.server.transportMode,
+				port: config.server.port,
+				host: config.server.host ?? "0.0.0.0",
+				path: config.server.path ?? "/mcp",
+				sessionMode: (config.server.sessionMode ?? "stateless") as "stateless" | "stateful",
+				idleTimeout: config.server.idleTimeout ?? 255,
+				apiKey: config.server.apiKey,
+				allowedOrigins: config.server.allowedOrigins,
+			},
+		};
 
-			// Set up graceful shutdown for SSE mode
-			const shutdown = async () => {
-				logger.info("Shutting down SSE server gracefully...");
+		const transport = await createTransport(transportConfig, serverFactory);
 
-				try {
-					await sseTransport.forceShutdown(5000);
-					logger.info("SSE server shutdown completed");
-					process.exit(0);
-				} catch (error) {
-					logger.error("Error during SSE shutdown:", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-					process.exit(1);
-				}
-			};
-
-			// Handle signals
-			process.on("SIGINT", shutdown);
-			process.on("SIGTERM", shutdown);
-
-			// Handle uncaught errors
-			process.on("uncaughtException", (error) => {
-				logger.error("Uncaught exception - shutting down:", {
-					error: error.message,
-					stack: error.stack,
-					name: error.name,
+		// Graceful shutdown
+		const shutdown = async () => {
+			logger.info("Shutting down server gracefully...");
+			try {
+				await transport.closeAll();
+				logger.info("Server shutdown completed");
+			} catch (error) {
+				logger.error("Error during shutdown:", {
+					error: error instanceof Error ? error.message : String(error),
 				});
-				shutdown();
+			}
+			process.exit(0);
+		};
+
+		process.on("SIGINT", shutdown);
+		process.on("SIGTERM", shutdown);
+
+		process.on("uncaughtException", (error) => {
+			logger.error("Uncaught exception - shutting down:", {
+				error: error.message,
+				stack: error.stack,
+				name: error.name,
 			});
+			shutdown();
+		});
 
-			process.on("unhandledRejection", (reason) => {
-				logger.error("Unhandled promise rejection - shutting down:", {
-					reason: reason instanceof Error ? reason.message : String(reason),
-					stack: reason instanceof Error ? reason.stack : undefined,
-				});
-				shutdown();
+		process.on("unhandledRejection", (reason) => {
+			logger.error("Unhandled promise rejection - shutting down:", {
+				reason: reason instanceof Error ? reason.message : String(reason),
+				stack: reason instanceof Error ? reason.stack : undefined,
 			});
+			shutdown();
+		});
 
-			const modeInfo = `SSE on port ${config.server.port}`;
-			logger.info(`Elasticsearch MCP Server started successfully with ${modeInfo}`, {
-				mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
-				strictMode: config.server.readOnlyStrictMode,
-				transport: config.server.transportMode,
-				stats: sseTransport.getStats(),
-			});
-		} else {
-			// Use stdio transport
-			logger.info("Using stdio transport mode");
-			const transport = new StdioServerTransport();
-
-			// Generate connection ID for tracing
-			const connectionId = `stdio-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-
-			// Detect client information (Claude Desktop for stdio)
-			const clientInfo = detectClient("stdio");
-
-			// Create session context without a static sessionId - let SessionManager handle it dynamically
-			const sessionContext = createSessionContext(connectionId, "stdio", connectionId, clientInfo);
-
-			// Connect with session context and tracing if enabled
-			await runWithSession(sessionContext, async () => {
-				if (config.langsmith.tracing) {
-					await traceConnection(
-						{ connectionId, transportMode: "stdio", clientInfo, sessionId: connectionId },
-						async () => server.connect(transport),
-					);
-				} else {
-					await server.connect(transport);
-				}
-			});
-
-			// Set up graceful shutdown
-			const shutdown = async () => {
-				logger.info("Shutting down server gracefully...");
-				try {
-					await transport.close();
-					logger.info("Server shutdown completed");
-				} catch (error) {
-					logger.error("Error during shutdown:", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-				process.exit(0);
-			};
-
-			// Handle signals
-			process.on("SIGINT", shutdown);
-			process.on("SIGTERM", shutdown);
-
-			// Handle uncaught errors with better error reporting
-			process.on("uncaughtException", (error) => {
-				logger.error("Uncaught exception - shutting down:", {
-					error: error.message,
-					stack: error.stack,
-					name: error.name,
-				});
-				shutdown();
-			});
-
-			process.on("unhandledRejection", (reason) => {
-				logger.error("Unhandled promise rejection - shutting down:", {
-					reason: reason instanceof Error ? reason.message : String(reason),
-					stack: reason instanceof Error ? reason.stack : undefined,
-				});
-				shutdown();
-			});
-
-			const modeInfo = "STDIO";
-			logger.info(`Elasticsearch MCP Server started successfully with ${modeInfo}`, {
-				mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
-				strictMode: config.server.readOnlyStrictMode,
-				transport: config.server.transportMode,
-			});
-		}
+		logger.info("Elasticsearch MCP Server started successfully", {
+			mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
+			strictMode: config.server.readOnlyStrictMode,
+			transport: config.server.transportMode,
+		});
 	} catch (error) {
 		logger.error("Fatal error during startup:", {
 			error: error instanceof Error ? error.message : String(error),

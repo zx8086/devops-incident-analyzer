@@ -11,8 +11,7 @@ export interface McpClientConfig {
 	konnectUrl?: string;
 }
 
-// SIO-564: MultiServerMCPClient will be wired here when MCP servers are running
-// For now, export the interface and a stub that returns empty tools
+// SIO-595: All MCP servers use Streamable HTTP transport at /mcp
 let allTools: StructuredToolInterface[] = [];
 
 export async function createMcpClient(config: McpClientConfig): Promise<void> {
@@ -20,19 +19,19 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	try {
 		const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
 
-		const servers: Record<string, { transport: string; url: string }> = {};
+		const servers: Record<string, { transport: "http"; url: string }> = {};
 
 		if (config.elasticUrl) {
-			servers["elastic-mcp"] = { transport: "sse", url: `${config.elasticUrl}/sse` };
+			servers["elastic-mcp"] = { transport: "http", url: `${config.elasticUrl}/mcp` };
 		}
 		if (config.kafkaUrl) {
-			servers["kafka-mcp"] = { transport: "sse", url: `${config.kafkaUrl}/mcp` };
+			servers["kafka-mcp"] = { transport: "http", url: `${config.kafkaUrl}/mcp` };
 		}
 		if (config.capellaUrl) {
-			servers["couchbase-mcp"] = { transport: "sse", url: `${config.capellaUrl}/sse` };
+			servers["couchbase-mcp"] = { transport: "http", url: `${config.capellaUrl}/mcp` };
 		}
 		if (config.konnectUrl) {
-			servers["konnect-mcp"] = { transport: "sse", url: `${config.konnectUrl}/mcp` };
+			servers["konnect-mcp"] = { transport: "http", url: `${config.konnectUrl}/mcp` };
 		}
 
 		if (Object.keys(servers).length === 0) {
@@ -42,7 +41,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 
 		const client = new MultiServerMCPClient({
 			mcpServers: Object.fromEntries(
-				Object.entries(servers).map(([name, { url }]) => [name, { transport: "sse" as const, url }]),
+				Object.entries(servers).map(([name, { transport, url }]) => [name, { transport, url }]),
 			),
 		});
 		allTools = await client.getTools();

@@ -10,7 +10,7 @@ import { logger } from "./logger.js";
 export interface SessionContext {
 	sessionId: string;
 	connectionId: string;
-	transportMode: "stdio" | "sse";
+	transportMode: "stdio" | "http" | "both";
 	clientInfo?: {
 		name?: string;
 		version?: string;
@@ -45,7 +45,7 @@ export function getCurrentClientInfo(): SessionContext["clientInfo"] | undefined
 
 export function createSessionContext(
 	connectionId: string,
-	transportMode: "stdio" | "sse",
+	transportMode: "stdio" | "http" | "both",
 	sessionId?: string,
 	clientInfo?: SessionContext["clientInfo"],
 	userId?: string,

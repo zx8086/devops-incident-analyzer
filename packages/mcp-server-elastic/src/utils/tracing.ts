@@ -175,7 +175,7 @@ export function traceToolExecution(
 
 export interface ConnectionContext {
 	connectionId: string;
-	transportMode: "stdio" | "sse" | "sse-bun" | string;
+	transportMode: "stdio" | "http" | "both" | string;
 	clientInfo?: {
 		name?: string;
 		version?: string;
@@ -277,7 +277,7 @@ export function detectClient(
 		return { name: "Claude Desktop", platform: process.platform };
 	}
 
-	if (transportMode === "sse") {
+	if (transportMode === "http" || transportMode === "both") {
 		if (userAgent) {
 			if (userAgent.includes("n8n")) return { name: "n8n", platform: "web" };
 			if (userAgent.includes("Chrome")) return { name: "Chrome Browser", platform: "web" };

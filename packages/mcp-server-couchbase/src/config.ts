@@ -9,8 +9,17 @@ const ServerConfigSchema = z.object({
 	readOnlyQueryMode: z.boolean().default(true),
 	maxQueryTimeout: z.number().min(1000).max(300000).default(30000),
 	maxResultsPerQuery: z.number().min(1).max(10000).default(1000),
-	transportMode: z.enum(["stdio", "sse"]).default("stdio"),
-	port: z.number().default(8080),
+});
+
+const TransportConfigSchema = z.object({
+	mode: z.enum(["stdio", "http", "both"]).default("stdio"),
+	port: z.number().min(1).max(65535).default(9082),
+	host: z.string().min(1).default("0.0.0.0"),
+	path: z.string().min(1).default("/mcp"),
+	sessionMode: z.enum(["stateless", "stateful"]).default("stateless"),
+	idleTimeout: z.number().min(1).default(255),
+	apiKey: z.string().optional(),
+	allowedOrigins: z.string().optional(),
 });
 
 const DatabaseConfigSchema = z.object({
@@ -43,6 +52,7 @@ const PlaybooksConfigSchema = z.object({
 
 const ConfigSchema = z.object({
 	server: ServerConfigSchema,
+	transport: TransportConfigSchema,
 	database: DatabaseConfigSchema,
 	logging: LoggingConfigSchema,
 	documentation: DocumentationConfigSchema,
@@ -59,8 +69,14 @@ const defaultConfig: Config = {
 		readOnlyQueryMode: true,
 		maxQueryTimeout: 30000,
 		maxResultsPerQuery: 1000,
-		transportMode: "stdio",
-		port: 8080,
+	},
+	transport: {
+		mode: "stdio",
+		port: 9082,
+		host: "0.0.0.0",
+		path: "/mcp",
+		sessionMode: "stateless",
+		idleTimeout: 255,
 	},
 	database: {
 		connectionString: "couchbase://localhost",
@@ -96,8 +112,16 @@ const envVarMapping = {
 		readOnlyQueryMode: "READ_ONLY_QUERY_MODE",
 		maxQueryTimeout: "MCP_MAX_QUERY_TIMEOUT",
 		maxResultsPerQuery: "MCP_MAX_RESULTS_PER_QUERY",
-		transportMode: "MCP_TRANSPORT",
-		port: "FASTMCP_PORT",
+	},
+	transport: {
+		mode: "MCP_TRANSPORT",
+		port: "MCP_PORT",
+		host: "MCP_HOST",
+		path: "MCP_PATH",
+		sessionMode: "MCP_SESSION_MODE",
+		idleTimeout: "MCP_IDLE_TIMEOUT",
+		apiKey: "MCP_API_KEY",
+		allowedOrigins: "MCP_ALLOWED_ORIGINS",
 	},
 	database: {
 		connectionString: "COUCHBASE_URL",
@@ -150,10 +174,24 @@ function loadConfigFromEnv(): Partial<Config> {
 		maxResultsPerQuery:
 			(parseEnvVar(Bun.env[envVarMapping.server.maxResultsPerQuery], "number") as number) ||
 			defaultConfig.server.maxResultsPerQuery,
-		transportMode:
-			(parseEnvVar(Bun.env[envVarMapping.server.transportMode], "string") as "stdio" | "sse") ||
-			defaultConfig.server.transportMode,
-		port: (parseEnvVar(Bun.env[envVarMapping.server.port], "number") as number) || defaultConfig.server.port,
+	};
+
+	// Load transport config
+	const transportMode = parseEnvVar(Bun.env[envVarMapping.transport.mode], "string") as string | undefined;
+	const transportSessionMode = parseEnvVar(Bun.env[envVarMapping.transport.sessionMode], "string") as
+		| string
+		| undefined;
+	config.transport = {
+		mode: (transportMode as "stdio" | "http" | "both") || defaultConfig.transport.mode,
+		port: (parseEnvVar(Bun.env[envVarMapping.transport.port], "number") as number) || defaultConfig.transport.port,
+		host: (parseEnvVar(Bun.env[envVarMapping.transport.host], "string") as string) || defaultConfig.transport.host,
+		path: (parseEnvVar(Bun.env[envVarMapping.transport.path], "string") as string) || defaultConfig.transport.path,
+		sessionMode: (transportSessionMode as "stateless" | "stateful") || defaultConfig.transport.sessionMode,
+		idleTimeout:
+			(parseEnvVar(Bun.env[envVarMapping.transport.idleTimeout], "number") as number) ||
+			defaultConfig.transport.idleTimeout,
+		apiKey: (parseEnvVar(Bun.env[envVarMapping.transport.apiKey], "string") as string) || undefined,
+		allowedOrigins: (parseEnvVar(Bun.env[envVarMapping.transport.allowedOrigins], "string") as string) || undefined,
 	};
 
 	// Load database config
@@ -232,6 +270,7 @@ try {
 	const envConfig = loadConfigFromEnv();
 	const mergedConfig = {
 		server: { ...defaultConfig.server, ...envConfig.server },
+		transport: { ...defaultConfig.transport, ...envConfig.transport },
 		database: { ...defaultConfig.database, ...envConfig.database },
 		logging: { ...defaultConfig.logging, ...envConfig.logging },
 		documentation: { ...defaultConfig.documentation, ...envConfig.documentation },
@@ -248,8 +287,13 @@ try {
 						name: config.server.name,
 						version: config.server.version,
 						readOnlyQueryMode: config.server.readOnlyQueryMode,
-						transportMode: config.server.transportMode,
-						port: config.server.port,
+					},
+					transport: {
+						mode: config.transport.mode,
+						port: config.transport.port,
+						host: config.transport.host,
+						path: config.transport.path,
+						sessionMode: config.transport.sessionMode,
 					},
 					database: {
 						connectionString: config.database.connectionString,

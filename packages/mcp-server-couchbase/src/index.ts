@@ -1,12 +1,9 @@
-/* src/index.ts */
+// src/index.ts
 
 // Import global setup first
 import "./set-global";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { config } from "./config";
 import { connectionManager } from "./lib/connectionManager";
 import { AppError } from "./lib/errors";
@@ -18,6 +15,7 @@ import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
 import { registerDatabaseStructureResource } from "./resources/databaseStructureResource";
+import { createTransport } from "./transport/index.ts";
 import type { AppContext, CapellaConn } from "./types";
 
 // Application context setup
@@ -25,7 +23,7 @@ const appContext: AppContext = {
 	readOnlyQueryMode: config.server.readOnlyQueryMode,
 };
 
-export async function createServer(bucket: any): Promise<McpServer> {
+export function createServer(bucket: any): McpServer {
 	const server = new McpServer({
 		name: config.server.name,
 		version: config.server.version,
@@ -108,101 +106,6 @@ export async function createServer(bucket: any): Promise<McpServer> {
 	return server;
 }
 
-export async function startSSEServer(server: McpServer, port: number): Promise<void> {
-	const http = await import("node:http");
-	const getRawBody = (await import("raw-body")).default;
-
-	const activeSessions = new Map<string, SSEServerTransport>();
-
-	const httpServer = http.createServer(async (req, res) => {
-		res.setHeader("Access-Control-Allow-Origin", "*");
-		res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-		res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-		if (req.method === "OPTIONS") {
-			res.writeHead(204);
-			res.end();
-			return;
-		}
-
-		if (req.url?.startsWith("/sse") && req.method === "GET") {
-			const transport = new SSEServerTransport("/mcp", res);
-			activeSessions.set(transport.sessionId, transport);
-			res.on("close", () => activeSessions.delete(transport.sessionId));
-			await server.connect(transport);
-			return;
-		}
-
-		if (req.url?.startsWith("/mcp") && req.method === "POST") {
-			const url = new URL(req.url, `http://localhost:${port}`);
-			const sessionId = url.searchParams.get("sessionId");
-			const transport = sessionId ? activeSessions.get(sessionId) : undefined;
-			if (!transport) {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ error: "Invalid or missing sessionId" }));
-				return;
-			}
-			const body = await getRawBody(req);
-			await transport.handlePostMessage(req, res, body);
-			return;
-		}
-
-		if (req.url === "/health") {
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ status: "ok" }));
-			return;
-		}
-
-		res.writeHead(404, { "Content-Type": "application/json" });
-		res.end(JSON.stringify({ error: "Not found" }));
-	});
-
-	await new Promise<void>((resolve) => {
-		httpServer.listen(port, "0.0.0.0", () => resolve());
-	});
-
-	logger.info(`SSE HTTP server listening on port ${port}`);
-}
-
-export async function createTransport(deps: { transport: "stdio" | "sse"; port?: number }): Promise<Transport | null> {
-	if (deps.transport === "sse") {
-		return null; // SSE uses startSSEServer instead
-	}
-	return new StdioServerTransport();
-}
-
-function handleServerStartupError(error: unknown): never {
-	logger.error(`Error starting server: ${error instanceof Error ? error.message : String(error)}`);
-	throw error instanceof Error ? error : new Error(String(error));
-}
-
-export async function startServer(deps: { transport: "stdio" | "sse"; port?: number }): Promise<void> {
-	try {
-		logger.info("Starting Couchbase MCP Server...");
-		const bucket = await connectionManager.getConnection();
-		const server = await createServer(bucket);
-		const transport = await createTransport(deps);
-		await server.connect(transport);
-		logger.info(`Couchbase MCP Server running with ${deps.transport} transport`);
-	} catch (error) {
-		handleServerStartupError(error);
-	}
-}
-
-export async function setupServer(): Promise<{
-	server: McpServer;
-	transport: Transport;
-	bucket: any;
-}> {
-	const bucket = await connectionManager.getConnection();
-	const server = await createServer(bucket);
-	const transport = await createTransport({
-		transport: "stdio",
-		port: 8080,
-	});
-	return { server, transport, bucket };
-}
-
 // Exponential backoff with circuit breaker for Couchbase connection
 async function connectWithBackoffAndCircuitBreaker(
 	maxAttempts = 10,
@@ -215,7 +118,7 @@ async function connectWithBackoffAndCircuitBreaker(
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		try {
 			await connectionManager.initialize();
-			return; // Success!
+			return;
 		} catch (err) {
 			failures++;
 			logger.error(
@@ -224,7 +127,7 @@ async function connectWithBackoffAndCircuitBreaker(
 			if (failures >= circuitBreakerThreshold) {
 				logger.error(`Circuit breaker tripped. Pausing for ${circuitBreakerCooldownMs / 1000}s`);
 				await sleep(circuitBreakerCooldownMs);
-				failures = 0; // Reset after cooldown
+				failures = 0;
 			} else {
 				const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
 				await sleep(delay);
@@ -236,25 +139,28 @@ async function connectWithBackoffAndCircuitBreaker(
 
 async function main(): Promise<void> {
 	try {
-		const transportMode = (process.env.MCP_TRANSPORT ?? "stdio") as "stdio" | "sse";
-		const port = Number(process.env.MCP_PORT) || 9082;
-
 		logger.info("Starting Couchbase MCP Server...");
 
 		// Initialize the connection manager with backoff and circuit breaker
 		await connectWithBackoffAndCircuitBreaker();
 
 		const bucket = await connectionManager.getConnection();
-		const server = await createServer(bucket);
+		const serverFactory = () => createServer(bucket);
 
-		if (transportMode === "sse") {
-			await startSSEServer(server, port);
-			logger.info(`Couchbase MCP Server running with SSE transport on port ${port}`);
-		} else {
-			const transport = new StdioServerTransport();
-			await server.connect(transport);
-			logger.info("Couchbase MCP Server running with stdio transport");
-		}
+		const transport = await createTransport(config.transport, serverFactory);
+
+		// Graceful shutdown
+		const shutdown = async () => {
+			logger.info("Shutting down Couchbase MCP Server...");
+			await transport.closeAll();
+			process.exit(0);
+		};
+		process.on("SIGINT", shutdown);
+		process.on("SIGTERM", shutdown);
+
+		logger.info("Couchbase MCP Server started successfully", {
+			mode: config.transport.mode,
+		});
 	} catch (error) {
 		logger.error(`Fatal error in main(): ${error instanceof Error ? error.message : String(error)}`);
 		process.exit(1);

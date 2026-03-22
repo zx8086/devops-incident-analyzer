@@ -9,8 +9,14 @@ const ServerConfigSchema = z.object({
 	readOnlyStrictMode: z.boolean(),
 	maxQueryTimeout: z.number().min(1000).max(300000),
 	maxResultsPerQuery: z.number().min(1).max(10000),
-	transportMode: z.enum(["stdio", "sse"]),
+	transportMode: z.enum(["stdio", "http", "both"]),
 	port: z.number(),
+	host: z.string(),
+	path: z.string().startsWith("/"),
+	sessionMode: z.enum(["stateless", "stateful"]),
+	idleTimeout: z.number().int().min(10).max(255),
+	apiKey: z.string().optional(),
+	allowedOrigins: z.string().optional(),
 	// Enhanced response handling configuration
 	maxResponseSizeBytes: z.number().min(1000).max(10000000),
 	defaultPageSize: z.number().min(1).max(1000),
@@ -110,6 +116,10 @@ const defaultConfig: Config = {
 		maxResultsPerQuery: 1000,
 		transportMode: "stdio",
 		port: 8080,
+		host: "0.0.0.0",
+		path: "/mcp",
+		sessionMode: "stateless",
+		idleTimeout: 255,
 		maxResponseSizeBytes: 1000000,
 		defaultPageSize: 20,
 		maxPageSize: 100,
@@ -161,6 +171,12 @@ const envVarMapping = {
 		maxResultsPerQuery: "MCP_MAX_RESULTS_PER_QUERY",
 		transportMode: "MCP_TRANSPORT",
 		port: "MCP_PORT",
+		host: "MCP_HOST",
+		path: "MCP_PATH",
+		sessionMode: "MCP_SESSION_MODE",
+		idleTimeout: "MCP_IDLE_TIMEOUT",
+		apiKey: "MCP_API_KEY",
+		allowedOrigins: "MCP_ALLOWED_ORIGINS",
 		maxResponseSizeBytes: "MCP_MAX_RESPONSE_SIZE_BYTES",
 		defaultPageSize: "MCP_DEFAULT_PAGE_SIZE",
 		maxPageSize: "MCP_MAX_PAGE_SIZE",
@@ -233,9 +249,18 @@ function loadConfigFromEnv(): Partial<Config> {
 			(parseEnvVar(Bun.env[envVarMapping.server.maxResultsPerQuery], "number") as number) ||
 			defaultConfig.server.maxResultsPerQuery,
 		transportMode:
-			(parseEnvVar(Bun.env[envVarMapping.server.transportMode], "string") as "stdio" | "sse") ||
+			(parseEnvVar(Bun.env[envVarMapping.server.transportMode], "string") as "stdio" | "http" | "both") ||
 			defaultConfig.server.transportMode,
 		port: (parseEnvVar(Bun.env[envVarMapping.server.port], "number") as number) || defaultConfig.server.port,
+		host: (parseEnvVar(Bun.env[envVarMapping.server.host], "string") as string) || defaultConfig.server.host,
+		path: (parseEnvVar(Bun.env[envVarMapping.server.path], "string") as string) || defaultConfig.server.path,
+		sessionMode:
+			(parseEnvVar(Bun.env[envVarMapping.server.sessionMode], "string") as "stateless" | "stateful") ||
+			defaultConfig.server.sessionMode,
+		idleTimeout:
+			(parseEnvVar(Bun.env[envVarMapping.server.idleTimeout], "number") as number) || defaultConfig.server.idleTimeout,
+		apiKey: parseEnvVar(Bun.env[envVarMapping.server.apiKey], "string") as string | undefined,
+		allowedOrigins: parseEnvVar(Bun.env[envVarMapping.server.allowedOrigins], "string") as string | undefined,
 		maxResponseSizeBytes:
 			(parseEnvVar(Bun.env[envVarMapping.server.maxResponseSizeBytes], "number") as number) ||
 			defaultConfig.server.maxResponseSizeBytes,

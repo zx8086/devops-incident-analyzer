@@ -74,6 +74,19 @@ export const ConfigSchema = z.object({
 			debugMode: z.boolean().default(false).describe("Enable debug mode for additional logging"),
 		})
 		.describe("Runtime-specific configuration"),
+
+	transport: z
+		.object({
+			mode: z.enum(["stdio", "http", "both"]).describe("Transport mode"),
+			port: z.number().int().min(1024).max(65535).describe("HTTP server port"),
+			host: z.string().describe("HTTP server host"),
+			path: z.string().startsWith("/").describe("MCP endpoint path"),
+			sessionMode: z.enum(["stateless", "stateful"]).describe("HTTP session mode"),
+			idleTimeout: z.number().int().min(10).max(255).describe("Idle timeout in seconds"),
+			apiKey: z.string().describe("API key for authentication"),
+			allowedOrigins: z.string().describe("Comma-separated allowed origins"),
+		})
+		.describe("Transport configuration for MCP server"),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 export interface ConfigurationHealth {
@@ -411,6 +424,16 @@ export class ConfigurationManager {
 				preferBunEnv: getEnvVarWithDefault("PREFER_BUN_ENV", "true") === "true",
 				envFileAutoLoad: getEnvVarWithDefault("ENV_FILE_AUTO_LOAD", "true") === "true",
 				debugMode: getEnvVarWithDefault("DEBUG_MODE", "false") === "true",
+			},
+			transport: {
+				mode: getEnvVarWithDefault("MCP_TRANSPORT", "stdio") as "stdio" | "http" | "both",
+				port: parseInt(getEnvVarWithDefault("MCP_PORT", "9083")),
+				host: getEnvVarWithDefault("MCP_HOST", "0.0.0.0"),
+				path: getEnvVarWithDefault("MCP_PATH", "/mcp"),
+				sessionMode: getEnvVarWithDefault("MCP_SESSION_MODE", "stateless") as "stateless" | "stateful",
+				idleTimeout: parseInt(getEnvVarWithDefault("MCP_IDLE_TIMEOUT", "255")),
+				apiKey: getEnvVarWithDefault("MCP_API_KEY", ""),
+				allowedOrigins: getEnvVarWithDefault("MCP_ALLOWED_ORIGINS", ""),
 			},
 		};
 	}

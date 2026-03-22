@@ -55,9 +55,7 @@ export class MCPCompatibleLogger {
 
 		// Format based on configuration
 		const format = this.format || process.env.LOG_FORMAT || "json";
-		return format === "json"
-			? JSON.stringify(logData)
-			: `${timestamp} [${level}] ${this.context}: ${message}`;
+		return format === "json" ? JSON.stringify(logData) : `${timestamp} [${level}] ${this.context}: ${message}`;
 	}
 
 	private shouldLog(level: string): boolean {
