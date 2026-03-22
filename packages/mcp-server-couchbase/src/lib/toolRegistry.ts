@@ -1,31 +1,21 @@
-/* src/lib/toolRegistry.ts */
+// src/lib/toolRegistry.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toolRegistry } from "../tools";
 import { logger } from "./logger";
 
 export class ToolRegistry {
-	private static registeredTools = new Set<string>();
-
 	static registerAll(server: McpServer, bucket: any): void {
-		Object.entries(toolRegistry).forEach(([name, toolFn]) => {
-			ToolRegistry.registerTool(server, bucket, name, toolFn);
-		});
+		const registered: string[] = [];
 
-		logger.info("All tools registered successfully", {
-			toolCount: ToolRegistry.registeredTools.size,
-			tools: Array.from(ToolRegistry.registeredTools),
-		});
-	}
-
-	static registerTool(server: McpServer, bucket: any, name: string, toolFn: Function): void {
-		if (ToolRegistry.registeredTools.has(name)) {
-			logger.warn(`Tool already registered: ${name}`);
-			return;
+		for (const [name, toolFn] of Object.entries(toolRegistry)) {
+			toolFn(server, bucket);
+			registered.push(name);
 		}
 
-		logger.info(`Registering tool: ${name}`);
-		toolFn(server, bucket);
-		ToolRegistry.registeredTools.add(name);
+		logger.info("All tools registered successfully", {
+			toolCount: registered.length,
+			tools: registered,
+		});
 	}
 }

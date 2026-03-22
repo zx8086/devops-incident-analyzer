@@ -13,83 +13,86 @@ export interface McpClientConfig {
 
 // SIO-595: All MCP servers use Streamable HTTP transport at /mcp
 let allTools: StructuredToolInterface[] = [];
+let connectedServers: Set<string> = new Set();
+let toolsByServer: Map<string, StructuredToolInterface[]> = new Map();
 
 export async function createMcpClient(config: McpClientConfig): Promise<void> {
-	// Dynamic import to avoid hard dependency when MCP servers aren't running
-	try {
-		const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
+	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
 
-		const servers: Record<string, { transport: "http"; url: string }> = {};
+	const serverEntries: Array<{ name: string; url: string }> = [];
 
-		if (config.elasticUrl) {
-			servers["elastic-mcp"] = { transport: "http", url: `${config.elasticUrl}/mcp` };
-		}
-		if (config.kafkaUrl) {
-			servers["kafka-mcp"] = { transport: "http", url: `${config.kafkaUrl}/mcp` };
-		}
-		if (config.capellaUrl) {
-			servers["couchbase-mcp"] = { transport: "http", url: `${config.capellaUrl}/mcp` };
-		}
-		if (config.konnectUrl) {
-			servers["konnect-mcp"] = { transport: "http", url: `${config.konnectUrl}/mcp` };
-		}
-
-		if (Object.keys(servers).length === 0) {
-			logger.warn("No MCP server URLs configured. Agent will have no tools.");
-			return;
-		}
-
-		const client = new MultiServerMCPClient({
-			mcpServers: Object.fromEntries(
-				Object.entries(servers).map(([name, { transport, url }]) => [name, { transport, url }]),
-			),
-		});
-		allTools = await client.getTools();
-		logger.info({ toolCount: allTools.length }, "MCP tools loaded");
-	} catch (error) {
-		logger.warn({ error }, "Failed to connect to MCP servers. Agent will operate without tools.");
+	if (config.elasticUrl) {
+		serverEntries.push({ name: "elastic-mcp", url: `${config.elasticUrl}/mcp` });
 	}
+	if (config.kafkaUrl) {
+		serverEntries.push({ name: "kafka-mcp", url: `${config.kafkaUrl}/mcp` });
+	}
+	if (config.capellaUrl) {
+		serverEntries.push({ name: "couchbase-mcp", url: `${config.capellaUrl}/mcp` });
+	}
+	if (config.konnectUrl) {
+		serverEntries.push({ name: "konnect-mcp", url: `${config.konnectUrl}/mcp` });
+	}
+
+	if (serverEntries.length === 0) {
+		logger.warn("No MCP server URLs configured. Agent will have no tools.");
+		return;
+	}
+
+	// Connect to each server independently so one failure doesn't block the rest
+	const results = await Promise.allSettled(
+		serverEntries.map(async ({ name, url }) => {
+			const client = new MultiServerMCPClient({
+				mcpServers: { [name]: { transport: "http", url } },
+			});
+			const tools = await client.getTools();
+			return { name, tools };
+		}),
+	);
+
+	const tools: StructuredToolInterface[] = [];
+	connectedServers = new Set();
+	toolsByServer = new Map();
+
+	for (const [i, result] of results.entries()) {
+		const entry = serverEntries[i] as { name: string; url: string };
+		if (result.status === "fulfilled") {
+			// Patch tools with empty descriptions to prevent Bedrock validation errors
+			for (const tool of result.value.tools) {
+				if (!tool.description) {
+					logger.warn({ serverName: entry.name, toolName: tool.name }, "Tool has empty description, patching");
+					tool.description = `${tool.name} tool`;
+				}
+			}
+			tools.push(...result.value.tools);
+			connectedServers.add(result.value.name);
+			toolsByServer.set(result.value.name, result.value.tools);
+			logger.info({ serverName: entry.name, toolCount: result.value.tools.length }, "MCP server connected");
+		} else {
+			logger.warn({ serverName: entry.name, error: result.reason }, "Failed to connect to MCP server, skipping");
+		}
+	}
+
+	allTools = tools;
+	logger.info({ toolCount: allTools.length, servers: [...connectedServers] }, "MCP tools loaded");
+}
+
+export function getConnectedServers(): string[] {
+	return [...connectedServers];
 }
 
 export function getToolsForDataSource(dataSourceId: string): StructuredToolInterface[] {
-	const prefixMap: Record<string, string> = {
+	const serverMap: Record<string, string> = {
 		elastic: "elastic-mcp",
 		kafka: "kafka-mcp",
 		couchbase: "couchbase-mcp",
 		konnect: "konnect-mcp",
 	};
 
-	const serverPrefix = prefixMap[dataSourceId];
-	if (!serverPrefix) return allTools;
+	const serverName = serverMap[dataSourceId];
+	if (!serverName) return allTools;
 
-	// Filter tools by their server origin
-	// MultiServerMCPClient prefixes tool names with server name
-	return allTools.filter((tool) => {
-		const name = tool.name.toLowerCase();
-		if (dataSourceId === "elastic") return name.includes("elasticsearch") || name.includes("elastic");
-		if (dataSourceId === "kafka") return name.includes("kafka") || name.includes("ksql");
-		if (dataSourceId === "couchbase")
-			return (
-				name.includes("couchbase") ||
-				name.includes("sql_plus") ||
-				name.includes("get_system") ||
-				name.includes("get_fatal") ||
-				name.includes("get_longest") ||
-				name.includes("get_most")
-			);
-		if (dataSourceId === "konnect")
-			return (
-				name.includes("konnect") ||
-				name.includes("control_plane") ||
-				name.includes("portal") ||
-				name.includes("service") ||
-				name.includes("route") ||
-				name.includes("plugin") ||
-				name.includes("consumer") ||
-				name.includes("certificate")
-			);
-		return false;
-	});
+	return toolsByServer.get(serverName) ?? [];
 }
 
 export function getAllTools(): StructuredToolInterface[] {

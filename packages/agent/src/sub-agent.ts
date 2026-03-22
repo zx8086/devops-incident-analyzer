@@ -1,11 +1,14 @@
 // agent/src/sub-agent.ts
 
+import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource } from "./mcp-bridge.ts";
 import { buildSubAgentPrompt } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+
+const logger = getLogger("agent:sub-agent");
 
 const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
@@ -46,12 +49,15 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
 	const startTime = Date.now();
 
+	logger.info({ dataSourceId, agentName }, "Sub-agent starting");
+
 	try {
 		const tools = getToolsForDataSource(dataSourceId);
 		const systemPrompt = buildSubAgentPrompt(agentName);
 		const llm = createLlm("subAgent");
 
 		if (tools.length === 0) {
+			logger.warn({ dataSourceId }, "No MCP tools available, skipping");
 			const result: DataSourceResult = {
 				dataSourceId,
 				data: `No tools available for ${dataSourceId}. MCP server may not be connected.`,
@@ -61,6 +67,8 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 			};
 			return { dataSourceResults: [result] };
 		}
+
+		logger.info({ dataSourceId, toolCount: tools.length }, "Creating ReAct agent with tools");
 
 		const agent = createReactAgent({
 			llm,
@@ -72,24 +80,33 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
+		logger.info({ dataSourceId }, "Invoking sub-agent");
 		const response = await agent.invoke({ messages });
 		const lastResponse = response.messages.at(-1);
+		const duration = Date.now() - startTime;
+
+		logger.info(
+			{ dataSourceId, duration, messageCount: response.messages.length, responseLength: String(lastResponse?.content ?? "").length },
+			"Sub-agent completed",
+		);
 
 		const result: DataSourceResult = {
 			dataSourceId,
 			data: lastResponse ? String(lastResponse.content) : "No response from sub-agent",
 			status: "success",
-			duration: Date.now() - startTime,
+			duration,
 			toolOutputs: [],
 		};
 
 		return { dataSourceResults: [result] };
 	} catch (error) {
+		const duration = Date.now() - startTime;
+		logger.error({ dataSourceId, duration, error: error instanceof Error ? error.message : String(error) }, "Sub-agent failed");
 		const result: DataSourceResult = {
 			dataSourceId,
 			data: null,
 			status: "error",
-			duration: Date.now() - startTime,
+			duration,
 			error: error instanceof Error ? error.message : String(error),
 		};
 		return { dataSourceResults: [result] };

@@ -37,9 +37,20 @@ export const POST: RequestHandler = async ({ request }) => {
 						isFollowUp: body.isFollowUp,
 					});
 
+					// Only stream content from final output nodes (aggregate, responder)
+					// Internal nodes (classifier, entityExtractor, sub-agents) should not leak to UI
+					const OUTPUT_NODES = new Set(["aggregate", "responder"]);
+
 					for await (const event of eventStream) {
 						if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
-							send({ type: "message", content: String(event.data.chunk.content) });
+							// Filter: only forward LLM output from output-producing nodes
+							const tags: string[] = event.tags ?? [];
+							const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
+							// LangGraph tags the node name in the event metadata
+							const nodeName = event.metadata?.langgraph_node;
+							if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
+								send({ type: "message", content: String(event.data.chunk.content) });
+							}
 						}
 
 						if (event.event === "on_chain_start" && event.name) {

@@ -1,9 +1,11 @@
 <script lang="ts">
 let {
 	dataSources,
+	connected = [],
 	selected = $bindable([]),
 }: {
 	dataSources: string[];
+	connected: string[];
 	selected: string[];
 } = $props();
 
@@ -14,7 +16,12 @@ const labels: Record<string, string> = {
 	konnect: "Konnect",
 };
 
+function isConnected(id: string): boolean {
+	return connected.includes(id);
+}
+
 function toggle(id: string) {
+	if (!isConnected(id)) return;
 	if (selected.includes(id)) {
 		selected = selected.filter((s) => s !== id);
 	} else {
@@ -23,7 +30,7 @@ function toggle(id: string) {
 }
 
 function selectAll() {
-	selected = [...dataSources];
+	selected = dataSources.filter((ds) => isConnected(ds));
 }
 
 function selectNone() {
@@ -38,11 +45,15 @@ function selectNone() {
       {#each dataSources as ds}
         <button
           onclick={() => toggle(ds)}
+          disabled={!isConnected(ds)}
           class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors
-            {selected.includes(ds)
-              ? 'bg-tommy-accent-blue text-white'
-              : 'bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue'
+            {!isConnected(ds)
+              ? 'bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300'
+              : selected.includes(ds)
+                ? 'bg-tommy-accent-blue text-white'
+                : 'bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue'
             }"
+          title={isConnected(ds) ? labels[ds] ?? ds : `${labels[ds] ?? ds} - not connected`}
         >
           {labels[ds] ?? ds}
         </button>

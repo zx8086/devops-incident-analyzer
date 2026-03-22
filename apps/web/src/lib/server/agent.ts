@@ -1,17 +1,29 @@
 // apps/web/src/lib/server/agent.ts
 import { buildGraph, createMcpClient } from "@devops-agent/agent";
 
+let mcpReady: Promise<void> | null = null;
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
 
-export async function getGraph() {
-	if (!graphPromise) {
-		await createMcpClient({
-			elasticUrl: process.env.ELASTIC_MCP_URL,
-			kafkaUrl: process.env.KAFKA_MCP_URL,
-			capellaUrl: process.env.COUCHBASE_MCP_URL,
-			konnectUrl: process.env.KONNECT_MCP_URL,
-		});
+function getMcpConfig() {
+	return {
+		elasticUrl: process.env.ELASTIC_MCP_URL,
+		kafkaUrl: process.env.KAFKA_MCP_URL,
+		capellaUrl: process.env.COUCHBASE_MCP_URL,
+		konnectUrl: process.env.KONNECT_MCP_URL,
+	};
+}
 
+export function ensureMcpConnected(): Promise<void> {
+	if (!mcpReady) {
+		mcpReady = createMcpClient(getMcpConfig());
+	}
+	return mcpReady;
+}
+
+export async function getGraph() {
+	await ensureMcpConnected();
+
+	if (!graphPromise) {
 		graphPromise = buildGraph({
 			checkpointerType: (process.env.AGENT_CHECKPOINTER_TYPE as "memory" | "sqlite") ?? "memory",
 		});

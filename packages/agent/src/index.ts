@@ -6,7 +6,7 @@ export { classify } from "./classifier.ts";
 export { extractEntities } from "./entity-extractor.ts";
 export { buildGraph } from "./graph.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
-export { createMcpClient, getAllTools, getToolsForDataSource } from "./mcp-bridge.ts";
+export { createMcpClient, getAllTools, getConnectedServers, getToolsForDataSource } from "./mcp-bridge.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";

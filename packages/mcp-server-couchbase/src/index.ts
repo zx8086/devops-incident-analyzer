@@ -98,7 +98,7 @@ export function createServer(bucket: any): McpServer {
 		const { createContextLogger } = require("./lib/logger");
 		return createContextLogger("EchoTool");
 	}
-	server.tool("echo", {}, async (params: any) => {
+	server.tool("echo", "Echoes back the input parameters for debugging", {}, async (params: any) => {
 		getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
 		return { content: [{ type: "text", text: JSON.stringify(params) }] };
 	});

@@ -21,6 +21,7 @@ function createAgentStore() {
 	let threadId = $state<string>("");
 	let currentContent = $state("");
 	let selectedDataSources = $state<string[]>([]);
+	let connectedDataSources = $state<string[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let abortController: AbortController | null = null;
@@ -157,9 +158,12 @@ function createAgentStore() {
 		try {
 			const res = await fetch("/api/datasources");
 			const data = await res.json();
-			selectedDataSources = data.dataSources ?? [];
+			connectedDataSources = data.connected ?? [];
+			// Pre-select only connected servers
+			selectedDataSources = connectedDataSources.length > 0 ? [...connectedDataSources] : (data.dataSources ?? []);
 		} catch {
 			selectedDataSources = [];
+			connectedDataSources = [];
 		}
 	}
 
@@ -193,6 +197,9 @@ function createAgentStore() {
 		},
 		set selectedDataSources(v: string[]) {
 			selectedDataSources = v;
+		},
+		get connectedDataSources() {
+			return connectedDataSources;
 		},
 		get activeNodes() {
 			return activeNodes;

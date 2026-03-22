@@ -1,18 +1,23 @@
 // agent/src/validator.ts
+import { getLogger } from "@devops-agent/observability";
 import type { AgentStateType } from "./state.ts";
 
+const logger = getLogger("agent:validator");
 const MAX_VALIDATION_RETRIES = 2;
 
 export function validate(state: AgentStateType): Partial<AgentStateType> {
 	const answer = state.finalAnswer;
 	if (!answer) {
+		logger.warn("No final answer to validate");
 		return { validationResult: "fail", retryCount: state.retryCount + 1 };
 	}
 
+	logger.info({ answerLength: answer.length, retryCount: state.retryCount }, "Validating answer");
 	const warnings: string[] = [];
 
 	// Check for empty or too-short answers
 	if (answer.length < 50) {
+		logger.warn({ answerLength: answer.length }, "Answer too short, validation failed");
 		return { validationResult: "fail", retryCount: state.retryCount + 1 };
 	}
 
@@ -38,12 +43,18 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	}
 
 	if (warnings.length > 0) {
+		logger.warn({ warnings }, "Validation passed with warnings");
 		return { validationResult: "pass_with_warnings" };
 	}
 
+	logger.info("Validation passed");
 	return { validationResult: "pass" };
 }
 
 export function shouldRetryValidation(state: AgentStateType): boolean {
-	return state.validationResult === "fail" && state.retryCount < MAX_VALIDATION_RETRIES;
+	const shouldRetry = state.validationResult === "fail" && state.retryCount < MAX_VALIDATION_RETRIES;
+	if (shouldRetry) {
+		logger.info({ retryCount: state.retryCount, maxRetries: MAX_VALIDATION_RETRIES }, "Retrying validation");
+	}
+	return shouldRetry;
 }

@@ -62,7 +62,7 @@ function handleSuggestionClick(suggestion: string) {
   </header>
 
   <!-- DataSource Selector -->
-  <DataSourceSelector dataSources={availableDataSources} bind:selected={agentStore.selectedDataSources} />
+  <DataSourceSelector dataSources={availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
 
   <!-- Messages -->
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto px-4 py-6">
