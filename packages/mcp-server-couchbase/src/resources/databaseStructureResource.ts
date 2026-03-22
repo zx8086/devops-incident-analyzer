@@ -1,6 +1,6 @@
 /* src/resources/databaseStructureResource.ts */
 
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../lib/logger";
 import type { Bucket } from "couchbase";
 import { ResponseBuilder } from "../lib/responseBuilder";
@@ -12,7 +12,7 @@ export function registerDatabaseStructureResource(
 ): void {
   server.resource(
     "database-structure",
-    new ResourceTemplate("database://structure", { list: undefined }),
+    "database://structure",
     async (uri) => {
       try {
         logger.info("Fetching database structure resource");

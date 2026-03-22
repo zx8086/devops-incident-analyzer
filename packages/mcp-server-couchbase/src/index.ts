@@ -39,13 +39,8 @@ export async function createServer(bucket: any): Promise<McpServer> {
     // Minimal hardcoded resource for debugging
     server.resource(
       "test-playbook",
-      {
-        uri: "playbook://test.md",
-        name: "Test Playbook",
-        description: "A test playbook file.",
-        mimeType: "text/markdown"
-      },
-      async (uri, params) => ({
+      "playbook://test.md",
+      async (uri) => ({
         contents: [{
           uri: uri.href,
           mimeType: "text/markdown",
