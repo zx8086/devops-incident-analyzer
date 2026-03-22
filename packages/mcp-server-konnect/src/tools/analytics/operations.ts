@@ -2,6 +2,7 @@ import type { KongApi } from "../../api/kong-api.js";
 import type { ApiRequestFilter } from "../../types.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { formatApiRequestsResponse } from "../../utils/formatting.js";
+import { mcpLogger } from "../../utils/mcp-logger.js";
 
 /**
  * Standard response time formatter for consistent formatting
@@ -30,6 +31,7 @@ export async function queryApiRequests(
 	routeIds?: string[],
 	maxResults = 100,
 ) {
+	mcpLogger.debug("tools", "Querying API requests", { timeRange, maxResults });
 	return withErrorContext(
 		"query_api_requests",
 		"analytics",
@@ -204,6 +206,7 @@ export async function getConsumerRequests(
 	failureOnly = false,
 	maxResults = 100,
 ) {
+	mcpLogger.debug("tools", "Getting consumer requests", { consumerId, timeRange, successOnly, failureOnly, maxResults });
 	return withErrorContext(
 		"get_consumer_requests",
 		"consumer",

@@ -16,6 +16,17 @@ import { createTransport } from "./transport/factory.ts";
 export async function main(): Promise<void> {
 	// 1. Load config
 	const config = getConfig();
+	const earlyLogger = getLogger();
+	earlyLogger.info("Configuration loaded", {
+		provider: config.kafka.provider,
+		clientId: config.kafka.clientId,
+		transport: config.transport.mode,
+		allowWrites: config.kafka.allowWrites,
+		allowDestructive: config.kafka.allowDestructive,
+		schemaRegistry: config.schemaRegistry.enabled,
+		ksql: config.ksql.enabled,
+		telemetry: config.telemetry.enabled,
+	});
 
 	// 2. Create logger
 	const logger = createLogger({
@@ -110,6 +121,25 @@ export async function main(): Promise<void> {
 	process.on("SIGINT", () => shutdown("SIGINT"));
 	process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
+
+process.on("uncaughtException", (error) => {
+	const logger = getLogger();
+	logger.error("Uncaught exception", {
+		error: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined,
+	});
+	logger.flush();
+	process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+	const logger = getLogger();
+	logger.error("Unhandled rejection", {
+		reason: reason instanceof Error ? reason.message : String(reason),
+	});
+	logger.flush();
+	process.exit(1);
+});
 
 if (import.meta.main) {
 	main().catch((error) => {

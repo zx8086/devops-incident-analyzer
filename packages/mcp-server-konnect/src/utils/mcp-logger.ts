@@ -1,15 +1,4 @@
-/**
- * MCP-Compliant Logging Utility
- * Implements standardized logging per MCP Specification 2025-06-18
- *
- * Features:
- * - RFC 5424 log levels
- * - MCP notifications/message protocol compliance
- * - Security-aware (no credentials/PII)
- * - Rate limiting protection
- * - Contextual data support
- * - Client log level control
- */
+// src/utils/mcp-logger.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -291,6 +280,40 @@ class MCPLogger {
 
 // Export singleton instance
 export const mcpLogger = new MCPLogger();
+
+export async function measureOperation<T>(
+	loggerName: string,
+	operation: string,
+	fn: () => Promise<T>,
+	context?: LogContext,
+): Promise<T> {
+	mcpLogger.operationStart(loggerName, operation, context);
+	const startTime = Date.now();
+	try {
+		const result = await fn();
+		mcpLogger.operationEnd(loggerName, operation, Date.now() - startTime, context);
+		return result;
+	} catch (error) {
+		const duration = Date.now() - startTime;
+		mcpLogger.error(loggerName, `Operation failed: ${operation}`, {
+			...context,
+			operation,
+			duration,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		throw error;
+	}
+}
+
+export function createContextLogger(loggerName: string, defaultContext?: LogContext) {
+	return {
+		debug: (msg: string, ctx?: LogContext) => mcpLogger.debug(loggerName, msg, { ...defaultContext, ...ctx }),
+		info: (msg: string, ctx?: LogContext) => mcpLogger.info(loggerName, msg, { ...defaultContext, ...ctx }),
+		notice: (msg: string, ctx?: LogContext) => mcpLogger.notice(loggerName, msg, { ...defaultContext, ...ctx }),
+		warning: (msg: string, ctx?: LogContext) => mcpLogger.warning(loggerName, msg, { ...defaultContext, ...ctx }),
+		error: (msg: string, ctx?: LogContext) => mcpLogger.error(loggerName, msg, { ...defaultContext, ...ctx }),
+	};
+}
 
 // Legacy compatibility - gradually migrate these
 export const logger = {

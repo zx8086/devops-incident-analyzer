@@ -863,6 +863,7 @@ class KongKonnectMcpServer extends McpServer {
 
 			// Register the traced tool with appropriate parameters
 			const toolParams = tool.inputSchema || tool.parameters?.shape || {};
+			mcpLogger.debug("server", "Registering tool", { method: tool.method, category: tool.category });
 			this.tool(tool.method, tool.description, toolParams, tracedHandler);
 		});
 	}
@@ -1065,6 +1066,22 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
 	mcpLogger.notice("server", "Terminating (SIGTERM)");
 	process.exit(0);
+});
+
+process.on("uncaughtException", (error) => {
+	mcpLogger.emergency("server", "Uncaught exception", {
+		error: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined,
+	});
+	process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+	mcpLogger.error("server", "Unhandled rejection", {
+		reason: reason instanceof Error ? reason.message : String(reason),
+		stack: reason instanceof Error ? reason.stack : undefined,
+	});
+	process.exit(1);
 });
 
 // Check if this module is being run directly (ES module compatible)

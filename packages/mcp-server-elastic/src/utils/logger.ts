@@ -15,10 +15,20 @@ interface LogData {
 export class MCPCompatibleLogger {
 	private context: string;
 	private metadata: LogMetadata;
+	private level: string | undefined;
+	private format: string | undefined;
 
 	constructor(context = "elasticsearch-mcp-server", metadata: LogMetadata = {}) {
 		this.context = context;
 		this.metadata = metadata;
+	}
+
+	setLevel(level: string): void {
+		this.level = level;
+	}
+
+	setFormat(format: string): void {
+		this.format = format;
 	}
 
 	private formatMessage(level: string, message: string, metadata: LogMetadata = {}): string {
@@ -43,13 +53,16 @@ export class MCPCompatibleLogger {
 			}
 		}
 
-		// Return formatted JSON string
-		return JSON.stringify(logData);
+		// Format based on configuration
+		const format = this.format || process.env.LOG_FORMAT || "json";
+		return format === "json"
+			? JSON.stringify(logData)
+			: `${timestamp} [${level}] ${this.context}: ${message}`;
 	}
 
 	private shouldLog(level: string): boolean {
 		const levels = ["debug", "info", "warn", "error"];
-		const configLevel = process.env.LOG_LEVEL || "info";
+		const configLevel = this.level || process.env.LOG_LEVEL || "info";
 		return levels.indexOf(level) >= levels.indexOf(configLevel);
 	}
 
@@ -103,4 +116,17 @@ export const logger = new MCPCompatibleLogger();
 // Helper function to create a child logger with a specific context
 export function createContextLogger(context: string, metadata: LogMetadata = {}): MCPCompatibleLogger {
 	return new MCPCompatibleLogger(context, metadata);
+}
+
+// Helper function to measure operation duration
+export function measureOperation<T>(operation: string, fn: () => Promise<T>, metadata: LogMetadata = {}): Promise<T> {
+	const startTime = Date.now();
+	return fn().finally(() => {
+		const duration = Date.now() - startTime;
+		logger.debug(`Operation completed: ${operation}`, {
+			...metadata,
+			operation,
+			duration,
+		});
+	});
 }

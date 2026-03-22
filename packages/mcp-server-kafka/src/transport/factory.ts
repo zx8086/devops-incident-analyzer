@@ -28,6 +28,7 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 export async function createTransport(config: AppConfig, serverFactory: () => McpServer): Promise<TransportResult> {
 	const logger = getLogger();
 	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
+	logger.info("Resolving transport mode", { mode: config.transport.mode, stdio: useStdio, http: useHttp });
 
 	const result: TransportResult = {
 		async closeAll() {

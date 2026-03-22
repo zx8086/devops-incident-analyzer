@@ -1,5 +1,6 @@
 // src/services/client-manager.ts
 import { Admin, Consumer, Producer } from "@platformatic/kafka";
+import { getLogger } from "../logging/container.ts";
 import type { KafkaConnectionConfig, KafkaProvider } from "../providers/types.ts";
 
 type KafkaClientOptions = ConstructorParameters<typeof Admin>[0];
@@ -27,23 +28,31 @@ export class KafkaClientManager {
 	constructor(private readonly provider: KafkaProvider) {}
 
 	async withAdmin<T>(fn: (admin: Admin) => Promise<T>): Promise<T> {
+		const logger = getLogger();
+		logger.debug("Creating admin client");
 		const config = await this.getConnectionConfig();
 		const admin = new Admin(buildClientOptions(config));
 		const result = await fn(admin);
 		admin.close().catch(() => {});
+		logger.debug("Admin client closed");
 		return result;
 	}
 
 	async getProducer(): Promise<Producer> {
+		const logger = getLogger();
 		if (this.producer && !this.producer.closed) {
+			logger.debug("Reusing existing producer");
 			return this.producer;
 		}
+		logger.info("Creating new Kafka producer");
 		const config = await this.getConnectionConfig();
 		this.producer = new Producer(buildClientOptions(config));
 		return this.producer;
 	}
 
 	async createConsumer(groupId: string): Promise<Consumer> {
+		const logger = getLogger();
+		logger.info("Creating Kafka consumer", { groupId });
 		const config = await this.getConnectionConfig();
 		return new Consumer({ ...buildClientOptions(config), groupId });
 	}
@@ -53,6 +62,8 @@ export class KafkaClientManager {
 	}
 
 	async close(): Promise<void> {
+		const logger = getLogger();
+		logger.info("Closing Kafka client manager");
 		if (this.producer && !this.producer.closed) {
 			await this.producer.close().catch(() => {});
 		}
@@ -61,6 +72,7 @@ export class KafkaClientManager {
 
 		this.producer = null;
 		this.cachedConfig = null;
+		logger.info("Kafka client manager closed");
 	}
 
 	private async getConnectionConfig(): Promise<KafkaConnectionConfig> {

@@ -8,6 +8,7 @@ import { validateCertificate, validatePrivateKey } from "../../utils/validation.
  * List certificates for a specific control plane with health analysis
  */
 export async function listCertificates(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+	mcpLogger.debug("tools", "Listing certificates", { controlPlaneId });
 	return withErrorContext(
 		"list_certificates",
 		"certificate",
@@ -93,6 +94,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
  * Get detailed information about a specific certificate
  */
 export async function getCertificate(api: KongApi, controlPlaneId: string, certificateId: string) {
+	mcpLogger.debug("tools", "Getting certificate", { controlPlaneId, certificateId });
 	return withErrorContext(
 		"get_certificate",
 		"certificate",
@@ -151,6 +153,7 @@ export async function createCertificate(
 	keyAlt?: string,
 	tags?: string[],
 ) {
+	mcpLogger.debug("tools", "Creating certificate", { controlPlaneId });
 	return withErrorContext(
 		"create_certificate",
 		"certificate",
@@ -228,6 +231,7 @@ export async function updateCertificate(
 	keyAlt?: string,
 	tags?: string[],
 ) {
+	mcpLogger.debug("tools", "Updating certificate", { controlPlaneId, certificateId });
 	return withErrorContext(
 		"update_certificate",
 		"certificate",
@@ -295,6 +299,7 @@ export async function updateCertificate(
  * Delete a certificate
  */
 export async function deleteCertificate(api: KongApi, controlPlaneId: string, certificateId: string) {
+	mcpLogger.debug("tools", "Deleting certificate", { controlPlaneId, certificateId });
 	return withErrorContext(
 		"delete_certificate",
 		"certificate",
