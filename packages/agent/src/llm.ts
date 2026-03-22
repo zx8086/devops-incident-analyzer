@@ -13,7 +13,7 @@ function getRootAgent() {
 	return cachedRootAgent;
 }
 
-export type LlmRole = "orchestrator" | "classifier" | "subAgent" | "aggregator" | "responder" | "entityExtractor";
+export type LlmRole = "orchestrator" | "classifier" | "subAgent" | "aggregator" | "responder" | "entityExtractor" | "followUp";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -22,6 +22,7 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	aggregator: { temperature: 0.1 },
 	responder: { temperature: 0.3 },
 	entityExtractor: { temperature: 0 },
+	followUp: { temperature: 0.5, maxTokens: 256 },
 };
 
 export function createLlm(role: LlmRole): ChatBedrockConverse {

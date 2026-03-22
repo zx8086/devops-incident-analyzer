@@ -7,6 +7,17 @@ export const ToolOutputSchema = z.object({
 });
 export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 
+export const ToolErrorCategorySchema = z.enum(["auth", "session", "transient", "unknown"]);
+export type ToolErrorCategory = z.infer<typeof ToolErrorCategorySchema>;
+
+export const ToolErrorSchema = z.object({
+	toolName: z.string(),
+	category: ToolErrorCategorySchema,
+	message: z.string(),
+	retryable: z.boolean(),
+});
+export type ToolError = z.infer<typeof ToolErrorSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	data: z.unknown(),
@@ -15,6 +26,7 @@ export const DataSourceResultSchema = z.object({
 	toolOutputs: z.array(ToolOutputSchema).optional(),
 	isAlignmentRetry: z.boolean().optional(),
 	error: z.string().optional(),
+	toolErrors: z.array(ToolErrorSchema).optional(),
 });
 export type DataSourceResult = z.infer<typeof DataSourceResultSchema>;
 

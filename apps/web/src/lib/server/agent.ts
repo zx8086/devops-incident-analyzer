@@ -1,5 +1,7 @@
 // apps/web/src/lib/server/agent.ts
-import { buildGraph, createMcpClient } from "@devops-agent/agent";
+import { buildGraph, createLlm, createMcpClient } from "@devops-agent/agent";
+import type { DataSourceContext } from "@devops-agent/shared";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
 let mcpReady: Promise<void> | null = null;
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
@@ -31,9 +33,22 @@ export async function getGraph() {
 	return graphPromise;
 }
 
+export function getFollowUpLlm(): BaseChatModel | null {
+	try {
+		return createLlm("followUp");
+	} catch {
+		return null;
+	}
+}
+
 export async function invokeAgent(
 	messages: Array<{ role: string; content: string }>,
-	options: { threadId: string; dataSources?: string[]; isFollowUp?: boolean },
+	options: {
+		threadId: string;
+		dataSources?: string[];
+		isFollowUp?: boolean;
+		dataSourceContext?: DataSourceContext;
+	},
 ) {
 	const { HumanMessage } = await import("@langchain/core/messages");
 	const graph = await getGraph();
@@ -45,10 +60,12 @@ export async function invokeAgent(
 			messages: langchainMessages,
 			targetDataSources: options.dataSources ?? [],
 			isFollowUp: options.isFollowUp ?? false,
+			...(options.dataSourceContext && { dataSourceContext: options.dataSourceContext }),
 		},
 		{
 			configurable: { thread_id: options.threadId },
 			version: "v2",
+			recursionLimit: 100,
 		},
 	);
 }

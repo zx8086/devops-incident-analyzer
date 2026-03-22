@@ -44,7 +44,10 @@ function handleSend(content: string) {
 }
 
 function handleSuggestionClick(suggestion: string) {
-	agentStore.sendMessage(suggestion, { isFollowUp: true });
+	agentStore.sendMessage(suggestion, {
+		isFollowUp: true,
+		dataSourceContext: agentStore.lastDataSourceContext,
+	});
 }
 </script>
 

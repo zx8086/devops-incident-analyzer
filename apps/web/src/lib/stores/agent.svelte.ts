@@ -1,5 +1,5 @@
 // apps/web/src/lib/stores/agent.svelte.ts
-import type { StreamEvent } from "@devops-agent/shared";
+import type { DataSourceContext, StreamEvent } from "@devops-agent/shared";
 
 export interface ChatMessage {
 	role: "user" | "assistant";
@@ -12,6 +12,11 @@ export interface ChatMessage {
 	feedback?: "up" | "down" | null;
 	runId?: string;
 	confidence?: number;
+}
+
+export interface FollowUpContext {
+	isFollowUp: boolean;
+	dataSourceContext?: DataSourceContext;
 }
 
 function createAgentStore() {
@@ -29,9 +34,10 @@ function createAgentStore() {
 	let lastToolsUsed = $state<string[]>([]);
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
+	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let abortController: AbortController | null = null;
 
-	async function sendMessage(content: string, followUpContext?: { isFollowUp: boolean }) {
+	async function sendMessage(content: string, followUpContext?: FollowUpContext) {
 		if (isStreaming || !content.trim()) return;
 
 		messages = [...messages, { role: "user", content }];
@@ -55,8 +61,9 @@ function createAgentStore() {
 				body: JSON.stringify({
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
-					dataSources: selectedDataSources.length > 0 ? selectedDataSources : undefined,
+					dataSources: selectedDataSources,
 					...(followUpContext?.isFollowUp && { isFollowUp: true }),
+					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
 				}),
 				signal: abortController.signal,
 			});
@@ -149,6 +156,7 @@ function createAgentStore() {
 				lastToolsUsed = event.toolsUsed ?? [];
 				lastRunId = event.runId;
 				lastConfidence = event.confidence;
+				lastDataSourceContext = event.dataSourceContext;
 				break;
 			case "error":
 				currentContent += `\n\n[Error: ${event.message}]`;
@@ -202,6 +210,7 @@ function createAgentStore() {
 		activeNodes = new Set();
 		completedNodes = new Map();
 		lastSuggestions = [];
+		lastDataSourceContext = undefined;
 	}
 
 	return {
@@ -234,6 +243,9 @@ function createAgentStore() {
 		},
 		get completedNodes() {
 			return completedNodes;
+		},
+		get lastDataSourceContext() {
+			return lastDataSourceContext;
 		},
 		sendMessage,
 		setFeedback,

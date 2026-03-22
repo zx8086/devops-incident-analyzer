@@ -1,7 +1,10 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
+
+import { generateFallbackSuggestions, generateFollowUpSuggestions } from "@devops-agent/agent";
+import { DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { invokeAgent } from "$lib/server/agent";
+import { getFollowUpLlm, invokeAgent } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
 
 const StreamRequestSchema = z.object({
@@ -14,6 +17,7 @@ const StreamRequestSchema = z.object({
 	threadId: z.string().optional(),
 	dataSources: z.array(z.string()).optional(),
 	isFollowUp: z.boolean().optional(),
+	dataSourceContext: DataSourceContextSchema.optional(),
 });
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -35,6 +39,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						threadId,
 						dataSources: body.dataSources,
 						isFollowUp: body.isFollowUp,
+						dataSourceContext: body.dataSourceContext,
 					});
 
 					const OUTPUT_NODES = new Set(["aggregate", "responder"]);
@@ -48,6 +53,8 @@ export const POST: RequestHandler = async ({ request }) => {
 						"responder",
 					]);
 					const nodeStartTimes = new Map<string, number>();
+					let responseContent = "";
+					const toolsUsed = new Set<string>();
 
 					for await (const event of eventStream) {
 						if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
@@ -55,7 +62,9 @@ export const POST: RequestHandler = async ({ request }) => {
 							const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
 							const nodeName = event.metadata?.langgraph_node;
 							if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
-								send({ type: "message", content: String(event.data.chunk.content) });
+								const content = String(event.data.chunk.content);
+								responseContent += content;
+								send({ type: "message", content });
 							}
 						}
 
@@ -72,18 +81,48 @@ export const POST: RequestHandler = async ({ request }) => {
 						}
 
 						if (event.event === "on_tool_start") {
+							const toolName = event.name ?? "unknown";
+							toolsUsed.add(toolName);
 							send({
 								type: "tool_call",
-								toolName: event.name ?? "unknown",
+								toolName,
 								args: event.data?.input ?? {},
 							});
 						}
 					}
 
+					// Generate follow-up suggestions after graph completes
+					const toolsUsedArray = [...toolsUsed];
+					const followUpLlm = getFollowUpLlm();
+					let suggestions: string[];
+					if (followUpLlm && responseContent.length >= 50) {
+						suggestions = await generateFollowUpSuggestions(followUpLlm, responseContent, toolsUsedArray);
+					} else {
+						suggestions = generateFallbackSuggestions(toolsUsedArray);
+					}
+
+					if (suggestions.length > 0) {
+						send({ type: "suggestions", suggestions });
+					}
+
+					// Build dataSourceContext from the datasources that were actually queried
+					const queriedDataSources = body.dataSources ?? [];
+					const dataSourceContext =
+						body.dataSourceContext ??
+						(queriedDataSources.length > 0
+							? {
+									type: "EXPLICIT" as const,
+									dataSources: queriedDataSources,
+									scope: "all" as const,
+								}
+							: undefined);
+
 					send({
 						type: "done",
 						threadId,
 						responseTime: Date.now() - startTime,
+						toolsUsed: toolsUsedArray,
+						dataSourceContext,
 					});
 				} catch (error) {
 					send({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });

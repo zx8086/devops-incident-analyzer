@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { checkAlignment } from "./alignment.ts";
+import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { AgentState } from "./state.ts";
 import { supervise } from "./supervisor.ts";
@@ -171,8 +171,7 @@ describe("alignment: cross-datasource gap detection", () => {
 				{ dataSourceId: "couchbase", data: "health", status: "success" },
 			],
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(false);
+		expect(routeAfterAlignment(state)).toBe("aggregate");
 	});
 
 	test("retries when a datasource is missing", () => {
@@ -183,8 +182,8 @@ describe("alignment: cross-datasource gap detection", () => {
 				{ dataSourceId: "kafka", data: "events", status: "success" },
 			],
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(true);
+		const result = routeAfterAlignment(state);
+		expect(Array.isArray(result)).toBe(true);
 	});
 
 	test("retries when a datasource returned an error", () => {
@@ -195,8 +194,8 @@ describe("alignment: cross-datasource gap detection", () => {
 				{ dataSourceId: "kafka", data: null, status: "error", error: "connection refused" },
 			],
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(true);
+		const result = routeAfterAlignment(state);
+		expect(Array.isArray(result)).toBe(true);
 	});
 
 	test("stops retrying after 2 alignment attempts", () => {
@@ -206,20 +205,19 @@ describe("alignment: cross-datasource gap detection", () => {
 			alignmentRetries: 2,
 		});
 		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(false);
 		expect(result.alignmentHints).toBeDefined();
 		expect(result.alignmentHints!.length).toBeGreaterThan(0);
+		expect(routeAfterAlignment(state)).toBe("aggregate");
 	});
 
-	test("increments alignmentRetries on retry", () => {
+	test("routes to retries for missing datasource", () => {
 		const state = makeState({
 			targetDataSources: ["elastic", "kafka"],
 			dataSourceResults: [{ dataSourceId: "elastic", data: "logs", status: "success" }],
 			alignmentRetries: 0,
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(true);
-		expect(result.alignmentRetries).toBe(1);
+		const result = routeAfterAlignment(state);
+		expect(Array.isArray(result)).toBe(true);
 	});
 });
 

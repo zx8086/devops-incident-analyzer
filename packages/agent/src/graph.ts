@@ -3,7 +3,7 @@
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { END, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
-import { checkAlignment } from "./alignment.ts";
+import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { extractEntities } from "./entity-extractor.ts";
 import { respond } from "./responder.ts";
@@ -18,11 +18,7 @@ export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) 
 		.addNode("responder", respond)
 		.addNode("entityExtractor", extractEntities)
 		.addNode("queryDataSource", queryDataSource)
-		.addNode("align", (state) => {
-			const result = checkAlignment(state);
-			const { shouldRetry: _, ...stateUpdate } = result;
-			return stateUpdate;
-		})
+		.addNode("align", checkAlignment)
 		.addNode("aggregate", aggregate)
 		.addNode("validate", validate)
 
@@ -38,17 +34,13 @@ export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) 
 		.addEdge("responder", END)
 
 		// EntityExtractor fans out to sub-agents via Send[]
-		// (supervisor logic is the conditional edge function, not a separate node)
 		.addConditionalEdges("entityExtractor", supervise)
 
 		// Sub-agent results flow to alignment
 		.addEdge("queryDataSource", "align")
 
-		// Alignment -> retry or aggregate
-		.addConditionalEdges("align", (state) => {
-			const result = checkAlignment(state);
-			return result.shouldRetry ? "queryDataSource" : "aggregate";
-		})
+		// Alignment -> Send[] retries or aggregate
+		.addConditionalEdges("align", routeAfterAlignment, ["queryDataSource", "aggregate"])
 
 		// Aggregate -> validate
 		.addEdge("aggregate", "validate")

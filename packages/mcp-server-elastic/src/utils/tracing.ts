@@ -122,7 +122,7 @@ export function traceToolCall(
 				const result = await handler(toolArgs, extra);
 				const executionTime = Date.now() - startTime;
 
-				logger.debug("Tool execution completed", { toolName, executionTime });
+				logger.debug("Tool execution completed", { toolName, dataSourceId: "elastic", executionTime });
 
 				return {
 					...result,
@@ -131,6 +131,7 @@ export function traceToolCall(
 			} catch (error) {
 				logger.error("Tool execution failed", {
 					toolName,
+					dataSourceId: "elastic",
 					executionTime: Date.now() - startTime,
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -143,6 +144,7 @@ export function traceToolCall(
 			project_name: project,
 			metadata: {
 				tool_name: toolName,
+				data_source_id: "elastic",
 				session_id: sessionId,
 				connection_id: connectionId,
 				client_name: clientName,

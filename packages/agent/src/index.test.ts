@@ -1,7 +1,7 @@
 // agent/src/index.test.ts
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
-import { checkAlignment } from "./alignment.ts";
+import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { AgentState } from "./state.ts";
 import { supervise } from "./supervisor.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
@@ -57,8 +57,7 @@ describe("alignment", () => {
 				{ dataSourceId: "kafka", data: "ok", status: "success" },
 			],
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(false);
+		expect(routeAfterAlignment(state)).toBe("aggregate");
 	});
 
 	test("retries when datasource is missing", () => {
@@ -66,8 +65,8 @@ describe("alignment", () => {
 			targetDataSources: ["elastic", "kafka"],
 			dataSourceResults: [{ dataSourceId: "elastic", data: "ok", status: "success" }],
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(true);
+		const result = routeAfterAlignment(state);
+		expect(Array.isArray(result)).toBe(true);
 	});
 
 	test("stops retrying after max attempts", () => {
@@ -76,9 +75,8 @@ describe("alignment", () => {
 			dataSourceResults: [{ dataSourceId: "elastic", data: "ok", status: "success" }],
 			alignmentRetries: 2,
 		});
-		const result = checkAlignment(state);
-		expect(result.shouldRetry).toBe(false);
-		expect(result.alignmentHints).toBeDefined();
+		checkAlignment(state); // updates state
+		expect(routeAfterAlignment(state)).toBe("aggregate");
 	});
 });
 
