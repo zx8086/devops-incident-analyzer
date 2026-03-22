@@ -1,0 +1,119 @@
+/* apps/web/src/app.css */
+@import "tailwindcss";
+
+@theme {
+  /* Tommy Hilfiger Brand Colors */
+  --color-tommy-navy: #02154E;
+  --color-tommy-dark-navy: #1B2651;
+  --color-tommy-red: #D61233;
+  --color-tommy-red-ui: #CD2028;
+  --color-tommy-offwhite: #EDEAE1;
+  --color-tommy-accent-blue: #166C96;
+  --color-tommy-cream: #F5F3EC;
+  --color-tommy-slate: #1B2651;
+
+  /* Gray scale */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+
+  /* Blue mapped to brand navy */
+  --color-blue-50: #F5F3EC;
+  --color-blue-100: #EDEAE1;
+  --color-blue-500: #166C96;
+  --color-blue-600: #02154E;
+  --color-blue-700: #1B2651;
+
+  /* Amber (tool badges) */
+  --color-amber-100: #fef3c7;
+  --color-amber-300: #fcd34d;
+  --color-amber-700: #b45309;
+
+  /* Green (completed progress) */
+  --color-green-50: #f0fdf4;
+  --color-green-100: #dcfce7;
+  --color-green-300: #86efac;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+
+  /* Semantic colors */
+  --color-yellow-600: #ca8a04;
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-purple-600: #9333ea;
+
+  /* Custom animations */
+  --animate-pulse-dot: pulse-dot 1.5s ease-in-out infinite;
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-pulse-glow: pulse-glow 1.5s ease-in-out infinite;
+  --animate-slide-up-fade: slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-pop-in: pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  --animate-cascade-in: cascade-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  --animate-fade-slide-up: fade-slide-up 0.7s ease-out forwards;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(22, 108, 150, 0.4), 0 4px 6px -1px rgba(22, 108, 150, 0.3);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 16px 4px rgba(22, 108, 150, 0.6), 0 4px 6px -1px rgba(22, 108, 150, 0.4);
+    transform: scale(1.02);
+  }
+}
+
+@keyframes slide-up-fade {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fade-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cascade-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Stagger delay utilities */
+.animation-delay-75 { animation-delay: 75ms; }
+.animation-delay-150 { animation-delay: 150ms; }
+.animation-delay-225 { animation-delay: 225ms; }
+.animation-delay-300 { animation-delay: 300ms; }
+.animation-delay-375 { animation-delay: 375ms; }
+.animation-delay-450 { animation-delay: 450ms; }
+
+/* Accessibility */
+.focus-ring { outline: none; }
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-tommy-navy);
+  outline-offset: 2px;
+}
