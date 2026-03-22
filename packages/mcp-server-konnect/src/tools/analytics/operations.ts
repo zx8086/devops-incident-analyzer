@@ -206,7 +206,13 @@ export async function getConsumerRequests(
 	failureOnly = false,
 	maxResults = 100,
 ) {
-	mcpLogger.debug("tools", "Getting consumer requests", { consumerId, timeRange, successOnly, failureOnly, maxResults });
+	mcpLogger.debug("tools", "Getting consumer requests", {
+		consumerId,
+		timeRange,
+		successOnly,
+		failureOnly,
+		maxResults,
+	});
 	return withErrorContext(
 		"get_consumer_requests",
 		"consumer",

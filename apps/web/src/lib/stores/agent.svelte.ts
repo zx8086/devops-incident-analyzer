@@ -24,15 +24,27 @@ function createAgentStore() {
 	let connectedDataSources = $state<string[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
+	let lastSuggestions = $state<string[]>([]);
+	let lastResponseTime = $state<number | undefined>(undefined);
+	let lastToolsUsed = $state<string[]>([]);
+	let lastRunId = $state<string | undefined>(undefined);
+	let lastConfidence = $state<number | undefined>(undefined);
 	let abortController: AbortController | null = null;
 
-	async function sendMessage(content: string) {
-		messages.push({ role: "user", content });
+	async function sendMessage(content: string, followUpContext?: { isFollowUp: boolean }) {
+		if (isStreaming || !content.trim()) return;
+
+		messages = [...messages, { role: "user", content }];
 		isStreaming = true;
 		currentContent = "";
+		dataSourceProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
-		dataSourceProgress = new Map();
+		lastSuggestions = [];
+		lastResponseTime = undefined;
+		lastToolsUsed = [];
+		lastRunId = undefined;
+		lastConfidence = undefined;
 
 		abortController = new AbortController();
 
@@ -44,13 +56,13 @@ function createAgentStore() {
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
 					dataSources: selectedDataSources.length > 0 ? selectedDataSources : undefined,
-					isFollowUp: messages.length > 2,
+					...(followUpContext?.isFollowUp && { isFollowUp: true }),
 				}),
 				signal: abortController.signal,
 			});
 
 			if (!response.ok || !response.body) {
-				throw new Error(`Stream failed: ${response.status}`);
+				throw new Error(`HTTP ${response.status}`);
 			}
 
 			const reader = response.body.getReader();
@@ -76,21 +88,35 @@ function createAgentStore() {
 				}
 			}
 		} catch (error) {
-			if (error instanceof DOMException && error.name === "AbortError") return;
-			const errMsg = error instanceof Error ? error.message : "Unknown error";
-			currentContent += `\n\nError: ${errMsg}`;
+			const isAbort = error instanceof DOMException && error.name === "AbortError";
+			if (!isAbort) {
+				currentContent += `\n\n[Error: ${error instanceof Error ? error.message : String(error)}]`;
+			}
 		} finally {
+			abortController = null;
 			if (currentContent) {
-				messages.push({
-					role: "assistant",
-					content: currentContent,
-					completedNodes: new Map(completedNodes),
-					dataSourceResults: new Map(dataSourceProgress),
-				});
+				messages = [
+					...messages,
+					{
+						role: "assistant",
+						content: currentContent,
+						suggestions: [...lastSuggestions],
+						responseTime: lastResponseTime,
+						toolsUsed: [...lastToolsUsed],
+						completedNodes: new Map(completedNodes),
+						dataSourceResults: new Map(dataSourceProgress),
+						feedback: null,
+						runId: lastRunId,
+						confidence: lastConfidence,
+					},
+				];
+				currentContent = "";
 			}
 			isStreaming = false;
-			currentContent = "";
-			abortController = null;
+			activeNodes = new Set();
+			completedNodes = new Map();
+			lastSuggestions = [];
+			dataSourceProgress = new Map();
 		}
 	}
 
@@ -102,52 +128,54 @@ function createAgentStore() {
 			case "tool_call":
 				break;
 			case "datasource_progress":
-				dataSourceProgress.set(event.dataSourceId, { status: event.status, message: event.message });
-				dataSourceProgress = new Map(dataSourceProgress);
+				dataSourceProgress = new Map([
+					...dataSourceProgress,
+					[event.dataSourceId, { status: event.status, message: event.message }],
+				]);
 				break;
 			case "node_start":
-				activeNodes.add(event.nodeId);
-				activeNodes = new Set(activeNodes);
+				activeNodes = new Set([...activeNodes, event.nodeId]);
 				break;
 			case "node_end":
-				activeNodes.delete(event.nodeId);
-				activeNodes = new Set(activeNodes);
-				completedNodes.set(event.nodeId, { duration: event.duration });
-				completedNodes = new Map(completedNodes);
+				activeNodes = new Set([...activeNodes].filter((n) => n !== event.nodeId));
+				completedNodes = new Map([...completedNodes, [event.nodeId, { duration: event.duration }]]);
 				break;
 			case "suggestions":
-				if (messages.length > 0) {
-					const last = messages[messages.length - 1];
-					if (last) last.suggestions = event.suggestions;
-				}
+				lastSuggestions = event.suggestions;
 				break;
 			case "done":
 				threadId = event.threadId;
-				if (messages.length > 0) {
-					const last = messages[messages.length - 1];
-					if (last) {
-						last.runId = event.runId;
-						last.confidence = event.confidence;
-						last.responseTime = event.responseTime;
-						last.toolsUsed = event.toolsUsed;
-					}
-				}
+				lastResponseTime = event.responseTime;
+				lastToolsUsed = event.toolsUsed ?? [];
+				lastRunId = event.runId;
+				lastConfidence = event.confidence;
 				break;
 			case "error":
-				currentContent += `\n\nError: ${event.message}`;
+				currentContent += `\n\n[Error: ${event.message}]`;
 				break;
 		}
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
 		const msg = messages[messageIndex];
-		if (!msg?.runId) return;
-		msg.feedback = score;
-		await fetch("/api/agent/feedback", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ runId: msg.runId, score: score === "up" ? 1 : 0 }),
-		});
+		if (!msg || msg.role !== "assistant") return;
+		const current = msg.feedback === score ? null : score;
+		messages = messages.map((m, i) => (i === messageIndex ? { ...m, feedback: current } : m));
+
+		if (msg.runId && current) {
+			try {
+				await fetch("/api/agent/feedback", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						runId: msg.runId,
+						score: current === "up" ? 1 : 0,
+					}),
+				});
+			} catch {
+				// Feedback submission is best-effort
+			}
+		}
 	}
 
 	function cancelStream() {
@@ -159,7 +187,6 @@ function createAgentStore() {
 			const res = await fetch("/api/datasources");
 			const data = await res.json();
 			connectedDataSources = data.connected ?? [];
-			// Pre-select only connected servers
 			selectedDataSources = connectedDataSources.length > 0 ? [...connectedDataSources] : (data.dataSources ?? []);
 		} catch {
 			selectedDataSources = [];
@@ -174,6 +201,7 @@ function createAgentStore() {
 		dataSourceProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
+		lastSuggestions = [];
 	}
 
 	return {

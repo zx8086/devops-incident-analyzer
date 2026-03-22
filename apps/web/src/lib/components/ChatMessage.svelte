@@ -1,4 +1,5 @@
 <script lang="ts">
+// apps/web/src/lib/components/ChatMessage.svelte
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
@@ -24,47 +25,46 @@ let {
 </script>
 
 {#if message.role === "user"}
-  <div class="flex justify-end mb-4 animate-fade-in">
-    <div class="max-w-2xl rounded-2xl rounded-br-md bg-tommy-navy px-4 py-3 text-white text-sm">
-      {message.content}
+  <div class="animate-slide-up-fade py-2 px-4">
+    <div class="flex justify-end">
+      <div class="max-w-[85%] bg-tommy-navy text-white rounded-lg px-3 py-2">
+        <p class="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+      </div>
     </div>
   </div>
 {:else}
-  <div class="flex gap-3 mb-4 animate-fade-in">
-    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-tommy-cream flex items-center justify-center">
-      <Icon name="bot" size={16} />
-    </div>
-    <div class="flex-1 min-w-0">
-      <div class="text-sm">
-        <MarkdownRenderer content={message.content} />
-        {#if isStreaming && isLast}
-          <span class="inline-block w-2 h-4 bg-tommy-accent-blue animate-pulse-dot ml-0.5"></span>
+  <div class="animate-slide-up-fade py-2 px-4">
+    <div class="flex gap-3 items-start">
+      <div class="w-7 h-7 bg-tommy-offwhite rounded-full flex items-center justify-center shrink-0 mt-0.5">
+        <Icon name="bot" class="w-3.5 h-3.5 text-tommy-navy" />
+      </div>
+      <div class="max-w-[85%]">
+        <div class="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+          {#if message.content}
+            <MarkdownRenderer content={message.content} />
+            {#if isStreaming && isLast}
+              <span class="inline-block w-2 h-4 bg-[#02154E] animate-pulse ml-0.5 align-middle"></span>
+            {/if}
+          {/if}
+        </div>
+
+        {#if !isStreaming && (message.responseTime !== undefined || (message.toolsUsed && message.toolsUsed.length > 0) || (message.dataSourceResults && message.dataSourceResults.size > 0))}
+          <CompletedProgress
+            responseTime={message.responseTime}
+            toolsUsed={message.toolsUsed}
+            completedNodes={message.completedNodes}
+            dataSourceResults={message.dataSourceResults}
+          />
+        {/if}
+
+        {#if !isStreaming && onFeedback}
+          <FeedbackBar content={message.content} feedback={message.feedback} onFeedback={(score) => onFeedback?.(index, score)} />
+        {/if}
+
+        {#if !isStreaming && message.suggestions && message.suggestions.length > 0 && onSuggestionClick}
+          <FollowUpSuggestions suggestions={message.suggestions} onSelect={(s) => onSuggestionClick?.(s)} />
         {/if}
       </div>
-
-      {#if !isStreaming && message.completedNodes && message.completedNodes.size > 0}
-        <CompletedProgress
-          nodes={message.completedNodes}
-          dataSourceResults={message.dataSourceResults}
-          responseTime={message.responseTime}
-          toolsUsed={message.toolsUsed}
-        />
-      {/if}
-
-      {#if !isStreaming && isLast}
-        <FeedbackBar
-          feedback={message.feedback}
-          content={message.content}
-          onFeedback={(score) => onFeedback?.(index, score)}
-        />
-      {/if}
-
-      {#if !isStreaming && message.suggestions && message.suggestions.length > 0}
-        <FollowUpSuggestions
-          suggestions={message.suggestions}
-          onSelect={(s) => onSuggestionClick?.(s)}
-        />
-      {/if}
     </div>
   </div>
 {/if}

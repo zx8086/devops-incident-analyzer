@@ -86,7 +86,12 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const duration = Date.now() - startTime;
 
 		logger.info(
-			{ dataSourceId, duration, messageCount: response.messages.length, responseLength: String(lastResponse?.content ?? "").length },
+			{
+				dataSourceId,
+				duration,
+				messageCount: response.messages.length,
+				responseLength: String(lastResponse?.content ?? "").length,
+			},
 			"Sub-agent completed",
 		);
 
@@ -101,7 +106,10 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		return { dataSourceResults: [result] };
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error({ dataSourceId, duration, error: error instanceof Error ? error.message : String(error) }, "Sub-agent failed");
+		logger.error(
+			{ dataSourceId, duration, error: error instanceof Error ? error.message : String(error) },
+			"Sub-agent failed",
+		);
 		const result: DataSourceResult = {
 			dataSourceId,
 			data: null,

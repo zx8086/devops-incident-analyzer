@@ -24,7 +24,11 @@ export function createContextLogger(context: string, metadata: Record<string, un
 	return getLogger().child({ context, ...metadata });
 }
 
-export function measureOperation<T>(operation: string, fn: () => Promise<T>, metadata: Record<string, unknown> = {}): Promise<T> {
+export function measureOperation<T>(
+	operation: string,
+	fn: () => Promise<T>,
+	metadata: Record<string, unknown> = {},
+): Promise<T> {
 	const logger = getLogger();
 	const startTime = Date.now();
 	return fn().finally(() => {

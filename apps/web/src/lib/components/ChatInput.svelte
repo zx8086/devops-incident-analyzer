@@ -46,11 +46,11 @@ function autoResize() {
     ></textarea>
     {#if isStreaming}
       <button onclick={onStop} class="rounded-lg bg-tommy-red p-3 text-white hover:bg-red-600 transition-colors">
-        <Icon name="stop" size={18} />
+        <Icon name="stop" class="w-[18px] h-[18px]" />
       </button>
     {:else}
       <button onclick={submit} disabled={!value.trim()} class="rounded-lg bg-tommy-navy p-3 text-white hover:bg-tommy-dark-navy transition-colors disabled:opacity-30">
-        <Icon name="send" size={18} />
+        <Icon name="send" class="w-[18px] h-[18px]" />
       </button>
     {/if}
   </div>

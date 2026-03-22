@@ -13,7 +13,7 @@ let {
 {#if suggestions.length > 0}
   <div class="mt-3 p-3 rounded-lg bg-gradient-to-r from-tommy-cream to-tommy-offwhite border border-gray-200 animate-fade-slide-up">
     <div class="flex items-center gap-1.5 mb-2 text-xs font-medium text-gray-600">
-      <Icon name="lightbulb" size={14} />
+      <Icon name="lightbulb" class="w-3.5 h-3.5" />
       <span>Suggested follow-ups</span>
     </div>
     <div class="grid gap-1.5">

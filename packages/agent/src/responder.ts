@@ -1,22 +1,34 @@
 // agent/src/responder.ts
 
 import { getLogger } from "@devops-agent/observability";
-import { buildSystemPrompt, loadAgent } from "@devops-agent/gitagent-bridge";
 import { AIMessage } from "@langchain/core/messages";
 import { createLlm } from "./llm.ts";
-import { getAgentsDir } from "./paths.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:responder");
 
+const RESPONDER_PROMPT = `You are a DevOps incident analysis assistant that helps engineers investigate and resolve infrastructure issues across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect.
+
+You can help with:
+- Greetings and general conversation
+- Explaining your capabilities
+- Answering general DevOps questions from knowledge
+
+Your capabilities when connected to datasources:
+- Elasticsearch: cluster health, index stats, shard allocation, log search, mapping inspection
+- Kafka: topic listing, consumer group lag, message consumption, broker health
+- Couchbase Capella: bucket health, N1QL query analysis, system vitals, node status
+- Kong Konnect: API gateway routes, services, plugins, request analytics
+
+Keep responses concise and direct. Do not fabricate infrastructure data -- only answer from general knowledge.
+Do not ask excessive clarifying questions. If the user asks something you can answer from general knowledge, answer it directly.`;
+
 export async function respond(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	logger.info("Simple query responder invoked");
-	const agent = loadAgent(getAgentsDir());
-	const systemPrompt = buildSystemPrompt(agent, []);
 
 	const llm = createLlm("responder");
 	const startTime = Date.now();
-	const response = await llm.invoke([{ role: "system", content: systemPrompt }, ...state.messages]);
+	const response = await llm.invoke([{ role: "system", content: RESPONDER_PROMPT }, ...state.messages]);
 	const answer = String(response.content);
 
 	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Responder complete");

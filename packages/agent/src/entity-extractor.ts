@@ -54,10 +54,7 @@ If no specific datasource is mentioned, include all: elastic, kafka, couchbase, 
 			const entities: ExtractedEntities = { dataSources: parsed.dataSources };
 			const extractedIds = parsed.dataSources.map((d) => d.id);
 			const effectiveTargets = uiSelected.length > 0 ? uiSelected : extractedIds;
-			logger.info(
-				{ extractedDataSources: extractedIds, uiSelected, effectiveTargets },
-				"Entity extraction complete",
-			);
+			logger.info({ extractedDataSources: extractedIds, uiSelected, effectiveTargets }, "Entity extraction complete");
 			return {
 				extractedEntities: entities,
 				previousEntities: state.extractedEntities,

@@ -108,6 +108,7 @@ declare module '$env/static/private' {
 	export const ELASTIC_MCP_URL: string;
 	export const KAFKA_MCP_URL: string;
 	export const COUCHBASE_MCP_URL: string;
+	export const KONNECT_MCP_URL: string;
 	export const OTEL_SERVICE_NAME: string;
 	export const TELEMETRY_MODE: string;
 	export const OTEL_EXPORTER_OTLP_ENDPOINT: string;
@@ -273,6 +274,7 @@ declare module '$env/dynamic/private' {
 		ELASTIC_MCP_URL: string;
 		KAFKA_MCP_URL: string;
 		COUCHBASE_MCP_URL: string;
+		KONNECT_MCP_URL: string;
 		OTEL_SERVICE_NAME: string;
 		TELEMETRY_MODE: string;
 		OTEL_EXPORTER_OTLP_ENDPOINT: string;

@@ -1,48 +1,58 @@
 <script lang="ts">
+// apps/web/src/lib/components/FeedbackBar.svelte
 import Icon from "./Icon.svelte";
 
 let {
-	feedback,
 	content,
+	feedback = null,
 	onFeedback,
 }: {
-	feedback?: "up" | "down" | null;
 	content: string;
-	onFeedback: (score: "up" | "down") => void;
+	feedback?: "up" | "down" | null;
+	onFeedback: (value: "up" | "down") => void;
 } = $props();
 
 let copied = $state(false);
 
-async function copyContent() {
-	await navigator.clipboard.writeText(content);
-	copied = true;
-	setTimeout(() => (copied = false), 2000);
+async function handleCopy() {
+	try {
+		await navigator.clipboard.writeText(content);
+		copied = true;
+		setTimeout(() => {
+			copied = false;
+		}, 2000);
+	} catch {
+		// clipboard API may be unavailable
+	}
 }
 </script>
 
-<div class="flex items-center gap-2 mt-2 text-gray-400">
-  <button onclick={copyContent} class="p-1 hover:text-gray-600 transition-colors" title="Copy response">
-    {#if copied}
-      <span class="text-xs text-green-600">Copied</span>
-    {:else}
-      <Icon name="copy" size={14} />
-    {/if}
+<div class="flex items-center gap-2 mt-3 p-2 bg-white border border-gray-200 rounded-lg shadow-sm animate-fade-in">
+  <button
+    onclick={handleCopy}
+    class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors {copied ? 'text-green-600 bg-green-50' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}"
+  >
+    <Icon name="copy" class="w-3 h-3" />
+    {copied ? "Copied" : "Copy"}
   </button>
 
-  <span class="text-gray-300">|</span>
-  <span class="text-xs">Helpful?</span>
+  <div class="w-px h-4 bg-gray-200"></div>
+
+  <span class="text-[0.625rem] text-gray-400">Helpful?</span>
 
   <button
     onclick={() => onFeedback("up")}
-    class="p-1 transition-colors {feedback === 'up' ? 'text-green-600' : 'hover:text-gray-600'}"
+    class="p-1 rounded transition-colors {feedback === 'up' ? 'bg-green-100 text-green-600' : 'text-gray-400 hover:text-green-600 hover:bg-green-50'}"
+    aria-label="Helpful"
   >
-    <Icon name="thumbs-up" size={14} />
+    <Icon name="thumbs-up" class="w-3.5 h-3.5" />
   </button>
 
   <button
     onclick={() => onFeedback("down")}
-    class="p-1 transition-colors {feedback === 'down' ? 'text-red-600' : 'hover:text-gray-600'}"
+    class="p-1 rounded transition-colors {feedback === 'down' ? 'bg-red-100 text-red-600' : 'text-gray-400 hover:text-red-600 hover:bg-red-50'}"
+    aria-label="Not helpful"
   >
-    <Icon name="thumbs-down" size={14} />
+    <Icon name="thumbs-down" class="w-3.5 h-3.5" />
   </button>
 </div>

@@ -37,28 +37,38 @@ export const POST: RequestHandler = async ({ request }) => {
 						isFollowUp: body.isFollowUp,
 					});
 
-					// Only stream content from final output nodes (aggregate, responder)
-					// Internal nodes (classifier, entityExtractor, sub-agents) should not leak to UI
 					const OUTPUT_NODES = new Set(["aggregate", "responder"]);
+					const PIPELINE_NODES = new Set([
+						"classify",
+						"entityExtractor",
+						"queryDataSource",
+						"align",
+						"aggregate",
+						"validate",
+						"responder",
+					]);
+					const nodeStartTimes = new Map<string, number>();
 
 					for await (const event of eventStream) {
 						if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
-							// Filter: only forward LLM output from output-producing nodes
 							const tags: string[] = event.tags ?? [];
 							const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
-							// LangGraph tags the node name in the event metadata
 							const nodeName = event.metadata?.langgraph_node;
 							if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
 								send({ type: "message", content: String(event.data.chunk.content) });
 							}
 						}
 
-						if (event.event === "on_chain_start" && event.name) {
+						if (event.event === "on_chain_start" && event.name && PIPELINE_NODES.has(event.name)) {
+							nodeStartTimes.set(event.name, Date.now());
 							send({ type: "node_start", nodeId: event.name });
 						}
 
-						if (event.event === "on_chain_end" && event.name) {
-							send({ type: "node_end", nodeId: event.name, duration: 0 });
+						if (event.event === "on_chain_end" && event.name && PIPELINE_NODES.has(event.name)) {
+							const startTime = nodeStartTimes.get(event.name);
+							const duration = startTime ? Date.now() - startTime : 0;
+							nodeStartTimes.delete(event.name);
+							send({ type: "node_end", nodeId: event.name, duration });
 						}
 
 						if (event.event === "on_tool_start") {

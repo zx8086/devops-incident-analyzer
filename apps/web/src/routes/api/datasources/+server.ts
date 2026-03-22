@@ -23,7 +23,9 @@ export const GET: RequestHandler = async () => {
 	if (process.env.KONNECT_MCP_URL) dataSources.push("konnect");
 
 	// Report which are actually connected
-	const connected = getConnectedServers().map((s) => SERVER_TO_DATASOURCE[s]).filter(Boolean);
+	const connected = getConnectedServers()
+		.map((s) => SERVER_TO_DATASOURCE[s])
+		.filter(Boolean);
 
 	return json({ dataSources, connected });
 };
