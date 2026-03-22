@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { API_REGIONS, KongApi } from "./api/kong-api.js";
@@ -894,9 +895,66 @@ class KongKonnectMcpServer extends McpServer {
 	}
 }
 
-/**
- * Main entry point for the Kong Konnect MCP server with centralized configuration
- */
+async function startSSEServer(server: KongKonnectMcpServer, port: number): Promise<void> {
+	const http = await import("node:http");
+	const getRawBody = (await import("raw-body")).default;
+
+	const activeSessions = new Map<string, SSEServerTransport>();
+
+	const httpServer = http.createServer(async (req, res) => {
+		res.setHeader("Access-Control-Allow-Origin", "*");
+		res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+		if (req.method === "OPTIONS") {
+			res.writeHead(204);
+			res.end();
+			return;
+		}
+
+		if (req.url?.startsWith("/sse") && req.method === "GET") {
+			const transport = new SSEServerTransport("/mcp", res);
+			activeSessions.set(transport.sessionId, transport);
+			res.on("close", () => activeSessions.delete(transport.sessionId));
+			await server.connect(transport);
+			return;
+		}
+
+		if (req.url?.startsWith("/mcp") && req.method === "POST") {
+			const url = new URL(req.url, `http://localhost:${port}`);
+			const sessionId = url.searchParams.get("sessionId");
+			const transport = sessionId ? activeSessions.get(sessionId) : undefined;
+			if (!transport) {
+				res.writeHead(400, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Invalid or missing sessionId" }));
+				return;
+			}
+			const body = await getRawBody(req);
+			await transport.handlePostMessage(req, res, body);
+			return;
+		}
+
+		if (req.url === "/health") {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ status: "ok" }));
+			return;
+		}
+
+		res.writeHead(404, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ error: "Not found" }));
+	});
+
+	await new Promise<void>((resolve) => {
+		httpServer.listen(port, "0.0.0.0", () => resolve());
+	});
+
+	mcpLogger.info("server", `SSE HTTP server listening on port ${port}`, {
+		sseEndpoint: "/sse",
+		mcpEndpoint: "/mcp?sessionId=<SESSION_ID>",
+		healthEndpoint: "/health",
+	});
+}
+
 async function main() {
 	try {
 		// Load and validate configuration with health checks
@@ -914,12 +972,14 @@ async function main() {
 			envSource: runtimeInfo.envSource,
 		});
 
+		const transportMode = getEnvVarWithDefault("MCP_TRANSPORT", "stdio") as "stdio" | "sse";
+		const port = Number(getEnvVarWithDefault("MCP_PORT", "9083"));
+
 		// Initialize server with validated configuration
 		const server = new KongKonnectMcpServer({
 			apiKey: config.kong.accessToken,
 			apiRegion: config.kong.region,
 		});
-		const transport = new StdioServerTransport();
 
 		mcpLogger.startup("server", {
 			availableRegions: Object.values(API_REGIONS),
@@ -928,43 +988,49 @@ async function main() {
 			logLevel: config.application.logLevel,
 			tracing: config.tracing.enabled,
 			monitoring: config.monitoring.enabled,
+			transport: transportMode,
+			port: transportMode === "sse" ? port : undefined,
 		});
 
-		// Create session context for connection (implementing AsyncLocalStorage pattern from guide)
-		const connectionId = `conn-${Date.now()}`;
-		const clientInfo = detectClient("stdio");
-		const sessionId = generateSessionId(connectionId, clientInfo);
-		const sessionContext = createSessionContext(connectionId, "stdio", sessionId, clientInfo);
-
-		mcpLogger.info("server", "Session context created", {
-			sessionId,
-			connectionId,
-			clientName: clientInfo.name,
-			transportMode: "stdio",
-		});
-
-		// Wrap server connection in session context AND session-level trace (critical for trace grouping)
-		await runWithSession(sessionContext, async () => {
-			// Create session-level parent trace that contains all tool calls
-			await server.tracingManager.createSessionTrace(sessionContext, async () => {
-				// All tool calls within this scope inherit session context AND nest under session trace
-				await server.connect(transport);
-
-				// Set MCP logger default level from configuration
-				const configLogLevel = config.application.logLevel;
-				const mcpLogLevel = configLogLevel === "warn" ? "warning" : (configLogLevel as any);
-				mcpLogger.initializeWithDefaultLevel(mcpLogLevel);
-
-				mcpLogger.ready("server", {
-					sessionId,
-					connectionId,
-					clientName: clientInfo.name,
-				});
-
-				// Log session info for debugging
-				logSessionInfo("MCP Server Session Established");
+		if (transportMode === "sse") {
+			await startSSEServer(server, port);
+			mcpLogger.ready("server", {
+				transport: "sse",
+				port,
 			});
-		});
+		} else {
+			const transport = new StdioServerTransport();
+
+			const connectionId = `conn-${Date.now()}`;
+			const clientInfo = detectClient("stdio");
+			const sessionId = generateSessionId(connectionId, clientInfo);
+			const sessionContext = createSessionContext(connectionId, "stdio", sessionId, clientInfo);
+
+			mcpLogger.info("server", "Session context created", {
+				sessionId,
+				connectionId,
+				clientName: clientInfo.name,
+				transportMode: "stdio",
+			});
+
+			await runWithSession(sessionContext, async () => {
+				await server.tracingManager.createSessionTrace(sessionContext, async () => {
+					await server.connect(transport);
+
+					const configLogLevel = config.application.logLevel;
+					const mcpLogLevel = configLogLevel === "warn" ? "warning" : (configLogLevel as any);
+					mcpLogger.initializeWithDefaultLevel(mcpLogLevel);
+
+					mcpLogger.ready("server", {
+						sessionId,
+						connectionId,
+						clientName: clientInfo.name,
+					});
+
+					logSessionInfo("MCP Server Session Established");
+				});
+			});
+		}
 	} catch (error: any) {
 		mcpLogger.critical("server", "Failed to start server", {
 			error: error.message,
