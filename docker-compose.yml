@@ -1,0 +1,121 @@
+# docker-compose.yml
+# Local development: all MCP servers + agent
+# Usage: docker-compose up
+
+services:
+  elastic-mcp:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-elastic/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      MCP_TRANSPORT: sse
+      MCP_PORT: 8080
+      MULTI_TENANT_MODE: "true"
+      ELASTIC_DEPLOYMENTS: ${ELASTIC_DEPLOYMENTS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:8080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  kafka-mcp:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-kafka/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      MCP_TRANSPORT: http
+      MCP_PORT: 3000
+      KAFKA_PROVIDER: ${KAFKA_PROVIDER:-local}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-}
+      KAFKA_ALLOW_WRITES: "false"
+      KAFKA_ALLOW_DESTRUCTIVE: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:3000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  couchbase-mcp:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-couchbase/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      MCP_PORT: 8082
+      CB_HOSTNAME: ${CB_HOSTNAME:-}
+      CB_USERNAME: ${CB_USERNAME:-}
+      CB_PASSWORD: ${CB_PASSWORD:-}
+      CB_BUCKET: ${CB_BUCKET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:8082/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  konnect-mcp:
+    build:
+      context: .
+      dockerfile: packages/mcp-server-konnect/Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      MCP_PORT: 8083
+      KONNECT_ACCESS_TOKEN: ${KONNECT_ACCESS_TOKEN:-}
+      KONNECT_REGION: ${KONNECT_REGION:-eu}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:8083/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  agent-web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      ELASTIC_MCP_URL: http://elastic-mcp:8080
+      KAFKA_MCP_URL: http://kafka-mcp:3000
+      COUCHBASE_MCP_URL: http://couchbase-mcp:8082
+      KONNECT_MCP_URL: http://konnect-mcp:8083
+      AGENT_CHECKPOINTER_TYPE: memory
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file: .env
+    depends_on:
+      elastic-mcp:
+        condition: service_healthy
+      kafka-mcp:
+        condition: service_healthy
+      couchbase-mcp:
+        condition: service_healthy
+      konnect-mcp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:5173/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
