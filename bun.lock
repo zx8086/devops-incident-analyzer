@@ -94,6 +94,7 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "catalog:",
         "couchbase": "^4.5.0",
+        "raw-body": "^3.0.2",
         "winston": "^3.17.0",
         "zod": "catalog:",
       },
