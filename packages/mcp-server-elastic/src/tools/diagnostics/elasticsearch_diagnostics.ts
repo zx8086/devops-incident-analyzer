@@ -127,12 +127,15 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 				output += "\n";
 			}
 
-			logger.info("Generated basic Elasticsearch diagnostics", {
-				clusterName: clusterInfo.cluster_name,
-				version: clusterInfo.version?.number,
-				healthStatus: healthStatus,
-				includeMetrics: params.includeMetrics,
-			});
+			logger.info(
+				{
+					clusterName: clusterInfo.cluster_name,
+					version: clusterInfo.version?.number,
+					healthStatus: healthStatus,
+					includeMetrics: params.includeMetrics,
+				},
+				"Generated basic Elasticsearch diagnostics",
+			);
 
 			return {
 				content: [
@@ -150,9 +153,12 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 				);
 			}
 
-			logger.error("Elasticsearch diagnostics failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Elasticsearch diagnostics failed",
+			);
 
 			throw new McpError(
 				ErrorCode.InternalError,

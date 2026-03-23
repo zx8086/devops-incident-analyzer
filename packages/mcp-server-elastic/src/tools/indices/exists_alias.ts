@@ -54,7 +54,7 @@ export const registerExistsAliasTool: ToolRegistrationFunction = (server: McpSer
 			// Validate parameters
 			const params = existsAliasValidator.parse(args);
 
-			logger.debug("Checking if alias exists", { name: params.name, index: params.index });
+			logger.debug({ name: params.name, index: params.index }, "Checking if alias exists");
 
 			const result = await esClient.indices.existsAlias(
 				{

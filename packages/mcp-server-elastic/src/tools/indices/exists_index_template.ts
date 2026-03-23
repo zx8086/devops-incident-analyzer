@@ -49,7 +49,7 @@ export const registerExistsIndexTemplateTool: ToolRegistrationFunction = (server
 			// Validate parameters
 			const params = existsIndexTemplateValidator.parse(args);
 
-			logger.debug("Checking if index template exists", { name: params.name });
+			logger.debug({ name: params.name }, "Checking if index template exists");
 
 			const result = await esClient.indices.existsIndexTemplate(
 				{

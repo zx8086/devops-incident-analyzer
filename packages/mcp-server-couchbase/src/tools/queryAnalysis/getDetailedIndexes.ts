@@ -26,16 +26,19 @@ export default (server: McpServer, bucket: Bucket) => {
 				.describe("Sort results by field"),
 		},
 		async ({ bucket_name, scope_name, collection_name, state, has_condition, is_primary, index_type, sort_by }) => {
-			logger.info("Getting detailed indexes information", {
-				bucket_name,
-				scope_name,
-				collection_name,
-				state,
-				has_condition,
-				is_primary,
-				index_type,
-				sort_by,
-			});
+			logger.info(
+				{
+					bucket_name,
+					scope_name,
+					collection_name,
+					state,
+					has_condition,
+					is_primary,
+					index_type,
+					sort_by,
+				},
+				"Getting detailed indexes information",
+			);
 
 			// Modify query based on parameters
 			let query = detailedIndexesQuery;

@@ -61,7 +61,7 @@ export const registerWatcherStatsTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow watcher operation", { duration });
+				logger.warn({ duration }, "Slow watcher operation");
 			}
 
 			return {

@@ -61,10 +61,13 @@ export const registerStopTool: ToolRegistrationFunction = (server: McpServer, es
 			// Simple validation - no complex parameter extraction
 			const params = stopValidator.parse(args);
 
-			logger.debug("Stopping ILM", {
-				masterTimeout: params.masterTimeout,
-				timeout: params.timeout,
-			});
+			logger.debug(
+				{
+					masterTimeout: params.masterTimeout,
+					timeout: params.timeout,
+				},
+				"Stopping ILM",
+			);
 
 			const result = await esClient.ilm.stop({
 				master_timeout: params.masterTimeout,
@@ -73,7 +76,7 @@ export const registerStopTool: ToolRegistrationFunction = (server: McpServer, es
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: stop", { duration });
+				logger.warn({ duration }, "Slow ILM operation: stop");
 			}
 
 			logger.info("ILM stopped successfully");

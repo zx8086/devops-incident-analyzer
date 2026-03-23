@@ -75,7 +75,7 @@ export const registerGetDocumentTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow document retrieval", { duration });
+				logger.warn({ duration }, "Slow document retrieval");
 			}
 
 			return {

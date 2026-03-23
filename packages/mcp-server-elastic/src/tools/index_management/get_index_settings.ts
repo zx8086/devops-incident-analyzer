@@ -71,7 +71,7 @@ export const registerGetIndexSettingsTool: ToolRegistrationFunction = (server: M
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index settings retrieval operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index settings retrieval operation");
 			}
 
 			return {

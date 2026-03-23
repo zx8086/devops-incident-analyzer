@@ -49,7 +49,7 @@ export async function createTransport(
 	serverFactory: () => McpServer,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	logger.info("Resolving transport mode", { mode: config.transport.mode, stdio: useStdio, http: useHttp });
+	logger.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -76,11 +76,14 @@ export async function createTransport(
 		result.stdio = await startStdioTransport(server);
 	}
 
-	logger.info("Transport initialized", {
-		mode: config.transport.mode,
-		stdio: useStdio,
-		http: useHttp,
-	});
+	logger.info(
+		{
+			mode: config.transport.mode,
+			stdio: useStdio,
+			http: useHttp,
+		},
+		"Transport initialized",
+	);
 
 	return result;
 }

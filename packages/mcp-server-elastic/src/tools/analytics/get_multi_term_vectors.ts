@@ -76,9 +76,12 @@ export const registerGetMultiTermVectorsTool: ToolRegistrationFunction = (server
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to get multi term vectors:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to get multi term vectors:",
+				);
 				return {
 					content: [
 						{

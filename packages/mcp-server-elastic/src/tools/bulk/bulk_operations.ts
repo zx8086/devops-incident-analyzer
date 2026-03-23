@@ -81,11 +81,14 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 
 			try {
 				if (readOnlyCheck.warning) {
-					logger.warn("CRITICAL: About to perform bulk operations", {
-						tool: "elasticsearch_bulk_operations",
-						operationCount: params.operations.length,
-						warning: "This may create, update, or delete multiple documents",
-					});
+					logger.warn(
+						{
+							tool: "elasticsearch_bulk_operations",
+							operationCount: params.operations.length,
+							warning: "This may create, update, or delete multiple documents",
+						},
+						"CRITICAL: About to perform bulk operations",
+					);
 
 					await notificationManager.sendWarning(`About to perform ${params.operations.length} bulk operations`, {
 						tool: "elasticsearch_bulk_operations",
@@ -148,9 +151,12 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 						retries: params.retries,
 						onDrop(doc) {
 							failed++;
-							logger.warn("Document failed after retries:", {
-								document: JSON.stringify(doc, null, 2),
-							});
+							logger.warn(
+								{
+									document: JSON.stringify(doc, null, 2),
+								},
+								"Document failed after retries:",
+							);
 						},
 					},
 					{
@@ -223,9 +229,12 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 					},
 				);
 
-				logger.error("Failed to perform bulk operations:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to perform bulk operations:",
+				);
 				const content: TextContent[] = [
 					{
 						type: "text",

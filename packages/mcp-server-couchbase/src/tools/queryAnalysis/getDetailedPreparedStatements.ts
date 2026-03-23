@@ -17,7 +17,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			query_pattern: z.string().optional().describe("Filter by query pattern (e.g., 'SELECT')"),
 		},
 		async ({ limit, node_filter, query_pattern }) => {
-			logger.info("Getting detailed prepared statements", { limit, node_filter, query_pattern });
+			logger.info({ limit, node_filter, query_pattern }, "Getting detailed prepared statements");
 
 			// Modify query based on parameters
 			let query = detailedPreparedStatementsQuery;

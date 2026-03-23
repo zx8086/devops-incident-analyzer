@@ -5,8 +5,8 @@ import {
 	detectClient,
 	generateSessionId,
 	getCurrentTrace,
-	initializeTracing as sharedInitializeTracing,
 	isTracingActive,
+	initializeTracing as sharedInitializeTracing,
 	traceConnection as sharedTraceConnection,
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
@@ -18,29 +18,11 @@ import { logger } from "./logger.js";
 export type { ConnectionContext };
 export { detectClient, generateSessionId, getCurrentTrace, isTracingActive, withNestedTrace };
 
-export interface TraceMetadata {
-	connectionId?: string;
-	sessionId?: string;
-	conversationId?: string;
-	conversationMessageCount?: number;
-	isNewConversation?: boolean;
-	transportMode?: string;
-	toolName?: string;
-	index?: string;
-	operation?: string;
-	queryType?: string;
-	resultCount?: number;
-	executionTime?: number;
-	error?: string;
-	[key: string]: unknown;
-}
-
 export function initializeTracing(options?: TracingOptions): void {
 	const apiKey = config.langsmith.apiKey || process.env.LANGSMITH_API_KEY || process.env.LANGCHAIN_API_KEY;
 	const endpoint = process.env.LANGSMITH_ENDPOINT || config.langsmith.endpoint;
 	const project = process.env.LANGSMITH_PROJECT || config.langsmith.project;
 
-	// Elastic reads its own config object for tracing enablement
 	const tracingEnabled =
 		config.langsmith.tracing || process.env.LANGSMITH_TRACING === "true" || process.env.LANGCHAIN_TRACING_V2 === "true";
 
@@ -58,25 +40,27 @@ export async function traceToolCall(
 	handler: (toolArgs: unknown, extra: unknown) => Promise<unknown>,
 ) {
 	const startTime = Date.now();
-	logger.info(`Tool call started: ${toolName}`, { tool: toolName, dataSource: "elastic" });
+	logger.info({ tool: toolName, dataSource: "elastic" }, `Tool call started: ${toolName}`);
 
 	try {
 		const result = await sharedTraceToolCall(toolName, () => handler(toolArgs, _extra), {
 			dataSourceId: "elastic",
-			toolArgs:
-				typeof toolArgs === "object" && toolArgs !== null ? (toolArgs as Record<string, unknown>) : undefined,
+			toolArgs: typeof toolArgs === "object" && toolArgs !== null ? (toolArgs as Record<string, unknown>) : undefined,
 		});
 		const duration = Date.now() - startTime;
-		logger.info(`Tool call completed: ${toolName}`, { tool: toolName, dataSource: "elastic", duration });
+		logger.info({ tool: toolName, dataSource: "elastic", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error(`Tool call failed: ${toolName}`, {
-			tool: toolName,
-			dataSource: "elastic",
-			duration,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		logger.error(
+			{
+				tool: toolName,
+				dataSource: "elastic",
+				duration,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			`Tool call failed: ${toolName}`,
+		);
 		throw error;
 	}
 }

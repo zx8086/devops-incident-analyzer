@@ -61,7 +61,7 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 				`Executing enrich policy: ${name}`,
 			);
 
-			logger.debug("Executing enrich policy", { name, masterTimeout, waitForCompletion });
+			logger.debug({ name, masterTimeout, waitForCompletion }, "Executing enrich policy");
 
 			// Send initial notification with policy execution details
 			await notificationManager.sendInfo(`Starting enrich policy execution: ${name}`, {
@@ -113,7 +113,7 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 
 				if (duration > 30000) {
 					// Execute operations can take longer
-					logger.warn("Slow execute enrich policy operation", { duration });
+					logger.warn({ duration }, "Slow execute enrich policy operation");
 				}
 
 				const executionSummary = {

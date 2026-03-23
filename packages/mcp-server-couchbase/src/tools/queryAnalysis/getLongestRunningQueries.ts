@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			min_time_ms: z.number().optional().describe("Minimum execution time in milliseconds to include"),
 		},
 		async ({ limit, min_time_ms }) => {
-			logger.info("Getting longest running queries", { limit, min_time_ms });
+			logger.info({ limit, min_time_ms }, "Getting longest running queries");
 
 			// Modify query based on parameters
 			let query = n1qlLongestRunningQueries;

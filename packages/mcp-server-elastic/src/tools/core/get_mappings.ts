@@ -47,16 +47,16 @@ export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpSer
 			const params = getMappingsValidator.parse(args);
 			const { index } = params;
 
-			logger.debug("Getting mappings", { index });
+			logger.debug({ index }, "Getting mappings");
 
 			const response = await esClient.indices.getMapping({ index });
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow mappings operation", { duration });
+				logger.warn({ duration }, "Slow mappings operation");
 			}
 
-			logger.debug("Retrieved mappings", { index });
+			logger.debug({ index }, "Retrieved mappings");
 
 			return {
 				content: [

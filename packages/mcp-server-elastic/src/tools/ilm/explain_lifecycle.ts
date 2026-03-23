@@ -77,13 +77,16 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 				`Analyzing ILM lifecycle status for ${index}${params.limit ? ` (max ${params.limit})` : ""}`,
 			);
 
-			logger.debug("Explaining ILM lifecycle (simplified)", {
-				index,
-				limit: params.limit,
-				onlyManaged: params.onlyManaged,
-				onlyErrors: params.onlyErrors,
-				includeDetails: params.includeDetails,
-			});
+			logger.debug(
+				{
+					index,
+					limit: params.limit,
+					onlyManaged: params.onlyManaged,
+					onlyErrors: params.onlyErrors,
+					includeDetails: params.includeDetails,
+				},
+				"Explaining ILM lifecycle (simplified)",
+			);
 
 			// Send initial notification with analysis scope
 			await notificationManager.sendInfo(`Starting ILM lifecycle analysis for ${index}`, {
@@ -296,7 +299,7 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			);
 
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: explain_lifecycle", { duration });
+				logger.warn({ duration }, "Slow ILM operation: explain_lifecycle");
 
 				await notificationManager.sendWarning(
 					`Slow ILM analysis: ${Math.round(duration / 1000)}s for ${indices.length} indices`,

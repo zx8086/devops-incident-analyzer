@@ -26,8 +26,8 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 	// Throw an error if the query uses a full bucket.scope.collection path (contains two dots in FROM clause)
 	if (/from\s+[`\w]+\.[`\w]+\.[`\w]+/i.test(query)) {
 		logger.error(
-			"Query uses full bucket.scope.collection path. When using scope context, only use the collection name in the query.",
 			{ query },
+			"Query uses full bucket.scope.collection path. When using scope context, only use the collection name in the query.",
 		);
 		return {
 			content: [
@@ -58,7 +58,7 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 			isError: false,
 		};
 	} catch (error) {
-		logger.error("Failed to execute query", { error });
+		logger.error({ error }, "Failed to execute query");
 		return {
 			content: [{ type: "text" as const, text: "Failed to execute query" }],
 			isError: true,

@@ -19,16 +19,19 @@ export async function runSqlPlusPlusQuery(
 		throw createError("DB_ERROR", "Bucket not initialized");
 	}
 
-	requestLogger.info("Executing SQL++ query", {
-		scope: scopeName,
-		queryLength: query.length,
-	});
+	requestLogger.info(
+		{
+			scope: scopeName,
+			queryLength: query.length,
+		},
+		"Executing SQL++ query",
+	);
 
 	// Warn if the query references a dot, which may indicate an incorrect path
 	if (/from\s+[`\w]+\.[`\w]+\.[`\w]+/i.test(query)) {
 		requestLogger.warn(
-			"Query references bucket.scope.collection path. When using scope context, only use the collection name in the query.",
 			{ query },
+			"Query references bucket.scope.collection path. When using scope context, only use the collection name in the query.",
 		);
 	}
 
@@ -36,19 +39,25 @@ export async function runSqlPlusPlusQuery(
 
 	// Check for data modification queries in read-only mode
 	if (config.server.readOnlyQueryMode && sqlppParser.modifiesData(parsedQuery)) {
-		requestLogger.warn("Data modification query rejected in read-only mode", {
-			query,
-			operation: "data_modification",
-		});
+		requestLogger.warn(
+			{
+				query,
+				operation: "data_modification",
+			},
+			"Data modification query rejected in read-only mode",
+		);
 		throw createError("QUERY_ERROR", "Data modification queries are not allowed in read-only mode");
 	}
 
 	// Check for structure modification queries in read-only mode
 	if (config.server.readOnlyQueryMode && sqlppParser.modifiesStructure(parsedQuery)) {
-		requestLogger.warn("Structure modification query rejected in read-only mode", {
-			query,
-			operation: "structure_modification",
-		});
+		requestLogger.warn(
+			{
+				query,
+				operation: "structure_modification",
+			},
+			"Structure modification query rejected in read-only mode",
+		);
 		throw createError("QUERY_ERROR", "Structure modification queries are not allowed in read-only mode");
 	}
 
@@ -56,24 +65,30 @@ export async function runSqlPlusPlusQuery(
 	let safeQuery = query;
 	if (config.server.maxResultsPerQuery && !parsedQuery.hasLimit) {
 		safeQuery = `${query} LIMIT ${config.server.maxResultsPerQuery}`;
-		requestLogger.debug("Added LIMIT clause to query", {
-			originalQuery: query,
-			modifiedQuery: safeQuery,
-		});
+		requestLogger.debug(
+			{
+				originalQuery: query,
+				modifiedQuery: safeQuery,
+			},
+			"Added LIMIT clause to query",
+		);
 	}
 
 	try {
 		return await measureOperation(
 			"execute_query",
 			async () => {
-				requestLogger.debug("Executing query", { query: safeQuery });
+				requestLogger.debug({ query: safeQuery }, "Executing query");
 				const result = await ctx.lifespanContext.bucket.scope(scopeName).query(safeQuery);
 				const rows = await result.rows;
 
-				requestLogger.info("Query executed successfully", {
-					rowCount: rows.length,
-					executionTime: result.meta?.executionTime,
-				});
+				requestLogger.info(
+					{
+						rowCount: rows.length,
+						executionTime: result.meta?.executionTime,
+					},
+					"Query executed successfully",
+				);
 
 				return {
 					rows,
@@ -86,10 +101,13 @@ export async function runSqlPlusPlusQuery(
 			},
 		);
 	} catch (error) {
-		requestLogger.error("Query execution failed", {
-			error: error instanceof Error ? error.message : String(error),
-			query: safeQuery,
-		});
+		requestLogger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				query: safeQuery,
+			},
+			"Query execution failed",
+		);
 		throw createError("QUERY_ERROR", "Failed to execute query", error);
 	}
 }

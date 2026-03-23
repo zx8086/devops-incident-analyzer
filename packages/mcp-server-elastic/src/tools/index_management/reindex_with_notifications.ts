@@ -47,11 +47,14 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 
 			// Security validation is handled automatically by the server wrapper
 
-			logger.info("Starting reindex operation with notifications", {
-				source: params.source.index,
-				destination: params.dest.index,
-				waitForCompletion: params.wait_for_completion,
-			});
+			logger.info(
+				{
+					source: params.source.index,
+					destination: params.dest.index,
+					waitForCompletion: params.wait_for_completion,
+				},
+				"Starting reindex operation with notifications",
+			);
 
 			// Send pre-operation notifications
 			await notificationManager.sendInfo("Preparing reindex operation", {
@@ -125,9 +128,12 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 					});
 				}
 			} catch (destError) {
-				logger.warn("Could not check destination index", {
-					error: destError instanceof Error ? destError.message : String(destError),
-				});
+				logger.warn(
+					{
+						error: destError instanceof Error ? destError.message : String(destError),
+					},
+					"Could not check destination index",
+				);
 			}
 
 			// Start the reindex operation
@@ -264,9 +270,12 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 				);
 			}
 
-			logger.error("Reindex with notifications failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Reindex with notifications failed",
+			);
 
 			await notificationManager.sendError(
 				"Reindex operation failed",

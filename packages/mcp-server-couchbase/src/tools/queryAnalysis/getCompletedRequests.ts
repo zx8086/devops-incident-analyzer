@@ -20,7 +20,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			status: z.enum(["success", "fatal", "timeout", "all"]).optional().describe("Filter by request status"),
 		},
 		async ({ limit, period, status }) => {
-			logger.info("Getting completed requests", { limit, period, status });
+			logger.info({ limit, period, status }, "Getting completed requests");
 
 			// Modify query based on parameters
 			let query = n1qlCompletedRequests;

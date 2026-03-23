@@ -49,7 +49,7 @@ export const registerExplainDataLifecycleTool: ToolRegistrationFunction = (serve
 			// Validate parameters
 			const params = explainDataLifecycleValidator.parse(args);
 
-			logger.debug("Explaining data lifecycle", { index: params.index });
+			logger.debug({ index: params.index }, "Explaining data lifecycle");
 
 			const result = await esClient.indices.explainDataLifecycle(
 				{

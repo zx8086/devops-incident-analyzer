@@ -62,9 +62,12 @@ export const registerRemovePolicyTool: ToolRegistrationFunction = (server: McpSe
 			// Simple validation - no complex parameter extraction
 			params = removePolicyValidator.parse(args);
 
-			logger.debug("Removing ILM policy from index", {
-				index: params.index,
-			});
+			logger.debug(
+				{
+					index: params.index,
+				},
+				"Removing ILM policy from index",
+			);
 
 			const result = await esClient.ilm.removePolicy({
 				index: params.index,
@@ -72,10 +75,10 @@ export const registerRemovePolicyTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: remove_policy", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow ILM operation: remove_policy");
 			}
 
-			logger.info("ILM policy removed successfully", { index: params.index });
+			logger.info({ index: params.index }, "ILM policy removed successfully");
 
 			// Extract information about affected indices
 			const hasFailures = result.has_failures || false;

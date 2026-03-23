@@ -53,17 +53,23 @@ export const getCapacity = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getCapacitySchema>) => {
 		try {
-			logger.debug("Getting autoscaling capacity", {
-				masterTimeout: args.masterTimeout,
-			});
+			logger.debug(
+				{
+					masterTimeout: args.masterTimeout,
+				},
+				"Getting autoscaling capacity",
+			);
 
 			const result = await client.autoscaling.getAutoscalingCapacity({
 				master_timeout: args.masterTimeout,
 			});
 
-			logger.debug("Autoscaling capacity retrieved successfully", {
-				capacityDataAvailable: !!result.policies,
-			});
+			logger.debug(
+				{
+					capacityDataAvailable: !!result.policies,
+				},
+				"Autoscaling capacity retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -74,10 +80,13 @@ export const getCapacity = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get autoscaling capacity", {
-				error: error instanceof Error ? error.message : String(error),
-				masterTimeout: args.masterTimeout,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					masterTimeout: args.masterTimeout,
+				},
+				"Failed to get autoscaling capacity",
+			);
 
 			throw new McpError(
 				ErrorCode.InternalError,
@@ -104,10 +113,13 @@ export const getPolicy = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getPolicySchema>) => {
 		try {
-			logger.debug("Getting autoscaling policy", {
-				policyName: args.name,
-				masterTimeout: args.masterTimeout,
-			});
+			logger.debug(
+				{
+					policyName: args.name,
+					masterTimeout: args.masterTimeout,
+				},
+				"Getting autoscaling policy",
+			);
 
 			const result = await client.autoscaling.getAutoscalingPolicy(
 				{
@@ -119,9 +131,12 @@ export const getPolicy = {
 				},
 			);
 
-			logger.debug("Autoscaling policy retrieved successfully", {
-				policyName: args.name,
-			});
+			logger.debug(
+				{
+					policyName: args.name,
+				},
+				"Autoscaling policy retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -132,10 +147,13 @@ export const getPolicy = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get autoscaling policy", {
-				error: error instanceof Error ? error.message : String(error),
-				policyName: args.name,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					policyName: args.name,
+				},
+				"Failed to get autoscaling policy",
+			);
 
 			if (error instanceof Error && error.message.includes("not found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Autoscaling policy not found: ${args.name}`);
@@ -162,11 +180,14 @@ const putPolicySchema = z.object({
 
 const putPolicyImpl = async (client: Client, args: z.infer<typeof putPolicySchema>) => {
 	try {
-		logger.debug("Creating/updating autoscaling policy", {
-			policyName: args.name,
-			masterTimeout: args.masterTimeout,
-			timeout: args.timeout,
-		});
+		logger.debug(
+			{
+				policyName: args.name,
+				masterTimeout: args.masterTimeout,
+				timeout: args.timeout,
+			},
+			"Creating/updating autoscaling policy",
+		);
 
 		const result = await client.autoscaling.putAutoscalingPolicy({
 			name: args.name,
@@ -175,9 +196,12 @@ const putPolicyImpl = async (client: Client, args: z.infer<typeof putPolicySchem
 			timeout: args.timeout,
 		});
 
-		logger.info("Autoscaling policy created/updated successfully", {
-			policyName: args.name,
-		});
+		logger.info(
+			{
+				policyName: args.name,
+			},
+			"Autoscaling policy created/updated successfully",
+		);
 
 		return {
 			content: [
@@ -188,10 +212,13 @@ const putPolicyImpl = async (client: Client, args: z.infer<typeof putPolicySchem
 			],
 		};
 	} catch (error) {
-		logger.error("Failed to create/update autoscaling policy", {
-			error: error instanceof Error ? error.message : String(error),
-			policyName: args.name,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				policyName: args.name,
+			},
+			"Failed to create/update autoscaling policy",
+		);
 
 		if (error instanceof Error && error.message.includes("validation")) {
 			throw new McpError(ErrorCode.InvalidRequest, `Invalid autoscaling policy configuration: ${error.message}`);
@@ -225,11 +252,14 @@ const deletePolicySchema = z.object({
 
 const deletePolicyImpl = async (client: Client, args: z.infer<typeof deletePolicySchema>) => {
 	try {
-		logger.debug("Deleting autoscaling policy", {
-			policyName: args.name,
-			masterTimeout: args.masterTimeout,
-			timeout: args.timeout,
-		});
+		logger.debug(
+			{
+				policyName: args.name,
+				masterTimeout: args.masterTimeout,
+				timeout: args.timeout,
+			},
+			"Deleting autoscaling policy",
+		);
 
 		const result = await client.autoscaling.deleteAutoscalingPolicy(
 			{
@@ -242,9 +272,12 @@ const deletePolicyImpl = async (client: Client, args: z.infer<typeof deletePolic
 			},
 		);
 
-		logger.info("Autoscaling policy deleted successfully", {
-			policyName: args.name,
-		});
+		logger.info(
+			{
+				policyName: args.name,
+			},
+			"Autoscaling policy deleted successfully",
+		);
 
 		return {
 			content: [
@@ -255,10 +288,13 @@ const deletePolicyImpl = async (client: Client, args: z.infer<typeof deletePolic
 			],
 		};
 	} catch (error) {
-		logger.error("Failed to delete autoscaling policy", {
-			error: error instanceof Error ? error.message : String(error),
-			policyName: args.name,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				policyName: args.name,
+			},
+			"Failed to delete autoscaling policy",
+		);
 
 		if (error instanceof Error && error.message.includes("not found")) {
 			throw new McpError(ErrorCode.InvalidRequest, `Autoscaling policy not found: ${args.name}`);

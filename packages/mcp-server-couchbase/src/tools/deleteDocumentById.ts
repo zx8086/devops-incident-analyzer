@@ -17,11 +17,14 @@ export default (server: McpServer, bucket: Bucket) => {
 		},
 		async ({ scope_name, collection_name, document_id }) => {
 			try {
-				logger.info("Processing document deletion:", {
-					scope_name,
-					collection_name,
-					document_id,
-				});
+				logger.info(
+					{
+						scope_name,
+						collection_name,
+						document_id,
+					},
+					"Processing document deletion:",
+				);
 
 				if (!bucket) {
 					throw createError("DB_ERROR", "Bucket is not initialized");
@@ -30,11 +33,14 @@ export default (server: McpServer, bucket: Bucket) => {
 				const collection = bucket.scope(scope_name).collection(collection_name);
 				await collection.remove(document_id);
 
-				logger.info("Document deleted successfully", {
-					scope: scope_name,
-					collection: collection_name,
-					id: document_id,
-				});
+				logger.info(
+					{
+						scope: scope_name,
+						collection: collection_name,
+						id: document_id,
+					},
+					"Document deleted successfully",
+				);
 
 				return {
 					content: [
@@ -45,7 +51,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error("Error in delete_document_by_id:", error);
+				logger.error({ error }, "Error in delete_document_by_id");
 				throw error;
 			}
 		},

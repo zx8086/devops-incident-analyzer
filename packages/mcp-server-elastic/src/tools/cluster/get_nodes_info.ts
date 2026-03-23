@@ -102,14 +102,17 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 			const params = nodesInfoValidator.parse(args);
 			const { nodeId, metric, flatSettings, timeout, compact, summary } = params;
 
-			logger.info(`[${requestId}] Nodes info request received`, {
-				params: {
-					...params,
-					nodeId: params.nodeId ? "[REDACTED]" : undefined,
+			logger.info(
+				{
+					params: {
+						...params,
+						nodeId: params.nodeId ? "[REDACTED]" : undefined,
+					},
 				},
-			});
+				`[${requestId}] Nodes info request received`,
+			);
 
-			logger.debug("Getting nodes info", { nodeId, metric, compact });
+			logger.debug({ nodeId, metric, compact }, "Getting nodes info");
 
 			let result: any;
 
@@ -132,7 +135,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 
 				const duration = performance.now() - perfStart;
 				if (duration > 5000) {
-					logger.warn("Slow nodes info operation", { duration, requestId });
+					logger.warn({ duration, requestId }, "Slow nodes info operation");
 				}
 
 				return {
@@ -162,7 +165,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 
 				const duration = performance.now() - perfStart;
 				if (duration > 5000) {
-					logger.warn("Slow nodes info operation", { duration, requestId });
+					logger.warn({ duration, requestId }, "Slow nodes info operation");
 				}
 
 				// Format compact response
@@ -192,15 +195,18 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 				},
 			);
 
-			logger.info(`[${requestId}] Successfully retrieved nodes info`, {
-				nodeCount: Object.keys(result.nodes || {}).length,
-				metric: metric || "all",
-				compact: compact || false,
-			});
+			logger.info(
+				{
+					nodeCount: Object.keys(result.nodes || {}).length,
+					metric: metric || "all",
+					compact: compact || false,
+				},
+				`[${requestId}] Successfully retrieved nodes info`,
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow nodes info operation", { duration, requestId });
+				logger.warn({ duration, requestId }, "Slow nodes info operation");
 			}
 
 			// Format final response
@@ -235,18 +241,21 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 				}
 			}
 
-			logger.error(`[${requestId}] Failed to get nodes info:`, {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-				name: error instanceof Error ? error.name : "Unknown",
-				cause: error instanceof Error ? error.cause : undefined,
-				params: {
-					...args,
-					nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+					name: error instanceof Error ? error.name : "Unknown",
+					cause: error instanceof Error ? error.cause : undefined,
+					params: {
+						...args,
+						nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+					},
+					elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
+					statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
 				},
-				elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
-				statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
-			});
+				`[${requestId}] Failed to get nodes info:`,
+			);
 
 			throw createNodesInfoMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",

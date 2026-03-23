@@ -39,9 +39,12 @@ export const registerAutoscalingGetCapacityTool: ToolRegistrationFunction = (ser
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to get autoscaling capacity:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to get autoscaling capacity:",
+				);
 				return {
 					content: [
 						{

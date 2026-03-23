@@ -61,11 +61,14 @@ export const registerMultiSearchTool: ToolRegistrationFunction = (server: McpSer
 				`Executing ${searchCount} searches${params.index ? ` on ${params.index}` : " across indices"}`,
 			);
 
-			logger.debug("Starting multi-search operation", {
-				searchCount,
-				index: params.index,
-				maxConcurrentSearches: params.maxConcurrentSearches,
-			});
+			logger.debug(
+				{
+					searchCount,
+					index: params.index,
+					maxConcurrentSearches: params.maxConcurrentSearches,
+				},
+				"Starting multi-search operation",
+			);
 
 			// Send initial notification with multi-search details
 			await notificationManager.sendInfo(`Starting multi-search: ${searchCount} parallel searches`, {
@@ -152,7 +155,7 @@ export const registerMultiSearchTool: ToolRegistrationFunction = (server: McpSer
 			);
 
 			if (duration > 5000) {
-				logger.warn("Slow operation", { duration });
+				logger.warn({ duration }, "Slow operation");
 
 				await notificationManager.sendWarning(
 					`Slow multi-search: ${Math.round(duration / 1000)}s for ${searchCount} searches`,

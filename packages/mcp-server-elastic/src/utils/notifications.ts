@@ -48,11 +48,14 @@ export class NotificationManager {
 
 	async sendProgress(notification: ProgressNotification): Promise<void> {
 		if (!this.requestContext?.sendNotification) {
-			logger.debug("No request context available for progress notification", {
-				token: notification.progressToken,
-				progress: notification.progress,
-				total: notification.total,
-			});
+			logger.debug(
+				{
+					token: notification.progressToken,
+					progress: notification.progress,
+					total: notification.total,
+				},
+				"No request context available for progress notification",
+			);
 			return;
 		}
 
@@ -77,21 +80,27 @@ export class NotificationManager {
 					},
 				});
 
-				logger.debug("Progress notification sent successfully", {
-					token: notification.progressToken,
-					progress: notification.progress,
-					total: notification.total,
-					hasTraceContext: !!currentTrace,
-				});
+				logger.debug(
+					{
+						token: notification.progressToken,
+						progress: notification.progress,
+						total: notification.total,
+						hasTraceContext: !!currentTrace,
+					},
+					"Progress notification sent successfully",
+				);
 			} catch (error) {
 				// Log but don't throw - progress notifications are optional
-				logger.warn("Progress notification failed (non-critical)", {
-					error: error instanceof Error ? error.message : String(error),
-					token: notification.progressToken,
-					progress: notification.progress,
-					total: notification.total,
-					hasTraceContext: !!currentTrace,
-				});
+				logger.warn(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						token: notification.progressToken,
+						progress: notification.progress,
+						total: notification.total,
+						hasTraceContext: !!currentTrace,
+					},
+					"Progress notification failed (non-critical)",
+				);
 			}
 		};
 
@@ -117,26 +126,29 @@ export class NotificationManager {
 		// Log locally using appropriate level
 		switch (notification.level) {
 			case "error":
-				logger.error(logMessage, logMetadata);
+				logger.error(logMetadata, logMessage);
 				break;
 			case "warning":
-				logger.warn(logMessage, logMetadata);
+				logger.warn(logMetadata, logMessage);
 				break;
 			case "debug":
-				logger.debug(logMessage, logMetadata);
+				logger.debug(logMetadata, logMessage);
 				break;
 			default:
-				logger.info(logMessage, logMetadata);
+				logger.info(logMetadata, logMessage);
 				break;
 		}
 
 		// Skip sending notification to client - most don't support it
 		// Only progress notifications are widely supported
-		logger.debug("Message logged locally (client notification skipped)", {
-			reason: "Most MCP clients don't support notifications/message",
-			level: notification.level,
-			message: notification.data.message,
-		});
+		logger.debug(
+			{
+				reason: "Most MCP clients don't support notifications/message",
+				level: notification.level,
+				message: notification.data.message,
+			},
+			"Message logged locally (client notification skipped)",
+		);
 	}
 
 	async startOperation(
@@ -168,18 +180,21 @@ export class NotificationManager {
 			},
 		});
 
-		logger.info("Operation started with progress tracking", {
-			operationId,
-			progressToken,
-			total,
-			description,
-		});
+		logger.info(
+			{
+				operationId,
+				progressToken,
+				total,
+				description,
+			},
+			"Operation started with progress tracking",
+		);
 	}
 
 	async updateProgress(operationId: string, progress: number, message?: string): Promise<void> {
 		const operation = this.activeOperations.get(operationId);
 		if (!operation) {
-			logger.warn("Attempted to update progress for unknown operation", { operationId });
+			logger.warn({ operationId }, "Attempted to update progress for unknown operation");
 			return;
 		}
 
@@ -205,18 +220,21 @@ export class NotificationManager {
 			});
 		}
 
-		logger.debug("Operation progress updated", {
-			operationId,
-			progress,
-			total: operation.total,
-			message,
-		});
+		logger.debug(
+			{
+				operationId,
+				progress,
+				total: operation.total,
+				message,
+			},
+			"Operation progress updated",
+		);
 	}
 
 	async completeOperation(operationId: string, result?: any, message?: string): Promise<void> {
 		const operation = this.activeOperations.get(operationId);
 		if (!operation) {
-			logger.warn("Attempted to complete unknown operation", { operationId });
+			logger.warn({ operationId }, "Attempted to complete unknown operation");
 			return;
 		}
 
@@ -241,17 +259,20 @@ export class NotificationManager {
 		// Clean up
 		this.activeOperations.delete(operationId);
 
-		logger.info("Operation completed", {
-			operationId,
-			result,
-			message,
-		});
+		logger.info(
+			{
+				operationId,
+				result,
+				message,
+			},
+			"Operation completed",
+		);
 	}
 
 	async failOperation(operationId: string, error: Error | string, message?: string): Promise<void> {
 		const operation = this.activeOperations.get(operationId);
 		if (!operation) {
-			logger.warn("Attempted to fail unknown operation", { operationId });
+			logger.warn({ operationId }, "Attempted to fail unknown operation");
 			return;
 		}
 
@@ -269,11 +290,14 @@ export class NotificationManager {
 		// Clean up
 		this.activeOperations.delete(operationId);
 
-		logger.error("Operation failed", {
-			operationId,
-			error: error instanceof Error ? error.message : String(error),
-			message,
-		});
+		logger.error(
+			{
+				operationId,
+				error: error instanceof Error ? error.message : String(error),
+				message,
+			},
+			"Operation failed",
+		);
 	}
 
 	async sendWarning(message: string, data?: Record<string, any>): Promise<void> {

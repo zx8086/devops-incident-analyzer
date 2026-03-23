@@ -49,12 +49,15 @@ export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: Mc
 			// Validate parameters
 			const params = clusterStatsValidator.parse(args);
 
-			logger.info(`[${requestId}] Cluster stats request received`, {
-				params: {
-					...params,
-					nodeId: params.nodeId ? "[REDACTED]" : undefined,
+			logger.info(
+				{
+					params: {
+						...params,
+						nodeId: params.nodeId ? "[REDACTED]" : undefined,
+					},
 				},
-			});
+				`[${requestId}] Cluster stats request received`,
+			);
 
 			logger.info(`[${requestId}] Executing cluster.stats()...`);
 
@@ -68,24 +71,27 @@ export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: Mc
 				},
 			);
 
-			logger.info(`[${requestId}] Successfully retrieved cluster stats`, {
-				clusterName: result.cluster_name,
-				status: result.status,
-				indices: {
-					count: result.indices?.count,
-					shards: result.indices?.shards?.total,
-					docs: result.indices?.docs?.count,
-					store: result.indices?.store?.size_in_bytes,
+			logger.info(
+				{
+					clusterName: result.cluster_name,
+					status: result.status,
+					indices: {
+						count: result.indices?.count,
+						shards: result.indices?.shards?.total,
+						docs: result.indices?.docs?.count,
+						store: result.indices?.store?.size_in_bytes,
+					},
+					nodes: {
+						count: result.nodes?.count?.total,
+						roles: result.nodes?.count,
+					},
 				},
-				nodes: {
-					count: result.nodes?.count?.total,
-					roles: result.nodes?.count,
-				},
-			});
+				`[${requestId}] Successfully retrieved cluster stats`,
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow cluster stats operation", { duration, requestId });
+				logger.warn({ duration, requestId }, "Slow cluster stats operation");
 			}
 
 			return {
@@ -117,18 +123,21 @@ export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: Mc
 				}
 			}
 
-			logger.error(`[${requestId}] Failed to get cluster stats:`, {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-				name: error instanceof Error ? error.name : "Unknown",
-				cause: error instanceof Error ? error.cause : undefined,
-				params: {
-					...args,
-					nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+					name: error instanceof Error ? error.name : "Unknown",
+					cause: error instanceof Error ? error.cause : undefined,
+					params: {
+						...args,
+						nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+					},
+					elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
+					statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
 				},
-				elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
-				statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
-			});
+				`[${requestId}] Failed to get cluster stats:`,
+			);
 
 			throw createClusterStatsMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",

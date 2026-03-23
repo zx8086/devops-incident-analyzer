@@ -73,7 +73,7 @@ export const registerDeleteDocumentTool: ToolRegistrationFunction = (server: Mcp
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow document deletion", { duration });
+				logger.warn({ duration }, "Slow document deletion");
 			}
 
 			return {

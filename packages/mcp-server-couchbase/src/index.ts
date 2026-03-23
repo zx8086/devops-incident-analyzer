@@ -70,8 +70,11 @@ createMcpApplication({
 	createTransport: (serverFactory) => createTransport(config.transport, serverFactory),
 
 	onStarted: () => {
-		logger.info("Couchbase MCP Server started successfully", {
-			mode: config.transport.mode,
-		});
+		logger.info(
+			{
+				mode: config.transport.mode,
+			},
+			"Couchbase MCP Server started successfully",
+		);
 	},
 });

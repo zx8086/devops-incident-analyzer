@@ -68,12 +68,15 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 				`Updating documents in ${params.index} matching query`,
 			);
 
-			logger.debug("Starting update by query operation", {
-				index: params.index,
-				hasScript: !!params.script,
-				maxDocs: params.maxDocs,
-				waitForCompletion: params.waitForCompletion,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					hasScript: !!params.script,
+					maxDocs: params.maxDocs,
+					waitForCompletion: params.waitForCompletion,
+				},
+				"Starting update by query operation",
+			);
 
 			// Send initial notification
 			await notificationManager.sendInfo(`Starting update by query operation`, {
@@ -100,9 +103,12 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 					index: params.index,
 				});
 			} catch (countError) {
-				logger.warn("Could not get document count for progress estimation", {
-					error: countError instanceof Error ? countError.message : String(countError),
-				});
+				logger.warn(
+					{
+						error: countError instanceof Error ? countError.message : String(countError),
+					},
+					"Could not get document count for progress estimation",
+				);
 			}
 
 			await tracker.updateProgress(20, "Starting document update operation");
@@ -132,7 +138,7 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation", { duration });
+				logger.warn({ duration }, "Slow operation");
 			}
 
 			// Handle different response types based on wait_for_completion

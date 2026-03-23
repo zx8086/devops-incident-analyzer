@@ -19,7 +19,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),
 		},
 		async ({ period, limit }) => {
-			logger.info("Getting fatal query requests", { period, limit });
+			logger.info({ period, limit }, "Getting fatal query requests");
 
 			// Modify query based on parameters
 			let query = n1qlQueryFatalRequests;

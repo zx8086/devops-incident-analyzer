@@ -71,7 +71,7 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 			const params = timestampAnalysisSchema.parse(args);
 			const { index, timestampField, sampleSize } = params;
 
-			logger.debug("Analyzing timestamps", { index, timestampField, sampleSize });
+			logger.debug({ index, timestampField, sampleSize }, "Analyzing timestamps");
 
 			// Get min/max timestamps via aggregation
 			const aggResult = await esClient.search({
@@ -189,7 +189,7 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 				],
 			};
 		} catch (error) {
-			logger.error("Timestamp analysis failed", { error: error instanceof Error ? error.message : String(error) });
+			logger.error({ error: error instanceof Error ? error.message : String(error) }, "Timestamp analysis failed");
 
 			if (error instanceof z.ZodError) {
 				throw new McpError(

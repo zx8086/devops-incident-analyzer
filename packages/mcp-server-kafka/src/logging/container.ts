@@ -1,38 +1,21 @@
 // src/logging/container.ts
+import { createMcpLogger } from "@devops-agent/shared";
+import type pino from "pino";
 
-import { createLogger } from "./create-logger.ts";
-import type { ILogger } from "./ports/logger.port.ts";
+let _logger: pino.Logger = createMcpLogger("kafka-mcp-server");
 
-let _logger: ILogger | null = null;
-
-export function getLogger(): ILogger {
-	if (!_logger) {
-		_logger = createLogger();
-	}
+export function getLogger(): pino.Logger {
 	return _logger;
 }
 
-export function setLogger(logger: ILogger): void {
-	_logger = logger;
+export function setLogger(newLogger: pino.Logger): void {
+	_logger = newLogger;
 }
 
 export function resetLoggerContainer(): void {
-	_logger = null;
+	_logger = createMcpLogger("kafka-mcp-server");
 }
 
-export function createContextLogger(context: string, metadata: Record<string, unknown> = {}): ILogger {
-	return getLogger().child({ context, ...metadata });
-}
-
-export function measureOperation<T>(
-	operation: string,
-	fn: () => Promise<T>,
-	metadata: Record<string, unknown> = {},
-): Promise<T> {
-	const logger = getLogger();
-	const startTime = Date.now();
-	return fn().finally(() => {
-		const duration = Date.now() - startTime;
-		logger.debug(`Operation completed: ${operation}`, { ...metadata, operation, duration });
-	});
+export function createContextLogger(context: string, metadata: Record<string, unknown> = {}): pino.Logger {
+	return _logger.child({ component: context, ...metadata });
 }

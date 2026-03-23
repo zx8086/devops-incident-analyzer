@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			period: z.enum(["day", "week", "month"]).optional().describe("Optional period to analyze (day, week, month)"),
 		},
 		async ({ limit, period }) => {
-			logger.info("Getting most expensive queries", { limit, period });
+			logger.info({ limit, period }, "Getting most expensive queries");
 
 			// Modify query based on parameters
 			let query = mostExpensiveQueries;

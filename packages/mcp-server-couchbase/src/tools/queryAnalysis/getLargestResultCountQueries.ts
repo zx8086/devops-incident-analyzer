@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			min_count: z.number().optional().describe("Minimum result count to include"),
 		},
 		async ({ limit, min_count }) => {
-			logger.info("Getting largest result count queries", { limit, min_count });
+			logger.info({ limit, min_count }, "Getting largest result count queries");
 
 			// Modify query based on parameters
 			let query = n1qlLargestResultCountQueries;

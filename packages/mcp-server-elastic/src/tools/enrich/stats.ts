@@ -48,7 +48,7 @@ export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpSer
 			const params = statsValidator.parse(args);
 			const { masterTimeout } = params;
 
-			logger.debug("Getting enrich stats", { masterTimeout });
+			logger.debug({ masterTimeout }, "Getting enrich stats");
 
 			const result = await esClient.enrich.stats({
 				master_timeout: masterTimeout,
@@ -56,7 +56,7 @@ export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow enrich stats operation", { duration });
+				logger.warn({ duration }, "Slow enrich stats operation");
 			}
 
 			return {

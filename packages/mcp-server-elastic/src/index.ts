@@ -31,19 +31,22 @@ createMcpApplication({
 			clearConfigWarnings();
 		}
 
-		logger.info("Starting Elasticsearch MCP server with validated configuration", {
-			url: config.elasticsearch.url,
-			hasApiKey: !!config.elasticsearch.apiKey,
-			hasUsername: !!config.elasticsearch.username,
-			hasPassword: !!config.elasticsearch.password,
-			hasCaCert: !!config.elasticsearch.caCert,
-			readOnlyMode: config.server.readOnlyMode,
-			readOnlyStrictMode: config.server.readOnlyStrictMode,
-			maxQueryTimeout: config.server.maxQueryTimeout,
-			maxResultsPerQuery: config.server.maxResultsPerQuery,
-			transportMode: config.server.transportMode,
-			port: config.server.port,
-		});
+		logger.info(
+			{
+				url: config.elasticsearch.url,
+				hasApiKey: !!config.elasticsearch.apiKey,
+				hasUsername: !!config.elasticsearch.username,
+				hasPassword: !!config.elasticsearch.password,
+				hasCaCert: !!config.elasticsearch.caCert,
+				readOnlyMode: config.server.readOnlyMode,
+				readOnlyStrictMode: config.server.readOnlyStrictMode,
+				maxQueryTimeout: config.server.maxQueryTimeout,
+				maxResultsPerQuery: config.server.maxResultsPerQuery,
+				transportMode: config.server.transportMode,
+				port: config.server.port,
+			},
+			"Starting Elasticsearch MCP server with validated configuration",
+		);
 
 		return initializeElasticsearchClient(config);
 	},
@@ -67,10 +70,13 @@ createMcpApplication({
 	},
 
 	onStarted: () => {
-		logger.info("Elasticsearch MCP Server started successfully", {
-			mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
-			strictMode: config.server.readOnlyStrictMode,
-			transport: config.server.transportMode,
-		});
+		logger.info(
+			{
+				mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
+				strictMode: config.server.readOnlyStrictMode,
+				transport: config.server.transportMode,
+			},
+			"Elasticsearch MCP Server started successfully",
+		);
 	},
 });

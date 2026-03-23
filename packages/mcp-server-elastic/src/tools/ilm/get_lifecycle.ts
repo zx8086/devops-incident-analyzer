@@ -99,26 +99,32 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 		let params: z.infer<typeof getLifecycleValidator> | undefined;
 
 		try {
-			logger.debug("ILM Handler received", {
-				argsType: typeof args,
-				argsKeys: args ? Object.keys(args) : "NO ARGS",
-				hasExtra: !!extra,
-				extraKeys: extra ? Object.keys(extra) : "NO EXTRA",
-				fullArgs: args,
-				fullExtra: extra,
-			});
+			logger.debug(
+				{
+					argsType: typeof args,
+					argsKeys: args ? Object.keys(args) : "NO ARGS",
+					hasExtra: !!extra,
+					extraKeys: extra ? Object.keys(extra) : "NO EXTRA",
+					fullArgs: args,
+					fullExtra: extra,
+				},
+				"ILM Handler received",
+			);
 
 			// Simple validation - no complex parameter extraction
 			params = getLifecycleValidator.parse(args);
 
-			logger.debug("Getting ILM lifecycle policies (simplified)", {
-				policy: params.policy,
-				limit: params.limit,
-				summary: params.summary,
-				sortBy: params.sortBy,
-				originalArgs: args,
-				paramsKeys: Object.keys(params),
-			});
+			logger.debug(
+				{
+					policy: params.policy,
+					limit: params.limit,
+					summary: params.summary,
+					sortBy: params.sortBy,
+					originalArgs: args,
+					paramsKeys: Object.keys(params),
+				},
+				"Getting ILM lifecycle policies (simplified)",
+			);
 
 			// Fetch policies from Elasticsearch
 			const result = await esClient.ilm.getLifecycle({
@@ -275,7 +281,7 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: get_lifecycle", { duration });
+				logger.warn({ duration }, "Slow ILM operation: get_lifecycle");
 			}
 
 			// MCP-compliant response

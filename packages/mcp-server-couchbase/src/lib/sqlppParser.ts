@@ -28,16 +28,19 @@ export class SQLPPParserImpl implements SQLPPParser {
 
 	parse(query: string): ASTNode {
 		const cleanedQuery = this.removeComments(query);
-		logger.debug("Parsing SQL++ query", { queryLength: query.length });
+		logger.debug({ queryLength: query.length }, "Parsing SQL++ query");
 
 		const tokens = this.tokenize(cleanedQuery);
 		const ast = this.buildAST(tokens);
 
-		logger.debug("Query parsed successfully", {
-			queryType: ast.type,
-			hasWhere: ast.hasWhere,
-			hasLimit: ast.hasLimit,
-		});
+		logger.debug(
+			{
+				queryType: ast.type,
+				hasWhere: ast.hasWhere,
+				hasLimit: ast.hasLimit,
+			},
+			"Query parsed successfully",
+		);
 
 		return ast;
 	}
@@ -52,9 +55,12 @@ export class SQLPPParserImpl implements SQLPPParser {
 		const result = this.dataModificationKeywords.has(firstToken);
 
 		if (result) {
-			logger.debug("Query identified as data modification query", {
-				operation: firstToken,
-			});
+			logger.debug(
+				{
+					operation: firstToken,
+				},
+				"Query identified as data modification query",
+			);
 		}
 
 		return result;
@@ -70,9 +76,12 @@ export class SQLPPParserImpl implements SQLPPParser {
 		const result = this.structureModificationKeywords.has(firstToken);
 
 		if (result) {
-			logger.debug("Query identified as structure modification query", {
-				operation: firstToken,
-			});
+			logger.debug(
+				{
+					operation: firstToken,
+				},
+				"Query identified as structure modification query",
+			);
 		}
 
 		return result;

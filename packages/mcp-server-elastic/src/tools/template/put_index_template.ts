@@ -71,7 +71,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 				masterTimeout,
 			} = params;
 
-			logger.debug("Creating/updating index template", { name, indexPatterns, priority });
+			logger.debug({ name, indexPatterns, priority }, "Creating/updating index template");
 
 			const result = await esClient.indices.putIndexTemplate(
 				{
@@ -94,7 +94,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow template operation", { duration });
+				logger.warn({ duration }, "Slow template operation");
 			}
 
 			return {

@@ -48,17 +48,23 @@ export const clearSqlCursor = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof clearSqlCursorSchema>) => {
 		try {
-			logger.debug("Clearing SQL cursor", {
-				cursorLength: args.cursor.length,
-			});
+			logger.debug(
+				{
+					cursorLength: args.cursor.length,
+				},
+				"Clearing SQL cursor",
+			);
 
 			const result = await client.sql.clearCursor({
 				cursor: args.cursor,
 			});
 
-			logger.debug("SQL cursor cleared successfully", {
-				succeeded: result.succeeded,
-			});
+			logger.debug(
+				{
+					succeeded: result.succeeded,
+				},
+				"SQL cursor cleared successfully",
+			);
 
 			return {
 				content: [
@@ -69,10 +75,13 @@ export const clearSqlCursor = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to clear SQL cursor", {
-				error: error instanceof Error ? error.message : String(error),
-				cursorLength: args.cursor.length,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					cursorLength: args.cursor.length,
+				},
+				"Failed to clear SQL cursor",
+			);
 
 			if (error instanceof Error && error.message.includes("invalid_cursor")) {
 				throw new McpError(ErrorCode.InvalidRequest, "Invalid SQL cursor: cursor may be expired or malformed");
@@ -108,12 +117,15 @@ export const getFieldMapping = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getFieldMappingSchema>) => {
 		try {
-			logger.debug("Getting field mapping", {
-				index: args.index,
-				field: args.field,
-				includeDefaults: args.includeDefaults,
-				expandWildcards: args.expandWildcards,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					field: args.field,
+					includeDefaults: args.includeDefaults,
+					expandWildcards: args.expandWildcards,
+				},
+				"Getting field mapping",
+			);
 
 			const result = await client.indices.getFieldMapping({
 				index: args.index,
@@ -124,11 +136,14 @@ export const getFieldMapping = {
 				expand_wildcards: args.expandWildcards,
 			} as any);
 
-			logger.debug("Field mapping retrieved successfully", {
-				index: args.index,
-				field: args.field,
-				mappingExists: Object.keys(result).length > 0,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					field: args.field,
+					mappingExists: Object.keys(result).length > 0,
+				},
+				"Field mapping retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -139,11 +154,14 @@ export const getFieldMapping = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get field mapping", {
-				error: error instanceof Error ? error.message : String(error),
-				index: args.index,
-				field: args.field,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					index: args.index,
+					field: args.field,
+				},
+				"Failed to get field mapping",
+			);
 
 			if (error instanceof Error && error.message.includes("index_not_found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Index not found: ${args.index}`);

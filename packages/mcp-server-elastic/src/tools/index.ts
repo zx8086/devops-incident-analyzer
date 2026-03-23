@@ -345,10 +345,13 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 		registerTool(server, esClient);
 	}
 
-	logger.info("All tools registered", {
-		toolCount: registeredTools.length,
-		notificationTools: notificationTools.length,
-	});
+	logger.info(
+		{
+			toolCount: registeredTools.length,
+			notificationTools: notificationTools.length,
+		},
+		"All tools registered",
+	);
 
 	return registeredTools;
 }

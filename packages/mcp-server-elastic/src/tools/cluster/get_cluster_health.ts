@@ -59,12 +59,15 @@ export const registerGetClusterHealthTool: ToolRegistrationFunction = (server: M
 			// Validate parameters
 			const params = clusterHealthValidator.parse(args);
 
-			logger.info(`[${requestId}] Cluster health request received`, {
-				params: {
-					...params,
-					index: params.index ? "[REDACTED]" : undefined,
+			logger.info(
+				{
+					params: {
+						...params,
+						index: params.index ? "[REDACTED]" : undefined,
+					},
 				},
-			});
+				`[${requestId}] Cluster health request received`,
+			);
 
 			logger.info(`[${requestId}] Preparing cluster health request...`);
 			const requestParams = {
@@ -82,30 +85,33 @@ export const registerGetClusterHealthTool: ToolRegistrationFunction = (server: M
 				wait_for_status: params.waitForStatus,
 			};
 
-			logger.debug(`[${requestId}] Request parameters:`, requestParams);
+			logger.debug(requestParams, `[${requestId}] Request parameters:`);
 			logger.info(`[${requestId}] Executing cluster.health()...`);
 
 			const result = await esClient.cluster.health(requestParams, {
 				opaqueId: "elasticsearch_get_cluster_health",
 			});
 
-			logger.info(`[${requestId}] Successfully retrieved cluster health`, {
-				status: result.status,
-				numberOfNodes: result.number_of_nodes,
-				activeShards: result.active_shards,
-				clusterName: result.cluster_name,
-				taskMaxWaitingInQueueMillis: result.task_max_waiting_in_queue_millis,
-				numberOfPendingTasks: result.number_of_pending_tasks,
-				numberOfInFlightFetch: result.number_of_in_flight_fetch,
-				initializingShards: result.initializing_shards,
-				unassignedShards: result.unassigned_shards,
-				delayedUnassignedShards: result.delayed_unassigned_shards,
-				activeShardsPercentAsNumber: result.active_shards_percent_as_number,
-			});
+			logger.info(
+				{
+					status: result.status,
+					numberOfNodes: result.number_of_nodes,
+					activeShards: result.active_shards,
+					clusterName: result.cluster_name,
+					taskMaxWaitingInQueueMillis: result.task_max_waiting_in_queue_millis,
+					numberOfPendingTasks: result.number_of_pending_tasks,
+					numberOfInFlightFetch: result.number_of_in_flight_fetch,
+					initializingShards: result.initializing_shards,
+					unassignedShards: result.unassigned_shards,
+					delayedUnassignedShards: result.delayed_unassigned_shards,
+					activeShardsPercentAsNumber: result.active_shards_percent_as_number,
+				},
+				`[${requestId}] Successfully retrieved cluster health`,
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow cluster health operation", { duration, requestId });
+				logger.warn({ duration, requestId }, "Slow cluster health operation");
 			}
 
 			logger.info(`[${requestId}] Returning response...`);
@@ -139,18 +145,21 @@ export const registerGetClusterHealthTool: ToolRegistrationFunction = (server: M
 			}
 
 			// Enhanced error logging with request context
-			logger.error(`[${requestId}] Failed to get cluster health:`, {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-				name: error instanceof Error ? error.name : "Unknown",
-				cause: error instanceof Error ? error.cause : undefined,
-				params: {
-					...args,
-					index: args?.index ? "[REDACTED]" : undefined,
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+					name: error instanceof Error ? error.name : "Unknown",
+					cause: error instanceof Error ? error.cause : undefined,
+					params: {
+						...args,
+						index: args?.index ? "[REDACTED]" : undefined,
+					},
+					elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
+					statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
 				},
-				elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
-				statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
-			});
+				`[${requestId}] Failed to get cluster health:`,
+			);
 
 			throw createClusterHealthMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",

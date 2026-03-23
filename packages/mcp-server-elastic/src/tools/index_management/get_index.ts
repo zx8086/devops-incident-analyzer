@@ -69,7 +69,7 @@ export const registerGetIndexTool: ToolRegistrationFunction = (server: McpServer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index retrieval operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index retrieval operation");
 			}
 
 			return {

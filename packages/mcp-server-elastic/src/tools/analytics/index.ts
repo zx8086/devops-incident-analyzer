@@ -62,14 +62,17 @@ export const getTermVectors = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getTermVectorsSchema>) => {
 		try {
-			logger.debug("Getting term vectors for document", {
-				index: args.index,
-				id: args.id,
-				fields: args.fields,
-				hasDoc: !!args.doc,
-				fieldStatistics: args.field_statistics,
-				termStatistics: args.term_statistics,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					id: args.id,
+					fields: args.fields,
+					hasDoc: !!args.doc,
+					fieldStatistics: args.field_statistics,
+					termStatistics: args.term_statistics,
+				},
+				"Getting term vectors for document",
+			);
 
 			// Validate that either id or doc is provided
 			if (!args.id && !args.doc) {
@@ -100,12 +103,15 @@ export const getTermVectors = {
 				},
 			);
 
-			logger.debug("Term vectors retrieved successfully", {
-				index: args.index,
-				id: args.id,
-				termVectorsFound: !!result.term_vectors,
-				fieldsAnalyzed: result.term_vectors ? Object.keys(result.term_vectors).length : 0,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					id: args.id,
+					termVectorsFound: !!result.term_vectors,
+					fieldsAnalyzed: result.term_vectors ? Object.keys(result.term_vectors).length : 0,
+				},
+				"Term vectors retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -116,11 +122,14 @@ export const getTermVectors = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get term vectors", {
-				error: error instanceof Error ? error.message : String(error),
-				index: args.index,
-				id: args.id,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					index: args.index,
+					id: args.id,
+				},
+				"Failed to get term vectors",
+			);
 
 			if (error instanceof Error && error.message.includes("index_not_found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Index not found: ${args.index}`);
@@ -173,11 +182,14 @@ export const getMultiTermVectors = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getMultiTermVectorsSchema>) => {
 		try {
-			logger.debug("Getting multi term vectors", {
-				index: args.index,
-				docsCount: args.docs?.length,
-				idsCount: args.ids?.length,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					docsCount: args.docs?.length,
+					idsCount: args.ids?.length,
+				},
+				"Getting multi term vectors",
+			);
 
 			// Validate that either docs or ids is provided
 			if (!args.docs && !args.ids) {
@@ -213,10 +225,13 @@ export const getMultiTermVectors = {
 				},
 			);
 
-			logger.debug("Multi term vectors retrieved successfully", {
-				index: args.index,
-				docsProcessed: result.docs?.length || 0,
-			});
+			logger.debug(
+				{
+					index: args.index,
+					docsProcessed: result.docs?.length || 0,
+				},
+				"Multi term vectors retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -227,12 +242,15 @@ export const getMultiTermVectors = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get multi term vectors", {
-				error: error instanceof Error ? error.message : String(error),
-				index: args.index,
-				docsCount: args.docs?.length,
-				idsCount: args.ids?.length,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					index: args.index,
+					docsCount: args.docs?.length,
+					idsCount: args.ids?.length,
+				},
+				"Failed to get multi term vectors",
+			);
 
 			if (error instanceof Error && error.message.includes("index_not_found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Index not found: ${args.index}`);

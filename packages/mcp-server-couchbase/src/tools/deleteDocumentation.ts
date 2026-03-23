@@ -36,12 +36,15 @@ export default (server: McpServer, bucket: Bucket) => {
 			// Always define baseDirectory here
 			const baseDirectory = config.documentation.baseDirectory || "./docs";
 			try {
-				logger.info("Deleting documentation", {
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-					recursive,
-				});
+				logger.info(
+					{
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+						recursive,
+					},
+					"Deleting documentation",
+				);
 
 				// Determine the path for the documentation
 				let docPath: string;
@@ -84,12 +87,15 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error("Error deleting documentation", {
-					error: error instanceof Error ? error.message : String(error),
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+					},
+					"Error deleting documentation",
+				);
 				throw error;
 			}
 		},

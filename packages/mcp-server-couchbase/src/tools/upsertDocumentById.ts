@@ -18,11 +18,14 @@ export default (server: McpServer, bucket: Bucket) => {
 		},
 		async ({ scope_name, collection_name, document_id, document_content }) => {
 			try {
-				logger.info("Processing document upsert:", {
-					scope_name,
-					collection_name,
-					document_id,
-				});
+				logger.info(
+					{
+						scope_name,
+						collection_name,
+						document_id,
+					},
+					"Processing document upsert:",
+				);
 
 				if (!bucket) {
 					throw createError("DB_ERROR", "Bucket is not initialized");
@@ -38,11 +41,14 @@ export default (server: McpServer, bucket: Bucket) => {
 				const collection = bucket.scope(scope_name).collection(collection_name);
 				await collection.upsert(document_id, content);
 
-				logger.info("Document upserted successfully", {
-					scope: scope_name,
-					collection: collection_name,
-					id: document_id,
-				});
+				logger.info(
+					{
+						scope: scope_name,
+						collection: collection_name,
+						id: document_id,
+					},
+					"Document upserted successfully",
+				);
 
 				return {
 					content: [
@@ -53,7 +59,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error("Error in upsert_document_by_id:", error);
+				logger.error({ error }, "Error in upsert_document_by_id");
 				throw error;
 			}
 		},

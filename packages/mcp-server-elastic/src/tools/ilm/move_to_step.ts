@@ -72,11 +72,14 @@ export const registerMoveToStepTool: ToolRegistrationFunction = (server: McpServ
 			// Simple validation - no complex parameter extraction
 			params = moveToStepValidator.parse(args);
 
-			logger.debug("Moving index to ILM step", {
-				index: params.index,
-				currentStep: params.currentStep,
-				nextStep: params.nextStep,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					currentStep: params.currentStep,
+					nextStep: params.nextStep,
+				},
+				"Moving index to ILM step",
+			);
 
 			const result = await esClient.ilm.moveToStep({
 				index: params.index,
@@ -86,14 +89,17 @@ export const registerMoveToStepTool: ToolRegistrationFunction = (server: McpServ
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow ILM operation: move_to_step", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow ILM operation: move_to_step");
 			}
 
-			logger.info("Index moved to ILM step successfully", {
-				index: params.index,
-				from: `${params.currentStep.phase}.${params.currentStep.action}.${params.currentStep.name}`,
-				to: `${params.nextStep.phase}.${params.nextStep.action || "default"}.${params.nextStep.name || "default"}`,
-			});
+			logger.info(
+				{
+					index: params.index,
+					from: `${params.currentStep.phase}.${params.currentStep.action}.${params.currentStep.name}`,
+					to: `${params.nextStep.phase}.${params.nextStep.action || "default"}.${params.nextStep.name || "default"}`,
+				},
+				"Index moved to ILM step successfully",
+			);
 
 			// MCP-compliant success response with step transition details
 			return {

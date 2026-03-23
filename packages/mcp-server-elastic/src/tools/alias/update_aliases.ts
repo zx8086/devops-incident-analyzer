@@ -124,12 +124,15 @@ export const registerUpdateAliasesTool: ToolRegistrationFunction = (server: McpS
 			// Validate alias actions structure
 			validateAliasActions(params.actions);
 
-			logger.debug("Updating aliases", {
-				actionCount: params.actions.length,
-				actions: params.actions.map((action) => Object.keys(action)[0]),
-				timeout: params.timeout,
-				masterTimeout: params.masterTimeout,
-			});
+			logger.debug(
+				{
+					actionCount: params.actions.length,
+					actions: params.actions.map((action) => Object.keys(action)[0]),
+					timeout: params.timeout,
+					masterTimeout: params.masterTimeout,
+				},
+				"Updating aliases",
+			);
 
 			const result = await esClient.indices.updateAliases(
 				{
@@ -144,7 +147,7 @@ export const registerUpdateAliasesTool: ToolRegistrationFunction = (server: McpS
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation: elasticsearch_update_aliases", { duration });
+				logger.warn({ duration }, "Slow operation: elasticsearch_update_aliases");
 			}
 
 			// Analyze actions for summary

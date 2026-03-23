@@ -74,20 +74,26 @@ export function wrapHandler<T>(
 		return traceToolExecution(toolName, async () => {
 			const startTime = Date.now();
 			try {
-				logger.debug(`Executing tool: ${toolName}`, {
-					args: Object.keys(args as Record<string, unknown>),
-				});
+				logger.debug(
+					{
+						args: Object.keys(args as Record<string, unknown>),
+					},
+					`Executing tool: ${toolName}`,
+				);
 				const result = await handler(args);
 				const duration = Date.now() - startTime;
-				logger.debug(`Tool completed: ${toolName}`, { duration });
+				logger.debug({ duration }, `Tool completed: ${toolName}`);
 				return result;
 			} catch (error) {
 				const duration = Date.now() - startTime;
-				logger.error(`Tool failed: ${toolName}`, {
-					error: error instanceof Error ? error.message : String(error),
-					stack: error instanceof Error ? error.stack : undefined,
-					duration,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+						duration,
+					},
+					`Tool failed: ${toolName}`,
+				);
 				const mcpError = normalizeError(error);
 				return ResponseBuilder.error(mcpError.message);
 			}

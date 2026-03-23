@@ -49,7 +49,7 @@ export const registerDeleteIndexTemplateTool: ToolRegistrationFunction = (server
 			const params = deleteIndexTemplateValidator.parse(args);
 			const { name, masterTimeout } = params;
 
-			logger.debug("Deleting index template", { name });
+			logger.debug({ name }, "Deleting index template");
 
 			const result = await esClient.indices.deleteIndexTemplate(
 				{
@@ -63,7 +63,7 @@ export const registerDeleteIndexTemplateTool: ToolRegistrationFunction = (server
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow template operation", { duration });
+				logger.warn({ duration }, "Slow template operation");
 			}
 
 			return {

@@ -19,16 +19,22 @@ export async function reportProgress(
 			},
 		});
 
-		logger.debug("Progress reported", {
-			token,
-			percentage: progress.percentage,
-			message: progress.message,
-		});
+		logger.debug(
+			{
+				token,
+				percentage: progress.percentage,
+				message: progress.message,
+			},
+			"Progress reported",
+		);
 	} catch (error) {
-		logger.error("Failed to report progress", {
-			error,
-			token,
-			percentage: progress.percentage,
-		});
+		logger.error(
+			{
+				error,
+				token,
+				percentage: progress.percentage,
+			},
+			"Failed to report progress",
+		);
 	}
 }

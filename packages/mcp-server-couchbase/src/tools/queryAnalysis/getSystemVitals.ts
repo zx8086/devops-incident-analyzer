@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),
 		},
 		async ({ node_filter }) => {
-			logger.info("Getting system vitals information", { node_filter });
+			logger.info({ node_filter }, "Getting system vitals information");
 
 			// Modify query based on parameters
 			let query = systemVitalsQuery;

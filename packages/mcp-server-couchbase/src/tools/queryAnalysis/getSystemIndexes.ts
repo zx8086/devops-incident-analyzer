@@ -17,7 +17,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			include_system: z.boolean().optional().describe("Whether to include system indexes"),
 		},
 		async ({ bucket_name, index_type, include_system }) => {
-			logger.info("Getting system indexes", { bucket_name, index_type, include_system });
+			logger.info({ bucket_name, index_type, include_system }, "Getting system indexes");
 
 			// Modify query based on parameters
 			let query = n1qlSystemIndexes;

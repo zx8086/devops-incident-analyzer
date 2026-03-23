@@ -87,11 +87,14 @@ export const registerReindexDocumentsTool: ToolRegistrationFunction = (server: M
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow reindex operation", {
-					duration,
-					sourceIndex: params.source.index,
-					destIndex: params.dest.index,
-				});
+				logger.warn(
+					{
+						duration,
+						sourceIndex: params.source.index,
+						destIndex: params.dest.index,
+					},
+					"Slow reindex operation",
+				);
 			}
 
 			return {

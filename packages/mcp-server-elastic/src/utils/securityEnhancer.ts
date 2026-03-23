@@ -101,11 +101,14 @@ export class SecurityEnhancer {
 					blocked: true,
 				});
 
-				logger.warn("Input size exceeds limit", {
-					tool: toolName,
-					size: inputSize,
-					limit: this.config.maxInputSize,
-				});
+				logger.warn(
+					{
+						tool: toolName,
+						size: inputSize,
+						limit: this.config.maxInputSize,
+					},
+					"Input size exceeds limit",
+				);
 
 				throw new McpError(
 					ErrorCode.InvalidParams,
@@ -137,27 +140,36 @@ export class SecurityEnhancer {
 			if (violations.length > 0) {
 				const criticalViolations = violations.filter((v) => v.severity === "critical" || v.blocked);
 				if (criticalViolations.length > 0) {
-					logger.error("Critical security violations detected", {
-						tool: toolName,
-						violations: criticalViolations,
-						input: this.redactSensitiveData(input),
-					});
+					logger.error(
+						{
+							tool: toolName,
+							violations: criticalViolations,
+							input: this.redactSensitiveData(input),
+						},
+						"Critical security violations detected",
+					);
 				} else {
-					logger.warn("Security violations detected but allowed", {
-						tool: toolName,
-						violations,
-						input: this.redactSensitiveData(input),
-					});
+					logger.warn(
+						{
+							tool: toolName,
+							violations,
+							input: this.redactSensitiveData(input),
+						},
+						"Security violations detected but allowed",
+					);
 				}
 			}
 
 			return { sanitized, violations };
 		} catch (error) {
-			logger.error("Security validation failed", {
-				tool: toolName,
-				error: error instanceof Error ? error.message : String(error),
-				input: this.redactSensitiveData(input),
-			});
+			logger.error(
+				{
+					tool: toolName,
+					error: error instanceof Error ? error.message : String(error),
+					input: this.redactSensitiveData(input),
+				},
+				"Security validation failed",
+			);
 			throw error;
 		}
 	}
@@ -361,7 +373,7 @@ export class SecurityEnhancer {
 			}
 		}
 
-		logger.warn("IP access denied", { clientIp, allowedRanges: this.config.allowedIpRanges });
+		logger.warn({ clientIp, allowedRanges: this.config.allowedIpRanges }, "IP access denied");
 		return false;
 	}
 
@@ -404,11 +416,14 @@ export function withSecurityValidation<_T extends any[], R>(
 		const { sanitized, violations } = enhancer.validateAndSanitizeInput(toolName, toolArgs);
 
 		// Log security metrics
-		logger.debug("Security validation completed", {
-			tool: toolName,
-			violationCount: violations.length,
-			blocked: violations.some((v) => v.blocked),
-		});
+		logger.debug(
+			{
+				tool: toolName,
+				violationCount: violations.length,
+				blocked: violations.some((v) => v.blocked),
+			},
+			"Security validation completed",
+		);
 
 		return toolFunction(sanitized, extra);
 	};

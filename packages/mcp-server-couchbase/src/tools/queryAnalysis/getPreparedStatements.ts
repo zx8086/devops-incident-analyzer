@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),
 		},
 		async ({ limit }) => {
-			logger.info("Getting prepared statements", { limit });
+			logger.info({ limit }, "Getting prepared statements");
 
 			// Modify query based on parameters
 			let query = n1qlPreparedStatements;

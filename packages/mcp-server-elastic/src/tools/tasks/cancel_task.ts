@@ -37,10 +37,13 @@ export const registerCancelTaskTool: ToolRegistrationFunction = (server: McpServ
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 			};
 		} catch (error) {
-			logger.error("Failed to cancel task:", {
-				error: error instanceof Error ? error.message : String(error),
-				taskId: params.taskId,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					taskId: params.taskId,
+				},
+				"Failed to cancel task:",
+			);
 			return {
 				content: [
 					{

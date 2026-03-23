@@ -85,7 +85,7 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 			const params = getIndexTemplateValidator.parse(args);
 			const { name, flatSettings, masterTimeout, local, limit, summary, sortBy } = params;
 
-			logger.debug("Getting index templates", { name, summary, limit });
+			logger.debug({ name, summary, limit }, "Getting index templates");
 
 			// Fetch templates from Elasticsearch
 			const result = await esClient.indices.getIndexTemplate(
@@ -280,15 +280,18 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 			});
 
 			if (truncated) {
-				logger.warn("Template response truncated due to size", {
-					originalLength: fullResponse.length,
-					truncatedLength: finalContent.length,
-				});
+				logger.warn(
+					{
+						originalLength: fullResponse.length,
+						truncatedLength: finalContent.length,
+					},
+					"Template response truncated due to size",
+				);
 			}
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow template operation", { duration });
+				logger.warn({ duration }, "Slow template operation");
 			}
 
 			return {

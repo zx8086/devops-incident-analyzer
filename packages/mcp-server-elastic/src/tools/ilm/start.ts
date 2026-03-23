@@ -61,10 +61,13 @@ export const registerStartTool: ToolRegistrationFunction = (server: McpServer, e
 			// Simple validation - no complex parameter extraction
 			const params = startValidator.parse(args);
 
-			logger.debug("Starting ILM", {
-				masterTimeout: params.masterTimeout,
-				timeout: params.timeout,
-			});
+			logger.debug(
+				{
+					masterTimeout: params.masterTimeout,
+					timeout: params.timeout,
+				},
+				"Starting ILM",
+			);
 
 			const result = await esClient.ilm.start({
 				master_timeout: params.masterTimeout,
@@ -73,7 +76,7 @@ export const registerStartTool: ToolRegistrationFunction = (server: McpServer, e
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: start", { duration });
+				logger.warn({ duration }, "Slow ILM operation: start");
 			}
 
 			logger.info("ILM started successfully");

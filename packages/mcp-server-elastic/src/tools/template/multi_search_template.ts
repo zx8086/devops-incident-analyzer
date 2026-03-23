@@ -54,7 +54,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 			const params = multiSearchTemplateValidator.parse(args);
 			const { searches, index, maxConcurrentSearches, ccsMinimizeRoundtrips, restTotalHitsAsInt, typedKeys } = params;
 
-			logger.debug("Executing multi-search template", { searchCount: searches.length, index });
+			logger.debug({ searchCount: searches.length, index }, "Executing multi-search template");
 
 			const result = await esClient.msearchTemplate(
 				{
@@ -72,7 +72,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow multi-search template operation", { duration, searchCount: searches.length });
+				logger.warn({ duration, searchCount: searches.length }, "Slow multi-search template operation");
 			}
 
 			return {

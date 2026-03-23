@@ -55,13 +55,16 @@ export const registerPutAliasTool: ToolRegistrationFunction = (server: McpServer
 			// Validate parameters
 			const params = putAliasValidator.parse(args);
 
-			logger.debug("Creating alias", {
-				index: params.index,
-				alias: params.name,
-				hasFilter: !!params.filter,
-				routing: params.routing,
-				isWriteIndex: params.isWriteIndex,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					alias: params.name,
+					hasFilter: !!params.filter,
+					routing: params.routing,
+					isWriteIndex: params.isWriteIndex,
+				},
+				"Creating alias",
+			);
 
 			// Check if index exists before creating alias
 			const indexExists = await esClient.indices.exists({ index: params.index });
@@ -88,7 +91,7 @@ export const registerPutAliasTool: ToolRegistrationFunction = (server: McpServer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation: elasticsearch_put_alias", { duration });
+				logger.warn({ duration }, "Slow operation: elasticsearch_put_alias");
 			}
 
 			// Format successful response

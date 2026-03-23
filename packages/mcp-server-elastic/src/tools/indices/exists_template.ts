@@ -49,7 +49,7 @@ export const registerExistsTemplateTool: ToolRegistrationFunction = (server: Mcp
 			// Validate parameters
 			const params = existsTemplateValidator.parse(args);
 
-			logger.debug("Checking if legacy template exists", { name: params.name });
+			logger.debug({ name: params.name }, "Checking if legacy template exists");
 
 			const result = await esClient.indices.existsTemplate(
 				{

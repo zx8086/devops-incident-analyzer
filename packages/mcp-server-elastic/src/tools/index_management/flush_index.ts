@@ -65,7 +65,7 @@ export const registerFlushIndexTool: ToolRegistrationFunction = (server: McpServ
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index flush operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index flush operation");
 			}
 
 			return {

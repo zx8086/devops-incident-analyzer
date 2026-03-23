@@ -66,7 +66,7 @@ export const registerIndexExistsTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index existence check operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index existence check operation");
 			}
 
 			return {

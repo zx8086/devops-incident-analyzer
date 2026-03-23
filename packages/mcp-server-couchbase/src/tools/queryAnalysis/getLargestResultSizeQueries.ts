@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			min_size_kb: z.number().optional().describe("Minimum result size in KB to include"),
 		},
 		async ({ limit, min_size_kb }) => {
-			logger.info("Getting largest result size queries", { limit, min_size_kb });
+			logger.info({ limit, min_size_kb }, "Getting largest result size queries");
 
 			// Modify query based on parameters
 			let query = n1qlLargestResultSizeQueries;

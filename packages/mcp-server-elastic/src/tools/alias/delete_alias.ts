@@ -54,12 +54,15 @@ export const registerDeleteAliasTool: ToolRegistrationFunction = (server: McpSer
 			// Validate parameters
 			const params = deleteAliasValidator.parse(args);
 
-			logger.debug("Deleting alias", {
-				index: params.index,
-				alias: params.name,
-				timeout: params.timeout,
-				masterTimeout: params.masterTimeout,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					alias: params.name,
+					timeout: params.timeout,
+					masterTimeout: params.masterTimeout,
+				},
+				"Deleting alias",
+			);
 
 			// Check if alias exists before attempting to delete
 			try {
@@ -87,7 +90,7 @@ export const registerDeleteAliasTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation: elasticsearch_delete_alias", { duration });
+				logger.warn({ duration }, "Slow operation: elasticsearch_delete_alias");
 			}
 
 			// Format successful response

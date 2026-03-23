@@ -1,8 +1,8 @@
 // src/telemetry/tracing.ts
 // Re-exports from shared tracing module with kafka-specific defaults
 import {
-	initializeTracing as sharedInitializeTracing,
 	isTracingActive,
+	initializeTracing as sharedInitializeTracing,
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
@@ -18,17 +18,23 @@ export function initializeTracing(options?: TracingOptions): void {
 export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const logger = getLogger();
 	const startTime = Date.now();
-	logger.info(`Tool call started: ${toolName} [dataSource=kafka]`);
+	logger.info({ tool: toolName, dataSource: "kafka" }, `Tool call started: ${toolName}`);
 
 	try {
 		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "kafka" });
 		const duration = Date.now() - startTime;
-		logger.info(`Tool call completed: ${toolName} [dataSource=kafka, duration=${duration}ms]`);
+		logger.info({ tool: toolName, dataSource: "kafka", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
 		logger.error(
-			`Tool call failed: ${toolName} [dataSource=kafka, duration=${duration}ms, error=${error instanceof Error ? error.message : String(error)}]`,
+			{
+				tool: toolName,
+				dataSource: "kafka",
+				duration,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			`Tool call failed: ${toolName}`,
 		);
 		throw error;
 	}

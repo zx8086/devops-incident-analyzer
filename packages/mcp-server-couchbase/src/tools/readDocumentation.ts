@@ -28,12 +28,15 @@ export default (server: McpServer, bucket: Bucket) => {
 			}
 
 			try {
-				logger.info("Reading documentation", {
-					resourceUri,
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-				});
+				logger.info(
+					{
+						resourceUri,
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+					},
+					"Reading documentation",
+				);
 
 				const resourceResult = await (server as any).readResourceByUri(resourceUri);
 
@@ -56,13 +59,16 @@ export default (server: McpServer, bucket: Bucket) => {
 					})),
 				};
 			} catch (error) {
-				logger.error("Error reading documentation", {
-					error: error instanceof Error ? error.message : String(error),
-					resourceUri,
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						resourceUri,
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+					},
+					"Error reading documentation",
+				);
 
 				return {
 					content: [

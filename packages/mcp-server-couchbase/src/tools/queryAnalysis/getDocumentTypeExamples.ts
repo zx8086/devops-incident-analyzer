@@ -17,7 +17,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			type_field: z.string().optional().default("documentType").describe("Field name that contains the document type"),
 		},
 		async ({ scope_name, collection_name, type_field }) => {
-			logger.info("Getting document type examples", { scope_name, collection_name, type_field });
+			logger.info({ scope_name, collection_name, type_field }, "Getting document type examples");
 
 			// Modify query based on parameters
 			let query = documentTypeExamples;

@@ -15,11 +15,14 @@ export function registerDocumentResource(server: McpServer, bucket: Bucket): voi
 		}),
 		async (uri, { scope, collection, id }) => {
 			try {
-				logger.info("Fetching document resource", {
-					scope,
-					collection,
-					id,
-				});
+				logger.info(
+					{
+						scope,
+						collection,
+						id,
+					},
+					"Fetching document resource",
+				);
 
 				try {
 					const doc = await bucket.scope(scope).collection(collection).get(id);
@@ -31,12 +34,15 @@ export function registerDocumentResource(server: McpServer, bucket: Bucket): voi
 					throw error;
 				}
 			} catch (error) {
-				logger.error("Error fetching document resource", {
-					error: error instanceof Error ? error.message : String(error),
-					scope,
-					collection,
-					id,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						scope,
+						collection,
+						id,
+					},
+					"Error fetching document resource",
+				);
 
 				return ResponseBuilder.error(
 					"Error fetching document resource",

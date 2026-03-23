@@ -54,7 +54,7 @@ export const registerDiskUsageTool: ToolRegistrationFunction = (server: McpServe
 			// Validate parameters
 			const params = diskUsageValidator.parse(args);
 
-			logger.debug("Analyzing disk usage", { index: params.index });
+			logger.debug({ index: params.index }, "Analyzing disk usage");
 
 			const result = await esClient.indices.diskUsage(
 				{

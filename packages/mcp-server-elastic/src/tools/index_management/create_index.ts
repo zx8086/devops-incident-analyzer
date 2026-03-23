@@ -72,7 +72,7 @@ export const registerCreateIndexTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index creation operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index creation operation");
 			}
 
 			return {

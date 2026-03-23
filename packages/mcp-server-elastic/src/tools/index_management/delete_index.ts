@@ -65,7 +65,7 @@ export const registerDeleteIndexTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index deletion operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index deletion operation");
 			}
 
 			return {

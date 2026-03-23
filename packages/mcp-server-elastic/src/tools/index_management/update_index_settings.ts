@@ -59,10 +59,13 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 			const params = updateIndexSettingsValidator.parse(args);
 
 			// Log the settings being applied for debugging
-			logger.debug("Updating index settings", {
-				index: params.index,
-				settings: JSON.stringify(params.settings, null, 2),
-			});
+			logger.debug(
+				{
+					index: params.index,
+					settings: JSON.stringify(params.settings, null, 2),
+				},
+				"Updating index settings",
+			);
 
 			// Check if settings object is empty or contains only empty objects
 			const hasValidSettings = (settings: any): boolean => {
@@ -153,7 +156,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index settings update operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index settings update operation");
 			}
 
 			return {

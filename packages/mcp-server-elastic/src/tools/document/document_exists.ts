@@ -68,7 +68,7 @@ export const registerDocumentExistsTool: ToolRegistrationFunction = (server: Mcp
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow document existence check", { duration });
+				logger.warn({ duration }, "Slow document existence check");
 			}
 
 			return {

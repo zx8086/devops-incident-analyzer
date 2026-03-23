@@ -67,18 +67,21 @@ export const registerGetAliasesTool: ToolRegistrationFunction = (server: McpServ
 			// Validate parameters
 			const params = getAliasesValidator.parse(args);
 
-			logger.debug("Getting aliases with improved processing", {
-				index: params.index,
-				name: params.name,
-				limit: params.limit,
-				summary: params.summary,
-				sortBy: params.sortBy,
-				options: {
-					ignoreUnavailable: params.ignoreUnavailable,
-					allowNoIndices: params.allowNoIndices,
-					expandWildcards: params.expandWildcards,
+			logger.debug(
+				{
+					index: params.index,
+					name: params.name,
+					limit: params.limit,
+					summary: params.summary,
+					sortBy: params.sortBy,
+					options: {
+						ignoreUnavailable: params.ignoreUnavailable,
+						allowNoIndices: params.allowNoIndices,
+						expandWildcards: params.expandWildcards,
+					},
 				},
-			});
+				"Getting aliases with improved processing",
+			);
 
 			// Fetch aliases from Elasticsearch
 			const result = await esClient.indices.getAlias(
@@ -154,7 +157,7 @@ export const registerGetAliasesTool: ToolRegistrationFunction = (server: McpServ
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation: elasticsearch_get_aliases", { duration });
+				logger.warn({ duration }, "Slow operation: elasticsearch_get_aliases");
 			}
 
 			// Create response content

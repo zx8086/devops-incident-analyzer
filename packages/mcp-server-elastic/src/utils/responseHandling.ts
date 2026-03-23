@@ -77,11 +77,14 @@ export function truncateResponse(
 	const truncatedContent = content.substring(0, maxChars) + truncationMessage;
 	const finalTokens = estimateTokenCount(truncatedContent);
 
-	logger.warn("Response truncated due to size limits", {
-		originalTokens,
-		finalTokens,
-		maxTokens,
-	});
+	logger.warn(
+		{
+			originalTokens,
+			finalTokens,
+			maxTokens,
+		},
+		"Response truncated due to size limits",
+	);
 
 	return {
 		content: truncatedContent,

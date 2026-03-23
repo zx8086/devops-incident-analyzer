@@ -46,10 +46,13 @@ export const registerGetTaskTool: ToolRegistrationFunction = (server: McpServer,
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to get task information:", {
-					error: error instanceof Error ? error.message : String(error),
-					taskId: params.taskId,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						taskId: params.taskId,
+					},
+					"Failed to get task information:",
+				);
 				return {
 					content: [
 						{

@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			min_count: z.number().optional().describe("Minimum execution count to include"),
 		},
 		async ({ limit, min_count }) => {
-			logger.info("Getting most frequent queries", { limit, min_count });
+			logger.info({ limit, min_count }, "Getting most frequent queries");
 
 			// Modify query based on parameters
 			let query = n1qlMostFrequentQueries;

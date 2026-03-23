@@ -84,7 +84,7 @@ export const registerPutMappingTool: ToolRegistrationFunction = (server: McpServ
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow mapping update operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow mapping update operation");
 			}
 
 			return {

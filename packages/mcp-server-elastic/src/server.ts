@@ -12,27 +12,33 @@ import { initializeReadOnlyManager } from "./utils/readOnlyMode.js";
 
 // Async -- called once at startup. Initializes read-only manager, builds ES client, tests connection.
 export async function initializeElasticsearchClient(config: Config): Promise<Client> {
-	logger.info("Creating Elasticsearch MCP server", {
-		url: config.elasticsearch.url,
-		hasApiKey: !!config.elasticsearch.apiKey,
-		hasUsername: !!config.elasticsearch.username,
-		hasPassword: !!config.elasticsearch.password,
-		hasCaCert: !!config.elasticsearch.caCert,
-		readOnlyMode: config.server.readOnlyMode,
-		readOnlyStrictMode: config.server.readOnlyStrictMode,
-		tracingEnabled: config.langsmith.tracing,
-	});
+	logger.info(
+		{
+			url: config.elasticsearch.url,
+			hasApiKey: !!config.elasticsearch.apiKey,
+			hasUsername: !!config.elasticsearch.username,
+			hasPassword: !!config.elasticsearch.password,
+			hasCaCert: !!config.elasticsearch.caCert,
+			readOnlyMode: config.server.readOnlyMode,
+			readOnlyStrictMode: config.server.readOnlyStrictMode,
+			tracingEnabled: config.langsmith.tracing,
+		},
+		"Creating Elasticsearch MCP server",
+	);
 
 	// Initialize read-only mode manager with config values
 	initializeReadOnlyManager(config.server.readOnlyMode, config.server.readOnlyStrictMode);
 
 	if (config.server.readOnlyMode) {
-		logger.info("READ-ONLY MODE ACTIVE", {
-			strictMode: config.server.readOnlyStrictMode,
-			behavior: config.server.readOnlyStrictMode
-				? "Destructive operations will be BLOCKED"
-				: "Destructive operations will show WARNINGS",
-		});
+		logger.info(
+			{
+				strictMode: config.server.readOnlyStrictMode,
+				behavior: config.server.readOnlyStrictMode
+					? "Destructive operations will be BLOCKED"
+					: "Destructive operations will show WARNINGS",
+			},
+			"READ-ONLY MODE ACTIVE",
+		);
 	}
 
 	// Build Elasticsearch client configuration
@@ -79,12 +85,15 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		}),
 	};
 
-	logger.debug("Initializing Elasticsearch client with configuration:", {
-		...clientOptions,
-		auth: clientOptions.auth ? "[REDACTED]" : undefined,
-		tls: clientOptions.tls ? "[TLS_CONFIG_PRESENT]" : undefined,
-		Connection: "HttpConnection",
-	});
+	logger.debug(
+		{
+			...clientOptions,
+			auth: clientOptions.auth ? "[REDACTED]" : undefined,
+			tls: clientOptions.tls ? "[TLS_CONFIG_PRESENT]" : undefined,
+			Connection: "HttpConnection",
+		},
+		"Initializing Elasticsearch client with configuration:",
+	);
 
 	const esClient = new Client(clientOptions);
 
@@ -96,37 +105,49 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 			emitter.on("connection:dead", (...args: unknown[]) => {
 				const connection = args[0] as { url?: string; id?: string } | undefined;
 				const error = args[1] as { message?: string } | undefined;
-				logger.error("Elasticsearch connection marked as dead", {
-					url: connection?.url,
-					id: connection?.id,
-					error: error?.message,
-				});
+				logger.error(
+					{
+						url: connection?.url,
+						id: connection?.id,
+						error: error?.message,
+					},
+					"Elasticsearch connection marked as dead",
+				);
 			});
 
 			emitter.on("connection:resurrect", (...args: unknown[]) => {
 				const connection = args[0] as { url?: string; id?: string } | undefined;
-				logger.info("Elasticsearch connection resurrected", {
-					url: connection?.url,
-					id: connection?.id,
-				});
+				logger.info(
+					{
+						url: connection?.url,
+						id: connection?.id,
+					},
+					"Elasticsearch connection resurrected",
+				);
 			});
 		}
 	} catch (error) {
-		logger.warn("Could not register connection pool events", {
-			error: error instanceof Error ? error.message : String(error),
-		});
+		logger.warn(
+			{
+				error: error instanceof Error ? error.message : String(error),
+			},
+			"Could not register connection pool events",
+		);
 	}
 
 	// Test connection to Elasticsearch
 	try {
 		const info = await esClient.info();
 
-		logger.info("Successfully connected to Elasticsearch", {
-			version: info.version?.number,
-			clusterName: info.cluster_name,
-			clusterUuid: info.cluster_uuid,
-			luceneVersion: info.version?.lucene_version,
-		});
+		logger.info(
+			{
+				version: info.version?.number,
+				clusterName: info.cluster_name,
+				clusterUuid: info.cluster_uuid,
+				luceneVersion: info.version?.lucene_version,
+			},
+			"Successfully connected to Elasticsearch",
+		);
 
 		const serverVersion = info.version?.number;
 		const majorVersion = serverVersion ? Number.parseInt(serverVersion.split(".")[0] ?? "0", 10) : 0;
@@ -139,10 +160,13 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 			logger.warn(`Connected to older Elasticsearch ${serverVersion} - some features may be limited`);
 		}
 	} catch (error: unknown) {
-		logger.error("Failed to connect to Elasticsearch:", {
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			},
+			"Failed to connect to Elasticsearch:",
+		);
 		throw error;
 	}
 
@@ -172,9 +196,12 @@ export function createMcpServerInstance(config: Config, esClient: Client): McpSe
 
 	const registeredTools = registerAllTools(server, esClient);
 
-	logger.info("All tools registered successfully", {
-		toolCount: registeredTools.length,
-	});
+	logger.info(
+		{
+			toolCount: registeredTools.length,
+		},
+		"All tools registered successfully",
+	);
 
 	return server;
 }
@@ -185,10 +212,13 @@ export async function createElasticsearchMcpServer(config: Config): Promise<McpS
 		const esClient = await initializeElasticsearchClient(config);
 		return createMcpServerInstance(config, esClient);
 	} catch (error: unknown) {
-		logger.error("Error creating server:", {
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			},
+			"Error creating server:",
+		);
 		throw error;
 	}
 }

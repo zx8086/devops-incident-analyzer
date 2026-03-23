@@ -51,7 +51,7 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 			const params = deletePolicyValidator.parse(args);
 			const { name, masterTimeout } = params;
 
-			logger.debug("Deleting enrich policy", { name, masterTimeout });
+			logger.debug({ name, masterTimeout }, "Deleting enrich policy");
 
 			const result = await esClient.enrich.deletePolicy({
 				name,
@@ -60,7 +60,7 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow delete enrich policy operation", { duration });
+				logger.warn({ duration }, "Slow delete enrich policy operation");
 			}
 
 			return {

@@ -55,19 +55,25 @@ const deleteByQuerySchema = z.object({
 
 const deleteByQueryImpl = async (client: Client, args: z.infer<typeof deleteByQuerySchema>) => {
 	try {
-		logger.debug("Executing delete by query operation", {
-			index: args.index,
-			maxDocs: args.maxDocs,
-			conflicts: args.conflicts,
-			requestsPerSecond: args.requestsPerSecond,
-		});
+		logger.debug(
+			{
+				index: args.index,
+				maxDocs: args.maxDocs,
+				conflicts: args.conflicts,
+				requestsPerSecond: args.requestsPerSecond,
+			},
+			"Executing delete by query operation",
+		);
 
 		// Log warning for potentially destructive operation
-		logger.warn("DESTRUCTIVE OPERATION: Delete by query executing", {
-			index: args.index,
-			query: JSON.stringify(args.query),
-			maxDocs: args.maxDocs,
-		});
+		logger.warn(
+			{
+				index: args.index,
+				query: JSON.stringify(args.query),
+				maxDocs: args.maxDocs,
+			},
+			"DESTRUCTIVE OPERATION: Delete by query executing",
+		);
 
 		const result = await client.deleteByQuery({
 			index: args.index,
@@ -86,13 +92,16 @@ const deleteByQueryImpl = async (client: Client, args: z.infer<typeof deleteByQu
 			slices: args.slices,
 		});
 
-		logger.info("Delete by query completed successfully", {
-			index: args.index,
-			deleted: result.deleted,
-			batches: result.batches,
-			versionConflicts: result.version_conflicts,
-			took: result.took,
-		});
+		logger.info(
+			{
+				index: args.index,
+				deleted: result.deleted,
+				batches: result.batches,
+				versionConflicts: result.version_conflicts,
+				took: result.took,
+			},
+			"Delete by query completed successfully",
+		);
 
 		return {
 			content: [
@@ -103,11 +112,14 @@ const deleteByQueryImpl = async (client: Client, args: z.infer<typeof deleteByQu
 			],
 		};
 	} catch (error) {
-		logger.error("Failed to execute delete by query", {
-			error: error instanceof Error ? error.message : String(error),
-			index: args.index,
-			query: JSON.stringify(args.query),
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				index: args.index,
+				query: JSON.stringify(args.query),
+			},
+			"Failed to execute delete by query",
+		);
 
 		if (error instanceof Error && error.message.includes("index_not_found")) {
 			throw new McpError(ErrorCode.InvalidRequest, `Index not found: ${args.index}`);
@@ -151,11 +163,14 @@ export const translateSqlQuery = {
 	operationType: OperationType.WRITE as const,
 	handler: async (client: Client, args: z.infer<typeof translateSqlQuerySchema>) => {
 		try {
-			logger.debug("Translating SQL query to Elasticsearch DSL", {
-				queryLength: args.query.length,
-				fetchSize: args.fetchSize,
-				timeZone: args.timeZone,
-			});
+			logger.debug(
+				{
+					queryLength: args.query.length,
+					fetchSize: args.fetchSize,
+					timeZone: args.timeZone,
+				},
+				"Translating SQL query to Elasticsearch DSL",
+			);
 
 			const result = await client.sql.translate({
 				query: args.query,
@@ -163,10 +178,13 @@ export const translateSqlQuery = {
 				time_zone: args.timeZone,
 			});
 
-			logger.debug("SQL query translation completed successfully", {
-				hasQuery: !!result.query,
-				hasSize: !!result.size,
-			});
+			logger.debug(
+				{
+					hasQuery: !!result.query,
+					hasSize: !!result.size,
+				},
+				"SQL query translation completed successfully",
+			);
 
 			return {
 				content: [
@@ -177,10 +195,13 @@ export const translateSqlQuery = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to translate SQL query", {
-				error: error instanceof Error ? error.message : String(error),
-				query: args.query.substring(0, 200) + (args.query.length > 200 ? "..." : ""),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					query: args.query.substring(0, 200) + (args.query.length > 200 ? "..." : ""),
+				},
+				"Failed to translate SQL query",
+			);
 
 			if (error instanceof Error && error.message.includes("parsing_exception")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Invalid SQL syntax: ${error.message}`);

@@ -16,7 +16,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			collection_name: z.string().optional().describe("Collection name (defaults to collection in query)"),
 		},
 		async ({ query, bucket_name, scope_name, collection_name }) => {
-			logger.info("Analyzing query for optimizations", { query, bucket_name, scope_name, collection_name });
+			logger.info({ query, bucket_name, scope_name, collection_name }, "Analyzing query for optimizations");
 
 			try {
 				// Analyze the query

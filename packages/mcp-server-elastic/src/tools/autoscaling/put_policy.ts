@@ -34,9 +34,12 @@ export const registerAutoscalingPutPolicyTool: ToolRegistrationFunction = (serve
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 			};
 		} catch (error) {
-			logger.error("Failed to create/update autoscaling policy:", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Failed to create/update autoscaling policy:",
+			);
 			return {
 				content: [
 					{

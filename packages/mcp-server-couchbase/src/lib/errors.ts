@@ -86,11 +86,14 @@ export function createError(code: ErrorCode, message?: string, originalError?: E
 	const errorMessage = message || errorMessages[code];
 	const error = new AppError(code, errorMessage, originalError);
 
-	logger.error(errorMessage, {
-		code,
-		originalError: originalError?.message,
-		stack: originalError?.stack,
-	});
+	logger.error(
+		{
+			code,
+			originalError: originalError?.message,
+			stack: originalError?.stack,
+		},
+		errorMessage,
+	);
 
 	return error;
 }

@@ -33,18 +33,24 @@ export default (server: McpServer, bucket: Bucket) => {
 			}
 			// Always define baseDirectory here
 			const baseDirectory = config.documentation.baseDirectory || "./docs";
-			logger.debug("[sync_documentation_with_database] Debug info", {
-				baseDirectory,
-				cwd: process.cwd(),
-				user: process.env.USER,
-				uid: process.getuid && process.getuid(),
-				gid: process.getgid && process.getgid(),
-				scope_name,
-			});
+			logger.debug(
+				{
+					baseDirectory,
+					cwd: process.cwd(),
+					user: process.env.USER,
+					uid: process.getuid && process.getuid(),
+					gid: process.getgid && process.getgid(),
+					scope_name,
+				},
+				"[sync_documentation_with_database] Debug info",
+			);
 			try {
-				logger.info("Syncing documentation with database structure", {
-					scope: scope_name,
-				});
+				logger.info(
+					{
+						scope: scope_name,
+					},
+					"Syncing documentation with database structure",
+				);
 
 				// Use system:keyspaces to get collections for the current bucket and scope
 				const bucketName = config.database.bucketName;
@@ -56,10 +62,10 @@ export default (server: McpServer, bucket: Bucket) => {
 					? "SELECT `scope`, `name` AS collection_name FROM system:keyspaces WHERE `bucket` = $bucket AND `scope` = $scope"
 					: "SELECT `scope`, `name` AS collection_name FROM system:keyspaces WHERE `bucket` = $bucket";
 				const parameters = scope_name ? { scope: scope_name, bucket: bucketName } : { bucket: bucketName };
-				logger.debug("[sync_documentation_with_database] Querying collections", { query, parameters });
+				logger.debug({ query, parameters }, "[sync_documentation_with_database] Querying collections");
 
 				const result = await cluster.query(query, { parameters });
-				logger.debug("[sync_documentation_with_database] Query result", { rows: result.rows });
+				logger.debug({ rows: result.rows }, "[sync_documentation_with_database] Query result");
 
 				// Group collections by scope
 				const scopes = new Map<string, Set<string>>();
@@ -76,7 +82,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				for (const [scope, collections] of scopes) {
 					// Create scope directory and index
 					const scopeDir = path.join(baseDirectory, sanitizePath(scope));
-					logger.debug("[sync_documentation_with_database] Creating scopeDir", { scopeDir });
+					logger.debug({ scopeDir }, "[sync_documentation_with_database] Creating scopeDir");
 					await fs.mkdir(scopeDir, { recursive: true });
 
 					const scopeIndexPath = path.join(scopeDir, `index${config.documentation?.fileExtension || ".md"}`);
@@ -84,7 +90,7 @@ export default (server: McpServer, bucket: Bucket) => {
 						await fs.access(scopeIndexPath);
 					} catch {
 						// Create scope index if it doesn't exist
-						logger.debug("[sync_documentation_with_database] Writing scope index", { scopeIndexPath });
+						logger.debug({ scopeIndexPath }, "[sync_documentation_with_database] Writing scope index");
 						await fs.writeFile(
 							scopeIndexPath,
 							`# ${scope} Scope\n\n` +
@@ -99,7 +105,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					// Create collection directories and indexes
 					for (const collection of collections) {
 						const collectionDir = path.join(scopeDir, sanitizePath(collection));
-						logger.debug("[sync_documentation_with_database] Creating collectionDir", { collectionDir });
+						logger.debug({ collectionDir }, "[sync_documentation_with_database] Creating collectionDir");
 						await fs.mkdir(collectionDir, { recursive: true });
 
 						const collectionIndexPath = path.join(
@@ -110,7 +116,7 @@ export default (server: McpServer, bucket: Bucket) => {
 							await fs.access(collectionIndexPath);
 						} catch {
 							// Create collection index if it doesn't exist
-							logger.debug("[sync_documentation_with_database] Writing collection index", { collectionIndexPath });
+							logger.debug({ collectionIndexPath }, "[sync_documentation_with_database] Writing collection index");
 							await fs.writeFile(
 								collectionIndexPath,
 								`# ${collection} Collection\n\n` +
@@ -136,10 +142,13 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error("Error syncing documentation", {
-					error: error instanceof Error ? error.stack || error.message : String(error),
-					scope: scope_name,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.stack || error.message : String(error),
+						scope: scope_name,
+					},
+					"Error syncing documentation",
+				);
 				throw error;
 			}
 		},

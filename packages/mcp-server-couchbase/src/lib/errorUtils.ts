@@ -26,10 +26,13 @@ export async function handleOperation<T>(
 			data: result,
 		};
 	} catch (error) {
-		logger.error(`Error during ${operationName}`, {
-			error: error instanceof Error ? error.message : String(error),
-			...context,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				...context,
+			},
+			`Error during ${operationName}`,
+		);
 
 		return {
 			success: false,
@@ -41,31 +44,31 @@ export async function handleOperation<T>(
 export function handleAppError(error: unknown): never {
 	if (error instanceof Error) {
 		if (error.message.includes("document not found")) {
-			logger.warn("Document not found", { error });
+			logger.warn({ error }, "Document not found");
 			throw createError("DOCUMENT_NOT_FOUND", error.message);
 		}
 		if (error.message.includes("invalid scope")) {
-			logger.warn("Invalid scope name", { error });
+			logger.warn({ error }, "Invalid scope name");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 		if (error.message.includes("invalid collection")) {
-			logger.warn("Invalid collection name", { error });
+			logger.warn({ error }, "Invalid collection name");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 		if (error.message.includes("authentication failed")) {
-			logger.error("Authentication failed", { error });
+			logger.error({ error }, "Authentication failed");
 			throw createError("AUTH_ERROR", error.message);
 		}
 		if (error.message.includes("query")) {
-			logger.error("Query error", { error });
+			logger.error({ error }, "Query error");
 			throw createError("QUERY_ERROR", error.message);
 		}
 		if (error.message.includes("validation")) {
-			logger.warn("Validation error", { error });
+			logger.warn({ error }, "Validation error");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 	}
 
-	logger.error("Unhandled database error", { error });
+	logger.error({ error }, "Unhandled database error");
 	throw createError("DB_ERROR", "An unexpected database error occurred");
 }

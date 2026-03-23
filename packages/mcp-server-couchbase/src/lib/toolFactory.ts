@@ -47,7 +47,7 @@ export function createTool<T extends z.ZodType>(config: ToolConfig<T>) {
 
 		server.tool(config.name, config.description, config.params, async (params: z.infer<T>) => {
 			try {
-				logger.info(`Processing ${config.name}:`, params);
+				logger.info({ params }, `Processing ${config.name}`);
 
 				if (!bucket) {
 					throw createError("DB_ERROR", "Bucket is not initialized");
@@ -58,7 +58,7 @@ export function createTool<T extends z.ZodType>(config: ToolConfig<T>) {
 				logger.info(`${config.name} completed successfully`);
 				return result;
 			} catch (error) {
-				logger.error(`Error in ${config.name}:`, error);
+				logger.error({ error }, `Error in ${config.name}`);
 				throw error;
 			}
 		});

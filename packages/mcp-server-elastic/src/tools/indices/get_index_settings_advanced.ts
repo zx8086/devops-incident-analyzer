@@ -62,10 +62,13 @@ export const registerGetIndexSettingsAdvancedTool: ToolRegistrationFunction = (s
 			// Validate parameters
 			const params = getIndexSettingsAdvancedValidator.parse(args);
 
-			logger.debug("Getting advanced index settings", {
-				index: params.index,
-				name: params.name,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					name: params.name,
+				},
+				"Getting advanced index settings",
+			);
 
 			const result = await esClient.indices.getSettings(
 				{

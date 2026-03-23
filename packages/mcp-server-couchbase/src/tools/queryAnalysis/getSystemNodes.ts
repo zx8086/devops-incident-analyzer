@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			service_filter: z.string().optional().describe("Filter by service type (e.g., 'n1ql', 'kv', 'index', 'fts')"),
 		},
 		async ({ service_filter }) => {
-			logger.info("Getting system nodes information", { service_filter });
+			logger.info({ service_filter }, "Getting system nodes information");
 
 			// Modify query based on parameters
 			let query = systemNodesQuery;

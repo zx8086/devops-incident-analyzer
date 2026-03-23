@@ -70,7 +70,7 @@ export const registerIndexDocumentTool: ToolRegistrationFunction = (server: McpS
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow document indexing", { duration });
+				logger.warn({ duration }, "Slow document indexing");
 			}
 
 			return {

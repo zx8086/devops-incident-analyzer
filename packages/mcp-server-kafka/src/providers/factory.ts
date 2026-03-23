@@ -10,15 +10,15 @@ import type { KafkaProvider } from "./types.ts";
 export function createProvider(config: AppConfig): KafkaProvider {
 	const logger = getLogger();
 	const { kafka } = config;
-	logger.info("Creating Kafka provider", { type: kafka.provider });
+	logger.info({ type: kafka.provider }, "Creating Kafka provider");
 
 	switch (kafka.provider) {
 		case "local":
-			logger.debug("Using local Kafka provider", { bootstrapServers: config.local.bootstrapServers });
+			logger.debug({ bootstrapServers: config.local.bootstrapServers }, "Using local Kafka provider");
 			return new LocalKafkaProvider(config.local.bootstrapServers, kafka.clientId);
 
 		case "confluent":
-			logger.debug("Using Confluent Kafka provider", { bootstrapServers: config.confluent.bootstrapServers });
+			logger.debug({ bootstrapServers: config.confluent.bootstrapServers }, "Using Confluent Kafka provider");
 			return new ConfluentKafkaProvider(
 				config.confluent.bootstrapServers,
 				config.confluent.apiKey,
@@ -29,7 +29,7 @@ export function createProvider(config: AppConfig): KafkaProvider {
 			);
 
 		case "msk":
-			logger.debug("Using MSK Kafka provider", { region: config.msk.region });
+			logger.debug({ region: config.msk.region }, "Using MSK Kafka provider");
 			return new MskKafkaProvider(
 				config.msk.bootstrapBrokers,
 				config.msk.clusterArn,

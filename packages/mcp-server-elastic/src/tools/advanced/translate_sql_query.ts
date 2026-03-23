@@ -40,9 +40,12 @@ export const registerTranslateSqlQueryTool: ToolRegistrationFunction = (server: 
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to translate SQL query:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to translate SQL query:",
+				);
 				return {
 					content: [
 						{

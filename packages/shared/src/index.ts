@@ -37,7 +37,7 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
-
+export { createMcpLogger, getChildLogger, measureOperation } from "./logger.ts";
 export { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 export {
 	type ConnectionContext,

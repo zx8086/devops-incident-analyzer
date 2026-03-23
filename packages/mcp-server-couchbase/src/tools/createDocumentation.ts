@@ -33,22 +33,28 @@ export default (server: McpServer, bucket: Bucket) => {
 			// Always define baseDirectory here
 			const baseDirectory = config.documentation.baseDirectory || "./docs";
 			// Debugging logs
-			logger.debug("[create_documentation] Debug info", {
-				baseDirectory,
-				cwd: process.cwd(),
-				user: process.env.USER,
-				uid: process.getuid && process.getuid(),
-				gid: process.getgid && process.getgid(),
-				scope_name,
-				collection_name,
-				file_name,
-			});
+			logger.debug(
+				{
+					baseDirectory,
+					cwd: process.cwd(),
+					user: process.env.USER,
+					uid: process.getuid && process.getuid(),
+					gid: process.getgid && process.getgid(),
+					scope_name,
+					collection_name,
+					file_name,
+				},
+				"[create_documentation] Debug info",
+			);
 			try {
-				logger.info("Creating/updating documentation", {
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-				});
+				logger.info(
+					{
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+					},
+					"Creating/updating documentation",
+				);
 
 				if (!content) {
 					throw createError("VALIDATION_ERROR", "Content is required");
@@ -76,7 +82,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					docPath = path.join(scopeDir, `index${config.documentation?.fileExtension || ".md"}`);
 				}
 				// Debugging log for docPath
-				logger.debug("[create_documentation] Writing documentation file to", { docPath });
+				logger.debug({ docPath }, "[create_documentation] Writing documentation file to");
 
 				// Write the documentation file
 				await fs.writeFile(docPath, content, "utf-8");
@@ -98,12 +104,15 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error("Error creating/updating documentation", {
-					error: error instanceof Error ? error.message : String(error),
-					scope: scope_name,
-					collection: collection_name,
-					file: file_name,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						scope: scope_name,
+						collection: collection_name,
+						file: file_name,
+					},
+					"Error creating/updating documentation",
+				);
 				throw error;
 			}
 		},

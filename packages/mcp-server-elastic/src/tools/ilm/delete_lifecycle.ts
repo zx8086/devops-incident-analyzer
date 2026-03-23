@@ -64,11 +64,14 @@ export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: Mc
 			// Simple validation - no complex parameter extraction
 			params = deleteLifecycleValidator.parse(args);
 
-			logger.debug("Deleting ILM lifecycle policy (simplified)", {
-				policy: params.policy,
-				masterTimeout: params.masterTimeout,
-				timeout: params.timeout,
-			});
+			logger.debug(
+				{
+					policy: params.policy,
+					masterTimeout: params.masterTimeout,
+					timeout: params.timeout,
+				},
+				"Deleting ILM lifecycle policy (simplified)",
+			);
 
 			// First, check if policy exists by trying to get it
 			try {
@@ -95,7 +98,7 @@ export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: Mc
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: delete_lifecycle", { duration });
+				logger.warn({ duration }, "Slow ILM operation: delete_lifecycle");
 			}
 
 			logger.info(`Successfully deleted ILM policy: ${params.policy}`);

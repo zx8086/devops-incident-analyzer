@@ -58,9 +58,12 @@ export const registerListTasksTool: ToolRegistrationFunction = (server: McpServe
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to list tasks:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to list tasks:",
+				);
 				return {
 					content: [
 						{

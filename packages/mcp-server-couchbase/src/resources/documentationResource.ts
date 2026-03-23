@@ -87,9 +87,12 @@ class DocumentationHandler {
 				],
 			};
 		} catch (error) {
-			logger.error("Error browsing documentation structure", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Error browsing documentation structure",
+			);
 
 			return {
 				contents: [
@@ -121,10 +124,13 @@ class DocumentationHandler {
 				],
 			};
 		} catch (error) {
-			logger.error("Error fetching scope documentation", {
-				error: error instanceof Error ? error.message : String(error),
-				scope,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					scope,
+				},
+				"Error fetching scope documentation",
+			);
 
 			return {
 				contents: [
@@ -156,11 +162,14 @@ class DocumentationHandler {
 				],
 			};
 		} catch (error) {
-			logger.error("Error fetching collection documentation", {
-				error: error instanceof Error ? error.message : String(error),
-				scope,
-				collection,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					scope,
+					collection,
+				},
+				"Error fetching collection documentation",
+			);
 
 			return {
 				contents: [
@@ -192,12 +201,15 @@ class DocumentationHandler {
 				],
 			};
 		} catch (error) {
-			logger.error("Error fetching documentation file", {
-				error: error instanceof Error ? error.message : String(error),
-				scope,
-				collection,
-				file,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					scope,
+					collection,
+					file,
+				},
+				"Error fetching documentation file",
+			);
 
 			return {
 				contents: [
@@ -232,7 +244,7 @@ export function registerMarkdownDocumentationResource(
 	// Register the documentation-browser resource
 	logger.info("Registering documentation-browser resource");
 	server.resource("documentation-browser", "docs://", async (uri) => {
-		logger.info("Handling documentation browser request", { uri: uri.href });
+		logger.info({ uri: uri.href }, "Handling documentation browser request");
 		return handler.listDocumentation();
 	});
 
@@ -243,7 +255,7 @@ export function registerMarkdownDocumentationResource(
 		"scope-documentation", // Use a simple URI to avoid template issues
 		async (uri) => {
 			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info("Handling scope documentation request", { uri: uri.href });
+			logger.info({ uri: uri.href }, "Handling scope documentation request");
 			return handler.getScopeDocumentation("default");
 		},
 	);
@@ -255,7 +267,7 @@ export function registerMarkdownDocumentationResource(
 		"collection-documentation", // Use a simple URI to avoid template issues
 		async (uri) => {
 			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info("Handling collection documentation request", { uri: uri.href });
+			logger.info({ uri: uri.href }, "Handling collection documentation request");
 			return handler.getCollectionDocumentation("default", "default");
 		},
 	);
@@ -267,7 +279,7 @@ export function registerMarkdownDocumentationResource(
 		"documentation-file", // Use a simple URI to avoid template issues
 		async (uri) => {
 			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info("Handling documentation file request", { uri: uri.href });
+			logger.info({ uri: uri.href }, "Handling documentation file request");
 			return handler.getDocumentationFile("default", "default", "default");
 		},
 	);
@@ -286,8 +298,11 @@ export function registerMarkdownDocumentationResource(
 		},
 	);
 
-	logger.info("Markdown documentation resources registered successfully", {
-		baseDirectory: config.baseDirectory,
-		fileExtension: config.fileExtension,
-	});
+	logger.info(
+		{
+			baseDirectory: config.baseDirectory,
+			fileExtension: config.fileExtension,
+		},
+		"Markdown documentation resources registered successfully",
+	);
 }

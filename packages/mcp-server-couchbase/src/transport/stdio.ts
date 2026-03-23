@@ -20,9 +20,12 @@ export async function startStdioTransport(server: McpServer): Promise<StdioTrans
 				await transport.close();
 				logger.info("Stdio transport closed");
 			} catch (error) {
-				logger.error("Error closing stdio transport", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Error closing stdio transport",
+				);
 			}
 		},
 	};

@@ -65,9 +65,12 @@ export const registerMultiGetTool: ToolRegistrationFunction = (server: McpServer
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to perform multi-get:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to perform multi-get:",
+				);
 				return {
 					content: [
 						{

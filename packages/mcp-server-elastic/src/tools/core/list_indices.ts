@@ -89,14 +89,17 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			// Validate parameters
 			const params = listIndicesValidator.parse(args);
 
-			logger.debug("Listing indices", {
-				pattern: params.indexPattern,
-				limit: params.limit,
-				filters: {
-					excludeSystemIndices: params.excludeSystemIndices,
-					excludeDataStreams: params.excludeDataStreams,
+			logger.debug(
+				{
+					pattern: params.indexPattern,
+					limit: params.limit,
+					filters: {
+						excludeSystemIndices: params.excludeSystemIndices,
+						excludeDataStreams: params.excludeDataStreams,
+					},
 				},
-			});
+				"Listing indices",
+			);
 
 			// Build the cat indices request
 			const catParams = {
@@ -175,7 +178,7 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation: elasticsearch_list_indices", { duration });
+				logger.warn({ duration }, "Slow operation: elasticsearch_list_indices");
 			}
 
 			const headerMessage = createPaginationHeader(metadata, "Indices");

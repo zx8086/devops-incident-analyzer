@@ -47,9 +47,12 @@ export const registerAutoscalingDeletePolicyTool: ToolRegistrationFunction = (se
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				logger.error("Failed to delete autoscaling policy:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to delete autoscaling policy:",
+				);
 				return {
 					content: [
 						{

@@ -44,13 +44,16 @@ export const registerBulkIndexWithProgress = (server: McpServer, esClient: Clien
 			const totalDocs = documents.length;
 			const batches = Math.ceil(totalDocs / batchSize);
 
-			logger.info("Starting bulk index operation with progress", {
-				index,
-				totalDocs,
-				batchSize,
-				batches,
-				progressToken,
-			});
+			logger.info(
+				{
+					index,
+					totalDocs,
+					batchSize,
+					batches,
+					progressToken,
+				},
+				"Starting bulk index operation with progress",
+			);
 
 			// Send initial notification
 			await notificationManager.sendInfo(`Starting bulk indexing of ${totalDocs} documents`, {
@@ -125,10 +128,13 @@ export const registerBulkIndexWithProgress = (server: McpServer, esClient: Clien
 					// Small delay to allow progress to be visible
 					await new Promise((resolve) => setTimeout(resolve, 100));
 				} catch (batchError) {
-					logger.error("Batch processing error", {
-						batchIndex,
-						error: batchError instanceof Error ? batchError.message : String(batchError),
-					});
+					logger.error(
+						{
+							batchIndex,
+							error: batchError instanceof Error ? batchError.message : String(batchError),
+						},
+						"Batch processing error",
+					);
 
 					// Count all documents in failed batch as errors
 					totalErrors += batchDocs.length;
@@ -201,9 +207,12 @@ export const registerBulkIndexWithProgress = (server: McpServer, esClient: Clien
 				);
 			}
 
-			logger.error("Bulk index with progress failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Bulk index with progress failed",
+			);
 
 			throw new McpError(
 				ErrorCode.InternalError,

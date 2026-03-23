@@ -33,7 +33,7 @@ export function registerPingHandlers(server: McpServer): void {
 					],
 				};
 			} catch (error) {
-				logger.warn("Database ping failed", { error });
+				logger.warn({ error }, "Database ping failed");
 				return {
 					content: [
 						{
@@ -44,7 +44,7 @@ export function registerPingHandlers(server: McpServer): void {
 				};
 			}
 		} catch (error) {
-			logger.error("Error during ping", { error });
+			logger.error({ error }, "Error during ping");
 			return {
 				content: [
 					{

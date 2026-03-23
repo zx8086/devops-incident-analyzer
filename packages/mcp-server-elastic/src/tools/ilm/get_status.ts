@@ -57,7 +57,7 @@ export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: get_status", { duration });
+				logger.warn({ duration }, "Slow ILM operation: get_status");
 			}
 
 			// Enhanced response with status interpretation

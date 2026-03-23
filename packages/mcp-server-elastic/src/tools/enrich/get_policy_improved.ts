@@ -78,7 +78,7 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			const params = getPolicyValidator.parse(args);
 			const { name, masterTimeout, limit, summary, sortBy } = params;
 
-			logger.debug("Getting enrich policies", { name, masterTimeout, limit, summary, sortBy });
+			logger.debug({ name, masterTimeout, limit, summary, sortBy }, "Getting enrich policies");
 
 			// Fetch policies from Elasticsearch
 			const result = await esClient.enrich.getPolicy({
@@ -261,15 +261,18 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			});
 
 			if (truncated) {
-				logger.warn("Enrich policy response truncated due to size", {
-					originalLength: fullResponse.length,
-					truncatedLength: finalContent.length,
-				});
+				logger.warn(
+					{
+						originalLength: fullResponse.length,
+						truncatedLength: finalContent.length,
+					},
+					"Enrich policy response truncated due to size",
+				);
 			}
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow get enrich policy operation", { duration });
+				logger.warn({ duration }, "Slow get enrich policy operation");
 			}
 
 			return {

@@ -62,9 +62,12 @@ export function registerDatabaseStructureResource(server: McpServer, bucket: Buc
 				],
 			};
 		} catch (error) {
-			logger.error("Error fetching database structure", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Error fetching database structure",
+			);
 
 			return {
 				contents: [

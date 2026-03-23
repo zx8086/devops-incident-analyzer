@@ -32,9 +32,12 @@ export default (server: McpServer, bucket: Bucket) => {
 				})),
 			};
 		} catch (error) {
-			logger.error("Error in list_playbooks tool", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Error in list_playbooks tool",
+			);
 
 			return {
 				content: [
@@ -55,7 +58,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		},
 		async ({ playbook_id }) => {
 			try {
-				logger.info("Getting playbook", { playbook_id });
+				logger.info({ playbook_id }, "Getting playbook");
 
 				const resourceUri = `playbook://${playbook_id}`;
 				const resourceResult = await (server as any).readResourceByUri(resourceUri);
@@ -78,10 +81,13 @@ export default (server: McpServer, bucket: Bucket) => {
 					})),
 				};
 			} catch (error) {
-				logger.error("Error in get_playbook tool", {
-					error: error instanceof Error ? error.message : String(error),
-					playbook_id,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						playbook_id,
+					},
+					"Error in get_playbook tool",
+				);
 
 				return {
 					content: [

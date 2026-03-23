@@ -79,7 +79,7 @@ export const registerSearchTemplateTool: ToolRegistrationFunction = (server: Mcp
 				typedKeys,
 			} = params;
 
-			logger.debug("Executing search template", { index, id, hasSource: !!source });
+			logger.debug({ index, id, hasSource: !!source }, "Executing search template");
 
 			const result = await esClient.searchTemplate(
 				{
@@ -106,7 +106,7 @@ export const registerSearchTemplateTool: ToolRegistrationFunction = (server: Mcp
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow search template operation", { duration });
+				logger.warn({ duration }, "Slow search template operation");
 			}
 
 			return {

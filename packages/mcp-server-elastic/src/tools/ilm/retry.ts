@@ -62,9 +62,12 @@ export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, e
 			// Simple validation - no complex parameter extraction
 			params = retryValidator.parse(args);
 
-			logger.debug("Retrying ILM policy execution", {
-				index: params.index,
-			});
+			logger.debug(
+				{
+					index: params.index,
+				},
+				"Retrying ILM policy execution",
+			);
 
 			// First, check if the index has any ILM errors to retry
 			try {
@@ -85,19 +88,25 @@ export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, e
 					);
 				}
 
-				logger.info("Found ILM errors to retry", {
-					index: params.index,
-					indicesWithErrors: Object.keys(explainResult.indices || {}).filter((name: string) => {
-						const indexInfo = explainResult.indices[name] as any;
-						return (
-							indexInfo.step_info?.failed_step || indexInfo.phase_execution?.failed_step || indexInfo.step_info?.error
-						);
-					}),
-				});
+				logger.info(
+					{
+						index: params.index,
+						indicesWithErrors: Object.keys(explainResult.indices || {}).filter((name: string) => {
+							const indexInfo = explainResult.indices[name] as any;
+							return (
+								indexInfo.step_info?.failed_step || indexInfo.phase_execution?.failed_step || indexInfo.step_info?.error
+							);
+						}),
+					},
+					"Found ILM errors to retry",
+				);
 			} catch (explainError) {
-				logger.warn("Could not pre-check ILM status", {
-					error: explainError instanceof Error ? explainError.message : String(explainError),
-				});
+				logger.warn(
+					{
+						error: explainError instanceof Error ? explainError.message : String(explainError),
+					},
+					"Could not pre-check ILM status",
+				);
 				// Continue with retry attempt - the error might be more informative
 			}
 
@@ -107,10 +116,10 @@ export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, e
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: retry", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow ILM operation: retry");
 			}
 
-			logger.info("ILM policy retry initiated", { index: params.index });
+			logger.info({ index: params.index }, "ILM policy retry initiated");
 
 			// MCP-compliant success response
 			return {

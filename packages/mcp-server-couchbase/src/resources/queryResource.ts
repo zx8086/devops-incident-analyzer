@@ -15,7 +15,7 @@ export function registerQueryResource(server: McpServer, bucket: Bucket): void {
 		async (uri, { scope, encodedQuery }) => {
 			try {
 				const query = decodeURIComponent(encodedQuery);
-				logger.info("Executing query resource", { scope, query });
+				logger.info({ scope, query }, "Executing query resource");
 
 				try {
 					const scopes = await bucket.collections().getAllScopes();
@@ -51,11 +51,14 @@ export function registerQueryResource(server: McpServer, bucket: Bucket): void {
 					throw queryError;
 				}
 			} catch (error) {
-				logger.error("Error executing query resource", {
-					error: error instanceof Error ? error.message : String(error),
-					scope,
-					encodedQuery,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						scope,
+						encodedQuery,
+					},
+					"Error executing query resource",
+				);
 
 				return ResponseBuilder.error(
 					"Error executing query",

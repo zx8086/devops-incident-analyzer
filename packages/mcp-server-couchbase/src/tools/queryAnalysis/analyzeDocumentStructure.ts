@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			collection_name: z.string().optional().default("_default").describe("Collection name"),
 		},
 		async ({ document_key, scope_name, collection_name }) => {
-			logger.info("Analyzing document structure", { document_key, scope_name, collection_name });
+			logger.info({ document_key, scope_name, collection_name }, "Analyzing document structure");
 
 			try {
 				// Get the document

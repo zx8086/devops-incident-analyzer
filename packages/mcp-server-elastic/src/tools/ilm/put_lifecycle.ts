@@ -92,12 +92,15 @@ export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpSe
 			// Simple validation - no complex parameter extraction
 			const params = putLifecycleValidator.parse(args);
 
-			logger.debug("Creating/updating ILM policy", {
-				policy: params.policy,
-				hasBody: !!params.body,
-				masterTimeout: params.masterTimeout,
-				timeout: params.timeout,
-			});
+			logger.debug(
+				{
+					policy: params.policy,
+					hasBody: !!params.body,
+					masterTimeout: params.masterTimeout,
+					timeout: params.timeout,
+				},
+				"Creating/updating ILM policy",
+			);
 
 			// Extract the correct policy body format for Elasticsearch API
 			// The Elasticsearch client expects the body to contain the ENTIRE policy structure
@@ -118,12 +121,15 @@ export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpSe
 				policyBody = params.body;
 			}
 
-			logger.debug("Elasticsearch ILM API call", {
-				policy: params.policy,
-				bodyStructure: Object.keys(policyBody),
-				hasPolicyWrapper: "policy" in policyBody,
-				hasPhases: policyBody.policy ? "phases" in policyBody.policy : "phases" in policyBody,
-			});
+			logger.debug(
+				{
+					policy: params.policy,
+					bodyStructure: Object.keys(policyBody),
+					hasPolicyWrapper: "policy" in policyBody,
+					hasPhases: policyBody.policy ? "phases" in policyBody.policy : "phases" in policyBody,
+				},
+				"Elasticsearch ILM API call",
+			);
 
 			const result = await esClient.ilm.putLifecycle({
 				name: params.policy,
@@ -134,10 +140,10 @@ export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow ILM operation: put_lifecycle", { duration, policy: params.policy });
+				logger.warn({ duration, policy: params.policy }, "Slow ILM operation: put_lifecycle");
 			}
 
-			logger.info("ILM policy created/updated successfully", { policy: params.policy });
+			logger.info({ policy: params.policy }, "ILM policy created/updated successfully");
 
 			// MCP-compliant success response
 			return {

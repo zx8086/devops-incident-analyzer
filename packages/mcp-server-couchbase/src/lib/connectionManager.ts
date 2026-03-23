@@ -35,10 +35,13 @@ export class CouchbaseConnectionManager {
 
 	private async initializeConnection(): Promise<void> {
 		try {
-			logger.info("Connecting to Couchbase cluster", {
-				connectionString: config.database.connectionString,
-				bucketName: config.database.bucketName,
-			});
+			logger.info(
+				{
+					connectionString: config.database.connectionString,
+					bucketName: config.database.bucketName,
+				},
+				"Connecting to Couchbase cluster",
+			);
 
 			this.cluster = await connect(config.database.connectionString, {
 				username: config.database.username,
@@ -53,9 +56,12 @@ export class CouchbaseConnectionManager {
 			logger.info("Successfully connected to Couchbase cluster");
 		} catch (error) {
 			this.isHealthy = false;
-			logger.error("Failed to connect to Couchbase cluster", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Failed to connect to Couchbase cluster",
+			);
 			throw createError(
 				"DB_ERROR",
 				"Failed to initialize database connection",
@@ -71,14 +77,20 @@ export class CouchbaseConnectionManager {
 				const bucket = this.cluster!.bucket(config.database.bucketName);
 				this.connectionPool.push(bucket);
 			}
-			logger.info("Connection pool initialized", {
-				poolSize: this.connectionPool.length,
-				maxConnections: config.database.maxConnections,
-			});
+			logger.info(
+				{
+					poolSize: this.connectionPool.length,
+					maxConnections: config.database.maxConnections,
+				},
+				"Connection pool initialized",
+			);
 		} catch (error) {
-			logger.error("Failed to initialize connection pool", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Failed to initialize connection pool",
+			);
 			throw createError(
 				"DB_ERROR",
 				"Failed to initialize connection pool",
@@ -116,23 +128,32 @@ export class CouchbaseConnectionManager {
 				});
 
 			this.isHealthy = true;
-			logger.debug("Health check passed", {
-				clusterConnected: !!this.cluster,
-				bucketConnected: !!this.bucket,
-			});
+			logger.debug(
+				{
+					clusterConnected: !!this.cluster,
+					bucketConnected: !!this.bucket,
+				},
+				"Health check passed",
+			);
 		} catch (error) {
 			this.isHealthy = false;
-			logger.error("Health check failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Health check failed",
+			);
 
 			// Attempt to reconnect
 			try {
 				await this.initializeConnection();
 			} catch (reconnectError) {
-				logger.error("Failed to reconnect during health check", {
-					error: reconnectError instanceof Error ? reconnectError.message : String(reconnectError),
-				});
+				logger.error(
+					{
+						error: reconnectError instanceof Error ? reconnectError.message : String(reconnectError),
+					},
+					"Failed to reconnect during health check",
+				);
 			}
 		}
 	}
@@ -176,9 +197,12 @@ export class CouchbaseConnectionManager {
 			this.initializationPromise = null;
 			logger.info("Couchbase connection closed successfully");
 		} catch (error) {
-			logger.error("Error closing Couchbase connection", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Error closing Couchbase connection",
+			);
 			throw createError(
 				"DB_ERROR",
 				"Failed to close database connection",

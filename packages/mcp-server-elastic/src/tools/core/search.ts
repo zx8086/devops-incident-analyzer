@@ -92,17 +92,20 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 
 		try {
 			// DEBUG: Check what we actually receive
-			logger.debug("SEARCH PARAMS DEBUG", {
-				paramsExists: !!params,
-				paramsType: typeof params,
-				paramsKeys: params ? Object.keys(params) : "NO PARAMS",
-				hasIndex: !!params?.index,
-				hasQuery: !!params?.query,
-				hasSize: params?.size !== undefined,
-				hasAggs: !!params?.aggs,
-				indexValue: params?.index,
-				sizeValue: params?.size,
-			});
+			logger.debug(
+				{
+					paramsExists: !!params,
+					paramsType: typeof params,
+					paramsKeys: params ? Object.keys(params) : "NO PARAMS",
+					hasIndex: !!params?.index,
+					hasQuery: !!params?.query,
+					hasSize: params?.size !== undefined,
+					hasAggs: !!params?.aggs,
+					indexValue: params?.index,
+					sizeValue: params?.size,
+				},
+				"SEARCH PARAMS DEBUG",
+			);
 
 			// Send initial notification
 			await notificationManager.sendInfo("Starting Elasticsearch search operation", {
@@ -118,20 +121,23 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			// Zod has already parsed and transformed the parameters
 			const { index, query, size, from, sort, aggs, _source, highlight } = params;
 
-			logger.debug("Parsed search parameters", {
-				index,
-				queryType: typeof query,
-				queryKeys: query && typeof query === "object" ? Object.keys(query) : undefined,
-				size,
-				from,
-				hasAggs: !!aggs,
-				hasSort: !!sort,
-			});
+			logger.debug(
+				{
+					index,
+					queryType: typeof query,
+					queryKeys: query && typeof query === "object" ? Object.keys(query) : undefined,
+					size,
+					from,
+					hasAggs: !!aggs,
+					hasSort: !!sort,
+				},
+				"Parsed search parameters",
+			);
 
 			// Log warning for potential timestamp issues if range queries are used
 			if (query && typeof query === "object" && (query as any).range?.["@timestamp"]) {
 				const rangeQuery = (query as any).range["@timestamp"];
-				logger.debug("Time range query detected", { rangeQuery, currentTime: new Date().toISOString() });
+				logger.debug({ rangeQuery, currentTime: new Date().toISOString() }, "Time range query detected");
 
 				await notificationManager.sendInfo("Time range query detected", {
 					timeRange: rangeQuery,
@@ -147,9 +153,12 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				indexMappings = mappingResponse[index as string]?.mappings || {};
 				await progressTracker.updateProgress(35, "Index mappings retrieved successfully");
 			} catch (mappingError) {
-				logger.warn("Could not retrieve mappings for highlighting", {
-					mappingError,
-				});
+				logger.warn(
+					{
+						mappingError,
+					},
+					"Could not retrieve mappings for highlighting",
+				);
 				await notificationManager.sendWarning("Could not retrieve index mappings", {
 					error: mappingError instanceof Error ? mappingError.message : String(mappingError),
 					impact: "Highlighting may be disabled",
@@ -208,7 +217,7 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			}
 
 			// DEBUG: Log the exact request being sent to Elasticsearch
-			logger.debug("EXACT Elasticsearch request:", { request: JSON.stringify(searchRequest, null, 2) });
+			logger.debug({ request: JSON.stringify(searchRequest, null, 2) }, "EXACT Elasticsearch request:");
 
 			await progressTracker.updateProgress(55, "Search request prepared, configuring highlighting");
 

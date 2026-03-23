@@ -2,8 +2,8 @@
 // Re-exports from shared tracing module with konnect-specific defaults
 import {
 	type ConnectionContext,
-	initializeTracing as sharedInitializeTracing,
 	isTracingActive,
+	initializeTracing as sharedInitializeTracing,
 	traceConnection as sharedTraceConnection,
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,

@@ -97,11 +97,14 @@ export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer
 			// Validate parameters
 			const params = rolloverValidator.parse(args);
 
-			logger.debug("Rolling over index", {
-				alias: params.alias,
-				newIndex: params.newIndex,
-				conditions: params.conditions,
-			});
+			logger.debug(
+				{
+					alias: params.alias,
+					newIndex: params.newIndex,
+					conditions: params.conditions,
+				},
+				"Rolling over index",
+			);
 
 			const result = await esClient.indices.rollover(
 				{
@@ -124,7 +127,7 @@ export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer
 
 			const duration = performance.now() - perfStart;
 			if (duration > 30000) {
-				logger.warn("Slow rollover operation", { duration });
+				logger.warn({ duration }, "Slow rollover operation");
 			}
 
 			return {

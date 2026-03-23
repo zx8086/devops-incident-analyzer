@@ -64,7 +64,7 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 			const params = getShardsValidator.parse(args);
 			const { index, limit, sortBy } = params;
 
-			logger.debug("Getting shard information", { index, limit, sortBy });
+			logger.debug({ index, limit, sortBy }, "Getting shard information");
 
 			const response = await esClient.cat.shards({
 				...(index && { index }),
@@ -74,11 +74,14 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 
 			const totalShards = response.length;
 			const duration = performance.now() - perfStart;
-			logger.debug("Retrieved shard information", {
-				totalCount: totalShards,
-				requestedLimit: limit,
-				duration: `${duration.toFixed(2)}ms`,
-			});
+			logger.debug(
+				{
+					totalCount: totalShards,
+					requestedLimit: limit,
+					duration: `${duration.toFixed(2)}ms`,
+				},
+				"Retrieved shard information",
+			);
 
 			const sortedShards = [...response];
 
@@ -151,10 +154,13 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 			};
 		} catch (error) {
 			const duration = performance.now() - perfStart;
-			logger.error("Failed to get shard information", {
-				error: error instanceof Error ? error.message : String(error),
-				duration: `${duration.toFixed(2)}ms`,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					duration: `${duration.toFixed(2)}ms`,
+				},
+				"Failed to get shard information",
+			);
 			throw createGetShardsMcpError(error instanceof Error ? error : new Error(String(error)), {
 				type: "get_shards",
 				details: args,

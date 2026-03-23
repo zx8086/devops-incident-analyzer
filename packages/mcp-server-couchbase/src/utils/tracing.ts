@@ -1,8 +1,8 @@
 // src/utils/tracing.ts
 // Re-exports from shared tracing module with couchbase-specific defaults
 import {
-	initializeTracing as sharedInitializeTracing,
 	isTracingActive,
+	initializeTracing as sharedInitializeTracing,
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
@@ -17,21 +17,24 @@ export function initializeTracing(options?: TracingOptions): void {
 
 export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const startTime = Date.now();
-	logger.info(`Tool call started: ${toolName}`, { tool: toolName, dataSource: "couchbase" });
+	logger.info({ tool: toolName, dataSource: "couchbase" }, `Tool call started: ${toolName}`);
 
 	try {
 		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "couchbase" });
 		const duration = Date.now() - startTime;
-		logger.info(`Tool call completed: ${toolName}`, { tool: toolName, dataSource: "couchbase", duration });
+		logger.info({ tool: toolName, dataSource: "couchbase", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error(`Tool call failed: ${toolName}`, {
-			tool: toolName,
-			dataSource: "couchbase",
-			duration,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		logger.error(
+			{
+				tool: toolName,
+				dataSource: "couchbase",
+				duration,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			`Tool call failed: ${toolName}`,
+		);
 		throw error;
 	}
 }

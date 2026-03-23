@@ -97,12 +97,15 @@ export class ReadOnlyModeManager {
 		this.strictMode = strictMode;
 
 		if (this.readOnlyMode) {
-			logger.info("Read-only mode enabled", {
-				strictMode: this.strictMode,
-				message: this.strictMode
-					? "Destructive operations will be blocked"
-					: "Destructive operations will show warnings",
-			});
+			logger.info(
+				{
+					strictMode: this.strictMode,
+					message: this.strictMode
+						? "Destructive operations will be blocked"
+						: "Destructive operations will show warnings",
+				},
+				"Read-only mode enabled",
+			);
 		}
 	}
 
@@ -123,22 +126,28 @@ export class ReadOnlyModeManager {
 
 		if (this.strictMode) {
 			const error = `READ-ONLY MODE: ${operationTypeStr} operation '${toolName}' is blocked. Set READ_ONLY_MODE=false to enable write operations.`;
-			logger.warn("Blocked destructive operation in read-only mode", {
-				toolName,
-				operationType: operationTypeStr,
-				strictMode: true,
-			});
+			logger.warn(
+				{
+					toolName,
+					operationType: operationTypeStr,
+					strictMode: true,
+				},
+				"Blocked destructive operation in read-only mode",
+			);
 			return {
 				allowed: false,
 				error,
 			};
 		}
 		const warning = `CAUTION: You are about to perform a ${operationTypeStr} operation '${toolName}'. This may modify or delete data in Elasticsearch. Proceed with caution.`;
-		logger.warn("Warning for destructive operation", {
-			toolName,
-			operationType: operationTypeStr,
-			strictMode: false,
-		});
+		logger.warn(
+			{
+				toolName,
+				operationType: operationTypeStr,
+				strictMode: false,
+			},
+			"Warning for destructive operation",
+		);
 		return {
 			allowed: true,
 			warning,
@@ -168,7 +177,7 @@ export class ReadOnlyModeManager {
 
 	setStrictMode(strict: boolean): void {
 		this.strictMode = strict;
-		logger.info("Read-only mode strictness changed", { strictMode: strict });
+		logger.info({ strictMode: strict }, "Read-only mode strictness changed");
 	}
 
 	// Helper method to create standardized error responses

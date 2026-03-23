@@ -56,9 +56,12 @@ export const registerGetFieldMappingTool: ToolRegistrationFunction = (server: Mc
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) } as TextContent],
 				};
 			} catch (error) {
-				logger.error("Failed to get field mapping:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Failed to get field mapping:",
+				);
 				return {
 					content: [
 						{

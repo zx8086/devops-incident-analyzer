@@ -60,10 +60,13 @@ export const registerGetIndexInfoTool: ToolRegistrationFunction = (server: McpSe
 			// Validate parameters
 			const params = getIndexInfoValidator.parse(args);
 
-			logger.debug("Getting index information", {
-				index: params.index,
-				features: params.features,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					features: params.features,
+				},
+				"Getting index information",
+			);
 
 			const result = await esClient.indices.get(
 				{

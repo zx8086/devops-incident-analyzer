@@ -38,11 +38,14 @@ export class ResponseBuilder {
 		const errorCode = error ? getErrorCode(error) : "UNKNOWN_ERROR";
 		const errorMessage = error ? getErrorMessage(error) : message;
 
-		logger.error("Error response", {
-			code: errorCode,
-			message: errorMessage,
-			originalError: error,
-		});
+		logger.error(
+			{
+				code: errorCode,
+				message: errorMessage,
+				originalError: error,
+			},
+			"Error response",
+		);
 
 		this.content.push({
 			type: "error",

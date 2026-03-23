@@ -61,11 +61,14 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 				!params.query || (typeof params.query === "object" && Object.keys(params.query).length === 0);
 			const finalQuery = isEmptyQuery ? undefined : params.query; // Let Elasticsearch default to match_all
 
-			logger.debug("Count documents request", {
-				index: params.index || "*",
-				hasQuery: !!finalQuery,
-				queryType: isEmptyQuery ? "match_all (default)" : "custom",
-			});
+			logger.debug(
+				{
+					index: params.index || "*",
+					hasQuery: !!finalQuery,
+					queryType: isEmptyQuery ? "match_all (default)" : "custom",
+				},
+				"Count documents request",
+			);
 
 			const result = await esClient.count(
 				{
@@ -92,7 +95,7 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation", { duration });
+				logger.warn({ duration }, "Slow operation");
 			}
 
 			return {

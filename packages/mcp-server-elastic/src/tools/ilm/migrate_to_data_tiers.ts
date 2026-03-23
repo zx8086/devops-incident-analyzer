@@ -68,12 +68,15 @@ export const registerMigrateToDataTiersTool: ToolRegistrationFunction = (server:
 			// Simple validation - no complex parameter extraction
 			const params = migrateToDataTiersValidator.parse(args);
 
-			logger.debug("Migrating to data tiers", {
-				legacyTemplateToDelete: params.legacyTemplateToDelete,
-				nodeAttribute: params.nodeAttribute,
-				dryRun: params.dryRun,
-				masterTimeout: params.masterTimeout,
-			});
+			logger.debug(
+				{
+					legacyTemplateToDelete: params.legacyTemplateToDelete,
+					nodeAttribute: params.nodeAttribute,
+					dryRun: params.dryRun,
+					masterTimeout: params.masterTimeout,
+				},
+				"Migrating to data tiers",
+			);
 
 			const result = await esClient.ilm.migrateToDataTiers({
 				legacy_template_to_delete: params.legacyTemplateToDelete,
@@ -84,10 +87,10 @@ export const registerMigrateToDataTiersTool: ToolRegistrationFunction = (server:
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow ILM operation: migrate_to_data_tiers", { duration });
+				logger.warn({ duration }, "Slow ILM operation: migrate_to_data_tiers");
 			}
 
-			logger.info("Data tiers migration completed", { dryRun: params.dryRun });
+			logger.info({ dryRun: params.dryRun }, "Data tiers migration completed");
 
 			// Enhanced response with migration summary
 			const isDryRun = params.dryRun === true;

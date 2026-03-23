@@ -53,11 +53,14 @@ export const listTasks = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof listTasksSchema>) => {
 		try {
-			logger.debug("Listing Elasticsearch tasks", {
-				actions: args.actions,
-				groupBy: args.groupBy,
-				nodes: args.nodes,
-			});
+			logger.debug(
+				{
+					actions: args.actions,
+					groupBy: args.groupBy,
+					nodes: args.nodes,
+				},
+				"Listing Elasticsearch tasks",
+			);
 
 			const result = await client.tasks.list({
 				actions: args.actions,
@@ -69,9 +72,12 @@ export const listTasks = {
 				wait_for_completion: args.waitForCompletion,
 			});
 
-			logger.debug("Tasks retrieved successfully", {
-				taskCount: Object.keys(result.tasks || {}).length,
-			});
+			logger.debug(
+				{
+					taskCount: Object.keys(result.tasks || {}).length,
+				},
+				"Tasks retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -82,11 +88,14 @@ export const listTasks = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to list tasks", {
-				error: error instanceof Error ? error.message : String(error),
-				actions: args.actions,
-				nodes: args.nodes,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					actions: args.actions,
+					nodes: args.nodes,
+				},
+				"Failed to list tasks",
+			);
 
 			throw new McpError(
 				ErrorCode.InternalError,
@@ -114,10 +123,13 @@ export const getTask = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof getTaskSchema>) => {
 		try {
-			logger.debug("Getting Elasticsearch task details", {
-				taskId: args.taskId,
-				timeout: args.timeout,
-			});
+			logger.debug(
+				{
+					taskId: args.taskId,
+					timeout: args.timeout,
+				},
+				"Getting Elasticsearch task details",
+			);
 
 			const result = await client.tasks.get({
 				task_id: args.taskId,
@@ -125,10 +137,13 @@ export const getTask = {
 				wait_for_completion: args.waitForCompletion,
 			});
 
-			logger.debug("Task details retrieved successfully", {
-				taskId: args.taskId,
-				completed: result.completed,
-			});
+			logger.debug(
+				{
+					taskId: args.taskId,
+					completed: result.completed,
+				},
+				"Task details retrieved successfully",
+			);
 
 			return {
 				content: [
@@ -139,10 +154,13 @@ export const getTask = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to get task", {
-				error: error instanceof Error ? error.message : String(error),
-				taskId: args.taskId,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					taskId: args.taskId,
+				},
+				"Failed to get task",
+			);
 
 			if (error instanceof Error && error.message.includes("not found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Task not found: ${args.taskId}`);
@@ -170,11 +188,14 @@ const cancelTaskSchema = z.object({
 
 const cancelTaskImpl = async (client: Client, args: z.infer<typeof cancelTaskSchema>) => {
 	try {
-		logger.debug("Cancelling Elasticsearch task", {
-			taskId: args.taskId,
-			actions: args.actions,
-			nodes: args.nodes,
-		});
+		logger.debug(
+			{
+				taskId: args.taskId,
+				actions: args.actions,
+				nodes: args.nodes,
+			},
+			"Cancelling Elasticsearch task",
+		);
 
 		const result = await client.tasks.cancel({
 			task_id: args.taskId,
@@ -184,10 +205,13 @@ const cancelTaskImpl = async (client: Client, args: z.infer<typeof cancelTaskSch
 			wait_for_completion: args.waitForCompletion,
 		});
 
-		logger.info("Task cancellation completed", {
-			taskId: args.taskId,
-			nodesAffected: result.nodes ? Object.keys(result.nodes).length : 0,
-		});
+		logger.info(
+			{
+				taskId: args.taskId,
+				nodesAffected: result.nodes ? Object.keys(result.nodes).length : 0,
+			},
+			"Task cancellation completed",
+		);
 
 		return {
 			content: [
@@ -198,10 +222,13 @@ const cancelTaskImpl = async (client: Client, args: z.infer<typeof cancelTaskSch
 			],
 		};
 	} catch (error) {
-		logger.error("Failed to cancel task", {
-			error: error instanceof Error ? error.message : String(error),
-			taskId: args.taskId,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				taskId: args.taskId,
+			},
+			"Failed to cancel task",
+		);
 
 		if (args.taskId && error instanceof Error && error.message.includes("not found")) {
 			throw new McpError(ErrorCode.InvalidRequest, `Task not found: ${args.taskId}`);

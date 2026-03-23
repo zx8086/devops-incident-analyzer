@@ -137,15 +137,18 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 			const { nodeId, metric, indexMetric, level, timeout, summary } = params;
 
 			// Debug logging to understand what parameters we're receiving
-			logger.info(`[${requestId}] get_nodes_stats called with params:`, {
-				params,
-				paramsType: typeof params,
-				paramsKeys: params ? Object.keys(params) : null,
-				hasMetric: !!params?.metric,
-				metricValue: params?.metric,
-			});
+			logger.info(
+				{
+					params,
+					paramsType: typeof params,
+					paramsKeys: params ? Object.keys(params) : null,
+					hasMetric: !!params?.metric,
+					metricValue: params?.metric,
+				},
+				`[${requestId}] get_nodes_stats called with params:`,
+			);
 
-			logger.info("Extracted parameters:", { nodeId, metric, indexMetric, level, timeout, hasMetric: !!metric });
+			logger.info({ nodeId, metric, indexMetric, level, timeout, hasMetric: !!metric }, "Extracted parameters:");
 
 			// Warn if no metric specified or problematic combinations
 			if (!metric) {
@@ -166,7 +169,7 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 
 				const duration = performance.now() - perfStart;
 				if (duration > 10000) {
-					logger.warn("Slow nodes stats operation", { duration, requestId });
+					logger.warn({ duration, requestId }, "Slow nodes stats operation");
 				}
 
 				// Format response based on summary parameter
@@ -205,7 +208,7 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 
 				const duration = performance.now() - perfStart;
 				if (duration > 10000) {
-					logger.warn("Slow nodes stats operation", { duration, requestId });
+					logger.warn({ duration, requestId }, "Slow nodes stats operation");
 				}
 
 				// Format response based on summary parameter
@@ -236,16 +239,19 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 				},
 			);
 
-			logger.info(`[${requestId}] Successfully retrieved nodes stats`, {
-				nodeCount: Object.keys(result.nodes || {}).length,
-				metric: metric || "all",
-				indexMetric: indexMetric || "none",
-				level: level || "node",
-			});
+			logger.info(
+				{
+					nodeCount: Object.keys(result.nodes || {}).length,
+					metric: metric || "all",
+					indexMetric: indexMetric || "none",
+					level: level || "node",
+				},
+				`[${requestId}] Successfully retrieved nodes stats`,
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 15000) {
-				logger.warn("Slow nodes stats operation", { duration, requestId });
+				logger.warn({ duration, requestId }, "Slow nodes stats operation");
 			}
 
 			// Format final response based on summary parameter
@@ -280,18 +286,21 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 				}
 			}
 
-			logger.error(`[${requestId}] Failed to get nodes stats:`, {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-				name: error instanceof Error ? error.name : "Unknown",
-				cause: error instanceof Error ? error.cause : undefined,
-				params: {
-					...args,
-					nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+					name: error instanceof Error ? error.name : "Unknown",
+					cause: error instanceof Error ? error.cause : undefined,
+					params: {
+						...args,
+						nodeId: args?.nodeId ? "[REDACTED]" : undefined,
+					},
+					elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
+					statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
 				},
-				elasticsearchError: error instanceof Error && "meta" in error ? error.meta : undefined,
-				statusCode: error instanceof Error && "statusCode" in error ? error.statusCode : undefined,
-			});
+				`[${requestId}] Failed to get nodes stats:`,
+			);
 
 			throw createNodesStatsMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",

@@ -26,7 +26,7 @@ export function registerHealthChecks(server: McpServer, capellaConn: CapellaConn
 				],
 			};
 		} catch (error) {
-			logger.error("Health check failed", { error });
+			logger.error({ error }, "Health check failed");
 			throw error;
 		}
 	});
@@ -65,7 +65,7 @@ export function registerHealthChecks(server: McpServer, capellaConn: CapellaConn
 				],
 			};
 		} catch (error) {
-			logger.error("Diagnostics failed", { error });
+			logger.error({ error }, "Diagnostics failed");
 			throw error;
 		}
 	});

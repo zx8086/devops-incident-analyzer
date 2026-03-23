@@ -52,7 +52,7 @@ export class KafkaClientManager {
 
 	async createConsumer(groupId: string): Promise<Consumer> {
 		const logger = getLogger();
-		logger.info("Creating Kafka consumer", { groupId });
+		logger.info({ groupId }, "Creating Kafka consumer");
 		const config = await this.getConnectionConfig();
 		return new Consumer({ ...buildClientOptions(config), groupId });
 	}

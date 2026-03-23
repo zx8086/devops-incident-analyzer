@@ -34,9 +34,12 @@ export class ToolRegistry {
 		// Restore original to avoid double-wrapping on re-registration
 		(server as any).tool = originalTool;
 
-		logger.info("All tools registered successfully", {
-			toolCount: registered.length,
-			tools: registered,
-		});
+		logger.info(
+			{
+				toolCount: registered.length,
+				tools: registered,
+			},
+			"All tools registered successfully",
+		);
 	}
 }

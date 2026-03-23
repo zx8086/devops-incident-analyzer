@@ -28,7 +28,7 @@ class PlaybookHandler {
 			this.playbookFiles = files.filter((file) => file.endsWith(this.fileExtension));
 			logger.info(`Found ${this.playbookFiles.length} playbooks in directory`);
 		} catch (err) {
-			logger.error(`Error reading playbook directory: ${this.baseDirectory}`, { error: err });
+			logger.error({ error: err }, `Error reading playbook directory: ${this.baseDirectory}`);
 			this.playbookFiles = [];
 		}
 	}
@@ -67,7 +67,7 @@ class PlaybookHandler {
 				],
 			};
 		} catch (err) {
-			logger.error("Error generating playbook directory listing", { error: err });
+			logger.error({ error: err }, "Error generating playbook directory listing");
 			return {
 				contents: [
 					{
@@ -127,7 +127,7 @@ class PlaybookHandler {
 				],
 			};
 		} catch (err) {
-			logger.error(`Error reading playbook: ${playbookId}`, { error: err });
+			logger.error({ error: err }, `Error reading playbook: ${playbookId}`);
 			return {
 				contents: [
 					{
@@ -159,7 +159,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 			path.join(__dirname, "../../playbook"),
 		].filter((dir): dir is string => !!dir);
 
-		logger.debug("Checking possible playbook directories", { possibleDirs });
+		logger.debug({ possibleDirs }, "Checking possible playbook directories");
 
 		let playbookDir: string | null = null;
 
@@ -170,13 +170,16 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				const mdFiles = files.filter((file) => file.endsWith(config.playbooks.fileExtension || ".md"));
 				if (mdFiles.length > 0) {
 					playbookDir = dir;
-					logger.info(`Found playbooks in ${dir}`, { count: mdFiles.length });
+					logger.info({ count: mdFiles.length }, `Found playbooks in ${dir}`);
 					break;
 				}
 			} catch (err) {
-				logger.debug(`Directory not accessible: ${dir}`, {
-					error: err instanceof Error ? err.message : String(err),
-				});
+				logger.debug(
+					{
+						error: err instanceof Error ? err.message : String(err),
+					},
+					`Directory not accessible: ${dir}`,
+				);
 			}
 		}
 
@@ -195,7 +198,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 			"playbook-directory", // Resource ID
 			"playbook://", // URI
 			async (uri) => {
-				logger.info("Handling direct resource request for playbook-directory", { uri: uri.href });
+				logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
 				return handler.listPlaybooks();
 			},
 		);
@@ -213,7 +216,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				`playbook-${resourceId}`, // Resource ID
 				resourceUri, // URI
 				async (uri) => {
-					logger.info(`Handling direct resource request for playbook: ${resourceId}`, { uri: uri.href });
+					logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
 					return handler.getPlaybook(resourceId);
 				},
 			);
@@ -256,9 +259,12 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 
 				throw new Error(`No resource handler found for URI: ${resourceUri}`);
 			} catch (error) {
-				logger.error(`Error reading resource URI: ${resourceUri}`, {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					`Error reading resource URI: ${resourceUri}`,
+				);
 				throw error;
 			}
 		}.bind(server);
@@ -298,8 +304,11 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 
 		logger.info("Playbook resources registered successfully");
 	} catch (err) {
-		logger.error("Error registering playbook resources", {
-			error: err instanceof Error ? err.message : String(err),
-		});
+		logger.error(
+			{
+				error: err instanceof Error ? err.message : String(err),
+			},
+			"Error registering playbook resources",
+		);
 	}
 }

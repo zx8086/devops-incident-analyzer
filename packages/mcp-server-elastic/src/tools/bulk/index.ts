@@ -62,20 +62,26 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 			);
 		}
 
-		logger.debug("Executing bulk operations", {
-			operationCount: args.operations.length,
-			globalIndex: args.index,
-			pipeline: args.pipeline,
-			flushBytes: args.flushBytes,
-			concurrency: args.concurrency,
-		});
+		logger.debug(
+			{
+				operationCount: args.operations.length,
+				globalIndex: args.index,
+				pipeline: args.pipeline,
+				flushBytes: args.flushBytes,
+				concurrency: args.concurrency,
+			},
+			"Executing bulk operations",
+		);
 
 		// Log warning for potentially destructive operation
-		logger.warn("WRITE OPERATION: Bulk operations executing", {
-			operationCount: args.operations.length,
-			globalIndex: args.index,
-			warning: "This may create, update, or delete multiple documents",
-		});
+		logger.warn(
+			{
+				operationCount: args.operations.length,
+				globalIndex: args.index,
+				warning: "This may create, update, or delete multiple documents",
+			},
+			"WRITE OPERATION: Bulk operations executing",
+		);
 
 		// Use the helper API for better performance and reliability
 		const result = await client.helpers.bulk(
@@ -98,9 +104,12 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 				concurrency: args.concurrency,
 				retries: args.retries,
 				onDrop(doc) {
-					logger.warn("Document failed after retries", {
-						document: JSON.stringify(doc, null, 2),
-					});
+					logger.warn(
+						{
+							document: JSON.stringify(doc, null, 2),
+						},
+						"Document failed after retries",
+					);
 				},
 			},
 			{
@@ -108,13 +117,16 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 			},
 		);
 
-		logger.info("Bulk operations completed successfully", {
-			total: result.total,
-			successful: result.successful,
-			failed: result.failed,
-			time: result.time,
-			bytes: result.bytes,
-		});
+		logger.info(
+			{
+				total: result.total,
+				successful: result.successful,
+				failed: result.failed,
+				time: result.time,
+				bytes: result.bytes,
+			},
+			"Bulk operations completed successfully",
+		);
 
 		const responseData = {
 			total: result.total,
@@ -133,10 +145,13 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 			],
 		};
 	} catch (error) {
-		logger.error("Failed to perform bulk operations", {
-			error: error instanceof Error ? error.message : String(error),
-			operationCount: args.operations.length,
-		});
+		logger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				operationCount: args.operations.length,
+			},
+			"Failed to perform bulk operations",
+		);
 
 		if (error instanceof Error && error.message.includes("index_not_found")) {
 			throw new McpError(
@@ -211,12 +226,15 @@ export const multiGet = {
 	operationType: OperationType.READ as const,
 	handler: async (client: Client, args: z.infer<typeof multiGetSchema>) => {
 		try {
-			logger.debug("Executing multi-get operation", {
-				docsCount: args.docs?.length,
-				globalIndex: args.index,
-				preference: args.preference,
-				realtime: args.realtime,
-			});
+			logger.debug(
+				{
+					docsCount: args.docs?.length,
+					globalIndex: args.index,
+					preference: args.preference,
+					realtime: args.realtime,
+				},
+				"Executing multi-get operation",
+			);
 
 			// Validate that docs is provided and not empty
 			if (!args.docs || args.docs.length === 0) {
@@ -238,11 +256,14 @@ export const multiGet = {
 				_source_includes: args._source_includes,
 			});
 
-			logger.debug("Multi-get operation completed successfully", {
-				docsRequested: args.docs.length,
-				docsFound: result.docs?.filter((doc) => (doc as any).found).length || 0,
-				docsNotFound: result.docs?.filter((doc) => !(doc as any).found).length || 0,
-			});
+			logger.debug(
+				{
+					docsRequested: args.docs.length,
+					docsFound: result.docs?.filter((doc) => (doc as any).found).length || 0,
+					docsNotFound: result.docs?.filter((doc) => !(doc as any).found).length || 0,
+				},
+				"Multi-get operation completed successfully",
+			);
 
 			return {
 				content: [
@@ -253,10 +274,13 @@ export const multiGet = {
 				],
 			};
 		} catch (error) {
-			logger.error("Failed to perform multi-get", {
-				error: error instanceof Error ? error.message : String(error),
-				docsCount: args.docs?.length,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					docsCount: args.docs?.length,
+				},
+				"Failed to perform multi-get",
+			);
 
 			if (error instanceof Error && error.message.includes("index_not_found")) {
 				throw new McpError(ErrorCode.InvalidRequest, `Index not found: ${args.index || "one or more indices in docs"}`);

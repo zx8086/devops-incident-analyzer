@@ -46,7 +46,7 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 			const params = indicesSummaryValidator.parse(args);
 			const { indexPattern, groupBy } = params;
 
-			logger.debug("Getting indices summary", { pattern: indexPattern, groupBy });
+			logger.debug({ pattern: indexPattern, groupBy }, "Getting indices summary");
 
 			const response = await esClient.cat.indices({
 				index: indexPattern,
@@ -55,10 +55,13 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 			});
 
 			const duration = performance.now() - perfStart;
-			logger.debug("Retrieved indices summary", {
-				indicesCount: response.length,
-				duration: `${duration.toFixed(2)}ms`,
-			});
+			logger.debug(
+				{
+					indicesCount: response.length,
+					duration: `${duration.toFixed(2)}ms`,
+				},
+				"Retrieved indices summary",
+			);
 
 			const categories: Record<string, { name: string; docs: number }[]> = {
 				system: [],
@@ -182,10 +185,13 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 			};
 		} catch (error) {
 			const duration = performance.now() - perfStart;
-			logger.error("Failed to get indices summary", {
-				error: error instanceof Error ? error.message : String(error),
-				duration: `${duration.toFixed(2)}ms`,
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					duration: `${duration.toFixed(2)}ms`,
+				},
+				"Failed to get indices summary",
+			);
 			throw createIndicesSummaryMcpError(error instanceof Error ? error : new Error(String(error)), {
 				type: "indices_summary",
 				details: args,

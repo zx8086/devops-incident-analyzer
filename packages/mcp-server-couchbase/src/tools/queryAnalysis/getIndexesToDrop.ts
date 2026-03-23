@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			bucket_filter: z.string().optional().describe("Optional filter for bucket names (comma-separated)"),
 		},
 		async ({ bucket_filter }) => {
-			logger.info("Getting indexes that are candidates for removal", { bucket_filter });
+			logger.info({ bucket_filter }, "Getting indexes that are candidates for removal");
 
 			// Modify query based on parameters
 			let query = n1qlIndexesToDrop;

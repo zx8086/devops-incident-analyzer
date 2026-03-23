@@ -12,7 +12,7 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 		new ResourceTemplate("schema://{scope}/{collection}", { list: undefined }),
 		async (uri, { scope, collection }) => {
 			try {
-				logger.info("Fetching schema resource", { scope, collection });
+				logger.info({ scope, collection }, "Fetching schema resource");
 
 				const collectionMgr = bucket.collections();
 				const scopes = await collectionMgr.getAllScopes();
@@ -52,11 +52,14 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 					throw queryError;
 				}
 			} catch (error) {
-				logger.error("Error fetching schema resource", {
-					error: error instanceof Error ? error.message : String(error),
-					scope,
-					collection,
-				});
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+						scope,
+						collection,
+					},
+					"Error fetching schema resource",
+				);
 
 				return ResponseBuilder.error(
 					"Error fetching schema resource",

@@ -53,7 +53,7 @@ export const registerFieldUsageStatsTool: ToolRegistrationFunction = (server: Mc
 			// Validate parameters
 			const params = fieldUsageStatsValidator.parse(args);
 
-			logger.debug("Getting field usage stats", { index: params.index, fields: params.fields });
+			logger.debug({ index: params.index, fields: params.fields }, "Getting field usage stats");
 
 			const result = await esClient.indices.fieldUsageStats(
 				{

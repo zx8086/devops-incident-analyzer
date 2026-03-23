@@ -63,7 +63,7 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 			const params = putPolicyValidator.parse(args);
 			const { name, geoMatch, match, range, masterTimeout } = params;
 
-			logger.debug("Creating enrich policy", { name, geoMatch, match, range, masterTimeout });
+			logger.debug({ name, geoMatch, match, range, masterTimeout }, "Creating enrich policy");
 
 			// Validate that at least one policy type is provided
 			if (!geoMatch && !match && !range) {
@@ -110,7 +110,7 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 
 			const duration = performance.now() - perfStart;
 			if (duration > 10000) {
-				logger.warn("Slow put enrich policy operation", { duration });
+				logger.warn({ duration }, "Slow put enrich policy operation");
 			}
 
 			return {

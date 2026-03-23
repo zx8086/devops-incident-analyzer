@@ -50,7 +50,7 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 					],
 				};
 			} catch (error) {
-				logger.error(`Error getting document ${bucketName}/${scopeName}/${collectionName}/${documentId}`, { error });
+				logger.error({ error }, `Error getting document ${bucketName}/${scopeName}/${collectionName}/${documentId}`);
 				throw error;
 			}
 		},
@@ -90,7 +90,7 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 					],
 				};
 			} catch (error) {
-				logger.error(`Error getting bucket info for ${bucketName}`, { error });
+				logger.error({ error }, `Error getting bucket info for ${bucketName}`);
 				throw error;
 			}
 		},

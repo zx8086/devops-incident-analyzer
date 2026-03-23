@@ -28,7 +28,7 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 export async function createTransport(config: AppConfig, serverFactory: () => McpServer): Promise<TransportResult> {
 	const logger = getLogger();
 	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	logger.info("Resolving transport mode", { mode: config.transport.mode, stdio: useStdio, http: useHttp });
+	logger.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -55,11 +55,14 @@ export async function createTransport(config: AppConfig, serverFactory: () => Mc
 		result.stdio = await startStdioTransport(server);
 	}
 
-	logger.info("Transport initialized", {
-		mode: config.transport.mode,
-		stdio: useStdio,
-		http: useHttp,
-	});
+	logger.info(
+		{
+			mode: config.transport.mode,
+			stdio: useStdio,
+			http: useHttp,
+		},
+		"Transport initialized",
+	);
 
 	return result;
 }

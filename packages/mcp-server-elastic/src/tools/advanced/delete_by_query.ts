@@ -43,11 +43,14 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 		);
 
 		try {
-			logger.debug("Starting delete by query operation", {
-				index: params.index,
-				maxDocs: params.maxDocs,
-				waitForCompletion: params.waitForCompletion,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					maxDocs: params.maxDocs,
+					waitForCompletion: params.waitForCompletion,
+				},
+				"Starting delete by query operation",
+			);
 
 			// CRITICAL SAFETY WARNING for destructive operation
 			await notificationManager.sendWarning(`DESTRUCTIVE OPERATION: About to delete documents from ${params.index}`, {
@@ -89,9 +92,12 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 					);
 				}
 			} catch (countError) {
-				logger.warn("Could not get document count for deletion estimate", {
-					error: countError instanceof Error ? countError.message : String(countError),
-				});
+				logger.warn(
+					{
+						error: countError instanceof Error ? countError.message : String(countError),
+					},
+					"Could not get document count for deletion estimate",
+				);
 
 				await notificationManager.sendWarning("Unable to determine deletion scope - proceeding with caution", {
 					operation_type: "delete_by_query",
@@ -209,9 +215,12 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 				},
 			);
 
-			logger.error("Failed to delete by query:", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Failed to delete by query:",
+			);
 			return {
 				content: [
 					{

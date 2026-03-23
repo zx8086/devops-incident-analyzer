@@ -61,7 +61,7 @@ export const registerRefreshIndexTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow index refresh operation", { duration, index: params.index });
+				logger.warn({ duration, index: params.index }, "Slow index refresh operation");
 			}
 
 			return {

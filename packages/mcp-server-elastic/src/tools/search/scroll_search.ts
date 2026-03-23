@@ -59,11 +59,14 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 				`Scrolling through documents in ${params.index}${params.maxDocuments ? ` (max ${params.maxDocuments})` : ""}`,
 			);
 
-			logger.debug("Starting scroll search operation", {
-				index: params.index,
-				maxDocuments: params.maxDocuments,
-				hasScrollId: !!params.scrollId,
-			});
+			logger.debug(
+				{
+					index: params.index,
+					maxDocuments: params.maxDocuments,
+					hasScrollId: !!params.scrollId,
+				},
+				"Starting scroll search operation",
+			);
 
 			// Send initial notification
 			await notificationManager.sendInfo(`Starting scroll search operation`, {
@@ -91,7 +94,7 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 
 				const duration = performance.now() - perfStart;
 				if (duration > 5000) {
-					logger.warn("Slow operation", { duration });
+					logger.warn({ duration }, "Slow operation");
 				}
 
 				const resultSize = result.hits?.hits?.length || 0;
@@ -191,7 +194,7 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
-				logger.warn("Slow operation", { duration });
+				logger.warn({ duration }, "Slow operation");
 			}
 
 			// Calculate final metrics
