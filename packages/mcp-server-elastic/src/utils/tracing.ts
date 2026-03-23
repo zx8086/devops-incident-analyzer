@@ -1,11 +1,14 @@
 /* src/utils/tracing.ts */
 
+import { type Span, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { RunTree } from "langsmith/run_trees";
 import { getCurrentRunTree, withRunTree } from "langsmith/singletons/traceable";
 import { traceable } from "langsmith/traceable";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
 import { getCurrentSession } from "./sessionContext.js";
+
+export const tracer = trace.getTracer("elastic-mcp-server");
 
 // =============================================================================
 // STATE
@@ -108,6 +111,33 @@ export function traceToolCall(
 	extra: any,
 	handler: (toolArgs: any, extra: any) => Promise<any>,
 ) {
+	return tracer.startActiveSpan(`mcp.tool.${toolName}`, { kind: SpanKind.SERVER }, async (span: Span) => {
+		span.setAttribute("mcp.tool.name", toolName);
+		span.setAttribute("mcp.tool.timestamp", Date.now());
+
+		try {
+			const result = await traceToolCallLangSmith(toolName, toolArgs, extra, handler);
+			span.setStatus({ code: SpanStatusCode.OK });
+			return result;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			span.setStatus({ code: SpanStatusCode.ERROR, message });
+			if (error instanceof Error) {
+				span.recordException(error);
+			}
+			throw error;
+		} finally {
+			span.end();
+		}
+	});
+}
+
+function traceToolCallLangSmith(
+	toolName: string,
+	toolArgs: any,
+	extra: any,
+	handler: (toolArgs: any, extra: any) => Promise<any>,
+) {
 	const project = process.env.LANGSMITH_PROJECT || config.langsmith.project;
 	const session = getCurrentSession();
 	const sessionId = session?.sessionId || "unknown";
@@ -195,6 +225,27 @@ export async function traceConnection(context: ConnectionContext, handler: () =>
 		traceName += ` [${short}]`;
 	}
 
+	return tracer.startActiveSpan(`mcp.connection.${traceName}`, { kind: SpanKind.SERVER }, async (span: Span) => {
+		span.setAttribute("mcp.connection.id", context.connectionId);
+		span.setAttribute("mcp.transport.mode", context.transportMode);
+		if (context.clientInfo?.name) span.setAttribute("mcp.client.name", context.clientInfo.name);
+
+		try {
+			const result = await traceConnectionLangSmith(traceName, context, handler);
+			span.setStatus({ code: SpanStatusCode.OK });
+			return result;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			span.setStatus({ code: SpanStatusCode.ERROR, message });
+			if (error instanceof Error) span.recordException(error);
+			throw error;
+		} finally {
+			span.end();
+		}
+	});
+}
+
+function traceConnectionLangSmith(traceName: string, context: ConnectionContext, handler: () => Promise<any>) {
 	const traced = traceable(
 		async (_input: any) => {
 			const startTime = Date.now();

@@ -211,7 +211,8 @@ const envVarMapping = {
 		tracing: "LANGSMITH_TRACING",
 		endpoint: "LANGSMITH_ENDPOINT",
 		apiKey: "LANGSMITH_API_KEY",
-		project: "LANGSMITH_PROJECT",
+		project: "ELASTIC_LANGSMITH_PROJECT",
+		projectFallback: "LANGSMITH_PROJECT",
 	},
 	sessionTracking: {
 		enabled: "SESSION_TRACKING_ENABLED",
@@ -332,7 +333,7 @@ function loadConfigFromEnv(): Partial<Config> {
 			defaultConfig.security.maxBulkOperations,
 	};
 
-	// Load LangSmith config
+	// Load LangSmith config (ELASTIC_LANGSMITH_PROJECT -> LANGSMITH_PROJECT -> default)
 	config.langsmith = {
 		tracing:
 			(parseEnvVar(Bun.env[envVarMapping.langsmith.tracing], "boolean") as boolean) ?? defaultConfig.langsmith.tracing,
@@ -340,7 +341,9 @@ function loadConfigFromEnv(): Partial<Config> {
 			(parseEnvVar(Bun.env[envVarMapping.langsmith.endpoint], "string") as string) || defaultConfig.langsmith.endpoint,
 		apiKey: parseEnvVar(Bun.env[envVarMapping.langsmith.apiKey], "string") as string,
 		project:
-			(parseEnvVar(Bun.env[envVarMapping.langsmith.project], "string") as string) || defaultConfig.langsmith.project,
+			(parseEnvVar(Bun.env[envVarMapping.langsmith.project], "string") as string) ||
+			(parseEnvVar(Bun.env[envVarMapping.langsmith.projectFallback], "string") as string) ||
+			defaultConfig.langsmith.project,
 	};
 
 	// Load Session Tracking config

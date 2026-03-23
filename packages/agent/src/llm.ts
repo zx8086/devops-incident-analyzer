@@ -13,7 +13,14 @@ function getRootAgent() {
 	return cachedRootAgent;
 }
 
-export type LlmRole = "orchestrator" | "classifier" | "subAgent" | "aggregator" | "responder" | "entityExtractor" | "followUp";
+export type LlmRole =
+	| "orchestrator"
+	| "classifier"
+	| "subAgent"
+	| "aggregator"
+	| "responder"
+	| "entityExtractor"
+	| "followUp";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},

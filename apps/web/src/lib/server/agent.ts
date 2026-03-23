@@ -48,6 +48,7 @@ export async function invokeAgent(
 		dataSources?: string[];
 		isFollowUp?: boolean;
 		dataSourceContext?: DataSourceContext;
+		metadata?: Record<string, unknown>;
 	},
 ) {
 	const { HumanMessage } = await import("@langchain/core/messages");
@@ -66,6 +67,7 @@ export async function invokeAgent(
 			configurable: { thread_id: options.threadId },
 			version: "v2",
 			recursionLimit: 100,
+			...(options.metadata && { metadata: options.metadata }),
 		},
 	);
 }

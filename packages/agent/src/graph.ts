@@ -6,6 +6,7 @@ import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { extractEntities } from "./entity-extractor.ts";
+import { initializeLangSmith } from "./langsmith.ts";
 import { respond } from "./responder.ts";
 import { AgentState } from "./state.ts";
 import { queryDataSource } from "./sub-agent.ts";
@@ -13,6 +14,7 @@ import { supervise } from "./supervisor.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
 
 export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) {
+	initializeLangSmith();
 	const graph = new StateGraph(AgentState)
 		.addNode("classify", classify)
 		.addNode("responder", respond)

@@ -27,6 +27,7 @@
 		"@opentelemetry/semantic-conventions": "^1.40.0",
 		"@platformatic/kafka": "^1.30.0",
 		"aws-msk-iam-sasl-signer-js": "^1.0.3",
+		"langsmith": "catalog:",
 		"pino": "catalog:",
 		"zod": "catalog:"
 	},

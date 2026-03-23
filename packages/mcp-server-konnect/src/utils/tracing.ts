@@ -3,6 +3,7 @@
  * Using the proven traceable pattern from the implementation guide
  */
 
+import { type Span, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 import {
 	getRuntimeInfo,
 	initializeEnvironment,
@@ -65,6 +66,8 @@ interface TraceContext {
 // Import traceable function for the proven pattern
 let traceable: any = null;
 let getCurrentRunTree: any = null;
+
+const otelTracer = trace.getTracer("konnect-mcp-server");
 
 export class UniversalTracingManager {
 	private client: any = null;
@@ -217,9 +220,34 @@ export class UniversalTracingManager {
 	}
 
 	/**
-	 * Trace a tool execution with enhanced conversation awareness
+	 * Trace a tool execution with OTEL span + enhanced LangSmith conversation awareness
 	 */
 	async traceToolExecution<T>(
+		toolName: string,
+		operation: () => Promise<T>,
+		metadata: TraceMetadata = { category: "unknown" },
+	): Promise<{ result: T; traceContext?: TraceContext }> {
+		return otelTracer.startActiveSpan(`mcp.tool.${toolName}`, { kind: SpanKind.SERVER }, async (span: Span) => {
+			span.setAttribute("mcp.tool.name", toolName);
+			span.setAttribute("mcp.tool.category", metadata.category);
+			span.setAttribute("mcp.tool.timestamp", Date.now());
+
+			try {
+				const traced = await this.traceToolExecutionLangSmith(toolName, operation, metadata);
+				span.setStatus({ code: SpanStatusCode.OK });
+				return traced;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				span.setStatus({ code: SpanStatusCode.ERROR, message });
+				if (error instanceof Error) span.recordException(error);
+				throw error;
+			} finally {
+				span.end();
+			}
+		});
+	}
+
+	private async traceToolExecutionLangSmith<T>(
 		toolName: string,
 		operation: () => Promise<T>,
 		metadata: TraceMetadata = { category: "unknown" },
@@ -488,9 +516,34 @@ export class UniversalTracingManager {
 	}
 
 	/**
-	 * Create a session-level trace that acts as parent for all tool calls
+	 * Create a session-level trace with OTEL span that acts as parent for all tool calls
 	 */
 	async createSessionTrace<T>(sessionContext: any, operation: () => Promise<T>): Promise<T> {
+		return otelTracer.startActiveSpan(
+			`mcp.session.${sessionContext.clientInfo?.name || "unknown"}`,
+			{ kind: SpanKind.SERVER },
+			async (span: Span) => {
+				span.setAttribute("mcp.connection.id", sessionContext.connectionId || "unknown");
+				span.setAttribute("mcp.transport.mode", sessionContext.transportMode || "unknown");
+				if (sessionContext.clientInfo?.name) span.setAttribute("mcp.client.name", sessionContext.clientInfo.name);
+
+				try {
+					const result = await this.createSessionTraceLangSmith(sessionContext, operation);
+					span.setStatus({ code: SpanStatusCode.OK });
+					return result;
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					span.setStatus({ code: SpanStatusCode.ERROR, message });
+					if (error instanceof Error) span.recordException(error);
+					throw error;
+				} finally {
+					span.end();
+				}
+			},
+		);
+	}
+
+	private async createSessionTraceLangSmith<T>(sessionContext: any, operation: () => Promise<T>): Promise<T> {
 		await this.ensureInitialized();
 
 		if (!this.enabled || !traceable) {

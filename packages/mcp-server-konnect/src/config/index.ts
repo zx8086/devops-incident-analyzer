@@ -405,7 +405,8 @@ export class ConfigurationManager {
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", "false") === "true",
 				apiKey: getEnvVar("LANGSMITH_API_KEY"),
-				project: getEnvVarWithDefault("LANGSMITH_PROJECT", "konnect-mcp-server"),
+				project:
+					getEnvVar("KONNECT_LANGSMITH_PROJECT") || getEnvVarWithDefault("LANGSMITH_PROJECT", "konnect-mcp-server"),
 				endpoint: getEnvVarWithDefault("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
 				sessionName: getEnvVarWithDefault("LANGSMITH_SESSION", "mcp-session"),
 				tags: getEnvVar("LANGSMITH_TAGS")?.split(",") || ["mcp-server", "kong-konnect"],

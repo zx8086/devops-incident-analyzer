@@ -15,8 +15,10 @@ import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
 import { registerDatabaseStructureResource } from "./resources/databaseStructureResource";
+import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry";
 import { createTransport } from "./transport/index.ts";
-import type { AppContext, CapellaConn } from "./types";
+import type { AppContext } from "./types";
+import { initializeTracing } from "./utils/tracing";
 
 // Application context setup
 const appContext: AppContext = {
@@ -139,6 +141,16 @@ async function connectWithBackoffAndCircuitBreaker(
 
 async function main(): Promise<void> {
 	try {
+		initializeTracing();
+
+		const telemetryConfig: TelemetryConfig = {
+			enabled: process.env.TELEMETRY_MODE !== undefined,
+			serviceName: process.env.OTEL_SERVICE_NAME || "couchbase-mcp-server",
+			mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
+			otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
+		};
+		const otelSdk = initTelemetry(telemetryConfig);
+
 		logger.info("Starting Couchbase MCP Server...");
 
 		// Initialize the connection manager with backoff and circuit breaker
@@ -153,6 +165,7 @@ async function main(): Promise<void> {
 		const shutdown = async () => {
 			logger.info("Shutting down Couchbase MCP Server...");
 			await transport.closeAll();
+			await shutdownTelemetry(otelSdk);
 			process.exit(0);
 		};
 		process.on("SIGINT", shutdown);

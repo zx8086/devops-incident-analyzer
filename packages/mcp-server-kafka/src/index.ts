@@ -10,10 +10,14 @@ import { KafkaService } from "./services/kafka-service.ts";
 import { KsqlService } from "./services/ksql-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
 import { initTelemetry, shutdownTelemetry } from "./telemetry/telemetry.ts";
+import { initializeTracing } from "./telemetry/tracing.ts";
 import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
 
 export async function main(): Promise<void> {
+	// 0. Initialize LangSmith tracing (must be before any other init)
+	initializeTracing();
+
 	// 1. Load config
 	const config = getConfig();
 	const earlyLogger = getLogger();

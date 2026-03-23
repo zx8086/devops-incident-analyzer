@@ -3,14 +3,24 @@
 // src/index.ts
 import { clearConfigWarnings, config, getConfigWarnings } from "./config.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
+import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeTracing } from "./utils/tracing.js";
 
 async function main() {
 	try {
-		// Initialize tracing first
+		// Initialize LangSmith tracing first
 		initializeTracing();
+
+		// Initialize OTEL telemetry
+		const telemetryConfig: TelemetryConfig = {
+			enabled: process.env.TELEMETRY_MODE !== undefined,
+			serviceName: process.env.OTEL_SERVICE_NAME || "elastic-mcp-server",
+			mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
+			otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
+		};
+		const otelSdk = initTelemetry(telemetryConfig);
 
 		// Log any configuration warnings now that logger is available
 		const configWarnings = getConfigWarnings();
@@ -62,6 +72,7 @@ async function main() {
 			logger.info("Shutting down server gracefully...");
 			try {
 				await transport.closeAll();
+				await shutdownTelemetry(otelSdk);
 				logger.info("Server shutdown completed");
 			} catch (error) {
 				logger.error("Error during shutdown:", {

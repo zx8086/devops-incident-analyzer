@@ -6,6 +6,7 @@ export { classify } from "./classifier.ts";
 export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateFollowUpSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
+export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
 export { createMcpClient, getAllTools, getConnectedServers, getToolsForDataSource } from "./mcp-bridge.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt } from "./prompt-context.ts";

@@ -7,9 +7,7 @@ import type { AgentStateType } from "./state.ts";
 const logger = getLogger("agent:alignment");
 const MAX_ALIGNMENT_RETRIES = 2;
 
-export function getDataSourceErrorCategories(
-	results: DataSourceResult[],
-): Map<string, Set<ToolErrorCategory>> {
+export function getDataSourceErrorCategories(results: DataSourceResult[]): Map<string, Set<ToolErrorCategory>> {
 	const categories = new Map<string, Set<ToolErrorCategory>>();
 	for (const result of results) {
 		if (result.status !== "error" || !result.toolErrors?.length) continue;

@@ -1,9 +1,9 @@
-// src/telemetry/tracing.ts
+// src/utils/tracing.ts
 import { type Span, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
-import { getLogger } from "../logging/container.ts";
-import { getCurrentSession } from "../utils/sessionContext.ts";
+import { logger } from "../lib/logger";
+import { getCurrentSession } from "./sessionContext";
 
-export const tracer = trace.getTracer("kafka-mcp-server");
+export const tracer = trace.getTracer("couchbase-mcp-server");
 
 let isTracingEnabled = false;
 let isInitialized = false;
@@ -13,16 +13,15 @@ export function initializeTracing(): void {
 	if (isInitialized) return;
 	isInitialized = true;
 
-	const logger = getLogger();
 	const enabled = process.env.LANGSMITH_TRACING === "true" || process.env.LANGCHAIN_TRACING_V2 === "true";
 	const apiKey = process.env.LANGSMITH_API_KEY || process.env.LANGCHAIN_API_KEY;
 
 	if (!enabled || !apiKey) {
-		logger.info("LangSmith tracing disabled for Kafka MCP server");
+		logger.info("LangSmith tracing disabled for Couchbase MCP server");
 		return;
 	}
 
-	const project = process.env.KAFKA_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "kafka-mcp-server";
+	const project = process.env.COUCHBASE_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "couchbase-mcp-server";
 	const endpoint = process.env.LANGSMITH_ENDPOINT || "https://api.smith.langchain.com";
 
 	process.env.LANGSMITH_TRACING = "true";
@@ -51,12 +50,10 @@ export function isTracingActive(): boolean {
 }
 
 export function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
-	// Always run OTEL span
 	return tracer.startActiveSpan(`mcp.tool.${toolName}`, { kind: SpanKind.SERVER }, async (span: Span) => {
 		span.setAttribute("mcp.tool.name", toolName);
 		span.setAttribute("mcp.tool.timestamp", Date.now());
 
-		// If LangSmith is active, wrap with traceable
 		const execute = isTracingEnabled && traceable ? wrapWithLangSmith(toolName, handler) : handler;
 
 		try {
@@ -83,7 +80,7 @@ function wrapWithLangSmith<T>(toolName: string, handler: () => Promise<T>): () =
 	const sessionId = session?.sessionId || "unknown";
 	const connectionId = session?.connectionId || "unknown";
 	const clientName = session?.clientInfo?.name || "unknown";
-	const project = process.env.LANGSMITH_PROJECT || "kafka-mcp-server";
+	const project = process.env.LANGSMITH_PROJECT || "couchbase-mcp-server";
 
 	const traced = traceable(
 		async () => {
@@ -100,7 +97,7 @@ function wrapWithLangSmith<T>(toolName: string, handler: () => Promise<T>): () =
 			project_name: project,
 			metadata: {
 				tool_name: toolName,
-				data_source_id: "kafka",
+				data_source_id: "couchbase",
 				session_id: sessionId,
 				connection_id: connectionId,
 				client_name: clientName,
@@ -111,6 +108,3 @@ function wrapWithLangSmith<T>(toolName: string, handler: () => Promise<T>): () =
 
 	return traced;
 }
-
-// Keep backward-compatible export name used by wrap.ts
-export { traceToolCall as traceToolExecution };

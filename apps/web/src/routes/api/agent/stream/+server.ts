@@ -1,6 +1,6 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
-import { generateFallbackSuggestions, generateFollowUpSuggestions } from "@devops-agent/agent";
+import { flushLangSmithCallbacks, generateFallbackSuggestions, generateFollowUpSuggestions } from "@devops-agent/agent";
 import { DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
@@ -24,6 +24,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = StreamRequestSchema.parse(await request.json());
 		const threadId = body.threadId ?? crypto.randomUUID();
+		const requestId = crypto.randomUUID();
 
 		const encoder = new TextEncoder();
 		const stream = new ReadableStream({
@@ -40,6 +41,10 @@ export const POST: RequestHandler = async ({ request }) => {
 						dataSources: body.dataSources,
 						isFollowUp: body.isFollowUp,
 						dataSourceContext: body.dataSourceContext,
+						metadata: {
+							request_id: requestId,
+							session_id: threadId,
+						},
 					});
 
 					const OUTPUT_NODES = new Set(["aggregate", "responder"]);
@@ -55,8 +60,13 @@ export const POST: RequestHandler = async ({ request }) => {
 					const nodeStartTimes = new Map<string, number>();
 					let responseContent = "";
 					const toolsUsed = new Set<string>();
+					let runId: string | undefined;
 
 					for await (const event of eventStream) {
+						if (!runId && event.run_id) {
+							runId = event.run_id;
+						}
+
 						if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
 							const tags: string[] = event.tags ?? [];
 							const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
@@ -105,6 +115,8 @@ export const POST: RequestHandler = async ({ request }) => {
 						send({ type: "suggestions", suggestions });
 					}
 
+					await flushLangSmithCallbacks();
+
 					// Build dataSourceContext from the datasources that were actually queried
 					const queriedDataSources = body.dataSources ?? [];
 					const dataSourceContext =
@@ -120,6 +132,8 @@ export const POST: RequestHandler = async ({ request }) => {
 					send({
 						type: "done",
 						threadId,
+						requestId,
+						runId,
 						responseTime: Date.now() - startTime,
 						toolsUsed: toolsUsedArray,
 						dataSourceContext,

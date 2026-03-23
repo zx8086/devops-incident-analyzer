@@ -3,14 +3,10 @@ import { describe, expect, test } from "bun:test";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
 import { Send } from "@langchain/langgraph";
 import { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "../src/alignment.ts";
-import { classifyToolError } from "../src/sub-agent.ts";
 import type { AgentStateType } from "../src/state.ts";
+import { classifyToolError } from "../src/sub-agent.ts";
 
-function makeToolError(
-	toolName: string,
-	category: ToolErrorCategory,
-	message: string,
-): ToolError {
+function makeToolError(toolName: string, category: ToolErrorCategory, message: string): ToolError {
 	return {
 		toolName,
 		category,
@@ -19,11 +15,7 @@ function makeToolError(
 	};
 }
 
-function makeResult(
-	dataSourceId: string,
-	status: "success" | "error",
-	toolErrors?: ToolError[],
-): DataSourceResult {
+function makeResult(dataSourceId: string, status: "success" | "error", toolErrors?: ToolError[]): DataSourceResult {
 	return {
 		dataSourceId,
 		data: status === "success" ? "some data" : null,
@@ -67,11 +59,7 @@ describe("getDataSourceErrorCategories", () => {
 	});
 
 	test("groups auth errors by data source", () => {
-		const results = [
-			makeResult("elastic", "error", [
-				makeToolError("search", "auth", "security_exception"),
-			]),
-		];
+		const results = [makeResult("elastic", "error", [makeToolError("search", "auth", "security_exception")])];
 		const categories = getDataSourceErrorCategories(results);
 		expect(categories.get("elastic")).toEqual(new Set(["auth"]));
 	});
@@ -149,10 +137,7 @@ describe("routeAfterAlignment", () => {
 	test("returns aggregate when all aligned", () => {
 		const state = makeState({
 			targetDataSources: ["elastic", "kafka"],
-			dataSourceResults: [
-				makeResult("elastic", "success"),
-				makeResult("kafka", "success"),
-			],
+			dataSourceResults: [makeResult("elastic", "success"), makeResult("kafka", "success")],
 		});
 		const result = routeAfterAlignment(state);
 		expect(result).toBe("aggregate");
@@ -196,12 +181,8 @@ describe("routeAfterAlignment", () => {
 		const state = makeState({
 			targetDataSources: ["elastic", "kafka"],
 			dataSourceResults: [
-				makeResult("elastic", "error", [
-					makeToolError("search", "auth", "security_exception"),
-				]),
-				makeResult("kafka", "error", [
-					makeToolError("list_topics", "auth", "unauthorized"),
-				]),
+				makeResult("elastic", "error", [makeToolError("search", "auth", "security_exception")]),
+				makeResult("kafka", "error", [makeToolError("list_topics", "auth", "unauthorized")]),
 			],
 		});
 		const result = routeAfterAlignment(state);
@@ -212,12 +193,8 @@ describe("routeAfterAlignment", () => {
 		const state = makeState({
 			targetDataSources: ["elastic", "kafka"],
 			dataSourceResults: [
-				makeResult("elastic", "error", [
-					makeToolError("search", "auth", "security_exception"),
-				]),
-				makeResult("kafka", "error", [
-					makeToolError("list_topics", "transient", "timeout"),
-				]),
+				makeResult("elastic", "error", [makeToolError("search", "auth", "security_exception")]),
+				makeResult("kafka", "error", [makeToolError("list_topics", "transient", "timeout")]),
 			],
 		});
 		const result = routeAfterAlignment(state);
@@ -250,10 +227,7 @@ describe("checkAlignment - state updates", () => {
 	test("returns empty update when all aligned", () => {
 		const state = makeState({
 			targetDataSources: ["elastic", "kafka"],
-			dataSourceResults: [
-				makeResult("elastic", "success"),
-				makeResult("kafka", "success"),
-			],
+			dataSourceResults: [makeResult("elastic", "success"), makeResult("kafka", "success")],
 		});
 		const result = checkAlignment(state);
 		expect(result.alignmentHints).toBeUndefined();

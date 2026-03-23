@@ -71,9 +71,7 @@ function extractToolErrors(messages: Array<{ _getType(): string; content: unknow
 		if (msg._getType() !== "tool") continue;
 		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 		// Tool messages containing error indicators
-		const isError =
-			/error|exception|failed|unauthorized|forbidden|timeout/i.test(content) &&
-			content.length < 2000; // Avoid false positives on large successful responses
+		const isError = /error|exception|failed|unauthorized|forbidden|timeout/i.test(content) && content.length < 2000; // Avoid false positives on large successful responses
 		if (!isError) continue;
 
 		const { category, retryable } = classifyToolError(content);
@@ -153,9 +151,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const duration = Date.now() - startTime;
 
 		const toolErrors = extractToolErrors(response.messages);
-		const toolMessages = response.messages.filter(
-			(m: { _getType(): string }) => m._getType() === "tool",
-		);
+		const toolMessages = response.messages.filter((m: { _getType(): string }) => m._getType() === "tool");
 		const allToolsFailed = toolMessages.length > 0 && toolErrors.length === toolMessages.length;
 
 		logger.info(

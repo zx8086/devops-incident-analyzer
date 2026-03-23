@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { API_REGIONS, KongApi } from "./api/kong-api.js";
 import { loadConfiguration } from "./config/index.js";
+import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.js";
 import * as analyticsOps from "./tools/analytics/operations.js";
 import * as certificatesOps from "./tools/certificates/operations.js";
 import * as configurationOps from "./tools/configuration/operations.js";
@@ -896,8 +897,19 @@ class KongKonnectMcpServer extends McpServer {
 
 let activeTransport: TransportResult | undefined;
 
+let otelSdk: ReturnType<typeof initTelemetry> = null;
+
 async function main() {
 	try {
+		// Initialize OTEL telemetry
+		const telemetryConfig: TelemetryConfig = {
+			enabled: process.env.TELEMETRY_MODE !== undefined,
+			serviceName: process.env.OTEL_SERVICE_NAME || "konnect-mcp-server",
+			mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
+			otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
+		};
+		otelSdk = initTelemetry(telemetryConfig);
+
 		// Load and validate configuration with health checks
 		mcpLogger.info("config", "Loading configuration");
 		const config = await loadConfiguration();
@@ -965,12 +977,14 @@ async function main() {
 process.on("SIGINT", async () => {
 	mcpLogger.notice("server", "Shutting down (SIGINT)");
 	if (activeTransport) await activeTransport.closeAll();
+	await shutdownTelemetry(otelSdk);
 	process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
 	mcpLogger.notice("server", "Terminating (SIGTERM)");
 	if (activeTransport) await activeTransport.closeAll();
+	await shutdownTelemetry(otelSdk);
 	process.exit(0);
 });
 
