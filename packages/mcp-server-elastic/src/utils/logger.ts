@@ -1,5 +1,7 @@
 /* src/utils/logger.ts */
 
+import { trace } from "@opentelemetry/api";
+
 interface LogMetadata {
 	[key: string]: any;
 }
@@ -33,11 +35,19 @@ export class MCPCompatibleLogger {
 
 	private formatMessage(level: string, message: string, metadata: LogMetadata = {}): string {
 		const timestamp = new Date().toISOString();
+
+		// Inject OTEL trace context for log-trace correlation
+		const span = trace.getActiveSpan();
+		const traceContext = span
+			? { "trace.id": span.spanContext().traceId, "span.id": span.spanContext().spanId }
+			: {};
+
 		const logData: LogData = {
 			timestamp,
 			level,
 			context: this.context,
 			message,
+			...traceContext,
 			...this.metadata,
 			...metadata,
 		};

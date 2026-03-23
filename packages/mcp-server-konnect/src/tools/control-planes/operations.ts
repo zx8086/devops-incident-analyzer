@@ -2,7 +2,6 @@ import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { formatEntity, formatEntityList } from "../../utils/formatting.js";
 import { mcpLogger } from "../../utils/mcp-logger.js";
-import { traceable } from "../../utils/tracing.js";
 
 /**
  * List all control planes in the organization

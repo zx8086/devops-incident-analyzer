@@ -12,6 +12,7 @@
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
+		"@devops-agent/shared": "workspace:*",
 		"@elastic/elasticsearch": "^9.3.4",
 		"@elastic/transport": "^9.3.5",
 		"@langchain/core": "catalog:",

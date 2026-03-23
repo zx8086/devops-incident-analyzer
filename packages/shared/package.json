@@ -9,6 +9,8 @@
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
+		"@opentelemetry/api": "^1.9.0",
+		"langsmith": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

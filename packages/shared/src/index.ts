@@ -32,3 +32,27 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
+
+export {
+	type SessionContext,
+	runWithSession,
+	getCurrentSession,
+	getCurrentSessionId,
+	getCurrentClientInfo,
+	createSessionContext,
+	initializeTracing,
+	isTracingActive,
+	getCurrentTrace,
+	getTraceable,
+	getRunTreeUtils,
+	resetTracing,
+	type TracingOptions,
+	traceToolCall,
+	traceToolExecution,
+	type ToolTraceOptions,
+	traceConnection,
+	type ConnectionContext,
+	withNestedTrace,
+	detectClient,
+	generateSessionId,
+} from "./tracing/index.ts";

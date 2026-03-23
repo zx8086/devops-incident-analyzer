@@ -27,14 +27,13 @@ import {
 	runWithSession,
 } from "./utils/session-manager.js";
 import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
-import { UniversalTracingManager } from "./utils/tracing.js";
+import { initializeTracing, isTracingActive, logTracingStatus, traceToolCall } from "./utils/tracing.js";
 
 /**
  * Enhanced MCP server class for Kong Konnect integration with modular architecture
  */
 class KongKonnectMcpServer extends McpServer {
 	private api: KongApi;
-	public tracingManager: UniversalTracingManager;
 	private performanceCollector: ToolPerformanceCollector;
 	private elicitationOps: ElicitationOperations;
 
@@ -58,7 +57,7 @@ class KongKonnectMcpServer extends McpServer {
 		});
 
 		// Initialize tracing and performance monitoring
-		this.tracingManager = new UniversalTracingManager();
+		initializeTracing();
 		this.performanceCollector = new ToolPerformanceCollector();
 		this.elicitationOps = new ElicitationOperations();
 
@@ -77,19 +76,7 @@ class KongKonnectMcpServer extends McpServer {
 		}
 
 		// Log tracing status to stderr (never stdout for MCP servers!)
-		// Note: getStats() is async, so we'll log this after server startup
-		this.tracingManager
-			.getStats()
-			.then((stats) => {
-				mcpLogger.info("tracing", "Tracing status", {
-					enabled: stats.enabled,
-					project: stats.project,
-					sessionId: stats.sessionId,
-				});
-			})
-			.catch(() => {
-				mcpLogger.debug("tracing", "Tracing initializing");
-			});
+		logTracingStatus();
 
 		// Register all tools
 		this.registerTools();
@@ -847,17 +834,9 @@ class KongKonnectMcpServer extends McpServer {
 				};
 			}
 
-			// Create dynamic tool tracer for this specific tool
-			const toolTracer = this.tracingManager.createToolTracer(tool.method);
-
-			// Create traced handler using dynamic tool tracer
+			// Create traced handler using shared tracing
 			const tracedHandler = async (args: any, extra: RequestHandlerExtra<any, any>): Promise<any> => {
-				const result = await toolTracer(async () => handler(args, extra), {
-					category: tool.category || "unknown",
-					toolName: tool.method,
-				});
-
-				return result;
+				return traceToolCall(tool.method, () => handler(args, extra));
 			};
 
 			// Register the traced tool with appropriate parameters
@@ -878,19 +857,17 @@ class KongKonnectMcpServer extends McpServer {
 	 * Get tracing statistics
 	 */
 	getTracingStats() {
-		return this.tracingManager.getStats();
+		return { enabled: isTracingActive(), project: process.env.LANGSMITH_PROJECT || "konnect-mcp-server" };
 	}
 
 	/**
 	 * Log session information for this MCP server instance
 	 */
 	private logMCPSessionInfo() {
-		this.tracingManager.logSessionInfo({
+		mcpLogger.info("session", "MCP server session", {
 			serverVersion: "2.0.0",
 			runtime: "bun",
 			apiRegion: this.api.region || "us",
-			toolCount: 11,
-			capabilities: ["analytics", "control-planes", "certificates", "configuration"],
 		});
 	}
 }

@@ -1,5 +1,6 @@
 // src/utils/mcp-logger.ts
 
+import { trace } from "@opentelemetry/api";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export type LogLevel = "debug" | "info" | "notice" | "warning" | "error" | "critical" | "alert" | "emergency";
@@ -176,6 +177,13 @@ class MCPLogger {
 
 		// Prepare log data according to MCP spec
 		const logData: Record<string, any> = { message };
+
+		// Inject OTEL trace context for log-trace correlation
+		const span = trace.getActiveSpan();
+		if (span) {
+			logData["trace.id"] = span.spanContext().traceId;
+			logData["span.id"] = span.spanContext().spanId;
+		}
 
 		if (context && Object.keys(context).length > 0) {
 			Object.assign(logData, this.sanitizeData(context));

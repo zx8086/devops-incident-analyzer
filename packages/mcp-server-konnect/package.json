@@ -11,6 +11,7 @@
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
+		"@devops-agent/shared": "workspace:*",
 		"@langchain/core": "catalog:",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.0",
