@@ -13,6 +13,7 @@ import {
 	withNestedTrace,
 } from "@devops-agent/shared";
 import { config } from "../config.js";
+import { logger } from "./logger.js";
 
 export type { ConnectionContext };
 export { detectClient, generateSessionId, getCurrentTrace, isTracingActive, withNestedTrace };
@@ -50,16 +51,34 @@ export function initializeTracing(options?: TracingOptions): void {
 	sharedInitializeTracing({ apiKey, endpoint, project, ...options });
 }
 
-export function traceToolCall(
+export async function traceToolCall(
 	toolName: string,
 	toolArgs: unknown,
 	_extra: unknown,
 	handler: (toolArgs: unknown, extra: unknown) => Promise<unknown>,
 ) {
-	return sharedTraceToolCall(toolName, () => handler(toolArgs, _extra), {
-		dataSourceId: "elastic",
-		toolArgs: typeof toolArgs === "object" && toolArgs !== null ? (toolArgs as Record<string, unknown>) : undefined,
-	});
+	const startTime = Date.now();
+	logger.info(`Tool call started: ${toolName}`, { tool: toolName, dataSource: "elastic" });
+
+	try {
+		const result = await sharedTraceToolCall(toolName, () => handler(toolArgs, _extra), {
+			dataSourceId: "elastic",
+			toolArgs:
+				typeof toolArgs === "object" && toolArgs !== null ? (toolArgs as Record<string, unknown>) : undefined,
+		});
+		const duration = Date.now() - startTime;
+		logger.info(`Tool call completed: ${toolName}`, { tool: toolName, dataSource: "elastic", duration });
+		return result;
+	} catch (error) {
+		const duration = Date.now() - startTime;
+		logger.error(`Tool call failed: ${toolName}`, {
+			tool: toolName,
+			dataSource: "elastic",
+			duration,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		throw error;
+	}
 }
 
 // Backward-compat alias

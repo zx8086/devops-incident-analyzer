@@ -6,6 +6,7 @@ import {
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
+import { getLogger } from "../logging/container.ts";
 
 export { isTracingActive };
 
@@ -14,8 +15,23 @@ export function initializeTracing(options?: TracingOptions): void {
 	sharedInitializeTracing({ project, ...options });
 }
 
-export function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
-	return sharedTraceToolCall(toolName, handler, { dataSourceId: "kafka" });
+export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
+	const logger = getLogger();
+	const startTime = Date.now();
+	logger.info(`Tool call started: ${toolName} [dataSource=kafka]`);
+
+	try {
+		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "kafka" });
+		const duration = Date.now() - startTime;
+		logger.info(`Tool call completed: ${toolName} [dataSource=kafka, duration=${duration}ms]`);
+		return result;
+	} catch (error) {
+		const duration = Date.now() - startTime;
+		logger.error(
+			`Tool call failed: ${toolName} [dataSource=kafka, duration=${duration}ms, error=${error instanceof Error ? error.message : String(error)}]`,
+		);
+		throw error;
+	}
 }
 
 export { traceToolCall as traceToolExecution };
