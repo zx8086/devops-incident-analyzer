@@ -21,7 +21,7 @@ function traceNode(name: string, fn: NodeFn): (state: AgentStateType) => Promise
 		traceSpan("agent", `agent.node.${name}`, async () => fn(state), {
 			"agent.node.name": name,
 			...(state.requestId && { "request.id": state.requestId }),
-			...(state.currentDataSource && { "data_source_id": state.currentDataSource }),
+			...(state.currentDataSource && { data_source_id: state.currentDataSource }),
 		});
 }
 

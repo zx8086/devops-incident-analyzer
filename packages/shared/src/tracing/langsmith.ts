@@ -16,8 +16,7 @@ export function initializeTracing(options: TracingOptions = {}): void {
 	if (isInitialized) return;
 	isInitialized = true;
 
-	const enabled =
-		process.env.LANGSMITH_TRACING === "true" || process.env.LANGCHAIN_TRACING_V2 === "true";
+	const enabled = process.env.LANGSMITH_TRACING === "true" || process.env.LANGCHAIN_TRACING_V2 === "true";
 	const apiKey = options.apiKey || process.env.LANGSMITH_API_KEY || process.env.LANGCHAIN_API_KEY;
 
 	if (!enabled) return;

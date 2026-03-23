@@ -64,5 +64,5 @@ export function traceSpan<T>(
 	});
 }
 
-export { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 export type { Span } from "@opentelemetry/api";
+export { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";

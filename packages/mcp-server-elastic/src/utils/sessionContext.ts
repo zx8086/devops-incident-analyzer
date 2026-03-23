@@ -1,10 +1,10 @@
 // src/utils/sessionContext.ts
 // Re-exports from shared tracing module for backward compatibility
 export {
-	type SessionContext,
-	runWithSession,
+	createSessionContext,
+	getCurrentClientInfo,
 	getCurrentSession,
 	getCurrentSessionId,
-	getCurrentClientInfo,
-	createSessionContext,
+	runWithSession,
+	type SessionContext,
 } from "@devops-agent/shared";

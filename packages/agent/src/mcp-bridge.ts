@@ -1,7 +1,8 @@
 // agent/src/mcp-bridge.ts
-import { context, propagation } from "@opentelemetry/api";
+
 import { getLogger } from "@devops-agent/observability";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { context, propagation } from "@opentelemetry/api";
 
 const logger = getLogger("mcp-bridge");
 

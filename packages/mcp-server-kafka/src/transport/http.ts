@@ -1,7 +1,8 @@
 // src/transport/http.ts
+
+import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { withTraceContextMiddleware } from "@devops-agent/shared";
 import { getLogger } from "../logging/container.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 
@@ -51,9 +52,12 @@ function createStatelessHandler(serverFactory: ServerFactory) {
 		try {
 			return await transport.handleRequest(req);
 		} catch (error) {
-			logger.error("Stateless request error", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Stateless request error",
+			);
 			return Response.json(
 				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
 				{ status: 500 },
@@ -79,7 +83,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		const transport = new WebStandardStreamableHTTPServerTransport({
 			sessionIdGenerator: () => crypto.randomUUID(),
 			onsessioninitialized: (id) => {
-				logger.info("Session initialized", { sessionId: id });
+				logger.info({ sessionId: id }, "Session initialized");
 			},
 		});
 
@@ -89,7 +93,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		transport.onclose = () => {
 			if (transport.sessionId) {
 				sessions.delete(transport.sessionId);
-				logger.info("Session closed", { sessionId: transport.sessionId });
+				logger.info({ sessionId: transport.sessionId }, "Session closed");
 			}
 		};
 
@@ -136,7 +140,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 			sessions.delete(id);
 		}
 		if (count > 0) {
-			logger.info("All sessions closed", { count });
+			logger.info({ count }, "All sessions closed");
 		}
 	}
 
@@ -192,9 +196,12 @@ export async function startHttpTransport(
 		},
 
 		error: (error) => {
-			logger.error("HTTP server error", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"HTTP server error",
+			);
 			return Response.json(
 				{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
 				{ status: 500 },
@@ -202,10 +209,13 @@ export async function startHttpTransport(
 		},
 	});
 
-	logger.info(`MCP server started (HTTP ${config.sessionMode} mode)`, {
-		url: `http://${config.host}:${httpServer.port}${config.path}`,
-		sessionMode: config.sessionMode,
-	});
+	logger.info(
+		{
+			url: `http://${config.host}:${httpServer.port}${config.path}`,
+			sessionMode: config.sessionMode,
+		},
+		`MCP server started (HTTP ${config.sessionMode} mode)`,
+	);
 
 	return {
 		server: httpServer,

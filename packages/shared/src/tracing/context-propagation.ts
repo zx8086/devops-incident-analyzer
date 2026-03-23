@@ -9,10 +9,7 @@ import { context, propagation } from "@opentelemetry/api";
  * When no traceparent header is present (e.g., Claude Desktop, n8n),
  * the function runs in the current context unchanged.
  */
-export function withExtractedContext<T>(
-	headers: Record<string, string | string[] | undefined>,
-	fn: () => T,
-): T {
+export function withExtractedContext<T>(headers: Record<string, string | string[] | undefined>, fn: () => T): T {
 	const carrier: Record<string, string> = {};
 	for (const [key, value] of Object.entries(headers)) {
 		if (typeof value === "string") {

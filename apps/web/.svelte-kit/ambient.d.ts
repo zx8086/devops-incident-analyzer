@@ -118,6 +118,10 @@ declare module '$env/static/private' {
 	export const LANGSMITH_API_KEY: string;
 	export const LANGSMITH_PROJECT: string;
 	export const LANGSMITH_TRACING: string;
+	export const ELASTIC_LANGSMITH_PROJECT: string;
+	export const KAFKA_LANGSMITH_PROJECT: string;
+	export const COUCHBASE_LANGSMITH_PROJECT: string;
+	export const KONNECT_LANGSMITH_PROJECT: string;
 }
 
 /**
@@ -284,6 +288,10 @@ declare module '$env/dynamic/private' {
 		LANGSMITH_API_KEY: string;
 		LANGSMITH_PROJECT: string;
 		LANGSMITH_TRACING: string;
+		ELASTIC_LANGSMITH_PROJECT: string;
+		KAFKA_LANGSMITH_PROJECT: string;
+		COUCHBASE_LANGSMITH_PROJECT: string;
+		KONNECT_LANGSMITH_PROJECT: string;
 		[key: `PUBLIC_${string}`]: undefined;
 		[key: `${string}`]: string | undefined;
 	}

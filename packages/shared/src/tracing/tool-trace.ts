@@ -12,11 +12,7 @@ export interface ToolTraceOptions {
 	toolArgs?: Record<string, unknown>;
 }
 
-export function traceToolCall<T>(
-	toolName: string,
-	handler: () => Promise<T>,
-	options: ToolTraceOptions,
-): Promise<T> {
+export function traceToolCall<T>(toolName: string, handler: () => Promise<T>, options: ToolTraceOptions): Promise<T> {
 	return tracer.startActiveSpan(`mcp.tool.${toolName}`, { kind: SpanKind.SERVER }, async (span: Span) => {
 		span.setAttribute("mcp.tool.name", toolName);
 		span.setAttribute("mcp.tool.timestamp", Date.now());
@@ -39,11 +35,7 @@ export function traceToolCall<T>(
 	});
 }
 
-function executeLangSmith<T>(
-	toolName: string,
-	handler: () => Promise<T>,
-	options: ToolTraceOptions,
-): Promise<T> {
+function executeLangSmith<T>(toolName: string, handler: () => Promise<T>, options: ToolTraceOptions): Promise<T> {
 	if (!isTracingActive()) return handler();
 
 	const session = getCurrentSession();

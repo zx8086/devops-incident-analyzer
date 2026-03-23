@@ -1,18 +1,18 @@
 // src/utils/session-manager.ts
 // Re-exports from shared tracing module with konnect-specific additions
 import {
-	type SessionContext,
-	runWithSession,
+	generateSessionId,
 	getCurrentSession,
 	getCurrentSessionId,
+	runWithSession,
+	type SessionContext,
 	createSessionContext as sharedCreateSessionContext,
 	detectClient as sharedDetectClient,
-	generateSessionId,
 } from "@devops-agent/shared";
 import { mcpLogger } from "./mcp-logger.js";
 
 export type { SessionContext };
-export { runWithSession, getCurrentSession, getCurrentSessionId, generateSessionId };
+export { generateSessionId, getCurrentSession, getCurrentSessionId, runWithSession };
 
 // Konnect uses "sse" as transport mode; map it to shared "http"
 export function createSessionContext(
@@ -23,7 +23,13 @@ export function createSessionContext(
 	userId?: string,
 ): SessionContext {
 	const normalizedTransport = transportMode === "sse" ? "http" : transportMode;
-	return sharedCreateSessionContext(connectionId, normalizedTransport as "stdio" | "http" | "both", sessionId, clientInfo, userId);
+	return sharedCreateSessionContext(
+		connectionId,
+		normalizedTransport as "stdio" | "http" | "both",
+		sessionId,
+		clientInfo,
+		userId,
+	);
 }
 
 export function detectClient(transportMode: "stdio" | "sse" | "http"): SessionContext["clientInfo"] {

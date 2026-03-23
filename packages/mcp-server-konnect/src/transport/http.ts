@@ -1,7 +1,8 @@
 // src/transport/http.ts
+
+import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { withTraceContextMiddleware } from "@devops-agent/shared";
 import { mcpLogger } from "../utils/mcp-logger.js";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 

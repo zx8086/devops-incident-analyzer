@@ -187,10 +187,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		return { dataSourceResults: [result] };
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		log.error(
-			{ duration, error: error instanceof Error ? error.message : String(error) },
-			"Sub-agent failed",
-		);
+		log.error({ duration, error: error instanceof Error ? error.message : String(error) }, "Sub-agent failed");
 		const result: DataSourceResult = {
 			dataSourceId,
 			data: null,
