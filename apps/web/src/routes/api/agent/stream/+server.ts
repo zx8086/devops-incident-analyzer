@@ -25,6 +25,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const body = StreamRequestSchema.parse(await request.json());
 		const threadId = body.threadId ?? crypto.randomUUID();
 		const requestId = crypto.randomUUID();
+		const runId = crypto.randomUUID();
 
 		const encoder = new TextEncoder();
 		const stream = new ReadableStream({
@@ -36,8 +37,12 @@ export const POST: RequestHandler = async ({ request }) => {
 				try {
 					const startTime = Date.now();
 
+					// Send run_id immediately so client can submit feedback before graph output
+					send({ type: "run_id", runId });
+
 					const eventStream = await invokeAgent(body.messages, {
 						threadId,
+						runId,
 						dataSources: body.dataSources,
 						isFollowUp: body.isFollowUp,
 						dataSourceContext: body.dataSourceContext,
@@ -60,12 +65,8 @@ export const POST: RequestHandler = async ({ request }) => {
 					const nodeStartTimes = new Map<string, number>();
 					let responseContent = "";
 					const toolsUsed = new Set<string>();
-					let runId: string | undefined;
 
 					for await (const event of eventStream) {
-						if (!runId && event.run_id) {
-							runId = event.run_id;
-						}
 
 						if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
 							const tags: string[] = event.tags ?? [];

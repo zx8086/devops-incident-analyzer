@@ -146,7 +146,14 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
 		logger.info({ dataSourceId }, "Invoking sub-agent");
-		const response = await agent.invoke({ messages });
+		const response = await agent.invoke(
+			{ messages },
+			{
+				runName: agentName,
+				metadata: { data_source_id: dataSourceId, request_id: state.requestId },
+				tags: ["sub-agent", `datasource:${dataSourceId}`],
+			},
+		);
 		const lastResponse = response.messages.at(-1);
 		const duration = Date.now() - startTime;
 

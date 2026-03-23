@@ -45,6 +45,7 @@ export async function invokeAgent(
 	messages: Array<{ role: string; content: string }>,
 	options: {
 		threadId: string;
+		runId?: string;
 		dataSources?: string[];
 		isFollowUp?: boolean;
 		dataSourceContext?: DataSourceContext;
@@ -56,15 +57,22 @@ export async function invokeAgent(
 
 	const langchainMessages = messages.filter((m) => m.role === "user").map((m) => new HumanMessage(m.content));
 
+	// Pass requestId into graph state so AgentState.requestId matches the web endpoint's value
+	const requestId = (options.metadata?.request_id as string) ?? crypto.randomUUID();
+
 	return graph.streamEvents(
 		{
 			messages: langchainMessages,
 			targetDataSources: options.dataSources ?? [],
 			isFollowUp: options.isFollowUp ?? false,
+			requestId,
 			...(options.dataSourceContext && { dataSourceContext: options.dataSourceContext }),
 		},
 		{
-			configurable: { thread_id: options.threadId },
+			configurable: {
+				thread_id: options.threadId,
+				...(options.runId && { run_id: options.runId }),
+			},
 			version: "v2",
 			recursionLimit: 100,
 			...(options.metadata && { metadata: options.metadata }),
