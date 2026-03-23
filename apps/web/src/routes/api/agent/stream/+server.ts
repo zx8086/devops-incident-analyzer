@@ -1,6 +1,7 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
 import { flushLangSmithCallbacks, generateFallbackSuggestions, generateFollowUpSuggestions } from "@devops-agent/agent";
+import { traceSpan } from "@devops-agent/observability";
 import { DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
@@ -35,6 +36,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				};
 
 				try {
+					await traceSpan("agent", "agent.request", async () => {
 					const startTime = Date.now();
 
 					// Send run_id immediately so client can submit feedback before graph output
@@ -139,6 +141,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						toolsUsed: toolsUsedArray,
 						dataSourceContext,
 					});
+					}, { "request.id": requestId, "thread.id": threadId });
 				} catch (error) {
 					send({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
 				} finally {

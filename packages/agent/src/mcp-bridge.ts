@@ -1,4 +1,5 @@
 // agent/src/mcp-bridge.ts
+import { context, propagation } from "@opentelemetry/api";
 import { getLogger } from "@devops-agent/observability";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
@@ -42,8 +43,21 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	// Connect to each server independently so one failure doesn't block the rest
 	const results = await Promise.allSettled(
 		serverEntries.map(async ({ name, url }) => {
+			// SIO-602: Inject W3C traceparent for OTEL span correlation with MCP servers.
+			// The beforeToolCall hook is supported at runtime but missing from the TypeScript
+			// type definitions in @langchain/mcp-adapters@1.1.3, hence the type assertion.
 			const client = new MultiServerMCPClient({
-				mcpServers: { [name]: { transport: "http", url } },
+				mcpServers: {
+					[name]: {
+						transport: "http",
+						url,
+						beforeToolCall: () => {
+							const headers: Record<string, string> = {};
+							propagation.inject(context.active(), headers);
+							return Object.keys(headers).length > 0 ? { headers } : undefined;
+						},
+					} as never,
+				},
 			});
 			const tools = await client.getTools();
 			return { name, tools };

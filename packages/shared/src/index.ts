@@ -55,4 +55,6 @@ export {
 	withNestedTrace,
 	detectClient,
 	generateSessionId,
+	withExtractedContext,
+	withTraceContextMiddleware,
 } from "./tracing/index.ts";

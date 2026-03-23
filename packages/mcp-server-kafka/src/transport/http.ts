@@ -1,6 +1,7 @@
 // src/transport/http.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { withTraceContextMiddleware } from "@devops-agent/shared";
 import { getLogger } from "../logging/container.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 
@@ -167,7 +168,9 @@ export async function startHttpTransport(
 	}
 
 	// Apply security middleware
-	const securedPost = withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey);
+	const securedPost = withTraceContextMiddleware(
+		withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey),
+	);
 	const securedGet = withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey);
 	const securedDelete = withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey);
 

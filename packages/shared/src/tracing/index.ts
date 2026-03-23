@@ -25,3 +25,5 @@ export { traceConnection, type ConnectionContext } from "./connection-trace.ts";
 export { withNestedTrace } from "./nested-trace.ts";
 
 export { detectClient, generateSessionId } from "./client-detect.ts";
+
+export { withExtractedContext, withTraceContextMiddleware } from "./context-propagation.ts";

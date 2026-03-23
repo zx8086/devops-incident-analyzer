@@ -1,4 +1,5 @@
 // observability/src/logger.ts
+import { trace } from "@opentelemetry/api";
 import pino from "pino";
 
 function getEnv(key: string): string | undefined {
@@ -21,7 +22,16 @@ function createBaseLogger(): pino.Logger {
 		}
 	}
 
-	return pino({ level });
+	// Production: inject OTEL trace context into every log line
+	return pino({
+		level,
+		mixin() {
+			const span = trace.getActiveSpan();
+			if (!span) return {};
+			const { traceId, spanId } = span.spanContext();
+			return { "trace.id": traceId, "span.id": spanId };
+		},
+	});
 }
 
 const baseLogger = createBaseLogger();

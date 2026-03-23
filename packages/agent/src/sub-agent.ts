@@ -113,8 +113,10 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 	const dataSourceId = state.currentDataSource;
 	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
 	const startTime = Date.now();
+	// SIO-603: Request-scoped logger with requestId and dataSourceId
+	const log = logger.child({ requestId: state.requestId, dataSourceId });
 
-	logger.info({ dataSourceId, agentName }, "Sub-agent starting");
+	log.info({ agentName }, "Sub-agent starting");
 
 	try {
 		const tools = getToolsForDataSource(dataSourceId);
@@ -122,7 +124,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const llm = createLlm("subAgent");
 
 		if (tools.length === 0) {
-			logger.warn({ dataSourceId }, "No MCP tools available, skipping");
+			log.warn("No MCP tools available, skipping");
 			const result: DataSourceResult = {
 				dataSourceId,
 				data: `No tools available for ${dataSourceId}. MCP server may not be connected.`,
@@ -133,7 +135,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 			return { dataSourceResults: [result] };
 		}
 
-		logger.info({ dataSourceId, toolCount: tools.length }, "Creating ReAct agent with tools");
+		log.info({ toolCount: tools.length }, "Creating ReAct agent with tools");
 
 		const agent = createReactAgent({
 			llm,
@@ -145,7 +147,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
-		logger.info({ dataSourceId }, "Invoking sub-agent");
+		log.info("Invoking sub-agent");
 		const response = await agent.invoke(
 			{ messages },
 			{
@@ -161,9 +163,8 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const toolMessages = response.messages.filter((m: { _getType(): string }) => m._getType() === "tool");
 		const allToolsFailed = toolMessages.length > 0 && toolErrors.length === toolMessages.length;
 
-		logger.info(
+		log.info(
 			{
-				dataSourceId,
 				duration,
 				messageCount: response.messages.length,
 				responseLength: String(lastResponse?.content ?? "").length,
@@ -186,8 +187,8 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		return { dataSourceResults: [result] };
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error(
-			{ dataSourceId, duration, error: error instanceof Error ? error.message : String(error) },
+		log.error(
+			{ duration, error: error instanceof Error ? error.message : String(error) },
 			"Sub-agent failed",
 		);
 		const result: DataSourceResult = {
