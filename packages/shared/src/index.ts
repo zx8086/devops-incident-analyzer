@@ -17,9 +17,14 @@ export {
 	type ToolPlanStep,
 	ToolPlanStepSchema,
 } from "./agent-state.ts";
-
+export {
+	type BootstrapLogger,
+	type BootstrapTransportResult,
+	createMcpApplication,
+	type McpApplication,
+	type McpApplicationOptions,
+} from "./bootstrap.ts";
 export { type AgentConfig, AgentConfigSchema, type ServerConfig, ServerConfigSchema } from "./config.ts";
-
 export {
 	type CapellaConfig,
 	CapellaConfigSchema,
@@ -33,28 +38,29 @@ export {
 	KonnectConfigSchema,
 } from "./datasource.ts";
 
+export { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 export {
-	type SessionContext,
-	runWithSession,
-	getCurrentSession,
-	getCurrentSessionId,
-	getCurrentClientInfo,
-	createSessionContext,
-	initializeTracing,
-	isTracingActive,
-	getCurrentTrace,
-	getTraceable,
-	getRunTreeUtils,
-	resetTracing,
-	type TracingOptions,
-	traceToolCall,
-	traceToolExecution,
-	type ToolTraceOptions,
-	traceConnection,
 	type ConnectionContext,
-	withNestedTrace,
+	createSessionContext,
 	detectClient,
 	generateSessionId,
+	getCurrentClientInfo,
+	getCurrentSession,
+	getCurrentSessionId,
+	getCurrentTrace,
+	getRunTreeUtils,
+	getTraceable,
+	initializeTracing,
+	isTracingActive,
+	resetTracing,
+	runWithSession,
+	type SessionContext,
+	type ToolTraceOptions,
+	type TracingOptions,
+	traceConnection,
+	traceToolCall,
+	traceToolExecution,
 	withExtractedContext,
+	withNestedTrace,
 	withTraceContextMiddleware,
 } from "./tracing/index.ts";

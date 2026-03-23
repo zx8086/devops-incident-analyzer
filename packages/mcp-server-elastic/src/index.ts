@@ -1,28 +1,28 @@
 #!/usr/bin/env bun
 
 // src/index.ts
+import { createMcpApplication, type TelemetryConfig } from "@devops-agent/shared";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
-import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeTracing } from "./utils/tracing.js";
 
-async function main() {
-	try {
-		// Initialize LangSmith tracing first
-		initializeTracing();
+const telemetryConfig: TelemetryConfig = {
+	enabled: process.env.TELEMETRY_MODE !== undefined,
+	serviceName: process.env.OTEL_SERVICE_NAME || "elastic-mcp-server",
+	mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
+	otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
+};
 
-		// Initialize OTEL telemetry
-		const telemetryConfig: TelemetryConfig = {
-			enabled: process.env.TELEMETRY_MODE !== undefined,
-			serviceName: process.env.OTEL_SERVICE_NAME || "elastic-mcp-server",
-			mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
-			otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
-		};
-		const otelSdk = initTelemetry(telemetryConfig);
+createMcpApplication({
+	name: "elastic-mcp-server",
+	logger,
 
-		// Log any configuration warnings now that logger is available
+	initTracing: () => initializeTracing(),
+	telemetry: telemetryConfig,
+
+	initDatasource: async () => {
 		const configWarnings = getConfigWarnings();
 		if (configWarnings.length > 0) {
 			for (const warning of configWarnings) {
@@ -31,7 +31,6 @@ async function main() {
 			clearConfigWarnings();
 		}
 
-		// Configuration is already loaded and validated in config.ts
 		logger.info("Starting Elasticsearch MCP server with validated configuration", {
 			url: config.elasticsearch.url,
 			hasApiKey: !!config.elasticsearch.apiKey,
@@ -46,12 +45,12 @@ async function main() {
 			port: config.server.port,
 		});
 
-		// Initialize ES client once at startup (async)
-		const esClient = await initializeElasticsearchClient(config);
+		return initializeElasticsearchClient(config);
+	},
 
-		// Sync factory for per-request McpServer creation
-		const serverFactory = () => createMcpServerInstance(config, esClient);
+	createServerFactory: (esClient) => () => createMcpServerInstance(config, esClient),
 
+	createTransport: (serverFactory) => {
 		const transportConfig = {
 			transport: {
 				mode: config.server.transportMode,
@@ -64,63 +63,14 @@ async function main() {
 				allowedOrigins: config.server.allowedOrigins,
 			},
 		};
+		return createTransport(transportConfig, serverFactory);
+	},
 
-		const transport = await createTransport(transportConfig, serverFactory);
-
-		// Graceful shutdown
-		const shutdown = async () => {
-			logger.info("Shutting down server gracefully...");
-			try {
-				await transport.closeAll();
-				await shutdownTelemetry(otelSdk);
-				logger.info("Server shutdown completed");
-			} catch (error) {
-				logger.error("Error during shutdown:", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-			process.exit(0);
-		};
-
-		process.on("SIGINT", shutdown);
-		process.on("SIGTERM", shutdown);
-
-		process.on("uncaughtException", (error) => {
-			logger.error("Uncaught exception - shutting down:", {
-				error: error.message,
-				stack: error.stack,
-				name: error.name,
-			});
-			shutdown();
-		});
-
-		process.on("unhandledRejection", (reason) => {
-			logger.error("Unhandled promise rejection - shutting down:", {
-				reason: reason instanceof Error ? reason.message : String(reason),
-				stack: reason instanceof Error ? reason.stack : undefined,
-			});
-			shutdown();
-		});
-
+	onStarted: () => {
 		logger.info("Elasticsearch MCP Server started successfully", {
 			mode: config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS",
 			strictMode: config.server.readOnlyStrictMode,
 			transport: config.server.transportMode,
 		});
-	} catch (error) {
-		logger.error("Fatal error during startup:", {
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		});
-		process.exit(1);
-	}
-}
-
-// Start the server
-main().catch((error) => {
-	logger.error("Failed to start server:", {
-		error: error instanceof Error ? error.message : String(error),
-		stack: error instanceof Error ? error.stack : undefined,
-	});
-	process.exit(1);
+	},
 });
