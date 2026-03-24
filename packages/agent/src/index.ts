@@ -8,7 +8,13 @@ export { generateFallbackSuggestions, generateFollowUpSuggestions } from "./foll
 export { buildGraph } from "./graph.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
-export { createMcpClient, getAllTools, getConnectedServers, getToolsForDataSource } from "./mcp-bridge.ts";
+export {
+	createMcpClient,
+	getAllTools,
+	getConnectedServers,
+	getToolsForDataSource,
+	stopHealthPolling,
+} from "./mcp-bridge.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";

@@ -18,6 +18,18 @@ let allTools: StructuredToolInterface[] = [];
 let connectedServers: Set<string> = new Set();
 let toolsByServer: Map<string, StructuredToolInterface[]> = new Map();
 
+// SIO-608: Health polling state
+let serverUrls: Map<string, string> = new Map();
+let healthPollTimer: ReturnType<typeof setInterval> | null = null;
+let isPolling = false;
+const HEALTH_POLL_INTERVAL_MS = 30_000;
+
+function injectTraceHeaders(): { headers: Record<string, string> } | undefined {
+	const headers: Record<string, string> = {};
+	propagation.inject(context.active(), headers);
+	return Object.keys(headers).length > 0 ? { headers } : undefined;
+}
+
 export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
 
@@ -41,6 +53,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 		return;
 	}
 
+	// SIO-608: Store URLs for health polling (base URL without /mcp suffix)
+	serverUrls = new Map(serverEntries.map(({ name, url }) => [name, url]));
+
 	// Connect to each server independently so one failure doesn't block the rest
 	const results = await Promise.allSettled(
 		serverEntries.map(async ({ name, url }) => {
@@ -52,11 +67,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 					[name]: {
 						transport: "http",
 						url,
-						beforeToolCall: () => {
-							const headers: Record<string, string> = {};
-							propagation.inject(context.active(), headers);
-							return Object.keys(headers).length > 0 ? { headers } : undefined;
-						},
+						beforeToolCall: () => injectTraceHeaders(),
 					} as never,
 				},
 			});
@@ -90,6 +101,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 
 	allTools = tools;
 	logger.info({ toolCount: allTools.length, servers: [...connectedServers] }, "MCP tools loaded");
+
+	// SIO-608: Start periodic health polling
+	startHealthPolling();
 }
 
 export function getConnectedServers(): string[] {
@@ -112,4 +126,110 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 
 export function getAllTools(): StructuredToolInterface[] {
 	return allTools;
+}
+
+// SIO-608: Health check a single MCP server via its /health endpoint
+async function healthCheckServer(mcpUrl: string): Promise<boolean> {
+	const healthUrl = mcpUrl.replace(/\/mcp$/, "/health");
+	try {
+		const response = await fetch(healthUrl, {
+			method: "GET",
+			signal: AbortSignal.timeout(5_000),
+		});
+		return response.ok;
+	} catch {
+		return false;
+	}
+}
+
+// SIO-608: Reconnect a single server that was previously down
+async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
+	try {
+		const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
+		const client = new MultiServerMCPClient({
+			mcpServers: {
+				[name]: {
+					transport: "http",
+					url: mcpUrl,
+					beforeToolCall: () => injectTraceHeaders(),
+				} as never,
+			},
+		});
+		const tools = await client.getTools();
+
+		for (const tool of tools) {
+			if (!tool.description) {
+				tool.description = `${tool.name} tool`;
+			}
+		}
+
+		// Remove any stale tools for this server before appending
+		const staleTools = toolsByServer.get(name) ?? [];
+		const staleNames = new Set(staleTools.map((t) => t.name));
+		allTools = [...allTools.filter((t) => !staleNames.has(t.name)), ...tools];
+
+		toolsByServer.set(name, tools);
+		connectedServers.add(name);
+		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
+	} catch (error) {
+		logger.warn(
+			{ serverName: name, error: error instanceof Error ? error.message : String(error) },
+			"Failed to reconnect MCP server",
+		);
+	}
+}
+
+// SIO-608: Poll all servers and update connectedServers
+async function pollServerHealth(): Promise<void> {
+	if (isPolling) return;
+	isPolling = true;
+
+	try {
+		const checks = [...serverUrls.entries()].map(async ([name, url]) => {
+			const healthy = await healthCheckServer(url);
+			return { name, url, healthy };
+		});
+
+		const results = await Promise.allSettled(checks);
+
+		for (const result of results) {
+			if (result.status !== "fulfilled") continue;
+			const { name, url, healthy } = result.value;
+
+			if (healthy && !connectedServers.has(name)) {
+				// Server came back online
+				const hasTools = (toolsByServer.get(name)?.length ?? 0) > 0;
+				if (hasTools) {
+					connectedServers.add(name);
+					logger.info({ serverName: name }, "MCP server back online (tools cached)");
+				} else {
+					await reconnectServer(name, url);
+				}
+			} else if (!healthy && connectedServers.has(name)) {
+				// Server went down
+				connectedServers.delete(name);
+				logger.warn({ serverName: name }, "MCP server health check failed, marking disconnected");
+			}
+		}
+	} finally {
+		isPolling = false;
+	}
+}
+
+function startHealthPolling(): void {
+	if (healthPollTimer) return;
+	healthPollTimer = setInterval(() => {
+		pollServerHealth().catch((error) => {
+			logger.error({ error: error instanceof Error ? error.message : String(error) }, "Health poll cycle failed");
+		});
+	}, HEALTH_POLL_INTERVAL_MS);
+	logger.info({ intervalMs: HEALTH_POLL_INTERVAL_MS }, "MCP health polling started");
+}
+
+export function stopHealthPolling(): void {
+	if (healthPollTimer) {
+		clearInterval(healthPollTimer);
+		healthPollTimer = null;
+		logger.info("MCP health polling stopped");
+	}
 }

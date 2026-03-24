@@ -1,6 +1,6 @@
 <script lang="ts">
 // apps/web/src/routes/+page.svelte
-import { onMount } from "svelte";
+import { onDestroy, onMount } from "svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
@@ -9,17 +9,13 @@ import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
-let availableDataSources = $state<string[]>([]);
 
 onMount(async () => {
 	await agentStore.loadDataSources();
-	try {
-		const res = await fetch("/api/datasources");
-		const data = await res.json();
-		availableDataSources = data.dataSources ?? [];
-	} catch {
-		availableDataSources = [];
-	}
+});
+
+onDestroy(() => {
+	agentStore.stopHealthPolling();
 });
 
 $effect(() => {
@@ -76,7 +72,7 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </header>
 
-  <DataSourceSelector dataSources={availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
+  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
 
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">
     <div class="max-w-4xl mx-auto py-4">

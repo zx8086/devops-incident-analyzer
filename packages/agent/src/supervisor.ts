@@ -34,8 +34,9 @@ export function supervise(state: AgentStateType): Send[] {
 
 	// Deduplicate, validate agent name, and skip datasources with no connected MCP tools
 	const deduped = [...new Set(targetSources)];
-	const skipped = deduped.filter((id) => !AGENT_NAMES[id] || getToolsForDataSource(id).length === 0);
-	const validSources = deduped.filter((id) => AGENT_NAMES[id] && getToolsForDataSource(id).length > 0);
+	const toolCounts = new Map(deduped.map((id) => [id, getToolsForDataSource(id).length]));
+	const skipped = deduped.filter((id) => !AGENT_NAMES[id] || toolCounts.get(id) === 0);
+	const validSources = deduped.filter((id) => AGENT_NAMES[id] && (toolCounts.get(id) ?? 0) > 0);
 
 	logger.info(
 		{
@@ -43,7 +44,7 @@ export function supervise(state: AgentStateType): Send[] {
 			requested: deduped,
 			dispatching: validSources,
 			skipped: skipped.length > 0 ? skipped : undefined,
-			toolCounts: Object.fromEntries(validSources.map((id) => [id, getToolsForDataSource(id).length])),
+			toolCounts: Object.fromEntries(validSources.map((id) => [id, toolCounts.get(id)])),
 		},
 		"Supervisor dispatching sub-agents",
 	);

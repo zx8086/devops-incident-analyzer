@@ -189,6 +189,9 @@ export async function startHttpTransport(
 				GET: securedGet,
 				DELETE: securedDelete,
 			},
+			"/health": {
+				GET: () => Response.json({ status: "ok" }),
+			},
 		},
 
 		fetch: () => {

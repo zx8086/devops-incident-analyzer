@@ -19,6 +19,9 @@ export interface FollowUpContext {
 	dataSourceContext?: DataSourceContext;
 }
 
+// SIO-608: Frontend polling interval for health status
+const HEALTH_POLL_INTERVAL_MS = 15_000;
+
 function createAgentStore() {
 	let messages = $state<ChatMessage[]>([]);
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
@@ -27,6 +30,7 @@ function createAgentStore() {
 	let currentContent = $state("");
 	let selectedDataSources = $state<string[]>([]);
 	let connectedDataSources = $state<string[]>([]);
+	let availableDataSources = $state<string[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -36,6 +40,7 @@ function createAgentStore() {
 	let lastConfidence = $state<number | undefined>(undefined);
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let abortController: AbortController | null = null;
+	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function sendMessage(content: string, followUpContext?: FollowUpContext) {
 		if (isStreaming || !content.trim()) return;
@@ -194,11 +199,52 @@ function createAgentStore() {
 		try {
 			const res = await fetch("/api/datasources");
 			const data = await res.json();
+			availableDataSources = data.dataSources ?? [];
 			connectedDataSources = data.connected ?? [];
-			selectedDataSources = connectedDataSources.length > 0 ? [...connectedDataSources] : (data.dataSources ?? []);
+			selectedDataSources = connectedDataSources.length > 0 ? [...connectedDataSources] : [...availableDataSources];
 		} catch {
+			availableDataSources = [];
 			selectedDataSources = [];
 			connectedDataSources = [];
+		}
+		startHealthPolling();
+	}
+
+	// SIO-608: Periodic health polling to keep pill status in sync
+	function startHealthPolling(): void {
+		if (healthPollTimer) return;
+		healthPollTimer = setInterval(async () => {
+			try {
+				const res = await fetch("/api/datasources");
+				const data: { dataSources: string[]; connected: string[] } = await res.json();
+				const newConnected = data.connected ?? [];
+				const prevConnected = connectedDataSources;
+
+				connectedDataSources = newConnected;
+
+				if (!isStreaming) {
+					// Auto-deselect datasources that went offline
+					const wentOffline = prevConnected.filter((ds) => !newConnected.includes(ds));
+					if (wentOffline.length > 0) {
+						selectedDataSources = selectedDataSources.filter((ds) => !wentOffline.includes(ds));
+					}
+
+					// Auto-select datasources that came online
+					const cameOnline = newConnected.filter((ds) => !prevConnected.includes(ds));
+					if (cameOnline.length > 0) {
+						selectedDataSources = [...new Set([...selectedDataSources, ...cameOnline])];
+					}
+				}
+			} catch {
+				// Best-effort polling
+			}
+		}, HEALTH_POLL_INTERVAL_MS);
+	}
+
+	function stopHealthPolling(): void {
+		if (healthPollTimer) {
+			clearInterval(healthPollTimer);
+			healthPollTimer = null;
 		}
 	}
 
@@ -238,6 +284,9 @@ function createAgentStore() {
 		get connectedDataSources() {
 			return connectedDataSources;
 		},
+		get availableDataSources() {
+			return availableDataSources;
+		},
 		get activeNodes() {
 			return activeNodes;
 		},
@@ -251,6 +300,7 @@ function createAgentStore() {
 		setFeedback,
 		cancelStream,
 		loadDataSources,
+		stopHealthPolling,
 		clearChat,
 	};
 }
