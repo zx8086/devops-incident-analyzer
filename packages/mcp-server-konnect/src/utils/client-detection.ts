@@ -94,7 +94,7 @@ export function detectClientEnvironment(
 		platform: string;
 	},
 ): ClientEnvironment {
-	const env = environmentVars || process.env;
+	const env = environmentVars || (process.env as unknown as Record<string, string>);
 	const argv = processInfo?.argv || process.argv;
 	const cwd = processInfo?.cwd || process.cwd();
 	const platform = processInfo?.platform || process.platform;

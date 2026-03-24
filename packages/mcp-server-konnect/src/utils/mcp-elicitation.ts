@@ -5,7 +5,7 @@
  * instead of complex enforcement layers.
  */
 
-import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { elicitationBridge } from "./elicitation-bridge.js";
 import { mcpLogger } from "./mcp-logger.js";
 
@@ -197,7 +197,9 @@ Would you like to provide additional context? (You can skip this step)`,
 			}
 		} catch (error) {
 			// Additional context is optional, so failures are not critical
-			mcpLogger.debug("elicitation", "Additional context elicitation skipped or failed", { error: error.message });
+			mcpLogger.debug("elicitation", "Additional context elicitation skipped or failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 
 		return null;
@@ -288,7 +290,7 @@ Would you like to provide additional context? (You can skip this step)`,
 	/**
 	 * Generate production-ready tags from context
 	 */
-	generateTags(context: KongDeploymentContext, entityType: string, entityName?: string): string[] {
+	generateTags(context: KongDeploymentContext, entityType: string, _entityName?: string): string[] {
 		const tags: string[] = [];
 
 		// Mandatory tags (3)

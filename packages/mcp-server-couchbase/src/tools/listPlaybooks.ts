@@ -26,8 +26,8 @@ export default (server: McpServer, bucket: Bucket) => {
 			}
 
 			return {
-				content: resourceResult.contents.map((content) => ({
-					type: content.mimeType === "text/markdown" ? "text" : "text",
+				content: resourceResult.contents.map((content: { mimeType?: string; text?: string }) => ({
+					type: "text" as const,
 					text: content.text || "[Binary content]",
 				})),
 			};
@@ -75,8 +75,8 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 
 				return {
-					content: resourceResult.contents.map((content) => ({
-						type: content.mimeType === "text/markdown" ? "text" : "text",
+					content: resourceResult.contents.map((content: { mimeType?: string; text?: string }) => ({
+						type: "text" as const,
 						text: content.text || "[Binary content]",
 					})),
 				};

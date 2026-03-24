@@ -219,6 +219,34 @@ describe("routeAfterAlignment", () => {
 		const sends = result as Send[];
 		expect(sends.length).toBe(1);
 	});
+
+	test("returns aggregate when retry result hard cap is reached", () => {
+		const retryResults: DataSourceResult[] = Array.from({ length: 16 }, (_, i) => ({
+			...makeResult(`ds-${i % 4}`, "error"),
+			isAlignmentRetry: true,
+		}));
+		const state = makeState({
+			targetDataSources: ["elastic", "kafka"],
+			dataSourceResults: retryResults,
+			alignmentRetries: 0,
+		});
+		const result = routeAfterAlignment(state);
+		expect(result).toBe("aggregate");
+	});
+
+	test("allows retries when below hard cap", () => {
+		const retryResults: DataSourceResult[] = Array.from({ length: 4 }, (_, i) => ({
+			...makeResult(`ds-${i}`, "error", [makeToolError("search", "transient", "timeout")]),
+			isAlignmentRetry: true,
+		}));
+		const state = makeState({
+			targetDataSources: ["elastic", "kafka", "couchbase", "konnect"],
+			dataSourceResults: retryResults,
+			alignmentRetries: 0,
+		});
+		const result = routeAfterAlignment(state);
+		expect(Array.isArray(result)).toBe(true);
+	});
 });
 
 // -- checkAlignment (state updates) --

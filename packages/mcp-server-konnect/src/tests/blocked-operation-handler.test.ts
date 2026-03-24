@@ -15,18 +15,18 @@ describe("INFO: Blocked Operation Handler", () => {
 		// Create a blocked operation handler for create_service
 		const handler = createBlockedOperationHandler("create_service", "Test deployment without context", [], []);
 
-		let result;
+		let result: Record<string, unknown> | undefined;
 		let wasStructuredResponse = false;
 
 		try {
-			result = await handler(
+			result = (await handler(
 				{
 					controlPlaneId: "test-cp-123",
 					name: "test-service",
 					host: "test-host",
 				},
 				{} as any,
-			);
+			)) as Record<string, unknown>;
 
 			console.log("INFO: Handler result:", JSON.stringify(result, null, 2));
 
@@ -41,10 +41,11 @@ describe("INFO: Blocked Operation Handler", () => {
 				console.log("ERROR: Expected structured elicitation response but got:", typeof result);
 			}
 		} catch (error) {
+			const err = error instanceof Error ? error : new Error(String(error));
 			console.log(
 				"ERROR: Handler threw error instead of returning structured response:",
-				error.constructor.name,
-				error.message,
+				err.constructor.name,
+				err.message,
 			);
 		}
 

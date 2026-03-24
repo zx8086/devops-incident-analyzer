@@ -1,6 +1,8 @@
 // src/lib/logger.ts
 import { createMcpLogger, measureOperation as sharedMeasureOperation } from "@devops-agent/shared";
 
+export type LoggerInterface = ReturnType<typeof createMcpLogger>;
+
 export const logger = createMcpLogger("couchbase-mcp-server");
 
 export function createContextLogger(context: string) {

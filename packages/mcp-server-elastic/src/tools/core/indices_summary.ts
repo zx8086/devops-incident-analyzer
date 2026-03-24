@@ -93,17 +93,17 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 
 				const indexName = index.index;
 				if (indexName.startsWith(".")) {
-					categories.system.push({ name: indexName, docs: docCount });
+					categories.system?.push({ name: indexName, docs: docCount });
 				} else if (indexName.includes(".ds-")) {
-					categories.dataStreams.push({ name: indexName, docs: docCount });
+					categories.dataStreams?.push({ name: indexName, docs: docCount });
 				} else if (indexName.includes("log")) {
-					categories.logs.push({ name: indexName, docs: docCount });
+					categories.logs?.push({ name: indexName, docs: docCount });
 				} else if (indexName.includes("metric")) {
-					categories.metrics.push({ name: indexName, docs: docCount });
+					categories.metrics?.push({ name: indexName, docs: docCount });
 				} else if (indexName.match(/^[a-zA-Z]+$/)) {
-					categories.application.push({ name: indexName, docs: docCount });
+					categories.application?.push({ name: indexName, docs: docCount });
 				} else {
-					categories.other.push({ name: indexName, docs: docCount });
+					categories.other?.push({ name: indexName, docs: docCount });
 				}
 			}
 
@@ -159,12 +159,12 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 					},
 				},
 				categories: {
-					system_indices: categories.system.length,
-					data_streams: categories.dataStreams.length,
-					application_indices: categories.application.length,
-					log_indices: categories.logs.length,
-					metric_indices: categories.metrics.length,
-					other_indices: categories.other.length,
+					system_indices: categories.system?.length ?? 0,
+					data_streams: categories.dataStreams?.length ?? 0,
+					application_indices: categories.application?.length ?? 0,
+					log_indices: categories.logs?.length ?? 0,
+					metric_indices: categories.metrics?.length ?? 0,
+					other_indices: categories.other?.length ?? 0,
 				},
 				patterns: patternSummary,
 				largest_indices: response

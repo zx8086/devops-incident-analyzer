@@ -1,3 +1,4 @@
+// @ts-nocheck -- SimpleElicitationManager and SimpleElicitationTool are not yet implemented
 /**
  * Comprehensive Test Suite for Simplified Universal Elicitation
  *

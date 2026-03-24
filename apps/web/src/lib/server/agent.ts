@@ -3,6 +3,10 @@ import { buildGraph, createLlm, createMcpClient } from "@devops-agent/agent";
 import type { DataSourceContext } from "@devops-agent/shared";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
+// SIO-606: Match gitagent-bridge getRecursionLimit(25) = 50.
+// Accounts for agent->tool round trips in each graph step.
+const RECURSION_LIMIT = 50;
+
 let mcpReady: Promise<void> | null = null;
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
 
@@ -74,7 +78,7 @@ export async function invokeAgent(
 				...(options.runId && { run_id: options.runId }),
 			},
 			version: "v2",
-			recursionLimit: 100,
+			recursionLimit: RECURSION_LIMIT,
 			...(options.metadata && { metadata: options.metadata }),
 		},
 	);

@@ -3,8 +3,6 @@
  * Makes direct elicitation/requestInput JSON-RPC calls
  */
 
-import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-
 export interface ElicitationSchema {
 	type: "object";
 	properties: Record<
@@ -75,7 +73,7 @@ export function generateTags(
 	return [...baseTags, ...contextualTags];
 }
 
-function getContextualTags(entityType: string, entityName?: string): string[] {
+function getContextualTags(entityType: string, _entityName?: string): string[] {
 	const tagMap = {
 		service: ["function-api-gateway", "type-external-api"],
 		route: ["function-routing", "type-external-api"],

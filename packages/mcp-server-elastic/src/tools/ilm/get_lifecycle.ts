@@ -174,7 +174,7 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 				if (deletePhase?.min_age) {
 					const minAge = String(deletePhase.min_age);
 					const match = minAge.match(/(\d+)d/);
-					if (match) {
+					if (match?.[1]) {
 						retentionDays = Number.parseInt(match[1], 10);
 					}
 				}

@@ -29,10 +29,11 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 		);
 
 		console.log("SUCCESS: Operation blocked as expected");
-		expect(blockedResult).toHaveProperty("error", "KONG_OPERATION_BLOCKED");
-		expect(blockedResult).toHaveProperty("sessionId");
+		const typedBlockedResult = blockedResult as Record<string, unknown>;
+		expect(typedBlockedResult).toHaveProperty("error", "KONG_OPERATION_BLOCKED");
+		expect(typedBlockedResult).toHaveProperty("sessionId");
 
-		const sessionId = blockedResult.sessionId;
+		const sessionId = typedBlockedResult.sessionId as string;
 		console.log("INFO: Session ID:", sessionId);
 
 		// Step 2: Process elicitation response with required context
@@ -89,19 +90,21 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 
 			// In a real integration, this would be the Kong service creation result
 			// For this test, we expect either success or a different error (not blocked)
+			const typedResult = successResult as Record<string, unknown> | undefined;
 			console.log(
 				"Operation result:",
 				typeof successResult,
-				successResult?.error !== "KONG_OPERATION_BLOCKED" ? "SUCCESS" : "STILL_BLOCKED",
+				typedResult?.error !== "KONG_OPERATION_BLOCKED" ? "SUCCESS" : "STILL_BLOCKED",
 			);
 
 			// The operation should not be blocked anymore
-			expect(successResult?.error).not.toBe("KONG_OPERATION_BLOCKED");
+			expect(typedResult?.error).not.toBe("KONG_OPERATION_BLOCKED");
 			console.log("SUCCESS: Operation no longer blocked by elicitation");
 		} catch (error) {
 			// Any error here should not be a KongOperationBlockedError
-			console.log("Operation threw:", error.constructor.name, error.message);
-			expect(error.constructor.name).not.toBe("KongOperationBlockedError");
+			const err = error instanceof Error ? error : new Error(String(error));
+			console.log("Operation threw:", err.constructor.name, err.message);
+			expect(err.constructor.name).not.toBe("KongOperationBlockedError");
 			console.log("SUCCESS: Operation no longer blocked by elicitation (threw different error)");
 		}
 

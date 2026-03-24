@@ -24,11 +24,6 @@ export function createKonnectServer(api: KongApi, config: Config): McpServer {
 		version: "2.0.0",
 		description:
 			"Comprehensive Kong Konnect API Gateway management with analytics, configuration, certificates, and more",
-		capabilities: {
-			tools: {},
-			elicitation: {},
-			logging: {},
-		},
 	});
 
 	const performanceCollector = new ToolPerformanceCollector();
@@ -52,13 +47,21 @@ export function createKonnectServer(api: KongApi, config: Config): McpServer {
 	return server;
 }
 
-function registerPaginatedToolsList(server: McpServer) {
-	server.setRequestHandler({ method: "tools/list" }, async (request) => {
+// TEMPORARILY DISABLED: This function is not called but kept for future reference.
+// Uses low-level server protocol methods not available on McpServer.
+function registerPaginatedToolsList(_server: McpServer) {
+	const server = _server as unknown as {
+		setRequestHandler: (
+			schema: { method: string },
+			handler: (request: { params?: Record<string, unknown> }) => Promise<unknown>,
+		) => void;
+	};
+	server.setRequestHandler({ method: "tools/list" }, async (request: { params?: Record<string, unknown> }) => {
 		const allTools = getAllTools();
 
 		try {
 			// Extract pagination parameters (only cursor is in official MCP schema)
-			const cursor = request.params?.cursor;
+			const cursor = request.params?.cursor as string | undefined;
 
 			// Use fixed page size since pageSize isn't in MCP schema
 			// Category filtering via custom tools/categories endpoint instead
@@ -85,7 +88,7 @@ function registerPaginatedToolsList(server: McpServer) {
 			}));
 
 			// Prepare response according to MCP spec
-			const response: any = {
+			const response: Record<string, unknown> = {
 				tools: mcpTools,
 			};
 
@@ -101,9 +104,10 @@ function registerPaginatedToolsList(server: McpServer) {
 			});
 
 			return response;
-		} catch (error: any) {
+		} catch (error: unknown) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
 			mcpLogger.error("tools", "Tools list pagination error", {
-				error: error.message,
+				error: errorMessage,
 				cursor: request.params?.cursor ? "[INVALID]" : undefined,
 			});
 
@@ -111,13 +115,13 @@ function registerPaginatedToolsList(server: McpServer) {
 			throw {
 				code: -32602,
 				message: "Invalid params",
-				data: { error: error.message },
+				data: { error: errorMessage },
 			};
 		}
 	});
 
 	// Register tools/categories helper method for client navigation
-	server.setRequestHandler({ method: "tools/categories" }, async (request) => {
+	server.setRequestHandler({ method: "tools/categories" }, async (_request: { params?: Record<string, unknown> }) => {
 		const allTools = getAllTools();
 		const categories = mcpPaginator.getToolCategories(allTools);
 
@@ -150,7 +154,7 @@ function registerTools(
 	});
 
 	// Kong modification operations using enhanced MCP elicitation - DISABLED FOR CLAUDE DESKTOP
-	const ENHANCED_KONG_OPERATIONS = new Set([
+	const ENHANCED_KONG_OPERATIONS = new Set<string>([
 		// 'create_service', 'create_route', 'create_consumer', 'create_plugin'
 	]);
 
@@ -715,24 +719,27 @@ function registerTools(
 							);
 							break;
 
-						case "create_elicitation_session":
-							result = await elicitationOps.createElicitationSession(args.analysisResult, args.context);
+						case "create_elicitation_session": {
+							const sessionResult = await elicitationOps.createElicitationSession(args.analysisResult, args.context);
+							const enhancedResult = sessionResult as Record<string, unknown>;
 
 							// Enhance result for Claude Desktop compatibility
-							if (result.needsUserInput && result.claudeDesktopPrompt) {
-								result.content = [
+							if (sessionResult.needsUserInput && sessionResult.claudeDesktopPrompt) {
+								enhancedResult.content = [
 									{
 										type: "text",
-										text: result.claudeDesktopPrompt,
+										text: sessionResult.claudeDesktopPrompt,
 									},
 								];
 
 								// Add structured guidance for Claude Desktop
-								if (result.directInstructions) {
-									result.guidance = result.directInstructions;
+								if (sessionResult.directInstructions) {
+									enhancedResult.guidance = sessionResult.directInstructions;
 								}
 							}
+							result = enhancedResult;
 							break;
+						}
 
 						case "process_elicitation_response":
 							result = await elicitationOps.processElicitationResponse(args.sessionId, args.requestId, args.response);
@@ -748,7 +755,7 @@ function registerTools(
 
 					// Record performance metrics
 					const duration = Date.now() - startTime;
-					performanceCollector.recordToolExecution(tool.method, duration, success);
+					performanceCollector.recordToolExecution(`konnect_${tool.method}`, duration, success);
 
 					return {
 						content: [
@@ -761,7 +768,7 @@ function registerTools(
 				} catch (error: any) {
 					success = false;
 					const duration = Date.now() - startTime;
-					performanceCollector.recordToolExecution(tool.method, duration, success);
+					performanceCollector.recordToolExecution(`konnect_${tool.method}`, duration, success);
 
 					const formattedError = formatError(error);
 
@@ -779,13 +786,14 @@ function registerTools(
 		}
 
 		// Create traced handler using shared tracing
+		const prefixedName = `konnect_${tool.method}`;
 		const tracedHandler = async (args: any, extra: RequestHandlerExtra<any, any>): Promise<any> => {
-			return traceToolCall(tool.method, () => handler(args, extra));
+			return traceToolCall(prefixedName, () => handler(args, extra));
 		};
 
 		// Register the traced tool with appropriate parameters
-		const toolParams = tool.inputSchema || tool.parameters?.shape || {};
-		mcpLogger.debug("server", "Registering tool", { method: tool.method, category: tool.category });
-		server.tool(tool.method, tool.description, toolParams, tracedHandler);
+		const toolParams = (tool as unknown as Record<string, unknown>).inputSchema ?? tool.parameters?.shape ?? {};
+		mcpLogger.debug("server", "Registering tool", { method: prefixedName, category: tool.category });
+		server.tool(prefixedName, tool.description, toolParams, tracedHandler);
 	});
 }

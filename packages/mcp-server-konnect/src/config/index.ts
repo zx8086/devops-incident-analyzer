@@ -350,7 +350,7 @@ export class ConfigurationHealthMonitor {
 		}
 		const recent = this.healthHistory.slice(-3);
 		const scores = recent.map((h) => this.getHealthScore(h.status));
-		const trend = scores[2] - scores[0];
+		const trend = (scores[2] ?? 0) - (scores[0] ?? 0);
 		if (trend > 0) {
 			return {
 				trend: "improving",

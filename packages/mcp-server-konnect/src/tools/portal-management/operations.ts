@@ -108,7 +108,6 @@ export async function createPortal(
 	}
 }
 
-/**
 export async function getPortal(api: KongApi, portalId: string) {
 	mcpLogger.debug("tools", "Getting portal", { portalId });
 	try {

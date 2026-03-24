@@ -44,7 +44,7 @@ export class ContextDetector {
 			name: "explicit-domain-mention",
 			pattern: /(?:for the|using the|migrate to|in the|domain[:\s]+)([a-z0-9]([a-z0-9-]*[a-z0-9])?)\s+domain/gi,
 			confidence: 0.95,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			validator: (value) => value.length >= 3 && value.length <= 20,
 			category: "domain",
 		},
@@ -52,7 +52,7 @@ export class ContextDetector {
 			name: "domain-keyword",
 			pattern: /domain[:\s]*([a-z0-9-]{3,20})/gi,
 			confidence: 0.8,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			validator: (value) => value.length >= 3 && value.length <= 20,
 			category: "domain",
 		},
@@ -60,7 +60,7 @@ export class ContextDetector {
 			name: "possessive-domain",
 			pattern: /([a-z0-9-]{3,20})\s+(?:domain|team|services?|apis?)/gi,
 			confidence: 0.6,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			validator: (value) => !["the", "our", "this", "that", "some"].includes(value),
 			category: "domain",
 		},
@@ -70,21 +70,21 @@ export class ContextDetector {
 			name: "explicit-environment",
 			pattern: /(?:for|in|to|environment[:\s]+)(production|staging|development|dev|prod|test)/gi,
 			confidence: 0.9,
-			extractor: (match) => this.normalizeEnvironment(match[1].toLowerCase()),
+			extractor: (match) => this.normalizeEnvironment(match[1]!.toLowerCase()),
 			category: "environment",
 		},
 		{
 			name: "env-prefix",
 			pattern: /env[:\s]*(production|staging|development|dev|prod|test)/gi,
 			confidence: 0.85,
-			extractor: (match) => this.normalizeEnvironment(match[1].toLowerCase()),
+			extractor: (match) => this.normalizeEnvironment(match[1]!.toLowerCase()),
 			category: "environment",
 		},
 		{
 			name: "deploy-context",
 			pattern: /deploy(?:ing|ed)?.*?(?:to|in).*?(production|staging|development|dev|prod|test)/gi,
 			confidence: 0.75,
-			extractor: (match) => this.normalizeEnvironment(match[1].toLowerCase()),
+			extractor: (match) => this.normalizeEnvironment(match[1]!.toLowerCase()),
 			category: "environment",
 		},
 
@@ -93,7 +93,7 @@ export class ContextDetector {
 			name: "explicit-team",
 			pattern: /(?:team|owned by|belongs to|maintained by)[:\s]+([a-z0-9-]{2,15})/gi,
 			confidence: 0.9,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			validator: (value) => !["the", "our", "my", "a"].includes(value),
 			category: "team",
 		},
@@ -101,7 +101,7 @@ export class ContextDetector {
 			name: "team-possessive",
 			pattern: /([a-z0-9-]{2,15})\s+team/gi,
 			confidence: 0.7,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			validator: (value) => !["the", "our", "my", "your", "this"].includes(value),
 			category: "team",
 		},
@@ -111,14 +111,14 @@ export class ContextDetector {
 			name: "api-service-type",
 			pattern: /(rest|graphql|grpc|microservice|api)\s+(?:service|endpoint|gateway)/gi,
 			confidence: 0.8,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			category: "service-type",
 		},
 		{
 			name: "service-architecture",
 			pattern: /\b(microservice|monolith|serverless|lambda|function)\b/gi,
 			confidence: 0.6,
-			extractor: (match) => match[1].toLowerCase(),
+			extractor: (match) => match[1]!.toLowerCase(),
 			category: "service-type",
 		},
 
@@ -127,7 +127,7 @@ export class ContextDetector {
 			name: "explicit-protocol",
 			pattern: /\b(https?|grpc|tcp|udp|websocket|ws)\b/gi,
 			confidence: 0.85,
-			extractor: (match) => match[1].toLowerCase().replace(/^http$/, "http"),
+			extractor: (match) => match[1]!.toLowerCase().replace(/^http$/, "http"),
 			category: "protocol",
 		},
 	];
@@ -283,10 +283,10 @@ export class ContextDetector {
 		configs.forEach((config) => {
 			// Control plane name analysis
 			if (config._konnect?.control_plane_name) {
-				const cpName = config._konnect.control_plane_name.toLowerCase();
+				const cpName = config._konnect.control_plane_name.toLowerCase() as string;
 				const parts = cpName.split(/[-_\s]/);
 
-				parts.forEach((part) => {
+				parts.forEach((part: string) => {
 					if (part.length >= 3 && part.length <= 15) {
 						result.domain.push({
 							value: part,
@@ -315,8 +315,8 @@ export class ContextDetector {
 
 					// Service name analysis for domain hints
 					if (service.name) {
-						const nameParts = service.name.toLowerCase().split(/[-_]/);
-						nameParts.forEach((part) => {
+						const nameParts = (service.name.toLowerCase() as string).split(/[-_]/);
+						nameParts.forEach((part: string) => {
 							if (part.length >= 3 && part.length <= 15 && !["api", "service", "app", "web", "server"].includes(part)) {
 								result.domain.push({
 									value: part,

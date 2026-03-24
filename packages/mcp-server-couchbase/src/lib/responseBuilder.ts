@@ -90,4 +90,22 @@ export class ResponseBuilder {
 			}),
 		};
 	}
+
+	// SIO-607: Build MCP SDK-compatible resource response (contents[] with uri)
+	buildResourceResponse(uri: string): { contents: Array<{ uri: string; mimeType: string; text: string }> } {
+		const built = this.build();
+		const mimeType = this.content.some((c) => c.type === "json") ? "application/json" : "text/plain";
+		return {
+			contents: built.content.map((item) => ({
+				uri,
+				mimeType,
+				text: item.text,
+			})),
+		};
+	}
+
+	static markdown(text: string): ResponseBuilder {
+		const builder = new ResponseBuilder();
+		return builder.addContent(text, "text");
+	}
 }

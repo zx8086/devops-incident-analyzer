@@ -1,4 +1,4 @@
-/* src/resources/schemaResource.ts */
+// src/resources/schemaResource.ts
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
@@ -11,43 +11,48 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 		"collection-schema",
 		new ResourceTemplate("schema://{scope}/{collection}", { list: undefined }),
 		async (uri, { scope, collection }) => {
+			const scopeName = String(scope ?? "");
+			const collectionName = String(collection ?? "");
 			try {
-				logger.info({ scope, collection }, "Fetching schema resource");
+				logger.info({ scope: scopeName, collection: collectionName }, "Fetching schema resource");
 
 				const collectionMgr = bucket.collections();
 				const scopes = await collectionMgr.getAllScopes();
-				const foundScope = scopes.find((s) => s.name === scope);
+				const foundScope = scopes.find((s) => s.name === scopeName);
 
 				if (!foundScope) {
-					return ResponseBuilder.error(`Scope "${scope}" not found`);
+					return ResponseBuilder.error(`Scope "${scopeName}" not found`).buildResourceResponse(uri.href);
 				}
 
-				const foundCollection = foundScope.collections.find((c) => c.name === collection);
+				const foundCollection = foundScope.collections.find((c) => c.name === collectionName);
 				if (!foundCollection) {
-					return ResponseBuilder.error(`Collection "${collection}" not found in scope "${scope}"`);
+					return ResponseBuilder.error(
+						`Collection "${collectionName}" not found in scope "${scopeName}"`,
+					).buildResourceResponse(uri.href);
 				}
 
 				try {
 					const result = await bucket
-						.scope(scope)
-						.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${scope}\`.\`${collection}\` LIMIT 1`);
+						.scope(scopeName)
+						.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\` LIMIT 1`);
 
 					const rows = await result.rows;
 
 					if (rows && rows.length > 0) {
 						const docId = rows[0];
-						const docResult = await bucket.scope(scope).collection(collection).get(docId);
+						const docResult = await bucket.scope(scopeName).collection(collectionName).get(docId);
 
 						const schemaText = formatDocumentAsSchema(docResult.content);
-						return ResponseBuilder.markdown(schemaText);
-					} else {
-						return ResponseBuilder.error(`No documents found in ${scope}.${collection} to infer schema.`);
+						return ResponseBuilder.markdown(schemaText).buildResourceResponse(uri.href);
 					}
+					return ResponseBuilder.error(
+						`No documents found in ${scopeName}.${collectionName} to infer schema.`,
+					).buildResourceResponse(uri.href);
 				} catch (queryError) {
 					if (queryError instanceof Error && queryError.message.includes("index")) {
 						return ResponseBuilder.error(
-							`Unable to query collection. You may need to create a primary index:\nCREATE PRIMARY INDEX ON \`${bucket.name}\`.\`${scope}\`.\`${collection}\`;`,
-						);
+							`Unable to query collection. You may need to create a primary index:\nCREATE PRIMARY INDEX ON \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\`;`,
+						).buildResourceResponse(uri.href);
 					}
 					throw queryError;
 				}
@@ -55,8 +60,8 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 				logger.error(
 					{
 						error: error instanceof Error ? error.message : String(error),
-						scope,
-						collection,
+						scope: scopeName,
+						collection: collectionName,
 					},
 					"Error fetching schema resource",
 				);
@@ -64,7 +69,7 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 				return ResponseBuilder.error(
 					"Error fetching schema resource",
 					error instanceof Error ? error : new Error(String(error)),
-				);
+				).buildResourceResponse(uri.href);
 			}
 		},
 	);
@@ -91,7 +96,7 @@ function formatDocumentAsSchema(doc: DocumentContent): string {
 			const itemType = typeof firstItem;
 
 			if (itemType === "object" && firstItem !== null) {
-				fieldText += ` of objects\n`;
+				fieldText += " of objects\n";
 				for (const [k, v] of Object.entries(firstItem as Record<string, unknown>)) {
 					fieldText += formatField(`${key}[0].${k}`, v, level + 1);
 				}

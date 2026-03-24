@@ -52,7 +52,7 @@ export class SQLPPParserImpl implements SQLPPParser {
 		const firstToken = this.tokenize(query)[0];
 
 		// Check if the first token is a data modification keyword
-		const result = this.dataModificationKeywords.has(firstToken);
+		const result = firstToken !== undefined && this.dataModificationKeywords.has(firstToken);
 
 		if (result) {
 			logger.debug(
@@ -73,7 +73,7 @@ export class SQLPPParserImpl implements SQLPPParser {
 		const firstToken = this.tokenize(query)[0];
 
 		// Check if the first token is a structure modification keyword
-		const result = this.structureModificationKeywords.has(firstToken);
+		const result = firstToken !== undefined && this.structureModificationKeywords.has(firstToken);
 
 		if (result) {
 			logger.debug(
@@ -136,7 +136,9 @@ export class SQLPPParserImpl implements SQLPPParser {
 		let currentClauseTokens: string[] = [];
 
 		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i].toUpperCase();
+			const rawToken = tokens[i];
+			if (rawToken === undefined) continue;
+			const token = rawToken.toUpperCase();
 
 			if (this.queryKeywords.has(token)) {
 				if (currentClause && currentClauseTokens.length > 0) {
@@ -148,7 +150,7 @@ export class SQLPPParserImpl implements SQLPPParser {
 				}
 				currentClause = token;
 			} else {
-				currentClauseTokens.push(tokens[i]);
+				currentClauseTokens.push(rawToken);
 			}
 
 			if (token === "WHERE") ast.hasWhere = true;

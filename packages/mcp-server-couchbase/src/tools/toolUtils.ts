@@ -1,7 +1,8 @@
 /* src/tools/toolUtils.ts */
 
 import { createError } from "../lib/errors";
-import type { DocumentContent, ToolResponse } from "../lib/types";
+import type { DocumentContent } from "../lib/types";
+import type { ToolResponse } from "../types";
 
 export interface DocumentParams {
 	scope: string;

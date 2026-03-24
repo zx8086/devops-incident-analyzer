@@ -57,8 +57,8 @@ export default (server: McpServer, bucket: Bucket) => {
 
 				// Map the resource content to the tool response format
 				return {
-					content: resourceResult.contents.map((content) => ({
-						type: "text",
+					content: resourceResult.contents.map((content: { mimeType?: string; text?: string }) => ({
+						type: "text" as const,
 						text: content.text || `[Binary content of type ${content.mimeType}]`,
 					})),
 				};

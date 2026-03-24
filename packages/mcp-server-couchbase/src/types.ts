@@ -55,6 +55,15 @@ export interface AppContext {
 /**
  * Settings for the MCP server
  */
+// SIO-607: Type for validating Couchbase connection fields (maps to config.database)
+export interface CouchbaseConfig {
+	connectionString: string;
+	username: string;
+	password: string;
+	bucketName: string;
+	defaultScope: string;
+}
+
 export interface ServerSettings {
 	connectionString: string;
 	username: string;
@@ -197,12 +206,14 @@ export interface ToolParams {
 	query?: string;
 }
 
-export interface ToolResponse {
+// SIO-607: Index signature required for MCP SDK CallToolResult compatibility
+export type ToolResponse = {
+	[x: string]: unknown;
 	content: Array<{
 		type: "text";
 		text: string;
 	}>;
-}
+};
 
 export interface ErrorResponse {
 	status: "error";

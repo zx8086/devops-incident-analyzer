@@ -17,9 +17,6 @@ const AGENT_NAMES: Record<string, string> = {
 	konnect: "konnect-agent",
 };
 
-const MAX_TOOL_OUTPUT_SIZE = 32_768;
-const TARGET_TOOL_OUTPUT_SIZE = 16_384;
-
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
 	{
 		category: "auth",
@@ -85,36 +82,13 @@ function extractToolErrors(messages: Array<{ _getType(): string; content: unknow
 	return errors;
 }
 
-function truncateToolOutput(output: unknown): unknown {
-	const str = JSON.stringify(output);
-	if (str.length <= MAX_TOOL_OUTPUT_SIZE) return output;
-
-	// Smart truncation: try to reduce arrays
-	if (typeof output === "object" && output !== null) {
-		const obj = output as Record<string, unknown>;
-		const truncated = { ...obj, _truncated: true, _originalSize: str.length };
-
-		for (const [key, value] of Object.entries(obj)) {
-			if (Array.isArray(value) && value.length > 3) {
-				(truncated as Record<string, unknown>)[key] = value.slice(0, 3);
-				(truncated as Record<string, unknown>)[`_${key}Total`] = value.length;
-			}
-		}
-
-		const newStr = JSON.stringify(truncated);
-		if (newStr.length <= TARGET_TOOL_OUTPUT_SIZE) return truncated;
-	}
-
-	// Fallback: hard truncate
-	return JSON.parse(str.slice(0, TARGET_TOOL_OUTPUT_SIZE) + '"}');
-}
-
 export async function queryDataSource(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	const dataSourceId = state.currentDataSource;
 	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
 	const startTime = Date.now();
 	// SIO-603: Request-scoped logger with requestId and dataSourceId
-	const log = logger.child({ requestId: state.requestId, dataSourceId });
+	const isRetry = state.alignmentHints.length > 0;
+	const log = logger.child({ requestId: state.requestId, dataSourceId, isRetry });
 
 	log.info({ agentName }, "Sub-agent starting");
 
@@ -180,6 +154,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 			status: allToolsFailed ? "error" : "success",
 			duration,
 			toolOutputs: [],
+			isAlignmentRetry: isRetry,
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(allToolsFailed && { error: `All ${toolErrors.length} tool calls failed` }),
 		};
@@ -193,6 +168,7 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 			data: null,
 			status: "error",
 			duration,
+			isAlignmentRetry: isRetry,
 			error: error instanceof Error ? error.message : String(error),
 		};
 		return { dataSourceResults: [result] };

@@ -157,8 +157,8 @@ function analyzeQuery(query: string): QueryAnalysis {
 	if (orderByMatch && orderByMatch[1]) {
 		const orderByFields = orderByMatch[1]
 			.split(",")
-			.map((f) => f.trim().split(/\s+/)[0]) // Remove ASC/DESC
-			.filter((f) => f.length > 0);
+			.map((f) => f.trim().split(/\s+/)[0] ?? "") // Remove ASC/DESC
+			.filter((f): f is string => f.length > 0);
 
 		analysis.orderByFields = orderByFields;
 	}
@@ -210,9 +210,9 @@ function extractQueryComponents(query: string): {
 	// Look for fully qualified path pattern: `bucket`.`scope`.`collection`
 	const fqpMatch = query.match(/`([^`]+)`.`([^`]+)`.`([^`]+)`/);
 	if (fqpMatch) {
-		extractedBucket = fqpMatch[1];
-		extractedScope = fqpMatch[2];
-		extractedCollection = fqpMatch[3];
+		extractedBucket = fqpMatch[1] ?? null;
+		extractedScope = fqpMatch[2] ?? null;
+		extractedCollection = fqpMatch[3] ?? null;
 	}
 
 	// If not found, try different patterns
@@ -344,7 +344,7 @@ function formatOptimizationSuggestions(
 				// Get projected fields that aren't already in our index
 				const coveringFields = analysis.projectedFields.filter((field) => {
 					// Extract field name from projections (handles aliases like "field AS alias")
-					const cleanField = field.split(/\s+AS\s+/i)[0].trim();
+					const cleanField = (field.split(/\s+AS\s+/i)[0] ?? "").trim();
 					// Remove function calls
 					if (cleanField.includes("(")) return false;
 					// Only include if not already in index fields

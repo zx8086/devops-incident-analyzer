@@ -196,14 +196,14 @@ class ElicitationBridge {
 			const responseArray = Array.from(responses.values());
 
 			// Based on the elicitation pattern: domain, environment, team
-			if (responseArray.length >= 1 && responseArray[0].data) {
+			if (responseArray[0]?.data) {
 				domain = typeof responseArray[0].data === "string" ? responseArray[0].data : responseArray[0].data.domain;
 			}
-			if (responseArray.length >= 2 && responseArray[1].data) {
+			if (responseArray[1]?.data) {
 				environment =
 					typeof responseArray[1].data === "string" ? responseArray[1].data : responseArray[1].data.environment;
 			}
-			if (responseArray.length >= 3 && responseArray[2].data) {
+			if (responseArray[2]?.data) {
 				team = typeof responseArray[2].data === "string" ? responseArray[2].data : responseArray[2].data.team;
 			}
 

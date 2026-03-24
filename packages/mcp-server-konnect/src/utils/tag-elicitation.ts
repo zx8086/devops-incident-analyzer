@@ -11,13 +11,13 @@ import type { ElicitationManager, ElicitationRequest } from "./elicitation.js";
 export interface EntityContext {
 	type: "service" | "route" | "plugin" | "consumer";
 	name?: string;
-	config?: any;
+	config?: Record<string, unknown>;
 	relationships?: {
 		serviceId?: string;
 		routeId?: string;
 		consumerId?: string;
 	};
-	deckSource?: any;
+	deckSource?: Record<string, unknown>;
 }
 
 export interface TaggingContext {
@@ -149,7 +149,7 @@ export class TagElicitationEngine {
 	async processTaggingResponses(
 		sessionId: string,
 		plans: TaggingPlan[],
-		context: TaggingContext,
+		_context: TaggingContext,
 	): Promise<Map<string, string[]>> {
 		const responses = this.elicitationManager.getSessionResponses(sessionId);
 		const finalTags = new Map<string, string[]>();
@@ -164,7 +164,7 @@ export class TagElicitationEngine {
 					response.requestId.includes(entityKey.replace(":", "_")),
 				);
 
-				if (entityResponse && entityResponse.data) {
+				if (entityResponse?.data) {
 					// Add user-provided contextual tags
 					tags.push(...entityResponse.data);
 				} else {
@@ -237,7 +237,7 @@ export class TagElicitationEngine {
 		return suggestions.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
 	}
 
-	private analyzeServiceTags(name: string, config: any): TagSuggestion[] {
+	private analyzeServiceTags(name: string, config: Record<string, unknown>): TagSuggestion[] {
 		const suggestions: TagSuggestion[] = [];
 		const nameLower = name.toLowerCase();
 
@@ -257,7 +257,7 @@ export class TagElicitationEngine {
 		}
 
 		// Protocol detection from config
-		if (config.protocol) {
+		if (typeof config.protocol === "string") {
 			const protocol = config.protocol.toLowerCase();
 			suggestions.push({
 				tag: `protocol-${protocol}`,
@@ -268,8 +268,9 @@ export class TagElicitationEngine {
 		}
 
 		// Access scope detection
-		if (config.host) {
-			const isExternal = !config.host.match(/^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/);
+		const host = typeof config.host === "string" ? config.host : "";
+		if (host) {
+			const isExternal = !host.match(/^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/);
 			if (isExternal) {
 				suggestions.push({
 					tag: "access-public",
@@ -315,9 +316,9 @@ export class TagElicitationEngine {
 		return suggestions;
 	}
 
-	private analyzeRouteTags(name: string, config: any): TagSuggestion[] {
+	private analyzeRouteTags(name: string, config: Record<string, unknown>): TagSuggestion[] {
 		const suggestions: TagSuggestion[] = [];
-		const nameLower = name.toLowerCase();
+		const _nameLower = name.toLowerCase();
 
 		// Always suggest routing function
 		suggestions.push({
@@ -328,7 +329,8 @@ export class TagElicitationEngine {
 		});
 
 		// Access detection from paths and protocols
-		if (config.protocols?.includes("https") || config.protocols?.includes("http")) {
+		const protocols = Array.isArray(config.protocols) ? (config.protocols as string[]) : [];
+		if (protocols.includes("https") || protocols.includes("http")) {
 			suggestions.push({
 				tag: "access-public",
 				confidence: 0.7,
@@ -338,8 +340,9 @@ export class TagElicitationEngine {
 		}
 
 		// Type detection from paths
-		if (config.paths) {
-			const hasApiPath = config.paths.some((path: string) => path.includes("/api"));
+		const paths = Array.isArray(config.paths) ? (config.paths as string[]) : [];
+		if (paths.length > 0) {
+			const hasApiPath = paths.some((path: string) => path.includes("/api"));
 			if (hasApiPath) {
 				suggestions.push({
 					tag: "type-external-api",
@@ -351,7 +354,8 @@ export class TagElicitationEngine {
 		}
 
 		// Method analysis
-		if (config.methods && config.methods.length === 1 && config.methods[0] === "GET") {
+		const methods = Array.isArray(config.methods) ? (config.methods as string[]) : [];
+		if (methods.length === 1 && methods[0] === "GET") {
 			suggestions.push({
 				tag: "type-read-only",
 				confidence: 0.6,
@@ -363,7 +367,7 @@ export class TagElicitationEngine {
 		return suggestions;
 	}
 
-	private analyzePluginTags(name: string, config: any): TagSuggestion[] {
+	private analyzePluginTags(name: string, _config: Record<string, unknown>): TagSuggestion[] {
 		const suggestions: TagSuggestion[] = [];
 		const pluginName = name.toLowerCase();
 
@@ -420,7 +424,7 @@ export class TagElicitationEngine {
 		return suggestions;
 	}
 
-	private analyzeConsumerTags(name: string, config: any): TagSuggestion[] {
+	private analyzeConsumerTags(name: string, _config: Record<string, unknown>): TagSuggestion[] {
 		const suggestions: TagSuggestion[] = [];
 
 		// Always suggest authentication function
@@ -477,7 +481,7 @@ export class TagElicitationEngine {
 	private createEntityTaggingRequest(
 		sessionId: string,
 		plan: TaggingPlan,
-		context: TaggingContext,
+		_context: TaggingContext,
 	): ElicitationRequest {
 		const entity = plan.entity;
 		const entityDisplay = `${entity.type}: ${entity.name || "unnamed"}`;
@@ -510,7 +514,7 @@ export class TagElicitationEngine {
 			}
 		});
 
-		const requestId = `${entity.type}_${entity.name?.replace(/[^a-z0-9]/gi, "_") || "unnamed"}_tags`;
+		const _requestId = `${entity.type}_${entity.name?.replace(/[^a-z0-9]/gi, "_") || "unnamed"}_tags`;
 
 		return this.elicitationManager.addRequest(
 			sessionId,
@@ -532,8 +536,8 @@ export class TagElicitationEngine {
 			case "service":
 				return `${entity.config?.protocol || "http"}://${entity.config?.host || "unknown"}:${entity.config?.port || "80"}`;
 			case "route": {
-				const paths = entity.config?.paths?.join(", ") || "/";
-				const methods = entity.config?.methods?.join(", ") || "ALL";
+				const paths = (entity.config?.paths as string[] | undefined)?.join(", ") || "/";
+				const methods = (entity.config?.methods as string[] | undefined)?.join(", ") || "ALL";
 				return `${methods} ${paths}`;
 			}
 			case "plugin":
@@ -555,15 +559,16 @@ export class TagElicitationEngine {
 		};
 
 		suggestions.forEach((suggestion) => {
-			if (categorized[suggestion.category]) {
-				categorized[suggestion.category].push(suggestion);
+			const category = categorized[suggestion.category];
+			if (category) {
+				category.push(suggestion);
 			}
 		});
 
 		return categorized;
 	}
 
-	private generateTaggingElicitationSummary(plans: TaggingPlan[], context: TaggingContext): string {
+	private generateTaggingElicitationSummary(plans: TaggingPlan[], _context: TaggingContext): string {
 		let summary = `**Contextual Tagging Required**\n\n`;
 		summary += `${plans.length} entities need additional classification tags:\n\n`;
 

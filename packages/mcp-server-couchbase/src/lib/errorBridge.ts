@@ -1,7 +1,7 @@
 /* src/lib/errorBridge.ts */
 
-import { AppError, createError, ErrorCode } from "./errors";
-import { createMcpError, MCP_ERROR_CODES, McpError, McpErrorCode } from "./mcpErrors";
+import { AppError, createError } from "./errors";
+import { createMcpError, MCP_ERROR_CODES, McpError } from "./mcpErrors";
 
 /**
  * Convert any error to the appropriate type
@@ -27,11 +27,11 @@ export function toMcpError(error: unknown): McpError {
 	}
 
 	if (normalized instanceof AppError) {
-		return normalized.toMcpError();
+		return normalized.toMcpError() as McpError;
 	}
 
-	// This should never happen due to normalizeError's implementation
-	return createMcpError(MCP_ERROR_CODES.UNKNOWN_ERROR_CODE, normalized.message);
+	// Unreachable: normalizeError always returns AppError | McpError
+	return createMcpError(MCP_ERROR_CODES.UNKNOWN_ERROR_CODE, (normalized as Error).message);
 }
 
 /**
@@ -48,6 +48,6 @@ export function toAppError(error: unknown): AppError {
 		return normalized.toAppError();
 	}
 
-	// This should never happen due to normalizeError's implementation
-	return createError("UNKNOWN_ERROR", normalized.message);
+	// Unreachable: normalizeError always returns AppError | McpError
+	return createError("UNKNOWN_ERROR", (normalized as Error).message);
 }

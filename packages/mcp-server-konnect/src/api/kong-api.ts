@@ -340,6 +340,10 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/core-entities/plugins/${pluginId}`, "DELETE");
 	}
 
+	async listPluginSchemas(controlPlaneId: string): Promise<any> {
+		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/core-entities/plugin-schemas`);
+	}
+
 	// ===========================
 	// Certificate Management
 	// ===========================

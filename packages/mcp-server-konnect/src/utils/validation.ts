@@ -201,9 +201,9 @@ export function validatePagination(size?: number, offset?: string, pageAfter?: s
  * Sanitize and validate JSON configuration
  */
 export function validateJsonConfig(
-	config: any,
+	config: unknown,
 	configName = "configuration",
-): { isValid: boolean; sanitized?: any; error?: string } {
+): { isValid: boolean; sanitized?: Record<string, unknown>; error?: string } {
 	try {
 		// Ensure it's a valid object
 		if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -228,7 +228,7 @@ export function validateJsonConfig(
 /**
  * Validate plugin configuration based on plugin name
  */
-export function validatePluginConfig(pluginName: string, config: any): string[] {
+export function validatePluginConfig(pluginName: string, config: Record<string, unknown>): string[] {
 	const errors: string[] = [];
 
 	// Common validations for all plugins

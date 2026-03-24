@@ -1,7 +1,11 @@
 {
-	"extends": "../../tsconfig.base.json",
+	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
-		"rootDir": "./src"
-	},
-	"include": ["src/**/*.ts"]
+		"allowImportingTsExtensions": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true
+	}
 }

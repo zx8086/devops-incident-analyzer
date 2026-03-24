@@ -79,6 +79,7 @@ export async function initializeEnvironment(): Promise<void> {
 
 	// For Node.js environments, try to load .env files manually
 	try {
+		// @ts-expect-error dotenv is an optional dependency for Node.js environments
 		const { config } = await import("dotenv");
 
 		// Try loading .env from multiple locations

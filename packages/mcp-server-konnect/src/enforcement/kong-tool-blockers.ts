@@ -14,7 +14,7 @@ import * as controlPlaneOps from "../tools/control-planes/operations.js";
 import { mcpLogger } from "../utils/mcp-logger.js";
 import {
 	ElicitationBlockedError,
-	KongOperationContext,
+	type KongOperationContext,
 	type MandatoryContext,
 	withMandatoryElicitation,
 } from "./mandatory-elicitation-gate";

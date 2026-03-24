@@ -3,6 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import type { z } from "zod";
+import type { ToolResponse } from "../types";
 import { createError } from "./errors";
 import { createContextLogger } from "./logger";
 
@@ -10,7 +11,7 @@ import { createContextLogger } from "./logger";
  * Configuration interface for creating a tool
  * @template T - The Zod schema type for the tool's parameters
  */
-export interface ToolConfig<T extends z.ZodType> {
+export interface ToolConfig<T extends z.ZodObject<z.ZodRawShape>> {
 	/** The name of the tool as it will be registered with the MCP server */
 	name: string;
 	/** A description of what the tool does */
@@ -18,34 +19,14 @@ export interface ToolConfig<T extends z.ZodType> {
 	/** Zod schema defining the tool's parameter structure and validation */
 	params: T;
 	/** The handler function that implements the tool's functionality */
-	handler: (params: z.infer<T>, bucket: Bucket) => Promise<any>;
+	handler: (params: z.infer<T>, bucket: Bucket) => Promise<ToolResponse>;
 }
 
-/**
- * Creates a tool using the factory pattern
- * @template T - The Zod schema type for the tool's parameters
- * @param config - The tool configuration object
- * @returns A function that registers the tool with an MCP server
- *
- * @example
- * ```typescript
- * const getDocumentTool = createTool({
- *   name: "get_document",
- *   description: "Get a document by ID",
- *   params: z.object({
- *     id: z.string()
- *   }),
- *   handler: async ({ id }, bucket) => {
- *     // Implementation
- *   }
- * });
- * ```
- */
-export function createTool<T extends z.ZodType>(config: ToolConfig<T>) {
+export function createTool<T extends z.ZodObject<z.ZodRawShape>>(config: ToolConfig<T>) {
 	return (server: McpServer, bucket: Bucket) => {
 		const logger = createContextLogger(config.name);
 
-		server.tool(config.name, config.description, config.params, async (params: z.infer<T>) => {
+		server.tool(config.name, config.description, config.params.shape, async (params: z.infer<T>) => {
 			try {
 				logger.info({ params }, `Processing ${config.name}`);
 
@@ -65,10 +46,14 @@ export function createTool<T extends z.ZodType>(config: ToolConfig<T>) {
 	};
 }
 
-export function createToolConfig<T extends z.ZodType>(config: { name: string; description: string; params: T }) {
-	return (handler: (params: z.infer<T>, bucket: Bucket) => Promise<any>) => {
+export function createToolConfig<T extends z.ZodObject<z.ZodRawShape>>(config: {
+	name: string;
+	description: string;
+	params: T;
+}) {
+	return (handler: (params: z.infer<T>, bucket: Bucket) => Promise<ToolResponse>) => {
 		return (server: McpServer, bucket: Bucket) => {
-			server.tool(config.name, config.description, config.params, async (params: z.infer<T>) =>
+			server.tool(config.name, config.description, config.params.shape, async (params: z.infer<T>) =>
 				handler(params, bucket),
 			);
 		};

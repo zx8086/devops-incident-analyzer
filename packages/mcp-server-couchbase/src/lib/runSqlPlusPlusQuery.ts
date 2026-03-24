@@ -1,17 +1,22 @@
 /* src/lib/runSqlPlusPlusQuery.ts */
 
 import { config } from "../config";
+import type { SQLPPParser } from "../types";
 import { createError } from "./errors";
 import { createContextLogger, logger, measureOperation } from "./logger";
-import type { SQLPPParser } from "./sqlppParser";
-import type { OperationContext, QueryResult } from "./types";
+import type { OperationContext } from "./types";
+
+interface RunQueryResult {
+	rows: unknown[];
+	meta?: unknown;
+}
 
 export async function runSqlPlusPlusQuery(
 	ctx: OperationContext,
 	scopeName: string,
 	query: string,
 	sqlppParser: SQLPPParser,
-): Promise<QueryResult> {
+): Promise<RunQueryResult> {
 	const requestLogger = createContextLogger("runSqlPlusPlusQuery");
 
 	if (!ctx.lifespanContext.bucket) {
@@ -85,7 +90,7 @@ export async function runSqlPlusPlusQuery(
 				requestLogger.info(
 					{
 						rowCount: rows.length,
-						executionTime: result.meta?.executionTime,
+						executionTime: result.meta?.metrics?.executionTime,
 					},
 					"Query executed successfully",
 				);
@@ -108,6 +113,6 @@ export async function runSqlPlusPlusQuery(
 			},
 			"Query execution failed",
 		);
-		throw createError("QUERY_ERROR", "Failed to execute query", error);
+		throw createError("QUERY_ERROR", "Failed to execute query", error instanceof Error ? error : undefined);
 	}
 }

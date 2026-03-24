@@ -4,7 +4,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-import { KongApi } from "../../api/kong-api.js";
+import type { KongApi } from "../../api/kong-api.js";
 import * as analyticsOps from "../../tools/analytics/operations.js";
 import * as certificatesOps from "../../tools/certificates/operations.js";
 // Import individual operation modules for testing
@@ -120,7 +120,7 @@ describe("Flight API Unit Tests", () => {
 			const result = await configurationOps.getService(mockKongApi, TEST_CONFIG.controlPlaneId, "test-service-123");
 
 			expect(result).toBeDefined();
-			expect(result.service.id).toBe("test-service-123");
+			expect(result.service.serviceId).toBe("test-service-123");
 			expect(mockKongApi.getService).toHaveBeenCalledWith(TEST_CONFIG.controlPlaneId, "test-service-123");
 		});
 
@@ -151,12 +151,12 @@ describe("Flight API Unit Tests", () => {
 		});
 
 		test("should list services with pagination", async () => {
-			const result = await configurationOps.listServices(mockKongApi, TEST_CONFIG.controlPlaneId, 10, 0);
+			const result = await configurationOps.listServices(mockKongApi, TEST_CONFIG.controlPlaneId, 10);
 
 			expect(result).toBeDefined();
 			expect(result.services).toBeDefined();
 			expect(Array.isArray(result.services)).toBe(true);
-			expect(mockKongApi.listServices).toHaveBeenCalledWith(TEST_CONFIG.controlPlaneId, 10, 0);
+			expect(mockKongApi.listServices).toHaveBeenCalledWith(TEST_CONFIG.controlPlaneId, 10, undefined);
 		});
 	});
 
@@ -181,7 +181,7 @@ describe("Flight API Unit Tests", () => {
 			expect(result).toBeDefined();
 			expect(result.success).toBe(true);
 			expect(result.route.name).toBe("get-flights-test");
-			expect(result.route.service.id).toBe("test-service-123");
+			expect(result.route.serviceId).toBe("test-service-123");
 			expect(mockKongApi.createRoute).toHaveBeenCalledTimes(1);
 		});
 
@@ -444,7 +444,10 @@ describe("Flight API Unit Tests", () => {
 		});
 
 		test("should get specific control plane details", async () => {
-			const result = await controlPlanesOps.getControlPlane(mockKongApi, TEST_CONFIG.controlPlaneId);
+			const result = (await controlPlanesOps.getControlPlane(mockKongApi, TEST_CONFIG.controlPlaneId)) as Record<
+				string,
+				unknown
+			>;
 
 			expect(result).toBeDefined();
 			expect(result.controlPlaneDetails).toBeDefined();
@@ -512,10 +515,10 @@ describe("Flight API Unit Tests", () => {
 
 	describe("Certificate Operations", () => {
 		test("should list certificates for control plane", async () => {
-			const result = await certificatesOps.listCertificates(mockKongApi, TEST_CONFIG.controlPlaneId, 10, 0);
+			const result = await certificatesOps.listCertificates(mockKongApi, TEST_CONFIG.controlPlaneId, 10);
 
 			expect(result).toBeDefined();
-			expect(mockKongApi.listCertificates).toHaveBeenCalledWith(TEST_CONFIG.controlPlaneId, 10, 0);
+			expect(mockKongApi.listCertificates).toHaveBeenCalledWith(TEST_CONFIG.controlPlaneId, 10, undefined);
 		});
 
 		test("should create certificate with proper format", async () => {
@@ -560,10 +563,13 @@ describe("Flight API Unit Tests", () => {
 			// Mock API error
 			const errorMockApi = {
 				createService: mock(() => Promise.reject(new Error("API Error: Service creation failed"))),
-			};
+			} as unknown as KongApi;
 
 			try {
-				await configurationOps.createService(errorMockApi, TEST_CONFIG.controlPlaneId, { name: "test-service" });
+				await configurationOps.createService(errorMockApi, TEST_CONFIG.controlPlaneId, {
+					name: "test-service",
+					host: "test.example.com",
+				});
 				// Should not reach this point
 				expect(true).toBe(false);
 			} catch (error: any) {
@@ -594,7 +600,7 @@ describe("Flight API Unit Tests", () => {
 
 			const timeoutMockApi = {
 				getService: mock(() => Promise.reject(timeoutError)),
-			};
+			} as unknown as KongApi;
 
 			try {
 				await configurationOps.getService(timeoutMockApi, TEST_CONFIG.controlPlaneId, "test-service-123");
@@ -643,7 +649,7 @@ describe("Flight API Unit Tests", () => {
 
 			invalidUrls.forEach((url) => {
 				const isValid = url.startsWith("http://") || url.startsWith("https://");
-				const hasHostname = url.split("://")[1]?.length > 0;
+				const hasHostname = (url.split("://")[1]?.length ?? 0) > 0;
 				expect(isValid && hasHostname).toBe(false);
 			});
 		});

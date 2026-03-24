@@ -110,7 +110,7 @@ export class BypassPreventionTests {
 					results.push({
 						index,
 						status: "UNEXPECTED_ERROR",
-						error: error.message,
+						error: error instanceof Error ? error.message : String(error),
 					});
 				}
 			}
@@ -167,7 +167,7 @@ export class BypassPreventionTests {
 					index,
 					context: partialContext,
 					status: "BLOCKED_CORRECTLY",
-					error: error.message,
+					error: error instanceof Error ? error.message : String(error),
 				});
 			}
 		}
@@ -236,7 +236,7 @@ export class BypassPreventionTests {
 				results.push({
 					index,
 					status: "BLOCKED_CORRECTLY",
-					error: error.message,
+					error: error instanceof Error ? error.message : String(error),
 				});
 			}
 		}
@@ -282,7 +282,7 @@ export class BypassPreventionTests {
 					if (error instanceof KongOperationBlockedError || error instanceof ElicitationBlockedError) {
 						return { index, status: "BLOCKED_CORRECTLY", error: error.message };
 					} else {
-						return { index, status: "UNEXPECTED_ERROR", error: error.message };
+						return { index, status: "UNEXPECTED_ERROR", error: error instanceof Error ? error.message : String(error) };
 					}
 				}
 			}),
@@ -371,7 +371,7 @@ export class BypassPreventionTests {
 			return {
 				passed: false,
 				error: "Operation still blocked after valid elicitation",
-				details: error.message,
+				details: error instanceof Error ? error.message : String(error),
 			};
 		}
 	}

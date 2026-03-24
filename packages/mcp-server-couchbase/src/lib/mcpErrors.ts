@@ -32,7 +32,7 @@ export class McpError extends Error {
 	constructor(
 		public code: McpErrorCode,
 		message: string,
-		public data?: any,
+		public data?: unknown,
 	) {
 		super(message);
 		this.name = "McpError";
@@ -76,7 +76,7 @@ export class McpError extends Error {
  * @param message Error message
  * @param data Additional error data
  */
-export function createMcpError(code: McpErrorCode, message: string, data?: any): McpError {
+export function createMcpError(code: McpErrorCode, message: string, data?: unknown): McpError {
 	return new McpError(code, message, data);
 }
 
@@ -116,7 +116,7 @@ export function errorToMcpError(error: unknown, defaultCode: McpErrorCode = MCP_
 	}
 
 	if (error instanceof AppError) {
-		return error.toMcpError();
+		return error.toMcpError() as McpError;
 	}
 
 	const message = error instanceof Error ? error.message : String(error);

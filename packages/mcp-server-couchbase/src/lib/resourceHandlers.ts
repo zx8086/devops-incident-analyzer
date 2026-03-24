@@ -1,6 +1,7 @@
 /* src/lib/resourceHandlers.ts */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { CapellaConn } from "../types";
 import { createError } from "./errors";
 import { logger } from "./logger";
@@ -27,10 +28,10 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 		"get_document_by_path",
 		"Get a document by its path",
 		{
-			bucketName: "string",
-			scopeName: "string",
-			collectionName: "string",
-			documentId: "string",
+			bucketName: z.string().describe("Bucket name"),
+			scopeName: z.string().describe("Scope name"),
+			collectionName: z.string().describe("Collection name"),
+			documentId: z.string().describe("Document ID"),
 		},
 		async ({ bucketName, scopeName, collectionName, documentId }) => {
 			try {
@@ -61,7 +62,7 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 		"get_bucket_info",
 		"Get bucket information",
 		{
-			bucketName: "string",
+			bucketName: z.string().describe("Bucket name"),
 		},
 		async ({ bucketName }) => {
 			try {

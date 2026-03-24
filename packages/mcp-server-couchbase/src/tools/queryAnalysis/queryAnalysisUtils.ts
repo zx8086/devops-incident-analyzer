@@ -44,7 +44,7 @@ export async function executeAnalysisQuery(bucket: Bucket, queryString: string, 
 				responseText += `- **Execution Time**: ${result.meta.metrics?.executionTime || "N/A"}\n`;
 				responseText += `- **Result Count**: ${result.meta.metrics?.resultCount || rows.length}\n`;
 				responseText += `- **Result Size**: ${result.meta.metrics?.resultSize || "N/A"} bytes\n`;
-				responseText += `- **Processed Objects**: ${result.meta.metrics?.processedObjects || "N/A"}\n`;
+				responseText += `- **Mutation Count**: ${result.meta.metrics?.mutationCount ?? "N/A"}\n`;
 			}
 		}
 

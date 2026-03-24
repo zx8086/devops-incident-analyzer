@@ -11,6 +11,16 @@ import { elicitationBridge } from "../utils/elicitation-bridge.js";
 import { type KongDeploymentContext, mcpElicitationManager } from "../utils/mcp-elicitation.js";
 import * as configOps from "./configuration/operations.js";
 
+// Extended extra type for MCP servers that support elicitation
+interface ElicitationExtra {
+	elicitation?: {
+		requestInput: (params: {
+			message: string;
+			schema: Record<string, unknown>;
+		}) => Promise<Record<string, string> | null>;
+	};
+}
+
 /**
  * Enhanced Create Service with Native MCP Elicitation
  */
@@ -64,8 +74,8 @@ export async function createServiceWithElicitation(
 			}
 
 			// Use proper MCP elicitation
-			if (extra.elicitation?.requestInput) {
-				const elicitationResponse = await extra.elicitation.requestInput({
+			if ((extra as unknown as ElicitationExtra).elicitation?.requestInput) {
+				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation!.requestInput({
 					message: `Please provide configuration details for service "${args.name}":`,
 					schema: {
 						type: "object",
@@ -196,8 +206,8 @@ export async function createRouteWithElicitation(
 			}
 
 			// Use proper MCP elicitation
-			if (extra.elicitation?.requestInput) {
-				const elicitationResponse = await extra.elicitation.requestInput({
+			if ((extra as unknown as ElicitationExtra).elicitation?.requestInput) {
+				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation!.requestInput({
 					message: `Please provide configuration details for route "${args.name}":`,
 					schema: {
 						type: "object",

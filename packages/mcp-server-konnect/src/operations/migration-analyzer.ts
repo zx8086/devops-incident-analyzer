@@ -96,7 +96,7 @@ export class MigrationAnalyzer {
 		const environmentMatch = userMessage.match(/\b(?:environment|env)\s*=\s*([^,\s]+)/i);
 		const teamMatch = userMessage.match(/\bteam\s*=\s*([^,\s]+)/i);
 
-		if (domainMatch) {
+		if (domainMatch?.[1]) {
 			result.domain = {
 				value: domainMatch[1].toLowerCase().trim(),
 				confidence: 1.0,
@@ -105,7 +105,7 @@ export class MigrationAnalyzer {
 			};
 		}
 
-		if (environmentMatch) {
+		if (environmentMatch?.[1]) {
 			result.environment = {
 				value: environmentMatch[1].toLowerCase().trim(),
 				confidence: 1.0,
@@ -114,7 +114,7 @@ export class MigrationAnalyzer {
 			};
 		}
 
-		if (teamMatch) {
+		if (teamMatch?.[1]) {
 			result.team = {
 				value: teamMatch[1].toLowerCase().trim(),
 				confidence: 1.0,
@@ -282,12 +282,14 @@ export class MigrationAnalyzer {
 			domainPatterns.forEach((pattern) => {
 				const matches = context.userMessage!.matchAll(pattern);
 				for (const match of matches) {
-					candidates.push({
-						value: match[1].toLowerCase(),
-						confidence: 0.95,
-						source: "explicit",
-						sources: ["user-message"],
-					});
+					if (match[1]) {
+						candidates.push({
+							value: match[1].toLowerCase(),
+							confidence: 0.95,
+							source: "explicit",
+							sources: ["user-message"],
+						});
+					}
 				}
 			});
 		}
@@ -372,13 +374,15 @@ export class MigrationAnalyzer {
 			envPatterns.forEach((pattern) => {
 				const matches = context.userMessage!.matchAll(pattern);
 				for (const match of matches) {
-					const normalized = this.normalizeEnvironment(match[1].toLowerCase());
-					candidates.push({
-						value: normalized,
-						confidence: 0.9,
-						source: "explicit",
-						sources: ["user-message"],
-					});
+					if (match[1]) {
+						const normalized = this.normalizeEnvironment(match[1].toLowerCase());
+						candidates.push({
+							value: normalized,
+							confidence: 0.9,
+							source: "explicit",
+							sources: ["user-message"],
+						});
+					}
 				}
 			});
 		}
@@ -432,12 +436,14 @@ export class MigrationAnalyzer {
 			teamPatterns.forEach((pattern) => {
 				const matches = context.userMessage!.matchAll(pattern);
 				for (const match of matches) {
-					candidates.push({
-						value: match[1].toLowerCase(),
-						confidence: 0.9,
-						source: "explicit",
-						sources: ["user-message"],
-					});
+					if (match[1]) {
+						candidates.push({
+							value: match[1].toLowerCase(),
+							confidence: 0.9,
+							source: "explicit",
+							sources: ["user-message"],
+						});
+					}
 				}
 			});
 		}

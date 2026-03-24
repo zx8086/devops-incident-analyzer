@@ -1,8 +1,11 @@
-/* src/lib/progressReporting.ts */
+// src/lib/progressReporting.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "./logger";
 
+// McpServer does not expose a direct notify/sendNotification method.
+// Progress is reported via logging. If SDK adds notification support in
+// the future, this function can be updated to use it.
 export async function reportProgress(
 	server: McpServer,
 	token: string | number | undefined,
@@ -10,31 +13,12 @@ export async function reportProgress(
 ): Promise<void> {
 	if (!token) return;
 
-	try {
-		await server.notify("$/progress", {
+	logger.debug(
+		{
 			token,
-			value: {
-				percentage: progress.percentage,
-				message: progress.message || `Operation ${progress.percentage}% complete`,
-			},
-		});
-
-		logger.debug(
-			{
-				token,
-				percentage: progress.percentage,
-				message: progress.message,
-			},
-			"Progress reported",
-		);
-	} catch (error) {
-		logger.error(
-			{
-				error,
-				token,
-				percentage: progress.percentage,
-			},
-			"Failed to report progress",
-		);
-	}
+			percentage: progress.percentage,
+			message: progress.message,
+		},
+		"Progress reported",
+	);
 }

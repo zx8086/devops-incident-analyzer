@@ -300,7 +300,7 @@ export class PortalApi {
 			return true;
 		} catch (error) {
 			mcpLogger.error("api", "Portal connection test failed", {
-				error: error.message,
+				error: error instanceof Error ? error.message : String(error),
 			});
 			return false;
 		}

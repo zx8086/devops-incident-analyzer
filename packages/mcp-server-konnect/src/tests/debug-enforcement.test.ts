@@ -36,14 +36,18 @@ describe("INFO: Debug Enforcement", () => {
 			console.log("ERROR: Gate did NOT block - this is wrong!");
 		} catch (error) {
 			wasBlocked = true;
-			errorMessage = error.message;
-			console.log("SUCCESS: Gate blocked correctly:", error.constructor.name, error.message);
+			errorMessage = error instanceof Error ? error.message : String(error);
+			console.log(
+				"SUCCESS: Gate blocked correctly:",
+				error instanceof Error ? error.constructor.name : "unknown",
+				errorMessage,
+			);
 
 			if (error instanceof ElicitationBlockedError) {
 				console.log("SUCCESS: Correct error type - ElicitationBlockedError");
 				console.log("Missing fields:", error.missingFields);
 			} else {
-				console.log("ERROR: Wrong error type:", error.constructor.name);
+				console.log("ERROR: Wrong error type:", error instanceof Error ? error.constructor.name : typeof error);
 			}
 		}
 

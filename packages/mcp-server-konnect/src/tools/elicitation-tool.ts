@@ -331,9 +331,9 @@ export class ElicitationOperations {
 
 		// Map responses based on order: domain, environment, team
 		const responseArray = Array.from(responses.values());
-		if (responseArray.length >= 1 && responseArray[0].data) domain = responseArray[0].data;
-		if (responseArray.length >= 2 && responseArray[1].data) environment = responseArray[1].data;
-		if (responseArray.length >= 3 && responseArray[2].data) team = responseArray[2].data;
+		if (responseArray[0]?.data) domain = responseArray[0].data;
+		if (responseArray[1]?.data) environment = responseArray[1].data;
+		if (responseArray[2]?.data) team = responseArray[2].data;
 
 		// CRITICAL: Validate all mandatory fields are provided - NO FALLBACKS
 		if (!domain || !environment || !team) {

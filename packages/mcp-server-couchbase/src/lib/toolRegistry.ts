@@ -1,17 +1,20 @@
 // src/lib/toolRegistry.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Bucket } from "couchbase";
 import { toolRegistry } from "../tools";
 import { traceToolCall } from "../utils/tracing";
 import { logger } from "./logger";
 
 export class ToolRegistry {
-	static registerAll(server: McpServer, bucket: any): void {
+	static registerAll(server: McpServer, bucket: Bucket): void {
 		const registered: string[] = [];
 
 		// Wrap server.tool to inject tracing around every tool handler
 		const originalTool = server.tool.bind(server);
-		(server as any).tool = (name: string, ...rest: any[]) => {
+		const serverRecord = server as unknown as Record<string, unknown>;
+		serverRecord.tool = (name: string, ...rest: unknown[]) => {
+			const prefixedName = `capella_${name}`;
 			// server.tool has multiple overloads; handler is always the last arg
 			const args = [...rest];
 			const handlerIdx = args.length - 1;
@@ -19,20 +22,22 @@ export class ToolRegistry {
 
 			if (typeof originalHandler === "function") {
 				args[handlerIdx] = async (...handlerArgs: unknown[]) => {
-					return traceToolCall(name, () => originalHandler(...handlerArgs));
+					return traceToolCall(prefixedName, () =>
+						(originalHandler as (...a: unknown[]) => Promise<unknown>)(...handlerArgs),
+					);
 				};
 			}
 
-			return originalTool(name, ...args);
+			return (originalTool as unknown as (...a: unknown[]) => unknown)(prefixedName, ...args);
 		};
 
 		for (const [name, toolFn] of Object.entries(toolRegistry)) {
 			toolFn(server, bucket);
-			registered.push(name);
+			registered.push(`capella_${name}`);
 		}
 
 		// Restore original to avoid double-wrapping on re-registration
-		(server as any).tool = originalTool;
+		serverRecord.tool = originalTool;
 
 		logger.info(
 			{

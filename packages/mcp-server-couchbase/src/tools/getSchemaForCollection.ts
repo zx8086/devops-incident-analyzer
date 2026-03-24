@@ -11,6 +11,7 @@ interface SchemaParams {
 }
 
 interface SchemaResponse {
+	[x: string]: unknown;
 	content: Array<{
 		type: "text";
 		text: string;

@@ -139,7 +139,8 @@ export class SecurityEnhancer {
 			// Log security violations
 			if (violations.length > 0) {
 				const criticalViolations = violations.filter((v) => v.severity === "critical" || v.blocked);
-				if (criticalViolations.length > 0) {
+				const firstCritical = criticalViolations[0];
+				if (firstCritical) {
 					logger.error(
 						{
 							tool: toolName,
@@ -205,10 +206,11 @@ export class SecurityEnhancer {
 
 			// Block critical violations
 			const criticalViolations = stringViolations.filter((v) => v.severity === "critical");
-			if (criticalViolations.length > 0) {
+			const firstCritical = criticalViolations[0];
+			if (firstCritical) {
 				throw new McpError(
 					ErrorCode.InvalidParams,
-					`Security violation detected in field ${path}: ${criticalViolations[0].type}`,
+					`Security violation detected in field ${path}: ${firstCritical.type}`,
 				);
 			}
 		}

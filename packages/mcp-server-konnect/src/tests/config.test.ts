@@ -276,9 +276,9 @@ describe("Configuration System", () => {
 	});
 
 	describe("JSON Schema Export", () => {
-		test("should export valid JSON schema", () => {
+		test("should export valid JSON schema", async () => {
 			const manager = new ConfigurationManager();
-			const schema = manager.exportJsonSchema();
+			const schema = await manager.exportJsonSchema();
 
 			expect(schema).toBeDefined();
 			expect(schema.type).toBe("object");

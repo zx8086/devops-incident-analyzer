@@ -50,19 +50,20 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 				);
 			} catch (error) {
 				wasBlocked = true;
-				console.log("INFO: Caught error:", error.constructor.name, error.message);
+				const err = error as Error & { missingFields?: string[]; elicitationSession?: { sessionId: string } };
+				console.log("INFO: Caught error:", err.constructor.name, err.message);
 
 				if (error instanceof KongOperationBlockedError) {
 					elicitationSession = error.elicitationSession;
 					expect(error.missingFields).toContain("domain");
 					expect(error.missingFields).toContain("environment");
 					expect(error.missingFields).toContain("team");
-				} else if (error.missingFields) {
+				} else if (err.missingFields) {
 					// Handle ElicitationBlockedError or similar
 					elicitationSession = { sessionId: "test-session" };
-					expect(error.missingFields).toContain("domain");
-					expect(error.missingFields).toContain("environment");
-					expect(error.missingFields).toContain("team");
+					expect(err.missingFields).toContain("domain");
+					expect(err.missingFields).toContain("environment");
+					expect(err.missingFields).toContain("team");
 				}
 			}
 
@@ -77,8 +78,11 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 				await BlockedRouteOperations.createRoute("test-cp-123", { name: "test-route", paths: ["/test"] }, testContext);
 			} catch (error) {
 				wasBlocked = true;
-				if (error instanceof KongOperationBlockedError || error.missingFields) {
-					expect(error.missingFields.length).toBeGreaterThan(0);
+				const err = error as Error & { missingFields?: string[] };
+				if (error instanceof KongOperationBlockedError || err.missingFields) {
+					expect(
+						(error instanceof KongOperationBlockedError ? error.missingFields : err.missingFields)!.length,
+					).toBeGreaterThan(0);
 				}
 			}
 
@@ -133,8 +137,11 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 			} catch (error) {
 				if (error instanceof KongOperationBlockedError) {
 					sessionId = error.elicitationSession.sessionId;
-				} else if (error.elicitationSession) {
-					sessionId = error.elicitationSession.sessionId;
+				} else {
+					const err = error as { elicitationSession?: { sessionId: string } };
+					if (err.elicitationSession) {
+						sessionId = err.elicitationSession.sessionId;
+					}
 				}
 			}
 

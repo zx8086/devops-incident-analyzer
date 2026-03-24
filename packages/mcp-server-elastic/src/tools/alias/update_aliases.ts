@@ -86,14 +86,14 @@ function validateAliasActions(actions: any[]): void {
 			throw new Error(`Action ${i}: Each action must have exactly one key (add, remove, or remove_index)`);
 		}
 
-		const actionType = actionKeys[0];
+		const actionType = actionKeys[0] as string;
 		if (!validActionTypes.includes(actionType)) {
 			throw new Error(
 				`Action ${i}: Invalid action type '${actionType}'. Must be one of: ${validActionTypes.join(", ")}`,
 			);
 		}
 
-		const actionConfig = action[actionType];
+		const actionConfig = action[actionType as keyof typeof action];
 		if (!actionConfig || typeof actionConfig !== "object") {
 			throw new Error(`Action ${i}: Action configuration must be an object`);
 		}
@@ -153,7 +153,7 @@ export const registerUpdateAliasesTool: ToolRegistrationFunction = (server: McpS
 			// Analyze actions for summary
 			const actionSummary = params.actions.reduce(
 				(summary, action) => {
-					const actionType = Object.keys(action)[0];
+					const actionType = Object.keys(action)[0] ?? "unknown";
 					summary[actionType] = (summary[actionType] || 0) + 1;
 					return summary;
 				},

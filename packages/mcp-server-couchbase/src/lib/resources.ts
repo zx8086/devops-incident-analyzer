@@ -103,12 +103,26 @@ export function registerResourceMethods(server: McpServer): void {
 	server.tool("handle_resources_list", "Handle resources_list method call", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling resources_list method call");
-		return getResourcesList();
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(getResourcesList()),
+				},
+			],
+		};
 	});
 
 	server.tool("handle_prompts_list", "Handle prompts_list method call", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling prompts_list method call");
-		return getPromptsList();
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(getPromptsList()),
+				},
+			],
+		};
 	});
 }

@@ -7,7 +7,7 @@
  * ARCHITECTURAL PRINCIPLE: Make it impossible to bypass elicitation
  */
 
-import { MigrationAnalyzer, MigrationContext } from "../operations/migration-analyzer.js";
+import { MigrationAnalyzer, type MigrationContext } from "../operations/migration-analyzer.js";
 import { ElicitationManager, type ElicitationSession, KongElicitationPatterns } from "../utils/elicitation.js";
 import { mcpLogger } from "../utils/mcp-logger.js";
 
@@ -34,7 +34,7 @@ export class ElicitationBlockedError extends Error {
 	constructor(
 		public missingFields: string[],
 		public elicitationSession: ElicitationSession,
-		public message: string = `OPERATION BLOCKED: Missing mandatory context: ${missingFields.join(", ")}`,
+		public override message: string = `OPERATION BLOCKED: Missing mandatory context: ${missingFields.join(", ")}`,
 	) {
 		super(message);
 		this.name = "ElicitationBlockedError";
@@ -58,7 +58,7 @@ export class MandatoryElicitationGate {
 
 	private constructor() {
 		this.elicitationManager = new ElicitationManager();
-		const elicitationPatterns = new KongElicitationPatterns();
+		const elicitationPatterns = new KongElicitationPatterns(this.elicitationManager);
 		this.migrationAnalyzer = new MigrationAnalyzer(this.elicitationManager, elicitationPatterns);
 	}
 
@@ -187,9 +187,9 @@ export class MandatoryElicitationGate {
 
 		// Create validated context from responses
 		const validatedContext: MandatoryContext = {
-			domain: responses.domain,
-			environment: responses.environment,
-			team: responses.team,
+			domain: responses.domain!,
+			environment: responses.environment!,
+			team: responses.team!,
 			sessionId,
 			elicitationComplete: true,
 			contextConfidence: 1.0, // Explicit user input = 100% confidence

@@ -6,6 +6,9 @@ import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:alignment");
 const MAX_ALIGNMENT_RETRIES = 2;
+// Defense-in-depth: hard cap on total retry results regardless of counter state.
+// 4 datasources x 4 retry attempts = 16 results before we stop retrying.
+const MAX_TOTAL_RETRY_RESULTS = 16;
 
 export function getDataSourceErrorCategories(results: DataSourceResult[]): Map<string, Set<ToolErrorCategory>> {
 	const categories = new Map<string, Set<ToolErrorCategory>>();
@@ -113,6 +116,13 @@ export function checkAlignment(state: AgentStateType): Partial<AgentStateType> {
 export function routeAfterAlignment(state: AgentStateType): Send[] | "aggregate" {
 	const results = state.dataSourceResults;
 	const targetSources = state.targetDataSources;
+
+	// Defense-in-depth: hard cap on total retry results, independent of counter
+	const retryResultCount = results.filter((r) => r.isAlignmentRetry).length;
+	if (retryResultCount >= MAX_TOTAL_RETRY_RESULTS) {
+		logger.warn({ retryResultCount, cap: MAX_TOTAL_RETRY_RESULTS }, "Hard cap on retry results reached");
+		return "aggregate";
+	}
 
 	const resultIds = new Set(results.map((r) => r.dataSourceId));
 	const missing = targetSources.filter((id) => !resultIds.has(id));

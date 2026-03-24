@@ -13,6 +13,8 @@ export type ErrorCode =
 	| "VALIDATION_ERROR"
 	| "AUTH_ERROR"
 	| "CONFIG_ERROR"
+	| "DOCUMENT_NOT_FOUND"
+	| "NOT_FOUND"
 	| "UNKNOWN_ERROR";
 
 /**
@@ -21,6 +23,8 @@ export type ErrorCode =
  * and application operations.
  */
 export class AppError extends Error {
+	public details?: Record<string, unknown>;
+
 	constructor(
 		public code: string,
 		message: string,
@@ -34,7 +38,7 @@ export class AppError extends Error {
 	 * Converts to a MCP protocol error if needed
 	 * This provides a bridge between app errors and protocol errors
 	 */
-	toMcpError(): any {
+	toMcpError(): unknown {
 		// Import inside the method to avoid circular dependencies
 		const { createMcpError, MCP_ERROR_CODES } = require("./mcpErrors");
 
@@ -73,6 +77,8 @@ export const errorMessages: Record<ErrorCode, string> = {
 	VALIDATION_ERROR: "Input validation failed",
 	AUTH_ERROR: "Authentication failed",
 	CONFIG_ERROR: "Configuration error",
+	DOCUMENT_NOT_FOUND: "Document not found",
+	NOT_FOUND: "Resource not found",
 	UNKNOWN_ERROR: "An unexpected error occurred",
 };
 
@@ -150,6 +156,7 @@ export function getErrorMessage(error: unknown): string {
 // Map error codes to HTTP status codes
 const statusCodes: Record<ErrorCode, number> = {
 	DOCUMENT_NOT_FOUND: 404,
+	NOT_FOUND: 404,
 	QUERY_ERROR: 400,
 	VALIDATION_ERROR: 400,
 	CONFIG_ERROR: 500,
@@ -166,7 +173,7 @@ export function formatErrorResponse(error: Error): {
 	error: string;
 	code: string;
 	message: string;
-	details?: any;
+	details?: Record<string, unknown>;
 } {
 	if (error instanceof AppError) {
 		return {

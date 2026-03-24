@@ -180,7 +180,7 @@ export async function listApplications(
 ) {
 	mcpLogger.debug("tools", "Listing applications", { portalId, pageSize });
 	try {
-		const portalClient = api.createPortalClient(portalId);
+		const portalClient = await api.createPortalClient(portalId);
 		const result = await portalClient.listApplications(pageSize, pageNumber, filterName, filterAuthStrategy);
 
 		return {

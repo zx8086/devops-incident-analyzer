@@ -223,7 +223,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}
 
 		// Expose a method for tools to easily access resources by URI
-		(server as any).readResourceByUri = async function (resourceUri: string) {
+		(server as any).readResourceByUri = (async (resourceUri: string) => {
 			try {
 				logger.info(`Handling readResourceByUri for: ${resourceUri}`);
 				// Simple URL parsing without using URL constructor (for compatibility)
@@ -239,7 +239,9 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				}
 
 				// Look through server resources for a matching URI
-				const resourceMap = (this as any)._resources || (this as any).resources || new Map();
+				// biome-ignore lint/suspicious/noExplicitAny: accessing internal MCP SDK resource registry
+				const serverInternal = server as Record<string, any>;
+				const resourceMap = serverInternal._resources || serverInternal.resources || new Map();
 				if (resourceMap instanceof Map) {
 					for (const [id, resource] of resourceMap.entries()) {
 						if (resource.uri === resourceUri) {
@@ -267,7 +269,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				);
 				throw error;
 			}
-		}.bind(server);
+		}).bind(server);
 
 		// Work around the template issue by adding a custom handler for templates listing
 		(server as any).setRequestHandler = (server as any).setRequestHandler || (() => {});

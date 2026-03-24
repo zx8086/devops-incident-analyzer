@@ -132,7 +132,7 @@ export function createBlockedOperationHandler(
 	files: string[] = [],
 	configs: any[] = [],
 ) {
-	return async (args: any, _extra: RequestHandlerExtra) => {
+	return async (args: any, _extra: RequestHandlerExtra<any, any>) => {
 		const requestContext = {
 			userMessage,
 			files,
@@ -416,7 +416,7 @@ const elicitationOps = new ElicitationOperations();
  * Handlers for ALL elicitation tools - both enforcement and migration analysis
  */
 export const ELICITATION_TOOL_HANDLERS = {
-	async analyze_migration_context(args: any, _extra: RequestHandlerExtra) {
+	async analyze_migration_context(args: any, _extra: RequestHandlerExtra<any, any>) {
 		mcpLogger.info("enforcement", "Analyzing migration context");
 
 		const result = await elicitationOps.analyzeContext(
@@ -432,7 +432,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		return result;
 	},
 
-	async create_elicitation_session(args: any, _extra: RequestHandlerExtra) {
+	async create_elicitation_session(args: any, _extra: RequestHandlerExtra<any, any>) {
 		mcpLogger.info("enforcement", "Creating elicitation session");
 
 		// Fix the analysisResult structure - handle both formats safely
@@ -482,7 +482,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		return result;
 	},
 
-	async process_elicitation_response(args: any, _extra: RequestHandlerExtra) {
+	async process_elicitation_response(args: any, _extra: RequestHandlerExtra<any, any>) {
 		mcpLogger.info("enforcement", "Processing elicitation response", {
 			sessionId: args.sessionId,
 		});
@@ -543,7 +543,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		}
 	},
 
-	async get_session_status(args: any, _extra: RequestHandlerExtra) {
+	async get_session_status(args: any, _extra: RequestHandlerExtra<any, any>) {
 		// Try both the enforcement system and migration analysis system
 		try {
 			const migrationStatus = await elicitationOps.getSessionStatus(args.sessionId);

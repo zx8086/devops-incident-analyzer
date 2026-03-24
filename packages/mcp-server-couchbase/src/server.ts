@@ -6,15 +6,10 @@ import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
 
-export function createServer(bucket: any): McpServer {
+export function createServer(bucket: import("couchbase").Bucket): McpServer {
 	const server = new McpServer({
 		name: config.server.name,
 		version: config.server.version,
-		capabilities: {
-			tools: {},
-			resources: {},
-			prompts: {},
-		},
 	});
 
 	// Minimal hardcoded resource for debugging
@@ -38,11 +33,13 @@ export function createServer(bucket: any): McpServer {
 	registerAllResources(server, bucket);
 
 	// Add a public method to read resources by URI
-	(server as any).readResourceByUri = async function (resourceUri: string) {
+	// biome-ignore lint/suspicious/noExplicitAny: accessing internal MCP SDK resource registry
+	const serverInternal = server as Record<string, any>;
+	serverInternal.readResourceByUri = async (resourceUri: string) => {
 		// Some SDK versions store resources as a Map (iterable), others as a plain object (not iterable).
-		const resourceMap = (this as any)._resources || (this as any).resources || (this as any)._registeredResources;
+		const resourceMap = serverInternal._resources || serverInternal.resources || serverInternal._registeredResources;
 		if (!resourceMap) {
-			console.error("No resource registry found on server instance. Available keys:", Object.keys(this));
+			console.error("No resource registry found on server instance.");
 			throw new Error(
 				"No resource registry found on server instance (tried _resources, resources, _registeredResources)",
 			);
@@ -69,7 +66,7 @@ export function createServer(bucket: any): McpServer {
 			}
 		}
 		throw new Error(`No resource handler found for URI: ${resourceUri}`);
-	}.bind(server);
+	};
 
 	// Register ping handlers for both protocol and tool usage
 	registerPingHandlers(server);
@@ -79,7 +76,7 @@ export function createServer(bucket: any): McpServer {
 		const { createContextLogger } = require("./lib/logger");
 		return createContextLogger("EchoTool");
 	}
-	server.tool("echo", "Echoes back the input parameters for debugging", {}, async (params: any) => {
+	server.tool("echo", "Echoes back the input parameters for debugging", {}, async (params: Record<string, unknown>) => {
 		getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
 		return { content: [{ type: "text", text: JSON.stringify(params) }] };
 	});
