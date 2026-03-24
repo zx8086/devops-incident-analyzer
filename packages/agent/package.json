@@ -17,6 +17,7 @@
 		"@langchain/langgraph": "catalog:",
 		"@langchain/langgraph-checkpoint": "catalog:",
 		"@langchain/mcp-adapters": "catalog:",
+		"mammoth": "^1.8.0",
 		"@langchain/aws": "catalog:",
 		"@langchain/core": "catalog:",
 		"zod": "catalog:"

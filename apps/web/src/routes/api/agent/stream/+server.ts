@@ -1,8 +1,14 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
-import { flushLangSmithCallbacks, generateFallbackSuggestions, generateFollowUpSuggestions } from "@devops-agent/agent";
+import {
+	AttachmentError,
+	flushLangSmithCallbacks,
+	generateFallbackSuggestions,
+	generateFollowUpSuggestions,
+	processAttachments,
+} from "@devops-agent/agent";
 import { traceSpan } from "@devops-agent/observability";
-import { DataSourceContextSchema } from "@devops-agent/shared";
+import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import { getFollowUpLlm, invokeAgent } from "$lib/server/agent";
@@ -17,6 +23,7 @@ const StreamRequestSchema = z.object({
 	),
 	threadId: z.string().optional(),
 	dataSources: z.array(z.string()).optional(),
+	attachments: z.array(AttachmentBlockSchema).max(10).optional(),
 	isFollowUp: z.boolean().optional(),
 	dataSourceContext: DataSourceContextSchema.optional(),
 });
@@ -27,6 +34,19 @@ export const POST: RequestHandler = async ({ request }) => {
 		const threadId = body.threadId ?? crypto.randomUUID();
 		const requestId = crypto.randomUUID();
 		const runId = crypto.randomUUID();
+
+		// SIO-610: Process attachments server-side before invoking the agent
+		let processedAttachments: Awaited<ReturnType<typeof processAttachments>> | undefined;
+		if (body.attachments && body.attachments.length > 0) {
+			try {
+				processedAttachments = await processAttachments(body.attachments);
+			} catch (err) {
+				if (err instanceof AttachmentError) {
+					return json({ error: "Attachment error", details: err.message }, { status: 422 });
+				}
+				throw err;
+			}
+		}
 
 		const encoder = new TextEncoder();
 		const stream = new ReadableStream({
@@ -45,12 +65,19 @@ export const POST: RequestHandler = async ({ request }) => {
 							// Send run_id immediately so client can submit feedback before graph output
 							send({ type: "run_id", runId });
 
+							// Send attachment warnings if any
+							if (processedAttachments?.warnings.length) {
+								send({ type: "attachment_warnings", warnings: processedAttachments.warnings });
+							}
+
 							const eventStream = await invokeAgent(body.messages, {
 								threadId,
 								runId,
 								dataSources: body.dataSources,
 								isFollowUp: body.isFollowUp,
 								dataSourceContext: body.dataSourceContext,
+								attachmentContentBlocks: processedAttachments?.contentBlocks,
+								attachmentMeta: processedAttachments?.metadata,
 								metadata: {
 									request_id: requestId,
 									session_id: threadId,

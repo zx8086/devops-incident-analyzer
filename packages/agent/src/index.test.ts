@@ -25,6 +25,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		finalAnswer: "",
 		dataSourceContext: undefined,
 		requestId: "test-123",
+		attachmentMeta: [],
 		...overrides,
 	};
 }

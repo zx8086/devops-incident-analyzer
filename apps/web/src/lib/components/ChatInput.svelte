@@ -32,7 +32,7 @@ function autoResize() {
 }
 </script>
 
-<div class="border-t border-gray-200 bg-white p-4">
+<div class="p-4">
   <div class="flex items-end gap-2 max-w-4xl mx-auto">
     <textarea
       bind:this={textarea}

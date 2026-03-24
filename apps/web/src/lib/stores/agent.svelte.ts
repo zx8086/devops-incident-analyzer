@@ -1,4 +1,5 @@
 // apps/web/src/lib/stores/agent.svelte.ts
+import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 import type { DataSourceContext, StreamEvent } from "@devops-agent/shared";
 
 export interface ChatMessage {
@@ -39,11 +40,16 @@ function createAgentStore() {
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
+	let pendingAttachments = $state<AttachmentBlock[]>([]);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function sendMessage(content: string, followUpContext?: FollowUpContext) {
 		if (isStreaming || !content.trim()) return;
+
+		// SIO-610: Capture attachments before clearing
+		const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
+		pendingAttachments = [];
 
 		messages = [...messages, { role: "user", content }];
 		isStreaming = true;
@@ -67,6 +73,7 @@ function createAgentStore() {
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
 					dataSources: selectedDataSources,
+					...(attachmentsToSend && { attachments: attachmentsToSend }),
 					...(followUpContext?.isFollowUp && { isFollowUp: true }),
 					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
 				}),
@@ -257,6 +264,7 @@ function createAgentStore() {
 		completedNodes = new Map();
 		lastSuggestions = [];
 		lastDataSourceContext = undefined;
+		pendingAttachments = [];
 	}
 
 	return {
@@ -295,6 +303,12 @@ function createAgentStore() {
 		},
 		get lastDataSourceContext() {
 			return lastDataSourceContext;
+		},
+		get pendingAttachments() {
+			return pendingAttachments;
+		},
+		set pendingAttachments(v: AttachmentBlock[]) {
+			pendingAttachments = v;
 		},
 		sendMessage,
 		setFeedback,

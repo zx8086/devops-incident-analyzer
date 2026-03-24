@@ -2,6 +2,7 @@
 
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
+export { AttachmentError, type ProcessedAttachments, processAttachments } from "./attachment-processor.ts";
 export { classify } from "./classifier.ts";
 export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateFollowUpSuggestions } from "./follow-up-generator.ts";

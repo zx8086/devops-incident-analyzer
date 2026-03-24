@@ -1,10 +1,22 @@
 // agent/src/state.ts
 
-import type { DataSourceContext, DataSourceResult, ExtractedEntities, ToolPlanStep } from "@devops-agent/shared";
+import type {
+	AttachmentMeta,
+	DataSourceContext,
+	DataSourceResult,
+	ExtractedEntities,
+	ToolPlanStep,
+} from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 export const AgentState = Annotation.Root({
 	...MessagesAnnotation.spec,
+
+	// SIO-610: Lightweight attachment metadata for routing decisions
+	attachmentMeta: Annotation<AttachmentMeta[]>({
+		reducer: (current, update) => [...(current ?? []), ...update],
+		default: () => [],
+	}),
 
 	queryComplexity: Annotation<"simple" | "complex">({
 		reducer: (_, next) => next,

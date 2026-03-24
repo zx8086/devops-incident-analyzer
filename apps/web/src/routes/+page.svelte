@@ -4,6 +4,7 @@ import { onDestroy, onMount } from "svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
+import FileUpload from "$lib/components/FileUpload.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
@@ -135,5 +136,13 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </div>
 
-  <ChatInput onSend={handleSend} onStop={() => agentStore.cancelStream()} isStreaming={agentStore.isStreaming} />
+  <div class="border-t border-gray-200 bg-white">
+    <div class="max-w-4xl mx-auto px-4 pt-3">
+      <FileUpload
+        bind:attachments={agentStore.pendingAttachments}
+        disabled={agentStore.isStreaming}
+      />
+    </div>
+    <ChatInput onSend={handleSend} onStop={() => agentStore.cancelStream()} isStreaming={agentStore.isStreaming} />
+  </div>
 </div>

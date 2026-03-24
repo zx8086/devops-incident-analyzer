@@ -1,7 +1,8 @@
 // apps/web/src/lib/server/agent.ts
 import { buildGraph, createLlm, createMcpClient } from "@devops-agent/agent";
-import type { DataSourceContext } from "@devops-agent/shared";
+import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { MessageContentComplex } from "@langchain/core/messages";
 
 // SIO-606: Match gitagent-bridge getRecursionLimit(25) = 50.
 // Accounts for agent->tool round trips in each graph step.
@@ -53,13 +54,25 @@ export async function invokeAgent(
 		dataSources?: string[];
 		isFollowUp?: boolean;
 		dataSourceContext?: DataSourceContext;
+		attachmentContentBlocks?: MessageContentComplex[];
+		attachmentMeta?: AttachmentMeta[];
 		metadata?: Record<string, unknown>;
 	},
 ) {
 	const { HumanMessage } = await import("@langchain/core/messages");
 	const graph = await getGraph();
 
-	const langchainMessages = messages.filter((m) => m.role === "user").map((m) => new HumanMessage(m.content));
+	// SIO-610: Attach content blocks (images, PDFs, text) to the last user message
+	const userMessages = messages.filter((m) => m.role === "user");
+	const langchainMessages = userMessages.map((m, i) => {
+		if (i === userMessages.length - 1 && options.attachmentContentBlocks?.length) {
+			const contentBlocks = [...options.attachmentContentBlocks, { type: "text" as const, text: m.content }];
+			// MessageContentComplex includes broader types than HumanMessage expects;
+			// ChatBedrockConverse handles the actual type translation at the API layer
+			return new HumanMessage({ content: contentBlocks as unknown as string });
+		}
+		return new HumanMessage(m.content);
+	});
 
 	// Pass requestId into graph state so AgentState.requestId matches the web endpoint's value
 	const requestId = (options.metadata?.request_id as string) ?? crypto.randomUUID();
@@ -70,6 +83,7 @@ export async function invokeAgent(
 			targetDataSources: options.dataSources ?? [],
 			isFollowUp: options.isFollowUp ?? false,
 			requestId,
+			attachmentMeta: options.attachmentMeta ?? [],
 			...(options.dataSourceContext && { dataSourceContext: options.dataSourceContext }),
 		},
 		{
