@@ -13,10 +13,13 @@ import * as portalOps from "./tools/portal/operations.js";
 import * as portalManagementOps from "./tools/portal-management/operations.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
 import { formatError } from "./utils/error-handling.js";
-import { mcpLogger } from "./utils/mcp-logger.js";
+import { createContextLogger } from "./utils/mcp-logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
 import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
 import { traceToolCall } from "./utils/tracing.js";
+
+const log = createContextLogger("server");
+const toolsLog = createContextLogger("tools");
 
 export function createKonnectServer(api: KongApi, config: Config): McpServer {
 	const server = new McpServer({
@@ -32,9 +35,7 @@ export function createKonnectServer(api: KongApi, config: Config): McpServer {
 	// Validate tool registry
 	const validation = validateToolRegistry();
 	if (!validation.isValid) {
-		mcpLogger.critical("server", "Tool registry validation failed", {
-			errors: validation.errors,
-		});
+		log.fatal({ errors: validation.errors }, "Tool registry validation failed");
 		throw new Error(`Invalid tool registry: ${validation.errors.join(", ")}`);
 	}
 
@@ -66,10 +67,7 @@ function registerPaginatedToolsList(_server: McpServer) {
 			// Use fixed page size since pageSize isn't in MCP schema
 			// Category filtering via custom tools/categories endpoint instead
 
-			mcpLogger.debug("tools", "Tools list requested", {
-				cursor: cursor ? "[CURSOR]" : undefined,
-				totalTools: allTools.length,
-			});
+			toolsLog.debug({ cursor: cursor ? "[CURSOR]" : undefined, totalTools: allTools.length }, "Tools list requested");
 
 			// Apply pagination (use default page size since not in MCP schema)
 			const paginatedResult = mcpPaginator.paginateTools(allTools, {
@@ -97,19 +95,22 @@ function registerPaginatedToolsList(_server: McpServer) {
 				response.nextCursor = paginatedResult.nextCursor;
 			}
 
-			mcpLogger.debug("tools", "Tools list response", {
-				returnedTools: mcpTools.length,
-				hasNextPage: !!paginatedResult.nextCursor,
-				categories: [...new Set(paginatedResult.items.map((t) => t.category))],
-			});
+			toolsLog.debug(
+				{
+					returnedTools: mcpTools.length,
+					hasNextPage: !!paginatedResult.nextCursor,
+					categories: [...new Set(paginatedResult.items.map((t) => t.category))],
+				},
+				"Tools list response",
+			);
 
 			return response;
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
-			mcpLogger.error("tools", "Tools list pagination error", {
-				error: errorMessage,
-				cursor: request.params?.cursor ? "[INVALID]" : undefined,
-			});
+			toolsLog.error(
+				{ error: errorMessage, cursor: request.params?.cursor ? "[INVALID]" : undefined },
+				"Tools list pagination error",
+			);
 
 			// Return error per MCP spec for invalid cursor
 			throw {
@@ -125,10 +126,7 @@ function registerPaginatedToolsList(_server: McpServer) {
 		const allTools = getAllTools();
 		const categories = mcpPaginator.getToolCategories(allTools);
 
-		mcpLogger.debug("tools", "Tool categories requested", {
-			categoriesCount: categories.length,
-			categories,
-		});
+		toolsLog.debug({ categoriesCount: categories.length, categories }, "Tool categories requested");
 
 		return {
 			categories: categories.map((category) => ({
@@ -147,11 +145,11 @@ function registerTools(
 ) {
 	const allTools = getAllTools();
 
-	mcpLogger.notice("server", "Native MCP elicitation active");
-	mcpLogger.info("server", "Registering tools", {
-		toolCount: allTools.length,
-		categories: [...new Set(allTools.map((t) => t.category))],
-	});
+	log.info("Native MCP elicitation active");
+	log.info(
+		{ toolCount: allTools.length, categories: [...new Set(allTools.map((t) => t.category))] },
+		"Registering tools",
+	);
 
 	// Kong modification operations using enhanced MCP elicitation - DISABLED FOR CLAUDE DESKTOP
 	const ENHANCED_KONG_OPERATIONS = new Set<string>([
@@ -166,9 +164,7 @@ function registerTools(
 
 		if (isEnhancedKongOperation) {
 			// Use enhanced operation handler with native MCP elicitation
-			mcpLogger.debug("server", "Registering enhanced operation", {
-				method: tool.method,
-			});
+			log.debug({ method: tool.method }, "Registering enhanced operation");
 			handler = async (args: any, extra: RequestHandlerExtra<any, any>) => {
 				switch (tool.method) {
 					case "create_service":
@@ -793,7 +789,7 @@ function registerTools(
 
 		// Register the traced tool with appropriate parameters
 		const toolParams = (tool as unknown as Record<string, unknown>).inputSchema ?? tool.parameters?.shape ?? {};
-		mcpLogger.debug("server", "Registering tool", { method: prefixedName, category: tool.category });
+		log.debug({ method: prefixedName, category: tool.category }, "Registering tool");
 		server.tool(prefixedName, tool.description, toolParams, tracedHandler);
 	});
 }

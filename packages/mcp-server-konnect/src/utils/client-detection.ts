@@ -3,7 +3,9 @@
  * Determines client environment during initialization for better UX adaptation
  */
 
-import { mcpLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./mcp-logger.js";
+
+const log = createContextLogger("session");
 
 export type ClientType =
 	// Official Claude Clients
@@ -865,16 +867,19 @@ export function getElicitationStrategy(client: ClientEnvironment): {
  * Log client detection results for debugging
  */
 export function logClientDetection(client: ClientEnvironment): void {
-	mcpLogger.debug("session", "Client detection results", {
-		type: client.type,
-		name: client.name,
-		confidence: `${(client.detectionConfidence * 100).toFixed(1)}%`,
-		methods: client.detectionMethod,
-		capabilities: {
-			fileSystem: client.capabilities.hasFileSystem,
-			gitContext: client.capabilities.hasGitContext,
-			todoList: client.capabilities.hasTodoList,
-			elicitationMode: client.capabilities.preferredElicitationMode,
+	log.debug(
+		{
+			type: client.type,
+			name: client.name,
+			confidence: `${(client.detectionConfidence * 100).toFixed(1)}%`,
+			methods: client.detectionMethod,
+			capabilities: {
+				fileSystem: client.capabilities.hasFileSystem,
+				gitContext: client.capabilities.hasGitContext,
+				todoList: client.capabilities.hasTodoList,
+				elicitationMode: client.capabilities.preferredElicitationMode,
+			},
 		},
-	});
+		"Client detection results",
+	);
 }

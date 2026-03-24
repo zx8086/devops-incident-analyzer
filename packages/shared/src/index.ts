@@ -20,6 +20,7 @@ export {
 export {
 	type BootstrapLogger,
 	type BootstrapTransportResult,
+	createBootstrapAdapter,
 	createMcpApplication,
 	type McpApplication,
 	type McpApplicationOptions,
@@ -44,9 +45,18 @@ export {
 	type EcsLoggerConfig,
 	formatLogLine,
 	getChildLogger,
+	getEnv,
+	isProdOrStaging,
 	measureOperation,
 } from "./logger.ts";
-export { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
+export {
+	buildTelemetryConfig,
+	getTracer,
+	initTelemetry,
+	shutdownTelemetry,
+	type TelemetryConfig,
+	traceSpan,
+} from "./telemetry/telemetry.ts";
 export {
 	type ConnectionContext,
 	createSessionContext,
@@ -67,7 +77,6 @@ export {
 	type TracingOptions,
 	traceConnection,
 	traceToolCall,
-	traceToolExecution,
 	withExtractedContext,
 	withNestedTrace,
 	withTraceContextMiddleware,

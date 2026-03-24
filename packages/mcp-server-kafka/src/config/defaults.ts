@@ -43,7 +43,7 @@ export const defaults = {
 	telemetry: {
 		enabled: false,
 		serviceName: "kafka-mcp-server",
-		mode: "console" as const,
+		mode: "otlp" as const,
 		otlpEndpoint: "http://localhost:4318",
 	},
 	transport: {

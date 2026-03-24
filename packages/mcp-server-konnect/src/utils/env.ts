@@ -3,7 +3,9 @@
  * Optimized for Bun runtime with Node.js fallback support
  */
 
-import { mcpLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./mcp-logger.js";
+
+const log = createContextLogger("config");
 
 /**
  * Universal environment variable access with Bun optimization
@@ -73,7 +75,7 @@ export function getRuntimeInfo(): {
 export async function initializeEnvironment(): Promise<void> {
 	// Skip initialization if running under Bun (auto-loads .env files)
 	if (isBunRuntime()) {
-		mcpLogger.info("config", "Running under Bun - .env auto-loading enabled");
+		log.info("Running under Bun - .env auto-loading enabled");
 		return;
 	}
 
@@ -89,19 +91,17 @@ export async function initializeEnvironment(): Promise<void> {
 		for (const path of envPaths) {
 			const result = config({ path, override: false });
 			if (!result.error) {
-				mcpLogger.info("config", "Loaded environment variables from file", {
-					path,
-				});
+				log.info({ path }, "Loaded environment variables from file");
 				loaded = true;
 				break;
 			}
 		}
 
 		if (!loaded) {
-			mcpLogger.debug("config", "No .env file found - using system environment variables only");
+			log.debug("No .env file found - using system environment variables only");
 		}
 	} catch (error) {
-		mcpLogger.warning("config", "dotenv not available - install with: npm install dotenv");
-		mcpLogger.info("config", "Using system environment variables only");
+		log.warn("dotenv not available - install with: npm install dotenv");
+		log.info("Using system environment variables only");
 	}
 }

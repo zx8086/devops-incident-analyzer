@@ -204,7 +204,7 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 
 		// Add tracing wrapper to ALL tools
 		enhancedHandler = async (toolArgs: any, extra: any) => {
-			return traceToolCall(name, toolArgs, extra, handler);
+			return traceToolCall(name, () => handler(toolArgs, extra));
 		};
 
 		// Add security validation wrapper for write operations

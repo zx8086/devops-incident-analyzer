@@ -92,8 +92,8 @@ class LangSmithTracingTester {
 			try {
 				const tracing = await import("./src/utils/tracing.js");
 
-				if (typeof tracing.traceToolExecution !== "function") {
-					throw new Error("traceToolExecution is not a function");
+				if (typeof tracing.traceToolCall !== "function") {
+					throw new Error("traceToolCall is not a function");
 				}
 
 				if (typeof tracing.initializeTracing !== "function") {
@@ -129,17 +129,17 @@ class LangSmithTracingTester {
 		console.log("─".repeat(40));
 
 		// Test 5: Function signature verification
-		await this.runTest("traceToolExecution Function Signature", async () => {
+		await this.runTest("traceToolCall Function Signature", async () => {
 			try {
-				const { traceToolExecution } = await import("./src/utils/tracing.js");
+				const { traceToolCall } = await import("./src/utils/tracing.js");
 
 				// Check that it's a function, not a constant
-				if (typeof traceToolExecution !== "function") {
-					throw new Error("traceToolExecution should be a function, not a constant");
+				if (typeof traceToolCall !== "function") {
+					throw new Error("traceToolCall should be a function, not a constant");
 				}
 
 				// Verify function parameters
-				const funcString = traceToolExecution.toString();
+				const funcString = traceToolCall.toString();
 				if (!funcString.includes("toolName")) {
 					throw new Error("Function should accept toolName parameter");
 				}
@@ -153,7 +153,7 @@ class LangSmithTracingTester {
 		// Test 6: Dynamic traceable creation
 		await this.runTest("Dynamic Traceable Creation Pattern", async () => {
 			try {
-				const { traceToolExecution } = await import("./src/utils/tracing.js");
+				const { traceToolCall } = await import("./src/utils/tracing.js");
 
 				// Mock handler for testing
 				const mockHandler = async () => ({ result: "test" });
@@ -163,8 +163,8 @@ class LangSmithTracingTester {
 				const toolName2 = "elasticsearch_list_indices";
 
 				// These calls should not fail (even if tracing is disabled)
-				const result1 = await traceToolExecution(toolName1, {}, mockHandler);
-				const result2 = await traceToolExecution(toolName2, {}, mockHandler);
+				const result1 = await traceToolCall(toolName1, () => mockHandler());
+				const result2 = await traceToolCall(toolName2, () => mockHandler());
 
 				if (!result1 || !result2) {
 					throw new Error("Tracing function should return results");

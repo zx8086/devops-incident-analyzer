@@ -16,7 +16,7 @@ import { registerScrollSearchTool } from "../../../src/tools/search/scroll_searc
 import { registerUpdateByQueryTool } from "../../../src/tools/search/update_by_query";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	safeCloseElasticsearchClient,

@@ -1,7 +1,10 @@
 // src/transport/factory.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config/index.js";
-import { mcpLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/mcp-logger.js";
+
+const log = createContextLogger("transport");
+
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";
@@ -34,11 +37,7 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 
 export async function createTransport(config: Config, serverFactory: () => McpServer): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	mcpLogger.info("transport", "Resolving transport mode", {
-		mode: config.transport.mode,
-		stdio: useStdio,
-		http: useHttp,
-	});
+	log.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -65,11 +64,7 @@ export async function createTransport(config: Config, serverFactory: () => McpSe
 		result.stdio = await startStdioTransport(server);
 	}
 
-	mcpLogger.info("transport", "Transport initialized", {
-		mode: config.transport.mode,
-		stdio: useStdio,
-		http: useHttp,
-	});
+	log.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Transport initialized");
 
 	return result;
 }

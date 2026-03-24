@@ -1,6 +1,7 @@
 // src/server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "./config";
+import { logger } from "./lib/logger";
 import { registerPingHandlers } from "./lib/pingHandler";
 import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
@@ -39,7 +40,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 		// Some SDK versions store resources as a Map (iterable), others as a plain object (not iterable).
 		const resourceMap = serverInternal._resources || serverInternal.resources || serverInternal._registeredResources;
 		if (!resourceMap) {
-			console.error("No resource registry found on server instance.");
+			logger.error("No resource registry found on server instance.");
 			throw new Error(
 				"No resource registry found on server instance (tried _resources, resources, _registeredResources)",
 			);

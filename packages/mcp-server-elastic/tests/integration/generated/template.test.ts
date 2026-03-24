@@ -15,7 +15,7 @@ import { registerPutIndexTemplateTool } from "../../../src/tools/template/put_in
 import { registerSearchTemplateTool } from "../../../src/tools/template/search_template";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

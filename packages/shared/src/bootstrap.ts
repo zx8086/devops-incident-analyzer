@@ -1,5 +1,6 @@
 // shared/src/bootstrap.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type pino from "pino";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 
 export type { TelemetryConfig };
@@ -9,6 +10,16 @@ export interface BootstrapLogger {
 	error(message: string, meta?: Record<string, unknown>): void;
 	warn(message: string, meta?: Record<string, unknown>): void;
 	flush?(): void;
+}
+
+// Bridges Pino's (mergeObj, message) arg order to BootstrapLogger's (message, meta?) interface
+export function createBootstrapAdapter(pinoLogger: pino.Logger): BootstrapLogger {
+	return {
+		info: (msg, meta) => (meta ? pinoLogger.info(meta, msg) : pinoLogger.info(msg)),
+		error: (msg, meta) => (meta ? pinoLogger.error(meta, msg) : pinoLogger.error(msg)),
+		warn: (msg, meta) => (meta ? pinoLogger.warn(meta, msg) : pinoLogger.warn(msg)),
+		flush: () => pinoLogger.flush?.(),
+	};
 }
 
 export interface BootstrapTransportResult {

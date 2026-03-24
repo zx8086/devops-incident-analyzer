@@ -11,7 +11,7 @@ import { getCurrentRunTree } from "langsmith/singletons/traceable";
 import { traceable } from "langsmith/traceable";
 import { logger } from "../src/utils/logger.js";
 import { notificationManager } from "../src/utils/notifications.js";
-import { initializeTracing, traceToolExecution } from "../src/utils/tracing.js";
+import { initializeTracing, traceToolCall } from "../src/utils/tracing.js";
 
 // Test configuration
 const LANGSMITH_API_KEY = process.env.LANGSMITH_API_KEY;
@@ -58,7 +58,7 @@ const testBasicToolTrace = traceable(
 		};
 
 		// Execute with tracing
-		const result = await traceToolExecution(toolName, { test: "arg" }, {}, mockHandler);
+		const result = await traceToolCall(toolName, () => mockHandler({ test: "arg" }, {}));
 
 		console.log("  Tool execution completed");
 		console.log("  Result:", result);

@@ -1,5 +1,8 @@
+// src/tools/portal/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
-import { mcpLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/mcp-logger.js";
+
+const log = createContextLogger("tools");
 
 export async function listApis(
 	api: KongApi,
@@ -9,7 +12,7 @@ export async function listApis(
 	filterStatus?: string,
 	sort?: string,
 ) {
-	mcpLogger.debug("tools", "Listing portal APIs", { pageSize });
+	log.debug({ pageSize }, "Listing portal APIs");
 	try {
 		const result = await api.listPortalApis(pageSize, pageNumber, filterName, filterStatus, sort);
 
@@ -57,7 +60,7 @@ export async function listApis(
  * Get detailed information about a specific API
  */
 export async function fetchApi(api: KongApi, apiIdOrSlug: string) {
-	mcpLogger.debug("tools", "Fetching portal API", { apiIdOrSlug });
+	log.debug({ apiIdOrSlug }, "Fetching portal API");
 	try {
 		const result = await api.fetchPortalApi(apiIdOrSlug);
 
@@ -98,7 +101,7 @@ export async function fetchApi(api: KongApi, apiIdOrSlug: string) {
 }
 
 export async function getApiActions(api: KongApi, apiIdOrSlug: string) {
-	mcpLogger.debug("tools", "Getting API actions", { apiIdOrSlug });
+	log.debug({ apiIdOrSlug }, "Getting API actions");
 	try {
 		const result = await api.getPortalApiActions(apiIdOrSlug);
 
@@ -125,7 +128,7 @@ export async function getApiActions(api: KongApi, apiIdOrSlug: string) {
 }
 
 export async function listApiDocuments(api: KongApi, apiIdOrSlug: string) {
-	mcpLogger.debug("tools", "Listing API documents", { apiIdOrSlug });
+	log.debug({ apiIdOrSlug }, "Listing API documents");
 	try {
 		const result = await api.listPortalApiDocuments(apiIdOrSlug);
 
@@ -148,7 +151,7 @@ export async function listApiDocuments(api: KongApi, apiIdOrSlug: string) {
  * Fetch a specific API document
  */
 export async function fetchApiDocument(api: KongApi, apiIdOrSlug: string, documentIdOrSlug: string, format = "json") {
-	mcpLogger.debug("tools", "Fetching API document", { apiIdOrSlug, documentIdOrSlug, format });
+	log.debug({ apiIdOrSlug, documentIdOrSlug, format }, "Fetching API document");
 	try {
 		const result = await api.fetchPortalApiDocument(apiIdOrSlug, documentIdOrSlug, format);
 
@@ -178,7 +181,7 @@ export async function listApplications(
 	filterName?: string,
 	filterAuthStrategy?: string,
 ) {
-	mcpLogger.debug("tools", "Listing applications", { portalId, pageSize });
+	log.debug({ portalId, pageSize }, "Listing applications");
 	try {
 		const portalClient = await api.createPortalClient(portalId);
 		const result = await portalClient.listApplications(pageSize, pageNumber, filterName, filterAuthStrategy);
@@ -232,7 +235,7 @@ export async function createApplication(
 		scopes?: string[];
 	},
 ) {
-	mcpLogger.debug("tools", "Creating application", { name: applicationData.name });
+	log.debug({ name: applicationData.name }, "Creating application");
 	try {
 		const requestData = {
 			name: applicationData.name,
@@ -275,7 +278,7 @@ export async function createApplication(
  * Get detailed information about an application
  */
 export async function getApplication(api: KongApi, applicationId: string) {
-	mcpLogger.debug("tools", "Getting application", { applicationId });
+	log.debug({ applicationId }, "Getting application");
 	try {
 		const result = await api.getPortalApplication(applicationId);
 
@@ -336,7 +339,7 @@ export async function updateApplication(
 		scopes?: string[];
 	},
 ) {
-	mcpLogger.debug("tools", "Updating application", { applicationId });
+	log.debug({ applicationId }, "Updating application");
 	try {
 		const requestData: any = {};
 
@@ -371,7 +374,7 @@ export async function updateApplication(
  * Delete an application
  */
 export async function deleteApplication(api: KongApi, applicationId: string) {
-	mcpLogger.debug("tools", "Deleting application", { applicationId });
+	log.debug({ applicationId }, "Deleting application");
 	try {
 		await api.deletePortalApplication(applicationId);
 
@@ -400,7 +403,7 @@ export async function listApplicationRegistrations(
 	filterStatus?: string,
 	filterApiName?: string,
 ) {
-	mcpLogger.debug("tools", "Listing application registrations", { applicationId, pageSize });
+	log.debug({ applicationId, pageSize }, "Listing application registrations");
 	try {
 		const result = await api.listPortalApplicationRegistrations(
 			applicationId,
@@ -461,7 +464,7 @@ export async function createApplicationRegistration(
 		requestReason?: string;
 	},
 ) {
-	mcpLogger.debug("tools", "Creating application registration", { applicationId, apiId: registrationData.apiId });
+	log.debug({ applicationId, apiId: registrationData.apiId }, "Creating application registration");
 	try {
 		const requestData = {
 			api_id: registrationData.apiId,
@@ -499,7 +502,7 @@ export async function createApplicationRegistration(
  * Get details about a specific registration
  */
 export async function getApplicationRegistration(api: KongApi, applicationId: string, registrationId: string) {
-	mcpLogger.debug("tools", "Getting application registration", { applicationId, registrationId });
+	log.debug({ applicationId, registrationId }, "Getting application registration");
 	try {
 		const result = await api.getPortalApplicationRegistration(applicationId, registrationId);
 
@@ -538,7 +541,7 @@ export async function getApplicationRegistration(api: KongApi, applicationId: st
  * Delete an application registration
  */
 export async function deleteApplicationRegistration(api: KongApi, applicationId: string, registrationId: string) {
-	mcpLogger.debug("tools", "Deleting application registration", { applicationId, registrationId });
+	log.debug({ applicationId, registrationId }, "Deleting application registration");
 	try {
 		await api.deletePortalApplicationRegistration(applicationId, registrationId);
 
@@ -559,7 +562,7 @@ export async function deleteApplicationRegistration(api: KongApi, applicationId:
  * List credentials for an application
  */
 export async function listCredentials(api: KongApi, applicationId: string, pageSize = 10, pageNumber?: number) {
-	mcpLogger.debug("tools", "Listing credentials", { applicationId, pageSize });
+	log.debug({ applicationId, pageSize }, "Listing credentials");
 	try {
 		const result = await api.listPortalCredentials(applicationId, pageSize, pageNumber);
 
@@ -608,7 +611,7 @@ export async function createCredential(
 		expiresAt?: string;
 	},
 ) {
-	mcpLogger.debug("tools", "Creating credential", { applicationId, credentialType: credentialData.credentialType });
+	log.debug({ applicationId, credentialType: credentialData.credentialType }, "Creating credential");
 	try {
 		const requestData = {
 			type: credentialData.credentialType,
@@ -651,7 +654,7 @@ export async function updateCredential(
 		expiresAt?: string;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating credential", { applicationId, credentialId });
+	log.debug({ applicationId, credentialId }, "Updating credential");
 	try {
 		const requestData: any = {};
 
@@ -681,7 +684,7 @@ export async function updateCredential(
  * Delete a credential
  */
 export async function deleteCredential(api: KongApi, applicationId: string, credentialId: string) {
-	mcpLogger.debug("tools", "Deleting credential", { applicationId, credentialId });
+	log.debug({ applicationId, credentialId }, "Deleting credential");
 	try {
 		await api.deletePortalCredential(applicationId, credentialId);
 
@@ -703,7 +706,7 @@ export async function deleteCredential(api: KongApi, applicationId: string, cred
  * Regenerate application secret
  */
 export async function regenerateApplicationSecret(api: KongApi, applicationId: string) {
-	mcpLogger.debug("tools", "Regenerating application secret", { applicationId });
+	log.debug({ applicationId }, "Regenerating application secret");
 	try {
 		const result = await api.regeneratePortalApplicationSecret(applicationId);
 
@@ -736,7 +739,7 @@ export async function registerDeveloper(
 		customAttributes?: Record<string, string>;
 	},
 ) {
-	mcpLogger.debug("tools", "Registering developer", { email: developerData.email });
+	log.debug({ email: developerData.email }, "Registering developer");
 	try {
 		const requestData = {
 			email: developerData.email,
@@ -770,7 +773,7 @@ export async function registerDeveloper(
  * Authenticate a developer
  */
 export async function authenticate(api: KongApi, username: string, password: string) {
-	mcpLogger.debug("tools", "Authenticating developer", { username });
+	log.debug({ username }, "Authenticating developer");
 	try {
 		const credentials = { username, password };
 		const result = await api.authenticatePortalDeveloper(credentials);
@@ -800,7 +803,7 @@ export async function authenticate(api: KongApi, username: string, password: str
  * Get current developer profile
  */
 export async function getDeveloperMe(api: KongApi) {
-	mcpLogger.debug("tools", "Getting developer profile");
+	log.debug("Getting developer profile");
 	try {
 		const result = await api.getPortalDeveloperMe();
 
@@ -827,7 +830,7 @@ export async function getDeveloperMe(api: KongApi) {
  * Logout current developer
  */
 export async function logout(api: KongApi) {
-	mcpLogger.debug("tools", "Logging out developer");
+	log.debug("Logging out developer");
 	try {
 		await api.logoutPortalDeveloper();
 
@@ -854,7 +857,7 @@ export async function queryApplicationAnalytics(
 		granularity?: string;
 	},
 ) {
-	mcpLogger.debug("tools", "Querying application analytics", { applicationId });
+	log.debug({ applicationId }, "Querying application analytics");
 	try {
 		const requestData = {
 			metrics: analyticsQuery.metrics,

@@ -12,7 +12,7 @@ import { registerGetMultiTermVectorsTool } from "../../../src/tools/analytics/ge
 import { registerGetTermVectorsTool } from "../../../src/tools/analytics/get_term_vectors";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

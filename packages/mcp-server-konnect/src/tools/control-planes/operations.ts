@@ -1,7 +1,10 @@
+// src/tools/control-planes/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { formatEntity, formatEntityList } from "../../utils/formatting.js";
-import { mcpLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/mcp-logger.js";
+
+const log = createContextLogger("tools");
 
 /**
  * List all control planes in the organization
@@ -16,7 +19,7 @@ export async function listControlPlanes(
 	labels?: string,
 	sort?: string,
 ) {
-	mcpLogger.debug("tools", "Listing control planes", { pageSize, filterName: filterName || null });
+	log.debug({ pageSize, filterName: filterName || null }, "Listing control planes");
 	return withErrorContext(
 		"list_control_planes",
 		"control-planes",
@@ -74,7 +77,7 @@ export async function listControlPlanes(
  * Get detailed information about a specific control plane
  */
 export async function getControlPlane(api: KongApi, controlPlaneId: string) {
-	mcpLogger.debug("tools", "Getting control plane", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Getting control plane");
 	return withErrorContext(
 		"get_control_plane",
 		"control-plane",
@@ -122,7 +125,7 @@ export async function listControlPlaneGroupMemberships(
 	pageSize = 10,
 	pageAfter?: string,
 ) {
-	mcpLogger.debug("tools", "Listing control plane group memberships", { groupId, pageSize });
+	log.debug({ groupId, pageSize }, "Listing control plane group memberships");
 	return withErrorContext(
 		"list_control_plane_group_memberships",
 		"control-plane-group",
@@ -168,7 +171,7 @@ export async function listControlPlaneGroupMemberships(
  * Check if a control plane is a member of any group
  */
 export async function checkControlPlaneGroupMembership(api: KongApi, controlPlaneId: string) {
-	mcpLogger.debug("tools", "Checking control plane group membership", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Checking control plane group membership");
 	return withErrorContext(
 		"check_control_plane_group_membership",
 		"control-plane",
@@ -211,7 +214,7 @@ export async function createControlPlane(
 		labels?: Record<string, string>;
 	},
 ) {
-	mcpLogger.debug("tools", "Creating control plane", { name: controlPlaneData.name });
+	log.debug({ name: controlPlaneData.name }, "Creating control plane");
 	return withErrorContext(
 		"create_control_plane",
 		"control-plane",
@@ -270,7 +273,7 @@ export async function updateControlPlane(
 		labels?: Record<string, string>;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating control plane", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Updating control plane");
 	return withErrorContext(
 		"update_control_plane",
 		"control-plane",
@@ -310,7 +313,7 @@ export async function updateControlPlane(
  * Delete a control plane
  */
 export async function deleteControlPlane(api: KongApi, controlPlaneId: string) {
-	mcpLogger.debug("tools", "Deleting control plane", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Deleting control plane");
 	return withErrorContext(
 		"delete_control_plane",
 		"control-plane",
@@ -341,7 +344,7 @@ export async function listDataPlaneNodes(
 	filterStatus?: string,
 	filterHostname?: string,
 ) {
-	mcpLogger.debug("tools", "Listing data plane nodes", { controlPlaneId, pageSize });
+	log.debug({ controlPlaneId, pageSize }, "Listing data plane nodes");
 	return withErrorContext(
 		"list_data_plane_nodes",
 		"control-plane",
@@ -408,7 +411,7 @@ export async function listDataPlaneNodes(
  * Get detailed information about a data plane node
  */
 export async function getDataPlaneNode(api: KongApi, controlPlaneId: string, nodeId: string) {
-	mcpLogger.debug("tools", "Getting data plane node", { controlPlaneId, nodeId });
+	log.debug({ controlPlaneId, nodeId }, "Getting data plane node");
 	return withErrorContext(
 		"get_data_plane_node",
 		"data-plane-node",
@@ -464,7 +467,7 @@ export async function getDataPlaneNode(api: KongApi, controlPlaneId: string, nod
  * Create a data plane authentication token
  */
 export async function createDataPlaneToken(api: KongApi, controlPlaneId: string, name: string, expiresAt?: string) {
-	mcpLogger.debug("tools", "Creating data plane token", { controlPlaneId, name });
+	log.debug({ controlPlaneId, name }, "Creating data plane token");
 	return withErrorContext(
 		"create_data_plane_token",
 		"control-plane",
@@ -506,7 +509,7 @@ export async function createDataPlaneToken(api: KongApi, controlPlaneId: string,
  * List data plane tokens for a control plane
  */
 export async function listDataPlaneTokens(api: KongApi, controlPlaneId: string, pageSize = 10, pageNumber?: number) {
-	mcpLogger.debug("tools", "Listing data plane tokens", { controlPlaneId, pageSize });
+	log.debug({ controlPlaneId, pageSize }, "Listing data plane tokens");
 	return withErrorContext(
 		"list_data_plane_tokens",
 		"control-plane",
@@ -547,7 +550,7 @@ export async function listDataPlaneTokens(api: KongApi, controlPlaneId: string, 
  * Revoke a data plane token
  */
 export async function revokeDataPlaneToken(api: KongApi, controlPlaneId: string, tokenId: string) {
-	mcpLogger.debug("tools", "Revoking data plane token", { controlPlaneId, tokenId });
+	log.debug({ controlPlaneId, tokenId }, "Revoking data plane token");
 	return withErrorContext(
 		"revoke_data_plane_token",
 		"data-plane-token",
@@ -572,7 +575,7 @@ export async function revokeDataPlaneToken(api: KongApi, controlPlaneId: string,
  * Get control plane configuration
  */
 export async function getControlPlaneConfig(api: KongApi, controlPlaneId: string) {
-	mcpLogger.debug("tools", "Getting control plane config", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Getting control plane config");
 	return withErrorContext(
 		"get_control_plane_config",
 		"control-plane",
@@ -622,7 +625,7 @@ export async function updateControlPlaneConfig(
 		analyticsEnabled?: boolean;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating control plane config", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Updating control plane config");
 	return withErrorContext(
 		"update_control_plane_config",
 		"control-plane",

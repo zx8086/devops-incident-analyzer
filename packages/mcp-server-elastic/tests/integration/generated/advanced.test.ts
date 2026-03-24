@@ -12,7 +12,7 @@ import { registerDeleteByQueryTool } from "../../../src/tools/advanced/delete_by
 import { registerTranslateSqlQueryTool } from "../../../src/tools/advanced/translate_sql_query";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

@@ -1,6 +1,8 @@
 import axios, { type AxiosRequestConfig } from "axios";
-import { mcpLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/mcp-logger.js";
 import { API_REGIONS } from "./kong-api.js";
+
+const log = createContextLogger("api");
 
 export interface PortalApiOptions {
 	apiKey?: string;
@@ -36,7 +38,7 @@ export class PortalApi {
 		this.apiKey = options.apiKey || process.env.KONNECT_ACCESS_TOKEN || "";
 
 		if (!this.apiKey) {
-			mcpLogger.warning("api", "KONNECT_ACCESS_TOKEN not set in environment - Portal API calls will fail");
+			log.warn("KONNECT_ACCESS_TOKEN not set in environment - Portal API calls will fail");
 		}
 
 		if (!portalId) {
@@ -50,7 +52,7 @@ export class PortalApi {
 	async portalRequest<T>(endpoint: string, method = "GET", data: any = null): Promise<T> {
 		try {
 			const url = `${this.baseUrl}${endpoint}`;
-			mcpLogger.debug("api", "Making portal API request", { url });
+			log.debug({ url }, "Making portal API request");
 
 			const headers = {
 				Authorization: `Bearer ${this.apiKey}`,
@@ -70,14 +72,10 @@ export class PortalApi {
 			}
 
 			const response = await axios(config);
-			mcpLogger.debug("api", "Received portal API response", {
-				status: response.status,
-			});
+			log.debug({ status: response.status }, "Received portal API response");
 			return response.data;
 		} catch (error: any) {
-			mcpLogger.error("api", "Portal API request failed", {
-				error: error.message,
-			});
+			log.error({ error: error.message }, "Portal API request failed");
 
 			let errorMessage = `Portal API Error`;
 
@@ -299,9 +297,7 @@ export class PortalApi {
 			await this.listPortalApis(1);
 			return true;
 		} catch (error) {
-			mcpLogger.error("api", "Portal connection test failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			log.error({ error: error instanceof Error ? error.message : String(error) }, "Portal connection test failed");
 			return false;
 		}
 	}

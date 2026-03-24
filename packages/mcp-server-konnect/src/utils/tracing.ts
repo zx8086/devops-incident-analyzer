@@ -1,5 +1,4 @@
 // src/utils/tracing.ts
-// Re-exports from shared tracing module with konnect-specific defaults
 import {
 	type ConnectionContext,
 	isTracingActive,
@@ -8,50 +7,42 @@ import {
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
-import { mcpLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./mcp-logger.js";
+
+const log = createContextLogger("tool");
 
 export type { ConnectionContext };
 export { isTracingActive };
 
 export function initializeTracing(options?: TracingOptions): void {
-	const project = process.env.LANGSMITH_PROJECT || "konnect-mcp-server";
+	const project = process.env.KONNECT_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "konnect-mcp-server";
 	sharedInitializeTracing({ project, ...options });
 }
 
-export async function traceToolCall<T>(
-	toolName: string,
-	handler: () => Promise<T>,
-	metadata?: { category?: string; toolArgs?: Record<string, unknown> },
-): Promise<T> {
+export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const startTime = Date.now();
-	mcpLogger.info("tool", `Tool call started: ${toolName}`, { tool: toolName, dataSource: "konnect" });
+	log.info({ tool: toolName, dataSource: "konnect" }, `Tool call started: ${toolName}`);
 
 	try {
-		const result = await sharedTraceToolCall(toolName, handler, {
-			dataSourceId: "konnect",
-			toolArgs: metadata?.toolArgs,
-		});
+		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "konnect" });
 		const duration = Date.now() - startTime;
-		mcpLogger.info("tool", `Tool call completed: ${toolName}`, { tool: toolName, dataSource: "konnect", duration });
+		log.info({ tool: toolName, dataSource: "konnect", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		mcpLogger.error("tool", `Tool call failed: ${toolName}`, {
-			tool: toolName,
-			dataSource: "konnect",
-			duration,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		log.error(
+			{
+				tool: toolName,
+				dataSource: "konnect",
+				duration,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			`Tool call failed: ${toolName}`,
+		);
 		throw error;
 	}
 }
 
 export function traceConnection<T>(context: ConnectionContext, handler: () => Promise<T>): Promise<T> {
 	return sharedTraceConnection(context, handler, { dataSourceId: "konnect" });
-}
-
-export function logTracingStatus(): void {
-	const enabled = isTracingActive();
-	const project = process.env.LANGSMITH_PROJECT || "konnect-mcp-server";
-	mcpLogger.info("tracing", "Tracing status", { enabled, project });
 }

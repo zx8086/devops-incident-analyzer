@@ -2,7 +2,9 @@
 
 import { z } from "zod";
 import { getEnvVar, getEnvVarWithDefault, getRuntimeInfo, initializeEnvironment } from "../utils/env.js";
-import { mcpLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/mcp-logger.js";
+
+const log = createContextLogger("config");
 export const ConfigSchema = z.object({
 	application: z
 		.object({
@@ -464,18 +466,15 @@ export class ConfigurationManager {
 				return `  - ${path}: ${issue.message}`;
 			})
 			.join("\n");
-		mcpLogger.error("config", "Configuration validation failed", { issues });
+		log.error({ issues }, "Configuration validation failed");
 
 		error.issues.forEach((issue) => {
 			const path = issue.path.join(".");
 			if (path === "kong.accessToken") {
-				mcpLogger.warning(
-					"config",
-					"TIP: Set KONNECT_ACCESS_TOKEN environment variable with your Kong Konnect API token",
-				);
+				log.warn("TIP: Set KONNECT_ACCESS_TOKEN environment variable with your Kong Konnect API token");
 			}
 			if (path === "tracing.apiKey" && getEnvVar("LANGSMITH_TRACING") === "true") {
-				mcpLogger.warning("config", "TIP: Set LANGSMITH_API_KEY environment variable or set LANGSMITH_TRACING=false");
+				log.warn("TIP: Set LANGSMITH_API_KEY environment variable or set LANGSMITH_TRACING=false");
 			}
 		});
 	}
@@ -489,36 +488,38 @@ export class ConfigurationManager {
 				return value;
 			}),
 		);
-		mcpLogger.info("config", "Configuration loaded successfully", {
-			environment: config.application.environment,
-			logLevel: config.application.logLevel,
-			kongRegion: config.kong.region,
-			tracingEnabled: config.tracing.enabled,
-			healthStatus: health.status,
-			securityScore: `${health.metrics.securityScore}%`,
-			consistencyScore: `${health.metrics.environmentConsistency}%`,
-		});
+		log.info(
+			{
+				environment: config.application.environment,
+				logLevel: config.application.logLevel,
+				kongRegion: config.kong.region,
+				tracingEnabled: config.tracing.enabled,
+				healthStatus: health.status,
+				securityScore: `${health.metrics.securityScore}%`,
+				consistencyScore: `${health.metrics.environmentConsistency}%`,
+			},
+			"Configuration loaded successfully",
+		);
 		if (health.recommendations.length > 0) {
-			mcpLogger.info("config", "Configuration recommendations", {
-				recommendations: health.recommendations,
-			});
+			log.info({ recommendations: health.recommendations }, "Configuration recommendations");
 		}
 		if (health.issues.critical.length > 0) {
-			mcpLogger.error("config", "Configuration critical issues detected", {
-				criticalIssues: health.issues.critical.map((issue) => ({
-					path: issue.path,
-					message: issue.message,
-					remediation: issue.remediation,
-				})),
-			});
+			log.error(
+				{
+					criticalIssues: health.issues.critical.map((issue) => ({
+						path: issue.path,
+						message: issue.message,
+						remediation: issue.remediation,
+					})),
+				},
+				"Configuration critical issues detected",
+			);
 		}
 		if (health.issues.warnings.length > 0) {
-			mcpLogger.warning("config", "Configuration warnings detected", {
-				warnings: health.issues.warnings.map((issue) => ({
-					path: issue.path,
-					message: issue.message,
-				})),
-			});
+			log.warn(
+				{ warnings: health.issues.warnings.map((issue) => ({ path: issue.path, message: issue.message })) },
+				"Configuration warnings detected",
+			);
 		}
 	}
 

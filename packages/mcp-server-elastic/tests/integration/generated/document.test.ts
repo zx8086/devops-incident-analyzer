@@ -15,7 +15,7 @@ import { registerIndexDocumentTool } from "../../../src/tools/document/index_doc
 import { registerUpdateDocumentTool } from "../../../src/tools/document/update_document";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

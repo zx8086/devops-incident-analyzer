@@ -39,5 +39,3 @@ export async function traceToolCall<T>(toolName: string, handler: () => Promise<
 		throw error;
 	}
 }
-
-export { traceToolCall as traceToolExecution };

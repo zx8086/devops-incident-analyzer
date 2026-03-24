@@ -1,23 +1,16 @@
-/**
- * KONG TOOL BLOCKING MECHANISMS
- *
- * This file contains wrapped versions of ALL Kong MCP tools that
- * MUST pass through mandatory elicitation before execution.
- *
- * ARCHITECTURAL PRINCIPLE: Every Kong operation is blocked until
- * mandatory context (domain, environment, team) is provided.
- */
-
+// src/enforcement/kong-tool-blockers.ts
 import { KongApi } from "../api/kong-api.js";
 import * as configOps from "../tools/configuration/operations.js";
 import * as controlPlaneOps from "../tools/control-planes/operations.js";
-import { mcpLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/mcp-logger.js";
 import {
 	ElicitationBlockedError,
 	type KongOperationContext,
 	type MandatoryContext,
 	withMandatoryElicitation,
 } from "./mandatory-elicitation-gate";
+
+const log = createContextLogger("enforcement");
 
 /**
  * ELICITATION ENFORCEMENT ERROR
@@ -63,7 +56,7 @@ function generateMandatoryTags(context: MandatoryContext, entityType: string, en
 
 	const allTags = [...mandatoryTags, ...optionalTags];
 
-	mcpLogger.debug("enforcement", "Mandatory tags generated", { tags: allTags });
+	log.debug({ tags: allTags }, "Mandatory tags generated");
 
 	return allTags;
 }
@@ -99,7 +92,7 @@ export const BlockedServiceOperations = {
 				requestContext,
 			},
 			async (validatedContext: MandatoryContext) => {
-				mcpLogger.info("enforcement", "Creating service with validated context", { name });
+				log.info({ name }, "Creating service with validated context");
 
 				const api = await getValidatedKongApi(validatedContext);
 				const tags = generateMandatoryTags(validatedContext, "service", additionalParams.purpose);

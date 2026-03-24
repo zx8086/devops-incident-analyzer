@@ -3,7 +3,7 @@
 // Import global setup first
 import "./set-global";
 
-import { createMcpApplication, type TelemetryConfig } from "@devops-agent/shared";
+import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { config } from "./config";
 import { connectionManager } from "./lib/connectionManager";
 import { logger } from "./lib/logger";
@@ -45,19 +45,12 @@ async function connectWithBackoffAndCircuitBreaker(
 	throw new Error("Failed to connect to Couchbase after multiple attempts");
 }
 
-const telemetryConfig: TelemetryConfig = {
-	enabled: process.env.TELEMETRY_MODE !== undefined,
-	serviceName: process.env.OTEL_SERVICE_NAME || "couchbase-mcp-server",
-	mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
-	otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
-};
-
 createMcpApplication({
 	name: "couchbase-mcp-server",
-	logger,
+	logger: createBootstrapAdapter(logger),
 
 	initTracing: () => initializeTracing(),
-	telemetry: telemetryConfig,
+	telemetry: buildTelemetryConfig("couchbase-mcp-server"),
 
 	initDatasource: async () => {
 		logger.info("Starting Couchbase MCP Server...");

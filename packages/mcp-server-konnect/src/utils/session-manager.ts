@@ -9,7 +9,9 @@ import {
 	createSessionContext as sharedCreateSessionContext,
 	detectClient as sharedDetectClient,
 } from "@devops-agent/shared";
-import { mcpLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./mcp-logger.js";
+
+const log = createContextLogger("session");
 
 export type { SessionContext };
 export { generateSessionId, getCurrentSession, getCurrentSessionId, runWithSession };
@@ -40,14 +42,17 @@ export function detectClient(transportMode: "stdio" | "sse" | "http"): SessionCo
 export function logSessionInfo(prefix = "Session Info") {
 	const session = getCurrentSession();
 	if (session) {
-		mcpLogger.debug("session", `${prefix}:`, {
-			sessionId: `${session.sessionId?.substring(0, 10)}...`,
-			connectionId: `${session.connectionId?.substring(0, 10)}...`,
-			client: session.clientInfo?.name || "unknown",
-			transport: session.transportMode,
-			duration: session.startTime ? Date.now() - session.startTime : 0,
-		});
+		log.debug(
+			{
+				sessionId: `${session.sessionId?.substring(0, 10)}...`,
+				connectionId: `${session.connectionId?.substring(0, 10)}...`,
+				client: session.clientInfo?.name || "unknown",
+				transport: session.transportMode,
+				duration: session.startTime ? Date.now() - session.startTime : 0,
+			},
+			`${prefix}:`,
+		);
 	} else {
-		mcpLogger.debug("session", `${prefix}: No active session`);
+		log.debug(`${prefix}: No active session`);
 	}
 }

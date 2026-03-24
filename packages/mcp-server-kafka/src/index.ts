@@ -1,6 +1,6 @@
 // src/index.ts
 
-import { createMcpApplication } from "@devops-agent/shared";
+import { createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig } from "./config/index.ts";
 import { getLogger } from "./logging/container.ts";
@@ -26,7 +26,7 @@ if (import.meta.main) {
 
 	createMcpApplication<KafkaDatasource>({
 		name: "kafka-mcp-server",
-		logger,
+		logger: createBootstrapAdapter(logger),
 
 		initTracing: () => initializeTracing(),
 		telemetry: config.telemetry,

@@ -1,26 +1,19 @@
 #!/usr/bin/env bun
 
 // src/index.ts
-import { createMcpApplication, type TelemetryConfig } from "@devops-agent/shared";
+import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeTracing } from "./utils/tracing.js";
 
-const telemetryConfig: TelemetryConfig = {
-	enabled: process.env.TELEMETRY_MODE !== undefined,
-	serviceName: process.env.OTEL_SERVICE_NAME || "elastic-mcp-server",
-	mode: (process.env.TELEMETRY_MODE as "console" | "otlp" | "both") || "console",
-	otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318",
-};
-
 createMcpApplication({
 	name: "elastic-mcp-server",
-	logger,
+	logger: createBootstrapAdapter(logger),
 
 	initTracing: () => initializeTracing(),
-	telemetry: telemetryConfig,
+	telemetry: buildTelemetryConfig("elastic-mcp-server"),
 
 	initDatasource: async () => {
 		const configWarnings = getConfigWarnings();

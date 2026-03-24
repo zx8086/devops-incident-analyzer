@@ -1,14 +1,17 @@
+// src/tools/configuration/operations.ts
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { z } from "zod";
 import type { KongApi } from "../../api/kong-api.js";
-import { mcpLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/mcp-logger.js";
 import { extractDeploymentContext, generateTags } from "../../utils/simple-elicitation.js";
+
+const log = createContextLogger("tools");
 
 /**
  * List services for a specific control plane
  */
 export async function listServices(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
-	mcpLogger.debug("tools", "Listing services", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing services");
 	try {
 		const result = await api.listServices(controlPlaneId, size, offset);
 
@@ -74,7 +77,7 @@ export async function createService(
 	},
 	extra?: RequestHandlerExtra<any, any>,
 ) {
-	mcpLogger.debug("tools", "Creating service", { controlPlaneId, name: serviceData.name, host: serviceData.host });
+	log.debug({ controlPlaneId, name: serviceData.name, host: serviceData.host }, "Creating service");
 	// Validate minimum required data
 	if (!serviceData.name || !serviceData.host) {
 		throw new Error("Service name and host are required");
@@ -205,7 +208,7 @@ export async function createService(
  * Get detailed information about a specific service
  */
 export async function getService(api: KongApi, controlPlaneId: string, serviceId: string) {
-	mcpLogger.debug("tools", "Getting service", { controlPlaneId, serviceId });
+	log.debug({ controlPlaneId, serviceId }, "Getting service");
 	try {
 		const result = await api.getService(controlPlaneId, serviceId);
 
@@ -264,7 +267,7 @@ export async function updateService(
 		enabled?: boolean;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating service", { controlPlaneId, serviceId });
+	log.debug({ controlPlaneId, serviceId }, "Updating service");
 	try {
 		const requestData: any = {};
 
@@ -317,7 +320,7 @@ export async function updateService(
  * Delete a service from a control plane
  */
 export async function deleteService(api: KongApi, controlPlaneId: string, serviceId: string) {
-	mcpLogger.debug("tools", "Deleting service", { controlPlaneId, serviceId });
+	log.debug({ controlPlaneId, serviceId }, "Deleting service");
 	try {
 		await api.deleteService(controlPlaneId, serviceId);
 
@@ -339,7 +342,7 @@ export async function deleteService(api: KongApi, controlPlaneId: string, servic
  * List routes for a specific control plane
  */
 export async function listRoutes(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
-	mcpLogger.debug("tools", "Listing routes", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing routes");
 	try {
 		const result = await api.listRoutes(controlPlaneId, size, offset);
 
@@ -404,7 +407,7 @@ export async function createRoute(
 	},
 	extra?: RequestHandlerExtra<any, any>,
 ) {
-	mcpLogger.debug("tools", "Creating route", { controlPlaneId, name: routeData.name || null });
+	log.debug({ controlPlaneId, name: routeData.name || null }, "Creating route");
 	// Check if deployment context is missing from tags
 	const contextCheck = extractDeploymentContext(routeData.tags);
 
@@ -529,7 +532,7 @@ export async function createRoute(
  * Get detailed information about a specific route
  */
 export async function getRoute(api: KongApi, controlPlaneId: string, routeId: string) {
-	mcpLogger.debug("tools", "Getting route", { controlPlaneId, routeId });
+	log.debug({ controlPlaneId, routeId }, "Getting route");
 	try {
 		const result = await api.getRoute(controlPlaneId, routeId);
 
@@ -584,7 +587,7 @@ export async function updateRoute(
 		enabled?: boolean;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating route", { controlPlaneId, routeId });
+	log.debug({ controlPlaneId, routeId }, "Updating route");
 	try {
 		const requestData: any = {};
 
@@ -637,7 +640,7 @@ export async function updateRoute(
  * Delete a route from a control plane
  */
 export async function deleteRoute(api: KongApi, controlPlaneId: string, routeId: string) {
-	mcpLogger.debug("tools", "Deleting route", { controlPlaneId, routeId });
+	log.debug({ controlPlaneId, routeId }, "Deleting route");
 	try {
 		await api.deleteRoute(controlPlaneId, routeId);
 
@@ -658,7 +661,7 @@ export async function deleteRoute(api: KongApi, controlPlaneId: string, routeId:
  * List consumers for a specific control plane
  */
 export async function listConsumers(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
-	mcpLogger.debug("tools", "Listing consumers", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing consumers");
 	try {
 		const result = await api.listConsumers(controlPlaneId, size, offset);
 
@@ -707,7 +710,7 @@ export async function createConsumer(
 	},
 	extra?: RequestHandlerExtra<any, any>,
 ) {
-	mcpLogger.debug("tools", "Creating consumer", { controlPlaneId, username: consumerData.username || null });
+	log.debug({ controlPlaneId, username: consumerData.username || null }, "Creating consumer");
 	// Check if deployment context is missing from tags
 	const contextCheck = extractDeploymentContext(consumerData.tags);
 
@@ -820,7 +823,7 @@ export async function createConsumer(
  * Get detailed information about a specific consumer
  */
 export async function getConsumer(api: KongApi, controlPlaneId: string, consumerId: string) {
-	mcpLogger.debug("tools", "Getting consumer", { controlPlaneId, consumerId });
+	log.debug({ controlPlaneId, consumerId }, "Getting consumer");
 	try {
 		const result = await api.getConsumer(controlPlaneId, consumerId);
 
@@ -861,7 +864,7 @@ export async function updateConsumer(
 		enabled?: boolean;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating consumer", { controlPlaneId, consumerId });
+	log.debug({ controlPlaneId, consumerId }, "Updating consumer");
 	try {
 		const requestData: any = {};
 
@@ -900,7 +903,7 @@ export async function updateConsumer(
  * Delete a consumer from a control plane
  */
 export async function deleteConsumer(api: KongApi, controlPlaneId: string, consumerId: string) {
-	mcpLogger.debug("tools", "Deleting consumer", { controlPlaneId, consumerId });
+	log.debug({ controlPlaneId, consumerId }, "Deleting consumer");
 	try {
 		await api.deleteConsumer(controlPlaneId, consumerId);
 
@@ -919,7 +922,7 @@ export async function deleteConsumer(api: KongApi, controlPlaneId: string, consu
  * List plugins for a specific control plane
  */
 export async function listPlugins(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
-	mcpLogger.debug("tools", "Listing plugins", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing plugins");
 	try {
 		const result = await api.listPlugins(controlPlaneId, size, offset);
 
@@ -978,7 +981,7 @@ export async function createPlugin(
 	},
 	extra?: RequestHandlerExtra<any, any>,
 ) {
-	mcpLogger.debug("tools", "Creating plugin", { controlPlaneId, name: pluginData.name });
+	log.debug({ controlPlaneId, name: pluginData.name }, "Creating plugin");
 	// Check if deployment context is missing from tags
 	const contextCheck = extractDeploymentContext(pluginData.tags);
 
@@ -1100,7 +1103,7 @@ export async function createPlugin(
  * Get detailed information about a specific plugin
  */
 export async function getPlugin(api: KongApi, controlPlaneId: string, pluginId: string) {
-	mcpLogger.debug("tools", "Getting plugin", { controlPlaneId, pluginId });
+	log.debug({ controlPlaneId, pluginId }, "Getting plugin");
 	try {
 		const result = await api.getPlugin(controlPlaneId, pluginId);
 
@@ -1151,7 +1154,7 @@ export async function updatePlugin(
 		enabled?: boolean;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating plugin", { controlPlaneId, pluginId });
+	log.debug({ controlPlaneId, pluginId }, "Updating plugin");
 	try {
 		const requestData: any = {};
 
@@ -1201,7 +1204,7 @@ export async function updatePlugin(
  * Delete a plugin from a control plane
  */
 export async function deletePlugin(api: KongApi, controlPlaneId: string, pluginId: string) {
-	mcpLogger.debug("tools", "Deleting plugin", { controlPlaneId, pluginId });
+	log.debug({ controlPlaneId, pluginId }, "Deleting plugin");
 	try {
 		await api.deletePlugin(controlPlaneId, pluginId);
 
@@ -1219,7 +1222,7 @@ export async function deletePlugin(api: KongApi, controlPlaneId: string, pluginI
  * List all available plugin schemas
  */
 export async function listPluginSchemas(api: KongApi, controlPlaneId: string) {
-	mcpLogger.debug("tools", "Listing plugin schemas", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing plugin schemas");
 	try {
 		const result = await api.listPluginSchemas(controlPlaneId);
 

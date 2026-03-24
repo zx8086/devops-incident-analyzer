@@ -12,7 +12,7 @@ import { registerClearSqlCursorTool } from "../../../src/tools/mapping/clear_sql
 import { registerGetFieldMappingTool } from "../../../src/tools/mapping/get_field_mapping";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

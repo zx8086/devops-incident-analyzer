@@ -22,4 +22,4 @@ export {
 	runWithSession,
 	type SessionContext,
 } from "./session.ts";
-export { type ToolTraceOptions, traceToolCall, traceToolExecution } from "./tool-trace.ts";
+export { type ToolTraceOptions, traceToolCall } from "./tool-trace.ts";

@@ -19,14 +19,14 @@ const SENSITIVE_KEYS = [
 // Redact both top-level and nested sensitive fields
 const SENSITIVE_PATHS = [...SENSITIVE_KEYS, ...SENSITIVE_KEYS.map((k) => `*.${k}`)];
 
-function getEnv(key: string): string | undefined {
+export function getEnv(key: string): string | undefined {
 	if (typeof globalThis.Bun !== "undefined") {
 		return globalThis.Bun.env[key];
 	}
 	return process.env[key];
 }
 
-function isProdOrStaging(): boolean {
+export function isProdOrStaging(): boolean {
 	const env = getEnv("NODE_ENV");
 	return env === "production" || env === "staging";
 }

@@ -23,7 +23,7 @@ import { registerWatcherStopTool } from "../../../src/tools/watcher/stop";
 import { registerWatcherUpdateSettingsTool } from "../../../src/tools/watcher/update_settings";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

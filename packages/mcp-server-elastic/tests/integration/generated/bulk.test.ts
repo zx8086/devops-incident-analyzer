@@ -12,7 +12,7 @@ import { registerBulkOperationsTool } from "../../../src/tools/bulk/bulk_operati
 import { registerMultiGetTool } from "../../../src/tools/bulk/multi_get";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

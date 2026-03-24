@@ -1,6 +1,8 @@
 import axios, { type AxiosRequestConfig } from "axios";
 import type { ApiRequestFilter, ApiRequestsResponse, TimeRange } from "./types.js";
-import { mcpLogger } from "./utils/mcp-logger.js";
+import { createContextLogger } from "./utils/mcp-logger.js";
+
+const log = createContextLogger("api");
 
 /**
  * Kong API Regions - Different geographical API endpoints
@@ -29,7 +31,7 @@ export class KongApi {
 		this.apiKey = options.apiKey || process.env.KONNECT_ACCESS_TOKEN || "";
 
 		if (!this.apiKey) {
-			mcpLogger.warning("api", "KONNECT_ACCESS_TOKEN not set in environment - API calls will fail");
+			log.warn("KONNECT_ACCESS_TOKEN not set in environment - API calls will fail");
 		}
 	}
 
@@ -39,7 +41,7 @@ export class KongApi {
 	async kongRequest<T>(endpoint: string, method = "GET", data: any = null): Promise<T> {
 		try {
 			const url = `${this.baseUrl}${endpoint}`;
-			mcpLogger.debug("api", "Making Kong API request", { url });
+			log.debug({ url }, "Making Kong API request");
 
 			const headers = {
 				Authorization: `Bearer ${this.apiKey}`,
@@ -55,14 +57,10 @@ export class KongApi {
 			};
 
 			const response = await axios(config);
-			mcpLogger.debug("api", "Received Kong API response", {
-				status: response.status,
-			});
+			log.debug({ status: response.status }, "Received Kong API response");
 			return response.data;
 		} catch (error: any) {
-			mcpLogger.error("api", "Kong API request failed", {
-				error: error.message,
-			});
+			log.error({ error: error.message }, "Kong API request failed");
 
 			if (error.response) {
 				const errorData = error.response.data;

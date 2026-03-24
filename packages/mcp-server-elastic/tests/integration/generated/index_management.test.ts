@@ -20,7 +20,7 @@ import { registerReindexDocumentsTool } from "../../../src/tools/index_managemen
 import { registerUpdateIndexSettingsTool } from "../../../src/tools/index_management/update_index_settings";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

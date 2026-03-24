@@ -1,19 +1,9 @@
-/**
- * ELICITATION VALIDATION GATES
- *
- * This file handles the user-facing aspects of mandatory elicitation:
- * 1. Error presentation when operations are blocked
- * 2. Elicitation request formatting for users
- * 3. Response validation and processing
- * 4. Session management across elicitation interactions
- *
- * ARCHITECTURAL PRINCIPLE: Present clear, actionable elicitation
- * requests that guide users to provide mandatory context.
- */
-
-import { mcpLogger } from "../utils/mcp-logger.js";
+// src/enforcement/elicitation-validation-gates.ts
+import { createContextLogger } from "../utils/mcp-logger.js";
 import type { KongOperationBlockedError } from "./kong-tool-blockers";
 import { ElicitationBlockedError, MandatoryElicitationGate } from "./mandatory-elicitation-gate";
+
+const log = createContextLogger("enforcement");
 
 export interface ElicitationRequest {
 	sessionId: string;
@@ -263,15 +253,18 @@ export class ElicitationFlowOrchestrator {
 	 * Processes a blocked Kong operation and returns elicitation request
 	 */
 	async handleBlockedOperation(error: KongOperationBlockedError): Promise<ElicitationRequest> {
-		mcpLogger.warning("enforcement", "Elicitation flow handling blocked operation", { operation: error.operation });
+		log.warn({ operation: error.operation }, "Elicitation flow handling blocked operation");
 
 		const request = ElicitationRequestFormatter.formatBlockedOperation(error);
 
-		mcpLogger.info("enforcement", "Elicitation request created", {
-			sessionId: request.sessionId,
-			operation: request.blockedOperation,
-			missingFields: request.missingFields,
-		});
+		log.info(
+			{
+				sessionId: request.sessionId,
+				operation: request.blockedOperation,
+				missingFields: request.missingFields,
+			},
+			"Elicitation request created",
+		);
 
 		return request;
 	}
@@ -287,17 +280,13 @@ export class ElicitationFlowOrchestrator {
 		errors?: string[];
 		contextUpdated?: boolean;
 	}> {
-		mcpLogger.info("enforcement", "Elicitation flow processing response", {
-			sessionId: response.sessionId,
-		});
+		log.info({ sessionId: response.sessionId }, "Elicitation flow processing response");
 
 		// Validate response format and content
 		const validation = ElicitationResponseValidator.validateResponse(response);
 
 		if (!validation.valid) {
-			mcpLogger.error("enforcement", "Elicitation validation failed", {
-				errors: validation.errors,
-			});
+			log.error({ errors: validation.errors }, "Elicitation validation failed");
 			return {
 				success: false,
 				message: `Elicitation response validation failed`,
@@ -312,13 +301,16 @@ export class ElicitationFlowOrchestrator {
 				validation.normalizedResponses,
 			);
 
-			mcpLogger.info("enforcement", "Elicitation completed successfully", {
-				sessionId: response.sessionId,
-				domain: mandatoryContext.domain,
-				environment: mandatoryContext.environment,
-				team: mandatoryContext.team,
-				confidence: mandatoryContext.contextConfidence,
-			});
+			log.info(
+				{
+					sessionId: response.sessionId,
+					domain: mandatoryContext.domain,
+					environment: mandatoryContext.environment,
+					team: mandatoryContext.team,
+					confidence: mandatoryContext.contextConfidence,
+				},
+				"Elicitation completed successfully",
+			);
 
 			return {
 				success: true,
@@ -326,7 +318,7 @@ export class ElicitationFlowOrchestrator {
 				contextUpdated: true,
 			};
 		} catch (error) {
-			mcpLogger.error("enforcement", "Elicitation processing error", { error });
+			log.error({ error }, "Elicitation processing error");
 			return {
 				success: false,
 				message: `Failed to process elicitation response: ${error instanceof Error ? error.message : "Unknown error"}`,

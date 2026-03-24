@@ -14,7 +14,7 @@ import { registerGetNodesInfoTool } from "../../../src/tools/cluster/get_nodes_i
 import { registerGetNodesStatsTool } from "../../../src/tools/cluster/get_nodes_stats";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

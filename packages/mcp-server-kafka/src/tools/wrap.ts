@@ -3,7 +3,7 @@ import type { AppConfig } from "../config/schemas.ts";
 import { normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
 import { getLogger } from "../logging/container.ts";
-import { traceToolExecution } from "../telemetry/tracing.ts";
+import { traceToolCall } from "../telemetry/tracing.ts";
 
 type ToolResponse = {
 	content: Array<{ type: "text"; text: string }>;
@@ -71,7 +71,7 @@ export function wrapHandler<T>(
 			return ResponseBuilder.error("Destructive operations are disabled. Set KAFKA_ALLOW_DESTRUCTIVE=true to enable.");
 		}
 
-		return traceToolExecution(toolName, async () => {
+		return traceToolCall(toolName, async () => {
 			const startTime = Date.now();
 			try {
 				logger.debug(

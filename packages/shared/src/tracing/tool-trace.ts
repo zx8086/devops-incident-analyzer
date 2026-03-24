@@ -81,6 +81,3 @@ function executeLangSmith<T>(toolName: string, handler: () => Promise<T>, option
 		timestamp: new Date().toISOString(),
 	});
 }
-
-// Backward-compatible alias
-export { traceToolCall as traceToolExecution };

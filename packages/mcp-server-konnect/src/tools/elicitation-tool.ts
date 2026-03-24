@@ -1,10 +1,13 @@
+// src/tools/elicitation-tool.ts
 import { z } from "zod";
 import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
 import { contextDetector } from "../utils/context-detection.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
-import { mcpLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/mcp-logger.js";
 import { TagElicitationEngine } from "../utils/tag-elicitation.js";
+
+const log = createContextLogger("elicitation");
 
 /**
  * MCP Tool for Kong Migration Elicitation
@@ -133,9 +136,7 @@ export class ElicitationOperations {
 			try {
 				analysisResult = JSON.parse(analysisResult);
 			} catch (error) {
-				mcpLogger.error("elicitation", "Failed to parse analysisResult JSON", {
-					error,
-				});
+				log.error({ error }, "Failed to parse analysisResult JSON");
 				return {
 					sessionId: "",
 					requests: [],

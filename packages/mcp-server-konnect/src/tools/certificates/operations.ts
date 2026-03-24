@@ -1,14 +1,17 @@
+// src/tools/certificates/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { formatCertificate, formatEntityList } from "../../utils/formatting.js";
-import { mcpLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/mcp-logger.js";
 import { validateCertificate, validatePrivateKey } from "../../utils/validation.js";
+
+const log = createContextLogger("certificates");
 
 /**
  * List certificates for a specific control plane with health analysis
  */
 export async function listCertificates(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
-	mcpLogger.debug("tools", "Listing certificates", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Listing certificates");
 	return withErrorContext(
 		"list_certificates",
 		"certificate",
@@ -45,9 +48,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 						expirationStatus = "valid";
 					}
 				} catch (error) {
-					mcpLogger.error("certificates", "Error parsing certificate", {
-						error,
-					});
+					log.error({ error }, "Error parsing certificate");
 				}
 
 				return {
@@ -94,7 +95,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
  * Get detailed information about a specific certificate
  */
 export async function getCertificate(api: KongApi, controlPlaneId: string, certificateId: string) {
-	mcpLogger.debug("tools", "Getting certificate", { controlPlaneId, certificateId });
+	log.debug({ controlPlaneId, certificateId }, "Getting certificate");
 	return withErrorContext(
 		"get_certificate",
 		"certificate",
@@ -153,7 +154,7 @@ export async function createCertificate(
 	keyAlt?: string,
 	tags?: string[],
 ) {
-	mcpLogger.debug("tools", "Creating certificate", { controlPlaneId });
+	log.debug({ controlPlaneId }, "Creating certificate");
 	return withErrorContext(
 		"create_certificate",
 		"certificate",
@@ -231,7 +232,7 @@ export async function updateCertificate(
 	keyAlt?: string,
 	tags?: string[],
 ) {
-	mcpLogger.debug("tools", "Updating certificate", { controlPlaneId, certificateId });
+	log.debug({ controlPlaneId, certificateId }, "Updating certificate");
 	return withErrorContext(
 		"update_certificate",
 		"certificate",
@@ -299,7 +300,7 @@ export async function updateCertificate(
  * Delete a certificate
  */
 export async function deleteCertificate(api: KongApi, controlPlaneId: string, certificateId: string) {
-	mcpLogger.debug("tools", "Deleting certificate", { controlPlaneId, certificateId });
+	log.debug({ controlPlaneId, certificateId }, "Deleting certificate");
 	return withErrorContext(
 		"delete_certificate",
 		"certificate",

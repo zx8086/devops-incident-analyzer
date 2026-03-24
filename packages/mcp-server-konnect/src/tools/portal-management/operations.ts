@@ -1,8 +1,11 @@
+// src/tools/portal-management/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
-import { mcpLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/mcp-logger.js";
+
+const log = createContextLogger("tools");
 
 export async function listPortals(api: KongApi, pageSize = 10, pageNumber?: number) {
-	mcpLogger.debug("tools", "Listing portals", { pageSize });
+	log.debug({ pageSize }, "Listing portals");
 	try {
 		const result = await api.listPortals(pageSize, pageNumber);
 
@@ -60,7 +63,7 @@ export async function createPortal(
 		labels?: Record<string, string>;
 	},
 ) {
-	mcpLogger.debug("tools", "Creating portal", { name: portalData.name });
+	log.debug({ name: portalData.name }, "Creating portal");
 	try {
 		const requestData = {
 			name: portalData.name,
@@ -109,7 +112,7 @@ export async function createPortal(
 }
 
 export async function getPortal(api: KongApi, portalId: string) {
-	mcpLogger.debug("tools", "Getting portal", { portalId });
+	log.debug({ portalId }, "Getting portal");
 	try {
 		const result = await api.getPortal(portalId);
 
@@ -170,7 +173,7 @@ export async function updatePortal(
 		labels?: Record<string, string>;
 	},
 ) {
-	mcpLogger.debug("tools", "Updating portal", { portalId });
+	log.debug({ portalId }, "Updating portal");
 	try {
 		const requestData: any = {};
 
@@ -215,7 +218,7 @@ export async function updatePortal(
  * Delete a developer portal
  */
 export async function deletePortal(api: KongApi, portalId: string) {
-	mcpLogger.debug("tools", "Deleting portal", { portalId });
+	log.debug({ portalId }, "Deleting portal");
 	try {
 		await api.deletePortal(portalId);
 
@@ -235,7 +238,7 @@ export async function deletePortal(api: KongApi, portalId: string) {
  * List products published to a portal
  */
 export async function listPortalProducts(api: KongApi, portalId: string, pageSize = 10, pageNumber?: number) {
-	mcpLogger.debug("tools", "Listing portal products", { portalId, pageSize });
+	log.debug({ portalId, pageSize }, "Listing portal products");
 	try {
 		const result = await api.listPortalProducts(portalId, pageSize, pageNumber);
 
@@ -283,7 +286,7 @@ export async function publishPortalProduct(
 		description?: string;
 	},
 ) {
-	mcpLogger.debug("tools", "Publishing portal product", { portalId, productId: productData.productId });
+	log.debug({ portalId, productId: productData.productId }, "Publishing portal product");
 	try {
 		const requestData = {
 			product_id: productData.productId,
@@ -317,7 +320,7 @@ export async function publishPortalProduct(
  * Unpublish an API product from the portal
  */
 export async function unpublishPortalProduct(api: KongApi, portalId: string, productId: string) {
-	mcpLogger.debug("tools", "Unpublishing portal product", { portalId, productId });
+	log.debug({ portalId, productId }, "Unpublishing portal product");
 	try {
 		await api.unpublishPortalProduct(portalId, productId);
 

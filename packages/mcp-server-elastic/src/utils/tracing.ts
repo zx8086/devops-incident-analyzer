@@ -1,5 +1,4 @@
 // src/utils/tracing.ts
-// Re-exports from shared tracing module with elastic-specific defaults
 import {
 	type ConnectionContext,
 	detectClient,
@@ -12,41 +11,22 @@ import {
 	type TracingOptions,
 	withNestedTrace,
 } from "@devops-agent/shared";
-import { config } from "../config.js";
 import { logger } from "./logger.js";
 
 export type { ConnectionContext };
 export { detectClient, generateSessionId, getCurrentTrace, isTracingActive, withNestedTrace };
 
 export function initializeTracing(options?: TracingOptions): void {
-	const apiKey = config.langsmith.apiKey || process.env.LANGSMITH_API_KEY || process.env.LANGCHAIN_API_KEY;
-	const endpoint = process.env.LANGSMITH_ENDPOINT || config.langsmith.endpoint;
-	const project = process.env.LANGSMITH_PROJECT || config.langsmith.project;
-
-	const tracingEnabled =
-		config.langsmith.tracing || process.env.LANGSMITH_TRACING === "true" || process.env.LANGCHAIN_TRACING_V2 === "true";
-
-	if (tracingEnabled) {
-		process.env.LANGSMITH_TRACING = "true";
-	}
-
-	sharedInitializeTracing({ apiKey, endpoint, project, ...options });
+	const project = process.env.ELASTIC_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "elastic-mcp-server";
+	sharedInitializeTracing({ project, ...options });
 }
 
-export async function traceToolCall(
-	toolName: string,
-	toolArgs: unknown,
-	_extra: unknown,
-	handler: (toolArgs: unknown, extra: unknown) => Promise<unknown>,
-) {
+export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const startTime = Date.now();
 	logger.info({ tool: toolName, dataSource: "elastic" }, `Tool call started: ${toolName}`);
 
 	try {
-		const result = await sharedTraceToolCall(toolName, () => handler(toolArgs, _extra), {
-			dataSourceId: "elastic",
-			toolArgs: typeof toolArgs === "object" && toolArgs !== null ? (toolArgs as Record<string, unknown>) : undefined,
-		});
+		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "elastic" });
 		const duration = Date.now() - startTime;
 		logger.info({ tool: toolName, dataSource: "elastic", duration }, `Tool call completed: ${toolName}`);
 		return result;
@@ -63,17 +43,6 @@ export async function traceToolCall(
 		);
 		throw error;
 	}
-}
-
-// Backward-compat alias
-export function traceToolExecution(
-	toolName: string,
-	toolArgs: unknown,
-	extra: unknown,
-	_context: unknown,
-	handler: (toolArgs: unknown, extra: unknown) => Promise<unknown>,
-) {
-	return traceToolCall(toolName, toolArgs, extra, handler);
 }
 
 export async function traceConnection(context: ConnectionContext, handler: () => Promise<unknown>): Promise<unknown> {

@@ -13,7 +13,7 @@ import { registerGetTaskTool } from "../../../src/tools/tasks/get_task";
 import { registerListTasksTool } from "../../../src/tools/tasks/list_tasks";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolExecution } from "../../../src/utils/tracing";
+import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,

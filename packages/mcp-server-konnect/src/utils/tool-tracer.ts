@@ -36,9 +36,7 @@ export function createTracedToolHandler(
 	toolName: string,
 ) {
 	return async (args: Record<string, unknown>, extra: McpHandlerExtra) => {
-		return traceToolCall(toolName, () => originalHandler(args, extra), {
-			toolArgs: sanitizeParameters(args),
-		});
+		return traceToolCall(toolName, () => originalHandler(args, extra));
 	};
 }
 
