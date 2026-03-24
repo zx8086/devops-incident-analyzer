@@ -16,7 +16,8 @@ type IconName =
 	| "lightbulb"
 	| "message-circle"
 	| "stop"
-	| "spinner-stop";
+	| "spinner-stop"
+	| "plus";
 
 let { name, class: className = "" }: { name: IconName; class?: string } = $props();
 </script>
@@ -80,5 +81,8 @@ let { name, class: className = "" }: { name: IconName; class?: string } = $props
   {:else if name === "spinner-stop"}
     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     <rect x="9" y="9" width="6" height="6" rx="0.5" fill="currentColor" />
+  {:else if name === "plus"}
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
   {/if}
 </svg>
