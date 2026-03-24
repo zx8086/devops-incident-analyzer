@@ -1,5 +1,5 @@
 // observability/src/logger.ts
-import { trace } from "@opentelemetry/api";
+import { buildEcsOptions, createFormattedDestination } from "@devops-agent/shared";
 import pino from "pino";
 
 function getEnv(key: string): string | undefined {
@@ -10,28 +10,22 @@ function getEnv(key: string): string | undefined {
 	return process.env[key];
 }
 
+function isProdOrStaging(): boolean {
+	const env = getEnv("NODE_ENV");
+	return env === "production" || env === "staging";
+}
+
 function createBaseLogger(): pino.Logger {
 	const level = getEnv("LOG_LEVEL") ?? "info";
+	const ecsOpts = buildEcsOptions({ serviceName: "devops-agent" });
 
-	if (getEnv("NODE_ENV") !== "production") {
-		try {
-			require.resolve("pino-pretty");
-			return pino({ level, transport: { target: "pino-pretty", options: { colorize: true } } });
-		} catch {
-			// pino-pretty not installed
-		}
+	if (!isProdOrStaging()) {
+		// Dev: colorized human-readable output to stdout
+		return pino({ level, ...ecsOpts }, createFormattedDestination(1));
 	}
 
-	// Production: inject OTEL trace context into every log line
-	return pino({
-		level,
-		mixin() {
-			const span = trace.getActiveSpan();
-			if (!span) return {};
-			const { traceId, spanId } = span.spanContext();
-			return { "trace.id": traceId, "span.id": spanId };
-		},
-	});
+	// Prod/staging: raw ECS NDJSON to stdout
+	return pino({ level, ...ecsOpts });
 }
 
 const baseLogger = createBaseLogger();

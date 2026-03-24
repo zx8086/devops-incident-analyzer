@@ -154,7 +154,6 @@
       "dependencies": {
         "@aws-sdk/client-kafka": "^3.1012.0",
         "@devops-agent/shared": "workspace:*",
-        "@elastic/ecs-pino-format": "^1.5.0",
         "@modelcontextprotocol/sdk": "catalog:",
         "@opentelemetry/api": "^1.9.0",
         "@opentelemetry/exporter-logs-otlp-http": "^0.213.0",
@@ -213,6 +212,7 @@
       "name": "@devops-agent/observability",
       "version": "0.1.0",
       "dependencies": {
+        "@devops-agent/shared": "workspace:*",
         "@opentelemetry/api": "^1.9.0",
         "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
         "@opentelemetry/resources": "^2.6.0",
@@ -231,6 +231,7 @@
       "name": "@devops-agent/shared",
       "version": "0.1.0",
       "dependencies": {
+        "@elastic/ecs-pino-format": "^1.5.0",
         "@modelcontextprotocol/sdk": "catalog:",
         "@opentelemetry/api": "^1.9.0",
         "@opentelemetry/exporter-logs-otlp-http": "^0.213.0",

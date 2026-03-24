@@ -14,8 +14,15 @@ export interface LogContext {
 
 const _logger = createMcpLogger("konnect-mcp-server");
 
+const _childCache = new Map<string, ReturnType<typeof _logger.child>>();
+
 function child(ctx: string) {
-	return _logger.child({ component: ctx });
+	let cached = _childCache.get(ctx);
+	if (!cached) {
+		cached = _logger.child({ component: ctx });
+		_childCache.set(ctx, cached);
+	}
+	return cached;
 }
 
 class MCPLogger {

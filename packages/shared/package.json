@@ -6,9 +6,12 @@
 	"types": "src/index.ts",
 	"scripts": {
 		"test": "bun test",
-		"typecheck": "bunx tsc --noEmit"
+		"typecheck": "bunx tsc --noEmit",
+		"biome:check": "bunx biome check .",
+		"biome:check:write": "bunx biome check --write ."
 	},
 	"dependencies": {
+		"@elastic/ecs-pino-format": "^1.5.0",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.0",
 		"@opentelemetry/exporter-logs-otlp-http": "^0.213.0",
