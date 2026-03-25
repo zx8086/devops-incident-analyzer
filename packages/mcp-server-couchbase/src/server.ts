@@ -77,7 +77,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 		const { createContextLogger } = require("./lib/logger");
 		return createContextLogger("EchoTool");
 	}
-	server.tool("echo", "Echoes back the input parameters for debugging", {}, async (params: Record<string, unknown>) => {
+	server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params: Record<string, unknown>) => {
 		getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
 		return { content: [{ type: "text", text: JSON.stringify(params) }] };
 	});

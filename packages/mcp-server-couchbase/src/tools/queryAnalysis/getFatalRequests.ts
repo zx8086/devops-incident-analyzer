@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_fatal_requests",
+		"capella_get_fatal_requests",
 		"Get information about failed/fatal N1QL queries",
 		{
 			period: z

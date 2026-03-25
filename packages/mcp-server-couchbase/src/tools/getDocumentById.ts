@@ -6,7 +6,7 @@ import { z } from "zod";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_document_by_id",
+		"capella_get_document_by_id",
 		"Get a document by ID from a specific scope and collection",
 		{
 			scope_name: z.string().describe("Name of the scope"),

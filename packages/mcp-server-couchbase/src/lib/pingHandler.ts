@@ -5,7 +5,7 @@ import { connectionManager } from "./connectionManager";
 import { logger } from "./logger";
 
 export function registerPingHandlers(server: McpServer): void {
-	server.tool("ping", "Checks the server and database connection status", {}, async () => {
+	server.tool("capella_ping", "Checks the server and database connection status", {}, async () => {
 		try {
 			logger.info("Protocol ping received");
 

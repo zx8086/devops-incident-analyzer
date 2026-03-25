@@ -56,10 +56,10 @@ START -> classify -> {simple: responder -> END, complex: entityExtractor}
 
 | Agent | MCP Port | Config Pattern |
 |-------|----------|----------------|
-| elastic-agent | :8080 | Multi-deployment: `ELASTIC_DEPLOYMENTS=prod,staging` per-deployment URL/auth |
-| kafka-agent | :3000 | Provider: `KAFKA_PROVIDER=local\|msk\|confluent`, feature gates for writes |
-| capella-agent | :8082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
-| konnect-agent | :8083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
+| elastic-agent | :9080 | Multi-deployment: `ELASTIC_DEPLOYMENTS=prod,staging` per-deployment URL/auth |
+| kafka-agent | :9081 | Provider: `KAFKA_PROVIDER=local\|msk\|confluent`, feature gates for writes |
+| capella-agent | :9082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
+| konnect-agent | :9083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
 
 Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. We do NOT rewrite MCP tools -- we copy existing servers and connect.
 
@@ -128,7 +128,7 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating names, obvious `@re
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket references (`SIO-XXX`), non-obvious algorithm explanations.
 
 ### Servers
-- Elastic MCP: 8080 | Kafka MCP: 3000 | Couchbase MCP: 8082 | Konnect MCP: 8083 | Web: 5173
+- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
 - Kill background processes after testing
 

@@ -7,7 +7,7 @@ import { logger } from "../../lib/logger";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"suggest_query_optimizations",
+		"capella_suggest_query_optimizations",
 		"Analyze a query and suggest optimizations and indexes",
 		{
 			query: z.string().describe("The N1QL query to analyze"),

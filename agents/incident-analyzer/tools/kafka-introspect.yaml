@@ -41,3 +41,9 @@ related_tools:
   - "Use elastic-search-logs to check if consumer lag correlates with application error spikes"
   - "Use couchbase-cluster-health to check if database slowness is causing Kafka backpressure"
   - "Use konnect-api-requests to check if upstream API errors are generating DLQ messages"
+
+tool_mapping:
+  mcp_server: kafka
+  mcp_patterns:
+    - "kafka_*"
+    - "ksql_*"

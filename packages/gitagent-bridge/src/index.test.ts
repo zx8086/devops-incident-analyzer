@@ -3,14 +3,18 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
 	buildAllToolPrompts,
+	buildFacadeMap,
 	buildRelatedToolsMap,
 	buildSystemPrompt,
 	buildToolPrompt,
 	complianceToMetadata,
 	getRecursionLimit,
+	getUncoveredTools,
 	loadAgent,
+	matchesPattern,
 	requiresApproval,
 	resolveBedrockConfig,
+	resolveMapping,
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
@@ -186,29 +190,135 @@ describe("related-tools", () => {
 	});
 });
 
-describe("tool-schema", () => {
-	test("validates matching tool names", () => {
+describe("tool-mapping", () => {
+	test("matchesPattern handles exact match", () => {
+		expect(matchesPattern("elasticsearch_search", "elasticsearch_search")).toBe(true);
+		expect(matchesPattern("elasticsearch_search", "kafka_list_topics")).toBe(false);
+	});
+
+	test("matchesPattern handles glob suffix", () => {
+		expect(matchesPattern("elasticsearch_*", "elasticsearch_search")).toBe(true);
+		expect(matchesPattern("elasticsearch_*", "elasticsearch_list_indices")).toBe(true);
+		expect(matchesPattern("elasticsearch_*", "kafka_list_topics")).toBe(false);
+	});
+
+	test("matchesPattern handles glob prefix", () => {
+		expect(matchesPattern("*_search", "elasticsearch_search")).toBe(true);
+		expect(matchesPattern("*_search", "global_search")).toBe(true);
+		expect(matchesPattern("*_search", "elasticsearch_list")).toBe(false);
+	});
+
+	test("resolveMapping resolves exact names and globs", () => {
+		const mcpTools = ["elasticsearch_search", "elasticsearch_list_indices", "kafka_list_topics"];
+		const result = resolveMapping(["elasticsearch_*"], mcpTools);
+		expect(result.matched).toContain("elasticsearch_search");
+		expect(result.matched).toContain("elasticsearch_list_indices");
+		expect(result.matched).not.toContain("kafka_list_topics");
+		expect(result.unmatchedPatterns).toEqual([]);
+	});
+
+	test("resolveMapping reports unmatched patterns", () => {
+		const result = resolveMapping(["nonexistent_*"], ["elasticsearch_search"]);
+		expect(result.matched).toEqual([]);
+		expect(result.unmatchedPatterns).toEqual(["nonexistent_*"]);
+	});
+
+	test("buildFacadeMap creates bidirectional lookup from real agent", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const mcpNames = agent.tools.map((t) => t.name);
+		const mockMcpTools = [
+			"elasticsearch_search",
+			"elasticsearch_list_indices",
+			"kafka_list_topics",
+			"kafka_describe_topic",
+			"capella_get_system_vitals",
+			"capella_get_fatal_requests",
+			"konnect_query_api_requests",
+			"konnect_list_services",
+		];
+		const map = buildFacadeMap(agent.tools, mockMcpTools);
+
+		expect(map.facadeToMcp.get("elastic-search-logs")).toContain("elasticsearch_search");
+		expect(map.facadeToMcp.get("elastic-search-logs")).toContain("elasticsearch_list_indices");
+		expect(map.facadeToMcp.get("kafka-introspect")).toContain("kafka_list_topics");
+		expect(map.facadeToMcp.get("couchbase-cluster-health")).toContain("capella_get_system_vitals");
+		expect(map.facadeToMcp.get("konnect-api-gateway")).toContain("konnect_query_api_requests");
+
+		// Action tools without mapping get empty arrays
+		expect(map.facadeToMcp.get("notify-slack")).toEqual([]);
+		expect(map.facadeToMcp.get("create-ticket")).toEqual([]);
+
+		// Reverse lookup
+		expect(map.mcpToFacade.get("elasticsearch_search")).toBe("elastic-search-logs");
+		expect(map.mcpToFacade.get("kafka_list_topics")).toBe("kafka-introspect");
+	});
+
+	test("getUncoveredTools reports tools not in any facade", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const mockMcpTools = ["elasticsearch_search", "some_orphan_tool"];
+		const map = buildFacadeMap(agent.tools, mockMcpTools);
+		const uncovered = getUncoveredTools(map, mockMcpTools);
+		expect(uncovered).toContain("some_orphan_tool");
+		expect(uncovered).not.toContain("elasticsearch_search");
+	});
+
+	test("tool_mapping is loaded from YAML for mapped tools", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		expect(elasticTool.tool_mapping).toBeDefined();
+		expect(elasticTool.tool_mapping?.mcp_server).toBe("elastic");
+		expect(elasticTool.tool_mapping?.mcp_patterns).toContain("elasticsearch_*");
+	});
+
+	test("tool_mapping is undefined for action tools", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const slackTool = agent.tools.find((t) => t.name === "notify-slack")!;
+		expect(slackTool.tool_mapping).toBeUndefined();
+	});
+});
+
+describe("tool-schema", () => {
+	test("validates with mapping-resolved MCP tool names", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const mcpNames = [
+			"elasticsearch_search",
+			"kafka_list_topics",
+			"capella_get_system_vitals",
+			"konnect_query_api_requests",
+		];
 		const result = validateToolSchemas(agent.tools, mcpNames);
+		expect(result.valid).toBe(true);
+		expect(result.missing).toEqual([]);
+		expect(result.unmappedFacades).toContain("notify-slack");
+		expect(result.unmappedFacades).toContain("create-ticket");
+	});
+
+	test("reports facades with zero MCP matches as missing", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		// No MCP tools match any patterns
+		const result = validateToolSchemas(agent.tools, ["some_unrelated_tool"]);
+		expect(result.valid).toBe(false);
+		expect(result.missing.length).toBe(4);
+	});
+
+	test("backward compatibility: direct name comparison without tool_mapping", () => {
+		const toolsWithoutMapping = [
+			{ name: "tool-a", description: "A" },
+			{ name: "tool-b", description: "B" },
+		];
+		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a", "tool-b"]);
 		expect(result.valid).toBe(true);
 		expect(result.missing).toEqual([]);
 		expect(result.extra).toEqual([]);
 	});
 
-	test("detects missing tools", () => {
-		const agent = loadAgent(AGENTS_DIR);
-		const result = validateToolSchemas(agent.tools, ["elastic-search-logs"]);
+	test("backward compatibility: detects missing in direct mode", () => {
+		const toolsWithoutMapping = [
+			{ name: "tool-a", description: "A" },
+			{ name: "tool-b", description: "B" },
+		];
+		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a"]);
 		expect(result.valid).toBe(false);
-		expect(result.missing.length).toBeGreaterThan(0);
-	});
-
-	test("detects extra tools", () => {
-		const agent = loadAgent(AGENTS_DIR);
-		const mcpNames = [...agent.tools.map((t) => t.name), "extra-tool"];
-		const result = validateToolSchemas(agent.tools, mcpNames);
-		expect(result.valid).toBe(true);
-		expect(result.extra).toEqual(["extra-tool"]);
+		expect(result.missing).toContain("tool-b");
 	});
 });
 

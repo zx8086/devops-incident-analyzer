@@ -45,3 +45,8 @@ related_tools:
   - "Use elastic-search-logs to check if backend service errors correlate with gateway error spikes"
   - "Use kafka-consumer-lag to check if event processing issues are caused by gateway routing changes"
   - "Use couchbase-cluster-health to check if database issues are causing upstream timeouts"
+
+tool_mapping:
+  mcp_server: konnect
+  mcp_patterns:
+    - "konnect_*"

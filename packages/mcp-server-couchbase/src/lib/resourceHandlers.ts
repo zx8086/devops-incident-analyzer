@@ -7,7 +7,7 @@ import { createError } from "./errors";
 import { logger } from "./logger";
 
 export function registerResources(server: McpServer, capellaConn: CapellaConn): void {
-	server.tool("get_server_info", "Get server information", {}, async () => ({
+	server.tool("capella_get_server_info", "Get server information", {}, async () => ({
 		content: [
 			{
 				type: "text",
@@ -25,7 +25,7 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 	}));
 
 	server.tool(
-		"get_document_by_path",
+		"capella_get_document_by_path",
 		"Get a document by its path",
 		{
 			bucketName: z.string().describe("Bucket name"),
@@ -59,7 +59,7 @@ export function registerResources(server: McpServer, capellaConn: CapellaConn): 
 
 	// Bucket info tool
 	server.tool(
-		"get_bucket_info",
+		"capella_get_bucket_info",
 		"Get bucket information",
 		{
 			bucketName: z.string().describe("Bucket name"),

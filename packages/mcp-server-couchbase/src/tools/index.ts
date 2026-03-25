@@ -40,44 +40,44 @@ const _registerPlaybookTools = (server: McpServer, bucket: Bucket) => {
 
 export const toolRegistry: Record<string, ToolFunction> = {
 	// Core database tools
-	get_scopes_and_collections: getScopesAndCollections,
-	get_schema_for_collection: getSchemaForCollection,
-	run_sql_plus_plus_query: runSqlPlusPlusQuery,
-	get_document_by_id: getDocumentById,
-	upsert_document_by_id: upsertDocumentById,
-	delete_document_by_id: deleteDocumentById,
+	capella_get_scopes_and_collections: getScopesAndCollections,
+	capella_get_schema_for_collection: getSchemaForCollection,
+	capella_run_sql_plus_plus_query: runSqlPlusPlusQuery,
+	capella_get_document_by_id: getDocumentById,
+	capella_upsert_document_by_id: upsertDocumentById,
+	capella_delete_document_by_id: deleteDocumentById,
 
 	// Documentation tools
-	create_documentation: createDocumentation,
-	list_documentation: listDocumentation,
-	read_documentation: readDocumentation,
-	delete_documentation: deleteDocumentation,
-	sync_documentation_with_database: syncDocumentation,
+	capella_create_documentation: createDocumentation,
+	capella_list_documentation: listDocumentation,
+	capella_read_documentation: readDocumentation,
+	capella_delete_documentation: deleteDocumentation,
+	capella_sync_documentation_with_database: syncDocumentation,
 
 	// Playbook tools
-	list_playbooks: listPlaybooks,
+	capella_list_playbooks: listPlaybooks,
 
 	// Query analysis tools
-	get_fatal_requests: queryAnalysisTools.getFatalRequests,
-	get_longest_running_queries: queryAnalysisTools.getLongestRunningQueries,
-	get_most_frequent_queries: queryAnalysisTools.getMostFrequentQueries,
-	get_largest_result_size_queries: queryAnalysisTools.getLargestResultSizeQueries,
-	get_largest_result_count_queries: queryAnalysisTools.getLargestResultCountQueries,
-	get_primary_index_queries: queryAnalysisTools.getPrimaryIndexQueries,
-	get_system_indexes: queryAnalysisTools.getSystemIndexes,
-	get_completed_requests: queryAnalysisTools.getCompletedRequests,
-	get_indexes_to_drop: queryAnalysisTools.getIndexesToDrop,
-	get_most_expensive_queries: queryAnalysisTools.getMostExpensiveQueries,
-	get_prepared_statements: queryAnalysisTools.getPreparedStatements,
-	get_document_type_examples: queryAnalysisTools.getDocumentTypeExamples,
-	analyze_document_structure: queryAnalysisTools.analyzeDocumentStructure,
-	suggest_query_optimizations: queryAnalysisTools.suggestQueryOptimizations,
+	capella_get_fatal_requests: queryAnalysisTools.getFatalRequests,
+	capella_get_longest_running_queries: queryAnalysisTools.getLongestRunningQueries,
+	capella_get_most_frequent_queries: queryAnalysisTools.getMostFrequentQueries,
+	capella_get_largest_result_size_queries: queryAnalysisTools.getLargestResultSizeQueries,
+	capella_get_largest_result_count_queries: queryAnalysisTools.getLargestResultCountQueries,
+	capella_get_primary_index_queries: queryAnalysisTools.getPrimaryIndexQueries,
+	capella_get_system_indexes: queryAnalysisTools.getSystemIndexes,
+	capella_get_completed_requests: queryAnalysisTools.getCompletedRequests,
+	capella_get_indexes_to_drop: queryAnalysisTools.getIndexesToDrop,
+	capella_get_most_expensive_queries: queryAnalysisTools.getMostExpensiveQueries,
+	capella_get_prepared_statements: queryAnalysisTools.getPreparedStatements,
+	capella_get_document_type_examples: queryAnalysisTools.getDocumentTypeExamples,
+	capella_analyze_document_structure: queryAnalysisTools.analyzeDocumentStructure,
+	capella_suggest_query_optimizations: queryAnalysisTools.suggestQueryOptimizations,
 
 	// System information tools
-	get_system_nodes: queryAnalysisTools.getSystemNodes,
-	get_system_vitals: queryAnalysisTools.getSystemVitals,
-	get_detailed_prepared_statements: queryAnalysisTools.getDetailedPreparedStatements,
-	get_detailed_indexes: queryAnalysisTools.getDetailedIndexes,
+	capella_get_system_nodes: queryAnalysisTools.getSystemNodes,
+	capella_get_system_vitals: queryAnalysisTools.getSystemVitals,
+	capella_get_detailed_prepared_statements: queryAnalysisTools.getDetailedPreparedStatements,
+	capella_get_detailed_indexes: queryAnalysisTools.getDetailedIndexes,
 };
 
 export default toolRegistry;

@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_system_nodes",
+		"capella_get_system_nodes",
 		"Get information about all nodes in the Couchbase cluster",
 		{
 			service_filter: z.string().optional().describe("Filter by service type (e.g., 'n1ql', 'kv', 'index', 'fts')"),

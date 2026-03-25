@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_detailed_prepared_statements",
+		"capella_get_detailed_prepared_statements",
 		"Get detailed information about prepared statements with usage statistics",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

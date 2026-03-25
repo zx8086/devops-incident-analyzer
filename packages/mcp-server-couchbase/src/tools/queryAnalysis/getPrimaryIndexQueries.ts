@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_primary_index_queries",
+		"capella_get_primary_index_queries",
 		"Get queries that used primary indexes, which can indicate inefficient querying",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

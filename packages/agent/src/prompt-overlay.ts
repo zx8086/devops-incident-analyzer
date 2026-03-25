@@ -1,32 +1,30 @@
 // agent/src/prompt-overlay.ts
-// SIO-576: Layer gitagent dynamic prompts onto existing MCP server tools
-import { buildAllToolPrompts, buildRelatedToolsMap, loadAgent } from "@devops-agent/gitagent-bridge";
+// SIO-613: Layer gitagent dynamic prompts onto existing MCP server tools
+import { buildAllToolPrompts, buildRelatedToolsMap, loadAgent, matchesPattern } from "@devops-agent/gitagent-bridge";
 import { getAgentsDir } from "./paths.ts";
 
 let cachedToolPrompts: Map<string, string> | null = null;
 let cachedRelatedToolsMap: Map<string, string[]> | null = null;
 
-// Mapping from gitagent YAML tool names to MCP server tool name patterns
-const TOOL_NAME_MAP: Record<string, string[]> = {
-	"elastic-search-logs": [
-		"elasticsearch_search",
-		"elasticsearch_execute_sql_query",
-		"elasticsearch_get_cluster_health",
-	],
-	"kafka-introspect": [
-		"kafka_list_topics",
-		"kafka_get_consumer_group_lag",
-		"kafka_consume_messages",
-		"kafka_describe_topic",
-	],
-	"couchbase-cluster-health": [
-		"get_system_vitals",
-		"get_system_nodes",
-		"get_fatal_requests",
-		"get_longest_running_queries",
-	],
-	"konnect-api-gateway": ["query_api_requests", "list_services", "list_routes", "list_plugins", "list_control_planes"],
-};
+interface FacadePatternEntry {
+	facadeName: string;
+	patterns: string[];
+}
+
+let cachedFacadePatterns: FacadePatternEntry[] | null = null;
+
+function getFacadePatterns(): FacadePatternEntry[] {
+	if (!cachedFacadePatterns) {
+		const agent = loadAgent(getAgentsDir());
+		cachedFacadePatterns = agent.tools.reduce<FacadePatternEntry[]>((acc, t) => {
+			if (t.tool_mapping) {
+				acc.push({ facadeName: t.name, patterns: t.tool_mapping.mcp_patterns });
+			}
+			return acc;
+		}, []);
+	}
+	return cachedFacadePatterns;
+}
 
 export function getToolPrompts(): Map<string, string> {
 	if (!cachedToolPrompts) {
@@ -48,11 +46,13 @@ export function getRelatedToolsMap(): Map<string, string[]> {
 
 export function getEnhancedDescription(mcpToolName: string): string | undefined {
 	const prompts = getToolPrompts();
+	const entries = getFacadePatterns();
 
-	// Check if any gitagent tool maps to this MCP tool
-	for (const [gitagentName, mcpNames] of Object.entries(TOOL_NAME_MAP)) {
-		if (mcpNames.includes(mcpToolName)) {
-			return prompts.get(gitagentName);
+	for (const { facadeName, patterns } of entries) {
+		for (const pattern of patterns) {
+			if (matchesPattern(pattern, mcpToolName)) {
+				return prompts.get(facadeName);
+			}
 		}
 	}
 

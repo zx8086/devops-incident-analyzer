@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_indexes_to_drop",
+		"capella_get_indexes_to_drop",
 		"Get indexes that might be candidates for removal (never scanned)",
 		{
 			bucket_filter: z.string().optional().describe("Optional filter for bucket names (comma-separated)"),

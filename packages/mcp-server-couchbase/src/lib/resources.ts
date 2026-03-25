@@ -74,7 +74,7 @@ export function getPromptsList() {
 }
 
 export function registerResourceMethods(server: McpServer): void {
-	server.tool("resources_list", "List available resources", {}, async () => {
+	server.tool("capella_resources_list", "List available resources", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Listing available resources");
 		return {
@@ -87,7 +87,7 @@ export function registerResourceMethods(server: McpServer): void {
 		};
 	});
 
-	server.tool("prompts_list", "List available prompts", {}, async () => {
+	server.tool("capella_prompts_list", "List available prompts", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Listing available prompts");
 		return {
@@ -100,7 +100,7 @@ export function registerResourceMethods(server: McpServer): void {
 		};
 	});
 
-	server.tool("handle_resources_list", "Handle resources_list method call", {}, async () => {
+	server.tool("capella_handle_resources_list", "Handle resources_list method call", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling resources_list method call");
 		return {
@@ -113,7 +113,7 @@ export function registerResourceMethods(server: McpServer): void {
 		};
 	});
 
-	server.tool("handle_prompts_list", "Handle prompts_list method call", {}, async () => {
+	server.tool("capella_handle_prompts_list", "Handle prompts_list method call", {}, async () => {
 		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling prompts_list method call");
 		return {

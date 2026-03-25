@@ -48,12 +48,12 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	describe("Tool Registration Tests", () => {
 		test("should register all required tools", () => {
 			const requiredTools = [
-				"get_scopes_and_collections",
-				"get_schema_for_collection",
-				"get_document_by_id",
-				"upsert_document_by_id",
-				"delete_document_by_id",
-				"run_sql_plus_plus_query",
+				"capella_get_scopes_and_collections",
+				"capella_get_schema_for_collection",
+				"capella_get_document_by_id",
+				"capella_upsert_document_by_id",
+				"capella_delete_document_by_id",
+				"capella_run_sql_plus_plus_query",
 			];
 
 			requiredTools.forEach((toolName) => {
@@ -67,9 +67,9 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	describe("Document Operations Tests", () => {
 		test("Document operations - upsert, get, delete sequence", async () => {
 			// Get handlers
-			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
-			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
-			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
+			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
+			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
 			// Test document content
 			const testDoc = {
@@ -115,9 +115,9 @@ describe("Couchbase MCP Server Tool Tests", () => {
 		});
 
 		test("should handle missing parameters", async () => {
-			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
-			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
-			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
+			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
+			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
 			// Test get document
 			await expect(getHandler({})).rejects.toThrow();
@@ -128,7 +128,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 		});
 
 		test("should handle invalid document content", async () => {
-			const handler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const handler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 
 			await expect(
 				handler({
@@ -144,7 +144,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	// SQL++ Query Tests
 	describe("SQL++ Query Tests", () => {
 		test("should execute read-only query", async () => {
-			const queryHandler = mockServer.registeredTools.run_sql_plus_plus_query.handler;
+			const queryHandler = mockServer.registeredTools.capella_run_sql_plus_plus_query.handler;
 			const result = await queryHandler({
 				scope_name: "_default",
 				query: "SELECT META().id FROM `_default` LIMIT 1",

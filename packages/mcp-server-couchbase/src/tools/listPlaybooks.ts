@@ -6,7 +6,7 @@ import { z } from "zod";
 import { logger } from "../lib/logger";
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool("list_playbooks", "List all available playbooks", {}, async () => {
+	server.tool("capella_list_playbooks", "List all available playbooks", {}, async () => {
 		try {
 			logger.info("Listing available playbooks");
 
@@ -50,7 +50,7 @@ export default (server: McpServer, _bucket: Bucket) => {
 	});
 
 	server.tool(
-		"get_playbook",
+		"capella_get_playbook",
 		"Get a specific playbook by ID",
 		{
 			playbook_id: z.string().describe("ID of the playbook to retrieve"),

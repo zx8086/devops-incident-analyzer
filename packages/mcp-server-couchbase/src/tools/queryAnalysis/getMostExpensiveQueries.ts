@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_most_expensive_queries",
+		"capella_get_most_expensive_queries",
 		"Get the most expensive queries based on execution time and resource usage",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

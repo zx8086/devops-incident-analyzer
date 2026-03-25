@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_detailed_indexes",
+		"capella_get_detailed_indexes",
 		"Get detailed information about all indexes in the Couchbase system",
 		{
 			bucket_name: z.string().optional().describe("Filter by bucket name"),

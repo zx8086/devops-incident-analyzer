@@ -39,7 +39,7 @@ describe("Resource Handlers", () => {
 			registerResources(mockServer as unknown as McpServer, mockCapellaConn);
 
 			expect(mockServer.tool).toHaveBeenCalledWith(
-				"get_server_info",
+				"capella_get_server_info",
 				"Get server information",
 				{},
 				expect.any(Function),
@@ -50,7 +50,7 @@ describe("Resource Handlers", () => {
 			registerResources(mockServer as unknown as McpServer, mockCapellaConn);
 
 			expect(mockServer.tool).toHaveBeenCalledWith(
-				"get_document_by_path",
+				"capella_get_document_by_path",
 				"Get a document by its path",
 				expect.any(Object),
 				expect.any(Function),
@@ -61,7 +61,7 @@ describe("Resource Handlers", () => {
 			registerResources(mockServer as unknown as McpServer, mockCapellaConn);
 
 			expect(mockServer.tool).toHaveBeenCalledWith(
-				"get_bucket_info",
+				"capella_get_bucket_info",
 				"Get bucket information",
 				expect.any(Object),
 				expect.any(Function),

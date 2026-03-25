@@ -38,3 +38,8 @@ related_tools:
   - "Use elastic-search-logs to check if database errors appear in application logs"
   - "Use kafka-consumer-lag to check if database slowness is causing event processing delays"
   - "Use konnect-api-requests to check if API latency correlates with database performance"
+
+tool_mapping:
+  mcp_server: couchbase
+  mcp_patterns:
+    - "capella_*"

@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_document_type_examples",
+		"capella_get_document_type_examples",
 		"Get examples of document keys for each document type",
 		{
 			scope_name: z.string().optional().default("_default").describe("Scope name to query"),

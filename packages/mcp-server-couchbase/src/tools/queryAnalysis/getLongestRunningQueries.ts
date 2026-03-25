@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_longest_running_queries",
+		"capella_get_longest_running_queries",
 		"Get the longest running queries based on service time",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

@@ -8,7 +8,7 @@ import { logger } from "../lib/logger";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"upsert_document_by_id",
+		"capella_upsert_document_by_id",
 		"Create or update a document with a specific ID",
 		{
 			scope_name: z.string().describe("Name of the scope"),

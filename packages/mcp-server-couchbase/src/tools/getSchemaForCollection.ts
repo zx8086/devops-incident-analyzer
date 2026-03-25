@@ -112,7 +112,7 @@ const getSchemaHandler = async (params: SchemaParams, bucket: Bucket): Promise<S
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_schema_for_collection",
+		"capella_get_schema_for_collection",
 		"Get the schema for a collection by sampling a document",
 		{
 			scope_name: z.string().describe("Name of the scope"),

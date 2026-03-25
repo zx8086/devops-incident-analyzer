@@ -7,7 +7,7 @@ import { logger } from "../../lib/logger";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"analyze_document_structure",
+		"capella_analyze_document_structure",
 		"Analyze the structure of a document type",
 		{
 			document_key: z.string().describe("Document key to analyze"),

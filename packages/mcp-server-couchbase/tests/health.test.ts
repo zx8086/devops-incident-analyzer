@@ -39,12 +39,12 @@ describe("Health Check Tests", () => {
 
 	test("should register health check tool", () => {
 		registerHealthChecks(mockServer as unknown as McpServer, mockCapellaConn);
-		expect(mockServer.registeredTools.health_check).toBeDefined();
+		expect(mockServer.registeredTools.capella_health_check).toBeDefined();
 	});
 
 	test("should handle health check with no bucket", async () => {
 		registerHealthChecks(mockServer as unknown as McpServer, mockCapellaConn);
-		const handler = mockServer.registeredTools.health_check.handler;
+		const handler = mockServer.registeredTools.capella_health_check.handler;
 		const result = await handler();
 		expect(result.content[0].text).toContain("healthy");
 	});

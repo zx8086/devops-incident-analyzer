@@ -61,3 +61,8 @@ related_tools:
   - "Use couchbase-cluster-health to verify database health during the same time window"
   - "Use konnect-api-requests to check if API gateway errors correlate with log patterns"
   - "Use aggregate-findings skill to correlate logs with events and datastore metrics"
+
+tool_mapping:
+  mcp_server: elastic
+  mcp_patterns:
+    - "elasticsearch_*"

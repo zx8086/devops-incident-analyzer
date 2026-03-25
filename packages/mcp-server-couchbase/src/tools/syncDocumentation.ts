@@ -16,7 +16,7 @@ const sanitizePath = (inputPath: string): string => {
 
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
-		"sync_documentation_with_database",
+		"capella_sync_documentation_with_database",
 		"Generate a documentation skeleton based on the database structure",
 		{
 			scope_name: z

@@ -36,7 +36,7 @@ const getScopesAndCollectionsHandler = async (_params: {}, bucket: Bucket) => {
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool("get_scopes_and_collections", "Get all scopes and collections in the bucket", {}, async (params: any) => {
+	server.tool("capella_get_scopes_and_collections", "Get all scopes and collections in the bucket", {}, async (params: any) => {
 		if (!params || typeof params !== "object") {
 			throw new Error("Missing required arguments object");
 		}

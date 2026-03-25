@@ -6,7 +6,7 @@ import { logger } from "./logger";
 
 export function registerPrompts(server: McpServer): void {
 	server.tool(
-		"generate_query",
+		"capella_generate_query",
 		"Generate a SQL++ query based on description",
 		{
 			description: z.string().describe("Description of the data you want to query"),
@@ -31,7 +31,7 @@ Remember to:
 	);
 
 	server.tool(
-		"analyze_schema",
+		"capella_analyze_schema",
 		"Analyze a document schema",
 		{
 			schemaJson: z.string().describe("JSON schema to analyze"),
@@ -63,7 +63,7 @@ Include in your analysis:
 	);
 
 	server.tool(
-		"validate_document",
+		"capella_validate_document",
 		"Validate a document against best practices",
 		{
 			document: z.string().describe("JSON document to validate"),
@@ -96,7 +96,7 @@ In your validation:
 
 	// Index advisor tool
 	server.tool(
-		"advise_indexes",
+		"capella_advise_indexes",
 		"Suggest optimal indexes for a query",
 		{
 			query: z.string().describe("SQL++ query to analyze"),

@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_largest_result_count_queries",
+		"capella_get_largest_result_count_queries",
 		"Get queries that return the largest number of results",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

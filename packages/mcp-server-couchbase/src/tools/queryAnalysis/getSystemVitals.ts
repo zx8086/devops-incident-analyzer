@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_system_vitals",
+		"capella_get_system_vitals",
 		"Get detailed system vitals and performance metrics for the Couchbase cluster",
 		{
 			node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),

@@ -8,7 +8,7 @@ import { logger } from "../lib/logger";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"delete_document_by_id",
+		"capella_delete_document_by_id",
 		"Delete a document by ID from a specific scope and collection",
 		{
 			scope_name: z.string().describe("Name of the scope"),

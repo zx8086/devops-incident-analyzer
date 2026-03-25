@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_system_indexes",
+		"capella_get_system_indexes",
 		"Get information about all indexes in the system",
 		{
 			bucket_name: z.string().optional().describe("Filter by bucket name"),

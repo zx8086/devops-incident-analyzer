@@ -7,7 +7,7 @@ import { logger } from "../lib/logger";
 
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
-		"read_documentation",
+		"capella_read_documentation",
 		"Read documentation content using the resource protocol",
 		{
 			scope_name: z.string().optional().describe("Name of the scope (optional)"),

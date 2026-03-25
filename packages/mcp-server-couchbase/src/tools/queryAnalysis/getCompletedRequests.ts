@@ -9,7 +9,7 @@ import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"get_completed_requests",
+		"capella_get_completed_requests",
 		"Get recent completed query requests with detailed execution information",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),

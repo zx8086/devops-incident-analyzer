@@ -16,7 +16,7 @@ const sanitizePath = (inputPath: string): string => {
 
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
-		"create_documentation",
+		"capella_create_documentation",
 		"Create or update documentation for a scope, collection, or specific file",
 		{
 			scope_name: z.string().describe("Name of the scope"),

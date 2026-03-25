@@ -14,26 +14,25 @@ export class ToolRegistry {
 		const originalTool = server.tool.bind(server);
 		const serverRecord = server as unknown as Record<string, unknown>;
 		serverRecord.tool = (name: string, ...rest: unknown[]) => {
-			const prefixedName = `capella_${name}`;
-			// server.tool has multiple overloads; handler is always the last arg
+			// Tool names are already capella_-prefixed; no additional prefixing needed
 			const args = [...rest];
 			const handlerIdx = args.length - 1;
 			const originalHandler = args[handlerIdx];
 
 			if (typeof originalHandler === "function") {
 				args[handlerIdx] = async (...handlerArgs: unknown[]) => {
-					return traceToolCall(prefixedName, () =>
+					return traceToolCall(name, () =>
 						(originalHandler as (...a: unknown[]) => Promise<unknown>)(...handlerArgs),
 					);
 				};
 			}
 
-			return (originalTool as unknown as (...a: unknown[]) => unknown)(prefixedName, ...args);
+			return (originalTool as unknown as (...a: unknown[]) => unknown)(name, ...args);
 		};
 
 		for (const [name, toolFn] of Object.entries(toolRegistry)) {
 			toolFn(server, bucket);
-			registered.push(`capella_${name}`);
+			registered.push(name);
 		}
 
 		// Restore original to avoid double-wrapping on re-registration

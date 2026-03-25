@@ -5,8 +5,16 @@ export { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
 export { type BedrockModelConfig, getRecursionLimit, resolveBedrockConfig } from "./model-factory.ts";
 export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { buildSystemPrompt } from "./skill-loader.ts";
+export {
+	type FacadeMap,
+	type ResolvedMapping,
+	buildFacadeMap,
+	getUncoveredTools,
+	matchesPattern,
+	resolveMapping,
+} from "./tool-mapping.ts";
 export { buildAllToolPrompts, buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";
-export { validateToolSchemas } from "./tool-schema.ts";
+export { type ToolValidationResult, validateToolSchemas } from "./tool-schema.ts";
 export {
 	type AgentManifest,
 	AgentManifestSchema,
@@ -14,4 +22,5 @@ export {
 	type ModelConfig,
 	type ToolDefinition,
 	ToolDefinitionSchema,
+	type ToolMapping,
 } from "./types.ts";

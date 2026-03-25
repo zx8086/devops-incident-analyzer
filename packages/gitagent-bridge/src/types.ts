@@ -82,9 +82,16 @@ export const ToolDefinitionSchema = z.object({
 		.optional(),
 	prompt_template: z.string().optional(),
 	related_tools: z.array(z.string()).optional(),
+	tool_mapping: z
+		.object({
+			mcp_server: z.string().describe("MCP server this facade maps to"),
+			mcp_patterns: z.array(z.string()).describe("MCP tool name patterns: exact names or glob with * suffix"),
+		})
+		.optional(),
 });
 
 export type AgentManifest = z.infer<typeof AgentManifestSchema>;
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 export type ComplianceConfig = z.infer<typeof ComplianceSchema>;
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
+export type ToolMapping = NonNullable<ToolDefinition["tool_mapping"]>;

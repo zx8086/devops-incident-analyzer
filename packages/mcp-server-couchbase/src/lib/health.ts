@@ -6,7 +6,7 @@ import { logger } from "./logger";
 import { createMcpError, MCP_ERROR_CODES } from "./mcpErrors";
 
 export function registerHealthChecks(server: McpServer, capellaConn: CapellaConn): void {
-	server.tool("health_check", "Check the health of the Couchbase MCP server", {}, async () => {
+	server.tool("capella_health_check", "Check the health of the Couchbase MCP server", {}, async () => {
 		logger.info("Running health check");
 
 		try {
@@ -30,7 +30,7 @@ export function registerHealthChecks(server: McpServer, capellaConn: CapellaConn
 		}
 	});
 
-	server.tool("get_diagnostics", "Get detailed server diagnostics", {}, async () => {
+	server.tool("capella_get_diagnostics", "Get detailed server diagnostics", {}, async () => {
 		logger.info("Running diagnostics");
 
 		try {

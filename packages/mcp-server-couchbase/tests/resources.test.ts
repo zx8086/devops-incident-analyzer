@@ -18,7 +18,7 @@ describe("Resource Methods", () => {
 		registerResourceMethods(mockServer as unknown as McpServer);
 
 		expect(mockServer.tool).toHaveBeenCalledWith(
-			"resources_list",
+			"capella_resources_list",
 			expect.any(String),
 			expect.any(Object),
 			expect.any(Function),

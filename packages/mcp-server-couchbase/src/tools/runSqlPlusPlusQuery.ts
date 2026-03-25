@@ -66,7 +66,7 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
-		"run_sql_plus_plus_query",
+		"capella_run_sql_plus_plus_query",
 		{
 			scope_name: z.string().describe("Name of the scope"),
 			query: z

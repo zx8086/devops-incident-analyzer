@@ -1,7 +1,7 @@
 /* tests/integration.test.ts */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createServer } from "../src/index";
+import { createServer } from "../src/server";
 import { logger } from "../src/lib/logger";
 import toolRegistry from "../src/tools";
 import { mockConnection, mockServer } from "./test.utils";
@@ -24,10 +24,10 @@ describe("Integration Tests", () => {
 
 	describe("Tool Interaction Tests", () => {
 		test("should handle document lifecycle with schema validation", async () => {
-			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
-			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
-			const schemaHandler = mockServer.registeredTools.get_schema_for_collection.handler;
-			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
+			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
+			const schemaHandler = mockServer.registeredTools.capella_get_schema_for_collection.handler;
+			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
 			// 1. Get schema first
 			const schemaResult = await schemaHandler({
@@ -76,9 +76,9 @@ describe("Integration Tests", () => {
 		});
 
 		test("should handle query with document operations", async () => {
-			const queryHandler = mockServer.registeredTools.run_sql_plus_plus_query.handler;
-			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
-			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
+			const queryHandler = mockServer.registeredTools.capella_run_sql_plus_plus_query.handler;
+			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
 
 			// 1. Create test documents
 			const testDocs = Array(5)
@@ -132,12 +132,12 @@ describe("Integration Tests", () => {
 
 		test("should register all required tools and resources", async () => {
 			const requiredTools = [
-				"get_scopes_and_collections",
-				"get_schema_for_collection",
-				"get_document_by_id",
-				"upsert_document_by_id",
-				"delete_document_by_id",
-				"run_sql_plus_plus_query",
+				"capella_get_scopes_and_collections",
+				"capella_get_schema_for_collection",
+				"capella_get_document_by_id",
+				"capella_upsert_document_by_id",
+				"capella_delete_document_by_id",
+				"capella_run_sql_plus_plus_query",
 			];
 
 			requiredTools.forEach((toolName) => {
@@ -149,8 +149,8 @@ describe("Integration Tests", () => {
 
 	describe("Error Recovery Tests", () => {
 		test("should recover from failed operations", async () => {
-			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
-			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
+			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
 
 			// 1. Try to create document with invalid JSON
 			await expect(
