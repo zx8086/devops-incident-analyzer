@@ -17,24 +17,27 @@ export function buildToolPrompt(toolDef: ToolDefinition, context: ToolPromptCont
 	let resolved = template;
 
 	if (context.datasources?.length) {
+		const datasourcesList = context.datasources.join(", ");
 		resolved = resolved.replace(/\{\{#if datasources\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, inner: string) =>
-			inner.replace(/\{\{datasources\}\}/g, context.datasources!.join(", ")),
+			inner.replace(/\{\{datasources\}\}/g, datasourcesList),
 		);
 	} else {
 		resolved = resolved.replace(/\{\{#if datasources\}\}[\s\S]*?\{\{\/if\}\}/g, "");
 	}
 
 	if (context.complianceTier) {
+		const tier = context.complianceTier;
 		resolved = resolved.replace(/\{\{#if compliance_tier\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, inner: string) =>
-			inner.replace(/\{\{compliance_tier\}\}/g, context.complianceTier!),
+			inner.replace(/\{\{compliance_tier\}\}/g, tier),
 		);
 	} else {
 		resolved = resolved.replace(/\{\{#if compliance_tier\}\}[\s\S]*?\{\{\/if\}\}/g, "");
 	}
 
 	if (context.activeSkills?.length) {
+		const skillsList = context.activeSkills.join(", ");
 		resolved = resolved.replace(/\{\{#if active_skills\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, inner: string) =>
-			inner.replace(/\{\{active_skills\}\}/g, context.activeSkills!.join(", ")),
+			inner.replace(/\{\{active_skills\}\}/g, skillsList),
 		);
 	} else {
 		resolved = resolved.replace(/\{\{#if active_skills\}\}[\s\S]*?\{\{\/if\}\}/g, "");

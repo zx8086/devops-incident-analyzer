@@ -52,7 +52,6 @@ declare module '$env/static/private' {
 	export const TERM_PROGRAM_VERSION: string;
 	export const FPATH: string;
 	export const WINDOWID: string;
-	export const TERM_SESSION_ID: string;
 	export const ZSH: string;
 	export const npm_config_local_prefix: string;
 	export const GIT_EDITOR: string;
@@ -87,7 +86,6 @@ declare module '$env/static/private' {
 	export const LOGNAME: string;
 	export const ALACRITTY_WINDOW_ID: string;
 	export const npm_lifecycle_script: string;
-	export const LC_CTYPE: string;
 	export const ZED_TERM: string;
 	export const COREPACK_ENABLE_AUTO_PIN: string;
 	export const BUN_INSTALL: string;
@@ -119,7 +117,6 @@ declare module '$env/static/private' {
 	export const KAFKA_MCP_URL: string;
 	export const COUCHBASE_MCP_URL: string;
 	export const KONNECT_MCP_URL: string;
-	export const OTEL_SERVICE_NAME: string;
 	export const TELEMETRY_MODE: string;
 	export const OTEL_EXPORTER_OTLP_ENDPOINT: string;
 	export const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: string;
@@ -232,7 +229,6 @@ declare module '$env/dynamic/private' {
 		TERM_PROGRAM_VERSION: string;
 		FPATH: string;
 		WINDOWID: string;
-		TERM_SESSION_ID: string;
 		ZSH: string;
 		npm_config_local_prefix: string;
 		GIT_EDITOR: string;
@@ -267,7 +263,6 @@ declare module '$env/dynamic/private' {
 		LOGNAME: string;
 		ALACRITTY_WINDOW_ID: string;
 		npm_lifecycle_script: string;
-		LC_CTYPE: string;
 		ZED_TERM: string;
 		COREPACK_ENABLE_AUTO_PIN: string;
 		BUN_INSTALL: string;
@@ -299,7 +294,6 @@ declare module '$env/dynamic/private' {
 		KAFKA_MCP_URL: string;
 		COUCHBASE_MCP_URL: string;
 		KONNECT_MCP_URL: string;
-		OTEL_SERVICE_NAME: string;
 		TELEMETRY_MODE: string;
 		OTEL_EXPORTER_OTLP_ENDPOINT: string;
 		OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: string;
