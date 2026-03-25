@@ -254,7 +254,7 @@ export class ElicitationOperations {
 			// Get next pending request if session not complete
 			let nextRequest;
 			if (!isSessionComplete && !response.cancelled) {
-				const session = elicitationManager.getSessionResponses(sessionId);
+				const _session = elicitationManager.getSessionResponses(sessionId);
 				// This would need implementation to find next pending request
 				// For now, we'll indicate that more info is needed
 			}
@@ -424,7 +424,7 @@ export class ElicitationOperations {
 		return summary;
 	}
 
-	private serializeSchema(schema: z.ZodSchema<any>): any {
+	private serializeSchema(_schema: z.ZodSchema<any>): any {
 		// Convert Zod schema to JSON-serializable format
 		// This is a simplified version - would need full implementation
 		return {

@@ -3,8 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { logger } from "../lib/logger";
-import { ResponseBuilder } from "../lib/responseBuilder";
-import type { BucketInfo, ScopeInfo } from "../lib/types";
+import type { BucketInfo } from "../lib/types";
 
 export function registerDatabaseStructureResource(server: McpServer, bucket: Bucket): void {
 	server.resource("database-structure", "database://structure", async (uri) => {
@@ -12,7 +11,7 @@ export function registerDatabaseStructureResource(server: McpServer, bucket: Buc
 			logger.info("Fetching database structure resource");
 
 			const scopes = await bucket.collections().getAllScopes();
-			const bucketInfo: BucketInfo = {
+			const _bucketInfo: BucketInfo = {
 				name: bucket.name,
 				scopes: scopes.map((scope) => ({
 					name: scope.name,

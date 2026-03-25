@@ -330,7 +330,7 @@ describe("Tool Parameter Validation Regression Tests", () => {
 			expect(() => fixedSchema.source.parse(testInput.source)).not.toThrow();
 
 			// The difference is in the validation - fixed schema actually validates the fields
-			const brokenResult = brokenSchema.source.parse(testInput.source);
+			const _brokenResult = brokenSchema.source.parse(testInput.source);
 			const fixedResult = fixedSchema.source.parse(testInput.source);
 
 			// Fixed schema preserves the typed structure
@@ -369,7 +369,7 @@ describe("Tool Integration Tests", () => {
 		const registeredTools: any[] = [];
 
 		const mockMcpServer = {
-			tool: (name: string, description: string, schema: any, handler: any) => {
+			tool: (name: string, _description: string, schema: any, handler: any) => {
 				registeredTools.push({ name, schema, handler });
 			},
 		};

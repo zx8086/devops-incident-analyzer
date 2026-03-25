@@ -13,7 +13,7 @@ async function testPagination() {
 		const server = await createElasticsearchMcpServer(config);
 
 		// Simulate tool call with limit parameter
-		const toolHandler = server["_tools"].get("elasticsearch_ilm_get_lifecycle");
+		const toolHandler = server._tools.get("elasticsearch_ilm_get_lifecycle");
 
 		if (!toolHandler) {
 			console.log("Tool not found");

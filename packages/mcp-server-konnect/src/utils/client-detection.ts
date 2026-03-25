@@ -318,7 +318,7 @@ function runMCPLibraryDetection(env: Record<string, string>, argv: string[], cwd
 }
 
 // Custom Client Detection
-function runCustomClientDetection(env: Record<string, string>, argv: string[], cwd: string): DetectionResult[] {
+function runCustomClientDetection(env: Record<string, string>, _argv: string[], cwd: string): DetectionResult[] {
 	const results: DetectionResult[] = [];
 
 	// Custom Web Client
@@ -355,7 +355,7 @@ function runCustomClientDetection(env: Record<string, string>, argv: string[], c
 }
 
 // Development Tool Detection
-function runDevelopmentToolDetection(env: Record<string, string>, argv: string[], cwd: string): DetectionResult[] {
+function runDevelopmentToolDetection(env: Record<string, string>, argv: string[], _cwd: string): DetectionResult[] {
 	const results: DetectionResult[] = [];
 
 	// CI/CD Pipeline

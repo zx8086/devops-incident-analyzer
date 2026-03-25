@@ -4,7 +4,7 @@
  * Coverage: 4 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerGetClusterHealthTool } from "../../../src/tools/cluster/get_cluster_health";
@@ -14,7 +14,6 @@ import { registerGetNodesInfoTool } from "../../../src/tools/cluster/get_nodes_i
 import { registerGetNodesStatsTool } from "../../../src/tools/cluster/get_nodes_stats";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -33,7 +32,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 
 	// Test indices
 	const TEST_INDEX = `test-cluster-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-cluster-*`;
+	const _TEST_INDEX_PATTERN = `test-cluster-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -45,7 +44,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

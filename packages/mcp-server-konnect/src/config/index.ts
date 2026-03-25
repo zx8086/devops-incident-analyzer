@@ -1,7 +1,7 @@
 /* src/config/index.ts */
 
 import { z } from "zod";
-import { getEnvVar, getEnvVarWithDefault, getRuntimeInfo, initializeEnvironment } from "../utils/env.js";
+import { getEnvVar, getEnvVarWithDefault, initializeEnvironment } from "../utils/env.js";
 import { createContextLogger } from "../utils/mcp-logger.js";
 
 const log = createContextLogger("config");
@@ -400,9 +400,9 @@ export class ConfigurationManager {
 				accessToken: getEnvVar("KONNECT_ACCESS_TOKEN") || "",
 				region: getEnvVarWithDefault("KONNECT_REGION", "us") as any,
 				baseUrl: getEnvVar("KONNECT_BASE_URL"),
-				timeout: parseInt(getEnvVarWithDefault("KONNECT_TIMEOUT", "30000")),
-				retryAttempts: parseInt(getEnvVarWithDefault("KONNECT_RETRY_ATTEMPTS", "3")),
-				retryDelay: parseInt(getEnvVarWithDefault("KONNECT_RETRY_DELAY", "1000")),
+				timeout: parseInt(getEnvVarWithDefault("KONNECT_TIMEOUT", "30000"), 10),
+				retryAttempts: parseInt(getEnvVarWithDefault("KONNECT_RETRY_ATTEMPTS", "3"), 10),
+				retryDelay: parseInt(getEnvVarWithDefault("KONNECT_RETRY_DELAY", "1000"), 10),
 			},
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", "false") === "true",
@@ -416,10 +416,10 @@ export class ConfigurationManager {
 			},
 			monitoring: {
 				enabled: getEnvVarWithDefault("MONITORING_ENABLED", "true") === "true",
-				healthCheckInterval: parseInt(getEnvVarWithDefault("HEALTH_CHECK_INTERVAL", "30000")),
+				healthCheckInterval: parseInt(getEnvVarWithDefault("HEALTH_CHECK_INTERVAL", "30000"), 10),
 				metricsCollection: getEnvVarWithDefault("METRICS_COLLECTION", "true") === "true",
 				performanceThresholds: {
-					responseTimeMs: parseInt(getEnvVarWithDefault("PERFORMANCE_RESPONSE_TIME_MS", "5000")),
+					responseTimeMs: parseInt(getEnvVarWithDefault("PERFORMANCE_RESPONSE_TIME_MS", "5000"), 10),
 					errorRate: parseFloat(getEnvVarWithDefault("PERFORMANCE_ERROR_RATE", "5")),
 				},
 			},
@@ -430,11 +430,11 @@ export class ConfigurationManager {
 			},
 			transport: {
 				mode: getEnvVarWithDefault("MCP_TRANSPORT", "stdio") as "stdio" | "http" | "both",
-				port: parseInt(getEnvVarWithDefault("MCP_PORT", "9083")),
+				port: parseInt(getEnvVarWithDefault("MCP_PORT", "9083"), 10),
 				host: getEnvVarWithDefault("MCP_HOST", "0.0.0.0"),
 				path: getEnvVarWithDefault("MCP_PATH", "/mcp"),
 				sessionMode: getEnvVarWithDefault("MCP_SESSION_MODE", "stateless") as "stateless" | "stateful",
-				idleTimeout: parseInt(getEnvVarWithDefault("MCP_IDLE_TIMEOUT", "255")),
+				idleTimeout: parseInt(getEnvVarWithDefault("MCP_IDLE_TIMEOUT", "255"), 10),
 				apiKey: getEnvVarWithDefault("MCP_API_KEY", ""),
 				allowedOrigins: getEnvVarWithDefault("MCP_ALLOWED_ORIGINS", ""),
 			},
@@ -479,7 +479,7 @@ export class ConfigurationManager {
 		});
 	}
 	private logConfiguration(config: Config, health: ConfigurationHealth): void {
-		const sanitized = JSON.parse(
+		const _sanitized = JSON.parse(
 			JSON.stringify(config, (key, value) => {
 				const sensitiveKeys = ["accessToken", "apiKey", "token", "key"];
 				if (sensitiveKeys.some((k) => key.toLowerCase().includes(k))) {
@@ -610,7 +610,7 @@ export class ConfigurationManager {
 			required: ["application", "kong", "tracing", "monitoring", "runtime"],
 		};
 		if (outputPath) {
-			const fs = await import("fs");
+			const fs = await import("node:fs");
 			fs.writeFileSync(outputPath, JSON.stringify(jsonSchema, null, 2));
 			console.error(`JSON Schema exported to ${outputPath}`);
 		}

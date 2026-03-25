@@ -6,9 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
-import { createError } from "../lib/errors";
 import { logger } from "../lib/logger";
-import { ResponseBuilder } from "../lib/responseBuilder";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
 
@@ -75,7 +73,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				.string()
 				.describe("SQL++ query to execute. Use only the collection name in the FROM clause if using scope context."),
 		},
-		async (params, extra) => {
+		async (params, _extra) => {
 			return runQuery(params, bucket);
 		},
 	);

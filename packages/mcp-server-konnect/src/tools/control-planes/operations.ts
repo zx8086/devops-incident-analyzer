@@ -1,7 +1,6 @@
 // src/tools/control-planes/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
-import { formatEntity, formatEntityList } from "../../utils/formatting.js";
 import { createContextLogger } from "../../utils/mcp-logger.js";
 
 const log = createContextLogger("tools");

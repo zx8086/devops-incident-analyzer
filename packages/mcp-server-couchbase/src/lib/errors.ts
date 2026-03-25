@@ -154,7 +154,7 @@ export function getErrorMessage(error: unknown): string {
 }
 
 // Map error codes to HTTP status codes
-const statusCodes: Record<ErrorCode, number> = {
+const _statusCodes: Record<ErrorCode, number> = {
 	DOCUMENT_NOT_FOUND: 404,
 	NOT_FOUND: 404,
 	QUERY_ERROR: 400,

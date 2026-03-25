@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { ElicitationManager, ElicitationRequest, KongElicitationPatterns } from "../utils/elicitation.js";
 
 /**
@@ -280,7 +279,8 @@ export class MigrationAnalyzer {
 			];
 
 			domainPatterns.forEach((pattern) => {
-				const matches = context.userMessage!.matchAll(pattern);
+				const matches = context.userMessage?.matchAll(pattern);
+				if (!matches) return;
 				for (const match of matches) {
 					if (match[1]) {
 						candidates.push({
@@ -372,7 +372,8 @@ export class MigrationAnalyzer {
 			];
 
 			envPatterns.forEach((pattern) => {
-				const matches = context.userMessage!.matchAll(pattern);
+				const matches = context.userMessage?.matchAll(pattern);
+				if (!matches) return;
 				for (const match of matches) {
 					if (match[1]) {
 						const normalized = this.normalizeEnvironment(match[1].toLowerCase());
@@ -434,7 +435,8 @@ export class MigrationAnalyzer {
 			const teamPatterns = [/(?:team|owned by|belongs to)\s+([a-z0-9-]{2,15})/gi];
 
 			teamPatterns.forEach((pattern) => {
-				const matches = context.userMessage!.matchAll(pattern);
+				const matches = context.userMessage?.matchAll(pattern);
+				if (!matches) return;
 				for (const match of matches) {
 					if (match[1]) {
 						candidates.push({
@@ -546,7 +548,7 @@ export class MigrationAnalyzer {
 		return "high";
 	}
 
-	private generateRecommendations(analysis: MigrationAnalysis, context: MigrationContext): string[] {
+	private generateRecommendations(analysis: MigrationAnalysis, _context: MigrationContext): string[] {
 		const recommendations: string[] = [];
 
 		if (analysis.missingInfo.domain) {

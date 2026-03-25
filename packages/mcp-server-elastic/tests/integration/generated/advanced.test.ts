@@ -4,7 +4,7 @@
  * Coverage: 2 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 // Import all tools in this category
@@ -12,7 +12,6 @@ import { registerDeleteByQueryTool } from "../../../src/tools/advanced/delete_by
 import { registerTranslateSqlQueryTool } from "../../../src/tools/advanced/translate_sql_query";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -31,7 +30,7 @@ describe.skipIf(shouldSkipIntegrationTests())("advanced Tools - Real Integration
 
 	// Test indices
 	const TEST_INDEX = `test-advanced-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-advanced-*`;
+	const _TEST_INDEX_PATTERN = `test-advanced-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -43,7 +42,7 @@ describe.skipIf(shouldSkipIntegrationTests())("advanced Tools - Real Integration
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

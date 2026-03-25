@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { type Config, ConfigSchema, ConfigurationManager } from "../config/index.js";
+import { ConfigSchema, ConfigurationManager } from "../config/index.js";
 
 describe("Configuration System", () => {
 	let originalEnv: Record<string, string | undefined>;
@@ -237,7 +237,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			expect(health.status).toBe("healthy");
@@ -253,7 +253,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			expect(health.status).not.toBe("healthy");
@@ -268,7 +268,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			expect(health.recommendations.length).toBeGreaterThan(0);
@@ -300,7 +300,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			// Should have security issues
@@ -318,7 +318,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			// Development should be more forgiving
@@ -332,7 +332,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			expect(health.metrics.configurationComplexity).toBeGreaterThan(0);
@@ -344,7 +344,7 @@ describe("Configuration System", () => {
 			process.env.LANGSMITH_TRACING = "false";
 
 			const manager = new ConfigurationManager();
-			const config = await manager.load();
+			const _config = await manager.load();
 			const health = await manager.getHealth();
 
 			expect(health.metrics.validationPerformance).toBeGreaterThan(0);

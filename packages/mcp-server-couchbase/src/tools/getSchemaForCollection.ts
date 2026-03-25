@@ -73,7 +73,7 @@ const getSchemaHandler = async (params: SchemaParams, bucket: Bucket): Promise<S
 	}
 
 	try {
-		const result = await bucket.scope(scope_name).query("SELECT * FROM `" + collection_name + "` LIMIT 1");
+		const result = await bucket.scope(scope_name).query(`SELECT * FROM \`${collection_name}\` LIMIT 1`);
 		const rows = await result.rows;
 
 		if (rows.length === 0) {

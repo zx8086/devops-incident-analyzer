@@ -103,7 +103,7 @@ function analyzeQuery(query: string): QueryAnalysis {
 
 	// Extract WHERE predicates
 	const whereMatch = upperQuery.match(/WHERE\s+(.*?)(?:ORDER BY|GROUP BY|LIMIT|OFFSET|HAVING|$)/is);
-	if (whereMatch && whereMatch[1]) {
+	if (whereMatch?.[1]) {
 		// Split by AND/OR and clean up
 		const predicates = whereMatch[1]
 			.split(/\s+(?:AND|OR)\s+/i)
@@ -120,7 +120,7 @@ function analyzeQuery(query: string): QueryAnalysis {
 
 	// Extract projected fields
 	const selectMatch = upperQuery.match(/SELECT\s+(.*?)\s+FROM/is);
-	if (selectMatch && selectMatch[1]) {
+	if (selectMatch?.[1]) {
 		if (!selectMatch[1].includes("*")) {
 			// Split by commas, but handle function calls carefully
 			let inFunction = 0;
@@ -154,7 +154,7 @@ function analyzeQuery(query: string): QueryAnalysis {
 
 	// Extract ORDER BY fields
 	const orderByMatch = upperQuery.match(/ORDER BY\s+(.*?)(?:LIMIT|OFFSET|$)/is);
-	if (orderByMatch && orderByMatch[1]) {
+	if (orderByMatch?.[1]) {
 		const orderByFields = orderByMatch[1]
 			.split(",")
 			.map((f) => f.trim().split(/\s+/)[0] ?? "") // Remove ASC/DESC
@@ -165,7 +165,7 @@ function analyzeQuery(query: string): QueryAnalysis {
 
 	// Extract GROUP BY fields
 	const groupByMatch = upperQuery.match(/GROUP BY\s+(.*?)(?:HAVING|ORDER BY|LIMIT|OFFSET|$)/is);
-	if (groupByMatch && groupByMatch[1]) {
+	if (groupByMatch?.[1]) {
 		const groupByFields = groupByMatch[1]
 			.split(",")
 			.map((f) => f.trim())
@@ -293,7 +293,7 @@ function formatOptimizationSuggestions(
 			const fieldMatch = p.match(
 				/([a-zA-Z0-9_.]+)\s*(?:=|!=|<|>|<=|>=|IN|LIKE|NOT LIKE|NOT NULL|IS NULL|IS NOT NULL)/i,
 			);
-			if (fieldMatch && fieldMatch[1]) {
+			if (fieldMatch?.[1]) {
 				indexableFields.add(fieldMatch[1].trim());
 			}
 		});

@@ -3,8 +3,8 @@
  * Comprehensive end-to-end testing using all Kong Konnect MCP tools
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { criticalTest, safeTest, TestEnvironmentDetector } from "./test-environment.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { safeTest, TestEnvironmentDetector } from "./test-environment.js";
 import {
 	FlightApiAssertions,
 	FlightApiTestUtils,
@@ -115,7 +115,7 @@ describe("Flight API Integration Tests", () => {
 			expect(testConsumer).toBeDefined();
 
 			// Add key-auth plugin to service
-			const keyAuthPlugin = await testUtils.addAuthPlugin(flightService.id, "key-auth", TEST_CONFIG.plugins[1]!.config);
+			const keyAuthPlugin = await testUtils.addAuthPlugin(flightService.id, "key-auth", TEST_CONFIG.plugins[1]?.config);
 
 			expect(keyAuthPlugin).toBeDefined();
 			expect(keyAuthPlugin.name).toBe("key-auth");
@@ -611,7 +611,7 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 				const token = await testUtils.createDataPlaneToken(tokenName);
 				expect(token).toBeDefined();
 				expect(token.name).toBe(tokenName);
-				console.log("SUCCESS: Created data plane token:", token.tokenId?.substring(0, 8) + "...");
+				console.log("SUCCESS: Created data plane token:", `${token.tokenId?.substring(0, 8)}...`);
 
 				// List tokens to verify creation
 				const tokens = await testUtils.listDataPlaneTokens();
@@ -673,7 +673,7 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 			const certificate = await testUtils.createTestCertificate();
 			expect(certificate).toBeDefined();
 			expect(certificate.certificateId).toBeDefined();
-			console.log("SUCCESS: Created test certificate:", certificate.certificateId?.substring(0, 8) + "...");
+			console.log("SUCCESS: Created test certificate:", `${certificate.certificateId?.substring(0, 8)}...`);
 
 			// Get certificate
 			const retrieved = await testUtils.getCertificate(certificate.certificateId);
@@ -754,7 +754,7 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 				});
 				expect(application).toBeDefined();
 				expect(application.applicationId).toBeDefined();
-				console.log("SUCCESS: Created test application:", application.applicationId?.substring(0, 8) + "...");
+				console.log("SUCCESS: Created test application:", `${application.applicationId?.substring(0, 8)}...`);
 
 				// Get application
 				const retrieved = await testUtils.getPortalApplication(application.applicationId);
@@ -819,7 +819,7 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 				const credential = await testUtils.createPortalCredential(application.applicationId, "api_key", credentialName);
 				expect(credential).toBeDefined();
 				expect(credential.credentialId).toBeDefined();
-				console.log("SUCCESS: Created test credential:", credential.credentialId?.substring(0, 8) + "...");
+				console.log("SUCCESS: Created test credential:", `${credential.credentialId?.substring(0, 8)}...`);
 
 				// Update credential
 				const updated = await testUtils.updatePortalCredential(application.applicationId, credential.credentialId, {
@@ -875,7 +875,7 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 				expect(controlPlane.controlPlane?.controlPlaneId).toBeDefined();
 				console.log(
 					"SUCCESS: Created control plane:",
-					controlPlane.controlPlane?.controlPlaneId?.substring(0, 8) + "...",
+					`${controlPlane.controlPlane?.controlPlaneId?.substring(0, 8)}...`,
 				);
 
 				// Update control plane

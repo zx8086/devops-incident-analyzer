@@ -3,10 +3,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
-import { config } from "../config";
 import { logger } from "../lib/logger";
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool("list_playbooks", "List all available playbooks", {}, async () => {
 		try {
 			logger.info("Listing available playbooks");

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "fs/promises";
-import path from "path";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 describe("Grafana Dashboard Validation", () => {
 	test("should have valid Grafana dashboard JSON", async () => {
@@ -136,7 +136,7 @@ describe("Grafana Dashboard Validation", () => {
 			let thresholdCount = 0;
 
 			for (const panel of panels) {
-				if (panel.fieldConfig && panel.fieldConfig.defaults && panel.fieldConfig.defaults.thresholds) {
+				if (panel.fieldConfig?.defaults?.thresholds) {
 					const thresholds = panel.fieldConfig.defaults.thresholds;
 
 					if (thresholds.steps && Array.isArray(thresholds.steps)) {

@@ -182,7 +182,7 @@ export class ContextDetector {
 							result.protocol.push(signal);
 							break;
 					}
-				} catch (error) {
+				} catch (_error) {
 					// Skip invalid matches
 				}
 			});

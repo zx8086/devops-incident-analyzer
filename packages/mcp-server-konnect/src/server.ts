@@ -21,7 +21,7 @@ import { traceToolCall } from "./utils/tracing.js";
 const log = createContextLogger("server");
 const toolsLog = createContextLogger("tools");
 
-export function createKonnectServer(api: KongApi, config: Config): McpServer {
+export function createKonnectServer(api: KongApi, _config: Config): McpServer {
 	const server = new McpServer({
 		name: "kong-konnect-mcp",
 		version: "2.0.0",
@@ -50,7 +50,7 @@ export function createKonnectServer(api: KongApi, config: Config): McpServer {
 
 // TEMPORARILY DISABLED: This function is not called but kept for future reference.
 // Uses low-level server protocol methods not available on McpServer.
-function registerPaginatedToolsList(_server: McpServer) {
+function _registerPaginatedToolsList(_server: McpServer) {
 	const server = _server as unknown as {
 		setRequestHandler: (
 			schema: { method: string },

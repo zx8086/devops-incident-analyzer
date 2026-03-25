@@ -9,7 +9,6 @@
  * every conceivable way someone might try to circumvent the enforcement.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
 	BlockedConsumerOperations,
 	BlockedPluginOperations,
@@ -193,7 +192,7 @@ export class BypassPreventionTests {
 		const manipulationAttempts = [
 			// Attempt to create fake validated context
 			() => {
-				const fakeContext: MandatoryContext = {
+				const _fakeContext: MandatoryContext = {
 					domain: "fake",
 					environment: "fake",
 					team: "fake",

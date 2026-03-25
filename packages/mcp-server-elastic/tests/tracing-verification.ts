@@ -9,7 +9,6 @@
 
 import { getCurrentRunTree } from "langsmith/singletons/traceable";
 import { traceable } from "langsmith/traceable";
-import { logger } from "../src/utils/logger.js";
 import { notificationManager } from "../src/utils/notifications.js";
 import { initializeTracing, traceToolCall } from "../src/utils/tracing.js";
 
@@ -42,7 +41,7 @@ const testBasicToolTrace = traceable(
 		console.log(`\nTest 1: Basic tool trace for ${toolName}`);
 
 		// Simulate a tool handler
-		const mockHandler = async (toolArgs: any, extra: any) => {
+		const mockHandler = async (_toolArgs: any, _extra: any) => {
 			console.log("  Tool handler executing...");
 
 			// Send notifications during execution

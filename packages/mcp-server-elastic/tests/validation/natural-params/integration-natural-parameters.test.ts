@@ -10,7 +10,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../../src/config";
 import { registerSearchTool } from "../../../src/tools/core/search";
 
 console.log("INTEGRATION TEST - NATURAL PARAMETER SCHEMA");
@@ -26,11 +25,11 @@ describe("Integration Test - Natural Parameter Schema", () => {
 
 		// Create mock MCP server
 		mockServer = {
-			tool: (name: string, description: string, schema: any, handler: Function) => {
+			tool: (name: string, _description: string, _schema: any, handler: Function) => {
 				console.log(`Registered tool: ${name}`);
 				searchHandler = handler;
 			},
-			registerTool: (name: string, metadata: any, handler: Function) => {
+			registerTool: (name: string, _metadata: any, handler: Function) => {
 				console.log(`Registered tool: ${name}`);
 				searchHandler = handler;
 			},

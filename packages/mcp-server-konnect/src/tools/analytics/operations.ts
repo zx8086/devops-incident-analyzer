@@ -2,7 +2,6 @@
 import type { KongApi } from "../../api/kong-api.js";
 import type { ApiRequestFilter } from "../../types.js";
 import { withErrorContext } from "../../utils/error-handling.js";
-import { formatApiRequestsResponse } from "../../utils/formatting.js";
 import { createContextLogger } from "../../utils/mcp-logger.js";
 
 const log = createContextLogger("tools");
@@ -297,7 +296,7 @@ export async function getConsumerRequests(
 				successRate: parseFloat(successRate.toFixed(2)),
 				statusCodeDistribution: Object.entries(statusCodeCounts)
 					.map(([code, count]) => ({
-						statusCode: parseInt(code),
+						statusCode: parseInt(code, 10),
 						count: count,
 						percentage: parseFloat(((count / result.results.length) * 100).toFixed(2)),
 					}))
@@ -309,7 +308,7 @@ export async function getConsumerRequests(
 						percentage: parseFloat(((data.count / result.results.length) * 100).toFixed(2)),
 						statusCodeBreakdown: Object.entries(data.statusCodes)
 							.map(([code, count]) => ({
-								statusCode: parseInt(code),
+								statusCode: parseInt(code, 10),
 								count: count,
 							}))
 							.sort((a, b) => b.count - a.count),

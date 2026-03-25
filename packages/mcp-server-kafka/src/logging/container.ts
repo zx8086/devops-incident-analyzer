@@ -1,5 +1,5 @@
 // src/logging/container.ts
-import { createMcpLogger, getChildLogger } from "@devops-agent/shared";
+import { createMcpLogger } from "@devops-agent/shared";
 import type pino from "pino";
 
 const _logger: pino.Logger = createMcpLogger("kafka-mcp-server");

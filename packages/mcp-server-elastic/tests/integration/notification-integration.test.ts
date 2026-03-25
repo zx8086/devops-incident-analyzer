@@ -90,7 +90,7 @@ describe("Notification Integration Tests", () => {
 		if (server && typeof server.close === "function") {
 			try {
 				server.close();
-			} catch (error) {
+			} catch (_error) {
 				// Ignore close errors
 			}
 		}

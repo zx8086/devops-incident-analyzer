@@ -1,9 +1,9 @@
 /* src/tools/createDocumentation.ts */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { z } from "zod";
 import { config } from "../config";
 import { createError } from "../lib/errors";
@@ -14,7 +14,7 @@ const sanitizePath = (inputPath: string): string => {
 	return path.normalize(inputPath).replace(/^(\.\.(\/|\\|$))+/, "");
 };
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"create_documentation",
 		"Create or update documentation for a scope, collection, or specific file",
@@ -38,8 +38,8 @@ export default (server: McpServer, bucket: Bucket) => {
 					baseDirectory,
 					cwd: process.cwd(),
 					user: process.env.USER,
-					uid: process.getuid && process.getuid(),
-					gid: process.getgid && process.getgid(),
+					uid: process.getuid?.(),
+					gid: process.getgid?.(),
 					scope_name,
 					collection_name,
 					file_name,

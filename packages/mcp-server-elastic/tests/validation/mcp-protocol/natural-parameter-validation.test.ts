@@ -13,14 +13,14 @@
  * 4. Proper parameter spreading and validation
  */
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
 console.log("NATURAL PARAMETER SCHEMA VALIDATION TEST");
 console.log("===========================================");
 
 // Import the new search schema and validator
-const searchSchema = {
+const _searchSchema = {
 	type: "object",
 	properties: {
 		index: {

@@ -1,4 +1,4 @@
-import { expect, mock, spyOn } from "bun:test";
+import { expect, mock } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";

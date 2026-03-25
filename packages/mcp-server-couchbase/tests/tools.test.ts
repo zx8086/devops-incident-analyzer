@@ -7,7 +7,7 @@ import { testConfig } from "./test.config";
 import { mockConnection, mockServer } from "./test.utils";
 
 describe("Couchbase MCP Server Tool Tests", () => {
-	let testCtx: any;
+	let _testCtx: any;
 	const TEST_DOC_ID = "mcp_test_doc";
 
 	// Setup - runs before all tests
@@ -16,7 +16,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			logger.info("Setting up test environment...");
 
 			// Create test context
-			testCtx = {
+			_testCtx = {
 				lifespanContext: {
 					bucket: mockConnection.defaultBucket,
 					readOnlyQueryMode: testConfig.server.readOnlyQueryMode,
@@ -67,9 +67,9 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	describe("Document Operations Tests", () => {
 		test("Document operations - upsert, get, delete sequence", async () => {
 			// Get handlers
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
-			const deleteHandler = mockServer.registeredTools["delete_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
+			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
 
 			// Test document content
 			const testDoc = {
@@ -115,9 +115,9 @@ describe("Couchbase MCP Server Tool Tests", () => {
 		});
 
 		test("should handle missing parameters", async () => {
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const deleteHandler = mockServer.registeredTools["delete_document_by_id"].handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
 
 			// Test get document
 			await expect(getHandler({})).rejects.toThrow();
@@ -128,7 +128,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 		});
 
 		test("should handle invalid document content", async () => {
-			const handler = mockServer.registeredTools["upsert_document_by_id"].handler;
+			const handler = mockServer.registeredTools.upsert_document_by_id.handler;
 
 			await expect(
 				handler({
@@ -144,7 +144,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	// SQL++ Query Tests
 	describe("SQL++ Query Tests", () => {
 		test("should execute read-only query", async () => {
-			const queryHandler = mockServer.registeredTools["run_sql_plus_plus_query"].handler;
+			const queryHandler = mockServer.registeredTools.run_sql_plus_plus_query.handler;
 			const result = await queryHandler({
 				scope_name: "_default",
 				query: "SELECT META().id FROM `_default` LIMIT 1",

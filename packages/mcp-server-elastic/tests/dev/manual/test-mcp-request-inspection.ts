@@ -2,7 +2,7 @@
 
 /* Deep inspection of MCP request structure */
 
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 
 console.log("Deep MCP request structure inspection...");
 
@@ -34,7 +34,7 @@ child.stderr.on("data", (data) => {
 	}
 });
 
-child.stdout.on("data", (data) => {
+child.stdout.on("data", (_data) => {
 	console.log("Server response received");
 	child.kill();
 	process.exit(0);
@@ -43,7 +43,7 @@ child.stdout.on("data", (data) => {
 // Send the test request after server startup
 setTimeout(() => {
 	console.log("Sending MCP request...");
-	child.stdin.write(JSON.stringify(testRequest) + "\n");
+	child.stdin.write(`${JSON.stringify(testRequest)}\n`);
 }, 3000);
 
 setTimeout(() => {

@@ -5,7 +5,7 @@
  * Run with: bun run src/utils/env-check.ts
  */
 
-import { getEnvVar, getEnvVarWithDefault, getRuntimeInfo, initializeEnvironment } from "./env.js";
+import { getEnvVar, getRuntimeInfo, initializeEnvironment } from "./env.js";
 
 async function main() {
 	console.error("INFO: Environment Variable Diagnostic Tool\n");
@@ -52,7 +52,7 @@ async function main() {
 	// Test .env file detection
 	console.error("\n4. .env File Detection:");
 	try {
-		const fs = await import("fs/promises");
+		const fs = await import("node:fs/promises");
 		const envExists = await fs
 			.access(".env")
 			.then(() => true)

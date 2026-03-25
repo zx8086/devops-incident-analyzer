@@ -41,7 +41,7 @@ describe("gitagent prompt overlay", () => {
 		expect(map.size).toBeGreaterThan(0);
 		const elasticHints = map.get("elastic-search-logs");
 		expect(elasticHints).toBeDefined();
-		expect(elasticHints!.some((h) => h.includes("kafka"))).toBe(true);
+		expect(elasticHints?.some((h) => h.includes("kafka"))).toBe(true);
 	});
 
 	test("getEnhancedDescription maps MCP tool to gitagent prompt", () => {

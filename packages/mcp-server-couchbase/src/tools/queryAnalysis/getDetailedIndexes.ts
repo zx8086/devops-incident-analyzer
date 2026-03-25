@@ -102,7 +102,6 @@ export default (server: McpServer, bucket: Bucket) => {
 				case "last_scan_time":
 					orderByField = "t.metadata.last_scan_time";
 					break;
-				case "keyspace_id":
 				default:
 					orderByField = "t.keyspace_id, t.name";
 					break;

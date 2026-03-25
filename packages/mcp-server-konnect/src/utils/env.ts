@@ -100,7 +100,7 @@ export async function initializeEnvironment(): Promise<void> {
 		if (!loaded) {
 			log.debug("No .env file found - using system environment variables only");
 		}
-	} catch (error) {
+	} catch (_error) {
 		log.warn("dotenv not available - install with: npm install dotenv");
 		log.info("Using system environment variables only");
 	}

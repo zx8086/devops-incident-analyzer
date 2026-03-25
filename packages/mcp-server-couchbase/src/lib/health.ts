@@ -1,7 +1,6 @@
 /* src/lib/health.ts */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import type { CapellaConn } from "../types";
 import { logger } from "./logger";
 import { createMcpError, MCP_ERROR_CODES } from "./mcpErrors";

@@ -55,7 +55,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 		}
 		for (const resource of resourcesIterable) {
 			// Template match
-			if (resource.template && resource.template.match) {
+			if (resource.template?.match) {
 				const match = resource.template.match(resourceUri);
 				if (match) {
 					return await resource.handler({ href: resourceUri }, match);

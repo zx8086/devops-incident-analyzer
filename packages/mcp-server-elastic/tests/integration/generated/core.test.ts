@@ -4,7 +4,7 @@
  * Coverage: 5 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerGetMappingsTool } from "../../../src/tools/core/get_mappings";
@@ -16,7 +16,6 @@ import { registerListIndicesTool } from "../../../src/tools/core/list_indices";
 import { registerSearchTool } from "../../../src/tools/core/search";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -35,7 +34,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 
 	// Test indices
 	const TEST_INDEX = `test-core-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-core-*`;
+	const _TEST_INDEX_PATTERN = `test-core-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -47,7 +46,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

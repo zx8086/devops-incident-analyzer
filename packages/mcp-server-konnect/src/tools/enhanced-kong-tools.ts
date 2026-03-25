@@ -75,7 +75,7 @@ export async function createServiceWithElicitation(
 
 			// Use proper MCP elicitation
 			if ((extra as unknown as ElicitationExtra).elicitation?.requestInput) {
-				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation!.requestInput({
+				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation?.requestInput({
 					message: `Please provide configuration details for service "${args.name}":`,
 					schema: {
 						type: "object",
@@ -207,7 +207,7 @@ export async function createRouteWithElicitation(
 
 			// Use proper MCP elicitation
 			if ((extra as unknown as ElicitationExtra).elicitation?.requestInput) {
-				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation!.requestInput({
+				const elicitationResponse = await (extra as unknown as ElicitationExtra).elicitation?.requestInput({
 					message: `Please provide configuration details for route "${args.name}":`,
 					schema: {
 						type: "object",
@@ -292,7 +292,7 @@ export async function createConsumerWithElicitation(
 		if (missing.length > 0) {
 			const mcpContext = (extra as any).context;
 
-			if (mcpContext && mcpContext.elicit) {
+			if (mcpContext?.elicit) {
 				// Try native MCP elicitation (Claude Code)
 				try {
 					const elicitationResult = await mcpContext.elicit({
@@ -460,7 +460,7 @@ function extractFromTags(tags: string[] | undefined, prefix: string): string | u
 	return tag ? tag.substring(prefix.length + 1) : undefined;
 }
 
-function generateServiceTags(context: KongDeploymentContext, serviceName: string): string[] {
+function generateServiceTags(context: KongDeploymentContext, _serviceName: string): string[] {
 	return [
 		`env-${context.environment}`,
 		`domain-${context.domain}`,
@@ -470,7 +470,7 @@ function generateServiceTags(context: KongDeploymentContext, serviceName: string
 	];
 }
 
-function generateRouteTags(context: KongDeploymentContext, routeName: string): string[] {
+function generateRouteTags(context: KongDeploymentContext, _routeName: string): string[] {
 	return [
 		`env-${context.environment}`,
 		`domain-${context.domain}`,
@@ -480,7 +480,7 @@ function generateRouteTags(context: KongDeploymentContext, routeName: string): s
 	];
 }
 
-function generateConsumerTags(context: KongDeploymentContext, consumerName: string): string[] {
+function generateConsumerTags(context: KongDeploymentContext, _consumerName: string): string[] {
 	return [
 		`env-${context.environment}`,
 		`domain-${context.domain}`,
@@ -503,7 +503,7 @@ function generatePluginTags(context: KongDeploymentContext, pluginName: string):
 /**
  * Generate elicitation questions for Claude Desktop
  */
-function generateElicitationQuestions(missing: string[]) {
+function _generateElicitationQuestions(missing: string[]) {
 	const questions = [];
 
 	if (missing.includes("domain")) {

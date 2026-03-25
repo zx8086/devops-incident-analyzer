@@ -1,8 +1,5 @@
-// src/enforcement/unified-elicitation-bridge.ts
-import { ElicitationOperations } from "../tools/elicitation-tool.js";
 import { createContextLogger } from "../utils/mcp-logger.js";
 import { elicitationOrchestrator } from "./elicitation-validation-gates.js";
-import { MandatoryElicitationGate } from "./mandatory-elicitation-gate.js";
 
 const log = createContextLogger("enforcement");
 
@@ -28,7 +25,6 @@ export class UnifiedElicitationBridge {
 	private sessionBridge = new Map<string, BridgedElicitationSession>();
 	private migrationToBlocking = new Map<string, string>(); // migration session → blocking session
 	private blockingToMigration = new Map<string, string>(); // blocking session → migration session
-	private gate = MandatoryElicitationGate.getInstance();
 
 	static getInstance(): UnifiedElicitationBridge {
 		if (!UnifiedElicitationBridge.instance) {
@@ -43,7 +39,7 @@ export class UnifiedElicitationBridge {
 	 * When a migration analysis creates an elicitation session,
 	 * register it for potential bridging to Kong operations
 	 */
-	registerMigrationSession(migrationSessionId: string, analysisResult: any, context: any): void {
+	registerMigrationSession(migrationSessionId: string, _analysisResult: any, _context: any): void {
 		log.debug({ migrationSessionId }, "Bridge registering migration session");
 
 		this.sessionBridge.set(migrationSessionId, {
@@ -139,7 +135,7 @@ export class UnifiedElicitationBridge {
 	async bridgeToKongBlocking(
 		blockingSessionId: string,
 		missingFields: string[],
-		operation: string,
+		_operation: string,
 	): Promise<{
 		bridged: boolean;
 		autoUnblocked: boolean;

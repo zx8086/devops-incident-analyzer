@@ -1,18 +1,16 @@
 /* src/types.ts */
 
-import {
-	type Bucket,
-	type Cluster,
-	type Collection,
-	type CouchbaseError,
-	DocumentNotFoundError,
-	type QueryMetaData,
-	type QueryOptions,
-	type QueryResult,
-	type Scope,
-	type StreamableRowPromise,
+import type {
+	Bucket,
+	Cluster,
+	Collection,
+	CouchbaseError,
+	QueryMetaData,
+	QueryOptions,
+	QueryResult,
+	Scope,
+	StreamableRowPromise,
 } from "couchbase";
-import type { AppError } from "./lib/errors";
 import type { LoggerInterface } from "./lib/logger";
 
 /**

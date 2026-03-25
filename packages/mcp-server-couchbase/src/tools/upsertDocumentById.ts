@@ -34,7 +34,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				let content;
 				try {
 					content = JSON.parse(document_content);
-				} catch (e) {
+				} catch (_e) {
 					throw createError("VALIDATION_ERROR", "Invalid JSON content");
 				}
 

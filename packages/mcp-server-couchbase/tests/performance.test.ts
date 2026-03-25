@@ -21,7 +21,7 @@ describe("Performance Tests", () => {
 			const collection = mockConnection.defaultBucket.scope("_default").collection("_default");
 			try {
 				await collection.remove(TEST_DOC_ID);
-			} catch (error) {
+			} catch (_error) {
 				logger.info(`No test document to clean up: ${TEST_DOC_ID}`);
 			}
 			if (mockConnection.cluster) {
@@ -32,8 +32,8 @@ describe("Performance Tests", () => {
 
 	describe("Load Tests", () => {
 		test("should handle batch document operations", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			const startTime = Date.now();
 
@@ -93,8 +93,8 @@ describe("Performance Tests", () => {
 		});
 
 		test("should handle concurrent operations", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const _getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			const startTime = Date.now();
 
@@ -136,8 +136,8 @@ describe("Performance Tests", () => {
 
 	describe("Query Performance Tests", () => {
 		test("should handle complex queries efficiently", async () => {
-			const queryHandler = mockServer.registeredTools["run_sql_plus_plus_query"].handler;
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
+			const queryHandler = mockServer.registeredTools.run_sql_plus_plus_query.handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
 
 			// Create test data
 			const testDocs = Array(100)
@@ -184,7 +184,7 @@ describe("Performance Tests", () => {
 
 	describe("Connection Pool Tests", () => {
 		test("should handle connection pool exhaustion gracefully", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
 
 			// Create many concurrent operations to test connection pool
 			const operations = Array(200)

@@ -53,7 +53,7 @@ export class TestEnvironmentDetector {
 		try {
 			const controlPlanes = await this.testUtils.listControlPlanes();
 			return controlPlanes.controlPlanes?.some((cp: any) => cp.clusterType === "CLUSTER_TYPE_HYBRID") || false;
-		} catch (error) {
+		} catch (_error) {
 			console.warn("WARNING:  Could not detect control plane types");
 			return false;
 		}

@@ -4,7 +4,7 @@
  * Coverage: 10 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerCreateIndexTool } from "../../../src/tools/index_management/create_index";
@@ -20,7 +20,6 @@ import { registerReindexDocumentsTool } from "../../../src/tools/index_managemen
 import { registerUpdateIndexSettingsTool } from "../../../src/tools/index_management/update_index_settings";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -39,7 +38,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 
 	// Test indices
 	const TEST_INDEX = `test-index_management-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-index_management-*`;
+	const _TEST_INDEX_PATTERN = `test-index_management-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -51,7 +50,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

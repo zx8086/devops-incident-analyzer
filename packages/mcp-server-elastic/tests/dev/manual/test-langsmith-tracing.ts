@@ -7,7 +7,14 @@
  * following the patterns described in LANGSMITH_TRACING_IMPLEMENTATION.md
  */
 
-import { setTimeout as sleep } from "timers/promises";
+export {};
+
+/**
+ * Comprehensive LangSmith Tracing Implementation Test
+ *
+ * This script tests all aspects of the tracing implementation
+ * following the patterns described in LANGSMITH_TRACING_IMPLEMENTATION.md
+ */
 
 // Colors for output
 const colors = {
@@ -255,7 +262,7 @@ class LangSmithTracingTester {
 		await this.runTest("Server Startup with Tracing Logs", async () => {
 			try {
 				// Start server process and capture logs
-				const { spawn } = await import("child_process");
+				const { spawn } = await import("node:child_process");
 
 				return new Promise((resolve, reject) => {
 					const timeout = setTimeout(() => {
@@ -314,7 +321,7 @@ class LangSmithTracingTester {
 		// Test 10: MCP Inspector Integration
 		await this.runTest("MCP Inspector Startup", async () => {
 			try {
-				const { spawn } = await import("child_process");
+				const { spawn } = await import("node:child_process");
 
 				return new Promise((resolve, reject) => {
 					const timeout = setTimeout(() => {
@@ -356,7 +363,7 @@ class LangSmithTracingTester {
 		// Test 11: Working tests suite
 		await this.runTest("Enhanced Features Test Suite", async () => {
 			try {
-				const { spawn } = await import("child_process");
+				const { spawn } = await import("node:child_process");
 
 				return new Promise((resolve, reject) => {
 					const timeout = setTimeout(() => {
@@ -422,7 +429,7 @@ class LangSmithTracingTester {
 	}
 
 	private printSummary(): void {
-		console.log("\n" + "═".repeat(50));
+		console.log(`\n${"═".repeat(50)}`);
 		console.log(`${colors.bold}${colors.cyan}Test Results Summary${colors.reset}`);
 		console.log("═".repeat(50));
 

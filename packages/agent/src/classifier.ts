@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createLlm } from "./llm.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:classifier");
@@ -103,7 +104,7 @@ function buildContextSummary(messages: BaseMessage[]): string {
 	return recent
 		.map((m) => {
 			const role = m.getType() === "human" ? "User" : "Assistant";
-			const text = typeof m.content === "string" ? m.content : "";
+			const text = extractTextFromContent(m.content);
 			return `${role}: ${text.slice(0, 150)}`;
 		})
 		.join("\n");
@@ -130,13 +131,20 @@ When in doubt, classify as COMPLEX.
 Respond with exactly one word: SIMPLE or COMPLEX`;
 
 export async function classify(state: AgentStateType): Promise<Partial<AgentStateType>> {
+	// Reset per-turn accumulation state so prior results don't bleed into this turn
+	const turnReset: Partial<AgentStateType> = {
+		dataSourceResults: [],
+		alignmentRetries: 0,
+		alignmentHints: [],
+	};
+
 	const lastMessage = state.messages[state.messages.length - 1];
 	if (!lastMessage || lastMessage._getType() !== "human") {
 		logger.info("No human message found, defaulting to simple");
-		return { queryComplexity: "simple" };
+		return { ...turnReset, queryComplexity: "simple" };
 	}
 
-	const query = typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content);
+	const query = extractTextFromContent(lastMessage.content);
 	const trimmed = query.trim();
 	logger.info({ query: trimmed.slice(0, 100) }, "Classifying query");
 
@@ -145,15 +153,15 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 	if (patternResult) {
 		logger.info({ result: patternResult, method: "regex" }, "Classification complete");
 		if (patternResult === "complex") {
-			return { queryComplexity: "complex" };
+			return { ...turnReset, queryComplexity: "complex" };
 		}
-		return { queryComplexity: "simple" };
+		return { ...turnReset, queryComplexity: "simple" };
 	}
 
 	// Follow-up detection
 	if (FOLLOW_UP_PATTERNS.some((p) => p.test(trimmed))) {
 		logger.info({ result: "complex", method: "follow-up-regex" }, "Classification complete");
-		return { queryComplexity: "complex", isFollowUp: true };
+		return { ...turnReset, queryComplexity: "complex", isFollowUp: true };
 	}
 
 	// SIO-504 pattern: short/ambiguous messages with conversation history need context
@@ -163,7 +171,7 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 		const cached = getCached(trimmed);
 		if (cached) {
 			logger.info({ result: cached, method: "cache" }, "Classification complete");
-			return { queryComplexity: cached };
+			return { ...turnReset, queryComplexity: cached };
 		}
 	}
 
@@ -186,12 +194,12 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 			setCached(trimmed, classification);
 		}
 		logger.info({ result: classification, method: "llm" }, "Classification complete");
-		return { queryComplexity: classification };
+		return { ...turnReset, queryComplexity: classification };
 	} catch (error) {
 		logger.error(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"LLM classification failed, defaulting to complex",
 		);
-		return { queryComplexity: "complex" };
+		return { ...turnReset, queryComplexity: "complex" };
 	}
 }

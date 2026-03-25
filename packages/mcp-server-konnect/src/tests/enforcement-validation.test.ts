@@ -81,7 +81,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 				const err = error as Error & { missingFields?: string[] };
 				if (error instanceof KongOperationBlockedError || err.missingFields) {
 					expect(
-						(error instanceof KongOperationBlockedError ? error.missingFields : err.missingFields)!.length,
+						(error instanceof KongOperationBlockedError ? error.missingFields : err.missingFields)?.length,
 					).toBeGreaterThan(0);
 				}
 			}
@@ -94,7 +94,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 			try {
 				await BlockedConsumerOperations.createConsumer("test-cp-123", { username: "test-user" }, testContext);
-			} catch (error) {
+			} catch (_error) {
 				wasBlocked = true;
 			}
 
@@ -106,7 +106,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 			try {
 				await BlockedPluginOperations.createPlugin("test-cp-123", { name: "rate-limiting" }, testContext);
-			} catch (error) {
+			} catch (_error) {
 				wasBlocked = true;
 			}
 
@@ -236,7 +236,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 			const result = await elicitationOrchestrator.processElicitationResponse(incompleteResponse);
 			expect(result.success).toBe(false);
 			expect(result.errors).toBeDefined();
-			expect(result.errors!.some((e) => e.includes("Missing required fields"))).toBe(true);
+			expect(result.errors?.some((e) => e.includes("Missing required fields"))).toBe(true);
 		});
 
 		it("should handle declined elicitation", async () => {
@@ -248,7 +248,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 			const result = await elicitationOrchestrator.processElicitationResponse(declinedResponse);
 			expect(result.success).toBe(false);
-			expect(result.errors!.some((e) => e.includes("declined elicitation"))).toBe(true);
+			expect(result.errors?.some((e) => e.includes("declined elicitation"))).toBe(true);
 		});
 	});
 
@@ -272,8 +272,8 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 			for (const sessionId of sessions) {
 				const context = activeSessions.get(sessionId);
 				expect(context).toBeDefined();
-				expect(context!.elicitationComplete).toBe(true);
-				expect(context!.domain).toBe(`domain-${sessionId}`);
+				expect(context?.elicitationComplete).toBe(true);
+				expect(context?.domain).toBe(`domain-${sessionId}`);
 			}
 		});
 	});

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerGetMappingsTool } from "../../../src/tools/core/get_mappings";
@@ -8,12 +8,10 @@ import { registerDeleteDocumentTool } from "../../../src/tools/document/delete_d
 import { registerIndexDocumentTool } from "../../../src/tools/document/index_document";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	safeCloseElasticsearchClient,
 	shouldSkipIntegrationTests,
-	testElasticsearchConnection,
 } from "../../utils/elasticsearch-client";
 
 // Test index names with timestamp to avoid conflicts
@@ -98,7 +96,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Real Elasticsearch Integration Te
 		try {
 			await client.indices.delete({ index: `${TEST_INDEX}*` });
 			await client.indices.delete({ index: `${TEST_INDEX_LOGS}*` });
-		} catch (error) {
+		} catch (_error) {
 			// Ignore cleanup errors
 		}
 
@@ -202,7 +200,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Real Elasticsearch Integration Te
 					},
 					refresh: true,
 				});
-			} catch (error) {
+			} catch (_error) {
 				// Index might not exist or be empty, that's ok
 			}
 
@@ -419,10 +417,10 @@ describe.skipIf(shouldSkipIntegrationTests())("Real Elasticsearch Integration Te
 			// Should show the actual mappings
 			expect(mappings.properties["@timestamp"]).toBeDefined();
 			expect(mappings.properties["@timestamp"].type).toBe("date");
-			expect(mappings.properties["message"]).toBeDefined();
-			expect(mappings.properties["message"].type).toBe("text");
-			expect(mappings.properties["level"]).toBeDefined();
-			expect(mappings.properties["level"].type).toBe("keyword");
+			expect(mappings.properties.message).toBeDefined();
+			expect(mappings.properties.message.type).toBe("text");
+			expect(mappings.properties.level).toBeDefined();
+			expect(mappings.properties.level.type).toBe("keyword");
 		});
 	});
 

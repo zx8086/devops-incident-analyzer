@@ -1,6 +1,6 @@
 /* tests/docsWrite.test.ts */
 
-import * as fs from "fs/promises";
+import * as fs from "node:fs/promises";
 import { config } from "../src/config";
 
 describe("Docs Directory Write Test", () => {

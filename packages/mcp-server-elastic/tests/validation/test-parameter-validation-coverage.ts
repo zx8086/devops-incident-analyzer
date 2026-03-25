@@ -49,7 +49,7 @@ async function testSchemaValidation() {
 			},
 		};
 
-		const result = moveToStepSchema.parse(testInput);
+		const _result = moveToStepSchema.parse(testInput);
 		console.log("elasticsearch_ilm_move_to_step validation PASSED");
 	} catch (error) {
 		console.log("elasticsearch_ilm_move_to_step validation FAILED:", error);
@@ -76,7 +76,7 @@ async function testSchemaValidation() {
 			waitForCompletion: false,
 		};
 
-		const result = reindexSchema.parse(testInput);
+		const _result = reindexSchema.parse(testInput);
 		console.log("elasticsearch_reindex_documents validation PASSED");
 	} catch (error) {
 		console.log("elasticsearch_reindex_documents validation FAILED:", error);
@@ -92,13 +92,13 @@ async function testMcpParameterFlow() {
 	console.log("--------------------------------------------------------------");
 
 	// Simulate the MCP tool registration and parameter flow
-	const mockMcpServer = {
-		tool: (name: string, description: string, schema: any, handler: any) => {
+	const _mockMcpServer = {
+		tool: (name: string, _description: string, schema: any, _handler: any) => {
 			console.log(`Testing MCP flow for ${name}`);
 
 			// This is what the MCP SDK does - it extracts parameters using the schema
 			try {
-				const testArgs = {
+				const _testArgs = {
 					index: ".ds-test-index-000001",
 					settings: {
 						"index.lifecycle.name": "test-policy",

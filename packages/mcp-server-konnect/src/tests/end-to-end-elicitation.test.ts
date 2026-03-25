@@ -62,7 +62,7 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 		console.log("Active sessions:", Array.from(activeSessions.keys()));
 
 		let foundValidatedContext = false;
-		for (const [key, context] of activeSessions) {
+		for (const [_key, context] of activeSessions) {
 			if (context.elicitationComplete && context.domain === "api") {
 				foundValidatedContext = true;
 				console.log("SUCCESS: Found validated context:", context);

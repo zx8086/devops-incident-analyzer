@@ -29,15 +29,15 @@ describe("Notification System Fix", () => {
 
 	it("should set and clear request context", () => {
 		// Initially no context
-		expect(notificationManager["requestContext"]).toBeNull();
+		expect(notificationManager.requestContext).toBeNull();
 
 		// Set context
 		notificationManager.setRequestContext(mockExtra);
-		expect(notificationManager["requestContext"]).toBe(mockExtra);
+		expect(notificationManager.requestContext).toBe(mockExtra);
 
 		// Clear context
 		notificationManager.clearRequestContext();
-		expect(notificationManager["requestContext"]).toBeNull();
+		expect(notificationManager.requestContext).toBeNull();
 	});
 
 	it("should send progress notifications using sendNotification from context", async () => {
@@ -102,7 +102,7 @@ describe("Notification System Fix", () => {
 		expect(mockHandler).toHaveBeenCalledWith(testArgs, mockExtra);
 
 		// Context should be cleared after execution
-		expect(notificationManager["requestContext"]).toBeNull();
+		expect(notificationManager.requestContext).toBeNull();
 	});
 
 	it("should clear context even if handler throws", async () => {
@@ -114,7 +114,7 @@ describe("Notification System Fix", () => {
 		await expect(wrappedHandler(testArgs, mockExtra)).rejects.toThrow("Handler error");
 
 		// Context should still be cleared after error
-		expect(notificationManager["requestContext"]).toBeNull();
+		expect(notificationManager.requestContext).toBeNull();
 	});
 
 	it("should log info notifications locally", async () => {

@@ -4,7 +4,7 @@
  * Coverage: 13 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerWatcherAckWatchTool } from "../../../src/tools/watcher/ack_watch";
@@ -23,7 +23,6 @@ import { registerWatcherStopTool } from "../../../src/tools/watcher/stop";
 import { registerWatcherUpdateSettingsTool } from "../../../src/tools/watcher/update_settings";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -42,7 +41,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 
 	// Test indices
 	const TEST_INDEX = `test-watcher-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-watcher-*`;
+	const _TEST_INDEX_PATTERN = `test-watcher-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -54,7 +53,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

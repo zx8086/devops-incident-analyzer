@@ -1,6 +1,7 @@
 // apps/web/src/lib/stores/agent.svelte.ts
-import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+
 import type { DataSourceContext, StreamEvent } from "@devops-agent/shared";
+import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 
 export interface ChatMessage {
 	role: "user" | "assistant";

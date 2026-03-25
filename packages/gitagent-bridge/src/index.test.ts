@@ -166,7 +166,7 @@ describe("related-tools", () => {
 		expect(map.size).toBeGreaterThan(0);
 		const elasticRelated = map.get("elastic-search-logs");
 		expect(elasticRelated).toBeDefined();
-		expect(elasticRelated!.length).toBeGreaterThan(0);
+		expect(elasticRelated?.length).toBeGreaterThan(0);
 	});
 
 	test("withRelatedTools appends hints to response", () => {

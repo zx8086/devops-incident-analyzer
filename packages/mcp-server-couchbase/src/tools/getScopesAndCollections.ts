@@ -2,7 +2,6 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import { z } from "zod";
 
 const getScopesAndCollectionsHandler = async (_params: {}, bucket: Bucket) => {
 	const scopes = await bucket.collections().getAllScopes();

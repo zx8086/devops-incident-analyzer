@@ -190,14 +190,14 @@ export class FlightApiTestUtils {
 	 * Add rate limiting plugin
 	 */
 	async addRateLimitingPlugin(serviceId: string): Promise<any> {
-		return this.addAuthPlugin(serviceId, "rate-limiting", TEST_CONFIG.plugins[0]!.config);
+		return this.addAuthPlugin(serviceId, "rate-limiting", TEST_CONFIG.plugins[0]?.config);
 	}
 
 	/**
 	 * Add CORS plugin
 	 */
 	async addCorsPlugin(serviceId: string): Promise<any> {
-		return this.addAuthPlugin(serviceId, "cors", TEST_CONFIG.plugins[2]!.config);
+		return this.addAuthPlugin(serviceId, "cors", TEST_CONFIG.plugins[2]?.config);
 	}
 
 	/**
@@ -436,7 +436,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Extended certificate creation for testing
 	 */
-	async createTestCertificate(name: string = "test-certificate"): Promise<any> {
+	async createTestCertificate(_name: string = "test-certificate"): Promise<any> {
 		// Create a self-signed test certificate for testing
 		const testCert = `-----BEGIN CERTIFICATE-----
 MIIDXTCCAkWgAwIBAgIJAKZPz0z0z0z0MA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV

@@ -6,7 +6,6 @@
 
 import { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getConfig } from "./src/config.js";
 import { registerGetAliasesTool } from "./src/tools/alias/get_aliases_improved.js";
 import { registerGetLifecycleTool } from "./src/tools/ilm/get_lifecycle.js";
@@ -39,7 +38,7 @@ async function testPaginationIntegration() {
 		console.log("\n1. Testing ILM get_lifecycle with limit parameter:");
 
 		// Get the tool handler
-		const ilmTool = server["_toolHandlers"]?.get("elasticsearch_ilm_get_lifecycle");
+		const ilmTool = server._toolHandlers?.get("elasticsearch_ilm_get_lifecycle");
 		if (ilmTool) {
 			try {
 				// Test with limit parameter (this should now work correctly)
@@ -55,7 +54,7 @@ async function testPaginationIntegration() {
 				}
 
 				// Test without limit (should use default)
-				const defaultResult = await ilmTool({ summary: true });
+				const _defaultResult = await ilmTool({ summary: true });
 				console.log("   ILM tool executed with default limit");
 			} catch (error) {
 				console.log(`   ILM tool test failed: ${error}`);
@@ -67,7 +66,7 @@ async function testPaginationIntegration() {
 		console.log("\n2. Testing alias get_aliases with limit parameter:");
 
 		// Get the alias tool handler
-		const aliasTool = server["_toolHandlers"]?.get("elasticsearch_get_aliases");
+		const aliasTool = server._toolHandlers?.get("elasticsearch_get_aliases");
 		if (aliasTool) {
 			try {
 				// Test with limit parameter

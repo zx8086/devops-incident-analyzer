@@ -20,7 +20,7 @@ const SENSITIVE_PARAMS = new Set([
 	"api_key",
 ]);
 
-function sanitizeParameters(args: Record<string, unknown>): Record<string, unknown> {
+function _sanitizeParameters(args: Record<string, unknown>): Record<string, unknown> {
 	if (!args || typeof args !== "object") return args;
 	const sanitized = { ...args };
 	for (const param of SENSITIVE_PARAMS) {

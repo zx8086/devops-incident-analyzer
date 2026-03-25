@@ -7,7 +7,7 @@ import { logger } from "./logger";
 // Progress is reported via logging. If SDK adds notification support in
 // the future, this function can be updated to use it.
 export async function reportProgress(
-	server: McpServer,
+	_server: McpServer,
 	token: string | number | undefined,
 	progress: { percentage: number; message?: string },
 ): Promise<void> {

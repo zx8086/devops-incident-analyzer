@@ -5,6 +5,7 @@ import type { AttachmentMeta, ExtractedEntities } from "@devops-agent/shared";
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:entity-extractor");
@@ -28,7 +29,7 @@ export async function extractEntities(state: AgentStateType): Promise<Partial<Ag
 		logger.info("No message found, targeting all datasources");
 		return { extractedEntities: { dataSources: [] }, targetDataSources: [...DATA_SOURCE_IDS] };
 	}
-	const query = typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content);
+	const query = extractTextFromContent(lastMessage.content);
 	logger.info({ query: query.slice(0, 100), uiSelected: state.targetDataSources }, "Extracting entities");
 
 	// SIO-610: Build attachment context if files are attached
@@ -46,8 +47,8 @@ If no specific datasource is mentioned, include all: elastic, kafka, couchbase, 
 		{ role: "human", content: query },
 	]);
 
-	// UI-selected datasources take priority -- don't overwrite them
 	const uiSelected = state.targetDataSources;
+	const isFollowUp = state.isFollowUp;
 
 	try {
 		const text = String(response.content);
@@ -56,12 +57,21 @@ If no specific datasource is mentioned, include all: elastic, kafka, couchbase, 
 			const parsed = ExtractionSchema.parse(JSON.parse(jsonMatch[0]));
 			const entities: ExtractedEntities = { dataSources: parsed.dataSources };
 			const extractedIds = parsed.dataSources.map((d) => d.id);
-			const effectiveTargets = uiSelected.length > 0 ? uiSelected : extractedIds;
-			logger.info({ extractedDataSources: extractedIds, uiSelected, effectiveTargets }, "Entity extraction complete");
+
+			// On follow-ups, if the LLM extracted a specific subset (not all datasources),
+			// the user is narrowing their focus -- prefer extracted targets over UI selections.
+			const extractedIsSubset = extractedIds.length > 0 && extractedIds.length < DATA_SOURCE_IDS.length;
+			const effectiveTargets =
+				isFollowUp && extractedIsSubset ? extractedIds : uiSelected.length > 0 ? uiSelected : extractedIds;
+
+			logger.info(
+				{ extractedDataSources: extractedIds, uiSelected, effectiveTargets, isFollowUp },
+				"Entity extraction complete",
+			);
 			return {
 				extractedEntities: entities,
 				previousEntities: state.extractedEntities,
-				...(uiSelected.length === 0 ? { targetDataSources: extractedIds } : {}),
+				targetDataSources: effectiveTargets,
 			};
 		}
 	} catch (error) {
@@ -74,7 +84,7 @@ If no specific datasource is mentioned, include all: elastic, kafka, couchbase, 
 	return {
 		extractedEntities: { dataSources: [...allDataSources] },
 		previousEntities: state.extractedEntities,
-		...(uiSelected.length === 0 ? { targetDataSources: [...DATA_SOURCE_IDS] } : {}),
+		targetDataSources: effectiveTargets,
 	};
 }
 

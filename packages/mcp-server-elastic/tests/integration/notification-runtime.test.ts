@@ -46,7 +46,7 @@ describe("Notification Runtime Integration", () => {
 		};
 
 		// Test wrapper function
-		const testHandler = withNotificationContext(async (args: any, _extra: any) => {
+		const testHandler = withNotificationContext(async (_args: any, _extra: any) => {
 			// sendInfo logs locally but doesn't call sendNotification (by design)
 			await notificationManager.sendInfo("Test notification from wrapped handler");
 			// sendProgress DOES call sendNotification

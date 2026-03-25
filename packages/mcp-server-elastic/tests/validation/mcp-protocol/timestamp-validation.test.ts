@@ -26,7 +26,7 @@ describe("Timestamp Validation Tests", () => {
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			console.warn("Elasticsearch not available, skipping timestamp tests");
 			return;
 		}
@@ -52,10 +52,10 @@ describe("Timestamp Validation Tests", () => {
 
 	test("timestamp analysis identifies data quality issues", async () => {
 		const testIndex = "*aws_fargate_shared_services.prd*";
-		const currentTime = new Date();
+		const _currentTime = new Date();
 
 		// Mock a timestamp analysis call
-		const mockTimestampAnalysis = {
+		const _mockTimestampAnalysis = {
 			index: testIndex,
 			timestampField: "@timestamp",
 			sampleSize: 50,
@@ -96,7 +96,7 @@ describe("Timestamp Validation Tests", () => {
 		// The enhanced search tool should now log range queries
 		// This helps with debugging timestamp issues
 
-		const expectedLogOutput = expect.objectContaining({
+		const _expectedLogOutput = expect.objectContaining({
 			rangeQuery: expect.objectContaining({
 				gte: "now-24h",
 			}),
@@ -125,7 +125,7 @@ describe("Timestamp Validation Tests", () => {
 		// Test timestamp parsing and validation logic
 		// Note: These dates were found in the actual data logs
 		const futureTimestamp = 1748672539797; // This timestamp from the logs (May 31, 2025)
-		const currentTimestamp = new Date().getTime(); // Current time (Sep 4, 2025)
+		const currentTimestamp = Date.now(); // Current time (Sep 4, 2025)
 		const pastTimestamp = new Date("2025-08-01T00:00:00Z").getTime();
 
 		// The problematic timestamp should be detected as past now (since we're in September 2025)

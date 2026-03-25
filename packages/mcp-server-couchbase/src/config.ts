@@ -1,7 +1,6 @@
 /* src/config.ts */
 
 import { z } from "zod";
-import { createError } from "./lib/errors";
 
 const ServerConfigSchema = z.object({
 	name: z.string().min(1),
@@ -234,13 +233,13 @@ function loadConfigFromEnv(): Partial<Config> {
 		config.documentation = {
 			enabled:
 				(parseEnvVar(Bun.env[envVarMapping.documentation.enabled], "boolean") as boolean) ??
-				defaultConfig.documentation!.enabled,
+				defaultConfig.documentation?.enabled,
 			baseDirectory:
 				(parseEnvVar(Bun.env[envVarMapping.documentation.baseDirectory], "string") as string) ||
-				defaultConfig.documentation!.baseDirectory,
+				defaultConfig.documentation?.baseDirectory,
 			fileExtension:
 				(parseEnvVar(Bun.env[envVarMapping.documentation.fileExtension], "string") as string) ||
-				defaultConfig.documentation!.fileExtension,
+				defaultConfig.documentation?.fileExtension,
 		};
 	}
 
@@ -249,13 +248,13 @@ function loadConfigFromEnv(): Partial<Config> {
 		config.playbooks = {
 			enabled:
 				(parseEnvVar(Bun.env[envVarMapping.playbooks.enabled], "boolean") as boolean) ??
-				defaultConfig.playbooks!.enabled,
+				defaultConfig.playbooks?.enabled,
 			baseDirectory:
 				(parseEnvVar(Bun.env[envVarMapping.playbooks.baseDirectory], "string") as string) ||
-				defaultConfig.playbooks!.baseDirectory,
+				defaultConfig.playbooks?.baseDirectory,
 			fileExtension:
 				(parseEnvVar(Bun.env[envVarMapping.playbooks.fileExtension], "string") as string) ||
-				defaultConfig.playbooks!.fileExtension,
+				defaultConfig.playbooks?.fileExtension,
 		};
 	}
 
@@ -320,10 +319,8 @@ try {
 			"\n",
 	);
 } catch (error) {
-	process.stderr.write(
-		"Configuration validation failed: " + (error instanceof Error ? error.message : String(error)) + "\n",
-	);
-	throw new Error("Invalid configuration: " + (error instanceof Error ? error.message : String(error)));
+	process.stderr.write(`Configuration validation failed: ${error instanceof Error ? error.message : String(error)}\n`);
+	throw new Error(`Invalid configuration: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 export { config };

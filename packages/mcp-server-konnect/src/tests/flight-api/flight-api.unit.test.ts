@@ -3,7 +3,7 @@
  * Tests individual Kong Konnect MCP operations and tools
  */
 
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { KongApi } from "../../api/kong-api.js";
 import * as analyticsOps from "../../tools/analytics/operations.js";
 import * as certificatesOps from "../../tools/certificates/operations.js";
@@ -11,7 +11,7 @@ import * as certificatesOps from "../../tools/certificates/operations.js";
 import * as configurationOps from "../../tools/configuration/operations.js";
 import * as controlPlanesOps from "../../tools/control-planes/operations.js";
 import * as portalOps from "../../tools/portal/operations.js";
-import { TEST_CONFIG, TEST_FIXTURES } from "./test-helpers.js";
+import { TEST_CONFIG } from "./test-helpers.js";
 
 describe("Flight API Unit Tests", () => {
 	let mockKongApi: any;

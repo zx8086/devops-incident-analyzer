@@ -24,7 +24,7 @@ logger.warn = () => {};
 describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integration Tests", () => {
 	let client: Client;
 	let server: McpServer;
-	let wrappedServer: McpServer;
+	let _wrappedServer: McpServer;
 
 	// Test indices with timestamp to avoid conflicts
 	const TEST_INDEX = `test-mcp-tool-${Date.now()}`;
@@ -39,7 +39,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 
@@ -49,7 +49,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 			version: "1.0.0",
 		});
 
-		wrappedServer = wrapServerWithTracing(server);
+		_wrappedServer = wrapServerWithTracing(server);
 
 		// Register the tool to test
 		// registerYourTool(wrappedServer, client);

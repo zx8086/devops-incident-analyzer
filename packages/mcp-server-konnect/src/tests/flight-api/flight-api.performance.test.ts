@@ -4,11 +4,11 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { FlightApiTestUtils, type FlightTestService, TEST_CONFIG, TEST_FIXTURES } from "./test-helpers.js";
+import { FlightApiTestUtils, type FlightTestService, TEST_FIXTURES } from "./test-helpers.js";
 
 describe("Flight API Performance Tests", () => {
 	let testUtils: FlightApiTestUtils;
-	let flightService: FlightTestService;
+	let _flightService: FlightTestService;
 
 	beforeAll(async () => {
 		testUtils = new FlightApiTestUtils();
@@ -51,7 +51,7 @@ describe("Flight API Performance Tests", () => {
 			expect(rps).toBeGreaterThan(2); // Should handle at least 2 requests per second
 
 			// Verify all responses are successful
-			responses.forEach((response, index) => {
+			responses.forEach((response, _index) => {
 				expect(response).toBeDefined();
 				expect(response.statusCode).toBe(200);
 				expect(response.timestamp).toBeDefined();

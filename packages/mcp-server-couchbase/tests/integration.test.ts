@@ -24,10 +24,10 @@ describe("Integration Tests", () => {
 
 	describe("Tool Interaction Tests", () => {
 		test("should handle document lifecycle with schema validation", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
-			const schemaHandler = mockServer.registeredTools["get_schema_for_collection"].handler;
-			const deleteHandler = mockServer.registeredTools["delete_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
+			const schemaHandler = mockServer.registeredTools.get_schema_for_collection.handler;
+			const deleteHandler = mockServer.registeredTools.delete_document_by_id.handler;
 
 			// 1. Get schema first
 			const schemaResult = await schemaHandler({
@@ -76,9 +76,9 @@ describe("Integration Tests", () => {
 		});
 
 		test("should handle query with document operations", async () => {
-			const queryHandler = mockServer.registeredTools["run_sql_plus_plus_query"].handler;
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const queryHandler = mockServer.registeredTools.run_sql_plus_plus_query.handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			// 1. Create test documents
 			const testDocs = Array(5)
@@ -149,8 +149,8 @@ describe("Integration Tests", () => {
 
 	describe("Error Recovery Tests", () => {
 		test("should recover from failed operations", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			// 1. Try to create document with invalid JSON
 			await expect(

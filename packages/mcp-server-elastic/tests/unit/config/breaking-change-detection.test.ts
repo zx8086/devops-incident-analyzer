@@ -85,12 +85,12 @@ describe("Configuration Breaking Change Detection", () => {
 		expect(config.server.name).toBe(expectedName);
 		expect(config.server.version).toBe("0.1.1");
 		// Account for potential environment override
-		const expectedTimeout = Bun.env.MCP_MAX_QUERY_TIMEOUT ? parseInt(Bun.env.MCP_MAX_QUERY_TIMEOUT) : 30000;
+		const expectedTimeout = Bun.env.MCP_MAX_QUERY_TIMEOUT ? parseInt(Bun.env.MCP_MAX_QUERY_TIMEOUT, 10) : 30000;
 		expect(config.server.maxQueryTimeout).toBe(expectedTimeout);
 		expect(config.server.maxResultsPerQuery).toBe(1000);
 
 		// Port might be overridden by environment (MCP_PORT), so check appropriately
-		const expectedPort = Bun.env.MCP_PORT ? parseInt(Bun.env.MCP_PORT) : 8080;
+		const expectedPort = Bun.env.MCP_PORT ? parseInt(Bun.env.MCP_PORT, 10) : 8080;
 		expect(config.server.port).toBe(expectedPort);
 
 		// Verify new defaults are reasonable

@@ -1,13 +1,12 @@
 /* src/tools/syncDocumentation.ts */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { z } from "zod";
 import { config } from "../config";
 import { connectionManager } from "../lib/connectionManager";
-import { createError } from "../lib/errors";
 import { logger } from "../lib/logger";
 
 // Function to sanitize file paths to prevent directory traversal
@@ -15,7 +14,7 @@ const sanitizePath = (inputPath: string): string => {
 	return path.normalize(inputPath).replace(/^(\.\.(\/|\\|$))+/, "");
 };
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"sync_documentation_with_database",
 		"Generate a documentation skeleton based on the database structure",
@@ -38,8 +37,8 @@ export default (server: McpServer, bucket: Bucket) => {
 					baseDirectory,
 					cwd: process.cwd(),
 					user: process.env.USER,
-					uid: process.getuid && process.getuid(),
-					gid: process.getgid && process.getgid(),
+					uid: process.getuid?.(),
+					gid: process.getgid?.(),
 					scope_name,
 				},
 				"[sync_documentation_with_database] Debug info",
@@ -75,7 +74,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					if (!scopes.has(scope)) {
 						scopes.set(scope, new Set());
 					}
-					scopes.get(scope)!.add(collection_name);
+					scopes.get(scope)?.add(collection_name);
 				}
 
 				// Create documentation structure

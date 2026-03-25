@@ -387,7 +387,7 @@ export function createBlockedOperationHandler(
 							]
 						: [
 								`Use the process_elicitation_response tool with sessionId: ${elicitationRequest.sessionId}`,
-								"Provide responses for all required fields: " + elicitationRequest.missingFields.join(", "),
+								`Provide responses for all required fields: ${elicitationRequest.missingFields.join(", ")}`,
 								"Once elicitation is complete, retry the original operation",
 							],
 				};
@@ -427,7 +427,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 
 		// Fix the analysisResult structure - handle both formats safely
 		let analysisResult;
-		if (args.analysisResult && args.analysisResult.migrationAnalysis) {
+		if (args.analysisResult?.migrationAnalysis) {
 			// Already has the right structure
 			analysisResult = args.analysisResult;
 		} else if (args.analysisResult) {
@@ -530,7 +530,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 			const migrationStatus = await elicitationOps.getSessionStatus(args.sessionId);
 			log.debug({ sessionId: args.sessionId, isComplete: migrationStatus.isComplete }, "Migration session status");
 			return migrationStatus;
-		} catch (error) {
+		} catch (_error) {
 			// Fallback to enforcement system
 			const status = await elicitationOrchestrator.getElicitationStatus(args.sessionId);
 			log.debug(

@@ -93,7 +93,7 @@ async function runConfigurationHealthCheck(): Promise<HealthCheckResult> {
 		}
 
 		// Final status
-		console.error("\n" + "=".repeat(60));
+		console.error(`\n${"=".repeat(60)}`);
 		if (health.status === "critical") {
 			console.error("ERROR: CONFIGURATION HEALTH CHECK FAILED");
 			console.error("   Fix critical issues before running the MCP server");
@@ -108,7 +108,7 @@ async function runConfigurationHealthCheck(): Promise<HealthCheckResult> {
 			return { success: true, config, health };
 		}
 	} catch (error: any) {
-		console.error("\n" + "=".repeat(60));
+		console.error(`\n${"=".repeat(60)}`);
 		console.error("ERROR: CONFIGURATION HEALTH CHECK FAILED");
 		console.error(`   Error: ${error.message}`);
 
@@ -221,7 +221,7 @@ async function runProductionSafetyCheck(): Promise<boolean> {
 // Export JSON Schema
 async function exportConfigSchema(): Promise<void> {
 	try {
-		const schema = configManager.exportJsonSchema("./config-schema.json");
+		const _schema = configManager.exportJsonSchema("./config-schema.json");
 		console.error("\nINFO: JSON Schema exported to: ./config-schema.json");
 
 		// Also log a simplified version

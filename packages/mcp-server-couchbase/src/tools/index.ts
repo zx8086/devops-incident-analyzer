@@ -20,7 +20,7 @@ import upsertDocumentById from "./upsertDocumentById";
 export type ToolFunction = (server: McpServer, bucket: Bucket) => void;
 
 // Register all documentation tools
-const registerDocumentationTools = (server: McpServer, bucket: Bucket) => {
+const _registerDocumentationTools = (server: McpServer, bucket: Bucket) => {
 	createDocumentation(server, bucket);
 	listDocumentation(server, bucket);
 	deleteDocumentation(server, bucket);
@@ -29,12 +29,12 @@ const registerDocumentationTools = (server: McpServer, bucket: Bucket) => {
 };
 
 // Register all query analysis tools
-const registerQueryAnalysisTools = (server: McpServer, bucket: Bucket) => {
+const _registerQueryAnalysisTools = (server: McpServer, bucket: Bucket) => {
 	Object.values(queryAnalysisTools).forEach((tool) => tool(server, bucket));
 };
 
 // Register all playbook tools
-const registerPlaybookTools = (server: McpServer, bucket: Bucket) => {
+const _registerPlaybookTools = (server: McpServer, bucket: Bucket) => {
 	listPlaybooks(server, bucket);
 };
 

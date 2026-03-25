@@ -11,7 +11,7 @@
  * 5. Aggregation support with proper document/analytics modes
  */
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
 console.log("COMPREHENSIVE SEARCH FIX VALIDATION");
@@ -33,7 +33,7 @@ type SearchParamsType = z.infer<typeof SearchParams>;
 
 // Mock security enhancer to test security bypass
 class MockSecurityEnhancer {
-	validateAndSanitizeInput(toolName: string, input: any) {
+	validateAndSanitizeInput(toolName: string, _input: any) {
 		// Should not be called for search tools due to bypass
 		console.log(`Security validation called for ${toolName} - THIS SHOULD NOT HAPPEN!`);
 		throw new Error(`Security validation should be bypassed for ${toolName}`);

@@ -19,7 +19,7 @@ describe("Edge Cases and Error Scenarios", () => {
 			const collection = mockConnection.defaultBucket.scope("_default").collection("_default");
 			try {
 				await collection.remove(TEST_DOC_ID);
-			} catch (error) {
+			} catch (_error) {
 				logger.info(`No test document to clean up: ${TEST_DOC_ID}`);
 			}
 			if (mockConnection.cluster) {
@@ -30,8 +30,8 @@ describe("Edge Cases and Error Scenarios", () => {
 
 	describe("Concurrent Operations", () => {
 		test("should handle concurrent operations on same document", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			// Create initial document
 			await upsertHandler({
@@ -71,8 +71,8 @@ describe("Edge Cases and Error Scenarios", () => {
 
 	describe("Large Document Handling", () => {
 		test("should handle large document operations", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			// Create a large document (1MB of data)
 			const largeDoc = {
@@ -107,7 +107,7 @@ describe("Edge Cases and Error Scenarios", () => {
 
 	describe("Malformed Data Handling", () => {
 		test("should handle malformed JSON responses", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
 
 			// Test with malformed JSON
 			const malformedJson = "{invalid: json}";
@@ -123,7 +123,7 @@ describe("Edge Cases and Error Scenarios", () => {
 		});
 
 		test("should handle empty document content", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
 
 			await expect(
 				upsertHandler({
@@ -138,8 +138,8 @@ describe("Edge Cases and Error Scenarios", () => {
 
 	describe("Special Character Handling", () => {
 		test("should handle documents with special characters", async () => {
-			const upsertHandler = mockServer.registeredTools["upsert_document_by_id"].handler;
-			const getHandler = mockServer.registeredTools["get_document_by_id"].handler;
+			const upsertHandler = mockServer.registeredTools.upsert_document_by_id.handler;
+			const getHandler = mockServer.registeredTools.get_document_by_id.handler;
 
 			const specialCharsDoc = {
 				text: "Special chars: !@#$%^&*()_+{}|:<>?",

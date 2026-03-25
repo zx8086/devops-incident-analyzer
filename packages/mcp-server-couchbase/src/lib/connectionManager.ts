@@ -74,8 +74,8 @@ export class CouchbaseConnectionManager {
 		try {
 			// Initialize the connection pool with the configured number of connections
 			for (let i = 0; i < config.database.maxConnections; i++) {
-				const bucket = this.cluster!.bucket(config.database.bucketName);
-				this.connectionPool.push(bucket);
+				const bucket = this.cluster?.bucket(config.database.bucketName);
+				if (bucket) this.connectionPool.push(bucket);
 			}
 			logger.info(
 				{

@@ -2,7 +2,7 @@
 
 /* Simple validation test for pagination fix */
 
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 
 console.log("Testing pagination fix validation...");
 
@@ -81,4 +81,4 @@ child.stderr.on("data", (data) => {
 });
 
 // Send the test request
-child.stdin.write(JSON.stringify(testRequest) + "\n");
+child.stdin.write(`${JSON.stringify(testRequest)}\n`);

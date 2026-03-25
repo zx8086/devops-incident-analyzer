@@ -5,7 +5,6 @@
  * instead of complex enforcement layers.
  */
 
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { elicitationBridge } from "./elicitation-bridge.js";
 import { createContextLogger } from "./mcp-logger.js";
 

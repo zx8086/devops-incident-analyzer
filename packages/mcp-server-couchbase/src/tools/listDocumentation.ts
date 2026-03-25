@@ -6,7 +6,7 @@ import { z } from "zod";
 import { config } from "../config";
 import { logger } from "../lib/logger";
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"list_documentation",
 		"List available documentation resources",

@@ -2,7 +2,7 @@
 
 /* Test to capture debug logs and see parameter flow */
 
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 
 console.log("Testing parameter flow with debug logs...");
 
@@ -96,5 +96,5 @@ child.stdout.on("data", (data) => {
 
 // Wait a moment for server startup, then send request
 setTimeout(() => {
-	child.stdin.write(JSON.stringify(testRequest) + "\n");
+	child.stdin.write(`${JSON.stringify(testRequest)}\n`);
 }, 3000);

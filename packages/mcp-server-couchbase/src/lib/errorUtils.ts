@@ -15,7 +15,7 @@ export function isCouchbaseError(error: unknown): error is CouchbaseError {
 
 export async function handleOperation<T>(
 	operation: () => Promise<T>,
-	errorCode: string,
+	_errorCode: string,
 	operationName: string,
 	context: Record<string, unknown> = {},
 ): Promise<OperationResult<T>> {

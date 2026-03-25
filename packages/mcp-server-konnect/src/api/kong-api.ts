@@ -524,7 +524,7 @@ export class KongApi {
 	}
 
 	async fetchPortalApiDocument(apiIdOrSlug: string, documentIdOrSlug: string, format = "json"): Promise<any> {
-		const headers = {
+		const _headers = {
 			Accept:
 				format === "yaml"
 					? "application/yaml"

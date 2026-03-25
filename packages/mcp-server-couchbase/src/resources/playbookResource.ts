@@ -1,8 +1,8 @@
 /* src/resources/playbookResource.ts */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { config } from "../config";
 import { logger } from "../lib/logger";
 
@@ -50,7 +50,7 @@ class PlaybookHandler {
 					const fileContent = await fs.readFile(filePath, "utf-8");
 					const firstLine = fileContent.split("\n")[0]?.replace(/^#\s*/, "") || "";
 					if (firstLine) description = firstLine;
-				} catch (err) {
+				} catch (_err) {
 					// Ignore read errors when building listing
 				}
 

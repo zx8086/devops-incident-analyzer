@@ -1,9 +1,9 @@
 /* src/resources/documentationResource.ts */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { createError } from "../lib/errors";
 import { logger } from "../lib/logger";
 
@@ -69,7 +69,7 @@ class DocumentationHandler {
 								documentationText += `  - ${collection}\n`;
 							}
 						}
-					} catch (err) {
+					} catch (_err) {
 						// Ignore read errors for collections
 					}
 				}
@@ -230,7 +230,7 @@ class DocumentationHandler {
  */
 export function registerMarkdownDocumentationResource(
 	server: McpServer,
-	bucket: Bucket,
+	_bucket: Bucket,
 	config: MarkdownDocsConfig,
 ): void {
 	// Validate config

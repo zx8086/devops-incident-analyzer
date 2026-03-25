@@ -33,19 +33,19 @@ describe("New Configuration Sections Validation", () => {
 		// Test that new server response configuration reflects environment or defaults
 		// If environment variables are set, they should be applied
 		if (Bun.env.MCP_MAX_RESPONSE_SIZE_BYTES) {
-			expect(config.server.maxResponseSizeBytes).toBe(parseInt(Bun.env.MCP_MAX_RESPONSE_SIZE_BYTES));
+			expect(config.server.maxResponseSizeBytes).toBe(parseInt(Bun.env.MCP_MAX_RESPONSE_SIZE_BYTES, 10));
 		} else {
 			expect(config.server.maxResponseSizeBytes).toBe(1000000); // Default
 		}
 
 		if (Bun.env.MCP_DEFAULT_PAGE_SIZE) {
-			expect(config.server.defaultPageSize).toBe(parseInt(Bun.env.MCP_DEFAULT_PAGE_SIZE));
+			expect(config.server.defaultPageSize).toBe(parseInt(Bun.env.MCP_DEFAULT_PAGE_SIZE, 10));
 		} else {
 			expect(config.server.defaultPageSize).toBe(20); // Default
 		}
 
 		if (Bun.env.MCP_MAX_PAGE_SIZE) {
-			expect(config.server.maxPageSize).toBe(parseInt(Bun.env.MCP_MAX_PAGE_SIZE));
+			expect(config.server.maxPageSize).toBe(parseInt(Bun.env.MCP_MAX_PAGE_SIZE, 10));
 		} else {
 			expect(config.server.maxPageSize).toBe(100); // Default
 		}

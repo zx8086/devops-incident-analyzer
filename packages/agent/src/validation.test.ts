@@ -5,7 +5,6 @@ import type { DataSourceResult } from "@devops-agent/shared";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
-import { AgentState } from "./state.ts";
 import { supervise } from "./supervisor.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
 
@@ -207,7 +206,7 @@ describe("alignment: cross-datasource gap detection", () => {
 		});
 		const result = checkAlignment(state);
 		expect(result.alignmentHints).toBeDefined();
-		expect(result.alignmentHints!.length).toBeGreaterThan(0);
+		expect(result.alignmentHints?.length).toBeGreaterThan(0);
 		expect(routeAfterAlignment(state)).toBe("aggregate");
 	});
 

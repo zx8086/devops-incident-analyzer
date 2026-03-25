@@ -5,7 +5,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../lib/logger";
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"read_documentation",
 		"Read documentation content using the resource protocol",

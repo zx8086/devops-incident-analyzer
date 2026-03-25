@@ -146,7 +146,7 @@ export async function testElasticsearchConnection(): Promise<boolean> {
 		}
 
 		return true;
-	} catch (error) {
+	} catch (_error) {
 		return false;
 	}
 }

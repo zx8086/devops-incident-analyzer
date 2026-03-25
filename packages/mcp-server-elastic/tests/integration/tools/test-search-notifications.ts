@@ -5,8 +5,6 @@
  * Run with: bun tests/integration/tools/test-search-notifications.ts
  */
 
-import { createServer } from "../../../src/server.js";
-import { logger } from "../../../src/utils/logger.js";
 import { notificationManager } from "../../../src/utils/notifications.js";
 
 console.log("Testing elasticsearch_search with notifications");

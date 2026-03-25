@@ -71,7 +71,7 @@ export class NotificationManager {
 		const sendNotificationSafely = async () => {
 			try {
 				// Use the sendNotification function from RequestHandlerExtra
-				await this.requestContext!.sendNotification({
+				await this.requestContext?.sendNotification({
 					method: "notifications/progress",
 					params: {
 						progressToken: notification.progressToken,

@@ -1,9 +1,9 @@
 /* src/tools/deleteDocumentation.ts */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { z } from "zod";
 import { config } from "../config";
 import { createError } from "../lib/errors";
@@ -14,7 +14,7 @@ const sanitizePath = (inputPath: string): string => {
 	return path.normalize(inputPath).replace(/^(\.\.(\/|\\|$))+/, "");
 };
 
-export default (server: McpServer, bucket: Bucket) => {
+export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"delete_documentation",
 		"Delete documentation for a scope, collection, or specific file",
@@ -67,7 +67,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				// Check if the path exists
 				try {
 					await fs.access(docPath);
-				} catch (error) {
+				} catch (_error) {
 					throw createError("NOT_FOUND", "Documentation not found at the specified path");
 				}
 

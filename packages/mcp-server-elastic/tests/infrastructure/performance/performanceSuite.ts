@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { performance } from "node:perf_hooks";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { performance } from "perf_hooks";
 import { getConfig } from "../../src/config.js";
 import { createElasticsearchMCPServer } from "../../src/server.js";
 
@@ -32,7 +32,6 @@ interface PerformanceBenchmark {
 }
 
 class PerformanceTestSuite {
-	private server: Server;
 	private baselines: Map<string, PerformanceBenchmark> = new Map();
 	private currentResults: Map<string, PerformanceBenchmark> = new Map();
 
@@ -150,7 +149,7 @@ class PerformanceTestSuite {
 		return benchmark;
 	}
 
-	private async executeTool(toolName: string, args: any): Promise<any> {
+	private async executeTool(toolName: string, _args: any): Promise<any> {
 		// Mock tool execution - in real implementation, this would call the actual tool
 		return new Promise((resolve) => {
 			// Simulate tool execution time based on tool type
@@ -289,7 +288,7 @@ class PerformanceTestSuite {
 					report += `- **Duration**: ${comparison.results.duration.current.toFixed(2)}ms (${comparison.results.duration.change > 0 ? "+" : ""}${comparison.results.duration.change.toFixed(1)}%)\n`;
 					report += `- **Memory**: ${Math.round(comparison.results.memory.current)} bytes (${comparison.results.memory.change > 0 ? "+" : ""}${comparison.results.memory.change.toFixed(1)}%)\n`;
 					report += `- **Success Rate**: ${comparison.results.successRate.current.toFixed(1)}% (${comparison.results.successRate.change > 0 ? "+" : ""}${comparison.results.successRate.change.toFixed(1)}%)\n\n`;
-				} catch (error) {
+				} catch (_error) {
 					report += `### ${toolName} - NO BASELINE\n\nNo baseline data available for comparison.\n\n`;
 				}
 			}
@@ -335,7 +334,7 @@ describe("Performance Regression Tests", () => {
 		expect(benchmark.summary.avgMemoryGrowth).toBeLessThan(1000000); // Should be <1MB memory growth
 
 		// Regression check
-		if (performanceSuite["baselines"].has("search")) {
+		if (performanceSuite.baselines.has("search")) {
 			const comparison = performanceSuite.compareWithBaseline("search");
 			expect(comparison.regression).toBe(false);
 		}
@@ -382,7 +381,7 @@ describe("Performance Regression Tests", () => {
 		expect(report).toContain("Test Results Summary");
 		expect(report).toContain("Regression Analysis");
 
-		console.log("\n" + "=".repeat(80));
+		console.log(`\n${"=".repeat(80)}`);
 		console.log("PERFORMANCE TEST REPORT");
 		console.log("=".repeat(80));
 		console.log(report);

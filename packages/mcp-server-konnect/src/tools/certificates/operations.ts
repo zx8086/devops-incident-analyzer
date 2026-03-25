@@ -1,7 +1,6 @@
 // src/tools/certificates/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
-import { formatCertificate, formatEntityList } from "../../utils/formatting.js";
 import { createContextLogger } from "../../utils/mcp-logger.js";
 import { validateCertificate, validatePrivateKey } from "../../utils/validation.js";
 
@@ -22,8 +21,8 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 
 		// Analyze certificate health (expiration dates, etc.)
 		const now = new Date();
-		const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-		const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+		const _thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+		const _ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
 
 		return {
 			metadata: {
@@ -42,7 +41,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 				try {
 					// This is a simplified approach - in production you'd want proper certificate parsing
 					if (cert.cert) {
-						const certLines = cert.cert.split("\n");
+						const _certLines = cert.cert.split("\n");
 						// Look for certificate validity period (this is simplified)
 						// In production, you'd use a proper X.509 certificate parser
 						expirationStatus = "valid";
@@ -72,7 +71,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 			}),
 			healthSummary: {
 				totalCertificates: result.data.length,
-				expiringSoon: result.data.filter((cert: any) => {
+				expiringSoon: result.data.filter((_cert: any) => {
 					// This would be properly implemented with certificate parsing
 					return false; // Placeholder
 				}).length,

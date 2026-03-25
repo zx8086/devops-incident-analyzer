@@ -4,7 +4,7 @@
  * Coverage: 4 tools
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAutoscalingDeletePolicyTool } from "../../../src/tools/autoscaling/delete_policy";
@@ -14,7 +14,6 @@ import { registerAutoscalingGetPolicyTool } from "../../../src/tools/autoscaling
 import { registerAutoscalingPutPolicyTool } from "../../../src/tools/autoscaling/put_policy";
 import { logger } from "../../../src/utils/logger";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode";
-import { traceToolCall } from "../../../src/utils/tracing";
 import {
 	createElasticsearchClient,
 	getToolFromServer,
@@ -33,7 +32,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 
 	// Test indices
 	const TEST_INDEX = `test-autoscaling-${Date.now()}`;
-	const TEST_INDEX_PATTERN = `test-autoscaling-*`;
+	const _TEST_INDEX_PATTERN = `test-autoscaling-*`;
 
 	beforeAll(async () => {
 		// Initialize
@@ -45,7 +44,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 		// Test connection
 		try {
 			await client.ping();
-		} catch (error) {
+		} catch (_error) {
 			throw new Error("Cannot run integration tests without Elasticsearch connection");
 		}
 

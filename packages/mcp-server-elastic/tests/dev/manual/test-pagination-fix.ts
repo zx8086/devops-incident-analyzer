@@ -7,7 +7,6 @@
  * and return manageable response sizes.
  */
 
-import { logger } from "./src/utils/logger.js";
 import { createPaginationHeader, paginateResults, responsePresets } from "./src/utils/responseHandling.js";
 
 // Mock data generator
@@ -154,7 +153,7 @@ async function runAllTests() {
 	console.log("- Providing sensible defaults");
 	console.log("- Handling large production datasets");
 	console.log("- Edge cases\n");
-	console.log("=".repeat(60) + "\n");
+	console.log(`${"=".repeat(60)}\n`);
 
 	try {
 		await testPaginationUtility();

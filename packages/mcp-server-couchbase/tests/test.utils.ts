@@ -1,14 +1,13 @@
 /* tests/test.utils.ts */
 
 import type { Bucket, Cluster } from "couchbase";
-import { testConfig } from "./test.config";
 
 export class MockBucket implements Partial<Bucket> {
 	private documents: Map<string, any> = new Map();
 
-	scope(name: string) {
+	scope(_name: string) {
 		return {
-			collection: (collectionName: string) => ({
+			collection: (_collectionName: string) => ({
 				get: async (id: string) => {
 					if (!id) throw new Error("Missing document id");
 					const doc = this.documents.get(id);
@@ -20,7 +19,7 @@ export class MockBucket implements Partial<Bucket> {
 					let parsedContent;
 					try {
 						parsedContent = typeof content === "string" ? JSON.parse(content) : content;
-					} catch (e) {
+					} catch (_e) {
 						throw new Error("Invalid JSON content");
 					}
 					this.documents.set(id, parsedContent);
@@ -34,7 +33,7 @@ export class MockBucket implements Partial<Bucket> {
 					return { content: { id } };
 				},
 			}),
-			query: async (query: string) => {
+			query: async (_query: string) => {
 				const results = Array.from(this.documents.entries()).map(([id, content]) => ({
 					id,
 					...content,
@@ -60,7 +59,7 @@ export class MockBucket implements Partial<Bucket> {
 }
 
 export class MockCluster implements Partial<Cluster> {
-	bucket(name: string) {
+	bucket(_name: string) {
 		return new MockBucket() as Bucket;
 	}
 

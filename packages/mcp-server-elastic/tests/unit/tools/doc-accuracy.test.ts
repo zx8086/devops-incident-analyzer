@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { Glob } from "bun";
-import { readFile, stat } from "fs/promises";
-import path from "path";
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 
 describe("Documentation Accuracy", () => {
 	let actualTools: any[] = [];
@@ -13,7 +12,7 @@ describe("Documentation Accuracy", () => {
 			// This would need to be adapted based on how tools are exported
 			// For now, we'll simulate tool discovery
 			actualTools = await discoverTools();
-		} catch (error) {
+		} catch (_error) {
 			console.log("Could not load actual tools, using mock data for tests");
 			actualTools = createMockTools();
 		}
@@ -23,7 +22,7 @@ describe("Documentation Accuracy", () => {
 			const docsPath = path.join(process.cwd(), "docs/api/openapi.json");
 			const docsContent = await readFile(docsPath, "utf-8");
 			generatedDocs = JSON.parse(docsContent);
-		} catch (error) {
+		} catch (_error) {
 			console.log("Generated documentation not found, will test generation process");
 		}
 	});
@@ -212,7 +211,7 @@ describe("Documentation Accuracy", () => {
 describe("Documentation Generation Process", () => {
 	test("should execute generate-docs script successfully", async () => {
 		// Test the actual documentation generation script
-		const { spawn } = require("child_process");
+		const { spawn } = require("node:child_process");
 
 		try {
 			const result = await new Promise((resolve, reject) => {
@@ -315,7 +314,7 @@ describe("Documentation Content Validation", () => {
 			}
 
 			console.log("Generated HTML has valid structure");
-		} catch (error) {
+		} catch (_error) {
 			console.log("HTML documentation file not available for validation");
 		}
 	});
@@ -343,7 +342,7 @@ describe("Documentation Content Validation", () => {
 			expect(spec.components.schemas).toBeDefined();
 
 			console.log("OpenAPI specification has valid JSON structure");
-		} catch (error) {
+		} catch (_error) {
 			console.log("OpenAPI specification file not available for validation");
 		}
 	});
@@ -367,7 +366,7 @@ describe("Documentation Content Validation", () => {
 			expect(markdownContent.length).toBeGreaterThan(1000);
 
 			console.log("Markdown documentation has valid structure");
-		} catch (error) {
+		} catch (_error) {
 			console.log("Markdown documentation file not available for validation");
 		}
 	});

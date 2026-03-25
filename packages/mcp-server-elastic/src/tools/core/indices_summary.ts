@@ -130,7 +130,7 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 				if (!patterns.has(pattern)) {
 					patterns.set(pattern, []);
 				}
-				patterns.get(pattern)!.push(index);
+				patterns.get(pattern)?.push(index);
 			}
 
 			const patternSummary = Array.from(patterns.entries())

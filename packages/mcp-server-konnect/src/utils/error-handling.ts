@@ -67,7 +67,7 @@ export function withErrorContext<T>(
 			} else if (error.message?.includes("Status ")) {
 				const match = error.message.match(/Status (\d+)/);
 				if (match) {
-					statusCode = parseInt(match[1]);
+					statusCode = parseInt(match[1], 10);
 				}
 			}
 
