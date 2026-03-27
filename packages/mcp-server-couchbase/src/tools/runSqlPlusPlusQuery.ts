@@ -67,6 +67,7 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
 		"capella_run_sql_plus_plus_query",
+		"Execute a SQL++ query against a specific scope in the Couchbase bucket",
 		{
 			scope_name: z.string().describe("Name of the scope"),
 			query: z

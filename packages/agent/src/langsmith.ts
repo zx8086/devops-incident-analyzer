@@ -27,12 +27,12 @@ function trimLargeValues(obj: Record<string, unknown>): Record<string, unknown> 
 	return trimmed;
 }
 
-function patchClientPayloadLimits(): void {
+async function patchClientPayloadLimits(): Promise<void> {
 	// Monkey-patch the LangSmith Client singleton's processInputs/processOutputs
-	// to truncate oversized fields before they hit the API. We use require() to
-	// avoid adding langsmith as a direct dependency of the agent package.
+	// to truncate oversized fields before they hit the API.
 	try {
-		const { getDefaultLangChainClientSingleton } = require("@langchain/core/singletons/tracer");
+		// @ts-expect-error Internal module not in @langchain/core exports map, but exists at runtime
+		const { getDefaultLangChainClientSingleton } = await import("@langchain/core/singletons/tracer");
 
 		// Force singleton creation so we can patch it before auto-tracer uses it
 		const client = getDefaultLangChainClientSingleton();
@@ -50,7 +50,7 @@ function patchClientPayloadLimits(): void {
 	}
 }
 
-export function initializeLangSmith(): boolean {
+export async function initializeLangSmith(): Promise<boolean> {
 	if (initialized) return true;
 	initialized = true;
 
@@ -68,7 +68,7 @@ export function initializeLangSmith(): boolean {
 		process.env.LANGCHAIN_PROJECT = project;
 	}
 
-	patchClientPayloadLimits();
+	await patchClientPayloadLimits();
 
 	logger.info({ project: project ?? "default" }, "Tracing enabled");
 	return true;

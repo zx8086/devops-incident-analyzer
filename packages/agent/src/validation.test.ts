@@ -301,7 +301,7 @@ describe("graph: compilation smoke test", () => {
 	test("buildGraph compiles without errors", async () => {
 		// This tests that all nodes are wired correctly
 		const { buildGraph } = await import("./graph.ts");
-		const graph = buildGraph({ checkpointerType: "memory" });
+		const graph = await buildGraph({ checkpointerType: "memory" });
 		expect(graph).toBeDefined();
 		expect(typeof graph.invoke).toBe("function");
 		expect(typeof graph.stream).toBe("function");

@@ -18,10 +18,10 @@ const ExtractionSchema = z.object({
 			mentionedAs: z.string(),
 		}),
 	),
-	timeFrom: z.string().optional(),
-	timeTo: z.string().optional(),
-	services: z.array(z.string()).optional(),
-	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
+	timeFrom: z.string().nullish(),
+	timeTo: z.string().nullish(),
+	services: z.array(z.string()).nullish(),
+	severity: z.enum(["critical", "high", "medium", "low"]).nullish(),
 });
 
 export async function extractEntities(

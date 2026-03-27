@@ -32,8 +32,8 @@ function traceNode(
 		});
 }
 
-export function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) {
-	initializeLangSmith();
+export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlite" }) {
+	await initializeLangSmith();
 	const graph = new StateGraph(AgentState)
 		.addNode("classify", traceNode("classify", classify))
 		.addNode("responder", traceNode("responder", respond))
