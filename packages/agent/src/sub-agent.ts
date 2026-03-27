@@ -2,6 +2,7 @@
 
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource } from "./mcp-bridge.ts";
@@ -82,7 +83,10 @@ function extractToolErrors(messages: Array<{ _getType(): string; content: unknow
 	return errors;
 }
 
-export async function queryDataSource(state: AgentStateType): Promise<Partial<AgentStateType>> {
+export async function queryDataSource(
+	state: AgentStateType,
+	config?: RunnableConfig,
+): Promise<Partial<AgentStateType>> {
 	const dataSourceId = state.currentDataSource;
 	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
 	const startTime = Date.now();
@@ -125,9 +129,14 @@ export async function queryDataSource(state: AgentStateType): Promise<Partial<Ag
 		const response = await agent.invoke(
 			{ messages },
 			{
+				...config,
 				runName: agentName,
-				metadata: { data_source_id: dataSourceId, request_id: state.requestId },
-				tags: ["sub-agent", `datasource:${dataSourceId}`],
+				metadata: {
+					...config?.metadata,
+					data_source_id: dataSourceId,
+					request_id: state.requestId,
+				},
+				tags: [...(config?.tags ?? []), "sub-agent", `datasource:${dataSourceId}`],
 			},
 		);
 		const lastResponse = response.messages.at(-1);

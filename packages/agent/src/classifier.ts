@@ -2,6 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
@@ -130,7 +131,7 @@ When in doubt, classify as COMPLEX.
 
 Respond with exactly one word: SIMPLE or COMPLEX`;
 
-export async function classify(state: AgentStateType): Promise<Partial<AgentStateType>> {
+export async function classify(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	// Reset per-turn accumulation state so prior results don't bleed into this turn
 	const turnReset: Partial<AgentStateType> = {
 		dataSourceResults: [],
@@ -148,6 +149,13 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 	const trimmed = query.trim();
 	logger.info({ query: trimmed.slice(0, 100) }, "Classifying query");
 
+	// Follow-up detection runs first so queries like "what about the kafka lag?"
+	// get isFollowUp: true even when they also match complex infrastructure patterns.
+	if (FOLLOW_UP_PATTERNS.some((p) => p.test(trimmed))) {
+		logger.info({ result: "complex", method: "follow-up-regex" }, "Classification complete");
+		return { ...turnReset, queryComplexity: "complex", isFollowUp: true };
+	}
+
 	// Fast path: regex pattern match
 	const patternResult = patternClassify(trimmed);
 	if (patternResult) {
@@ -156,12 +164,6 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 			return { ...turnReset, queryComplexity: "complex" };
 		}
 		return { ...turnReset, queryComplexity: "simple" };
-	}
-
-	// Follow-up detection
-	if (FOLLOW_UP_PATTERNS.some((p) => p.test(trimmed))) {
-		logger.info({ result: "complex", method: "follow-up-regex" }, "Classification complete");
-		return { ...turnReset, queryComplexity: "complex", isFollowUp: true };
 	}
 
 	// SIO-504 pattern: short/ambiguous messages with conversation history need context
@@ -186,7 +188,7 @@ export async function classify(state: AgentStateType): Promise<Partial<AgentStat
 				]
 			: [new SystemMessage(CLASSIFIER_PROMPT), new HumanMessage(trimmed)];
 
-		const response = await llm.invoke(llmMessages);
+		const response = await llm.invoke(llmMessages, config);
 		const content = typeof response.content === "string" ? response.content.trim().toUpperCase() : "";
 		const classification = content.includes("SIMPLE") ? ("simple" as const) : ("complex" as const);
 

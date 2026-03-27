@@ -1,6 +1,15 @@
 // agent/src/mcp-integration.test.ts
 // SIO-577: Integration tests for MCP server connectivity and tool scoping
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+
+// Explicitly mock with empty state to isolate from other test files that mock
+// mcp-bridge with fake tools for supervisor tests.
+mock.module("./mcp-bridge.ts", () => ({
+	getToolsForDataSource: () => [],
+	getAllTools: () => [],
+	getConnectedServers: () => [],
+}));
+
 import { getAllTools, getToolsForDataSource } from "./mcp-bridge.ts";
 import { getEnhancedDescription, getRelatedToolsMap, getToolPrompts } from "./prompt-overlay.ts";
 

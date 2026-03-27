@@ -2,6 +2,7 @@
 
 import { getLogger } from "@devops-agent/observability";
 import { AIMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { createLlm } from "./llm.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -23,12 +24,12 @@ Your capabilities when connected to datasources:
 Keep responses concise and direct. Do not fabricate infrastructure data -- only answer from general knowledge.
 Do not ask excessive clarifying questions. If the user asks something you can answer from general knowledge, answer it directly.`;
 
-export async function respond(state: AgentStateType): Promise<Partial<AgentStateType>> {
+export async function respond(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	logger.info("Simple query responder invoked");
 
 	const llm = createLlm("responder");
 	const startTime = Date.now();
-	const response = await llm.invoke([{ role: "system", content: RESPONDER_PROMPT }, ...state.messages]);
+	const response = await llm.invoke([{ role: "system", content: RESPONDER_PROMPT }, ...state.messages], config);
 	const answer = String(response.content);
 
 	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Responder complete");

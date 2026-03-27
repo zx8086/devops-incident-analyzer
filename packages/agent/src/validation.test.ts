@@ -1,8 +1,17 @@
 // agent/src/validation.test.ts
 // Validation tests -- everything that runs without LLM or MCP servers
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
+
+// Mock MCP bridge so supervisor tests don't depend on connected MCP servers.
+const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect"]);
+mock.module("./mcp-bridge.ts", () => ({
+	getToolsForDataSource: (id: string) => (VALID_DATASOURCES.has(id) ? [{ name: `${id}_tool` }] : []),
+	getAllTools: () => [],
+	getConnectedServers: () => [...VALID_DATASOURCES],
+}));
+
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { supervise } from "./supervisor.ts";

@@ -2,6 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildOrchestratorPrompt } from "./prompt-context.ts";
@@ -40,7 +41,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	return messages;
 }
 
-export async function aggregate(state: AgentStateType): Promise<Partial<AgentStateType>> {
+export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 	if (results.length === 0) {
 		logger.warn("No datasource results to aggregate");
@@ -71,7 +72,7 @@ export async function aggregate(state: AgentStateType): Promise<Partial<AgentSta
 
 	logger.info("Invoking LLM for aggregation");
 	const startTime = Date.now();
-	const response = await llm.invoke(messages);
+	const response = await llm.invoke(messages, config);
 
 	const answer = String(response.content);
 	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Aggregation complete");

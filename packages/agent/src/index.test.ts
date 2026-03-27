@@ -1,6 +1,16 @@
 // agent/src/index.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
+
+// Mock MCP bridge so supervisor tests don't depend on connected MCP servers.
+// Returns a single fake tool for any valid datasource ID.
+const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect"]);
+mock.module("./mcp-bridge.ts", () => ({
+	getToolsForDataSource: (id: string) => (VALID_DATASOURCES.has(id) ? [{ name: `${id}_tool` }] : []),
+	getAllTools: () => [],
+	getConnectedServers: () => [...VALID_DATASOURCES],
+}));
+
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { AgentState } from "./state.ts";
 import { supervise } from "./supervisor.ts";

@@ -3,6 +3,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, ExtractedEntities } from "@devops-agent/shared";
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -23,7 +24,10 @@ const ExtractionSchema = z.object({
 	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
 });
 
-export async function extractEntities(state: AgentStateType): Promise<Partial<AgentStateType>> {
+export async function extractEntities(
+	state: AgentStateType,
+	config?: RunnableConfig,
+): Promise<Partial<AgentStateType>> {
 	const lastMessage = state.messages.at(-1);
 	if (!lastMessage) {
 		logger.info("No message found, targeting all datasources");
@@ -42,10 +46,13 @@ Return JSON with: dataSources (array of {id, mentionedAs}), timeFrom, timeTo (IS
 Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect".
 If no specific datasource is mentioned, include all: elastic, kafka, couchbase, konnect.${attachmentContext ? `\n\n${attachmentContext}` : ""}`;
 
-	const response = await llm.invoke([
-		{ role: "system", content: systemPrompt },
-		{ role: "human", content: query },
-	]);
+	const response = await llm.invoke(
+		[
+			{ role: "system", content: systemPrompt },
+			{ role: "human", content: query },
+		],
+		config,
+	);
 
 	const uiSelected = state.targetDataSources;
 	const isFollowUp = state.isFollowUp;

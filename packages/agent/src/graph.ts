@@ -2,6 +2,7 @@
 
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { traceSpan } from "@devops-agent/observability";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { END, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
@@ -14,11 +15,17 @@ import { queryDataSource } from "./sub-agent.ts";
 import { supervise } from "./supervisor.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
 
-type NodeFn = (state: AgentStateType) => Partial<AgentStateType> | Promise<Partial<AgentStateType>>;
+type NodeFn = (
+	state: AgentStateType,
+	config?: RunnableConfig,
+) => Partial<AgentStateType> | Promise<Partial<AgentStateType>>;
 
-function traceNode(name: string, fn: NodeFn): (state: AgentStateType) => Promise<Partial<AgentStateType>> {
-	return (state: AgentStateType) =>
-		traceSpan("agent", `agent.node.${name}`, async () => fn(state), {
+function traceNode(
+	name: string,
+	fn: NodeFn,
+): (state: AgentStateType, config: RunnableConfig) => Promise<Partial<AgentStateType>> {
+	return (state: AgentStateType, config: RunnableConfig) =>
+		traceSpan("agent", `agent.node.${name}`, async () => fn(state, config), {
 			"agent.node.name": name,
 			...(state.requestId && { "request.id": state.requestId }),
 			...(state.currentDataSource && { data_source_id: state.currentDataSource }),
