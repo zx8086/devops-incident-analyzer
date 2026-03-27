@@ -1,7 +1,6 @@
 // apps/web/src/lib/server/agent.ts
-import { buildGraph, createLlm, createMcpClient } from "@devops-agent/agent";
+import { buildGraph, createMcpClient } from "@devops-agent/agent";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { MessageContentComplex } from "@langchain/core/messages";
 
 // SIO-606: Match gitagent-bridge getRecursionLimit(25) = 50.
@@ -36,14 +35,6 @@ export async function getGraph() {
 		});
 	}
 	return graphPromise;
-}
-
-export function getFollowUpLlm(): BaseChatModel | null {
-	try {
-		return createLlm("followUp");
-	} catch {
-		return null;
-	}
 }
 
 export async function invokeAgent(

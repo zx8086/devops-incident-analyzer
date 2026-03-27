@@ -101,6 +101,11 @@ export const AgentState = Annotation.Root({
 		reducer: (_, next) => next,
 		default: () => crypto.randomUUID(),
 	}),
+
+	suggestions: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
 });
 
 export type AgentStateType = typeof AgentState.State;

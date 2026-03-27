@@ -5,7 +5,7 @@ export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } fro
 export { AttachmentError, type ProcessedAttachments, processAttachments } from "./attachment-processor.ts";
 export { classify } from "./classifier.ts";
 export { extractEntities } from "./entity-extractor.ts";
-export { generateFallbackSuggestions, generateFollowUpSuggestions } from "./follow-up-generator.ts";
+export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export { createLlm, type LlmRole } from "./llm.ts";

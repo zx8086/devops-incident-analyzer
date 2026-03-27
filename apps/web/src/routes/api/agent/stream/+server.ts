@@ -1,17 +1,11 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
-import {
-	AttachmentError,
-	flushLangSmithCallbacks,
-	generateFallbackSuggestions,
-	generateFollowUpSuggestions,
-	processAttachments,
-} from "@devops-agent/agent";
+import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
 import { traceSpan } from "@devops-agent/observability";
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getFollowUpLlm, invokeAgent } from "$lib/server/agent";
+import { invokeAgent } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
 
 const StreamRequestSchema = z.object({
@@ -93,6 +87,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								"aggregate",
 								"validate",
 								"responder",
+								"followUp",
 							]);
 							const nodeStartTimes = new Map<string, number>();
 							let responseContent = "";
@@ -120,6 +115,14 @@ export const POST: RequestHandler = async ({ request }) => {
 									const duration = startTime ? Date.now() - startTime : 0;
 									nodeStartTimes.delete(event.name);
 									send({ type: "node_end", nodeId: event.name, duration });
+
+									// Suggestions are now generated inside the graph's followUp node
+									if (event.name === "followUp") {
+										const suggestions = event.data?.output?.suggestions;
+										if (Array.isArray(suggestions) && suggestions.length > 0) {
+											send({ type: "suggestions", suggestions });
+										}
+									}
 								}
 
 								if (event.event === "on_tool_start") {
@@ -133,19 +136,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 							}
 
-							// Generate follow-up suggestions after graph completes
 							const toolsUsedArray = [...toolsUsed];
-							const followUpLlm = getFollowUpLlm();
-							let suggestions: string[];
-							if (followUpLlm && responseContent.length >= 50) {
-								suggestions = await generateFollowUpSuggestions(followUpLlm, responseContent, toolsUsedArray);
-							} else {
-								suggestions = generateFallbackSuggestions(toolsUsedArray);
-							}
-
-							if (suggestions.length > 0) {
-								send({ type: "suggestions", suggestions });
-							}
 
 							await flushLangSmithCallbacks();
 

@@ -1,7 +1,9 @@
 // agent/src/follow-up-generator.ts
 import { getLogger } from "@devops-agent/observability";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { createLlm } from "./llm.ts";
+import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:follow-up-generator");
 
@@ -46,40 +48,62 @@ export function generateFallbackSuggestions(toolsUsed: string[]): string[] {
 	return suggestions.slice(0, 4);
 }
 
-export async function generateFollowUpSuggestions(
-	llm: BaseChatModel,
-	responseText: string,
-	toolsUsed: string[],
-): Promise<string[]> {
-	if (responseText.length < 50) {
-		return generateFallbackSuggestions(toolsUsed);
+function extractToolNamesFromResults(state: AgentStateType): string[] {
+	return state.dataSourceResults
+		.filter((r) => r.status === "success")
+		.flatMap((r) => r.toolOutputs?.map((t) => t.toolName) ?? []);
+}
+
+function parseSuggestions(content: string): string[] | null {
+	const match = content.match(/\[[\s\S]*\]/);
+	if (!match) return null;
+
+	try {
+		const parsed = JSON.parse(match[0]);
+		if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
+			const filtered = parsed.filter(
+				(s: string) => s.length >= MIN_SUGGESTION_LENGTH && s.length <= MAX_SUGGESTION_LENGTH,
+			);
+			return filtered.length > 0 ? filtered.slice(0, 4) : null;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+// LangGraph node function -- inherits trace context via RunnableConfig
+export async function generateSuggestions(
+	state: AgentStateType,
+	config?: RunnableConfig,
+): Promise<Partial<AgentStateType>> {
+	const toolsUsed = extractToolNamesFromResults(state);
+	const responseText = state.finalAnswer;
+
+	if (!responseText || responseText.length < 50) {
+		logger.info("Short or missing response, using fallback suggestions");
+		return { suggestions: generateFallbackSuggestions(toolsUsed) };
 	}
 
 	try {
+		const llm = createLlm("followUp");
 		const truncated = responseText.slice(0, 1000);
-		const result = await llm.invoke([new SystemMessage(FOLLOW_UP_PROMPT), new HumanMessage(truncated)]);
+		const result = await llm.invoke([new SystemMessage(FOLLOW_UP_PROMPT), new HumanMessage(truncated)], config);
 
 		const content = typeof result.content === "string" ? result.content : "";
-		const match = content.match(/\[[\s\S]*\]/);
-		if (match) {
-			const parsed = JSON.parse(match[0]);
-			if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
-				const filtered = parsed.filter(
-					(s: string) => s.length >= MIN_SUGGESTION_LENGTH && s.length <= MAX_SUGGESTION_LENGTH,
-				);
-				if (filtered.length > 0) {
-					return filtered.slice(0, 4);
-				}
-				logger.warn("All LLM suggestions filtered by length constraints, using fallbacks");
-				return generateFallbackSuggestions(toolsUsed);
-			}
+		const suggestions = parseSuggestions(content);
+		if (suggestions) {
+			logger.info({ count: suggestions.length }, "Generated follow-up suggestions");
+			return { suggestions };
 		}
+
+		logger.warn("LLM suggestions did not pass validation, using fallbacks");
+		return { suggestions: generateFallbackSuggestions(toolsUsed) };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"LLM suggestion generation failed, using fallbacks",
 		);
+		return { suggestions: generateFallbackSuggestions(toolsUsed) };
 	}
-
-	return generateFallbackSuggestions(toolsUsed);
 }

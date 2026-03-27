@@ -8,6 +8,7 @@ import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { extractEntities } from "./entity-extractor.ts";
+import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";
 import { respond } from "./responder.ts";
 import { AgentState, type AgentStateType } from "./state.ts";
@@ -42,6 +43,7 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("align", traceNode("align", checkAlignment))
 		.addNode("aggregate", traceNode("aggregate", aggregate))
 		.addNode("validate", traceNode("validate", validate))
+		.addNode("followUp", traceNode("followUp", generateSuggestions))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -51,8 +53,9 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 			return state.queryComplexity === "simple" ? "responder" : "entityExtractor";
 		})
 
-		// Simple path ends
-		.addEdge("responder", END)
+		// Simple path: responder -> followUp -> END
+		.addEdge("responder", "followUp")
+		.addEdge("followUp", END)
 
 		// EntityExtractor fans out to sub-agents via Send[]
 		.addConditionalEdges("entityExtractor", supervise)
@@ -66,9 +69,9 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// Aggregate -> validate
 		.addEdge("aggregate", "validate")
 
-		// Validate -> END or retry aggregate
+		// Validate -> retry aggregate or followUp -> END
 		.addConditionalEdges("validate", (state) => {
-			return shouldRetryValidation(state) ? "aggregate" : "__end__";
+			return shouldRetryValidation(state) ? "aggregate" : "followUp";
 		});
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");

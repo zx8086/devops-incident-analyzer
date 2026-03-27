@@ -36,6 +36,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],
+		suggestions: [],
 		...overrides,
 	};
 }
@@ -56,6 +57,7 @@ describe("AgentState", () => {
 		expect(AgentState.spec.isFollowUp).toBeDefined();
 		expect(AgentState.spec.finalAnswer).toBeDefined();
 		expect(AgentState.spec.requestId).toBeDefined();
+		expect(AgentState.spec.suggestions).toBeDefined();
 	});
 });
 
