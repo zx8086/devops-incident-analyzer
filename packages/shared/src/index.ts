@@ -109,3 +109,8 @@ export {
 	withNestedTrace,
 	withTraceContextMiddleware,
 } from "./tracing/index.ts";
+export {
+	type AgentCoreTransportConfig,
+	type AgentCoreTransportResult,
+	startAgentCoreTransport,
+} from "./transport/agentcore.ts";
