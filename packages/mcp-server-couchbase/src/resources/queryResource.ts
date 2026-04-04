@@ -2,9 +2,9 @@
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import { logger } from "../utils/logger";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import { sqlppParser } from "../lib/sqlppParser";
+import { logger } from "../utils/logger";
 
 export function registerQueryResource(server: McpServer, bucket: Bucket): void {
 	server.resource(

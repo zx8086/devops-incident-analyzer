@@ -1,8 +1,8 @@
 /* src/tools/queryAnalysis/queryAnalysisUtils.ts */
 
 import type { Bucket } from "couchbase";
-import { logger } from "../../utils/logger";
 import type { ToolResponse } from "../../types";
+import { logger } from "../../utils/logger";
 
 /**
  * Execute a query and return formatted results

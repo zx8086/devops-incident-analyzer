@@ -6,11 +6,11 @@ export { type BedrockModelConfig, getRecursionLimit, resolveBedrockConfig } from
 export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { buildSystemPrompt } from "./skill-loader.ts";
 export {
-	type FacadeMap,
-	type ResolvedMapping,
 	buildFacadeMap,
+	type FacadeMap,
 	getUncoveredTools,
 	matchesPattern,
+	type ResolvedMapping,
 	resolveMapping,
 } from "./tool-mapping.ts";
 export { buildAllToolPrompts, buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";

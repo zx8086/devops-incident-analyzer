@@ -1,10 +1,10 @@
 // src/tools/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../config/schemas.ts";
-import { logger } from "../utils/logger.ts";
 import type { KafkaService } from "../services/kafka-service.ts";
 import type { KsqlService } from "../services/ksql-service.ts";
 import type { SchemaRegistryService } from "../services/schema-registry-service.ts";
+import { logger } from "../utils/logger.ts";
 import { registerDestructiveTools } from "./destructive/tools.ts";
 import { registerKsqlTools } from "./ksql/tools.ts";
 import { registerReadTools } from "./read/tools.ts";

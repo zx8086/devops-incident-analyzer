@@ -1,7 +1,7 @@
 // src/services/client-manager.ts
 import { Admin, Consumer, Producer } from "@platformatic/kafka";
-import { logger } from "../utils/logger.ts";
 import type { KafkaConnectionConfig, KafkaProvider } from "../providers/types.ts";
+import { logger } from "../utils/logger.ts";
 
 type KafkaClientOptions = ConstructorParameters<typeof Admin>[0];
 

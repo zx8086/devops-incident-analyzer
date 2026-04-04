@@ -1,11 +1,11 @@
 // src/server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "./config";
-import { logger } from "./utils/logger";
 import { registerPingHandlers } from "./lib/pingHandler";
 import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
+import { logger } from "./utils/logger";
 
 export function createServer(bucket: import("couchbase").Bucket): McpServer {
 	const server = new McpServer({
@@ -77,10 +77,15 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 		const { createContextLogger } = require("./utils/logger");
 		return createContextLogger("EchoTool");
 	}
-	server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params: Record<string, unknown>) => {
-		getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
-		return { content: [{ type: "text", text: JSON.stringify(params) }] };
-	});
+	server.tool(
+		"capella_echo",
+		"Echoes back the input parameters for debugging",
+		{},
+		async (params: Record<string, unknown>) => {
+			getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
+			return { content: [{ type: "text", text: JSON.stringify(params) }] };
+		},
+	);
 
 	return server;
 }

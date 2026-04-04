@@ -3,8 +3,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { toolRegistry } from "../tools";
-import { traceToolCall } from "../utils/tracing";
 import { logger } from "../utils/logger";
+import { traceToolCall } from "../utils/tracing";
 
 export class ToolRegistry {
 	static registerAll(server: McpServer, bucket: Bucket): void {
@@ -21,9 +21,7 @@ export class ToolRegistry {
 
 			if (typeof originalHandler === "function") {
 				args[handlerIdx] = async (...handlerArgs: unknown[]) => {
-					return traceToolCall(name, () =>
-						(originalHandler as (...a: unknown[]) => Promise<unknown>)(...handlerArgs),
-					);
+					return traceToolCall(name, () => (originalHandler as (...a: unknown[]) => Promise<unknown>)(...handlerArgs));
 				};
 			}
 

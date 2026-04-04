@@ -6,9 +6,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
-import { logger } from "../utils/logger";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
+import { logger } from "../utils/logger";
 
 // Ensure all queries use only the collection name in the FROM clause when using scope context
 const runQuery = async (params: { scope_name: string; query: string }, bucket: Bucket) => {
