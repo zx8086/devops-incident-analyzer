@@ -1,0 +1,60 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "MSKClusterConnect",
+			"Effect": "Allow",
+			"Action": [
+				"kafka-cluster:Connect",
+				"kafka-cluster:DescribeCluster",
+				"kafka-cluster:DescribeClusterDynamicConfiguration"
+			],
+			"Resource": "arn:aws:kafka:REGION:ACCOUNT:cluster/CLUSTER_NAME/*"
+		},
+		{
+			"Sid": "MSKTopicReadOnly",
+			"Effect": "Allow",
+			"Action": [
+				"kafka-cluster:DescribeTopic",
+				"kafka-cluster:DescribeTopicDynamicConfiguration",
+				"kafka-cluster:ReadData"
+			],
+			"Resource": "arn:aws:kafka:REGION:ACCOUNT:topic/CLUSTER_NAME/*"
+		},
+		{
+			"Sid": "MSKConsumerGroupRead",
+			"Effect": "Allow",
+			"Action": ["kafka-cluster:DescribeGroup"],
+			"Resource": "arn:aws:kafka:REGION:ACCOUNT:group/CLUSTER_NAME/*"
+		},
+		{
+			"Sid": "MSKBrokerDiscovery",
+			"Effect": "Allow",
+			"Action": ["kafka:GetBootstrapBrokers", "kafka:DescribeClusterV2"],
+			"Resource": "arn:aws:kafka:REGION:ACCOUNT:cluster/CLUSTER_NAME/*"
+		},
+		{
+			"Sid": "AgentCoreLogs",
+			"Effect": "Allow",
+			"Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+			"Resource": "arn:aws:logs:REGION:ACCOUNT:log-group:/aws/bedrock-agentcore/runtimes/*"
+		},
+		{
+			"Sid": "ECRImagePull",
+			"Effect": "Allow",
+			"Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:GetAuthorizationToken"],
+			"Resource": "*"
+		}
+	],
+	"_comments": {
+		"write_permissions": "Add these to the MSKTopicReadOnly statement if KAFKA_ALLOW_WRITES=true:",
+		"write_actions": [
+			"kafka-cluster:WriteData",
+			"kafka-cluster:CreateTopic",
+			"kafka-cluster:AlterTopicDynamicConfiguration"
+		],
+		"destructive_permissions": "Add these if KAFKA_ALLOW_DESTRUCTIVE=true:",
+		"destructive_actions": ["kafka-cluster:DeleteTopic", "kafka-cluster:AlterGroup"],
+		"usage": "Replace REGION, ACCOUNT, and CLUSTER_NAME with your values. For tighter security, replace the wildcards in Resource ARNs with specific cluster/topic/group names."
+	}
+}
