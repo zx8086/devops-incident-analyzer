@@ -101,6 +101,16 @@ See [.env.example](.env.example) for the full list. Minimum required:
 - `ES_URL`, `ES_API_KEY` -- Elasticsearch connection
 - `ELASTIC_MCP_URL`, `KAFKA_MCP_URL` -- MCP server URLs for the agent
 
+## Documentation
+
+| Need to... | Go to... |
+|------------|----------|
+| Full documentation index | [docs/README.md](docs/README.md) |
+| Understand the architecture | [System Overview](docs/architecture/system-overview.md) |
+| Set up the project | [Getting Started](docs/development/getting-started.md) |
+| Deploy to AgentCore | [AgentCore Deployment](docs/deployment/agentcore-deployment.md) |
+| Add or modify MCP tools | [Adding MCP Tools](docs/development/adding-mcp-tools.md) |
+
 ## Tech Stack
 
 - **Runtime**: Bun
