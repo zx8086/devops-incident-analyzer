@@ -1,227 +1,9 @@
-/* src/config.ts */
+// src/config/loader.ts
 
-import { z } from "zod";
-
-const ServerConfigSchema = z.object({
-	name: z.string().min(1),
-	version: z.string().min(1),
-	readOnlyMode: z.boolean(),
-	readOnlyStrictMode: z.boolean(),
-	maxQueryTimeout: z.number().min(1000).max(300000),
-	maxResultsPerQuery: z.number().min(1).max(10000),
-	transportMode: z.enum(["stdio", "http", "both"]),
-	port: z.number(),
-	host: z.string(),
-	path: z.string().startsWith("/"),
-	sessionMode: z.enum(["stateless", "stateful"]),
-	idleTimeout: z.number().int().min(10).max(255),
-	apiKey: z.string().optional(),
-	allowedOrigins: z.string().optional(),
-	// Enhanced response handling configuration
-	maxResponseSizeBytes: z.number().min(1000).max(10000000),
-	defaultPageSize: z.number().min(1).max(1000),
-	maxPageSize: z.number().min(10).max(10000),
-	enableResponseCompression: z.boolean(),
-	autoSummarizeLargeResponses: z.boolean(),
-	// Monitoring configuration
-	monitoringPort: z.number().min(1024).max(65535),
-});
-
-const ElasticsearchConfigSchema = z
-	.object({
-		url: z.string().url().min(1),
-		apiKey: z.string().optional(),
-		username: z.string().optional(),
-		password: z.string().optional(),
-		caCert: z.string().optional(),
-		maxRetries: z.number().min(0).max(10),
-		requestTimeout: z.number().min(1000).max(60000),
-		compression: z.boolean(),
-		enableMetaHeader: z.boolean(),
-		disablePrototypePoisoningProtection: z.boolean(),
-	})
-	.refine(
-		(data) => {
-			// If username is provided, password must be provided
-			if (data.username) {
-				return !!data.password;
-			}
-
-			// If password is provided, username must be provided
-			if (data.password) {
-				return !!data.username;
-			}
-
-			// If apiKey is provided, it's valid
-			if (data.apiKey) {
-				return true;
-			}
-
-			// No auth is also valid (for local development)
-			return true;
-		},
-		{
-			message:
-				"Either ES_API_KEY or both ES_USERNAME and ES_PASSWORD must be provided, or no auth for local development",
-			path: ["username", "password"],
-		},
-	);
-
-const LoggingConfigSchema = z.object({
-	level: z.enum(["debug", "info", "warn", "error"]),
-	format: z.enum(["json", "text"]),
-	includeMetadata: z.boolean(),
-});
-
-const SecurityConfigSchema = z.object({
-	allowDestructiveOperations: z.boolean(),
-	allowSchemaModifications: z.boolean(),
-	allowIndexManagement: z.boolean(),
-	maxBulkOperations: z.number().min(1).max(10000),
-});
-
-const LangSmithConfigSchema = z.object({
-	tracing: z.boolean(),
-	endpoint: z.string().url(),
-	apiKey: z.string().optional(),
-	project: z.string(),
-});
-
-const SessionTrackingConfigSchema = z.object({
-	enabled: z.boolean(),
-	sessionTimeoutMinutes: z.number().min(0.5).max(120),
-	includeSessionInTraceName: z.boolean(),
-	maxConcurrentSessions: z.number().min(10).max(1000),
-	conversationDetectionThresholdSeconds: z.number().min(10).max(300),
-});
-
-const ConfigSchema = z.object({
-	server: ServerConfigSchema,
-	elasticsearch: ElasticsearchConfigSchema,
-	logging: LoggingConfigSchema,
-	security: SecurityConfigSchema,
-	langsmith: LangSmithConfigSchema,
-	sessionTracking: SessionTrackingConfigSchema,
-});
-
-export type Config = z.infer<typeof ConfigSchema>;
-
-const defaultConfig: Config = {
-	server: {
-		name: "elasticsearch-mcp-server",
-		version: "0.1.1",
-		readOnlyMode: false,
-		readOnlyStrictMode: true,
-		maxQueryTimeout: 30000,
-		maxResultsPerQuery: 1000,
-		transportMode: "stdio",
-		port: 8080,
-		host: "0.0.0.0",
-		path: "/mcp",
-		sessionMode: "stateless",
-		idleTimeout: 255,
-		maxResponseSizeBytes: 1000000,
-		defaultPageSize: 20,
-		maxPageSize: 100,
-		enableResponseCompression: true,
-		autoSummarizeLargeResponses: true,
-		// Monitoring configuration
-		monitoringPort: 9090,
-	},
-	elasticsearch: {
-		url: "http://localhost:9200",
-		maxRetries: 3,
-		requestTimeout: 30000,
-		compression: true,
-		enableMetaHeader: true,
-		disablePrototypePoisoningProtection: true,
-	},
-	logging: {
-		level: "info",
-		format: "json",
-		includeMetadata: true,
-	},
-	security: {
-		allowDestructiveOperations: false,
-		allowSchemaModifications: false,
-		allowIndexManagement: false,
-		maxBulkOperations: 1000,
-	},
-	langsmith: {
-		tracing: false,
-		endpoint: "https://api.smith.langchain.com",
-		project: "elasticsearch-mcp-server",
-	},
-	sessionTracking: {
-		enabled: true,
-		sessionTimeoutMinutes: 0.5, // 30 seconds for better conversation separation
-		includeSessionInTraceName: false,
-		maxConcurrentSessions: 100,
-		conversationDetectionThresholdSeconds: 30, // Detect new conversation after 30s gap
-	},
-};
-
-const envVarMapping = {
-	server: {
-		name: "MCP_SERVER_NAME",
-		version: "MCP_SERVER_VERSION",
-		readOnlyMode: "READ_ONLY_MODE",
-		readOnlyStrictMode: "READ_ONLY_STRICT_MODE",
-		maxQueryTimeout: "MCP_MAX_QUERY_TIMEOUT",
-		maxResultsPerQuery: "MCP_MAX_RESULTS_PER_QUERY",
-		transportMode: "MCP_TRANSPORT",
-		port: "MCP_PORT",
-		host: "MCP_HOST",
-		path: "MCP_PATH",
-		sessionMode: "MCP_SESSION_MODE",
-		idleTimeout: "MCP_IDLE_TIMEOUT",
-		apiKey: "MCP_API_KEY",
-		allowedOrigins: "MCP_ALLOWED_ORIGINS",
-		maxResponseSizeBytes: "MCP_MAX_RESPONSE_SIZE_BYTES",
-		defaultPageSize: "MCP_DEFAULT_PAGE_SIZE",
-		maxPageSize: "MCP_MAX_PAGE_SIZE",
-		enableResponseCompression: "MCP_ENABLE_RESPONSE_COMPRESSION",
-		autoSummarizeLargeResponses: "MCP_AUTO_SUMMARIZE_LARGE_RESPONSES",
-		monitoringPort: "MONITORING_PORT",
-	},
-	elasticsearch: {
-		url: "ES_URL",
-		apiKey: "ES_API_KEY",
-		username: "ES_USERNAME",
-		password: "ES_PASSWORD",
-		caCert: "ES_CA_CERT",
-		maxRetries: "ES_MAX_RETRIES",
-		requestTimeout: "ES_REQUEST_TIMEOUT",
-		compression: "ES_COMPRESSION",
-		enableMetaHeader: "ES_ENABLE_META_HEADER",
-		disablePrototypePoisoningProtection: "ES_DISABLE_PROTOTYPE_POISONING_PROTECTION",
-	},
-	logging: {
-		level: "LOG_LEVEL",
-		format: "LOG_FORMAT",
-		includeMetadata: "LOG_INCLUDE_METADATA",
-	},
-	security: {
-		allowDestructiveOperations: "ALLOW_DESTRUCTIVE_OPERATIONS",
-		allowSchemaModifications: "ALLOW_SCHEMA_MODIFICATIONS",
-		allowIndexManagement: "ALLOW_INDEX_MANAGEMENT",
-		maxBulkOperations: "MAX_BULK_OPERATIONS",
-	},
-	langsmith: {
-		tracing: "LANGSMITH_TRACING",
-		endpoint: "LANGSMITH_ENDPOINT",
-		apiKey: "LANGSMITH_API_KEY",
-		project: "ELASTIC_LANGSMITH_PROJECT",
-		projectFallback: "LANGSMITH_PROJECT",
-	},
-	sessionTracking: {
-		enabled: "SESSION_TRACKING_ENABLED",
-		sessionTimeoutMinutes: "SESSION_TIMEOUT_MINUTES",
-		includeSessionInTraceName: "SESSION_ID_IN_TRACE_NAME",
-		maxConcurrentSessions: "MAX_CONCURRENT_SESSIONS",
-		conversationDetectionThresholdSeconds: "CONVERSATION_DETECTION_THRESHOLD_SECONDS",
-	},
-} as const;
+import { defaultConfig } from "./defaults.js";
+import { envVarMapping } from "./envMapping.js";
+import type { Config } from "./schemas.js";
+import { ConfigSchema } from "./schemas.js";
 
 function parseEnvVar(value: string | undefined, type: "string" | "number" | "boolean"): unknown {
 	if (value === undefined) return undefined;
@@ -430,13 +212,15 @@ export function validateEnvironment(): { valid: boolean; errors: string[]; warni
 	};
 }
 
-let config: Config;
+interface LoadConfigResult {
+	config: Config;
+	warnings: string[];
+}
 
-try {
+export function loadConfig(): LoadConfigResult {
 	// Validate environment first
 	const envValidation = validateEnvironment();
 	if (!envValidation.valid) {
-		// Use stderr for critical errors that prevent startup
 		console.error(
 			JSON.stringify({
 				level: "ERROR",
@@ -447,7 +231,6 @@ try {
 		process.exit(1);
 	}
 
-	// Store warnings to be logged later after logger initialization
 	const configWarnings = envValidation.warnings || [];
 
 	// Merge default config with environment variables
@@ -462,52 +245,7 @@ try {
 	};
 
 	// Validate merged configuration against schemas
-	config = ConfigSchema.parse(mergedConfig);
+	const config = ConfigSchema.parse(mergedConfig);
 
-	// Store warnings in config for later logging
-	(config as any)._configWarnings = configWarnings;
-
-	// Don't log here - let the logger handle it after initialization
-} catch (error) {
-	// Use structured logging for errors
-	console.error(
-		JSON.stringify({
-			level: "ERROR",
-			message: "Configuration validation failed",
-			error: error instanceof Error ? error.message : String(error),
-		}),
-	);
-	throw new Error(`Invalid configuration: ${error instanceof Error ? error.message : String(error)}`);
-}
-
-export { config, defaultConfig, envVarMapping };
-
-// Helper function to get the configuration
-export function getConfig(): Config {
-	return config;
-}
-
-// Helper function to get configuration warnings
-export function getConfigWarnings(): string[] {
-	return (config as any)._configWarnings || [];
-}
-
-// Helper function to clear configuration warnings after logging
-export function clearConfigWarnings(): void {
-	(config as any)._configWarnings = undefined;
-}
-
-// Helper function to get configuration documentation
-export function getConfigDocumentation(): Record<string, any> {
-	return {
-		environmentVariables: envVarMapping,
-		defaults: defaultConfig,
-		schemas: {
-			server: ServerConfigSchema.describe("Server configuration options"),
-			elasticsearch: ElasticsearchConfigSchema.describe("Elasticsearch connection configuration"),
-			logging: LoggingConfigSchema.describe("Logging configuration"),
-			security: SecurityConfigSchema.describe("Security and permission configuration"),
-			langsmith: LangSmithConfigSchema.describe("LangSmith tracing configuration"),
-		},
-	};
+	return { config, warnings: configWarnings };
 }

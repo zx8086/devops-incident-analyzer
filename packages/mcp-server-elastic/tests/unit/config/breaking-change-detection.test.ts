@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { envVarMapping, getConfig } from "../../../src/config";
+import { envVarMapping, getConfig } from "../../../src/config/index.js";
 
 describe("Configuration Breaking Change Detection", () => {
 	test("should maintain backward compatibility for all config sections", () => {

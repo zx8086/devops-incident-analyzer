@@ -80,7 +80,7 @@ class LangSmithTracingTester {
 		// Test 2: Configuration file access
 		await this.runTest("Configuration File Access", async () => {
 			try {
-				const { config } = await import("./src/config.js");
+				const { config } = await import("./src/config/index.js");
 				return `Configuration loaded: ${config ? "Success" : "Failed"}`;
 			} catch (error) {
 				throw new Error(`Failed to load configuration: ${error.message}`);

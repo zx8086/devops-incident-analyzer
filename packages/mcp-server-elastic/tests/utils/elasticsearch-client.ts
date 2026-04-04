@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Client, type ClientOptions } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
-import { getConfig } from "../../src/config.js";
+import { getConfig } from "../../src/config/index.js";
 
 // Bun automatically loads .env files, no need for dotenv
 

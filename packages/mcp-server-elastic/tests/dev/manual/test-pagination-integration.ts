@@ -6,7 +6,7 @@
 
 import { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "./src/config.js";
+import { getConfig } from "./src/config/index.js";
 import { registerGetAliasesTool } from "./src/tools/alias/get_aliases_improved.js";
 import { registerGetLifecycleTool } from "./src/tools/ilm/get_lifecycle.js";
 

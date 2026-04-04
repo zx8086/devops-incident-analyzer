@@ -1,4 +1,4 @@
-// src/config/env-mapping.ts
+// src/config/envMapping.ts
 
 export const envMapping: Record<string, string> = {
 	KAFKA_PROVIDER: "kafka.provider",

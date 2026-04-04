@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Config } from "./config.js";
+import type { Config } from "./config/index.js";
 import { registerAllTools } from "./tools/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeReadOnlyManager } from "./utils/readOnlyMode.js";

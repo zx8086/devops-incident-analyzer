@@ -1,164 +1,19 @@
-/* src/config.ts */
+// src/config/loader.ts
 
-import { z } from "zod";
+import { defaultConfig } from "./defaults";
+import { envVarMapping } from "./envMapping";
+import type { Config } from "./schemas";
+import { ConfigSchema } from "./schemas";
 
-const ServerConfigSchema = z.object({
-	name: z.string().min(1),
-	version: z.string().min(1),
-	readOnlyQueryMode: z.boolean().default(true),
-	maxQueryTimeout: z.number().min(1000).max(300000).default(30000),
-	maxResultsPerQuery: z.number().min(1).max(10000).default(1000),
-});
+function parseEnvVar(value: string | undefined, type: "string" | "number" | "boolean"): unknown {
+	if (value === undefined) return undefined;
+	if (type === "number") return Number(value);
+	if (type === "boolean") return value.toLowerCase() === "true";
+	return value;
+}
 
-const TransportConfigSchema = z.object({
-	mode: z.enum(["stdio", "http", "both"]).default("stdio"),
-	port: z.number().min(1).max(65535).default(9082),
-	host: z.string().min(1).default("0.0.0.0"),
-	path: z.string().min(1).default("/mcp"),
-	sessionMode: z.enum(["stateless", "stateful"]).default("stateless"),
-	idleTimeout: z.number().min(1).default(255),
-	apiKey: z.string().optional(),
-	allowedOrigins: z.string().optional(),
-});
-
-const DatabaseConfigSchema = z.object({
-	connectionString: z.string().url(),
-	username: z.string().min(1),
-	password: z.string().min(1),
-	bucketName: z.string().min(1),
-	defaultScope: z.string().default("_default"),
-	maxConnections: z.number().min(1).max(100).default(10),
-	connectionTimeout: z.number().min(1000).max(30000).default(5000),
-});
-
-const LoggingConfigSchema = z.object({
-	level: z.enum(["debug", "info", "warn", "error"]).default("info"),
-	format: z.enum(["json", "text"]).default("json"),
-	includeMetadata: z.boolean().default(true),
-});
-
-const DocumentationConfigSchema = z.object({
-	enabled: z.boolean().default(false),
-	baseDirectory: z.string().min(1).default("/tmp/docs"),
-	fileExtension: z.string().default(".md"),
-});
-
-const PlaybooksConfigSchema = z.object({
-	enabled: z.boolean().default(false),
-	baseDirectory: z.string().min(1).default("./playbook"),
-	fileExtension: z.string().default(".md"),
-});
-
-const ConfigSchema = z.object({
-	server: ServerConfigSchema,
-	transport: TransportConfigSchema,
-	database: DatabaseConfigSchema,
-	logging: LoggingConfigSchema,
-	documentation: DocumentationConfigSchema,
-	playbooks: PlaybooksConfigSchema,
-});
-
-type Config = z.infer<typeof ConfigSchema>;
-
-// Default configuration
-const defaultConfig: Config = {
-	server: {
-		name: "mcp-server-couchbase",
-		version: "1.0.0",
-		readOnlyQueryMode: true,
-		maxQueryTimeout: 30000,
-		maxResultsPerQuery: 1000,
-	},
-	transport: {
-		mode: "stdio",
-		port: 9082,
-		host: "0.0.0.0",
-		path: "/mcp",
-		sessionMode: "stateless",
-		idleTimeout: 255,
-	},
-	database: {
-		connectionString: "couchbase://localhost",
-		username: "Administrator",
-		password: "password",
-		bucketName: "default",
-		defaultScope: "_default",
-		maxConnections: 10,
-		connectionTimeout: 5000,
-	},
-	logging: {
-		level: "info",
-		format: "json",
-		includeMetadata: true,
-	},
-	documentation: {
-		enabled: true,
-		baseDirectory: "/tmp/docs",
-		fileExtension: ".md",
-	},
-	playbooks: {
-		enabled: true,
-		baseDirectory: "./playbook",
-		fileExtension: ".md",
-	},
-};
-
-// Environment variable mapping
-const envVarMapping = {
-	server: {
-		name: "MCP_SERVER_NAME",
-		version: "MCP_SERVER_VERSION",
-		readOnlyQueryMode: "READ_ONLY_QUERY_MODE",
-		maxQueryTimeout: "MCP_MAX_QUERY_TIMEOUT",
-		maxResultsPerQuery: "MCP_MAX_RESULTS_PER_QUERY",
-	},
-	transport: {
-		mode: "MCP_TRANSPORT",
-		port: "MCP_PORT",
-		host: "MCP_HOST",
-		path: "MCP_PATH",
-		sessionMode: "MCP_SESSION_MODE",
-		idleTimeout: "MCP_IDLE_TIMEOUT",
-		apiKey: "MCP_API_KEY",
-		allowedOrigins: "MCP_ALLOWED_ORIGINS",
-	},
-	database: {
-		connectionString: "COUCHBASE_URL",
-		username: "COUCHBASE_USERNAME",
-		password: "COUCHBASE_PASSWORD",
-		bucketName: "COUCHBASE_BUCKET",
-		defaultScope: "COUCHBASE_SCOPE",
-		maxConnections: "COUCHBASE_MAX_CONNECTIONS",
-		connectionTimeout: "COUCHBASE_CONNECTION_TIMEOUT",
-	},
-	logging: {
-		level: "LOG_LEVEL",
-		format: "LOG_FORMAT",
-		includeMetadata: "LOG_INCLUDE_METADATA",
-	},
-	documentation: {
-		enabled: "DOCS_ENABLED",
-		baseDirectory: "DOCS_BASE_DIR",
-		fileExtension: "DOCS_FILE_EXT",
-	},
-	playbooks: {
-		enabled: "PLAYBOOKS_ENABLED",
-		baseDirectory: "PLAYBOOKS_BASE_DIR",
-		fileExtension: "PLAYBOOKS_FILE_EXT",
-	},
-};
-
-// Load configuration from environment variables
 function loadConfigFromEnv(): Partial<Config> {
 	const config: Partial<Config> = {};
-
-	// Helper function to parse environment variables
-	const parseEnvVar = (value: string | undefined, type: "string" | "number" | "boolean"): unknown => {
-		if (value === undefined) return undefined;
-		if (type === "number") return Number(value);
-		if (type === "boolean") return value.toLowerCase() === "true";
-		return value;
-	};
 
 	// Load server config
 	config.server = {
@@ -261,11 +116,9 @@ function loadConfigFromEnv(): Partial<Config> {
 	return config;
 }
 
-// Initialize configuration
 let config: Config;
 
 try {
-	// Merge default config with environment variables
 	const envConfig = loadConfigFromEnv();
 	const mergedConfig = {
 		server: { ...defaultConfig.server, ...envConfig.server },
@@ -276,7 +129,6 @@ try {
 		playbooks: { ...defaultConfig.playbooks, ...envConfig.playbooks },
 	};
 
-	// Validate and set configuration
 	config = ConfigSchema.parse(mergedConfig);
 	process.stderr.write(
 		"Configuration loaded successfully: " +

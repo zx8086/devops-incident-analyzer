@@ -2,7 +2,7 @@
 
 // src/index.ts
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
-import { clearConfigWarnings, config, getConfigWarnings } from "./config.js";
+import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
