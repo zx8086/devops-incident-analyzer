@@ -1,7 +1,7 @@
 // src/tools/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../config/schemas.ts";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "../utils/logger.ts";
 import type { KafkaService } from "../services/kafka-service.ts";
 import type { KsqlService } from "../services/ksql-service.ts";
 import type { SchemaRegistryService } from "../services/schema-registry-service.ts";
@@ -23,7 +23,6 @@ export function registerAllTools(
 	config: AppConfig,
 	options?: ToolRegistrationOptions,
 ): void {
-	const logger = getLogger();
 	logger.debug("Registering read tools");
 	registerReadTools(server, service, config);
 	logger.debug("Registering extended read tools");

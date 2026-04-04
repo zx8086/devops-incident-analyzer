@@ -3,7 +3,7 @@
 import { type Bucket, type Cluster, connect } from "couchbase";
 import { config } from "../config";
 import { createError } from "./errors";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export class CouchbaseConnectionManager {
 	private static instance: CouchbaseConnectionManager;

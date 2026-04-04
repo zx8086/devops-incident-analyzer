@@ -1,6 +1,6 @@
 // src/tools/portal/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
-import { createContextLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/logger.js";
 
 const log = createContextLogger("tools");
 

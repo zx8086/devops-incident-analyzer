@@ -1,6 +1,6 @@
 // src/transport/factory.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { logger } from "../lib/logger.ts";
+import { logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";

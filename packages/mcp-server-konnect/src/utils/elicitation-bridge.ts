@@ -7,7 +7,7 @@
 
 import { elicitationManager } from "./elicitation.js";
 import type { KongDeploymentContext } from "./mcp-elicitation.js";
-import { createContextLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./logger.js";
 
 const log = createContextLogger("elicitation");
 

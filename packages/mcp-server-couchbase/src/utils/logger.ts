@@ -1,4 +1,4 @@
-// src/lib/logger.ts
+// src/utils/logger.ts
 import { createMcpLogger, measureOperation as sharedMeasureOperation } from "@devops-agent/shared";
 
 export type LoggerInterface = ReturnType<typeof createMcpLogger>;

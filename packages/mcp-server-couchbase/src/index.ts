@@ -6,9 +6,9 @@ import "./set-global";
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { config } from "./config";
 import { connectionManager } from "./lib/connectionManager";
-import { logger } from "./lib/logger";
 import { createServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
+import { logger } from "./utils/logger";
 import { initializeTracing } from "./utils/tracing";
 
 function sleep(ms: number): Promise<void> {
@@ -45,29 +45,35 @@ async function connectWithBackoffAndCircuitBreaker(
 	throw new Error("Failed to connect to Couchbase after multiple attempts");
 }
 
-createMcpApplication({
-	name: "couchbase-mcp-server",
-	logger: createBootstrapAdapter(logger),
+if (import.meta.main) {
+	createMcpApplication({
+		name: "couchbase-mcp-server",
+		logger: createBootstrapAdapter(logger),
 
-	initTracing: () => initializeTracing(),
-	telemetry: buildTelemetryConfig("couchbase-mcp-server"),
+		initTracing: () => initializeTracing(),
+		telemetry: buildTelemetryConfig("couchbase-mcp-server"),
 
-	initDatasource: async () => {
-		logger.info("Starting Couchbase MCP Server...");
-		await connectWithBackoffAndCircuitBreaker();
-		return connectionManager.getConnection();
-	},
+		initDatasource: async () => {
+			logger.info("Starting Couchbase MCP Server...");
+			await connectWithBackoffAndCircuitBreaker();
+			return connectionManager.getConnection();
+		},
 
-	createServerFactory: (bucket) => () => createServer(bucket),
+		createServerFactory: (bucket) => () => createServer(bucket),
 
-	createTransport: (serverFactory) => createTransport(config.transport, serverFactory),
+		createTransport: (serverFactory) => createTransport(config.transport, serverFactory),
 
-	onStarted: () => {
-		logger.info(
-			{
-				mode: config.transport.mode,
-			},
-			"Couchbase MCP Server started successfully",
-		);
-	},
-});
+		cleanupDatasource: async () => {
+			await connectionManager.close();
+		},
+
+		onStarted: () => {
+			logger.info(
+				{
+					mode: config.transport.mode,
+				},
+				"Couchbase MCP Server started successfully",
+			);
+		},
+	});
+}

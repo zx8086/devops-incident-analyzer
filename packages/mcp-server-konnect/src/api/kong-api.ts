@@ -1,6 +1,6 @@
 import axios, { type AxiosRequestConfig } from "axios";
 import type { ApiRequestFilter, ApiRequestsResponse, TimeRange } from "../types.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { PortalApi, type PortalApiOptions } from "./portal-api.js";
 
 const log = createContextLogger("api");

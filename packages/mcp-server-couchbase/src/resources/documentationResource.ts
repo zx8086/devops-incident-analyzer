@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { createError } from "../lib/errors";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 /**
  * Configuration for the markdown documentation resource

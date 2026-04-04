@@ -2,8 +2,8 @@
 import type { AppConfig } from "../config/schemas.ts";
 import { normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
-import { getLogger } from "../logging/container.ts";
-import { traceToolCall } from "../telemetry/tracing.ts";
+import { logger } from "../utils/logger.ts";
+import { traceToolCall } from "../utils/tracing.ts";
 
 type ToolResponse = {
 	content: Array<{ type: "text"; text: string }>;
@@ -52,8 +52,6 @@ export function wrapHandler<T>(
 	handler: (args: T) => Promise<ToolResponse>,
 ): (args: T) => Promise<ToolResponse> {
 	return async (args: T) => {
-		const logger = getLogger();
-
 		if (SCHEMA_REGISTRY_TOOLS.has(toolName) && !config.schemaRegistry.enabled) {
 			return ResponseBuilder.error(
 				"Schema Registry is not enabled. Set SCHEMA_REGISTRY_ENABLED=true and SCHEMA_REGISTRY_URL to enable.",

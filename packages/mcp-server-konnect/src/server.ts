@@ -13,7 +13,7 @@ import * as portalOps from "./tools/portal/operations.js";
 import * as portalManagementOps from "./tools/portal-management/operations.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
 import { formatError } from "./utils/error-handling.js";
-import { createContextLogger } from "./utils/mcp-logger.js";
+import { createContextLogger } from "./utils/logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
 import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
 import { traceToolCall } from "./utils/tracing.js";

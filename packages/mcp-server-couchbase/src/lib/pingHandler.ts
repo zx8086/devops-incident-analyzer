@@ -2,7 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { connectionManager } from "./connectionManager";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export function registerPingHandlers(server: McpServer): void {
 	server.tool("capella_ping", "Checks the server and database connection status", {}, async () => {

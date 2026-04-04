@@ -3,7 +3,7 @@
 import { config } from "../config";
 import type { SQLPPParser } from "../types";
 import { createError } from "./errors";
-import { createContextLogger, measureOperation } from "./logger";
+import { createContextLogger, measureOperation } from "../utils/logger";
 import type { OperationContext } from "./types";
 
 interface RunQueryResult {

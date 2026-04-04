@@ -5,7 +5,7 @@ import { type Config, loadConfiguration } from "./config/index.js";
 import { createKonnectServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
-import { createContextLogger, logger } from "./utils/mcp-logger.js";
+import { createContextLogger, logger } from "./utils/logger.js";
 import { initializeTracing } from "./utils/tracing.js";
 
 const serverLog = createContextLogger("server");
@@ -15,9 +15,7 @@ interface KonnectDatasource {
 	config: Config;
 }
 
-const isMainModule = process.argv[1] && import.meta.url.includes(process.argv[1]);
-
-if (isMainModule) {
+if (import.meta.main) {
 	createMcpApplication<KonnectDatasource>({
 		name: "konnect-mcp-server",
 		logger: createBootstrapAdapter(logger),

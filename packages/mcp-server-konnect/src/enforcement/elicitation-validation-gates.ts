@@ -1,5 +1,5 @@
 // src/enforcement/elicitation-validation-gates.ts
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import type { KongOperationBlockedError } from "./kong-tool-blockers";
 import { MandatoryElicitationGate } from "./mandatory-elicitation-gate";
 

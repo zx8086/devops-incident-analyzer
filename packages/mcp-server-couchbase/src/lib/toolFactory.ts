@@ -5,7 +5,7 @@ import type { Bucket } from "couchbase";
 import type { z } from "zod";
 import type { ToolResponse } from "../types";
 import { createError } from "./errors";
-import { createContextLogger } from "./logger";
+import { createContextLogger } from "../utils/logger";
 
 /**
  * Configuration interface for creating a tool

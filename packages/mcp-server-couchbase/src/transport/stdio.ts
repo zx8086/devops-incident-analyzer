@@ -1,7 +1,7 @@
 // src/transport/stdio.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { logger } from "../lib/logger.ts";
+import { logger } from "../utils/logger.ts";
 
 export interface StdioTransportResult {
 	transport: StdioServerTransport;

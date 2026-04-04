@@ -1,6 +1,6 @@
 /* src/lib/errors.ts */
 
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 /**
  * Application-level error codes

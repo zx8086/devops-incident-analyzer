@@ -1,7 +1,7 @@
 /* src/tools/queryAnalysis/queryAnalysisUtils.ts */
 
 import type { Bucket } from "couchbase";
-import { logger } from "../../lib/logger";
+import { logger } from "../../utils/logger";
 import type { ToolResponse } from "../../types";
 
 /**

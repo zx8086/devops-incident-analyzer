@@ -9,7 +9,7 @@ import {
 	createSessionContext as sharedCreateSessionContext,
 	detectClient as sharedDetectClient,
 } from "@devops-agent/shared";
-import { createContextLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./logger.js";
 
 const log = createContextLogger("session");
 

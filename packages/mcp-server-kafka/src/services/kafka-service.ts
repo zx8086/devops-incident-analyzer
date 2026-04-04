@@ -7,7 +7,7 @@ import {
 	type ListedOffsetsTopic,
 	ListOffsetTimestamps,
 } from "@platformatic/kafka";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
 
 // @platformatic/kafka doesn't support partitionIndex=-1 (all partitions) in listOffsets.
@@ -84,7 +84,6 @@ export class KafkaService {
 	constructor(private readonly clientManager: KafkaClientManager) {}
 
 	async listTopics(filter?: string): Promise<{ name: string }[]> {
-		const logger = getLogger();
 		logger.debug({ filter: filter || null }, "Listing topics");
 		return this.clientManager.withAdmin(async (admin) => {
 			const topics = await admin.listTopics();
@@ -105,7 +104,6 @@ export class KafkaService {
 		offsets: ListedOffsetsTopic | null;
 		configs: ConfigDescription | null;
 	}> {
-		const logger = getLogger();
 		logger.debug({ topicName }, "Describing topic");
 		return this.clientManager.withAdmin(async (admin) => {
 			const partitions = await getPartitionIndices(admin, topicName);
@@ -142,7 +140,6 @@ export class KafkaService {
 	}
 
 	async getTopicOffsets(topicName: string, timestamp?: number): Promise<ListedOffsetsTopic | null> {
-		const logger = getLogger();
 		logger.debug({ topicName, timestamp: timestamp ?? null }, "Getting topic offsets");
 		return this.clientManager.withAdmin(async (admin) => {
 			const ts = timestamp !== undefined ? BigInt(timestamp) : ListOffsetTimestamps.LATEST;
@@ -172,7 +169,6 @@ export class KafkaService {
 			headers: Record<string, string>;
 		}>
 	> {
-		const logger = getLogger();
 		logger.debug(
 			{
 				topic: options.topic,
@@ -226,7 +222,6 @@ export class KafkaService {
 		filter?: string,
 		states?: string[],
 	): Promise<Array<{ id: string; state: string; groupType: string; protocolType: string }>> {
-		const logger = getLogger();
 		logger.debug({ filter: filter || null, states: states || null }, "Listing consumer groups");
 		return this.clientManager.withAdmin(async (admin) => {
 			const groupsMap = await admin.listGroups({
@@ -271,7 +266,6 @@ export class KafkaService {
 			}>;
 		}>;
 	}> {
-		const logger = getLogger();
 		logger.debug({ groupId }, "Describing consumer group");
 		return this.clientManager.withAdmin(async (admin) => {
 			const [groupsMap, offsetGroups] = await Promise.all([
@@ -311,7 +305,6 @@ export class KafkaService {
 	}
 
 	async getClusterInfo(): Promise<Record<string, unknown>> {
-		const logger = getLogger();
 		logger.debug("Getting cluster info");
 		const provider = this.clientManager.getProvider();
 
@@ -343,7 +336,6 @@ export class KafkaService {
 		}>;
 		totalLag: string;
 	}> {
-		const logger = getLogger();
 		logger.debug({ groupId }, "Getting consumer group lag");
 		return this.clientManager.withAdmin(async (admin) => {
 			const offsetGroups = await admin.listConsumerGroupOffsets({ groups: [groupId] });
@@ -425,7 +417,6 @@ export class KafkaService {
 		topicCount: number;
 		provider: string;
 	}> {
-		const logger = getLogger();
 		logger.debug("Describing cluster");
 		const provider = this.clientManager.getProvider();
 
@@ -463,7 +454,6 @@ export class KafkaService {
 		timestamp: string;
 		headers: Record<string, string>;
 	} | null> {
-		const logger = getLogger();
 		logger.debug({ topic, partition, offset }, "Getting message by offset");
 		const groupId = `mcp-seek-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
@@ -504,7 +494,6 @@ export class KafkaService {
 		messages: ProduceMessageInput[],
 		acks?: number,
 	): Promise<{ offsets: Array<{ topic: string; partition: number; offset: string }> }> {
-		const logger = getLogger();
 		logger.debug({ topic, messageCount: messages.length }, "Producing messages");
 		const producer = await this.clientManager.getProducer();
 
@@ -538,7 +527,6 @@ export class KafkaService {
 		partitions: number;
 		replicas: number;
 	}> {
-		const logger = getLogger();
 		logger.debug(
 			{
 				name: input.name,
@@ -572,7 +560,6 @@ export class KafkaService {
 		topicName: string,
 		configs: Record<string, string>,
 	): Promise<{ topic: string; updatedConfigs: Record<string, string> }> {
-		const logger = getLogger();
 		logger.debug({ topicName, configCount: Object.keys(configs).length }, "Altering topic config");
 		return this.clientManager.withAdmin(async (admin) => {
 			await admin.alterConfigs({
@@ -593,7 +580,6 @@ export class KafkaService {
 	}
 
 	async deleteTopic(topicName: string): Promise<{ deleted: string }> {
-		const logger = getLogger();
 		logger.debug({ topicName }, "Deleting topic");
 		return this.clientManager.withAdmin(async (admin) => {
 			const topics = await admin.listTopics();
@@ -609,7 +595,6 @@ export class KafkaService {
 	async resetConsumerGroupOffsets(
 		input: ResetOffsetsInput,
 	): Promise<{ groupId: string; topic: string; strategy: string }> {
-		const logger = getLogger();
 		logger.debug(
 			{
 				groupId: input.groupId,

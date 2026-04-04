@@ -3,7 +3,7 @@
 import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "../utils/logger.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 
 interface HttpTransportConfig {
@@ -41,7 +41,6 @@ function badRequest(message: string): Response {
 
 function createStatelessHandler(serverFactory: ServerFactory) {
 	return async (req: Request): Promise<Response> => {
-		const logger = getLogger();
 		const server = serverFactory();
 		const transport = new WebStandardStreamableHTTPServerTransport({
 			sessionIdGenerator: undefined,
@@ -70,7 +69,6 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 	const sessions = new Map<string, SessionEntry>();
 
 	async function handlePost(req: Request): Promise<Response> {
-		const logger = getLogger();
 		const sessionId = req.headers.get("mcp-session-id");
 
 		// Existing session: delegate to its transport
@@ -128,7 +126,6 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 	}
 
 	async function closeAll(): Promise<void> {
-		const logger = getLogger();
 		const count = sessions.size;
 		for (const [id, session] of sessions) {
 			try {
@@ -151,7 +148,6 @@ export async function startHttpTransport(
 	serverFactory: ServerFactory,
 	config: HttpTransportConfig,
 ): Promise<HttpTransportResult> {
-	const logger = getLogger();
 	const isStateful = config.sessionMode === "stateful";
 
 	let postHandler: (req: Request) => Promise<Response>;

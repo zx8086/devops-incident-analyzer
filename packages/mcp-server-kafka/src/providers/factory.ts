@@ -1,6 +1,6 @@
 // src/providers/factory.ts
 import type { AppConfig } from "../config/schemas.ts";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "../utils/logger.ts";
 import { ConfluentKafkaProvider } from "./confluent.ts";
 import { KafkaProviderError } from "./errors.ts";
 import { LocalKafkaProvider } from "./local.ts";
@@ -8,7 +8,6 @@ import { MskKafkaProvider } from "./msk.ts";
 import type { KafkaProvider } from "./types.ts";
 
 export function createProvider(config: AppConfig): KafkaProvider {
-	const logger = getLogger();
 	const { kafka } = config;
 	logger.info({ type: kafka.provider }, "Creating Kafka provider");
 

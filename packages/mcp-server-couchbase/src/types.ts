@@ -11,7 +11,7 @@ import type {
 	Scope,
 	StreamableRowPromise,
 } from "couchbase";
-import type { LoggerInterface } from "./lib/logger";
+import type { LoggerInterface } from "./utils/logger";
 
 /**
  * Environment configuration type

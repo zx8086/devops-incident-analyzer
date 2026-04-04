@@ -2,7 +2,7 @@
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { z } from "zod";
 import type { KongApi } from "../../api/kong-api.js";
-import { createContextLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/logger.js";
 import { extractDeploymentContext, generateTags } from "../../utils/simple-elicitation.js";
 
 const log = createContextLogger("tools");

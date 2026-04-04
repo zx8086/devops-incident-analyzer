@@ -1,5 +1,5 @@
 import axios, { type AxiosRequestConfig } from "axios";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { API_REGIONS } from "./kong-api.js";
 
 const log = createContextLogger("api");

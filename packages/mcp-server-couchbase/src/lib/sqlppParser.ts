@@ -1,7 +1,7 @@
 /* src/lib/sqlppParser.ts */
 
 import type { ASTNode, SQLPPParser } from "../types";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export class SQLPPParserImpl implements SQLPPParser {
 	private readonly dataModificationKeywords = new Set(["INSERT", "UPDATE", "DELETE", "UPSERT", "MERGE"]);

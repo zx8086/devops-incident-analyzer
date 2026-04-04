@@ -1,17 +1,17 @@
 // src/index.ts
 
-import { createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig } from "./config/index.ts";
-import { getLogger } from "./logging/container.ts";
 import { createProvider } from "./providers/factory.ts";
 import { KafkaClientManager } from "./services/client-manager.ts";
 import { KafkaService } from "./services/kafka-service.ts";
 import { KsqlService } from "./services/ksql-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
-import { initializeTracing } from "./telemetry/tracing.ts";
 import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
+import { logger } from "./utils/logger.ts";
+import { initializeTracing } from "./utils/tracing.ts";
 
 interface KafkaDatasource {
 	kafkaService: KafkaService;
@@ -21,7 +21,6 @@ interface KafkaDatasource {
 
 if (import.meta.main) {
 	const config = getConfig();
-	const logger = getLogger();
 	logger.level = config.logging.level;
 
 	createMcpApplication<KafkaDatasource>({
@@ -29,7 +28,7 @@ if (import.meta.main) {
 		logger: createBootstrapAdapter(logger),
 
 		initTracing: () => initializeTracing(),
-		telemetry: config.telemetry,
+		telemetry: buildTelemetryConfig("kafka-mcp-server"),
 
 		initDatasource: async () => {
 			logger.info(

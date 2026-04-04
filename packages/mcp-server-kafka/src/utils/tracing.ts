@@ -1,4 +1,4 @@
-// src/telemetry/tracing.ts
+// src/utils/tracing.ts
 // Re-exports from shared tracing module with kafka-specific defaults
 import {
 	isTracingActive,
@@ -6,7 +6,7 @@ import {
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "./logger.ts";
 
 export { isTracingActive };
 
@@ -16,7 +16,6 @@ export function initializeTracing(options?: TracingOptions): void {
 }
 
 export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
-	const logger = getLogger();
 	const startTime = Date.now();
 	logger.info({ tool: toolName, dataSource: "kafka" }, `Tool call started: ${toolName}`);
 

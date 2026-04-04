@@ -2,7 +2,7 @@
 import { KongApi } from "../api/kong-api.js";
 import * as configOps from "../tools/configuration/operations.js";
 import * as controlPlaneOps from "../tools/control-planes/operations.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { ElicitationBlockedError, type MandatoryContext, withMandatoryElicitation } from "./mandatory-elicitation-gate";
 
 const log = createContextLogger("enforcement");

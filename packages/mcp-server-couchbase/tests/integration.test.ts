@@ -2,7 +2,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "../src/server";
-import { logger } from "../src/lib/logger";
+import { logger } from "../src/utils/logger";
 import toolRegistry from "../src/tools";
 import { mockConnection, mockServer } from "./test.utils";
 

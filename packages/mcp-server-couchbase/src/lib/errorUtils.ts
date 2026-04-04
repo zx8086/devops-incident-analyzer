@@ -1,7 +1,7 @@
 /* src/lib/errorUtils.ts */
 
 import { createError } from "./errors";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 import type { OperationResult } from "./types";
 
 export interface CouchbaseError extends Error {

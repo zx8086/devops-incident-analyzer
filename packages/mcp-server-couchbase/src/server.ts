@@ -1,7 +1,7 @@
 // src/server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "./config";
-import { logger } from "./lib/logger";
+import { logger } from "./utils/logger";
 import { registerPingHandlers } from "./lib/pingHandler";
 import { ToolRegistry } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
@@ -74,7 +74,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 
 	// Register a minimal echo tool for debugging
 	function getDocLogger() {
-		const { createContextLogger } = require("./lib/logger");
+		const { createContextLogger } = require("./utils/logger");
 		return createContextLogger("EchoTool");
 	}
 	server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params: Record<string, unknown>) => {

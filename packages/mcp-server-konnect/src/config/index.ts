@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { getEnvVar, getEnvVarWithDefault, initializeEnvironment } from "../utils/env.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("config");
 export const ConfigSchema = z.object({

@@ -1,4 +1,4 @@
-// src/utils/mcp-logger.ts
+// src/utils/logger.ts
 import { createMcpLogger, getChildLogger } from "@devops-agent/shared";
 
 export const logger = createMcpLogger("konnect-mcp-server");

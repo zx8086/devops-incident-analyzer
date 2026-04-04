@@ -3,7 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
-import { logger } from "../../lib/logger";
+import { logger } from "../../utils/logger";
 import { mostExpensiveQueries } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 

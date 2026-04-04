@@ -6,7 +6,6 @@
 	"types": "src/index.ts",
 	"scripts": {
 		"dev": "MCP_TRANSPORT=http MCP_PORT=9080 bun --env-file=../../.env --hot src/index.ts",
-		"dev:hot": "MCP_TRANSPORT=http MCP_PORT=9080 bun --env-file=../../.env --hot src/index.ts",
 		"start": "bun src/index.ts",
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit"

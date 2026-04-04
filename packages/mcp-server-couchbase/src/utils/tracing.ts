@@ -6,7 +6,7 @@ import {
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 export { isTracingActive };
 

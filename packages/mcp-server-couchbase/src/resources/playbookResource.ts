@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../config";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 /**
  * Playbook handler class that manages access to playbook content

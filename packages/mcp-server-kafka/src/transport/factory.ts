@@ -2,7 +2,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { splitCommaSeparated } from "../config/helpers.ts";
 import type { AppConfig } from "../config/schemas.ts";
-import { getLogger } from "../logging/container.ts";
+import { logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";
@@ -26,7 +26,6 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 }
 
 export async function createTransport(config: AppConfig, serverFactory: () => McpServer): Promise<TransportResult> {
-	const logger = getLogger();
 	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
 	logger.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 

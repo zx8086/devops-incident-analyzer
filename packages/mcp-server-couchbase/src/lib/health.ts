@@ -2,7 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CapellaConn } from "../types";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 import { createMcpError, MCP_ERROR_CODES } from "./mcpErrors";
 
 export function registerHealthChecks(server: McpServer, capellaConn: CapellaConn): void {

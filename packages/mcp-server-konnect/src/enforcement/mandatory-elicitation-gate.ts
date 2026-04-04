@@ -1,7 +1,7 @@
 // src/enforcement/mandatory-elicitation-gate.ts
 import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
 import { ElicitationManager, type ElicitationSession, KongElicitationPatterns } from "../utils/elicitation.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("enforcement");
 

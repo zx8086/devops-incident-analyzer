@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { toolRegistry } from "../tools";
 import { traceToolCall } from "../utils/tracing";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export class ToolRegistry {
 	static registerAll(server: McpServer, bucket: Bucket): void {

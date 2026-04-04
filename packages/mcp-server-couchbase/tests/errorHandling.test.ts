@@ -1,7 +1,7 @@
 /* tests/errorHandling.test.ts */
 
 import { afterAll, beforeAll, describe } from "bun:test";
-import { logger } from "../src/lib/logger";
+import { logger } from "../src/utils/logger";
 import toolRegistry from "../src/tools";
 import { mockConnection, mockServer } from "./test.utils";
 

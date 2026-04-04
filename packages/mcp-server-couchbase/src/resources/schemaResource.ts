@@ -2,7 +2,7 @@
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import type { DocumentContent } from "../lib/types";
 

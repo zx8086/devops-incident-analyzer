@@ -1,7 +1,7 @@
 // src/transport/factory.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config/index.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("transport");
 

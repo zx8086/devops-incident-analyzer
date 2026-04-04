@@ -1,7 +1,7 @@
 // src/enforcement/mcp-server-integration.ts
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { ElicitationOperations } from "../tools/elicitation-tool.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { ElicitationRequestFormatter, elicitationOrchestrator } from "./elicitation-validation-gates";
 import {
 	BlockedConsumerOperations,

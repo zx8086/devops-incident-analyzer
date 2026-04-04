@@ -7,7 +7,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { config } from "../config";
 import { connectionManager } from "../lib/connectionManager";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 // Function to sanitize file paths to prevent directory traversal
 const sanitizePath = (inputPath: string): string => {

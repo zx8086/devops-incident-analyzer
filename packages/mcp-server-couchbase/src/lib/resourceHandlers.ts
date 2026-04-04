@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { CapellaConn } from "../types";
 import { createError } from "./errors";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export function registerResources(server: McpServer, capellaConn: CapellaConn): void {
 	server.tool("capella_get_server_info", "Get server information", {}, async () => ({

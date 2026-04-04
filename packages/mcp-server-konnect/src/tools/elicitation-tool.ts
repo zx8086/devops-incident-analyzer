@@ -4,7 +4,7 @@ import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
 import { contextDetector } from "../utils/context-detection.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { TagElicitationEngine } from "../utils/tag-elicitation.js";
 
 const log = createContextLogger("elicitation");

@@ -15,9 +15,11 @@
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.0",
 		"couchbase": "^4.5.0",
+		"pino": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "catalog:dev",
 		"@types/bun": "catalog:dev",
 		"bun-types": "catalog:dev",
 		"typescript": "catalog:dev"

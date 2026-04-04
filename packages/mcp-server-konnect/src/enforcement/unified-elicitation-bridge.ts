@@ -1,4 +1,4 @@
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { elicitationOrchestrator } from "./elicitation-validation-gates.js";
 
 const log = createContextLogger("enforcement");

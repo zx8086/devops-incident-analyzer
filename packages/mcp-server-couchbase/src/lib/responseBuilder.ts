@@ -1,7 +1,7 @@
 /* src/lib/responseBuilder.ts */
 
 import { getErrorCode, getErrorMessage } from "./errors";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export type ResponseType = "json" | "text" | "error";
 
