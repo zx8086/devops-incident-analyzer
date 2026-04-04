@@ -15,16 +15,14 @@ function splitCommaSeparated(value: string | undefined): string[] {
 }
 
 export interface TransportConfig {
-	transport: {
-		mode: string;
-		port: number;
-		host: string;
-		path: string;
-		sessionMode: "stateless" | "stateful";
-		idleTimeout: number;
-		apiKey?: string;
-		allowedOrigins?: string;
-	};
+	mode: string;
+	port: number;
+	host: string;
+	path: string;
+	sessionMode: "stateless" | "stateful";
+	idleTimeout: number;
+	apiKey?: string;
+	allowedOrigins?: string;
 }
 
 export interface TransportResult {
@@ -48,8 +46,8 @@ export async function createTransport(
 	config: TransportConfig,
 	serverFactory: () => McpServer,
 ): Promise<TransportResult> {
-	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	logger.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
+	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.mode);
+	logger.info({ mode: config.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -59,14 +57,14 @@ export async function createTransport(
 	};
 
 	if (useHttp) {
-		const allowedOrigins = splitCommaSeparated(config.transport.allowedOrigins || undefined);
+		const allowedOrigins = splitCommaSeparated(config.allowedOrigins || undefined);
 		result.http = await startHttpTransport(serverFactory, {
-			port: config.transport.port,
-			host: config.transport.host,
-			path: config.transport.path,
-			sessionMode: config.transport.sessionMode,
-			idleTimeout: config.transport.idleTimeout,
-			apiKey: config.transport.apiKey || undefined,
+			port: config.port,
+			host: config.host,
+			path: config.path,
+			sessionMode: config.sessionMode,
+			idleTimeout: config.idleTimeout,
+			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
 		});
 	}
@@ -78,7 +76,7 @@ export async function createTransport(
 
 	logger.info(
 		{
-			mode: config.transport.mode,
+			mode: config.mode,
 			stdio: useStdio,
 			http: useHttp,
 		},

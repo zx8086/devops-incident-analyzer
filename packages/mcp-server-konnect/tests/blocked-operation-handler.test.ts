@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { createBlockedOperationHandler } from "../enforcement/mcp-server-integration.js";
+import { createBlockedOperationHandler } from "../src/enforcement/mcp-server-integration.js";
 
 describe("INFO: Blocked Operation Handler", () => {
 	it("should catch KongOperationBlockedError and return structured elicitation response", async () => {

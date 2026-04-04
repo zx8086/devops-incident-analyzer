@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { MandatoryElicitationGate } from "../enforcement/mandatory-elicitation-gate.js";
-import { createBlockedOperationHandler, ELICITATION_TOOL_HANDLERS } from "../enforcement/mcp-server-integration.js";
+import { MandatoryElicitationGate } from "../src/enforcement/mandatory-elicitation-gate.js";
+import { createBlockedOperationHandler, ELICITATION_TOOL_HANDLERS } from "../src/enforcement/mcp-server-integration.js";
 
 describe("INFO: End-to-End Elicitation Workflow", () => {
 	it("should complete full elicitation workflow from blocked operation to successful operation", async () => {

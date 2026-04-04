@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ConfigSchema, ConfigurationManager } from "../config/index.js";
+import { ConfigSchema, ConfigurationManager } from "../src/config/index.js";
 
 describe("Configuration System", () => {
 	let originalEnv: Record<string, string | undefined>;

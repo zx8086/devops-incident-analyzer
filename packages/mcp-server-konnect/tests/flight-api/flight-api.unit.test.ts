@@ -4,13 +4,13 @@
  */
 
 import { beforeAll, describe, expect, mock, test } from "bun:test";
-import type { KongApi } from "../../api/kong-api.js";
-import * as analyticsOps from "../../tools/analytics/operations.js";
-import * as certificatesOps from "../../tools/certificates/operations.js";
+import type { KongApi } from "../../src/api/kong-api.js";
+import * as analyticsOps from "../../src/tools/analytics/operations.js";
+import * as certificatesOps from "../../src/tools/certificates/operations.js";
 // Import individual operation modules for testing
-import * as configurationOps from "../../tools/configuration/operations.js";
-import * as controlPlanesOps from "../../tools/control-planes/operations.js";
-import * as portalOps from "../../tools/portal/operations.js";
+import * as configurationOps from "../../src/tools/configuration/operations.js";
+import * as controlPlanesOps from "../../src/tools/control-planes/operations.js";
+import * as portalOps from "../../src/tools/portal/operations.js";
 import { TEST_CONFIG } from "./test-helpers.js";
 
 describe("Flight API Unit Tests", () => {

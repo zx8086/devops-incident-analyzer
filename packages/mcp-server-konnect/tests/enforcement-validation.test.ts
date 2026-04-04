@@ -6,16 +6,16 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { BypassPreventionTests, validateElicitationEnforcement } from "../enforcement/bypass-prevention-tests.js";
-import { elicitationOrchestrator } from "../enforcement/elicitation-validation-gates.js";
+import { BypassPreventionTests, validateElicitationEnforcement } from "../src/enforcement/bypass-prevention-tests.js";
+import { elicitationOrchestrator } from "../src/enforcement/elicitation-validation-gates.js";
 import {
 	BlockedConsumerOperations,
 	BlockedPluginOperations,
 	BlockedRouteOperations,
 	BlockedServiceOperations,
 	KongOperationBlockedError,
-} from "../enforcement/kong-tool-blockers.js";
-import { MandatoryElicitationGate } from "../enforcement/mandatory-elicitation-gate.js";
+} from "../src/enforcement/kong-tool-blockers.js";
+import { MandatoryElicitationGate } from "../src/enforcement/mandatory-elicitation-gate.js";
 
 describe("🔒 Bulletproof Elicitation Enforcement", () => {
 	const gate = MandatoryElicitationGate.getInstance();

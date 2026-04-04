@@ -6,8 +6,8 @@
  */
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { SimpleElicitationTool } from "../tools/simple-elicitation-tool.js";
-import { SimpleElicitationManager } from "../utils/simple-elicitation.js";
+import { SimpleElicitationTool } from "../src/tools/simple-elicitation-tool.js";
+import { SimpleElicitationManager } from "../src/utils/simple-elicitation.js";
 
 describe("Simplified Universal Elicitation", () => {
 	let elicitationManager: SimpleElicitationManager;

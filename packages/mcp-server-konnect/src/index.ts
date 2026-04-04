@@ -49,7 +49,7 @@ if (import.meta.main) {
 
 		createServerFactory: (ds) => () => createKonnectServer(ds.api, ds.config),
 
-		createTransport: (serverFactory, ds) => createTransport(ds.config, serverFactory),
+		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
 
 		onStarted: (ds) => {
 			serverLog.info(

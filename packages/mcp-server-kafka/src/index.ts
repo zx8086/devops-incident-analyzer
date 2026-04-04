@@ -2,6 +2,7 @@
 
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import pkg from "../package.json" with { type: "json" };
 import { getConfig } from "./config/index.ts";
 import { createProvider } from "./providers/factory.ts";
 import { KafkaClientManager } from "./services/client-manager.ts";
@@ -61,12 +62,12 @@ if (import.meta.main) {
 		},
 
 		createServerFactory: (ds) => () => {
-			const server = new McpServer({ name: "kafka-mcp-server", version: "1.0.0" });
+			const server = new McpServer({ name: pkg.name, version: pkg.version });
 			registerAllTools(server, ds.kafkaService, config, ds.toolOptions);
 			return server;
 		},
 
-		createTransport: (serverFactory) => createTransport(config, serverFactory),
+		createTransport: (serverFactory) => createTransport(config.transport, serverFactory),
 
 		cleanupDatasource: async (ds) => {
 			await ds.clientManager.close();

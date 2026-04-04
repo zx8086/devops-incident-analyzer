@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { KongApi } from "../../api/kong-api.js";
+import { KongApi } from "../../src/api/kong-api.js";
 import { FlightApiTestUtils, TEST_CONFIG } from "./test-helpers.js";
 
 describe("Flight API Portal Management Tests", () => {

@@ -1,6 +1,6 @@
 // src/transport/factory.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Config } from "../config/index.js";
+import type { TransportConfig } from "../config/index.js";
 import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("transport");
@@ -35,9 +35,12 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 	}
 }
 
-export async function createTransport(config: Config, serverFactory: () => McpServer): Promise<TransportResult> {
-	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	log.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
+export async function createTransport(
+	config: TransportConfig,
+	serverFactory: () => McpServer,
+): Promise<TransportResult> {
+	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.mode);
+	log.info({ mode: config.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -47,14 +50,14 @@ export async function createTransport(config: Config, serverFactory: () => McpSe
 	};
 
 	if (useHttp) {
-		const allowedOrigins = splitCommaSeparated(config.transport.allowedOrigins || undefined);
+		const allowedOrigins = splitCommaSeparated(config.allowedOrigins || undefined);
 		result.http = await startHttpTransport(serverFactory, {
-			port: config.transport.port,
-			host: config.transport.host,
-			path: config.transport.path,
-			sessionMode: config.transport.sessionMode,
-			idleTimeout: config.transport.idleTimeout,
-			apiKey: config.transport.apiKey || undefined,
+			port: config.port,
+			host: config.host,
+			path: config.path,
+			sessionMode: config.sessionMode,
+			idleTimeout: config.idleTimeout,
+			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
 		});
 	}
@@ -64,7 +67,7 @@ export async function createTransport(config: Config, serverFactory: () => McpSe
 		result.stdio = await startStdioTransport(server);
 	}
 
-	log.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Transport initialized");
+	log.info({ mode: config.mode, stdio: useStdio, http: useHttp }, "Transport initialized");
 
 	return result;
 }

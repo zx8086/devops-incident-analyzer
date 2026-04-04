@@ -155,3 +155,4 @@ export const configSchema = z
 	});
 
 export type AppConfig = z.infer<typeof configSchema>;
+export type TransportConfig = z.infer<typeof transportSchema>;

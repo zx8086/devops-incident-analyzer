@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { ElicitationBlockedError, MandatoryElicitationGate } from "../enforcement/mandatory-elicitation-gate.js";
+import { ElicitationBlockedError, MandatoryElicitationGate } from "../src/enforcement/mandatory-elicitation-gate.js";
 
 describe("INFO: Debug Enforcement", () => {
 	it("should test gate directly", async () => {

@@ -91,6 +91,7 @@ export const ConfigSchema = z.object({
 		.describe("Transport configuration for MCP server"),
 });
 export type Config = z.infer<typeof ConfigSchema>;
+export type TransportConfig = Config["transport"];
 export interface ConfigurationHealth {
 	status: "healthy" | "degraded" | "unhealthy" | "critical";
 	timestamp: number;

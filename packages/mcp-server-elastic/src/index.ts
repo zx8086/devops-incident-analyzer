@@ -47,9 +47,9 @@ if (import.meta.main) {
 
 		createServerFactory: (esClient) => () => createMcpServerInstance(config, esClient),
 
-		createTransport: (serverFactory) => {
-			const transportConfig = {
-				transport: {
+		createTransport: (serverFactory) =>
+			createTransport(
+				{
 					mode: config.server.transportMode,
 					port: config.server.port,
 					host: config.server.host ?? "0.0.0.0",
@@ -59,9 +59,8 @@ if (import.meta.main) {
 					apiKey: config.server.apiKey,
 					allowedOrigins: config.server.allowedOrigins,
 				},
-			};
-			return createTransport(transportConfig, serverFactory);
-		},
+				serverFactory,
+			),
 
 		onStarted: () => {
 			logger.info(

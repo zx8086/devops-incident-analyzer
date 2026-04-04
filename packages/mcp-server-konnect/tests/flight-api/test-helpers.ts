@@ -4,7 +4,7 @@
  */
 
 import { expect } from "bun:test";
-import { KongApi } from "../../api/kong-api.js";
+import { KongApi } from "../../src/api/kong-api.js";
 
 // Test Configuration Constants
 export const TEST_CONFIG = {
