@@ -17,7 +17,7 @@ export const ComplianceSchema = z.object({
 	supervision: z
 		.object({
 			human_in_the_loop: z.enum(["always", "conditional", "advisory", "none"]).optional(),
-			escalation_triggers: z.array(z.record(z.unknown())).optional(),
+			escalation_triggers: z.array(z.record(z.string(), z.unknown())).optional(),
 			kill_switch: z.boolean().optional(),
 		})
 		.optional(),
@@ -56,7 +56,7 @@ export const AgentManifestSchema = z.object({
 	runtime: RuntimeConfigSchema.optional(),
 	skills: z.array(z.string()).optional(),
 	tools: z.array(z.string()).optional(),
-	agents: z.record(SubAgentRefSchema).optional(),
+	agents: z.record(z.string(), SubAgentRefSchema).optional(),
 	delegation: z
 		.object({
 			mode: z.enum(["auto", "explicit", "router"]),
@@ -71,8 +71,8 @@ export const ToolDefinitionSchema = z.object({
 	name: z.string(),
 	description: z.string(),
 	version: z.string().optional(),
-	input_schema: z.record(z.unknown()),
-	output_schema: z.record(z.unknown()).optional(),
+	input_schema: z.record(z.string(), z.unknown()),
+	output_schema: z.record(z.string(), z.unknown()).optional(),
 	annotations: z
 		.object({
 			requires_confirmation: z.boolean().optional(),

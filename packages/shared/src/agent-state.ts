@@ -32,7 +32,7 @@ export type DataSourceResult = z.infer<typeof DataSourceResultSchema>;
 
 export const ToolPlanStepSchema = z.object({
 	tool: z.string(),
-	args: z.record(z.unknown()),
+	args: z.record(z.string(), z.unknown()),
 });
 export type ToolPlanStep = z.infer<typeof ToolPlanStepSchema>;
 
@@ -59,7 +59,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("tool_call"),
 		toolName: z.string(),
-		args: z.record(z.unknown()),
+		args: z.record(z.string(), z.unknown()),
 		dataSourceId: z.string().optional(),
 	}),
 	z.object({
