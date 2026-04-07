@@ -218,7 +218,7 @@ Attach the base policy and any server-specific policies (see [IAM Policies](#iam
 
 ### Step 4: Create AgentCore Runtime
 
-Create or update the AgentCore Runtime resource:
+Create or update the AgentCore Runtime resource. The `--environment-variables` differ per server:
 
 ```bash
 aws bedrock-agentcore create-runtime \
@@ -227,6 +227,7 @@ aws bedrock-agentcore create-runtime \
   --network-mode PUBLIC \
   --container-image <ACCOUNT_ID>.dkr.ecr.eu-west-1.amazonaws.com/kafka-mcp-agentcore:latest \
   --role-arn arn:aws:iam::<ACCOUNT_ID>:role/kafka-mcp-agentcore-role \
+  --environment-variables "KAFKA_PROVIDER=msk,MSK_CLUSTER_ARN=<ARN>,AWS_REGION=eu-west-1" \
   --region eu-west-1
 ```
 
@@ -236,6 +237,15 @@ Key parameters:
 |-----------|-------|-------|
 | `protocol` | `MCP` | AgentCore handles MCP message routing |
 | `networkMode` | `PUBLIC` | Server can reach external data sources (Kafka brokers, Elasticsearch clusters) |
+
+#### Per-Server Environment Variables
+
+| Server | Required Variables | Notes |
+|--------|-------------------|-------|
+| Kafka | `KAFKA_PROVIDER`, `MSK_CLUSTER_ARN` (for MSK), `AWS_REGION` | `KAFKA_PROVIDER=msk` for AWS MSK clusters |
+| Elastic | `ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY` or `ELASTICSEARCH_USERNAME` + `ELASTICSEARCH_PASSWORD` | Authenticates directly to ES cluster, no AWS-specific IAM needed |
+| Couchbase | `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET` | Authenticates via Capella SDK credentials |
+| Konnect | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` | Uses Kong Konnect API token, region: `us\|eu\|au\|me\|in` |
 
 ### Step 5: Register as Gateway Target
 
@@ -338,27 +348,34 @@ The `scripts/agentcore/` directory contains automation scripts for the deploymen
 | Script | Purpose |
 |--------|---------|
 | `deploy.sh` | Full 5-step deployment pipeline (ECR, build, IAM, Runtime, Gateway) |
-| `test-local.sh` | Build and run the AgentCore image locally for testing |
+| `test-local.sh` | Test AgentCore endpoints against a running server |
+| `register-gateway.sh` | Register a deployed Runtime as an AgentCore Gateway target |
 
 ### deploy.sh
 
 Usage:
 
 ```bash
-./scripts/agentcore/deploy.sh --server mcp-server-kafka --region eu-west-1
+./scripts/agentcore/deploy.sh                              # Deploys Kafka (default)
+MCP_SERVER=elastic ./scripts/agentcore/deploy.sh           # Deploys Elastic
+MCP_SERVER=couchbase ./scripts/agentcore/deploy.sh         # Deploys Couchbase
+MCP_SERVER=konnect ./scripts/agentcore/deploy.sh           # Deploys Konnect
 ```
 
-The script is idempotent -- it creates resources if they do not exist and updates them if they do. On completion, it outputs connection information and saves deployment metadata to `.agentcore-deployment.json`.
+The `MCP_SERVER` env var selects which server to deploy. The script is idempotent -- it creates resources if they do not exist and updates them if they do. On completion, it outputs connection information and saves deployment metadata to `.agentcore-deployment.json`.
 
 ### test-local.sh
 
 Usage:
 
 ```bash
-./scripts/agentcore/test-local.sh --server mcp-server-kafka
+./scripts/agentcore/test-local.sh                              # Tests kafka (default)
+MCP_SERVER=elastic ./scripts/agentcore/test-local.sh           # Tests elastic
+MCP_SERVER=couchbase ./scripts/agentcore/test-local.sh         # Tests couchbase
+MCP_SERVER=konnect ./scripts/agentcore/test-local.sh           # Tests konnect
 ```
 
-This script builds the AgentCore image and runs it locally with the same port mapping and environment as a real deployment. It verifies the `/ping`, `/health`, and `/mcp` endpoints.
+The script verifies `/ping`, `/health`, and `/mcp` endpoints against a running AgentCore-mode server. It checks that the MCP initialize response contains the expected server name (`<MCP_SERVER>-mcp-server`).
 
 ---
 
@@ -366,21 +383,39 @@ This script builds the AgentCore image and runs it locally with the same port ma
 
 Before deploying to AgentCore, test the container image locally to verify the entrypoint, health checks, and MCP endpoints work correctly.
 
-### Build and Run
+### Build and Run (per server)
+
+**Kafka:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-kafka -t kafka-mcp-agentcore .
+docker run --rm -p 8000:8000 -e KAFKA_PROVIDER=local -e KAFKA_BROKERS=host.docker.internal:9092 kafka-mcp-agentcore
+```
+
+**Elastic:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-elastic -t elastic-mcp-agentcore .
+docker run --rm -p 8000:8000 -e ELASTICSEARCH_URL=http://host.docker.internal:9200 elastic-mcp-agentcore
+```
+
+**Couchbase:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-couchbase -t couchbase-mcp-agentcore .
+docker run --rm -p 8000:8000 -e CB_HOSTNAME=host.docker.internal -e CB_USERNAME=admin -e CB_PASSWORD=password -e CB_BUCKET=default couchbase-mcp-agentcore
+```
+
+**Konnect:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-konnect -t konnect-mcp-agentcore .
+docker run --rm -p 8000:8000 -e KONNECT_ACCESS_TOKEN=your-token -e KONNECT_REGION=us konnect-mcp-agentcore
+```
+
+Or test without Docker by running the entrypoint directly:
 
 ```bash
-# Build the image
-docker build \
-  -f Dockerfile.agentcore \
-  --build-arg MCP_SERVER_PACKAGE=mcp-server-kafka \
-  -t kafka-mcp-agentcore:latest \
-  .
-
-# Run with environment variables
-docker run --rm -p 8000:8000 \
-  -e KAFKA_PROVIDER=local \
-  -e KAFKA_BROKERS=host.docker.internal:9092 \
-  kafka-mcp-agentcore:latest
+KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/agentcore-entrypoint.ts
+ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/agentcore-entrypoint.ts
+CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/agentcore-entrypoint.ts
+KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/agentcore-entrypoint.ts
 ```
 
 ### Verify Endpoints
@@ -403,13 +438,16 @@ curl -s -X POST http://localhost:8000/mcp \
 
 ### Using test-local.sh
 
-The test script automates the build, run, and verification steps:
+The test script verifies all AgentCore endpoints against a running server:
 
 ```bash
-./scripts/agentcore/test-local.sh --server mcp-server-kafka
+MCP_SERVER=kafka ./scripts/agentcore/test-local.sh
+MCP_SERVER=elastic ./scripts/agentcore/test-local.sh
+MCP_SERVER=couchbase ./scripts/agentcore/test-local.sh
+MCP_SERVER=konnect ./scripts/agentcore/test-local.sh
 ```
 
-It builds the image, starts the container, waits for the health check to pass, runs the verification curl commands, and stops the container. Exit code 0 means all checks passed.
+It checks `/ping`, `/health`, `/mcp` initialize response (verifies server name matches), GET `/mcp` returns 405, and unknown paths return 404. Exit code 0 means all checks passed.
 
 ---
 
@@ -426,4 +464,5 @@ It builds the image, starts the container, waits for the health check to pass, r
 
 | Date | Change |
 |------|--------|
+| 2026-04-07 | Updated to cover all 4 MCP servers with per-server env vars, build examples, and parameterized scripts |
 | 2026-04-04 | Initial AgentCore deployment guide created (Phase 3: Configuration + Deployment), migrated from docs/agentbedrockcore/ |

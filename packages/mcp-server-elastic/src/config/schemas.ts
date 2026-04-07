@@ -8,7 +8,7 @@ export const ServerConfigSchema = z.object({
 	readOnlyStrictMode: z.boolean(),
 	maxQueryTimeout: z.number().min(1000).max(300000),
 	maxResultsPerQuery: z.number().min(1).max(10000),
-	transportMode: z.enum(["stdio", "http", "both"]),
+	transportMode: z.enum(["stdio", "http", "both", "agentcore"]),
 	port: z.number(),
 	host: z.string(),
 	path: z.string().startsWith("/"),

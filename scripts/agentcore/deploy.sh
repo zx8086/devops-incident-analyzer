@@ -14,12 +14,30 @@
 #   MCP_SERVER=elastic ./scripts/agentcore/deploy.sh # Deploys Elastic MCP server
 #
 # Environment variables (override defaults):
-#   MCP_SERVER          - Server name: kafka|elastic|couchbase|konnect (default: kafka)
-#   AWS_REGION          - AWS region (default: eu-west-1)
-#   RUNTIME_NAME        - AgentCore runtime name (default: <server>-mcp-server)
-#   ECR_REPO            - ECR repository name (default: <server>-mcp-agentcore)
-#   MSK_CLUSTER_ARN     - Your MSK cluster ARN (required for kafka with msk provider)
-#   KAFKA_PROVIDER      - Kafka provider type (default: msk)
+#   MCP_SERVER              - Server name: kafka|elastic|couchbase|konnect (default: kafka)
+#   AWS_REGION              - AWS region (default: eu-west-1)
+#   RUNTIME_NAME            - AgentCore runtime name (default: <server>-mcp-server)
+#   ECR_REPO                - ECR repository name (default: <server>-mcp-agentcore)
+#
+# Kafka-specific:
+#   KAFKA_PROVIDER          - Kafka provider type (default: msk)
+#   MSK_CLUSTER_ARN         - MSK cluster ARN (required for msk provider)
+#
+# Elastic-specific:
+#   ELASTICSEARCH_URL       - Elasticsearch cluster URL
+#   ELASTICSEARCH_API_KEY   - API key auth (or use USERNAME+PASSWORD)
+#   ELASTICSEARCH_USERNAME  - Basic auth username
+#   ELASTICSEARCH_PASSWORD  - Basic auth password
+#
+# Couchbase-specific:
+#   CB_HOSTNAME             - Capella cluster hostname
+#   CB_USERNAME             - Cluster username
+#   CB_PASSWORD             - Cluster password
+#   CB_BUCKET               - Target bucket name
+#
+# Konnect-specific:
+#   KONNECT_ACCESS_TOKEN    - Kong Konnect API access token
+#   KONNECT_REGION          - Konnect region (us|eu|au|me|in)
 
 set -euo pipefail
 
@@ -43,9 +61,12 @@ echo "  Account:      ${ACCOUNT_ID}"
 echo "  Runtime:      ${RUNTIME_NAME}"
 echo "  ECR Repo:     ${ECR_REPO}"
 echo "  Package:      ${MCP_SERVER_PACKAGE}"
-if [ "${MCP_SERVER}" = "kafka" ]; then
-echo "  Kafka:        ${KAFKA_PROVIDER}"
-fi
+case "${MCP_SERVER}" in
+  kafka)    echo "  Kafka:        ${KAFKA_PROVIDER}" ;;
+  elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
+  couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
+  konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
+esac
 echo "================================================================"
 echo ""
 
@@ -208,12 +229,50 @@ echo "[4/5] Creating AgentCore Runtime..."
 
 # Build environment variables based on server type
 ENV_VARS="AWS_REGION=${AWS_REGION}"
-if [ "${MCP_SERVER}" = "kafka" ]; then
-  ENV_VARS="${ENV_VARS},KAFKA_PROVIDER=${KAFKA_PROVIDER}"
-  if [ -n "${MSK_CLUSTER_ARN:-}" ]; then
-    ENV_VARS="${ENV_VARS},MSK_CLUSTER_ARN=${MSK_CLUSTER_ARN}"
-  fi
-fi
+case "${MCP_SERVER}" in
+  kafka)
+    ENV_VARS="${ENV_VARS},KAFKA_PROVIDER=${KAFKA_PROVIDER}"
+    if [ -n "${MSK_CLUSTER_ARN:-}" ]; then
+      ENV_VARS="${ENV_VARS},MSK_CLUSTER_ARN=${MSK_CLUSTER_ARN}"
+    fi
+    ;;
+  elastic)
+    if [ -n "${ELASTICSEARCH_URL:-}" ]; then
+      ENV_VARS="${ENV_VARS},ELASTICSEARCH_URL=${ELASTICSEARCH_URL}"
+    fi
+    if [ -n "${ELASTICSEARCH_API_KEY:-}" ]; then
+      ENV_VARS="${ENV_VARS},ELASTICSEARCH_API_KEY=${ELASTICSEARCH_API_KEY}"
+    fi
+    if [ -n "${ELASTICSEARCH_USERNAME:-}" ]; then
+      ENV_VARS="${ENV_VARS},ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME}"
+    fi
+    if [ -n "${ELASTICSEARCH_PASSWORD:-}" ]; then
+      ENV_VARS="${ENV_VARS},ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD}"
+    fi
+    ;;
+  couchbase)
+    if [ -n "${CB_HOSTNAME:-}" ]; then
+      ENV_VARS="${ENV_VARS},CB_HOSTNAME=${CB_HOSTNAME}"
+    fi
+    if [ -n "${CB_USERNAME:-}" ]; then
+      ENV_VARS="${ENV_VARS},CB_USERNAME=${CB_USERNAME}"
+    fi
+    if [ -n "${CB_PASSWORD:-}" ]; then
+      ENV_VARS="${ENV_VARS},CB_PASSWORD=${CB_PASSWORD}"
+    fi
+    if [ -n "${CB_BUCKET:-}" ]; then
+      ENV_VARS="${ENV_VARS},CB_BUCKET=${CB_BUCKET}"
+    fi
+    ;;
+  konnect)
+    if [ -n "${KONNECT_ACCESS_TOKEN:-}" ]; then
+      ENV_VARS="${ENV_VARS},KONNECT_ACCESS_TOKEN=${KONNECT_ACCESS_TOKEN}"
+    fi
+    if [ -n "${KONNECT_REGION:-}" ]; then
+      ENV_VARS="${ENV_VARS},KONNECT_REGION=${KONNECT_REGION}"
+    fi
+    ;;
+esac
 
 EXISTING_RUNTIME=$(aws bedrock-agentcore-control list-agent-runtimes \
   --region "${AWS_REGION}" \
@@ -298,8 +357,7 @@ cat > .agentcore-deployment.json <<EOF
   "accountId": "${ACCOUNT_ID}",
   "roleArn": "${ROLE_ARN}",
   "ecrUri": "${ECR_URI}:${IMAGE_TAG}",
-  "server": "${MCP_SERVER}",
-  "provider": "${KAFKA_PROVIDER}"
+  "server": "${MCP_SERVER}"
 }
 EOF
 

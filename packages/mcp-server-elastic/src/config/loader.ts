@@ -32,7 +32,7 @@ function loadConfigFromEnv(): Partial<Config> {
 			(parseEnvVar(Bun.env[envVarMapping.server.maxResultsPerQuery], "number") as number) ||
 			defaultConfig.server.maxResultsPerQuery,
 		transportMode:
-			(parseEnvVar(Bun.env[envVarMapping.server.transportMode], "string") as "stdio" | "http" | "both") ||
+			(parseEnvVar(Bun.env[envVarMapping.server.transportMode], "string") as "stdio" | "http" | "both" | "agentcore") ||
 			defaultConfig.server.transportMode,
 		port: (parseEnvVar(Bun.env[envVarMapping.server.port], "number") as number) || defaultConfig.server.port,
 		host: (parseEnvVar(Bun.env[envVarMapping.server.host], "string") as string) || defaultConfig.server.host,

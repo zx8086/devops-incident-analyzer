@@ -11,7 +11,7 @@ export const ServerConfigSchema = z.object({
 });
 
 export const TransportConfigSchema = z.object({
-	mode: z.enum(["stdio", "http", "both"]).default("stdio"),
+	mode: z.enum(["stdio", "http", "both", "agentcore"]).default("stdio"),
 	port: z.number().min(1).max(65535).default(9082),
 	host: z.string().min(1).default("0.0.0.0"),
 	path: z.string().min(1).default("/mcp"),

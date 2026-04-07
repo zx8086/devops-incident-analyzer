@@ -16,8 +16,20 @@ ARG MCP_SERVER_PACKAGE
 RUN apk add --no-cache dumb-init
 
 COPY package.json bun.lock bunfig.toml ./
+
+# Copy ALL workspace package.json manifests so bun sees a consistent workspace
+# structure and the frozen lockfile validates. Only source for the target server
+# is copied in the runtime stage.
 COPY packages/shared/package.json packages/shared/
-COPY packages/${MCP_SERVER_PACKAGE}/package.json packages/${MCP_SERVER_PACKAGE}/
+COPY packages/agent/package.json packages/agent/
+COPY packages/checkpointer/package.json packages/checkpointer/
+COPY packages/gitagent-bridge/package.json packages/gitagent-bridge/
+COPY packages/mcp-server-couchbase/package.json packages/mcp-server-couchbase/
+COPY packages/mcp-server-elastic/package.json packages/mcp-server-elastic/
+COPY packages/mcp-server-kafka/package.json packages/mcp-server-kafka/
+COPY packages/mcp-server-konnect/package.json packages/mcp-server-konnect/
+COPY packages/observability/package.json packages/observability/
+COPY apps/web/package.json apps/web/
 
 RUN bun install --frozen-lockfile --production
 

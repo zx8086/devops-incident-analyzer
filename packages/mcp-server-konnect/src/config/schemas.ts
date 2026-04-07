@@ -76,7 +76,7 @@ export const ConfigSchema = z.object({
 
 	transport: z
 		.object({
-			mode: z.enum(["stdio", "http", "both"]).describe("Transport mode"),
+			mode: z.enum(["stdio", "http", "both", "agentcore"]).describe("Transport mode"),
 			port: z.number().int().min(1024).max(65535).describe("HTTP server port"),
 			host: z.string().describe("HTTP server host"),
 			path: z.string().startsWith("/").describe("MCP endpoint path"),

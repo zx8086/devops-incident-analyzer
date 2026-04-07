@@ -5,17 +5,25 @@
 #
 # Prerequisites (run in another terminal first):
 #   KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/agentcore-entrypoint.ts
+#   ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/agentcore-entrypoint.ts
+#   CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/agentcore-entrypoint.ts
+#   KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/agentcore-entrypoint.ts
 #
 # Or test via Docker:
 #   docker run --rm -p 8000:8000 -e KAFKA_PROVIDER=local kafka-mcp-agentcore
 #
 # Usage:
-#   ./scripts/agentcore/test-local.sh
+#   ./scripts/agentcore/test-local.sh                              # Tests kafka (default)
+#   MCP_SERVER=elastic ./scripts/agentcore/test-local.sh           # Tests elastic
+#   MCP_SERVER=couchbase ./scripts/agentcore/test-local.sh         # Tests couchbase
+#   MCP_SERVER=konnect ./scripts/agentcore/test-local.sh           # Tests konnect
 #   BASE_URL=http://localhost:9000 ./scripts/agentcore/test-local.sh
 
 set -euo pipefail
 
+MCP_SERVER="${MCP_SERVER:-kafka}"
 BASE_URL="${BASE_URL:-http://localhost:8000}"
+EXPECTED_SERVER_NAME="${MCP_SERVER}-mcp-server"
 PASS=0
 FAIL=0
 
@@ -35,7 +43,7 @@ check() {
   fi
 }
 
-echo "Testing AgentCore endpoints at ${BASE_URL}"
+echo "Testing AgentCore endpoints for ${MCP_SERVER} at ${BASE_URL}"
 echo "================================================================"
 echo ""
 
@@ -65,7 +73,7 @@ MCP_INIT=$(curl -s -X POST "${BASE_URL}/mcp" \
     }
   }')
 check "POST /mcp initialize returns serverInfo" "serverInfo" "${MCP_INIT}"
-check "POST /mcp server identifies as kafka-mcp-server" "kafka-mcp-server" "${MCP_INIT}"
+check "POST /mcp server identifies as ${EXPECTED_SERVER_NAME}" "${EXPECTED_SERVER_NAME}" "${MCP_INIT}"
 
 # -- Error handling --
 echo ""
