@@ -239,7 +239,9 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 						} catch (error) {
 							const isRetryable =
 								error instanceof Error &&
-								(error.name === "TimeoutError" || error.message.includes("aborted") || error.message.includes("ECONNRESET"));
+								(error.name === "TimeoutError" ||
+									error.message.includes("aborted") ||
+									error.message.includes("ECONNRESET"));
 
 							if (isRetryable && attempt < maxAttempts) {
 								logger.warn(
