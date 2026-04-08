@@ -23,6 +23,13 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 			? `\n\nIMPORTANT: Only the following datasources were queried for this report: ${queriedSources.join(", ")}. Do NOT mention, list, or create sections for datasources that were not queried. The user explicitly selected these datasources -- omitting others is intentional, not a gap.`
 			: "";
 
+	// SIO-626: Surface unavailable datasources so the report explicitly mentions gaps
+	const skipped = state.skippedDataSources ?? [];
+	const unavailableNote =
+		skipped.length > 0
+			? `\n\nUNAVAILABLE DATASOURCES: ${skipped.join("; ")}. Include these in a "Gaps" section of the report so the user knows which datasources could not be reached.`
+			: "";
+
 	// Datasources that return point-in-time state (not timestamped events) should not
 	// be penalized in the confidence score for lacking a timeline.
 	const STATUS_ORIENTED_SOURCES = new Set(["kafka", "couchbase", "konnect"]);
@@ -49,7 +56,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${timelineGuidance}\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
 		),
 	);
 

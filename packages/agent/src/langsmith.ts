@@ -31,13 +31,14 @@ async function patchClientPayloadLimits(): Promise<void> {
 	// Monkey-patch the LangSmith Client singleton's processInputs/processOutputs
 	// to truncate oversized fields before they hit the API.
 	try {
-		// Use createRequire to bypass Vite's strict ESM exports-map validation.
-		// The internal @langchain/core/singletons/tracer path isn't in the
-		// package's exports map, so Vite's SSR resolver rejects a bare
-		// dynamic import(). Node/Bun's require() resolves it fine at runtime.
+		// SIO-626: Resolve the public singletons entry (which IS in the exports map),
+		// then derive the sibling tracer file path. This avoids hitting the unexported
+		// @langchain/core/singletons/tracer subpath which triggers Vite/Bun warnings.
 		const { createRequire } = await import("node:module");
 		const require = createRequire(import.meta.url);
-		const { getDefaultLangChainClientSingleton } = require("@langchain/core/singletons/tracer");
+		const singletonsPath = require.resolve("@langchain/core/singletons");
+		const tracerPath = singletonsPath.replace(/singletons[/\\]index\.(c?js)$/, "singletons/tracer.$1");
+		const { getDefaultLangChainClientSingleton } = require(tracerPath);
 
 		// Force singleton creation so we can patch it before auto-tracer uses it
 		const client = getDefaultLangChainClientSingleton();

@@ -82,6 +82,12 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-626: Datasources skipped by supervisor (e.g., MCP server not connected)
+	skippedDataSources: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
 	isFollowUp: Annotation<boolean>({
 		reducer: (_, next) => next,
 		default: () => false,

@@ -31,6 +31,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		retryCount: 0,
 		alignmentRetries: 0,
 		alignmentHints: [] as string[],
+		skippedDataSources: [] as string[],
 		isFollowUp: false,
 		finalAnswer: "",
 		dataSourceContext: undefined,

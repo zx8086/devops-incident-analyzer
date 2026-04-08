@@ -42,6 +42,18 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		warnings.push(`Potential fabricated timestamps: ${fabricatedTimestamps.join(", ")}`);
 	}
 
+	// SIO-626: Cross-reference numerical metrics with units against source data
+	const metricPattern = /(\d+(?:\.\d+)?)\s*(%|ms|MB|GB|TB|vCPUs?)\b/g;
+	const answerMetrics = [...answer.matchAll(metricPattern)].map((m) => m[1] as string);
+	const sourceMetricSet = new Set([...sourceData.matchAll(metricPattern)].map((m) => m[1] as string));
+	if (answerMetrics.length > 0 && sourceMetricSet.size > 0) {
+		const ungrounded = answerMetrics.filter((v) => !sourceMetricSet.has(v));
+		if (ungrounded.length > 3) {
+			const sample = ungrounded.slice(0, 5).join(", ");
+			warnings.push(`${ungrounded.length} metric values in answer not found in source data (sample: ${sample})`);
+		}
+	}
+
 	if (warnings.length > 0) {
 		logger.warn({ warnings }, "Validation passed with warnings");
 		return { validationResult: "pass_with_warnings" };

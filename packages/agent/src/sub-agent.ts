@@ -3,13 +3,18 @@
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource } from "./mcp-bridge.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import { buildSubAgentPrompt } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:sub-agent");
+
+// SIO-626: Prevent hung MCP servers from stalling the pipeline indefinitely
+const SUB_AGENT_TIMEOUT_MS = 60_000;
 
 const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
@@ -83,6 +88,33 @@ function extractToolErrors(messages: Array<{ _getType(): string; content: unknow
 	return errors;
 }
 
+// SIO-626: Tool name patterns for health/status queries per datasource
+const HEALTH_TOOL_PATTERNS: Record<string, RegExp> = {
+	elastic: /health|stats|cluster|node_info|cat_nodes|cat_indices|cat_shards|ingest_pipeline|node_stats/i,
+	kafka: /cluster|topic|consumer|broker|describe|list|group/i,
+	couchbase: /health|stats|cluster|node|bucket|query_service|ping/i,
+	konnect: /status|health|service|route|upstream|gateway/i,
+};
+
+const HEALTH_QUERY_PATTERN = /\b(health|status|healthy|doing|ok|check|monitor)\b/i;
+const MIN_FILTERED_TOOLS = 5;
+
+function filterToolsForQuery(
+	tools: StructuredToolInterface[],
+	dataSourceId: string,
+	query: string,
+): { tools: StructuredToolInterface[]; filtered: boolean } {
+	if (!HEALTH_QUERY_PATTERN.test(query)) return { tools, filtered: false };
+
+	const pattern = HEALTH_TOOL_PATTERNS[dataSourceId];
+	if (!pattern) return { tools, filtered: false };
+
+	const filtered = tools.filter((t) => pattern.test(t.name) || pattern.test(t.description ?? ""));
+	if (filtered.length < MIN_FILTERED_TOOLS) return { tools, filtered: false };
+
+	return { tools: filtered, filtered: true };
+}
+
 export async function queryDataSource(
 	state: AgentStateType,
 	config?: RunnableConfig,
@@ -97,11 +129,11 @@ export async function queryDataSource(
 	log.info({ agentName }, "Sub-agent starting");
 
 	try {
-		const tools = getToolsForDataSource(dataSourceId);
+		const allTools = getToolsForDataSource(dataSourceId);
 		const systemPrompt = buildSubAgentPrompt(agentName);
 		const llm = createLlm("subAgent");
 
-		if (tools.length === 0) {
+		if (allTools.length === 0) {
 			log.warn("No MCP tools available, skipping");
 			const result: DataSourceResult = {
 				dataSourceId,
@@ -113,7 +145,11 @@ export async function queryDataSource(
 			return { dataSourceResults: [result] };
 		}
 
-		log.info({ toolCount: tools.length }, "Creating ReAct agent with tools");
+		// SIO-626: Filter tools for health/status queries to reduce prompt token count
+		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
+		const queryText = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
+		const { tools, filtered } = filterToolsForQuery(allTools, dataSourceId, queryText);
+		log.info({ toolCount: tools.length, totalTools: allTools.length, filtered }, "Creating ReAct agent with tools");
 
 		const agent = createReactAgent({
 			llm,
@@ -122,7 +158,6 @@ export async function queryDataSource(
 		});
 
 		// Only pass the last user message to prevent cross-datasource pollution
-		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
 		log.info("Invoking sub-agent");
@@ -130,6 +165,7 @@ export async function queryDataSource(
 			{ messages },
 			{
 				...config,
+				signal: AbortSignal.timeout(SUB_AGENT_TIMEOUT_MS),
 				runName: agentName,
 				metadata: {
 					...config?.metadata,

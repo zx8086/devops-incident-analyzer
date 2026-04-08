@@ -38,6 +38,13 @@ export function supervise(state: AgentStateType): Send[] {
 	const skipped = deduped.filter((id) => !AGENT_NAMES[id] || toolCounts.get(id) === 0);
 	const validSources = deduped.filter((id) => AGENT_NAMES[id] && (toolCounts.get(id) ?? 0) > 0);
 
+	// SIO-626: Build human-readable skip reasons for the aggregator
+	const skipReasons = skipped.map((id) => {
+		if (!AGENT_NAMES[id]) return `${id}: unknown datasource`;
+		if (toolCounts.get(id) === 0) return `${id}: MCP server not connected`;
+		return `${id}: skipped`;
+	});
+
 	logger.info(
 		{
 			sourceMethod,
@@ -49,10 +56,13 @@ export function supervise(state: AgentStateType): Send[] {
 		"Supervisor dispatching sub-agents",
 	);
 
+	const skippedState = skipReasons.length > 0 ? { skippedDataSources: skipReasons } : {};
+
 	return validSources.map(
 		(dataSourceId) =>
 			new Send("queryDataSource", {
 				...state,
+				...skippedState,
 				currentDataSource: dataSourceId,
 				dataSourceResults: [],
 			}),
