@@ -17,6 +17,7 @@ export {
 	type ToolPlanStep,
 	ToolPlanStepSchema,
 } from "./agent-state.ts";
+export { type AgentCoreProxyHandle, startAgentCoreProxy } from "./agentcore-proxy.ts";
 export {
 	type AttachmentBlock,
 	AttachmentBlockSchema,

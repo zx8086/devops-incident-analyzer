@@ -133,7 +133,7 @@ export function createBlockedOperationHandler(
 		};
 
 		try {
-			let result;
+			let result: unknown;
 
 			switch (originalMethod) {
 				// ===========================
@@ -426,7 +426,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		log.info("Creating elicitation session");
 
 		// Fix the analysisResult structure - handle both formats safely
-		let analysisResult;
+		let analysisResult: Record<string, unknown>;
 		if (args.analysisResult?.migrationAnalysis) {
 			// Already has the right structure
 			analysisResult = args.analysisResult;

@@ -61,7 +61,7 @@ interface StructureAnalysis {
 	sizeEstimate: number;
 }
 
-function analyzeStructure(document: any): StructureAnalysis {
+function analyzeStructure(document: Record<string, unknown>): StructureAnalysis {
 	const analysis: StructureAnalysis = {
 		fieldCount: 0,
 		depth: 0,
@@ -73,7 +73,7 @@ function analyzeStructure(document: any): StructureAnalysis {
 		sizeEstimate: 0,
 	};
 
-	function analyzeField(path: string, value: any, depth: number): void {
+	function analyzeField(path: string, value: unknown, depth: number): void {
 		analysis.fieldCount++;
 		analysis.depth = Math.max(analysis.depth, depth);
 
@@ -91,7 +91,7 @@ function analyzeStructure(document: any): StructureAnalysis {
 			analysis.objectFields.push(path);
 
 			// Analyze object fields
-			Object.entries(value).forEach(([key, val]) => {
+			Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
 				analyzeField(`${path}.${key}`, val, depth + 1);
 			});
 		} else {
@@ -120,7 +120,7 @@ function analyzeStructure(document: any): StructureAnalysis {
 	return analysis;
 }
 
-function formatAnalysis(documentKey: string, document: any, analysis: StructureAnalysis): string {
+function formatAnalysis(documentKey: string, document: Record<string, unknown>, analysis: StructureAnalysis): string {
 	let output = `# Document Structure Analysis: ${documentKey}\n\n`;
 
 	// Basic statistics

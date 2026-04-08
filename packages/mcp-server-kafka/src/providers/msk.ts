@@ -48,10 +48,9 @@ export class MskKafkaProvider implements KafkaProvider {
 		try {
 			const { KafkaClient, DescribeClusterV2Command } = await import("@aws-sdk/client-kafka");
 			const client = new KafkaClient({ region: this.region, requestHandler: { requestTimeout: 10_000 } });
-			const response = await client.send(
-				new DescribeClusterV2Command({ ClusterArn: this.clusterArn }),
-				{ abortSignal: AbortSignal.timeout(10_000) },
-			);
+			const response = await client.send(new DescribeClusterV2Command({ ClusterArn: this.clusterArn }), {
+				abortSignal: AbortSignal.timeout(10_000),
+			});
 			return {
 				provider: "msk",
 				clusterArn: this.clusterArn,

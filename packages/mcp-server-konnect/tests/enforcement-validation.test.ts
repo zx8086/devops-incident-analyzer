@@ -37,7 +37,7 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 		it("should block service creation without elicitation", async () => {
 			let wasBlocked = false;
-			let elicitationSession;
+			let elicitationSession: { sessionId: string } | undefined;
 
 			try {
 				await BlockedServiceOperations.createService(

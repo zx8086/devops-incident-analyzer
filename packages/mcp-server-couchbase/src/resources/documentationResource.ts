@@ -286,8 +286,10 @@ export function registerMarkdownDocumentationResource(
 
 	// Fix the templates/list issue
 	logger.info("Setting up custom handler for resources/templates/list");
-	(server as any).setRequestHandler = (server as any).setRequestHandler || (() => {});
-	(server as any).setRequestHandler(
+	const serverRecord = server as Record<string, unknown>;
+	(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler =
+		(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler || (() => {});
+	(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler(
 		{
 			method: "resources/templates/list",
 		},

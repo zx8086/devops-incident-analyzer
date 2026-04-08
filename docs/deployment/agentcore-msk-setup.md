@@ -18,7 +18,7 @@ Local Machine                                  AWS Account (VPC)
 |  mcp-bridge.ts (plain HTTP)   |              |    |                                      |
 |    |                          |              |    | IAM SASL auth (OAUTHBEARER via STS)  |
 |    v                          |  SigV4       |    v                                      |
-|  agentcore-proxy.ts  ---------|------------->|  MSK Provisioned Cluster                 |
+|  agentcore-proxy     ---------|------------->|  MSK Provisioned Cluster                 |
 |    localhost:3000             |              |    port 9098 (TLS + IAM)                 |
 |                               |              |                                          |
 +-------------------------------+              +------------------------------------------+
@@ -363,11 +363,16 @@ cat /tmp/mcp-topics-response.bin
 
 ## Step 8: Configure Local Proxy
 
-The agent connects to MCP servers via plain HTTP. AgentCore requires SigV4 signing. The `agentcore-proxy.ts` bridges the two.
+The agent connects to MCP servers via plain HTTP. AgentCore requires SigV4 signing.
+A built-in SigV4 proxy starts automatically when `MCP_TRANSPORT=agentcore` and
+`AGENTCORE_RUNTIME_ARN` are both set in `.env`.
 
 Add to `.env`:
 
 ```env
+# Transport mode -- set to "agentcore" to connect via AgentCore Runtime
+MCP_TRANSPORT=agentcore
+
 # AgentCore proxy
 AGENTCORE_RUNTIME_ARN=<RUNTIME_ARN from Step 6>
 AGENTCORE_PROXY_PORT=3000
@@ -380,10 +385,10 @@ KAFKA_MCP_URL=http://localhost:3000
 
 The proxy resolves credentials in order: `AGENTCORE_AWS_*` -> `AWS_*` -> `aws configure export-credentials`.
 
-Start the proxy:
+Start the server (the SigV4 proxy launches automatically):
 
 ```bash
-cd packages/mcp-server-kafka && bun run agentcore-proxy
+cd packages/mcp-server-kafka && bun run dev
 ```
 
 Verify:

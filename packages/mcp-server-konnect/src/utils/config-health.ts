@@ -205,7 +205,9 @@ async function runProductionSafetyCheck(): Promise<boolean> {
 		if (safetyIssues.length > 0) {
 			console.error("CRITICAL: PRODUCTION DEPLOYMENT BLOCKED");
 			console.error("   Safety Issues:");
-			safetyIssues.forEach((issue) => console.error(`   - ${issue}`));
+			for (const issue of safetyIssues) {
+				console.error(`   - ${issue}`);
+			}
 			console.error("\n   Fix these issues before deploying to production");
 			return false;
 		}

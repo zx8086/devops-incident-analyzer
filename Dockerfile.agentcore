@@ -51,8 +51,12 @@ COPY --from=deps --chown=65532:65532 /app/packages/${MCP_SERVER_PACKAGE}/node_mo
 COPY --chown=65532:65532 packages/shared/ packages/shared/
 COPY --chown=65532:65532 packages/${MCP_SERVER_PACKAGE}/ packages/${MCP_SERVER_PACKAGE}/
 
-# Bake the entrypoint path at build time so CMD uses exec form (no shell needed)
-ENV ENTRYPOINT_PATH=packages/${MCP_SERVER_PACKAGE}/src/agentcore-entrypoint.ts
+# Bake the entrypoint path at build time so CMD uses exec form (no shell needed).
+# The unified index.ts reads MCP_TRANSPORT from env -- no separate entrypoint needed.
+ENV ENTRYPOINT_PATH=packages/${MCP_SERVER_PACKAGE}/src/index.ts
+ENV MCP_TRANSPORT=agentcore
+ENV MCP_PORT=8000
+ENV MCP_HOST=0.0.0.0
 
 USER 65532:65532
 

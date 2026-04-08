@@ -40,7 +40,7 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 
 	try {
 		const result = await runSqlPlusPlusQuery({ lifespanContext: { bucket } }, scope_name, query, sqlppParser);
-		const rows = result.rows as any[];
+		const rows = result.rows as Record<string, unknown>[];
 
 		if (rows.length === 1 && "distinct_source_count" in rows[0]) {
 			return {

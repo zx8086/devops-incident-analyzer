@@ -51,7 +51,10 @@ declare module '$env/static/private' {
 	export const TMPDIR: string;
 	export const TERM_PROGRAM_VERSION: string;
 	export const FPATH: string;
+	export const MallocSpaceEfficient: string;
 	export const WINDOWID: string;
+	export const MallocNanoZone: string;
+	export const EXTENSION_KIT_EXTENSION_TYPE: string;
 	export const ZSH: string;
 	export const npm_config_local_prefix: string;
 	export const GIT_EDITOR: string;
@@ -81,6 +84,7 @@ declare module '$env/static/private' {
 	export const XPC_SERVICE_NAME: string;
 	export const HOME: string;
 	export const SHLVL: string;
+	export const CLAUDE_CODE_EXECPATH: string;
 	export const HOMEBREW_PREFIX: string;
 	export const LESS: string;
 	export const LOGNAME: string;
@@ -100,6 +104,7 @@ declare module '$env/static/private' {
 	export const npm_node_execpath: string;
 	export const npm_package_version: string;
 	export const NODE_ENV: string;
+	export const MCP_TRANSPORT: string;
 	export const AWS_REGION: string;
 	export const AWS_ACCESS_KEY_ID: string;
 	export const AWS_SECRET_ACCESS_KEY: string;
@@ -107,6 +112,10 @@ declare module '$env/static/private' {
 	export const ES_API_KEY: string;
 	export const KAFKA_PROVIDER: string;
 	export const KAFKA_BROKERS: string;
+	export const AGENTCORE_RUNTIME_ARN: string;
+	export const AGENTCORE_PROXY_PORT: string;
+	export const AGENTCORE_AWS_ACCESS_KEY_ID: string;
+	export const AGENTCORE_AWS_SECRET_ACCESS_KEY: string;
 	export const COUCHBASE_URL: string;
 	export const COUCHBASE_USERNAME: string;
 	export const COUCHBASE_PASSWORD: string;
@@ -228,7 +237,10 @@ declare module '$env/dynamic/private' {
 		TMPDIR: string;
 		TERM_PROGRAM_VERSION: string;
 		FPATH: string;
+		MallocSpaceEfficient: string;
 		WINDOWID: string;
+		MallocNanoZone: string;
+		EXTENSION_KIT_EXTENSION_TYPE: string;
 		ZSH: string;
 		npm_config_local_prefix: string;
 		GIT_EDITOR: string;
@@ -258,6 +270,7 @@ declare module '$env/dynamic/private' {
 		XPC_SERVICE_NAME: string;
 		HOME: string;
 		SHLVL: string;
+		CLAUDE_CODE_EXECPATH: string;
 		HOMEBREW_PREFIX: string;
 		LESS: string;
 		LOGNAME: string;
@@ -277,6 +290,7 @@ declare module '$env/dynamic/private' {
 		npm_node_execpath: string;
 		npm_package_version: string;
 		NODE_ENV: string;
+		MCP_TRANSPORT: string;
 		AWS_REGION: string;
 		AWS_ACCESS_KEY_ID: string;
 		AWS_SECRET_ACCESS_KEY: string;
@@ -284,6 +298,10 @@ declare module '$env/dynamic/private' {
 		ES_API_KEY: string;
 		KAFKA_PROVIDER: string;
 		KAFKA_BROKERS: string;
+		AGENTCORE_RUNTIME_ARN: string;
+		AGENTCORE_PROXY_PORT: string;
+		AGENTCORE_AWS_ACCESS_KEY_ID: string;
+		AGENTCORE_AWS_SECRET_ACCESS_KEY: string;
 		COUCHBASE_URL: string;
 		COUCHBASE_USERNAME: string;
 		COUCHBASE_PASSWORD: string;

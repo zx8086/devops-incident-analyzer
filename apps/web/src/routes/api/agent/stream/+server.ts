@@ -90,7 +90,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								"followUp",
 							]);
 							const nodeStartTimes = new Map<string, number>();
-							let responseContent = "";
+							let _responseContent = "";
 							const toolsUsed = new Set<string>();
 
 							for await (const event of eventStream) {
@@ -100,7 +100,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									const nodeName = event.metadata?.langgraph_node;
 									if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
 										const content = String(event.data.chunk.content);
-										responseContent += content;
+										_responseContent += content;
 										send({ type: "message", content });
 									}
 								}

@@ -108,7 +108,7 @@ export class FlightApiTestUtils {
 
 	constructor() {
 		this.kongApi = new KongApi({
-			apiKey: process.env.KONNECT_ACCESS_TOKEN!,
+			apiKey: process.env.KONNECT_ACCESS_TOKEN ?? "",
 			apiRegion: process.env.KONNECT_REGION || "eu",
 		});
 
@@ -119,7 +119,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Create flight service for testing
 	 */
-	async createFlightService(): Promise<any> {
+	async createFlightService(): Promise<unknown> {
 		const serviceData = {
 			name: `${TEST_CONFIG.service.name}-${Date.now()}`,
 			host: TEST_CONFIG.service.host,
@@ -136,7 +136,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Create flight routes for testing
 	 */
-	async createFlightRoutes(serviceId: string): Promise<any[]> {
+	async createFlightRoutes(serviceId: string): Promise<unknown[]> {
 		const routes = [];
 
 		for (const routeConfig of TEST_CONFIG.routes) {
@@ -159,7 +159,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Create test consumer (if not exists)
 	 */
-	async createTestConsumer(): Promise<any> {
+	async createTestConsumer(): Promise<unknown> {
 		const consumerData = {
 			username: `${TEST_CONFIG.consumer.username}-${Date.now()}`,
 			tags: ["test", "flight-api", "automated-test"],
@@ -173,7 +173,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Add authentication plugin to service
 	 */
-	async addAuthPlugin(serviceId: string, pluginName: string, config: any): Promise<any> {
+	async addAuthPlugin(serviceId: string, pluginName: string, config: unknown): Promise<unknown> {
 		const pluginData = {
 			name: pluginName,
 			service: { id: serviceId },
@@ -189,22 +189,22 @@ export class FlightApiTestUtils {
 	/**
 	 * Add rate limiting plugin
 	 */
-	async addRateLimitingPlugin(serviceId: string): Promise<any> {
+	async addRateLimitingPlugin(serviceId: string): Promise<unknown> {
 		return this.addAuthPlugin(serviceId, "rate-limiting", TEST_CONFIG.plugins[0]?.config);
 	}
 
 	/**
 	 * Add CORS plugin
 	 */
-	async addCorsPlugin(serviceId: string): Promise<any> {
+	async addCorsPlugin(serviceId: string): Promise<unknown> {
 		return this.addAuthPlugin(serviceId, "cors", TEST_CONFIG.plugins[2]?.config);
 	}
 
 	/**
 	 * Create consumer credentials
 	 */
-	async createConsumerCredentials(consumerId: string): Promise<any> {
-		const credentials: any = {};
+	async createConsumerCredentials(consumerId: string): Promise<unknown> {
+		const credentials: Record<string, unknown> = {};
 
 		// Create Key Auth credential
 		const keyAuth = await this.kongApi.createConsumerKey(TEST_CONFIG.controlPlaneId, consumerId, {
@@ -219,7 +219,7 @@ export class FlightApiTestUtils {
 	/**
 	 * Create portal application for testing
 	 */
-	async createPortalApplication(overrides?: Record<string, unknown>): Promise<any> {
+	async createPortalApplication(overrides?: Record<string, unknown>): Promise<unknown> {
 		const appData = {
 			name: `Flight API Test App ${Date.now()}`,
 			description: "Test application for flight API integration testing",
@@ -243,7 +243,12 @@ export class FlightApiTestUtils {
 	/**
 	 * Simulate API request
 	 */
-	async simulateApiRequest(method: string, path: string, headers: any = {}, body?: any): Promise<any> {
+	async simulateApiRequest(
+		method: string,
+		path: string,
+		headers: Record<string, string> = {},
+		body?: unknown,
+	): Promise<unknown> {
 		// This would typically make actual HTTP requests to test the Kong gateway
 		// For testing, we'll simulate the request
 		return {
@@ -260,14 +265,14 @@ export class FlightApiTestUtils {
 	/**
 	 * Get analytics for flight API
 	 */
-	async getFlightApiAnalytics(timeRange: string = "1H"): Promise<any> {
+	async getFlightApiAnalytics(timeRange: string = "1H"): Promise<unknown> {
 		return this.kongApi.queryApiRequests(timeRange, [], 100);
 	}
 
 	/**
 	 * Portal CRUD
 	 */
-	async createPortal(portalData: Record<string, unknown>): Promise<any> {
+	async createPortal(portalData: Record<string, unknown>): Promise<unknown> {
 		const result = await this.kongApi.createPortal(portalData);
 		this.createdResources.portals.push(result.portalId || result.id);
 		return result;
@@ -281,28 +286,28 @@ export class FlightApiTestUtils {
 	/**
 	 * Control Plane listing
 	 */
-	async listControlPlanes(): Promise<any> {
+	async listControlPlanes(): Promise<unknown> {
 		return this.kongApi.listControlPlanes();
 	}
 
 	/**
 	 * Portal listing
 	 */
-	async listPortals(): Promise<any> {
+	async listPortals(): Promise<unknown> {
 		return this.kongApi.listPortals();
 	}
 
 	/**
 	 * Certificate listing
 	 */
-	async listCertificates(): Promise<any> {
+	async listCertificates(): Promise<unknown> {
 		return this.kongApi.listCertificates(this.controlPlaneId);
 	}
 
 	/**
 	 * API request querying
 	 */
-	async queryApiRequests(timeRange: string, _filters: unknown[] = [], maxResults = 100): Promise<any> {
+	async queryApiRequests(timeRange: string, _filters: unknown[] = [], maxResults = 100): Promise<unknown> {
 		return this.kongApi.queryApiRequests(timeRange, [], maxResults);
 	}
 
@@ -313,14 +318,14 @@ export class FlightApiTestUtils {
 	/**
 	 * Data Plane Token Management
 	 */
-	async createDataPlaneToken(name: string = "test-token"): Promise<any> {
+	async createDataPlaneToken(name: string = "test-token"): Promise<unknown> {
 		const result = await this.kongApi.createDataPlaneToken(this.controlPlaneId, name);
 		this.createdResources.tokens = this.createdResources.tokens || [];
 		this.createdResources.tokens.push(result.tokenId);
 		return result;
 	}
 
-	async listDataPlaneTokens(): Promise<any> {
+	async listDataPlaneTokens(): Promise<unknown> {
 		return this.kongApi.listDataPlaneTokens(this.controlPlaneId);
 	}
 
@@ -332,25 +337,25 @@ export class FlightApiTestUtils {
 	/**
 	 * Data Plane Node Management
 	 */
-	async listDataPlaneNodes(): Promise<any> {
+	async listDataPlaneNodes(): Promise<unknown> {
 		return this.kongApi.listDataPlaneNodes(this.controlPlaneId);
 	}
 
 	/**
 	 * Control Plane Configuration
 	 */
-	async getControlPlaneConfig(): Promise<any> {
+	async getControlPlaneConfig(): Promise<unknown> {
 		return this.kongApi.getControlPlaneConfig(this.controlPlaneId);
 	}
 
 	/**
 	 * Certificate Management (Complete CRUD)
 	 */
-	async getCertificate(certificateId: string): Promise<any> {
+	async getCertificate(certificateId: string): Promise<unknown> {
 		return this.kongApi.getCertificate(this.controlPlaneId, certificateId);
 	}
 
-	async updateCertificate(certificateId: string, updates: any): Promise<any> {
+	async updateCertificate(certificateId: string, updates: Record<string, unknown>): Promise<unknown> {
 		return this.kongApi.updateCertificate(this.controlPlaneId, certificateId, updates);
 	}
 
@@ -362,32 +367,32 @@ export class FlightApiTestUtils {
 	/**
 	 * Plugin Schema Information
 	 */
-	async listPluginSchemas(): Promise<any> {
+	async listPluginSchemas(): Promise<unknown> {
 		return this.kongApi.listPluginSchemas(this.controlPlaneId);
 	}
 
 	/**
 	 * Portal Management Extensions
 	 */
-	async listPortalProducts(portalId: string): Promise<any> {
+	async listPortalProducts(portalId: string): Promise<unknown> {
 		return this.kongApi.listPortalProducts(portalId);
 	}
 
 	/**
 	 * Portal API Management
 	 */
-	async listPortalApis(): Promise<any> {
+	async listPortalApis(): Promise<unknown> {
 		return this.kongApi.listPortalApis();
 	}
 
 	/**
 	 * Portal Application Management (Complete CRUD)
 	 */
-	async getPortalApplication(applicationId: string): Promise<any> {
+	async getPortalApplication(applicationId: string): Promise<unknown> {
 		return this.kongApi.getPortalApplication(applicationId);
 	}
 
-	async updatePortalApplication(applicationId: string, updates: any): Promise<any> {
+	async updatePortalApplication(applicationId: string, updates: Record<string, unknown>): Promise<unknown> {
 		return this.kongApi.updatePortalApplication(applicationId, updates);
 	}
 
@@ -399,25 +404,29 @@ export class FlightApiTestUtils {
 	/**
 	 * Portal Application Registration Management
 	 */
-	async listPortalApplicationRegistrations(applicationId: string): Promise<any> {
+	async listPortalApplicationRegistrations(applicationId: string): Promise<unknown> {
 		return this.kongApi.listPortalApplicationRegistrations(applicationId);
 	}
 
 	/**
 	 * Portal Credential Management
 	 */
-	async listPortalCredentials(applicationId: string): Promise<any> {
+	async listPortalCredentials(applicationId: string): Promise<unknown> {
 		return this.kongApi.listPortalCredentials(applicationId);
 	}
 
-	async createPortalCredential(applicationId: string, type: string = "api_key", name?: string): Promise<any> {
+	async createPortalCredential(applicationId: string, type: string = "api_key", name?: string): Promise<unknown> {
 		const result = await this.kongApi.createPortalCredential(applicationId, { credentialType: type, name });
 		this.createdResources.credentials = this.createdResources.credentials || [];
 		this.createdResources.credentials.push(result.credentialId);
 		return result;
 	}
 
-	async updatePortalCredential(applicationId: string, credentialId: string, updates: any): Promise<any> {
+	async updatePortalCredential(
+		applicationId: string,
+		credentialId: string,
+		updates: Record<string, unknown>,
+	): Promise<unknown> {
 		return this.kongApi.updatePortalCredential(applicationId, credentialId, updates);
 	}
 
@@ -429,14 +438,14 @@ export class FlightApiTestUtils {
 	/**
 	 * Portal Application Secret Management
 	 */
-	async regeneratePortalApplicationSecret(applicationId: string): Promise<any> {
+	async regeneratePortalApplicationSecret(applicationId: string): Promise<unknown> {
 		return this.kongApi.regeneratePortalApplicationSecret(applicationId);
 	}
 
 	/**
 	 * Extended certificate creation for testing
 	 */
-	async createTestCertificate(_name: string = "test-certificate"): Promise<any> {
+	async createTestCertificate(_name: string = "test-certificate"): Promise<unknown> {
 		// Create a self-signed test certificate for testing
 		const testCert = `-----BEGIN CERTIFICATE-----
 MIIDXTCCAkWgAwIBAgIJAKZPz0z0z0z0MA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV
@@ -566,7 +575,7 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 	// Medium-complexity tools (17 tools)
 	// =========================
 
-	async testCreateControlPlane(): Promise<any> {
+	async testCreateControlPlane(): Promise<unknown> {
 		const result = await this.kongApi.createControlPlane({
 			name: `flight-test-cp-${Date.now()}`,
 			description: "Test control plane for flight API",
@@ -576,25 +585,25 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 		return result;
 	}
 
-	async testUpdateControlPlane(controlPlaneId: string): Promise<any> {
+	async testUpdateControlPlane(controlPlaneId: string): Promise<unknown> {
 		return await this.kongApi.updateControlPlane(controlPlaneId, {
 			description: "Updated flight API control plane",
 		});
 	}
 
-	async testDeleteControlPlane(controlPlaneId: string): Promise<any> {
+	async testDeleteControlPlane(controlPlaneId: string): Promise<unknown> {
 		return await this.kongApi.deleteControlPlane(controlPlaneId);
 	}
 
-	async testListDataPlaneNodes(): Promise<any> {
+	async testListDataPlaneNodes(): Promise<unknown> {
 		return await this.kongApi.listDataPlaneNodes(this.controlPlaneId, 10);
 	}
 
-	async testGetDataPlaneNode(nodeId: string): Promise<any> {
+	async testGetDataPlaneNode(nodeId: string): Promise<unknown> {
 		return await this.kongApi.getDataPlaneNode(this.controlPlaneId, nodeId);
 	}
 
-	async testCreateDataPlaneToken(): Promise<any> {
+	async testCreateDataPlaneToken(): Promise<unknown> {
 		const result = await this.kongApi.createDataPlaneToken(this.controlPlaneId, {
 			name: `flight-test-token-${Date.now()}`,
 		});
@@ -602,51 +611,51 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 		return result;
 	}
 
-	async testListDataPlaneTokens(): Promise<any> {
+	async testListDataPlaneTokens(): Promise<unknown> {
 		return await this.kongApi.listDataPlaneTokens(this.controlPlaneId, 10);
 	}
 
-	async testRevokeDataPlaneToken(tokenId: string): Promise<any> {
+	async testRevokeDataPlaneToken(tokenId: string): Promise<unknown> {
 		return await this.kongApi.revokeDataPlaneToken(this.controlPlaneId, tokenId);
 	}
 
-	async testGetControlPlaneConfig(): Promise<any> {
+	async testGetControlPlaneConfig(): Promise<unknown> {
 		return await this.kongApi.getControlPlaneConfig(this.controlPlaneId);
 	}
 
-	async testUpdateControlPlaneConfig(): Promise<any> {
+	async testUpdateControlPlaneConfig(): Promise<unknown> {
 		return await this.kongApi.updateControlPlaneConfig(this.controlPlaneId, {
 			analyticsEnabled: true,
 		});
 	}
 
-	async testUpdateCertificate(certificateId: string): Promise<any> {
+	async testUpdateCertificate(certificateId: string): Promise<unknown> {
 		return await this.kongApi.updateCertificate(this.controlPlaneId, certificateId, {
 			tags: ["flight-api", "updated"],
 		});
 	}
 
-	async testDeleteCertificate(certificateId: string): Promise<any> {
+	async testDeleteCertificate(certificateId: string): Promise<unknown> {
 		return await this.kongApi.deleteCertificate(this.controlPlaneId, certificateId);
 	}
 
-	async testListPortalApis(): Promise<any> {
+	async testListPortalApis(): Promise<unknown> {
 		return await this.kongApi.listPortalApis(10);
 	}
 
-	async testFetchPortalApi(apiSlug: string): Promise<any> {
+	async testFetchPortalApi(apiSlug: string): Promise<unknown> {
 		return await this.kongApi.fetchPortalApi(apiSlug);
 	}
 
-	async testGetPortalApiActions(apiSlug: string): Promise<any> {
+	async testGetPortalApiActions(apiSlug: string): Promise<unknown> {
 		return await this.kongApi.getPortalApiActions(apiSlug);
 	}
 
-	async testListPortalApiDocuments(apiSlug: string): Promise<any> {
+	async testListPortalApiDocuments(apiSlug: string): Promise<unknown> {
 		return await this.kongApi.listPortalApiDocuments(apiSlug);
 	}
 
-	async testFetchPortalApiDocument(apiSlug: string, documentSlug: string): Promise<any> {
+	async testFetchPortalApiDocument(apiSlug: string, documentSlug: string): Promise<unknown> {
 		return await this.kongApi.fetchPortalApiDocument(apiSlug, documentSlug, "json");
 	}
 
@@ -655,7 +664,7 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 	// Complex workflows (4 tools)
 	// =========================
 
-	async testCreatePortalApplicationRegistration(applicationId: string, apiId: string): Promise<any> {
+	async testCreatePortalApplicationRegistration(applicationId: string, apiId: string): Promise<unknown> {
 		const result = await this.kongApi.createPortalApplicationRegistration(applicationId, {
 			apiId,
 			requestReason: "Flight API integration for automated booking system",
@@ -663,15 +672,15 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 		return result;
 	}
 
-	async testGetPortalApplicationRegistration(applicationId: string, registrationId: string): Promise<any> {
+	async testGetPortalApplicationRegistration(applicationId: string, registrationId: string): Promise<unknown> {
 		return await this.kongApi.getPortalApplicationRegistration(applicationId, registrationId);
 	}
 
-	async testDeletePortalApplicationRegistration(applicationId: string, registrationId: string): Promise<any> {
+	async testDeletePortalApplicationRegistration(applicationId: string, registrationId: string): Promise<unknown> {
 		return await this.kongApi.deletePortalApplicationRegistration(applicationId, registrationId);
 	}
 
-	async testQueryPortalApplicationAnalytics(applicationId: string): Promise<any> {
+	async testQueryPortalApplicationAnalytics(applicationId: string): Promise<unknown> {
 		return await this.kongApi.queryPortalApplicationAnalytics(applicationId, {
 			metrics: ["request_count", "response_time", "success_rate"],
 			timeRange: "24H",
@@ -680,7 +689,7 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 	}
 
 	// Complex workflow: Complete portal developer authentication flow
-	async testCompletePortalDeveloperWorkflow(): Promise<any> {
+	async testCompletePortalDeveloperWorkflow(): Promise<unknown> {
 		try {
 			// Step 1: Register new developer
 			const developerEmail = `flight-dev-${Date.now()}@example.com`;
@@ -723,14 +732,14 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 				credential,
 				workflow: "complete",
 			};
-		} catch (error: any) {
-			console.warn("Portal developer workflow not fully available:", error.message);
-			return { workflow: "partial", error: error.message };
+		} catch (error: unknown) {
+			console.warn("Portal developer workflow not fully available:", (error as Error).message);
+			return { workflow: "partial", error: (error as Error).message };
 		}
 	}
 
 	// Complex workflow: End-to-end application lifecycle
-	async testCompleteApplicationLifecycle(): Promise<any> {
+	async testCompleteApplicationLifecycle(): Promise<unknown> {
 		try {
 			const appName = `lifecycle-app-${Date.now()}`;
 
@@ -748,8 +757,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 					name: "API Key Credential",
 				});
 				credentials.push(apiKeyCredential);
-			} catch (error: any) {
-				console.warn("API key credential creation failed:", error.message);
+			} catch (error: unknown) {
+				console.warn("API key credential creation failed:", (error as Error).message);
 			}
 
 			try {
@@ -759,8 +768,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 					scopes: ["read", "write"],
 				});
 				credentials.push(oauth2Credential);
-			} catch (error: any) {
-				console.warn("OAuth2 credential creation failed:", error.message);
+			} catch (error: unknown) {
+				console.warn("OAuth2 credential creation failed:", (error as Error).message);
 			}
 
 			// Step 3: List and manage credentials
@@ -779,8 +788,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 			if (credentials.length > 0) {
 				try {
 					regeneratedSecret = await this.kongApi.regeneratePortalApplicationSecret(application.applicationId);
-				} catch (error: any) {
-					console.warn("Secret regeneration not available:", error.message);
+				} catch (error: unknown) {
+					console.warn("Secret regeneration not available:", (error as Error).message);
 				}
 			}
 
@@ -789,8 +798,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 				if (credential.credentialId) {
 					try {
 						await this.kongApi.deletePortalCredential(application.applicationId, credential.credentialId);
-					} catch (error: any) {
-						console.warn("Credential cleanup failed:", error.message);
+					} catch (error: unknown) {
+						console.warn("Credential cleanup failed:", (error as Error).message);
 					}
 				}
 			}
@@ -807,9 +816,9 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 				regeneratedSecret,
 				lifecycle: "complete",
 			};
-		} catch (error: any) {
-			console.warn("Application lifecycle not fully available:", error.message);
-			return { lifecycle: "partial", error: error.message };
+		} catch (error: unknown) {
+			console.warn("Application lifecycle not fully available:", (error as Error).message);
+			return { lifecycle: "partial", error: (error as Error).message };
 		}
 	}
 }
@@ -819,7 +828,7 @@ export const FlightApiAssertions = {
 	/**
 	 * Assert service configuration
 	 */
-	assertServiceConfig(service: any, expectedConfig: any) {
+	assertServiceConfig(service: Record<string, unknown>, expectedConfig: Record<string, unknown>) {
 		expect(service.name).toBe(expectedConfig.name);
 		expect(service.host).toBe(expectedConfig.host);
 		expect(service.port).toBe(expectedConfig.port);
@@ -829,7 +838,7 @@ export const FlightApiAssertions = {
 	/**
 	 * Assert route configuration
 	 */
-	assertRouteConfig(route: any, expectedConfig: any) {
+	assertRouteConfig(route: Record<string, unknown>, expectedConfig: Record<string, unknown>) {
 		expect(route.name).toBe(expectedConfig.name);
 		expect(route.paths).toEqual(expectedConfig.paths);
 		expect(route.methods).toEqual(expectedConfig.methods);
@@ -838,7 +847,7 @@ export const FlightApiAssertions = {
 	/**
 	 * Assert plugin configuration
 	 */
-	assertPluginConfig(plugin: any, expectedConfig: any) {
+	assertPluginConfig(plugin: Record<string, unknown>, expectedConfig: Record<string, unknown>) {
 		expect(plugin.name).toBe(expectedConfig.name);
 		expect(plugin.config).toEqual(expect.objectContaining(expectedConfig.config));
 	},
@@ -846,7 +855,7 @@ export const FlightApiAssertions = {
 	/**
 	 * Assert API response structure
 	 */
-	assertApiResponse(response: any) {
+	assertApiResponse(response: Record<string, unknown>) {
 		expect(response).toHaveProperty("statusCode");
 		expect(response).toHaveProperty("timestamp");
 		expect(response.statusCode).toBeGreaterThanOrEqual(200);
@@ -856,7 +865,7 @@ export const FlightApiAssertions = {
 	/**
 	 * Assert analytics data structure
 	 */
-	assertAnalyticsData(analytics: any) {
+	assertAnalyticsData(analytics: Record<string, unknown>) {
 		expect(analytics).toHaveProperty("data");
 		expect(Array.isArray(analytics.data)).toBe(true);
 		if (analytics.data.length > 0) {

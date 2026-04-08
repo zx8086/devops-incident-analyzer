@@ -106,7 +106,7 @@ describe("Flight API Portal Management Tests", () => {
 			expect(Array.isArray(result.data)).toBe(true);
 
 			// Find our created portal
-			const flightPortal = result.data.find((portal: any) => portal.id === createdPortalId);
+			const flightPortal = result.data.find((portal: { id: string; name: string }) => portal.id === createdPortalId);
 			expect(flightPortal).toBeDefined();
 			expect(flightPortal.name).toContain("flight-api-portal");
 
@@ -180,10 +180,11 @@ describe("Flight API Portal Management Tests", () => {
 				await api.publishPortalProduct(createdPortalId, publishData);
 
 				console.log(`SUCCESS: API product publishing workflow tested`);
-			} catch (error: any) {
+			} catch (error: unknown) {
 				// Expected to fail since we don't have real API products
-				expect(error.message).toBeTruthy();
-				console.log(`SUCCESS: API publishing error handling verified: ${error.message}`);
+				const err = error as Error;
+				expect(err.message).toBeTruthy();
+				console.log(`SUCCESS: API publishing error handling verified: ${err.message}`);
 			}
 		});
 	});
@@ -213,9 +214,9 @@ describe("Flight API Portal Management Tests", () => {
 
 				console.log(`SUCCESS: Created Flight API application: ${result.id}`);
 				console.log(`🔑 Client credentials generated successfully`);
-			} catch (error: any) {
+			} catch (error: unknown) {
 				// May fail if portal applications aren't properly configured
-				console.log(`INFO: Application creation test: ${error.message}`);
+				console.log(`INFO: Application creation test: ${(error as Error).message}`);
 				expect(error).toBeDefined();
 			}
 		});
@@ -248,8 +249,8 @@ describe("Flight API Portal Management Tests", () => {
 				} else {
 					console.log(`WARNING:  Portal client could not connect - may require portal domain setup`);
 				}
-			} catch (error: any) {
-				console.log(`INFO: Application listing test: ${error.message}`);
+			} catch (error: unknown) {
+				console.log(`INFO: Application listing test: ${(error as Error).message}`);
 				expect(error).toBeDefined();
 			}
 		});
@@ -331,10 +332,10 @@ describe("Flight API Portal Management Tests", () => {
 			};
 
 			// All checks should pass for a properly configured portal
-			Object.entries(readinessChecks).forEach(([check, passed]) => {
+			for (const [check, passed] of Object.entries(readinessChecks)) {
 				expect(passed).toBe(true);
 				console.log(`SUCCESS: Portal readiness check - ${check}: ${passed}`);
-			});
+			}
 
 			console.log(`INFO: Flight API Portal is ready for developer onboarding!`);
 		});
@@ -352,7 +353,9 @@ describe("Flight API Portal Management Tests", () => {
 			];
 
 			console.log(`INFO: Portal Management Capabilities Demonstrated:`);
-			operations.forEach((op) => console.log(`   ${op}`));
+			for (const op of operations) {
+				console.log(`   ${op}`);
+			}
 
 			console.log(`\nINFO: Ready for Flight API Developer Portal deployment!`);
 			expect(operations.length).toBe(7);

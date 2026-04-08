@@ -107,7 +107,7 @@ The image does not contain:
 
 | Environment Variable | Value | Set By |
 |---------------------|-------|--------|
-| `ENTRYPOINT_PATH` | `packages/<server>/src/agentcore-entrypoint.ts` | Dockerfile |
+| `ENTRYPOINT_PATH` | `packages/<server>/src/index.ts` | Dockerfile |
 | `NODE_ENV` | `production` | Dockerfile |
 | `MCP_TRANSPORT` | `agentcore` | AgentCore Runtime |
 | `MCP_PORT` | `8000` | AgentCore contract |

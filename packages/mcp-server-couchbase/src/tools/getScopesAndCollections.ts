@@ -3,7 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 
-const getScopesAndCollectionsHandler = async (_params: {}, bucket: Bucket) => {
+const getScopesAndCollectionsHandler = async (_params: Record<string, never>, bucket: Bucket) => {
 	const scopes = await bucket.collections().getAllScopes();
 	const scopesCollections: Record<string, string[]> = {};
 
@@ -40,7 +40,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		"capella_get_scopes_and_collections",
 		"Get all scopes and collections in the bucket",
 		{},
-		async (params: any) => {
+		async (params: Record<string, never>) => {
 			if (!params || typeof params !== "object") {
 				throw new Error("Missing required arguments object");
 			}
@@ -49,6 +49,6 @@ export default (server: McpServer, bucket: Bucket) => {
 	);
 };
 
-interface Collection {
+interface _Collection {
 	name: string;
 }

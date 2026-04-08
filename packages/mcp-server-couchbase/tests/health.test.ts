@@ -7,12 +7,28 @@ import { registerHealthChecks } from "../src/lib/health";
 import type { CapellaConn } from "../src/types";
 
 describe("Health Check Tests", () => {
-	let mockServer: any;
+	let mockServer: {
+		tool: (
+			name: string,
+			description: string,
+			schema: Record<string, unknown>,
+			handler: (...args: unknown[]) => unknown,
+		) => void;
+		registeredTools: Record<
+			string,
+			{ description: string; schema: Record<string, unknown>; handler: (...args: unknown[]) => unknown }
+		>;
+	};
 	let mockCapellaConn: CapellaConn;
 
 	beforeEach(() => {
 		mockServer = {
-			tool: (name: string, description: string, schema: any, handler: Function) => {
+			tool: (
+				name: string,
+				description: string,
+				schema: Record<string, unknown>,
+				handler: (...args: unknown[]) => unknown,
+			) => {
 				mockServer.registeredTools[name] = {
 					description,
 					schema,
@@ -22,17 +38,17 @@ describe("Health Check Tests", () => {
 			registeredTools: {},
 		};
 		mockCapellaConn = {
-			cluster: {} as any,
+			cluster: {} as unknown as import("couchbase").Cluster,
 			defaultBucket: {
 				collections: () => ({
 					getAllScopes: async () => [],
 				}),
-			} as any,
-			defaultScope: {} as any,
-			defaultCollection: {} as any,
-			bucket: () => ({}) as any,
-			scope: () => ({}) as any,
-			collection: () => ({}) as any,
+			} as unknown as import("couchbase").Bucket,
+			defaultScope: {} as unknown as import("couchbase").Scope,
+			defaultCollection: {} as unknown as import("couchbase").Collection,
+			bucket: () => ({}) as unknown as import("couchbase").Bucket,
+			scope: () => ({}) as unknown as import("couchbase").Scope,
+			collection: () => ({}) as unknown as import("couchbase").Collection,
 			CouchbaseError,
 		};
 	});

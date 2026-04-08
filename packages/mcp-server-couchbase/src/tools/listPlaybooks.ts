@@ -11,7 +11,12 @@ export default (server: McpServer, _bucket: Bucket) => {
 			logger.info("Listing available playbooks");
 
 			// Use the server's readResourceByUri method to access the playbook directory
-			const resourceResult = await (server as any).readResourceByUri("playbook://");
+			const resourceResult = await (
+				server as unknown as Record<
+					string,
+					(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
+				>
+			).readResourceByUri("playbook://");
 
 			if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 				return {
@@ -60,7 +65,12 @@ export default (server: McpServer, _bucket: Bucket) => {
 				logger.info({ playbook_id }, "Getting playbook");
 
 				const resourceUri = `playbook://${playbook_id}`;
-				const resourceResult = await (server as any).readResourceByUri(resourceUri);
+				const resourceResult = await (
+					server as unknown as Record<
+						string,
+						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
+					>
+				).readResourceByUri(resourceUri);
 
 				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 					return {

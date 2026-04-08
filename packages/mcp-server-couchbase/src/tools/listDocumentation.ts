@@ -42,7 +42,12 @@ export default (server: McpServer, _bucket: Bucket) => {
 				);
 
 				// Use the resource URI handler to get documentation listing
-				const resourceResult = await (server as any).readResourceByUri(resourceUri);
+				const resourceResult = await (
+					server as unknown as Record<
+						string,
+						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
+					>
+				).readResourceByUri(resourceUri);
 
 				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 					return {

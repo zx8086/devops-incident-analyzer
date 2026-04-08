@@ -186,7 +186,7 @@ function registerTools(
 				let success = true;
 
 				try {
-					let result;
+					let result: unknown;
 
 					// Route to appropriate handler based on method
 					switch (tool.method) {

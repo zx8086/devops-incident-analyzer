@@ -16,7 +16,7 @@ export class MockBucket implements Partial<Bucket> {
 				},
 				upsert: async (id: string, content: any) => {
 					if (!id || !content) throw new Error("Missing parameters for upsert");
-					let parsedContent;
+					let parsedContent: unknown;
 					try {
 						parsedContent = typeof content === "string" ? JSON.parse(content) : content;
 					} catch (_e) {
@@ -76,7 +76,9 @@ export const mockConnection = {
 export const mockServer = {
 	registeredTools: {} as Record<string, { schema: any; handler: any }>,
 	tool: (...args: any[]) => {
-		let name, schema, handler;
+		let name: string;
+		let schema: unknown;
+		let handler: unknown;
 		if (args.length === 4) {
 			[name, , schema, handler] = args;
 		} else if (args.length === 3) {

@@ -15,6 +15,7 @@ import {
 	requiresApproval,
 	resolveBedrockConfig,
 	resolveMapping,
+	type ToolDefinition,
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
@@ -65,7 +66,7 @@ describe("manifest-loader", () => {
 		expect(agent.subAgents.has("capella-agent")).toBe(true);
 		expect(agent.subAgents.has("konnect-agent")).toBe(true);
 
-		const elastic = agent.subAgents.get("elastic-agent")!;
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		expect(elastic.manifest.name).toBe("elastic-agent");
 		expect(elastic.manifest.model?.preferred).toBe("claude-haiku-4-5");
 		expect(elastic.soul).toContain("Elasticsearch specialist");
@@ -123,7 +124,7 @@ describe("skill-loader", () => {
 
 	test("handles sub-agent with no skills", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elastic = agent.subAgents.get("elastic-agent")!;
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		const prompt = buildSystemPrompt(elastic);
 		expect(prompt).toContain("Elasticsearch specialist");
 		expect(prompt).not.toContain("Skill:");
@@ -133,7 +134,7 @@ describe("skill-loader", () => {
 describe("tool-prompt", () => {
 	test("resolves template with full context", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		const resolved = buildToolPrompt(elasticTool, {
 			datasources: ["elastic", "kafka", "couchbase"],
 			complianceTier: "medium",
@@ -144,14 +145,14 @@ describe("tool-prompt", () => {
 
 	test("removes conditional blocks when context is missing", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		const resolved = buildToolPrompt(elasticTool, {});
 		expect(resolved).not.toContain("{{");
 		expect(resolved).not.toContain("}}");
 	});
 
 	test("falls back to static description when no template", () => {
-		const result = buildToolPrompt({ name: "test", description: "static desc" } as any, {});
+		const result = buildToolPrompt({ name: "test", description: "static desc" } as ToolDefinition, {});
 		expect(result).toBe("static desc");
 	});
 
@@ -263,7 +264,7 @@ describe("tool-mapping", () => {
 
 	test("tool_mapping is loaded from YAML for mapped tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		expect(elasticTool.tool_mapping).toBeDefined();
 		expect(elasticTool.tool_mapping?.mcp_server).toBe("elastic");
 		expect(elasticTool.tool_mapping?.mcp_patterns).toContain("elasticsearch_*");
@@ -271,7 +272,7 @@ describe("tool-mapping", () => {
 
 	test("tool_mapping is undefined for action tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const slackTool = agent.tools.find((t) => t.name === "notify-slack")!;
+		const slackTool = agent.tools.find((t) => t.name === "notify-slack") as ToolDefinition;
 		expect(slackTool.tool_mapping).toBeUndefined();
 	});
 });
@@ -305,7 +306,7 @@ describe("tool-schema", () => {
 			{ name: "tool-a", description: "A" },
 			{ name: "tool-b", description: "B" },
 		];
-		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a", "tool-b"]);
+		const result = validateToolSchemas(toolsWithoutMapping as ToolDefinition[], ["tool-a", "tool-b"]);
 		expect(result.valid).toBe(true);
 		expect(result.missing).toEqual([]);
 		expect(result.extra).toEqual([]);
@@ -316,7 +317,7 @@ describe("tool-schema", () => {
 			{ name: "tool-a", description: "A" },
 			{ name: "tool-b", description: "B" },
 		];
-		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a"]);
+		const result = validateToolSchemas(toolsWithoutMapping as ToolDefinition[], ["tool-a"]);
 		expect(result.valid).toBe(false);
 		expect(result.missing).toContain("tool-b");
 	});

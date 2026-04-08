@@ -31,7 +31,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					throw createError("DB_ERROR", "Bucket is not initialized");
 				}
 
-				let content;
+				let content: unknown;
 				try {
 					content = JSON.parse(document_content);
 				} catch (_e) {

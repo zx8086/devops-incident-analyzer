@@ -30,7 +30,9 @@ const _registerDocumentationTools = (server: McpServer, bucket: Bucket) => {
 
 // Register all query analysis tools
 const _registerQueryAnalysisTools = (server: McpServer, bucket: Bucket) => {
-	Object.values(queryAnalysisTools).forEach((tool) => tool(server, bucket));
+	Object.values(queryAnalysisTools).forEach((tool) => {
+		tool(server, bucket);
+	});
 };
 
 // Register all playbook tools

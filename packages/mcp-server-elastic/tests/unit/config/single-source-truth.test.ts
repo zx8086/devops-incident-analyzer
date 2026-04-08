@@ -23,7 +23,9 @@ describe("Single Source of Truth Configuration Pattern", () => {
 			});
 
 			console.log("Found .default() calls in schemas:");
-			defaultLines.forEach((line) => console.log("  ", line));
+			for (const line of defaultLines) {
+				console.log("  ", line);
+			}
 		}
 
 		expect(defaultCalls).toBeNull();

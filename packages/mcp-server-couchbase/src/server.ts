@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "./config";
 import { registerPingHandlers } from "./lib/pingHandler";
-import { ToolRegistry } from "./lib/toolRegistry";
+import { registerAll } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
 import { logger } from "./utils/logger";
@@ -25,7 +25,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 	}));
 
 	// Register all tools
-	ToolRegistry.registerAll(server, bucket);
+	registerAll(server, bucket);
 
 	// Register our SQL++ query generator prompt
 	registerSqlppQueryGenerator(server);
@@ -45,7 +45,7 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 				"No resource registry found on server instance (tried _resources, resources, _registeredResources)",
 			);
 		}
-		let resourcesIterable;
+		let resourcesIterable: Iterable<unknown>;
 		if (resourceMap instanceof Map) {
 			resourcesIterable = resourceMap.values();
 		} else if (typeof resourceMap === "object") {

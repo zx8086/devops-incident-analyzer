@@ -14,7 +14,7 @@ import * as portalOps from "../../src/tools/portal/operations.js";
 import { TEST_CONFIG } from "./test-helpers.js";
 
 describe("Flight API Unit Tests", () => {
-	let mockKongApi: any;
+	let mockKongApi: Record<string, ReturnType<typeof mock>>;
 
 	beforeAll(() => {
 		// Create mock Kong API client
@@ -572,8 +572,8 @@ describe("Flight API Unit Tests", () => {
 				});
 				// Should not reach this point
 				expect(true).toBe(false);
-			} catch (error: any) {
-				expect(error.message).toContain("API Error");
+			} catch (error: unknown) {
+				expect((error as Error).message).toContain("API Error");
 			}
 		});
 
@@ -604,9 +604,9 @@ describe("Flight API Unit Tests", () => {
 
 			try {
 				await configurationOps.getService(timeoutMockApi, TEST_CONFIG.controlPlaneId, "test-service-123");
-			} catch (error: any) {
-				expect(error.name).toBe("TimeoutError");
-				expect(error.message).toBe("Request timeout");
+			} catch (error: unknown) {
+				expect((error as Error).name).toBe("TimeoutError");
+				expect((error as Error).message).toBe("Request timeout");
 			}
 		});
 	});

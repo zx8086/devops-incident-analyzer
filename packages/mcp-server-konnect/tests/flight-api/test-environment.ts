@@ -52,7 +52,10 @@ export class TestEnvironmentDetector {
 	private async checkHybridControlPlanes(): Promise<boolean> {
 		try {
 			const controlPlanes = await this.testUtils.listControlPlanes();
-			return controlPlanes.controlPlanes?.some((cp: any) => cp.clusterType === "CLUSTER_TYPE_HYBRID") || false;
+			return (
+				controlPlanes.controlPlanes?.some((cp: { clusterType?: string }) => cp.clusterType === "CLUSTER_TYPE_HYBRID") ||
+				false
+			);
 		} catch (_error) {
 			console.warn("WARNING:  Could not detect control plane types");
 			return false;
@@ -64,8 +67,9 @@ export class TestEnvironmentDetector {
 			const nodes = await this.testUtils.listDataPlaneNodes();
 			// If we get a valid response structure (even empty), the endpoint exists
 			return nodes && typeof nodes === "object" && "nodes" in nodes;
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Data plane nodes endpoint not available (wrong API path)");
 				return false;
 			}
@@ -79,8 +83,9 @@ export class TestEnvironmentDetector {
 		try {
 			const tokens = await this.testUtils.listDataPlaneTokens();
 			return tokens && typeof tokens === "object" && "tokens" in tokens;
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Data plane tokens endpoint not available (wrong API path)");
 				return false;
 			}
@@ -93,8 +98,9 @@ export class TestEnvironmentDetector {
 		try {
 			const config = await this.testUtils.getControlPlaneConfig();
 			return config && typeof config === "object";
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Control plane config endpoint not available (wrong API path)");
 				return false;
 			}
@@ -107,8 +113,9 @@ export class TestEnvironmentDetector {
 		try {
 			const portals = await this.testUtils.listPortals?.();
 			return portals && typeof portals === "object";
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Portal features not available");
 				return false;
 			}
@@ -121,8 +128,9 @@ export class TestEnvironmentDetector {
 		try {
 			const certificates = await this.testUtils.listCertificates?.();
 			return certificates && typeof certificates === "object";
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Certificate management not available");
 				return false;
 			}
@@ -136,8 +144,9 @@ export class TestEnvironmentDetector {
 			// Try a simple analytics query
 			const analytics = await this.testUtils.queryApiRequests?.("1H", [], 10);
 			return analytics && typeof analytics === "object";
-		} catch (error: any) {
-			if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		} catch (error: unknown) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("404") || msg.includes("Cannot GET")) {
 				console.log("ERROR: Analytics not available");
 				return false;
 			}
@@ -176,15 +185,16 @@ export async function safeTest(
 
 	try {
 		await testFn();
-	} catch (error: any) {
+	} catch (error: unknown) {
 		// If we get here, the capability was detected but the test still failed
 		// This indicates a real bug that needs investigation
-		if (error.message.includes("404") || error.message.includes("Cannot GET")) {
+		const msg = error instanceof Error ? error.message : String(error);
+		if (msg.includes("404") || msg.includes("Cannot GET")) {
 			throw new Error(
 				`SECURITY: API ENDPOINT BUG DETECTED in ${testName}!\n` +
 					`Environment detector said ${requiredCapability} was available, but got 404.\n` +
 					`This likely indicates a wrong API endpoint path.\n` +
-					`Original error: ${error.message}`,
+					`Original error: ${msg}`,
 			);
 		}
 		throw error; // Re-throw other errors normally
@@ -197,11 +207,12 @@ export async function safeTest(
 export async function criticalTest(testName: string, testFn: () => Promise<void>): Promise<void> {
 	try {
 		await testFn();
-	} catch (error: any) {
+	} catch (error: unknown) {
+		const msg = error instanceof Error ? error.message : String(error);
 		throw new Error(
 			`SECURITY: CRITICAL TEST FAILURE in ${testName}!\n` +
 				`This test should work in all environments.\n` +
-				`Original error: ${error.message}`,
+				`Original error: ${msg}`,
 		);
 	}
 }

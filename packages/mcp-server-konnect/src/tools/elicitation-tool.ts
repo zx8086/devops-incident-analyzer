@@ -170,7 +170,7 @@ export class ElicitationOperations {
 		}
 
 		// Safely extract migration analysis with fallback
-		let migrationAnalysis;
+		let migrationAnalysis: Record<string, unknown>;
 		if (analysisResult.migrationAnalysis) {
 			migrationAnalysis = analysisResult.migrationAnalysis;
 		} else {
@@ -252,7 +252,7 @@ export class ElicitationOperations {
 			}
 
 			// Get next pending request if session not complete
-			let nextRequest;
+			let nextRequest: unknown;
 			if (!isSessionComplete && !response.cancelled) {
 				const _session = elicitationManager.getSessionResponses(sessionId);
 				// This would need implementation to find next pending request
@@ -533,7 +533,7 @@ export class ElicitationOperations {
 			const suggestions = req.suggestions || [];
 
 			prompt += `**${index + 1}. ${fieldName.toUpperCase()}**\n`;
-			prompt += `${req.message.replace(/[🏷️🌍👥]/gu, "").trim()}\n`;
+			prompt += `${req.message.replace(/\p{Emoji_Presentation}/gu, "").trim()}\n`;
 
 			if (suggestions.length > 0) {
 				prompt += `💡 **Suggestions:** ${suggestions.join(", ")}\n`;

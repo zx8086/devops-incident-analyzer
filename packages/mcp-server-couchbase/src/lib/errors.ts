@@ -40,7 +40,7 @@ export class AppError extends Error {
 	 */
 	toMcpError(): unknown {
 		// Import inside the method to avoid circular dependencies
-		const { createMcpError, MCP_ERROR_CODES } = require("./mcpErrors");
+		const { createMcpError } = require("./mcpErrors");
 
 		// Map app error codes to MCP error codes
 		const mcpErrorCode = this.getMcpErrorCode();

@@ -223,7 +223,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}
 
 		// Expose a method for tools to easily access resources by URI
-		(server as any).readResourceByUri = (async (resourceUri: string) => {
+		(server as Record<string, unknown>).readResourceByUri = (async (resourceUri: string) => {
 			try {
 				logger.info(`Handling readResourceByUri for: ${resourceUri}`);
 				// Simple URL parsing without using URL constructor (for compatibility)
@@ -239,19 +239,22 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				}
 
 				// Look through server resources for a matching URI
-				// biome-ignore lint/suspicious/noExplicitAny: accessing internal MCP SDK resource registry
-				const serverInternal = server as Record<string, any>;
+				const serverInternal = server as Record<string, unknown>;
+				interface ResourceEntry {
+					uri?: string;
+					handler: (href: { href: string }, params: Record<string, unknown>) => Promise<unknown>;
+				}
 				const resourceMap = serverInternal._resources || serverInternal.resources || new Map();
 				if (resourceMap instanceof Map) {
-					for (const [id, resource] of resourceMap.entries()) {
+					for (const [id, resource] of resourceMap.entries() as IterableIterator<[string, ResourceEntry]>) {
 						if (resource.uri === resourceUri) {
 							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
 							return resource.handler({ href: resourceUri }, {});
 						}
 					}
-				} else if (typeof resourceMap === "object") {
-					for (const id in resourceMap) {
-						const resource = resourceMap[id];
+				} else if (typeof resourceMap === "object" && resourceMap !== null) {
+					for (const id in resourceMap as Record<string, ResourceEntry>) {
+						const resource = (resourceMap as Record<string, ResourceEntry>)[id];
 						if (resource.uri === resourceUri) {
 							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
 							return resource.handler({ href: resourceUri }, {});
@@ -272,8 +275,12 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}).bind(server);
 
 		// Work around the template issue by adding a custom handler for templates listing
-		(server as any).setRequestHandler = (server as any).setRequestHandler || (() => {});
-		(server as any).setRequestHandler(
+		const serverExt = server as Record<string, unknown>;
+		type RequestHandler = (schema: { method: string }, handler: () => Promise<unknown>) => void;
+		(serverExt as Record<string, RequestHandler | (() => void)>).setRequestHandler =
+			(serverExt as Record<string, RequestHandler | undefined>).setRequestHandler || (() => {});
+		const setHandler = (serverExt as Record<string, RequestHandler>).setRequestHandler;
+		setHandler(
 			{
 				method: "resources/templates/list",
 			},
@@ -285,7 +292,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		);
 
 		// Also handle resources/list to include our resources
-		(server as any).setRequestHandler(
+		setHandler(
 			{
 				method: "resources/list",
 			},

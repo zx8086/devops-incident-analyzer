@@ -269,7 +269,7 @@ describe("Simplified Universal Elicitation", () => {
 			expect(result.context?.environment).toBe("production");
 			expect(result.context?.team).toBe("travel-platform");
 
-			const serviceTags = elicitationTool.generateEntityTags(result.context!, "service");
+			const serviceTags = elicitationTool.generateEntityTags(result.context as Record<string, string>, "service");
 			expect(serviceTags).toContain("env-production");
 			expect(serviceTags).toContain("domain-api");
 			expect(serviceTags).toContain("team-travel-platform");

@@ -27,7 +27,7 @@ Each MCP server is deployed independently. The parameterized `Dockerfile.agentco
 +---------------------------------------------------+
 | AgentCore Runtime (microVM)                       |
 |                                                   |
-|   agentcore-entrypoint.ts                         |
+|   index.ts (MCP_TRANSPORT=agentcore)              |
 |     GET /ping   -> 200 OK                         |
 |     GET /health -> 200 OK + status JSON           |
 |     POST /mcp   -> Streamable HTTP                |
@@ -112,7 +112,7 @@ Base: oven/bun:1-alpine
 
 ## AgentCore Entrypoint Contract
 
-Each MCP server provides an `agentcore-entrypoint.ts` file that satisfies the AgentCore Runtime contract. This file is separate from the standard `index.ts` used for local development and Docker Compose.
+Each MCP server uses the unified `index.ts` entrypoint for all transport modes. When `MCP_TRANSPORT=agentcore` is set (via the Dockerfile or `.env`), the transport layer automatically satisfies the AgentCore Runtime contract.
 
 ### Endpoints
 
@@ -409,13 +409,13 @@ docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-k
 docker run --rm -p 8000:8000 -e KONNECT_ACCESS_TOKEN=your-token -e KONNECT_REGION=us konnect-mcp-agentcore
 ```
 
-Or test without Docker by running the entrypoint directly:
+Or test without Docker by running with `MCP_TRANSPORT=agentcore`:
 
 ```bash
-KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/agentcore-entrypoint.ts
-ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/agentcore-entrypoint.ts
-CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/agentcore-entrypoint.ts
-KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/agentcore-entrypoint.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/index.ts
 ```
 
 ### Verify Endpoints
