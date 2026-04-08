@@ -31,10 +31,6 @@ export class MultiTermVectorError extends AnalyticsError {
 	}
 }
 
-// ============================================================================
-// GET TERM VECTORS
-// ============================================================================
-
 const getTermVectorsSchema = z.object({
 	index: z.string().min(1, "Index cannot be empty"),
 	id: z.string().optional(),
@@ -146,10 +142,6 @@ export const getTermVectors = {
 		}
 	},
 };
-
-// ============================================================================
-// GET MULTI TERM VECTORS
-// ============================================================================
 
 const getMultiTermVectorsSchema = z.object({
 	index: z.string().optional(),
@@ -264,6 +256,5 @@ export const getMultiTermVectors = {
 	},
 };
 
-// Export all tools
 export { registerTimestampAnalysisTool } from "./timestamp_analysis.js";
 export const analyticsTools = [getTermVectors, getMultiTermVectors] as const;

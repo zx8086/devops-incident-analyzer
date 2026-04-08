@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { CommonSchemas } from "../../utils/validation.js";
 
-// =========================
-// Certificate Management Parameters
-// =========================
-
 export const listCertificatesParameters = () =>
 	z.object({
 		controlPlaneId: CommonSchemas.uuid.describe("Control Plane ID (obtainable from list-control-planes tool)"),

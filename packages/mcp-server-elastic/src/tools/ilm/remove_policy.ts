@@ -11,23 +11,11 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const removePolicyValidator = z.object({
 	index: z.string().min(1, "Index name cannot be empty"),
 });
 
 type _RemovePolicyParams = z.infer<typeof removePolicyValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmRemovePolicyMcpError(
 	error: Error | string,
@@ -48,10 +36,6 @@ function createIlmRemovePolicyMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_remove_policy] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerRemovePolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const removePolicyHandler = async (args: any): Promise<SearchResult> => {

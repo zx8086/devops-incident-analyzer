@@ -99,9 +99,6 @@ export class KongApi {
 		}
 	}
 
-	// ===========================
-	// Analytics API methods
-	// ===========================
 	async queryApiRequests(
 		timeRange: string,
 		filters: ApiRequestFilter[] = [],
@@ -119,9 +116,6 @@ export class KongApi {
 		return this.kongRequest<ApiRequestsResponse>("/api-requests", "POST", requestBody);
 	}
 
-	// ===========================
-	// Control Planes API methods
-	// ===========================
 	async listControlPlanes(
 		pageSize = 10,
 		pageNumber?: number,
@@ -178,7 +172,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/group-member-status`);
 	}
 
-	// Control Plane CRUD operations
 	async createControlPlane(controlPlaneData: any): Promise<any> {
 		return this.kongRequest<any>(`/control-planes`, "POST", controlPlaneData);
 	}
@@ -193,7 +186,6 @@ export class KongApi {
 
 	// Data Plane Node Management (deprecated - using newer /nodes endpoint below)
 
-	// Data Plane Token Management
 	async createDataPlaneToken(controlPlaneId: string, tokenData: any): Promise<any> {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/tokens`, "POST", tokenData);
 	}
@@ -210,7 +202,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/tokens/${tokenId}`, "DELETE");
 	}
 
-	// Control Plane Configuration
 	async getControlPlaneConfig(controlPlaneId: string): Promise<any> {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/config`);
 	}
@@ -219,9 +210,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/config`, "PATCH", configData);
 	}
 
-	// ===========================
-	// Configuration API methods
-	// ===========================
 	async listServices(controlPlaneId: string, size = 100, offset?: string): Promise<any> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/services?size=${size}`;
 
@@ -342,9 +330,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/core-entities/plugin-schemas`);
 	}
 
-	// ===========================
-	// Certificate Management
-	// ===========================
 	async listCertificates(controlPlaneId: string, size = 100, offset?: string): Promise<any> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/certificates?size=${size}`;
 
@@ -382,9 +367,6 @@ export class KongApi {
 		);
 	}
 
-	// ===========================
-	// Upstreams Management
-	// ===========================
 	async listUpstreams(controlPlaneId: string, size = 100, offset?: string): Promise<any> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/upstreams?size=${size}`;
 
@@ -413,9 +395,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/core-entities/upstreams/${upstreamId}/health`);
 	}
 
-	// ===========================
-	// Data Plane Nodes Management
-	// ===========================
 	async listDataPlaneNodes(
 		controlPlaneId: string,
 		pageSize = 10,
@@ -444,9 +423,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/expected-config-hash`);
 	}
 
-	// ===========================
-	// SNI Management
-	// ===========================
 	async listSNIs(controlPlaneId: string, size = 100, offset?: string): Promise<any> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/snis?size=${size}`;
 
@@ -461,9 +437,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/control-planes/${controlPlaneId}/core-entities/snis`, "POST", sniData);
 	}
 
-	// ===========================
-	// Consumer Key Management
-	// ===========================
 	async listConsumerKeys(controlPlaneId: string, consumerId: string, size = 100, offset?: string): Promise<any> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/consumers/${consumerId}/key-auth?size=${size}`;
 
@@ -489,11 +462,6 @@ export class KongApi {
 		);
 	}
 
-	// ===========================
-	// Portal API Methods
-	// ===========================
-
-	// Portal APIs
 	async listPortalApis(
 		pageSize = 10,
 		pageNumber?: number,
@@ -537,7 +505,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/portal/apis/${apiIdOrSlug}/documents/${documentIdOrSlug}`, "GET");
 	}
 
-	// Application Management
 	async listPortalApplications(
 		pageSize = 10,
 		pageNumber?: number,
@@ -569,7 +536,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/api/v3/applications/${applicationId}`, "DELETE");
 	}
 
-	// Application Registrations
 	async listPortalApplicationRegistrations(
 		applicationId: string,
 		pageSize = 10,
@@ -598,7 +564,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`, "DELETE");
 	}
 
-	// Credential Management
 	async listPortalCredentials(applicationId: string, pageSize = 10, pageNumber?: number): Promise<any> {
 		let endpoint = `/api/v3/applications/${applicationId}/credentials?page[size]=${pageSize}`;
 
@@ -627,7 +592,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/api/v3/applications/${applicationId}/regenerate-secret`, "POST");
 	}
 
-	// Developer Authentication
 	async registerPortalDeveloper(developerData: any): Promise<any> {
 		return this.kongRequest<any>(`/api/v3/register`, "POST", developerData);
 	}
@@ -644,12 +608,10 @@ export class KongApi {
 		return this.kongRequest<any>(`/api/v3/logout`, "POST");
 	}
 
-	// Application Analytics
 	async queryPortalApplicationAnalytics(applicationId: string, analyticsQuery: any): Promise<any> {
 		return this.kongRequest<any>(`/api/v3/applications/${applicationId}/analytics`, "POST", analyticsQuery);
 	}
 
-	// Portal Management Methods
 	async listPortals(pageSize = 10, pageNumber?: number): Promise<any> {
 		let endpoint = `/portals?page[size]=${pageSize}`;
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
@@ -672,7 +634,6 @@ export class KongApi {
 		return this.kongRequest<any>(`/portals/${portalId}`, "DELETE");
 	}
 
-	// Portal Products/APIs Management
 	async listPortalProducts(portalId: string, pageSize = 10, pageNumber?: number): Promise<any> {
 		let endpoint = `/portals/${portalId}/products?page[size]=${pageSize}`;
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
@@ -686,10 +647,6 @@ export class KongApi {
 	async unpublishPortalProduct(portalId: string, productId: string): Promise<any> {
 		return this.kongRequest<any>(`/portals/${portalId}/products/${productId}`, "DELETE");
 	}
-
-	// =========================
-	// Portal API Client Factory
-	// =========================
 
 	/**
 	 * Create a Portal API client for portal-specific operations

@@ -551,9 +551,7 @@ describe("Flight API Security Tests", () => {
 	});
 });
 
-// =========================
 // PHASE 1 EXPANSION: 20 Easy-to-Test Tools
-// =========================
 describe("Flight API Phase 1 Expansion Tests", () => {
 	const testUtils = new FlightApiTestUtils();
 	const environmentDetector = new TestEnvironmentDetector(testUtils);
@@ -860,10 +858,8 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 		});
 	});
 
-	// =========================
 	// PHASE 2: MEDIUM COMPLEXITY TOOLS
 	// Target: 17 tools to reach 94.6% coverage
-	// =========================
 
 	// Control Plane Management CRUD
 	describe("Control Plane Management CRUD", () => {
@@ -1028,10 +1024,8 @@ P7cCIBz3T3J1Q2B5Rz7N8QCz8Y3F4F1Kz5F2V2B3zZ5z3L5D
 		});
 	});
 
-	// =========================
 	// PHASE 3: COMPLEX WORKFLOWS
 	// Target: 4 sophisticated tools to reach 100% coverage
-	// =========================
 
 	// Portal Application Registration Workflow
 	describe("Portal Application Registration Workflow", () => {

@@ -32,10 +32,6 @@ export class FieldMappingError extends MappingError {
 	}
 }
 
-// ============================================================================
-// CLEAR SQL CURSOR
-// ============================================================================
-
 const clearSqlCursorSchema = z.object({
 	cursor: z.string().min(1, "Cursor cannot be empty"),
 });
@@ -94,10 +90,6 @@ export const clearSqlCursor = {
 		}
 	},
 };
-
-// ============================================================================
-// GET FIELD MAPPING
-// ============================================================================
 
 const getFieldMappingSchema = z.object({
 	index: z.string().min(1, "Index cannot be empty"),
@@ -179,5 +171,4 @@ export const getFieldMapping = {
 	},
 };
 
-// Export all tools
 export const mappingTools = [clearSqlCursor, getFieldMapping] as const;

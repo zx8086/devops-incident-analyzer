@@ -12,14 +12,6 @@ import { createProgressTracker, notificationManager, type ProgressTracker } from
 import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition (no complex Zod conversion)
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const explainLifecycleValidator = z.object({
 	index: z.string().optional(),
 	onlyErrors: z.boolean().optional(),
@@ -30,10 +22,6 @@ const explainLifecycleValidator = z.object({
 });
 
 type _ExplainLifecycleParams = z.infer<typeof explainLifecycleValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmExplainMcpError(
 	error: Error | string,
@@ -53,10 +41,6 @@ function createIlmExplainMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_explain_lifecycle] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const explainLifecycleHandler = async (args: any): Promise<SearchResult> => {
@@ -420,10 +404,6 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 		explainLifecycleHandler,
 	);
 };
-
-// =============================================================================
-// COMPARISON NOTES
-// =============================================================================
 
 /*
 IMPROVEMENTS vs explain_lifecycle.ts:

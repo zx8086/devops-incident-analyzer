@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// =========================
-// Common Field Schemas
-// =========================
-
 /**
  * Standard time range options used across multiple tools.
  */
@@ -22,10 +18,6 @@ export const pageSizeSchema = z
 	.max(1000)
 	.default(100)
 	.describe("Number of items to return per page");
-
-// =========================
-// API Requests Analytics Schemas
-// =========================
 
 export const queryApiRequestsParameters = () =>
 	z.object({
@@ -56,10 +48,6 @@ export const getConsumerRequestsParameters = () =>
 		maxResults: pageSizeSchema,
 	});
 
-// =========================
-// Control Planes Configuration Schemas
-// =========================
-
 export const listServicesParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
@@ -88,10 +76,6 @@ export const listPluginsParameters = () =>
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
 
-// =========================
-// Control Planes Tools
-// =========================
-
 export const listControlPlanesParameters = () =>
 	z.object({
 		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of control planes per page"),
@@ -119,10 +103,6 @@ export const checkControlPlaneGroupMembershipParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control plane ID to check (can be obtained from list-control-planes tool)"),
 	});
-
-// =========================
-// Service CRUD Operation Schemas
-// =========================
 
 export const createServiceParameters = () =>
 	z.object({
@@ -174,10 +154,6 @@ export const deleteServiceParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		serviceId: z.string().describe("Service ID (obtainable from list-services tool)"),
 	});
-
-// =========================
-// Route CRUD Operation Schemas
-// =========================
 
 export const createRouteParameters = () =>
 	z.object({
@@ -236,10 +212,6 @@ export const deleteRouteParameters = () =>
 		routeId: z.string().describe("Route ID (obtainable from list-routes tool)"),
 	});
 
-// =========================
-// Consumer CRUD Operation Schemas
-// =========================
-
 export const createConsumerParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
@@ -270,10 +242,6 @@ export const deleteConsumerParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		consumerId: z.string().describe("Consumer ID (obtainable from list-consumers tool)"),
 	});
-
-// =========================
-// Plugin CRUD Operation Schemas
-// =========================
 
 export const createPluginParameters = () =>
 	z.object({

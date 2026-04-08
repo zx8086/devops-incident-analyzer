@@ -8,9 +8,6 @@ import { createMcpLogger } from "./logger.ts";
 
 const logger = createMcpLogger("agentcore-proxy");
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
 function readProxyConfig() {
 	const runtimeArn = process.env.AGENTCORE_RUNTIME_ARN;
 	if (!runtimeArn) {
@@ -34,9 +31,6 @@ function readProxyConfig() {
 	return { runtimeArn, region, port, qualifier, serverName, basePath, baseUrl, queryString, fullUrl };
 }
 
-// ---------------------------------------------------------------------------
-// AWS credential resolution
-// ---------------------------------------------------------------------------
 interface AwsCreds {
 	accessKeyId: string;
 	secretAccessKey: string;
@@ -95,9 +89,6 @@ async function getCredentials(): Promise<AwsCreds> {
 	throw new Error("No AWS credentials found. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure AWS CLI.");
 }
 
-// ---------------------------------------------------------------------------
-// SigV4 signing (minimal, for bedrock-agentcore service)
-// ---------------------------------------------------------------------------
 function sha256(data: string | Buffer): string {
 	return createHash("sha256").update(data).digest("hex");
 }
@@ -161,18 +152,13 @@ function signRequest(method: string, url: URL, body: string, creds: AwsCreds, re
 	return headers;
 }
 
-// ---------------------------------------------------------------------------
 // Proxy handle returned to bootstrap for lifecycle management
-// ---------------------------------------------------------------------------
 export interface AgentCoreProxyHandle {
 	port: number;
 	url: string;
 	close(): Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Start the proxy server
-// ---------------------------------------------------------------------------
 export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	const cfg = readProxyConfig();
 	let mcpSessionId: string | undefined;
@@ -317,9 +303,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	};
 }
 
-// ---------------------------------------------------------------------------
 // Standalone execution: `bun run shared/src/agentcore-proxy.ts`
-// ---------------------------------------------------------------------------
 if (import.meta.main) {
 	startAgentCoreProxy();
 }

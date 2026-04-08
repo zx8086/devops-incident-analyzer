@@ -11,9 +11,6 @@ export type ControlPlanesTool = {
 };
 
 export const controlPlanesTools = (): ControlPlanesTool[] => [
-	// =========================
-	// Basic Control Plane Operations
-	// =========================
 	{
 		method: "list_control_planes",
 		name: "List Control Planes",
@@ -43,9 +40,6 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		category: "control_planes",
 	},
 
-	// =========================
-	// Control Plane CRUD Operations
-	// =========================
 	{
 		method: "create_control_plane",
 		name: "Create Control Plane",
@@ -68,9 +62,6 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		category: "control_planes",
 	},
 
-	// =========================
-	// Data Plane Node Management
-	// =========================
 	{
 		method: "list_data_plane_nodes",
 		name: "List Data Plane Nodes",
@@ -86,9 +77,6 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		category: "control_planes",
 	},
 
-	// =========================
-	// Data Plane Token Management
-	// =========================
 	{
 		method: "create_data_plane_token",
 		name: "Create Data Plane Token",
@@ -111,9 +99,6 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		category: "control_planes",
 	},
 
-	// =========================
-	// Control Plane Configuration
-	// =========================
 	{
 		method: "get_control_plane_config",
 		name: "Get Control Plane Configuration",

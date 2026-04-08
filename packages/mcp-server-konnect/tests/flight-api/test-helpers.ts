@@ -6,7 +6,6 @@
 import { expect } from "bun:test";
 import { KongApi } from "../../src/api/kong-api.js";
 
-// Test Configuration Constants
 export const TEST_CONFIG = {
 	controlPlaneId: "1379aab0-2351-4e68-bff9-64e091173c82",
 	consumer: {
@@ -54,7 +53,6 @@ export const TEST_CONFIG = {
 	],
 };
 
-// Test Data Fixtures
 export const TEST_FIXTURES = {
 	flightData: {
 		origin: "JFK",
@@ -78,7 +76,6 @@ export const TEST_FIXTURES = {
 	},
 };
 
-// Test Utilities Class
 export class FlightApiTestUtils {
 	public readonly kongApi: KongApi;
 	private createdResources: {
@@ -311,9 +308,7 @@ export class FlightApiTestUtils {
 		return this.kongApi.queryApiRequests(timeRange, [], maxResults);
 	}
 
-	// =========================
 	// PHASE 1 EXPANSION: Easy-to-test tools (20 new methods)
-	// =========================
 
 	/**
 	 * Data Plane Token Management
@@ -570,10 +565,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 		return { ...this.createdResources };
 	}
 
-	// =========================
 	// PHASE 2 HELPER METHODS
 	// Medium-complexity tools (17 tools)
-	// =========================
 
 	async testCreateControlPlane(): Promise<unknown> {
 		const result = await this.kongApi.createControlPlane({
@@ -659,10 +652,8 @@ TPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTPTMIIBIjANBgkqhkiG9w0B
 		return await this.kongApi.fetchPortalApiDocument(apiSlug, documentSlug, "json");
 	}
 
-	// =========================
 	// PHASE 3 HELPER METHODS
 	// Complex workflows (4 tools)
-	// =========================
 
 	async testCreatePortalApplicationRegistration(applicationId: string, apiId: string): Promise<unknown> {
 		const result = await this.kongApi.createPortalApplicationRegistration(applicationId, {

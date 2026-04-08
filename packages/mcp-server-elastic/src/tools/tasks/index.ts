@@ -31,10 +31,6 @@ export class TaskCancellationError extends TaskError {
 	}
 }
 
-// ============================================================================
-// LIST TASKS
-// ============================================================================
-
 const listTasksSchema = z.object({
 	actions: z.union([z.string(), z.array(z.string())]).optional(),
 	detailed: booleanField().optional(),
@@ -105,10 +101,6 @@ export const listTasks = {
 	},
 };
 
-// ============================================================================
-// GET TASK
-// ============================================================================
-
 const getTaskSchema = z.object({
 	taskId: z.string().min(1, "Task ID cannot be empty"),
 	timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
@@ -173,10 +165,6 @@ export const getTask = {
 		}
 	},
 };
-
-// ============================================================================
-// CANCEL TASK
-// ============================================================================
 
 const cancelTaskSchema = z.object({
 	taskId: z.string().optional(),
@@ -250,5 +238,4 @@ export const cancelTask = {
 	handler: withReadOnlyCheck("elasticsearch_cancel_task", cancelTaskImpl, OperationType.WRITE),
 };
 
-// Export all tools
 export const tasksTools = [listTasks, getTask, cancelTask] as const;

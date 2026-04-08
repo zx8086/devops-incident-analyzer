@@ -9,11 +9,6 @@ import { logger } from "../../utils/logger.js";
 import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition (no complex Zod conversion)
 const _getLifecycleSchema = {
 	type: "object",
 	properties: {
@@ -66,10 +61,6 @@ const getLifecycleValidator = z.object({
 
 type _GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
 
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
-
 function createIlmMcpError(
 	error: Error | string,
 	context: {
@@ -88,10 +79,6 @@ function createIlmMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_get_lifecycle] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const getLifecycleHandler = async (args: any, extra?: any): Promise<SearchResult> => {
@@ -351,10 +338,6 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 		getLifecycleHandler,
 	);
 };
-
-// =============================================================================
-// COMPARISON NOTES
-// =============================================================================
 
 /*
 IMPROVEMENTS vs get_lifecycle_improved.ts:

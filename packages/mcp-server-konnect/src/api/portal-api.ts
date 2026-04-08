@@ -108,10 +108,6 @@ export class PortalApi {
 		}
 	}
 
-	// =========================
-	// Application Management
-	// =========================
-
 	async listApplications(
 		pageSize = 10,
 		pageNumber?: number,
@@ -143,10 +139,6 @@ export class PortalApi {
 		return this.portalRequest<any>(`/api/v3/applications/${applicationId}`, "DELETE");
 	}
 
-	// =========================
-	// Application Registrations
-	// =========================
-
 	async listApplicationRegistrations(
 		applicationId: string,
 		pageSize = 10,
@@ -174,10 +166,6 @@ export class PortalApi {
 	async deleteApplicationRegistration(applicationId: string, registrationId: string): Promise<any> {
 		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`, "DELETE");
 	}
-
-	// =========================
-	// Application Credentials
-	// =========================
 
 	async listCredentials(applicationId: string, pageSize = 10, pageNumber?: number): Promise<any> {
 		let endpoint = `/api/v3/applications/${applicationId}/credentials?page[size]=${pageSize}`;
@@ -207,10 +195,6 @@ export class PortalApi {
 		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/regenerate-secret`, "POST");
 	}
 
-	// =========================
-	// Developer Authentication
-	// =========================
-
 	async registerDeveloper(developerData: any): Promise<any> {
 		return this.portalRequest<any>(`/api/v3/register`, "POST", developerData);
 	}
@@ -227,17 +211,9 @@ export class PortalApi {
 		return this.portalRequest<any>(`/api/v3/logout`, "POST");
 	}
 
-	// =========================
-	// Application Analytics
-	// =========================
-
 	async queryApplicationAnalytics(applicationId: string, analyticsQuery: any): Promise<any> {
 		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/analytics`, "POST", analyticsQuery);
 	}
-
-	// =========================
-	// Portal APIs (within portal context)
-	// =========================
 
 	async listPortalApis(
 		pageSize = 10,
@@ -272,10 +248,6 @@ export class PortalApi {
 		const formatParam = format !== "json" ? `?format=${format}` : "";
 		return this.portalRequest<any>(`/api/v3/apis/${apiIdOrSlug}/documents/${documentIdOrSlug}${formatParam}`);
 	}
-
-	// =========================
-	// Utility Methods
-	// =========================
 
 	/**
 	 * Get portal info (useful for debugging and validation)

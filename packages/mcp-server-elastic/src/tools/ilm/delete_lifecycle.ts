@@ -11,14 +11,6 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition (no complex Zod conversion)
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const deleteLifecycleValidator = z.object({
 	policy: z.string().min(1, "Policy identifier cannot be empty"),
 	masterTimeout: z.string().optional(),
@@ -26,10 +18,6 @@ const deleteLifecycleValidator = z.object({
 });
 
 type DeleteLifecycleParams = z.infer<typeof deleteLifecycleValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmDeleteMcpError(
 	error: Error | string,
@@ -50,10 +38,6 @@ function createIlmDeleteMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_delete_lifecycle] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const deleteLifecycleHandler = async (args: any): Promise<SearchResult> => {
@@ -205,9 +189,7 @@ export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: Mc
 	);
 };
 
-// =============================================================================
 // COMPARISON NOTES
-// =============================================================================
 
 /*
 IMPROVEMENTS vs delete_lifecycle.ts:

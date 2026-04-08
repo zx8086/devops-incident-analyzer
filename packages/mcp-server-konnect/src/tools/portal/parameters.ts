@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// =========================
-// Common Field Schemas
-// =========================
-
 /**
  * Standard pagination parameters for portal APIs
  */
@@ -11,10 +7,6 @@ export const portalPaginationSchema = z.object({
 	pageSize: z.number().int().min(1).max(100).default(10).describe("Number of items per page"),
 	pageNumber: z.number().int().min(1).optional().describe("Page number to retrieve"),
 });
-
-// =========================
-// Portal API Operations
-// =========================
 
 export const listApisParameters = () =>
 	z.object({
@@ -46,10 +38,6 @@ export const fetchApiDocumentParameters = () =>
 		documentIdOrSlug: z.string().describe("Document ID or slug identifier"),
 		format: z.enum(["json", "yaml", "html", "markdown"]).default("json").describe("Requested document format"),
 	});
-
-// =========================
-// Application Management Operations
-// =========================
 
 export const listApplicationsParameters = () =>
 	z.object({
@@ -89,10 +77,6 @@ export const deleteApplicationParameters = () =>
 		applicationId: z.string().describe("Application ID to delete"),
 	});
 
-// =========================
-// Application Registration Operations
-// =========================
-
 export const listApplicationRegistrationsParameters = () =>
 	z.object({
 		applicationId: z.string().describe("Application ID"),
@@ -124,10 +108,6 @@ export const deleteApplicationRegistrationParameters = () =>
 		applicationId: z.string().describe("Application ID"),
 		registrationId: z.string().describe("Registration ID to delete"),
 	});
-
-// =========================
-// Credential Management Operations
-// =========================
 
 export const listCredentialsParameters = () =>
 	z.object({
@@ -165,10 +145,6 @@ export const regenerateApplicationSecretParameters = () =>
 		applicationId: z.string().describe("Application ID"),
 	});
 
-// =========================
-// Developer Authentication Operations
-// =========================
-
 export const registerDeveloperParameters = () =>
 	z.object({
 		email: z.string().email().describe("Developer email address"),
@@ -193,10 +169,6 @@ export const logoutParameters = () =>
 	z.object({
 		// No parameters - logs out current developer
 	});
-
-// =========================
-// Application Analytics Operations
-// =========================
 
 export const queryApplicationAnalyticsParameters = () =>
 	z.object({

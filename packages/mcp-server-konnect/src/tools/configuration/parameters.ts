@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// =========================
-// Common Field Schemas
-// =========================
-
 /**
  * Standard pagination size parameter
  */
@@ -14,10 +10,6 @@ export const pageSizeSchema = z
 	.max(1000)
 	.default(100)
 	.describe("Number of items to return per page");
-
-// =========================
-// Service CRUD Operation Schemas
-// =========================
 
 export const createServiceParameters = () =>
 	z.object({
@@ -69,10 +61,6 @@ export const deleteServiceParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		serviceId: z.string().describe("Service ID (obtainable from list-services tool)"),
 	});
-
-// =========================
-// Route CRUD Operation Schemas
-// =========================
 
 export const createRouteParameters = () =>
 	z.object({
@@ -130,10 +118,6 @@ export const deleteRouteParameters = () =>
 		routeId: z.string().describe("Route ID (obtainable from list-routes tool)"),
 	});
 
-// =========================
-// Consumer CRUD Operation Schemas
-// =========================
-
 export const createConsumerParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
@@ -164,10 +148,6 @@ export const deleteConsumerParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		consumerId: z.string().describe("Consumer ID (obtainable from list-consumers tool)"),
 	});
-
-// =========================
-// Plugin CRUD Operation Schemas
-// =========================
 
 export const createPluginParameters = () =>
 	z.object({
@@ -218,10 +198,6 @@ export const listPluginSchemasParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 	});
-
-// =========================
-// Legacy List Operation Schemas (for existing tools)
-// =========================
 
 export const listServicesParameters = () =>
 	z.object({

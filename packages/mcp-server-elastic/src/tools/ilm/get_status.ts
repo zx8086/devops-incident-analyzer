@@ -9,17 +9,6 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition (no parameters needed)
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
-
 function createIlmStatusMcpError(
 	error: Error | string,
 	context: {
@@ -36,10 +25,6 @@ function createIlmStatusMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_get_status] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const getStatusHandler = async (_args: any): Promise<SearchResult> => {

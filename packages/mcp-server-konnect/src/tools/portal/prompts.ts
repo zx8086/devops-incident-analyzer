@@ -1,7 +1,3 @@
-// =========================
-// Portal API Operations
-// =========================
-
 export const listApisPrompt = () => `
 List published APIs available in the Kong developer portal.
 
@@ -99,10 +95,6 @@ OUTPUT:
     - lastModified: String - Last modification date
   - relatedTools: Array - Tools for exploring related documentation
 `;
-
-// =========================
-// Application Management Operations
-// =========================
 
 export const listApplicationsPrompt = () => `
 List applications registered by the current developer.
@@ -202,10 +194,6 @@ OUTPUT:
   - relatedTools: Array - Tools for creating new applications
 `;
 
-// =========================
-// Application Registration Operations
-// =========================
-
 export const listApplicationRegistrationsPrompt = () => `
 List API registrations for a specific application.
 
@@ -282,10 +270,6 @@ OUTPUT:
   - message: String - Confirmation message
   - relatedTools: Array - Tools for managing remaining registrations
 `;
-
-// =========================
-// Credential Management Operations
-// =========================
 
 export const listCredentialsPrompt = () => `
 List credentials for a specific application.
@@ -381,10 +365,6 @@ OUTPUT:
   - relatedTools: Array - Tools for testing with new secret
 `;
 
-// =========================
-// Developer Authentication Operations
-// =========================
-
 export const registerDeveloperPrompt = () => `
 Register a new developer account for the portal.
 
@@ -452,10 +432,6 @@ OUTPUT:
   - message: String - Confirmation message
   - relatedTools: Array - Public tools available without authentication
 `;
-
-// =========================
-// Application Analytics Operations
-// =========================
 
 export const queryApplicationAnalyticsPrompt = () => `
 Query analytics data for a specific application.

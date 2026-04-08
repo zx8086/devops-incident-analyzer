@@ -11,14 +11,6 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const migrateToDataTiersValidator = z.object({
 	legacyTemplateToDelete: z.string().optional(),
 	nodeAttribute: z.string().optional(),
@@ -27,10 +19,6 @@ const migrateToDataTiersValidator = z.object({
 });
 
 type _MigrateToDataTiersParams = z.infer<typeof migrateToDataTiersValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmMigrateToDataTiersMcpError(
 	error: Error | string,
@@ -55,10 +43,6 @@ function createIlmMigrateToDataTiersMcpError(
 		context.details,
 	);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerMigrateToDataTiersTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const migrateToDataTiersHandler = async (args: any): Promise<SearchResult> => {

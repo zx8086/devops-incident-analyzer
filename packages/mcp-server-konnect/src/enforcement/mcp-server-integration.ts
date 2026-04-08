@@ -136,9 +136,7 @@ export function createBlockedOperationHandler(
 			let result: unknown;
 
 			switch (originalMethod) {
-				// ===========================
 				// SERVICE OPERATIONS - BLOCKED
-				// ===========================
 				case "create_service":
 					result = await BlockedServiceOperations.createService(
 						args.controlPlaneId,
@@ -184,9 +182,7 @@ export function createBlockedOperationHandler(
 					result = await BlockedServiceOperations.deleteService(args.controlPlaneId, args.serviceId, requestContext);
 					break;
 
-				// ===========================
 				// ROUTE OPERATIONS - BLOCKED
-				// ===========================
 				case "create_route":
 					result = await BlockedRouteOperations.createRoute(
 						args.controlPlaneId,
@@ -231,9 +227,7 @@ export function createBlockedOperationHandler(
 					result = await BlockedRouteOperations.deleteRoute(args.controlPlaneId, args.routeId, requestContext);
 					break;
 
-				// ===========================
 				// CONSUMER OPERATIONS - BLOCKED
-				// ===========================
 				case "create_consumer":
 					result = await BlockedConsumerOperations.createConsumer(
 						args.controlPlaneId,
@@ -251,9 +245,7 @@ export function createBlockedOperationHandler(
 					result = await BlockedConsumerOperations.deleteConsumer(args.controlPlaneId, args.consumerId, requestContext);
 					break;
 
-				// ===========================
 				// PLUGIN OPERATIONS - BLOCKED
-				// ===========================
 				case "create_plugin":
 					result = await BlockedPluginOperations.createPlugin(
 						args.controlPlaneId,
@@ -292,9 +284,7 @@ export function createBlockedOperationHandler(
 					result = await BlockedPluginOperations.deletePlugin(args.controlPlaneId, args.pluginId, requestContext);
 					break;
 
-				// ===========================
 				// READ OPERATIONS - NOT BLOCKED
-				// ===========================
 				case "list_services":
 					result = await BlockedListOperations.listServices(args.controlPlaneId);
 					break;

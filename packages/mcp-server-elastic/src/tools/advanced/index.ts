@@ -32,10 +32,6 @@ export class DeleteByQueryError extends AdvancedOperationError {
 	}
 }
 
-// ============================================================================
-// DELETE BY QUERY
-// ============================================================================
-
 const deleteByQuerySchema = z.object({
 	index: z.string().min(1, "Index cannot be empty"),
 	query: z.object({}).passthrough(),
@@ -145,10 +141,6 @@ export const deleteByQuery = {
 	handler: withReadOnlyCheck("elasticsearch_delete_by_query", deleteByQueryImpl, OperationType.DELETE),
 };
 
-// ============================================================================
-// TRANSLATE SQL QUERY
-// ============================================================================
-
 const translateSqlQuerySchema = z.object({
 	query: z.string().min(1, "SQL query cannot be empty"),
 	fetchSize: z.number().optional(),
@@ -219,5 +211,4 @@ export const translateSqlQuery = {
 	},
 };
 
-// Export all tools
 export const advancedTools = [deleteByQuery, translateSqlQuery] as const;

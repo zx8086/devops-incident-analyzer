@@ -11,9 +11,6 @@ export type PortalManagementTool = {
 };
 
 export const portalManagementTools = (): PortalManagementTool[] => [
-	// =========================
-	// Portal Management
-	// =========================
 	{
 		method: "list_portals",
 		name: "List Developer Portals",

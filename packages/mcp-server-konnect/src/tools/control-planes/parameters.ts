@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { CommonSchemas } from "../../utils/validation.js";
 
-// =========================
-// Control Planes API Parameters
-// =========================
-
 export const listControlPlanesParameters = () =>
 	z.object({
 		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of control planes per page"),
@@ -35,10 +31,6 @@ export const checkControlPlaneGroupMembershipParameters = () =>
 		),
 	});
 
-// =========================
-// Control Plane CRUD Operations
-// =========================
-
 export const createControlPlaneParameters = () =>
 	z.object({
 		name: z.string().min(1).describe("Control plane name"),
@@ -68,10 +60,6 @@ export const deleteControlPlaneParameters = () =>
 	z.object({
 		controlPlaneId: CommonSchemas.uuid.describe("Control Plane ID (obtainable from list-control-planes tool)"),
 	});
-
-// =========================
-// Data Plane Node Management
-// =========================
 
 export const listDataPlaneNodesParameters = () =>
 	z.object({
@@ -110,10 +98,6 @@ export const listDataPlaneTokensParameters = () =>
 		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of tokens per page"),
 		pageNumber: z.number().int().min(1).optional().describe("Page number to retrieve"),
 	});
-
-// =========================
-// Control Plane Configuration
-// =========================
 
 export const getControlPlaneConfigParameters = () =>
 	z.object({
