@@ -10,7 +10,7 @@ export const defaultConfig: Config = {
 		maxQueryTimeout: 30000,
 		maxResultsPerQuery: 1000,
 		transportMode: "stdio",
-		port: 8080,
+		port: 9080,
 		host: "0.0.0.0",
 		path: "/mcp",
 		sessionMode: "stateless",
