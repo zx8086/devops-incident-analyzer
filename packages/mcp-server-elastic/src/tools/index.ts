@@ -143,6 +143,10 @@ import { registerListTasksTool } from "./tasks/list_tasks.js";
 
 // Diagnostics Tools
 import { registerElasticsearchDiagnostics } from "./diagnostics/index.js";
+// Ingest Pipeline Tools (Get Pipeline, Simulate Pipeline, Processor Grok)
+import { registerGetIngestPipelineTool } from "./ingest/get_pipeline.js";
+import { registerProcessorGrokTool } from "./ingest/processor_grok.js";
+import { registerSimulateIngestPipelineTool } from "./ingest/simulate_pipeline.js";
 
 // Notification Tools (Progress tracking and status updates)
 import { notificationTools } from "./notifications/index.js";
@@ -196,6 +200,9 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 			"elasticsearch_get_shards",
 			"elasticsearch_indices_summary",
 			"elasticsearch_diagnostics",
+			"elasticsearch_get_ingest_pipeline",
+			"elasticsearch_simulate_ingest_pipeline",
+			"elasticsearch_processor_grok",
 		];
 		const shouldValidate = !readOnlyTools.includes(name);
 
@@ -336,6 +343,11 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	// registerWatcherGetSettingsTool(server, esClient);
 	// registerWatcherUpdateSettingsTool(server, esClient);
 	// registerWatcherStatsTool(server, esClient);
+
+	// Register Ingest Pipeline Tools
+	registerGetIngestPipelineTool(server, esClient);
+	registerSimulateIngestPipelineTool(server, esClient);
+	registerProcessorGrokTool(server, esClient);
 
 	// Register Diagnostics Tools
 	registerElasticsearchDiagnostics(server, esClient);
