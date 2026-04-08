@@ -188,6 +188,18 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 					const body = await req.text();
 					const maxAttempts = 2;
 
+					// SIO-626: Log tool calls passing through the proxy for observability
+					let toolName: string | undefined;
+					try {
+						const parsed = JSON.parse(body);
+						if (parsed.method === "tools/call" && parsed.params?.name) {
+							toolName = parsed.params.name;
+							logger.info({ tool: toolName, id: parsed.id }, `Proxying tool call: ${toolName}`);
+						}
+					} catch {
+						// Not valid JSON or not a tool call -- continue silently
+					}
+
 					for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 						try {
 							const creds = await getCredentials();
@@ -212,6 +224,13 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 							const respHeaders = new Headers();
 							respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
 							if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
+
+							if (toolName) {
+								logger.info(
+									{ tool: toolName, status: response.status },
+									`Tool call proxied: ${toolName} -> ${response.status}`,
+								);
+							}
 
 							return new Response(response.body, {
 								status: response.status,
