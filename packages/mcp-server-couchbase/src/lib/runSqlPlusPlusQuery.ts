@@ -20,7 +20,6 @@ export async function runSqlPlusPlusQuery(
 	const requestLogger = createContextLogger("runSqlPlusPlusQuery");
 
 	if (!ctx.lifespanContext.bucket) {
-		requestLogger.error("Bucket not initialized");
 		throw createError("DB_ERROR", "Bucket not initialized");
 	}
 
