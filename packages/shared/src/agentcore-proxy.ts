@@ -185,48 +185,71 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 		routes: {
 			"/mcp": {
 				POST: async (req: Request) => {
-					try {
-						const body = await req.text();
-						const creds = await getCredentials();
-						const targetUrl = new URL(`${cfg.basePath}?${cfg.queryString}`, cfg.baseUrl);
+					const body = await req.text();
+					const maxAttempts = 2;
 
-						const headers = signRequest("POST", targetUrl, body, creds, cfg.region);
+					for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+						try {
+							const creds = await getCredentials();
+							const targetUrl = new URL(`${cfg.basePath}?${cfg.queryString}`, cfg.baseUrl);
 
-						if (mcpSessionId) {
-							headers["mcp-session-id"] = mcpSessionId;
+							const headers = signRequest("POST", targetUrl, body, creds, cfg.region);
+
+							if (mcpSessionId) {
+								headers["mcp-session-id"] = mcpSessionId;
+							}
+
+							const response = await fetch(targetUrl.toString(), {
+								method: "POST",
+								headers,
+								body,
+								signal: AbortSignal.timeout(30_000),
+							});
+
+							const respSessionId = response.headers.get("mcp-session-id");
+							if (respSessionId) mcpSessionId = respSessionId;
+
+							const respHeaders = new Headers();
+							respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
+							if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
+
+							return new Response(response.body, {
+								status: response.status,
+								headers: respHeaders,
+							});
+						} catch (error) {
+							const isRetryable =
+								error instanceof Error &&
+								(error.name === "TimeoutError" || error.message.includes("aborted") || error.message.includes("ECONNRESET"));
+
+							if (isRetryable && attempt < maxAttempts) {
+								logger.warn(
+									{ attempt, error: error instanceof Error ? error.message : String(error) },
+									"Proxy request failed, retrying",
+								);
+								continue;
+							}
+
+							logger.error(
+								{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp", attempt },
+								"Proxy request failed",
+							);
+							return Response.json(
+								{
+									jsonrpc: "2.0",
+									error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+									id: null,
+								},
+								{ status: 502 },
+							);
 						}
-
-						const response = await fetch(targetUrl.toString(), {
-							method: "POST",
-							headers,
-							body,
-						});
-
-						const respSessionId = response.headers.get("mcp-session-id");
-						if (respSessionId) mcpSessionId = respSessionId;
-
-						const respHeaders = new Headers();
-						respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
-						if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
-
-						return new Response(response.body, {
-							status: response.status,
-							headers: respHeaders,
-						});
-					} catch (error) {
-						logger.error(
-							{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp" },
-							"Proxy request failed",
-						);
-						return Response.json(
-							{
-								jsonrpc: "2.0",
-								error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
-								id: null,
-							},
-							{ status: 502 },
-						);
 					}
+
+					// Unreachable, but TypeScript requires a return
+					return Response.json(
+						{ jsonrpc: "2.0", error: { code: -32000, message: "Max retries exceeded" }, id: null },
+						{ status: 502 },
+					);
 				},
 
 				GET: () => new Response("Method not allowed", { status: 405 }),
