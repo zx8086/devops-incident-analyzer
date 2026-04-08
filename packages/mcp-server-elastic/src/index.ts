@@ -36,10 +36,10 @@ if (import.meta.main) {
 					readOnlyStrictMode: config.server.readOnlyStrictMode,
 					maxQueryTimeout: config.server.maxQueryTimeout,
 					maxResultsPerQuery: config.server.maxResultsPerQuery,
-					transportMode: config.server.transportMode,
+					transport: config.server.transportMode,
 					port: config.server.port,
 				},
-				"Starting Elasticsearch MCP server with validated configuration",
+				"Starting Elasticsearch MCP Server",
 			);
 
 			return initializeElasticsearchClient(config);
@@ -69,7 +69,7 @@ if (import.meta.main) {
 					strictMode: config.server.readOnlyStrictMode,
 					transport: config.server.transportMode,
 				},
-				"Elasticsearch MCP Server started successfully",
+				"Elasticsearch MCP Server ready",
 			);
 		},
 	});

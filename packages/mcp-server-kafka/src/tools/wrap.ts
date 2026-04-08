@@ -2,7 +2,6 @@
 import type { AppConfig } from "../config/schemas.ts";
 import { normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
-import { logger } from "../utils/logger.ts";
 import { traceToolCall } from "../utils/tracing.ts";
 
 type ToolResponse = {
@@ -70,28 +69,9 @@ export function wrapHandler<T>(
 		}
 
 		return traceToolCall(toolName, async () => {
-			const startTime = Date.now();
 			try {
-				logger.debug(
-					{
-						args: Object.keys(args as Record<string, unknown>),
-					},
-					`Executing tool: ${toolName}`,
-				);
-				const result = await handler(args);
-				const duration = Date.now() - startTime;
-				logger.debug({ duration }, `Tool completed: ${toolName}`);
-				return result;
+				return await handler(args);
 			} catch (error) {
-				const duration = Date.now() - startTime;
-				logger.error(
-					{
-						error: error instanceof Error ? error.message : String(error),
-						stack: error instanceof Error ? error.stack : undefined,
-						duration,
-					},
-					`Tool failed: ${toolName}`,
-				);
 				const mcpError = normalizeError(error);
 				return ResponseBuilder.error(mcpError.message);
 			}

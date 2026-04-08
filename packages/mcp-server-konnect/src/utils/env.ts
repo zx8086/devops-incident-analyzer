@@ -75,7 +75,7 @@ export function getRuntimeInfo(): {
 export async function initializeEnvironment(): Promise<void> {
 	// Skip initialization if running under Bun (auto-loads .env files)
 	if (isBunRuntime()) {
-		log.info("Running under Bun - .env auto-loading enabled");
+		log.debug("Running under Bun - .env auto-loading enabled");
 		return;
 	}
 

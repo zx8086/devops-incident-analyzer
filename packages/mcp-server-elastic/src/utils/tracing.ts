@@ -11,7 +11,9 @@ import {
 	type TracingOptions,
 	withNestedTrace,
 } from "@devops-agent/shared";
-import { logger } from "./logger.js";
+import { createContextLogger } from "./logger.js";
+
+const log = createContextLogger("tool");
 
 export type { ConnectionContext };
 export { detectClient, generateSessionId, getCurrentTrace, isTracingActive, withNestedTrace };
@@ -23,16 +25,16 @@ export function initializeTracing(options?: TracingOptions): void {
 
 export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const startTime = Date.now();
-	logger.info({ tool: toolName, dataSource: "elastic" }, `Tool call started: ${toolName}`);
+	log.info({ tool: toolName, dataSource: "elastic" }, `Tool call started: ${toolName}`);
 
 	try {
 		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "elastic" });
 		const duration = Date.now() - startTime;
-		logger.info({ tool: toolName, dataSource: "elastic", duration }, `Tool call completed: ${toolName}`);
+		log.info({ tool: toolName, dataSource: "elastic", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error(
+		log.error(
 			{
 				tool: toolName,
 				dataSource: "elastic",

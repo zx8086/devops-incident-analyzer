@@ -3,13 +3,12 @@ import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTr
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportConfig } from "../config/index.js";
 import { createContextLogger, logger } from "../utils/logger.js";
-
-const log = createContextLogger("transport");
-
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
+
+const log = createContextLogger("transport");
 
 export interface TransportResult {
 	stdio?: StdioTransportResult;

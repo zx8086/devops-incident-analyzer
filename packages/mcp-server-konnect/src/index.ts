@@ -1,6 +1,6 @@
 // src/index.ts
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
-import { API_REGIONS, KongApi } from "./api/kong-api.js";
+import { KongApi } from "./api/kong-api.js";
 import { type Config, loadConfiguration } from "./config/index.js";
 import { createKonnectServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
@@ -24,7 +24,6 @@ if (import.meta.main) {
 		telemetry: buildTelemetryConfig("konnect-mcp-server"),
 
 		initDatasource: async () => {
-			serverLog.info("Loading configuration");
 			const config = await loadConfiguration();
 
 			logger.level = config.application.logLevel;
@@ -36,7 +35,7 @@ if (import.meta.main) {
 					version: runtimeInfo.version,
 					envSource: runtimeInfo.envSource,
 				},
-				"Runtime information",
+				"Starting Konnect MCP Server",
 			);
 
 			const api = new KongApi({
@@ -54,24 +53,14 @@ if (import.meta.main) {
 		onStarted: (ds) => {
 			serverLog.info(
 				{
-					availableRegions: Object.values(API_REGIONS),
 					region: ds.config.kong.region,
 					environment: ds.config.application.environment,
-					logLevel: ds.config.application.logLevel,
+					transport: ds.config.transport.mode,
+					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
 					tracing: ds.config.tracing.enabled,
 					monitoring: ds.config.monitoring.enabled,
-					transport: ds.config.transport.mode,
-					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
 				},
-				"Server starting",
-			);
-
-			serverLog.info(
-				{
-					transport: ds.config.transport.mode,
-					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
-				},
-				"Server ready",
+				"Konnect MCP Server ready",
 			);
 		},
 	});

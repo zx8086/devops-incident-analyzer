@@ -6,7 +6,9 @@ import {
 	traceToolCall as sharedTraceToolCall,
 	type TracingOptions,
 } from "@devops-agent/shared";
-import { logger } from "../utils/logger";
+import { createContextLogger } from "../utils/logger";
+
+const log = createContextLogger("tool");
 
 export { isTracingActive };
 
@@ -17,16 +19,16 @@ export function initializeTracing(options?: TracingOptions): void {
 
 export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
 	const startTime = Date.now();
-	logger.info({ tool: toolName, dataSource: "couchbase" }, `Tool call started: ${toolName}`);
+	log.info({ tool: toolName, dataSource: "couchbase" }, `Tool call started: ${toolName}`);
 
 	try {
 		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "couchbase" });
 		const duration = Date.now() - startTime;
-		logger.info({ tool: toolName, dataSource: "couchbase", duration }, `Tool call completed: ${toolName}`);
+		log.info({ tool: toolName, dataSource: "couchbase", duration }, `Tool call completed: ${toolName}`);
 		return result;
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		logger.error(
+		log.error(
 			{
 				tool: toolName,
 				dataSource: "couchbase",

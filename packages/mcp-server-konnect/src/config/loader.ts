@@ -140,7 +140,7 @@ export class ConfigurationManager {
 				return value;
 			}),
 		);
-		log.info(
+		log.debug(
 			{
 				environment: config.application.environment,
 				logLevel: config.application.logLevel,
@@ -153,7 +153,7 @@ export class ConfigurationManager {
 			"Configuration loaded successfully",
 		);
 		if (health.recommendations.length > 0) {
-			log.info({ recommendations: health.recommendations }, "Configuration recommendations");
+			log.debug({ recommendations: health.recommendations }, "Configuration recommendations");
 		}
 		if (health.issues.critical.length > 0) {
 			log.error(

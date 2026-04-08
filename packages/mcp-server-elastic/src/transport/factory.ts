@@ -1,11 +1,13 @@
 // src/transport/factory.ts
 import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { logger } from "../utils/logger.js";
+import { createContextLogger, logger } from "../utils/logger.js";
 import type { HttpTransportResult } from "./http.js";
 import { startHttpTransport } from "./http.js";
 import type { StdioTransportResult } from "./stdio.js";
 import { startStdioTransport } from "./stdio.js";
+
+const log = createContextLogger("transport");
 
 function splitCommaSeparated(value: string | undefined): string[] {
 	if (!value) return [];
@@ -51,10 +53,7 @@ export async function createTransport(
 	serverFactory: () => McpServer,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
-	logger.info(
-		{ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore },
-		"Resolving transport mode",
-	);
+	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -90,7 +89,7 @@ export async function createTransport(
 		result.stdio = await startStdioTransport(server);
 	}
 
-	logger.info(
+	log.info(
 		{
 			mode: config.mode,
 			stdio: useStdio,

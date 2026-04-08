@@ -792,4 +792,6 @@ function registerTools(
 		log.debug({ method: prefixedName, category: tool.category }, "Registering tool");
 		server.tool(prefixedName, tool.description, toolParams, tracedHandler);
 	});
+
+	log.info({ toolCount: allTools.length }, "All tools registered successfully");
 }

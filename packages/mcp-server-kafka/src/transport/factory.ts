@@ -3,11 +3,13 @@ import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTr
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { splitCommaSeparated } from "../config/helpers.ts";
 import type { TransportConfig } from "../config/schemas.ts";
-import { logger } from "../utils/logger.ts";
+import { createContextLogger, logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
+
+const log = createContextLogger("transport");
 
 export interface TransportResult {
 	stdio?: StdioTransportResult;
@@ -34,10 +36,7 @@ export async function createTransport(
 	serverFactory: () => McpServer,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
-	logger.info(
-		{ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore },
-		"Resolving transport mode",
-	);
+	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
@@ -73,7 +72,7 @@ export async function createTransport(
 		result.stdio = await startStdioTransport(server);
 	}
 
-	logger.info(
+	log.info(
 		{
 			mode: config.mode,
 			stdio: useStdio,

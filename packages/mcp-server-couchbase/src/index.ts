@@ -54,7 +54,15 @@ if (import.meta.main) {
 		telemetry: buildTelemetryConfig("couchbase-mcp-server"),
 
 		initDatasource: async () => {
-			logger.info("Starting Couchbase MCP Server...");
+			logger.info(
+				{
+					connectionString: config.database.connectionString,
+					bucket: config.database.bucketName,
+					transport: config.transport.mode,
+					port: config.transport.port,
+				},
+				"Starting Couchbase MCP Server",
+			);
 			await connectWithBackoffAndCircuitBreaker();
 			return connectionManager.getConnection();
 		},
@@ -65,14 +73,15 @@ if (import.meta.main) {
 
 		cleanupDatasource: async () => {
 			await connectionManager.close();
+			logger.info("Couchbase connection closed");
 		},
 
 		onStarted: () => {
 			logger.info(
 				{
-					mode: config.transport.mode,
+					transport: config.transport.mode,
 				},
-				"Couchbase MCP Server started successfully",
+				"Couchbase MCP Server ready",
 			);
 		},
 	});

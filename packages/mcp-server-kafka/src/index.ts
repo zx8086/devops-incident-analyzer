@@ -26,10 +26,34 @@ if (import.meta.main) {
 	if (process.env.AGENTCORE_RUNTIME_ARN) {
 		const { startAgentCoreProxy } = await import("@devops-agent/shared");
 		logger.info(
-			{ arn: process.env.AGENTCORE_RUNTIME_ARN },
-			"AgentCore mode: starting SigV4 proxy (server runs remotely)",
+			{
+				arn: process.env.AGENTCORE_RUNTIME_ARN,
+				transport: "agentcore-proxy",
+			},
+			"Starting Kafka MCP Server",
 		);
-		await startAgentCoreProxy();
+		const proxy = await startAgentCoreProxy();
+		logger.info(
+			{
+				transport: "agentcore-proxy",
+				port: proxy.port,
+				url: proxy.url,
+			},
+			"Kafka MCP Server ready",
+		);
+		logger.info("kafka-mcp-server started successfully");
+
+		let isShuttingDown = false;
+		const shutdown = async () => {
+			if (isShuttingDown) return;
+			isShuttingDown = true;
+			logger.info("Shutting down kafka-mcp-server...");
+			await proxy.close();
+			logger.info("kafka-mcp-server shutdown completed");
+			process.exit(0);
+		};
+		process.on("SIGINT", () => shutdown());
+		process.on("SIGTERM", () => shutdown());
 	} else {
 		// Local mode: start the Kafka MCP server locally.
 		const config = getConfig();
@@ -91,8 +115,9 @@ if (import.meta.main) {
 					{
 						provider: config.kafka.provider,
 						transport: config.transport.mode,
+						toolCount,
 					},
-					`Kafka MCP Server started (${toolCount} tools per server instance)`,
+					"Kafka MCP Server ready",
 				);
 			},
 		});

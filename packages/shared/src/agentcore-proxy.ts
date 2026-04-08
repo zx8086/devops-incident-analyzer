@@ -268,7 +268,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 		url: proxyUrl,
 		async close() {
 			server.stop(true);
-			logger.info("AgentCore proxy stopped");
+			logger.info("AgentCore proxy closed");
 		},
 	};
 }

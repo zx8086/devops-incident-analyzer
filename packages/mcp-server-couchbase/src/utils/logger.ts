@@ -5,8 +5,8 @@ export type LoggerInterface = ReturnType<typeof createMcpLogger>;
 
 export const logger = createMcpLogger("couchbase-mcp-server");
 
-export function createContextLogger(context: string) {
-	return logger.child({ component: context });
+export function createContextLogger(component: string) {
+	return logger.child({ component });
 }
 
 export async function measureOperation<T>(

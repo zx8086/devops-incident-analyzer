@@ -42,5 +42,6 @@ export function registerAllTools(
 		registerKsqlTools(server, options.ksqlService);
 	}
 
-	logger.info("All tools registered successfully");
+	const toolCount = 15 + (options?.schemaRegistryService ? 8 : 0) + (options?.ksqlService ? 7 : 0);
+	logger.info({ toolCount }, "All tools registered successfully");
 }

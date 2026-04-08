@@ -1,5 +1,6 @@
 // src/config/loader.ts
 
+import { logger } from "../utils/logger";
 import { defaultConfig } from "./defaults";
 import { envVarMapping } from "./envMapping";
 import type { Config } from "./schemas";
@@ -130,48 +131,17 @@ try {
 	};
 
 	config = ConfigSchema.parse(mergedConfig);
-	process.stderr.write(
-		"Configuration loaded successfully: " +
-			JSON.stringify(
-				{
-					server: {
-						name: config.server.name,
-						version: config.server.version,
-						readOnlyQueryMode: config.server.readOnlyQueryMode,
-					},
-					transport: {
-						mode: config.transport.mode,
-						port: config.transport.port,
-						host: config.transport.host,
-						path: config.transport.path,
-						sessionMode: config.transport.sessionMode,
-					},
-					database: {
-						connectionString: config.database.connectionString,
-						bucketName: config.database.bucketName,
-					},
-					logging: {
-						level: config.logging.level,
-						format: config.logging.format,
-					},
-					documentation: {
-						enabled: config.documentation?.enabled || false,
-						baseDirectory: config.documentation?.baseDirectory || "./docs",
-						fileExtension: config.documentation?.fileExtension || ".md",
-					},
-					playbooks: {
-						enabled: config.playbooks?.enabled || false,
-						baseDirectory: config.playbooks?.baseDirectory || "./playbook",
-						fileExtension: config.playbooks?.fileExtension || ".md",
-					},
-				},
-				null,
-				2,
-			) +
-			"\n",
+	logger.debug(
+		{
+			server: { name: config.server.name, version: config.server.version },
+			transport: { mode: config.transport.mode, port: config.transport.port },
+			database: { connectionString: config.database.connectionString, bucket: config.database.bucketName },
+			logging: { level: config.logging.level },
+		},
+		"Configuration loaded successfully",
 	);
 } catch (error) {
-	process.stderr.write(`Configuration validation failed: ${error instanceof Error ? error.message : String(error)}\n`);
+	logger.error({ error: error instanceof Error ? error.message : String(error) }, "Configuration validation failed");
 	throw new Error(`Invalid configuration: ${error instanceof Error ? error.message : String(error)}`);
 }
 

@@ -35,11 +35,6 @@ export function registerAll(server: McpServer, bucket: Bucket): void {
 	// Restore original to avoid double-wrapping on re-registration
 	serverRecord.tool = originalTool;
 
-	logger.info(
-		{
-			toolCount: registered.length,
-			tools: registered,
-		},
-		"All tools registered successfully",
-	);
+	logger.debug({ tools: registered }, "Registered tool names");
+	logger.info({ toolCount: registered.length }, "All tools registered successfully");
 }
