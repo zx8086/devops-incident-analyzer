@@ -67,6 +67,8 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
+export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts";
+export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {
 	buildEcsOptions,
 	createFormattedDestination,
@@ -77,7 +79,10 @@ export {
 	getEnv,
 	isProdOrStaging,
 	measureOperation,
+	type McpLoggerOptions,
 } from "./logger.ts";
+export { redactPiiContent } from "./pii-redactor.ts";
+export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
 	buildTelemetryConfig,
 	getTracer,

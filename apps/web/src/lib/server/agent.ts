@@ -2,6 +2,7 @@
 import { buildGraph, createMcpClient, getAgent } from "@devops-agent/agent";
 import { getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
+import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
 
 // SIO-621: Derive recursion limit from gitagent runtime.max_turns instead of hardcoding.
@@ -63,6 +64,9 @@ export async function invokeAgent(
 		metadata?: Record<string, unknown>;
 	},
 ) {
+	// SIO-637: Kill switch prevents new graph invocations
+	if (isKillSwitchActive()) throw new KillSwitchError();
+
 	const { HumanMessage } = await import("@langchain/core/messages");
 	const graph = await getGraph();
 

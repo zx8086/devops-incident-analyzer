@@ -2,7 +2,7 @@
 
 import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
 import { traceSpan } from "@devops-agent/observability";
-import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
+import { AttachmentBlockSchema, DataSourceContextSchema, redactPiiContent } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import { invokeAgent } from "$lib/server/agent";
@@ -99,7 +99,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
 									const nodeName = event.metadata?.langgraph_node;
 									if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
-										const content = String(event.data.chunk.content);
+										const content = redactPiiContent(String(event.data.chunk.content));
 										_responseContent += content;
 										send({ type: "message", content });
 									}

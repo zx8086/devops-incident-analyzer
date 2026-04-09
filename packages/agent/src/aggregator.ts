@@ -1,5 +1,6 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
+import { redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -114,7 +115,8 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const startTime = Date.now();
 	const response = await llm.invoke(messages, config);
 
-	const answer = String(response.content);
+	const rawAnswer = String(response.content);
+	const answer = redactPiiContent(rawAnswer);
 	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Aggregation complete");
 	return {
 		messages: [new AIMessage({ content: answer })],
