@@ -129,6 +129,21 @@ describe("skill-loader", () => {
 		expect(prompt).toContain("Elasticsearch specialist");
 		expect(prompt).not.toContain("Skill:");
 	});
+
+	test("includes knowledge base in system prompt", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Knowledge Base");
+		expect(prompt).toContain("### Runbooks");
+		expect(prompt).toContain("high-error-rate.md");
+	});
+
+	test("sub-agent prompt does not include knowledge", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
+		const prompt = buildSystemPrompt(elastic);
+		expect(prompt).not.toContain("## Knowledge Base");
+	});
 });
 
 describe("tool-prompt", () => {
