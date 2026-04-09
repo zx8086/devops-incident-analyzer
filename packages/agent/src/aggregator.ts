@@ -38,6 +38,13 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 		? ""
 		: `\n\nTIMELINE GUIDANCE: The queried datasources (${queriedSources.join(", ")}) return infrastructure state snapshots, not timestamped event logs. A correlated timeline is not expected for these sources. Do not penalize the confidence score for the absence of timestamps or timeline data. If no event-log datasources (e.g. elastic) were queried, omit the correlated timeline section entirely.`;
 
+	// When tool errors indicate connectivity problems, instruct the LLM to lead with that
+	const failedSources = state.dataSourceResults.filter((r) => r.toolErrors && r.toolErrors.length > 0);
+	const connectivityGuidance =
+		failedSources.length > 0
+			? `\n\nTOOL FAILURE GUIDANCE: ${failedSources.length} datasource(s) reported tool errors. When tool errors show repeated metadata/connection failures, the report summary must lead with the infrastructure connectivity problem (e.g. "brokers are unreachable") as the primary finding. Do not present connectivity failure as one possibility among equals -- state it as the leading diagnosis and list other causes as secondary.`
+			: "";
+
 	const messages: BaseMessage[] = [new SystemMessage(systemPrompt)];
 
 	// On follow-ups with a prior answer, provide it as condensed context instead of
@@ -56,7 +63,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
 		),
 	);
 
@@ -85,7 +92,18 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		.map((r) => {
 			const status = r.status === "success" ? "OK" : `ERROR: ${r.error ?? "unknown"}`;
 			const data = r.status === "success" ? String(r.data) : "No data";
-			return `### ${r.dataSourceId} [${status}] (${r.duration ?? 0}ms)\n${data}`;
+			const header = `### ${r.dataSourceId} [${status}] (${r.duration ?? 0}ms)`;
+
+			// Surface tool-level errors so the LLM can distinguish "some tools failed"
+			// from "all tools failed" and identify the failure pattern (auth, connectivity, etc.)
+			const toolErrorBlock =
+				r.toolErrors && r.toolErrors.length > 0
+					? `\n\nTool errors (${r.toolErrors.length} failures):\n${r.toolErrors
+							.map((e) => `- ${e.toolName} [${e.category}]: ${e.message}`)
+							.join("\n")}`
+					: "";
+
+			return `${header}${toolErrorBlock}\n${data}`;
 		})
 		.join("\n\n");
 

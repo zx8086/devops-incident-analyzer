@@ -29,6 +29,79 @@ Not all credentials are required for every development task. If you are only wor
 
 ---
 
+## Local Infrastructure
+
+The MCP servers connect to external data sources. Most (Elasticsearch, Couchbase Capella, Kong Konnect) are cloud-hosted and only need credentials in `.env`. Kafka is the exception -- when using `KAFKA_PROVIDER=local`, you need a Kafka broker running on your machine.
+
+### Local Kafka Broker
+
+Start a single-node KRaft Kafka broker (no Zookeeper required):
+
+```bash
+docker run -d --name kafka \
+  -p 9092:9092 \
+  -e KAFKA_NODE_ID=0 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=0@localhost:9093 \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
+  -e CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk \
+  apache/kafka:latest
+```
+
+Verify the broker is running:
+
+```bash
+docker logs kafka 2>&1 | tail -3
+# Should show: Kafka Server started
+
+lsof -i :9092
+# Should show a process listening
+```
+
+Ensure `.env` is configured for local Kafka (and that `AGENTCORE_RUNTIME_ARN` is **not** set, otherwise the server enters AgentCore proxy mode instead of connecting to local Kafka):
+
+```bash
+KAFKA_PROVIDER=local
+KAFKA_BROKERS=localhost:9092
+
+# Comment out or remove these for local development:
+# AGENTCORE_RUNTIME_ARN=...
+# AGENTCORE_PROXY_PORT=...
+# AGENTCORE_AWS_ACCESS_KEY_ID=...
+# AGENTCORE_AWS_SECRET_ACCESS_KEY=...
+```
+
+### Managing the Local Broker
+
+```bash
+# Stop
+docker stop kafka
+
+# Start again (data persists)
+docker start kafka
+
+# Remove completely (loses all topic data)
+docker rm -f kafka
+```
+
+### Creating Test Topics
+
+Use the Kafka CLI inside the container to create topics for testing:
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --create --topic test-topic --partitions 3 --replication-factor 1
+
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --list
+```
+
+---
+
 ## Option 1: Docker Compose
 
 Docker Compose starts all five services (four MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.

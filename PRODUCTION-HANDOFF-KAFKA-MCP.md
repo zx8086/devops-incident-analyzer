@@ -159,7 +159,7 @@ echo "ECR URI:    $ECR_URI"
 
 Choose the scenario that applies:
 
-### Step 1a: Simon Pushed to Your ECR
+### Step 1a: Application Owner Pushed to Your ECR
 
 If the application owner pushed the image directly to your ECR, verify it exists:
 
@@ -575,7 +575,7 @@ cat /tmp/mcp-cluster-response.bin
 
 ## 9. Step 6: Hand Back to Application Owner
 
-Provide these values to the application owner (Simon):
+Provide these values to the application owner:
 
 | Item | Variable | Value |
 |------|----------|-------|
