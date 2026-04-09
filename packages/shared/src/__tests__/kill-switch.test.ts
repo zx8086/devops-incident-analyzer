@@ -1,8 +1,8 @@
 // shared/src/__tests__/kill-switch.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isKillSwitchActive, KillSwitchError } from "../kill-switch.ts";
 
 const SENTINEL = join(tmpdir(), `kill-switch-test-${Date.now()}`);

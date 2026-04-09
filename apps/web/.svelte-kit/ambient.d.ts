@@ -127,6 +127,8 @@ declare module '$env/static/private' {
 	export const KAFKA_LANGSMITH_PROJECT: string;
 	export const COUCHBASE_LANGSMITH_PROJECT: string;
 	export const KONNECT_LANGSMITH_PROJECT: string;
+	export const LINEAR_TEAM_ID: string;
+	export const LINEAR_PROJECT_ID: string;
 }
 
 /**
@@ -302,6 +304,8 @@ declare module '$env/dynamic/private' {
 		KAFKA_LANGSMITH_PROJECT: string;
 		COUCHBASE_LANGSMITH_PROJECT: string;
 		KONNECT_LANGSMITH_PROJECT: string;
+		LINEAR_TEAM_ID: string;
+		LINEAR_PROJECT_ID: string;
 		[key: `PUBLIC_${string}`]: undefined;
 		[key: `${string}`]: string | undefined;
 	}

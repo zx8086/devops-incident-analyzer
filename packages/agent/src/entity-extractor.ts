@@ -72,13 +72,14 @@ export async function extractEntities(
 
 	// SIO-630: Use normalized incident data as hints when available
 	const normalized = state.normalizedIncident;
-	const normalizationHint = normalized?.severity || normalized?.affectedServices?.length || normalized?.timeWindow
-		? `\n\nNormalization context (use as hints, not overrides):
+	const normalizationHint =
+		normalized?.severity || normalized?.affectedServices?.length || normalized?.timeWindow
+			? `\n\nNormalization context (use as hints, not overrides):
 ${normalized.severity ? `- Inferred severity: ${normalized.severity}` : ""}
 ${normalized.timeWindow ? `- Time window: ${normalized.timeWindow.from} to ${normalized.timeWindow.to}` : ""}
 ${normalized.affectedServices?.length ? `- Affected services: ${normalized.affectedServices.map((s) => s.name).join(", ")}` : ""}
 ${normalized.extractedMetrics?.length ? `- Metrics mentioned: ${normalized.extractedMetrics.map((m) => `${m.name}${m.value ? `=${m.value}` : ""}`).join(", ")}` : ""}`
-		: "";
+			: "";
 
 	const llm = createLlm("entityExtractor");
 	const systemPrompt = `Extract incident entities from the query. Available datasources: ${DATA_SOURCE_IDS.join(", ")}.

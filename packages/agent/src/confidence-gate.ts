@@ -37,10 +37,7 @@ export function checkConfidence(state: AgentStateType): Partial<AgentStateType> 
 	logger.info({ confidenceScore: score, threshold }, "Checking confidence against HITL threshold");
 
 	if (score > 0 && score < threshold) {
-		logger.warn(
-			{ confidenceScore: score, threshold },
-			"Confidence below threshold, flagging for user review",
-		);
+		logger.warn({ confidenceScore: score, threshold }, "Confidence below threshold, flagging for user review");
 		return { lowConfidence: true };
 	}
 

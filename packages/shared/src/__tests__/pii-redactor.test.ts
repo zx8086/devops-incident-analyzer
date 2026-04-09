@@ -4,15 +4,11 @@ import { redactPiiContent } from "../pii-redactor.ts";
 
 describe("redactPiiContent", () => {
 	test("redacts email addresses", () => {
-		expect(redactPiiContent("contact user@example.com for help")).toBe(
-			"contact [EMAIL_REDACTED] for help",
-		);
+		expect(redactPiiContent("contact user@example.com for help")).toBe("contact [EMAIL_REDACTED] for help");
 	});
 
 	test("redacts IPv4 addresses", () => {
-		expect(redactPiiContent("server at 192.168.1.100 is down")).toBe(
-			"server at [IP_REDACTED] is down",
-		);
+		expect(redactPiiContent("server at 192.168.1.100 is down")).toBe("server at [IP_REDACTED] is down");
 	});
 
 	test("redacts US phone numbers", () => {
