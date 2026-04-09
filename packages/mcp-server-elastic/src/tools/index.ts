@@ -192,7 +192,9 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 			inputSchema: config.inputSchema,
 		});
 
-		// Skip security validation for read-only search operations
+		// SIO-621: Skip security validation for read-only tools. The SQL injection
+		// detection patterns (quotes, keywords like SELECT/WHERE) produce false
+		// positives on legitimate Elasticsearch SQL queries and read-only parameters.
 		const readOnlyTools = [
 			"elasticsearch_search",
 			"elasticsearch_list_indices",
@@ -203,6 +205,42 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 			"elasticsearch_get_ingest_pipeline",
 			"elasticsearch_simulate_ingest_pipeline",
 			"elasticsearch_processor_grok",
+			"elasticsearch_execute_sql_query",
+			"elasticsearch_translate_sql_query",
+			"elasticsearch_count_documents",
+			"elasticsearch_scroll_search",
+			"elasticsearch_multi_search",
+			"elasticsearch_clear_scroll",
+			"elasticsearch_get_cluster_health",
+			"elasticsearch_get_cluster_stats",
+			"elasticsearch_get_nodes_info",
+			"elasticsearch_get_nodes_stats",
+			"elasticsearch_get_aliases",
+			"elasticsearch_get_field_mapping",
+			"elasticsearch_clear_sql_cursor",
+			"elasticsearch_get_document",
+			"elasticsearch_document_exists",
+			"elasticsearch_multi_get",
+			"elasticsearch_search_template",
+			"elasticsearch_multi_search_template",
+			"elasticsearch_get_index_template",
+			"elasticsearch_get_index",
+			"elasticsearch_index_exists",
+			"elasticsearch_get_index_settings",
+			"elasticsearch_ilm_get_lifecycle",
+			"elasticsearch_ilm_explain_lifecycle",
+			"elasticsearch_ilm_get_status",
+			"elasticsearch_list_tasks",
+			"elasticsearch_tasks_get_task",
+			"elasticsearch_field_usage_stats",
+			"elasticsearch_disk_usage",
+			"elasticsearch_get_data_lifecycle_stats",
+			"elasticsearch_get_index_info",
+			"elasticsearch_get_index_settings_advanced",
+			"elasticsearch_exists_alias",
+			"elasticsearch_exists_index_template",
+			"elasticsearch_exists_template",
+			"elasticsearch_explain_data_lifecycle",
 		];
 		const shouldValidate = !readOnlyTools.includes(name);
 
