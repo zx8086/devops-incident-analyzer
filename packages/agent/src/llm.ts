@@ -1,8 +1,16 @@
 // agent/src/llm.ts
 
-import { type BedrockModelConfig, loadAgent, resolveBedrockConfig } from "@devops-agent/gitagent-bridge";
+import {
+	type BedrockModelConfig,
+	loadAgent,
+	resolveBedrockConfig,
+	resolveFallbackConfig,
+} from "@devops-agent/gitagent-bridge";
+import { getLogger } from "@devops-agent/observability";
 import { ChatBedrockConverse } from "@langchain/aws";
 import { getAgentsDir } from "./paths.ts";
+
+const logger = getLogger("agent:llm");
 
 let cachedRootAgent: ReturnType<typeof loadAgent> | null = null;
 
@@ -32,6 +40,22 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	followUp: { temperature: 0.5, maxTokens: 256 },
 };
 
+function buildChatModel(
+	bedrockConfig: BedrockModelConfig,
+	overrides: Partial<BedrockModelConfig>,
+): ChatBedrockConverse {
+	return new ChatBedrockConverse({
+		model: bedrockConfig.model,
+		region: bedrockConfig.region,
+		temperature: overrides.temperature ?? bedrockConfig.temperature,
+		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
+	});
+}
+
+// SIO-621: Roles that are passed to createReactAgent need bindTools(), which
+// RunnableWithFallbacks does not implement. Only wrap invoke-only roles with fallbacks.
+const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
+
 export function createLlm(role: LlmRole): ChatBedrockConverse {
 	const agent = getRootAgent();
 	const isLightweight = role === "classifier" || role === "entityExtractor";
@@ -40,11 +64,17 @@ export function createLlm(role: LlmRole): ChatBedrockConverse {
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
+	const primary = buildChatModel(bedrockConfig, overrides);
 
-	return new ChatBedrockConverse({
-		model: bedrockConfig.model,
-		region: bedrockConfig.region,
-		temperature: overrides.temperature ?? bedrockConfig.temperature,
-		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
-	});
+	// SIO-621: Wrap with fallback model from gitagent manifest if available.
+	// Skip for tool-binding roles (subAgent) because createReactAgent requires
+	// bindTools() which RunnableWithFallbacks does not implement.
+	if (TOOL_BINDING_ROLES.has(role)) return primary;
+
+	const fallbackConfig = resolveFallbackConfig(modelConfig);
+	if (!fallbackConfig) return primary;
+
+	const fallback = buildChatModel(fallbackConfig, overrides);
+	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
+	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
 }

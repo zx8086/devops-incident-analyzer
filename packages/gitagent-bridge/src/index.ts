@@ -2,7 +2,12 @@
 
 export { complianceToMetadata, requiresApproval } from "./compliance.ts";
 export { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
-export { type BedrockModelConfig, getRecursionLimit, resolveBedrockConfig } from "./model-factory.ts";
+export {
+	type BedrockModelConfig,
+	getRecursionLimit,
+	resolveBedrockConfig,
+	resolveFallbackConfig,
+} from "./model-factory.ts";
 export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { buildSystemPrompt } from "./skill-loader.ts";
 export {

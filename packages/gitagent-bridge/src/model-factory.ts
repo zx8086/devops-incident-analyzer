@@ -32,6 +32,29 @@ export function resolveBedrockConfig(
 	};
 }
 
+// SIO-621: Resolve fallback model from gitagent manifest fallback array.
+// Returns the first valid fallback model config, or null if none are available.
+export function resolveFallbackConfig(
+	modelConfig: ModelConfig | undefined,
+	defaults: { temperature?: number; maxTokens?: number } = {},
+): BedrockModelConfig | null {
+	const fallbacks = modelConfig?.fallback;
+	if (!fallbacks || fallbacks.length === 0) return null;
+
+	for (const fallback of fallbacks) {
+		const bedrockId = MODEL_MAP[fallback];
+		if (bedrockId) {
+			return {
+				model: bedrockId,
+				region: process.env.AWS_REGION ?? "eu-west-1",
+				temperature: modelConfig?.constraints?.temperature ?? defaults.temperature ?? 0,
+				maxTokens: modelConfig?.constraints?.max_tokens ?? defaults.maxTokens ?? 4096,
+			};
+		}
+	}
+	return null;
+}
+
 export function getRecursionLimit(maxTurns?: number): number {
 	return (maxTurns ?? 25) * 2;
 }

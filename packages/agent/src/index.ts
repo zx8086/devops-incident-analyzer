@@ -16,7 +16,7 @@ export {
 	getToolsForDataSource,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
-export { buildOrchestratorPrompt, buildSubAgentPrompt } from "./prompt-context.ts";
+export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";
