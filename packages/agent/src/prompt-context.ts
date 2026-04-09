@@ -56,3 +56,10 @@ export function getToolDefinitionForDataSource(dataSourceId: string): ToolDefini
 	const agent = getAgent();
 	return agent.tools.find((t) => t.tool_mapping?.mcp_server === dataSourceId);
 }
+
+export function getRunbookFilenames(): string[] {
+	const agent = getAgent();
+	return agent.knowledge
+		.filter((k) => k.category === "runbooks")
+		.map((k) => k.filename);
+}
