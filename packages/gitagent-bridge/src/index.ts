@@ -1,7 +1,7 @@
 // gitagent-bridge/src/index.ts
 
 export { complianceToMetadata, requiresApproval } from "./compliance.ts";
-export { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
+export { type KnowledgeEntry, type LoadedAgent, loadAgent } from "./manifest-loader.ts";
 export {
 	type BedrockModelConfig,
 	getRecursionLimit,
@@ -27,6 +27,9 @@ export {
 	type AgentManifest,
 	AgentManifestSchema,
 	type ComplianceConfig,
+	KnowledgeCategorySchema,
+	type KnowledgeIndex,
+	KnowledgeIndexSchema,
 	type ModelConfig,
 	type ToolDefinition,
 	ToolDefinitionSchema,

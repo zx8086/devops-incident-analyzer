@@ -2,7 +2,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { type AgentManifest, AgentManifestSchema, type ToolDefinition, ToolDefinitionSchema } from "./types.ts";
+import { type AgentManifest, AgentManifestSchema, KnowledgeIndexSchema, type ToolDefinition, ToolDefinitionSchema } from "./types.ts";
+
+export interface KnowledgeEntry {
+	category: string;
+	filename: string;
+	content: string;
+}
 
 export interface LoadedAgent {
 	manifest: AgentManifest;
@@ -11,6 +17,7 @@ export interface LoadedAgent {
 	tools: ToolDefinition[];
 	skills: Map<string, string>;
 	subAgents: Map<string, LoadedAgent>;
+	knowledge: KnowledgeEntry[];
 }
 
 export function loadAgent(agentDir: string): LoadedAgent {
@@ -53,7 +60,37 @@ export function loadAgent(agentDir: string): LoadedAgent {
 		}
 	}
 
-	return { manifest, soul, rules, tools, skills, subAgents };
+	const knowledge = loadKnowledge(agentDir);
+	return { manifest, soul, rules, tools, skills, subAgents, knowledge };
+}
+
+function loadKnowledge(agentDir: string): KnowledgeEntry[] {
+	const knowledgeDir = join(agentDir, "knowledge");
+	const indexPath = join(knowledgeDir, "index.yaml");
+
+	if (!existsSync(indexPath)) return [];
+
+	const indexYaml = parse(readFileSync(indexPath, "utf-8"));
+	const index = KnowledgeIndexSchema.safeParse(indexYaml);
+	if (!index.success) return [];
+
+	const entries: KnowledgeEntry[] = [];
+	for (const [category, config] of Object.entries(index.data.categories)) {
+		const categoryDir = join(knowledgeDir, config.path);
+		if (!isDirectory(categoryDir)) continue;
+
+		const files = readdirSync(categoryDir).filter(
+			(f) => f.endsWith(".md") && f !== ".gitkeep",
+		);
+		for (const file of files) {
+			const content = readFileSync(join(categoryDir, file), "utf-8").trim();
+			if (content) {
+				entries.push({ category, filename: file, content });
+			}
+		}
+	}
+
+	return entries;
 }
 
 function loadOptionalFile(path: string): string {

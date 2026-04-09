@@ -99,3 +99,16 @@ export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 export type ComplianceConfig = z.infer<typeof ComplianceSchema>;
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 export type ToolMapping = NonNullable<ToolDefinition["tool_mapping"]>;
+
+export const KnowledgeCategorySchema = z.object({
+	path: z.string(),
+	description: z.string(),
+});
+
+export const KnowledgeIndexSchema = z.object({
+	name: z.string(),
+	description: z.string(),
+	version: z.string(),
+	categories: z.record(z.string(), KnowledgeCategorySchema),
+});
+export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;

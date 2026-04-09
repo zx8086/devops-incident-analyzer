@@ -323,6 +323,42 @@ describe("tool-schema", () => {
 	});
 });
 
+describe("knowledge-loader", () => {
+	test("loads knowledge entries from agent directory", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		expect(agent.knowledge).toBeDefined();
+		expect(Array.isArray(agent.knowledge)).toBe(true);
+	});
+
+	test("loads runbook entries with correct category", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const runbooks = agent.knowledge.filter((k) => k.category === "runbooks");
+		expect(runbooks.length).toBeGreaterThanOrEqual(1);
+		for (const entry of runbooks) {
+			expect(entry.filename).toMatch(/\.md$/);
+			expect(entry.content.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("loads systems-map entries", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const systemsMap = agent.knowledge.filter((k) => k.category === "systems-map");
+		expect(systemsMap.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("loads slo-policies entries", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const slo = agent.knowledge.filter((k) => k.category === "slo-policies");
+		expect(slo.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("skips .gitkeep files", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const gitkeeps = agent.knowledge.filter((k) => k.filename === ".gitkeep");
+		expect(gitkeeps.length).toBe(0);
+	});
+});
+
 describe("compliance", () => {
 	test("converts compliance config to LangSmith metadata", () => {
 		const agent = loadAgent(AGENTS_DIR);
