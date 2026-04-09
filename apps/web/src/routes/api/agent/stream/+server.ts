@@ -131,6 +131,14 @@ export const POST: RequestHandler = async ({ request }) => {
 									if (event.name === "checkConfidence" && event.data?.output?.lowConfidence === true) {
 										send({ type: "low_confidence", message: "Report confidence is below the review threshold. Results may be incomplete." });
 									}
+
+									// SIO-634, SIO-635: Emit pending action proposals for user confirmation
+									if (event.name === "proposeMitigation") {
+										const pendingActions = event.data?.output?.pendingActions;
+										if (Array.isArray(pendingActions) && pendingActions.length > 0) {
+											send({ type: "pending_actions", actions: pendingActions });
+										}
+									}
 								}
 
 								if (event.event === "on_tool_start") {
