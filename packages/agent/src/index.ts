@@ -1,5 +1,6 @@
 // agent/src/index.ts
 
+export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
 export { AttachmentError, type ProcessedAttachments, processAttachments } from "./attachment-processor.ts";
