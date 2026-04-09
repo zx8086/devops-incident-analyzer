@@ -66,6 +66,7 @@ export async function executeAnalysisQuery(bucket: Bucket, queryString: string, 
 					text: `## Error Executing Query\n\n${error instanceof Error ? error.stack || error.message : typeof error === "object" ? JSON.stringify(error, null, 2) : String(error)}`,
 				},
 			],
+			isError: true,
 		};
 	}
 }

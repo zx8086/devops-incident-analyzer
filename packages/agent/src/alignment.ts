@@ -23,12 +23,22 @@ export function getDataSourceErrorCategories(results: DataSourceResult[]): Map<s
 	return categories;
 }
 
-function isRetryable(categories: Set<ToolErrorCategory>): boolean {
-	// Non-retryable if ONLY auth and/or session errors -- retrying won't fix credentials
-	for (const cat of categories) {
-		if (cat === "transient" || cat === "unknown") return true;
+// Uses ToolError.retryable (set by classifyToolError in sub-agent.ts) as the
+// single source of truth for retry decisions. A datasource is retryable if ANY
+// of its tool errors are marked retryable, or if no toolErrors exist (unknown
+// failure mode -- better to retry than drop).
+function isDataSourceRetryable(results: DataSourceResult[], dataSourceId: string): boolean {
+	let hasToolErrors = false;
+	for (const result of results) {
+		if (result.dataSourceId !== dataSourceId) continue;
+		if (!result.toolErrors?.length) continue;
+		hasToolErrors = true;
+		for (const err of result.toolErrors) {
+			if (err.retryable) return true;
+		}
 	}
-	return false;
+	// No toolErrors means we don't know the failure mode -- default to retryable
+	return !hasToolErrors;
 }
 
 function getRetryTargets(state: AgentStateType): { retryTargets: string[]; nonRetryable: string[] } {
@@ -42,16 +52,14 @@ function getRetryTargets(state: AgentStateType): { retryTargets: string[]; nonRe
 	// Deduplicate errored datasource IDs -- results accumulate across retries
 	const erroredIds = [...new Set(errors.map((r) => r.dataSourceId).filter((id) => id !== ""))];
 
-	const errorCategories = getDataSourceErrorCategories(errors);
 	const retryableErrors: string[] = [];
 	const nonRetryable: string[] = [];
 
 	for (const id of erroredIds) {
-		const cats = errorCategories.get(id);
-		if (cats && !isRetryable(cats)) {
-			nonRetryable.push(id);
-		} else {
+		if (isDataSourceRetryable(errors, id)) {
 			retryableErrors.push(id);
+		} else {
+			nonRetryable.push(id);
 		}
 	}
 

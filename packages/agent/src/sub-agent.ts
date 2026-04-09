@@ -71,15 +71,18 @@ export function classifyToolError(message: string): { category: ToolErrorCategor
 	return { category: "unknown", retryable: true };
 }
 
-function extractToolErrors(messages: Array<{ _getType(): string; content: unknown; name?: string }>): ToolError[] {
+function extractToolErrors(
+	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
+): ToolError[] {
 	const errors: ToolError[] = [];
 	for (const msg of messages) {
 		if (msg._getType() !== "tool") continue;
-		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-		// Tool messages containing error indicators
-		const isError = /error|exception|failed|unauthorized|forbidden|timeout/i.test(content) && content.length < 2000; // Avoid false positives on large successful responses
-		if (!isError) continue;
+		// Use LangGraph ToolMessage.status as the error gate instead of regex on content.
+		// LangGraph ToolNode sets status="error" when the tool throws (including MCP isError:true).
+		// The old regex matched domain vocabulary like "totalErrorCount" causing false positives.
+		if (msg.status !== "error") continue;
 
+		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 		const { category, retryable } = classifyToolError(content);
 		errors.push({
 			toolName: msg.name ?? "unknown",

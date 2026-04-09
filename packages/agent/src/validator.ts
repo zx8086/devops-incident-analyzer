@@ -31,10 +31,21 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		}
 	}
 
+	// Build source data: sub-agent results + prior assistant messages on follow-ups.
+	// The aggregator can legitimately reference values from earlier conversation turns,
+	// so the validator must include those in its comparison set.
+	let sourceData = results.map((r) => String(r.data)).join(" ");
+	if (state.isFollowUp) {
+		const priorAssistantContent = state.messages
+			.filter((m) => m._getType() === "ai" && String(m.content) !== answer)
+			.map((m) => String(m.content))
+			.join(" ");
+		sourceData = `${sourceData} ${priorAssistantContent}`;
+	}
+
 	// Check for hallucination indicators -- fabricated timestamps not in source data
 	const timestampPattern = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/g;
 	const answerTimestamps = answer.match(timestampPattern) ?? [];
-	const sourceData = results.map((r) => String(r.data)).join(" ");
 	const sourceTimestamps = new Set(sourceData.match(timestampPattern) ?? []);
 
 	const fabricatedTimestamps = answerTimestamps.filter((t) => !sourceTimestamps.has(t));
