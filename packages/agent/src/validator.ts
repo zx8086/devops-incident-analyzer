@@ -43,12 +43,18 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		sourceData = `${sourceData} ${priorAssistantContent}`;
 	}
 
-	// Check for hallucination indicators -- fabricated timestamps not in source data
+	// Check for hallucination indicators -- fabricated timestamps not in source data.
+	// The aggregator prompt injects a "Report generation timestamp" which the LLM
+	// echoes in the report header. Timestamps within 5 minutes of now are legitimate.
 	const timestampPattern = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/g;
 	const answerTimestamps = answer.match(timestampPattern) ?? [];
 	const sourceTimestamps = new Set(sourceData.match(timestampPattern) ?? []);
 
-	const fabricatedTimestamps = answerTimestamps.filter((t) => !sourceTimestamps.has(t));
+	const nowMs = Date.now();
+	const GENERATION_WINDOW_MS = 5 * 60 * 1000;
+	const isNearNow = (ts: string) => Math.abs(new Date(ts).getTime() - nowMs) < GENERATION_WINDOW_MS;
+
+	const fabricatedTimestamps = answerTimestamps.filter((t) => !sourceTimestamps.has(t) && !isNearNow(t));
 	if (fabricatedTimestamps.length > 0 && sourceTimestamps.size > 0) {
 		warnings.push(`Potential fabricated timestamps: ${fabricatedTimestamps.join(", ")}`);
 	}
