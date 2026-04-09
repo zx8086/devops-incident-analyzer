@@ -117,9 +117,20 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 
 	const rawAnswer = String(response.content);
 	const answer = redactPiiContent(rawAnswer);
-	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Aggregation complete");
+
+	// SIO-632: Extract confidence score from the LLM-generated report for the HITL gate.
+	// The LLM may format this as "Confidence Score: 0.82", "**Confidence:** 0.85",
+	// "Confidence: 0.7/1.0", or just "0.82" after "confidence" heading.
+	const confidenceMatch = answer.match(/confidence[^0-9]*([0-9]+(?:\.[0-9]+)?)/i);
+	const confidenceScore = confidenceMatch ? Number.parseFloat(confidenceMatch[1] ?? "0") : 0;
+
+	logger.info(
+		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore },
+		"Aggregation complete",
+	);
 	return {
 		messages: [new AIMessage({ content: answer })],
 		finalAnswer: answer,
+		confidenceScore,
 	};
 }

@@ -40,6 +40,10 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		requestId: "test-123",
 		attachmentMeta: [],
 		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		confidenceScore: 0,
+		lowConfidence: false,
 		...overrides,
 	};
 }

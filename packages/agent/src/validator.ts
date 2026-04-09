@@ -52,7 +52,12 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 
 	const nowMs = Date.now();
 	const GENERATION_WINDOW_MS = 5 * 60 * 1000;
-	const isNearNow = (ts: string) => Math.abs(new Date(ts).getTime() - nowMs) < GENERATION_WINDOW_MS;
+	// Append Z if missing so timestamps without timezone are parsed as UTC (matching the
+	// aggregator's new Date().toISOString() output which is always UTC)
+	const isNearNow = (ts: string) => {
+		const utcTs = ts.endsWith("Z") || ts.includes("+") ? ts : `${ts}Z`;
+		return Math.abs(new Date(utcTs).getTime() - nowMs) < GENERATION_WINDOW_MS;
+	};
 
 	const fabricatedTimestamps = answerTimestamps.filter((t) => !sourceTimestamps.has(t) && !isNearNow(t));
 	if (fabricatedTimestamps.length > 0 && sourceTimestamps.size > 0) {

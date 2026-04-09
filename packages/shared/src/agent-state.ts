@@ -47,6 +47,28 @@ export const ExtractedEntitiesSchema = z.object({
 });
 export type ExtractedEntities = z.infer<typeof ExtractedEntitiesSchema>;
 
+// SIO-630: Structured incident data produced by the normalize node
+export const NormalizedIncidentSchema = z.object({
+	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
+	timeWindow: z.object({ from: z.string(), to: z.string() }).optional(),
+	affectedServices: z
+		.array(z.object({ name: z.string(), namespace: z.string().optional(), deployment: z.string().optional() }))
+		.optional(),
+	extractedMetrics: z
+		.array(z.object({ name: z.string(), value: z.string().optional(), threshold: z.string().optional() }))
+		.optional(),
+});
+export type NormalizedIncident = z.infer<typeof NormalizedIncidentSchema>;
+
+// SIO-631: Mitigation steps produced by the propose-mitigation node
+export const MitigationStepsSchema = z.object({
+	investigate: z.array(z.string()),
+	monitor: z.array(z.string()),
+	escalate: z.array(z.string()),
+	relatedRunbooks: z.array(z.string()),
+});
+export type MitigationSteps = z.infer<typeof MitigationStepsSchema>;
+
 export const DataSourceContextSchema = z.object({
 	type: z.enum(["EXPLICIT", "INHERITED"]),
 	dataSources: z.array(z.string()),
@@ -83,5 +105,6 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		dataSourceContext: DataSourceContextSchema.optional(),
 	}),
 	z.object({ type: z.literal("error"), message: z.string() }),
+	z.object({ type: z.literal("low_confidence"), message: z.string() }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

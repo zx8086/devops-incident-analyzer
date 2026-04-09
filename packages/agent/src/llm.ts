@@ -28,7 +28,9 @@ export type LlmRole =
 	| "aggregator"
 	| "responder"
 	| "entityExtractor"
-	| "followUp";
+	| "followUp"
+	| "normalizer"
+	| "mitigation";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -38,6 +40,8 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	responder: { temperature: 0.3 },
 	entityExtractor: { temperature: 0 },
 	followUp: { temperature: 0.5, maxTokens: 256 },
+	normalizer: { temperature: 0 },
+	mitigation: { temperature: 0.2 },
 };
 
 function buildChatModel(

@@ -7,9 +7,12 @@ import { END, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
+import { checkConfidence } from "./confidence-gate.ts";
 import { extractEntities } from "./entity-extractor.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";
+import { proposeMitigation } from "./mitigation.ts";
+import { normalizeIncident } from "./normalizer.ts";
 import { respond } from "./responder.ts";
 import { AgentState, type AgentStateType } from "./state.ts";
 import { queryDataSource } from "./sub-agent.ts";
@@ -37,25 +40,31 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 	await initializeLangSmith();
 	const graph = new StateGraph(AgentState)
 		.addNode("classify", traceNode("classify", classify))
+		.addNode("normalize", traceNode("normalize", normalizeIncident))
 		.addNode("responder", traceNode("responder", respond))
 		.addNode("entityExtractor", traceNode("entityExtractor", extractEntities))
 		.addNode("queryDataSource", traceNode("queryDataSource", queryDataSource))
 		.addNode("align", traceNode("align", checkAlignment))
 		.addNode("aggregate", traceNode("aggregate", aggregate))
+		.addNode("checkConfidence", traceNode("checkConfidence", checkConfidence))
 		.addNode("validate", traceNode("validate", validate))
+		.addNode("proposeMitigation", traceNode("proposeMitigation", proposeMitigation))
 		.addNode("followUp", traceNode("followUp", generateSuggestions))
 
 		// Entry
 		.addEdge("__start__", "classify")
 
-		// Classify -> responder (simple) or entityExtractor (complex)
+		// SIO-630: Classify -> normalize (complex) or responder (simple)
 		.addConditionalEdges("classify", (state) => {
-			return state.queryComplexity === "simple" ? "responder" : "entityExtractor";
+			return state.queryComplexity === "simple" ? "responder" : "normalize";
 		})
 
 		// Simple path: responder -> followUp -> END
 		.addEdge("responder", "followUp")
 		.addEdge("followUp", END)
+
+		// SIO-630: Normalize -> entityExtractor
+		.addEdge("normalize", "entityExtractor")
 
 		// EntityExtractor fans out to sub-agents via Send[]
 		.addConditionalEdges("entityExtractor", supervise)
@@ -66,13 +75,15 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// Alignment -> Send[] retries or aggregate
 		.addConditionalEdges("align", routeAfterAlignment, ["queryDataSource", "aggregate"])
 
-		// Aggregate -> validate
-		.addEdge("aggregate", "validate")
+		// SIO-632: Aggregate -> checkConfidence (HITL gate) -> validate
+		.addEdge("aggregate", "checkConfidence")
+		.addEdge("checkConfidence", "validate")
 
-		// Validate -> retry aggregate or followUp -> END
+		// SIO-631: Validate -> retry aggregate or proposeMitigation -> followUp -> END
 		.addConditionalEdges("validate", (state) => {
-			return shouldRetryValidation(state) ? "aggregate" : "followUp";
-		});
+			return shouldRetryValidation(state) ? "aggregate" : "proposeMitigation";
+		})
+		.addEdge("proposeMitigation", "followUp");
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
 	return graph.compile({ checkpointer });

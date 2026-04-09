@@ -45,6 +45,10 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		requestId: "test-router",
 		attachmentMeta: [],
 		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		confidenceScore: 0,
+		lowConfidence: false,
 		...overrides,
 	};
 }

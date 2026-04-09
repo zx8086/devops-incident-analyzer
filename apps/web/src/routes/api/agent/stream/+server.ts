@@ -81,11 +81,14 @@ export const POST: RequestHandler = async ({ request }) => {
 							const OUTPUT_NODES = new Set(["aggregate", "responder"]);
 							const PIPELINE_NODES = new Set([
 								"classify",
+								"normalize",
 								"entityExtractor",
 								"queryDataSource",
 								"align",
 								"aggregate",
+								"checkConfidence",
 								"validate",
+								"proposeMitigation",
 								"responder",
 								"followUp",
 							]);
@@ -122,6 +125,11 @@ export const POST: RequestHandler = async ({ request }) => {
 										if (Array.isArray(suggestions) && suggestions.length > 0) {
 											send({ type: "suggestions", suggestions });
 										}
+									}
+
+									// SIO-632: Notify frontend when confidence is below threshold
+									if (event.name === "checkConfidence" && event.data?.output?.lowConfidence === true) {
+										send({ type: "low_confidence", message: "Report confidence is below the review threshold. Results may be incomplete." });
 									}
 								}
 

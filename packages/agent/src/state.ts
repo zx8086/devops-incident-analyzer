@@ -5,6 +5,8 @@ import type {
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
+	MitigationSteps,
+	NormalizedIncident,
 	ToolPlanStep,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
@@ -111,6 +113,30 @@ export const AgentState = Annotation.Root({
 	suggestions: Annotation<string[]>({
 		reducer: (_, next) => next,
 		default: () => [],
+	}),
+
+	// SIO-630: Structured incident data from normalize node
+	normalizedIncident: Annotation<NormalizedIncident>({
+		reducer: (_, next) => next,
+		default: () => ({}),
+	}),
+
+	// SIO-631: Mitigation steps from propose-mitigation node
+	mitigationSteps: Annotation<MitigationSteps>({
+		reducer: (_, next) => next,
+		default: () => ({ investigate: [], monitor: [], escalate: [], relatedRunbooks: [] }),
+	}),
+
+	// SIO-632: Confidence score extracted from aggregator output
+	confidenceScore: Annotation<number>({
+		reducer: (_, next) => next,
+		default: () => 0,
+	}),
+
+	// SIO-632: Set by checkConfidence when score is below the HITL threshold
+	lowConfidence: Annotation<boolean>({
+		reducer: (_, next) => next,
+		default: () => false,
 	}),
 });
 
