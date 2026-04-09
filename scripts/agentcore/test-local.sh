@@ -4,10 +4,10 @@
 # Tests AgentCore-compatible endpoints locally before deployment.
 #
 # Prerequisites (run in another terminal first):
-#   KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/agentcore-entrypoint.ts
-#   ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/agentcore-entrypoint.ts
-#   CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/agentcore-entrypoint.ts
-#   KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/agentcore-entrypoint.ts
+#   MCP_TRANSPORT=agentcore KAFKA_PROVIDER=local bun run packages/mcp-server-kafka/src/index.ts
+#   MCP_TRANSPORT=agentcore ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/index.ts
+#   MCP_TRANSPORT=agentcore CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/index.ts
+#   MCP_TRANSPORT=agentcore KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/index.ts
 #
 # Or test via Docker:
 #   docker run --rm -p 8000:8000 -e KAFKA_PROVIDER=local kafka-mcp-agentcore

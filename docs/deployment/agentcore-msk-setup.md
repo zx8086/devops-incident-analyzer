@@ -1,5 +1,8 @@
 # AgentCore + MSK Deployment Guide
 
+> **Targets:** Bun 1.3.9+ | AWS Bedrock AgentCore | MSK Provisioned
+> **Last updated:** 2026-04-09
+
 Deploying the Kafka MCP server to AWS Bedrock AgentCore Runtime with a provisioned MSK cluster in a private VPC. Covers MSK cluster creation, VPC endpoint setup, container build, IAM, AgentCore runtime, and the local SigV4 proxy.
 
 This guide is account- and region-agnostic. All commands use shell variables set in the first step.

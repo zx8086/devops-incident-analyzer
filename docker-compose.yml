@@ -8,16 +8,16 @@ services:
       context: .
       dockerfile: packages/mcp-server-elastic/Dockerfile
     ports:
-      - "8080:8080"
+      - "9080:9080"
     environment:
       MCP_TRANSPORT: sse
-      MCP_PORT: 8080
+      MCP_PORT: 9080
       MULTI_TENANT_MODE: "true"
       ELASTIC_DEPLOYMENTS: ${ELASTIC_DEPLOYMENTS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     env_file: .env
     healthcheck:
-      test: ["CMD", "bun", "--eval", "fetch('http://localhost:8080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:9080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -29,10 +29,10 @@ services:
       context: .
       dockerfile: packages/mcp-server-kafka/Dockerfile
     ports:
-      - "3000:3000"
+      - "9081:9081"
     environment:
       MCP_TRANSPORT: http
-      MCP_PORT: 3000
+      MCP_PORT: 9081
       KAFKA_PROVIDER: ${KAFKA_PROVIDER:-local}
       KAFKA_BROKERS: ${KAFKA_BROKERS:-}
       KAFKA_ALLOW_WRITES: "false"
@@ -40,7 +40,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     env_file: .env
     healthcheck:
-      test: ["CMD", "bun", "--eval", "fetch('http://localhost:3000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "--eval", "fetch('http://localhost:9081/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -96,10 +96,10 @@ services:
     ports:
       - "5173:5173"
     environment:
-      ELASTIC_MCP_URL: http://elastic-mcp:8080
-      KAFKA_MCP_URL: http://kafka-mcp:3000
-      COUCHBASE_MCP_URL: http://couchbase-mcp:8082
-      KONNECT_MCP_URL: http://konnect-mcp:8083
+      ELASTIC_MCP_URL: http://elastic-mcp:9080
+      KAFKA_MCP_URL: http://kafka-mcp:9081
+      COUCHBASE_MCP_URL: http://couchbase-mcp:9082
+      KONNECT_MCP_URL: http://konnect-mcp:9083
       AGENT_CHECKPOINTER_TYPE: memory
       LOG_LEVEL: ${LOG_LEVEL:-info}
     env_file: .env

@@ -90,7 +90,7 @@ describe("Configuration Breaking Change Detection", () => {
 		expect(config.server.maxResultsPerQuery).toBe(1000);
 
 		// Port might be overridden by environment (MCP_PORT), so check appropriately
-		const expectedPort = Bun.env.MCP_PORT ? parseInt(Bun.env.MCP_PORT, 10) : 8080;
+		const expectedPort = Bun.env.MCP_PORT ? parseInt(Bun.env.MCP_PORT, 10) : 9080;
 		expect(config.server.port).toBe(expectedPort);
 
 		// Verify new defaults are reasonable

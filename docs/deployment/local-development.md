@@ -122,10 +122,10 @@ docker compose up -d
 
 | Service | Container Name | Port | Health URL |
 |---------|---------------|------|------------|
-| Elasticsearch MCP | `elastic-mcp` | 8080 | `http://localhost:8080/health` |
-| Kafka MCP | `kafka-mcp` | 3000 | `http://localhost:3000/health` |
-| Couchbase MCP | `couchbase-mcp` | 8082 | `http://localhost:8082/health` |
-| Konnect MCP | `konnect-mcp` | 8083 | `http://localhost:8083/health` |
+| Elasticsearch MCP | `elastic-mcp` | 9080 | `http://localhost:9080/health` |
+| Kafka MCP | `kafka-mcp` | 9081 | `http://localhost:9081/health` |
+| Couchbase MCP | `couchbase-mcp` | 9082 | `http://localhost:9082/health` |
+| Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
 All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all four MCP servers to report healthy before starting. Health checks use:

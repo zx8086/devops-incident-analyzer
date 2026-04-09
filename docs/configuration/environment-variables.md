@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-09
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -191,12 +191,12 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ELASTIC_MCP_URL` | Yes | `http://localhost:8080` | Elasticsearch MCP server URL |
-| `KAFKA_MCP_URL` | Yes | `http://localhost:3000` | Kafka MCP server URL |
-| `COUCHBASE_MCP_URL` | Yes | `http://localhost:8082` | Couchbase Capella MCP server URL |
-| `KONNECT_MCP_URL` | Yes | `http://localhost:8083` | Kong Konnect MCP server URL |
+| `ELASTIC_MCP_URL` | Yes | `http://localhost:9080` | Elasticsearch MCP server URL |
+| `KAFKA_MCP_URL` | Yes | `http://localhost:9081` | Kafka MCP server URL |
+| `COUCHBASE_MCP_URL` | Yes | `http://localhost:9082` | Couchbase Capella MCP server URL |
+| `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
 
-In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:8080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
+In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
 ---
 
@@ -226,3 +226,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial environment variables reference created (Phase 3: Configuration + Deployment) |
+| 2026-04-09 | Fixed MCP server URL port defaults to match standardized ports (9080-9083) |

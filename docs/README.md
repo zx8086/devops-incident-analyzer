@@ -1,7 +1,7 @@
 # Documentation Index
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-09
 
 Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates four MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect) to correlate DevOps incidents across 192 tools.
 
