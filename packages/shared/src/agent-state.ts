@@ -1,5 +1,6 @@
 // shared/src/agent-state.ts
 import { z } from "zod";
+import { PendingActionSchema } from "./action-types.ts";
 
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
@@ -104,7 +105,11 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		toolsUsed: z.array(z.string()).optional(),
 		dataSourceContext: DataSourceContextSchema.optional(),
 	}),
-	z.object({ type: z.literal("error"), message: z.string() }),
 	z.object({ type: z.literal("low_confidence"), message: z.string() }),
+	z.object({
+		type: z.literal("pending_actions"),
+		actions: z.array(PendingActionSchema),
+	}),
+	z.object({ type: z.literal("error"), message: z.string() }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

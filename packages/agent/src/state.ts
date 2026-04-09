@@ -1,12 +1,14 @@
 // agent/src/state.ts
 
 import type {
+	ActionResult,
 	AttachmentMeta,
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
 	MitigationSteps,
 	NormalizedIncident,
+	PendingAction,
 	ToolPlanStep,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
@@ -137,6 +139,18 @@ export const AgentState = Annotation.Root({
 	lowConfidence: Annotation<boolean>({
 		reducer: (_, next) => next,
 		default: () => false,
+	}),
+
+	// SIO-634, SIO-635: Action proposals from mitigation node, awaiting user confirmation
+	pendingActions: Annotation<PendingAction[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-634, SIO-635: Results from executed actions
+	actionResults: Annotation<ActionResult[]>({
+		reducer: (prev, next) => [...prev, ...next],
+		default: () => [],
 	}),
 });
 

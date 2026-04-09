@@ -1,5 +1,11 @@
 // shared/src/index.ts
 export {
+	type ActionResult,
+	ActionResultSchema,
+	type PendingAction,
+	PendingActionSchema,
+} from "./action-types.ts";
+export {
 	type DataSourceContext,
 	DataSourceContextSchema,
 	type DataSourceResult,
@@ -58,7 +64,16 @@ export {
 	type McpApplication,
 	type McpApplicationOptions,
 } from "./bootstrap.ts";
-export { type AgentConfig, AgentConfigSchema, type ServerConfig, ServerConfigSchema } from "./config.ts";
+export {
+	type AgentConfig,
+	AgentConfigSchema,
+	type LinearConfig,
+	LinearConfigSchema,
+	type ServerConfig,
+	ServerConfigSchema,
+	type SlackConfig,
+	SlackConfigSchema,
+} from "./config.ts";
 export {
 	type CapellaConfig,
 	CapellaConfigSchema,
