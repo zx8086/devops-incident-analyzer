@@ -151,7 +151,7 @@ export const registerDeveloperParameters = () =>
 		fullName: z.string().min(1).describe("Developer full name"),
 		password: z.string().min(8).describe("Password (minimum 8 characters)"),
 		organization: z.string().optional().describe("Developer organization"),
-		customAttributes: z.record(z.string()).optional().describe("Custom developer attributes"),
+		customAttributes: z.record(z.string(), z.string()).optional().describe("Custom developer attributes"),
 	});
 
 export const authenticateParameters = () =>

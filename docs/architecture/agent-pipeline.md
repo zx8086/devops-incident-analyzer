@@ -380,6 +380,88 @@ Tool scoping is handled by `getToolsForDataSource()` in `mcp-bridge.ts`, which r
 
 ---
 
+## Tool Selection
+
+Sub-agents can receive 30-67 MCP tools from their connected server. Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
+
+### Selection Flow
+
+```
+Tool YAML (action_tool_map)
+    |
+    v
+Entity Extractor (buildActionCatalog -> LLM -> toolActions)
+    |
+    v
+Sub-Agent (selectToolsByAction -> resolveActionTools -> filtered tools)
+    |
+    v
+ReAct Agent (LLM with 5-25 tools instead of 30-67)
+```
+
+### How It Works
+
+**1. Action catalog construction** (`buildActionCatalog()` in `entity-extractor.ts`): At extraction time, the entity extractor reads all tool YAMLs from the loaded agent and builds a catalog of available actions per datasource. This catalog is injected into the extraction prompt so the LLM knows which action categories exist.
+
+**2. Entity extraction**: The LLM returns a `toolActions` field as part of the extracted entities -- a record mapping datasource IDs to arrays of action category names. For example: `{ "elastic": ["search", "cluster_health"], "kafka": ["consumer_lag"] }`.
+
+**3. Action-to-tool resolution** (`selectToolsByAction()` in `sub-agent.ts`): When the sub-agent starts, it calls `selectToolsByAction()` with the full MCP tool set, the datasource ID, the extracted `toolActions`, and the tool definition from the gitagent YAML. The function resolves action names to concrete MCP tool names via `resolveActionTools()` from the gitagent bridge.
+
+### The `action_tool_map` in Tool YAMLs
+
+Each tool YAML in `agents/incident-analyzer/tools/` contains a `tool_mapping.action_tool_map` section that groups MCP tool names by action category:
+
+```yaml
+tool_mapping:
+  mcp_server: elastic
+  mcp_patterns:
+    - "elasticsearch_*"
+  action_tool_map:
+    search:
+      - elasticsearch_search
+      - elasticsearch_multi_search
+      - elasticsearch_scroll_search
+    cluster_health:
+      - elasticsearch_get_cluster_health
+      - elasticsearch_get_cluster_stats
+      - elasticsearch_diagnostics
+```
+
+The `input_schema.properties.action.enum` array in the same YAML lists all valid action categories. The entity extractor uses this enum to constrain its output.
+
+### Tool Counts per Datasource
+
+| Datasource | Total MCP Tools | Action Categories | Typical Filtered Set |
+|------------|----------------|-------------------|---------------------|
+| elastic | 63 | 11 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics) | 3-15 |
+| kafka | 30 | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
+| couchbase | 24 | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
+| konnect | 67 | 9 (api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management) | 3-12 |
+
+### Fallback Chain
+
+`selectToolsByAction()` implements a 3-tier fallback to ensure every sub-agent receives a usable tool set:
+
+**Tier 1 -- Extracted actions:** If the entity extractor produced `toolActions` for this datasource and the resolved tool names match at least `MIN_FILTERED_TOOLS` (5) from the available MCP tools, use that filtered set (capped at `MAX_TOOLS_PER_AGENT` = 25).
+
+**Tier 2 -- All curated tools:** If tier 1 fails (no extracted actions, unresolvable actions, or fewer than 5 matches), fall back to all tool names listed across every action category in the YAML via `getAllActionToolNames()`. This provides the full curated set without action-based filtering, still excluding any MCP tools not mentioned in the YAML.
+
+**Tier 3 -- Hard cap:** If tier 2 also fails (no `action_tool_map` defined, or fewer than 5 curated tools match), take the first 25 tools from the full MCP tool set. This is a last resort to prevent the sub-agent from running with zero tools.
+
+**Short-circuit:** If the datasource has 25 or fewer total MCP tools, no filtering is applied -- the full set is passed directly.
+
+### Key Functions
+
+| Function | File | Purpose |
+|----------|------|---------|
+| `selectToolsByAction()` | `packages/agent/src/sub-agent.ts` | Orchestrates the 3-tier fallback, returns filtered tools |
+| `getToolDefinitionForDataSource()` | `packages/agent/src/prompt-context.ts` | Finds the tool YAML whose `mcp_server` matches the datasource ID |
+| `buildActionCatalog()` | `packages/agent/src/entity-extractor.ts` | Builds the action catalog string for the extraction prompt |
+| `resolveActionTools()` | `packages/gitagent-bridge/src/tool-mapping.ts` | Maps action names to MCP tool names from the YAML |
+| `getAllActionToolNames()` | `packages/gitagent-bridge/src/tool-mapping.ts` | Returns all MCP tool names across all action categories |
+
+---
+
 ## Model Selection
 
 | Role | Model | Temperature | Max Tokens | Rationale |
@@ -402,3 +484,4 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
+| 2026-04-09 | Added Tool Selection section documenting action-driven filtering |

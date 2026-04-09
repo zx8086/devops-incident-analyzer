@@ -15,6 +15,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Understand architecture | [System Overview](architecture/system-overview.md) |
 | Understand agent pipeline | [Agent Pipeline](architecture/agent-pipeline.md) |
 | Add or modify MCP tools | [Adding MCP Tools](development/adding-mcp-tools.md) |
+| Understand action-driven tool filtering | [Action Tool Maps](development/action-tool-maps.md) |
 | Configure environment variables | [Environment Variables](configuration/environment-variables.md) |
 | Run locally | [Local Development](deployment/local-development.md) |
 | Deploy to AgentCore | [AgentCore Deployment](deployment/agentcore-deployment.md) |
@@ -60,6 +61,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Monorepo Structure](development/monorepo-structure.md) | Package map, dependency graph, workspace configuration |
 | [Adding MCP Tools](development/adding-mcp-tools.md) | Step-by-step process for adding tools to any of the four MCP servers |
 | [Testing](development/testing.md) | Unit, integration, and MCP tool testing strategies |
+| [Action Tool Maps](development/action-tool-maps.md) | Action-driven tool selection: YAML maps, fallback chain, troubleshooting |
 | [Frontend](development/frontend.md) | SvelteKit app, Svelte 5 runes, SSE streaming, component reference |
 
 ### Operations
@@ -87,3 +89,4 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial documentation index created with Phase 1 foundation structure |
+| 2026-04-09 | Added Action Tool Maps development guide |

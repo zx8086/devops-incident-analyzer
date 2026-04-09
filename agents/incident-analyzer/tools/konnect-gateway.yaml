@@ -8,7 +8,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status]
+      enum: [api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management]
       description: Type of gateway inspection to perform
     service_name:
       type: string
@@ -50,3 +50,68 @@ tool_mapping:
   mcp_server: konnect
   mcp_patterns:
     - "konnect_*"
+  action_tool_map:
+    api_requests:
+      - query_api_requests
+      - get_consumer_requests
+      - query_portal_application_analytics
+    service_config:
+      - list_services
+      - get_service
+      - create_service
+      - update_service
+      - delete_service
+    route_config:
+      - list_routes
+      - get_route
+      - create_route
+      - update_route
+      - delete_route
+    plugin_chain:
+      - list_plugins
+      - get_plugin
+      - create_plugin
+      - update_plugin
+      - delete_plugin
+      - list_plugin_schemas
+    data_plane_health:
+      - list_data_plane_nodes
+      - get_data_plane_node
+      - list_data_plane_tokens
+      - create_data_plane_token
+      - revoke_data_plane_token
+    certificate_status:
+      - list_certificates
+      - get_certificate
+      - create_certificate
+      - update_certificate
+      - delete_certificate
+    control_plane_management:
+      - list_control_planes
+      - get_control_plane
+      - create_control_plane
+      - update_control_plane
+      - delete_control_plane
+      - list_control_plane_group_memberships
+      - check_control_plane_group_membership
+      - get_control_plane_config
+      - update_control_plane_config
+    consumer_management:
+      - list_consumers
+      - get_consumer
+      - create_consumer
+      - update_consumer
+      - delete_consumer
+    portal_management:
+      - list_portals
+      - get_portal
+      - create_portal
+      - update_portal
+      - delete_portal
+      - list_portal_products
+      - publish_portal_product
+      - unpublish_portal_product
+      - list_portal_apis
+      - fetch_portal_api
+      - list_portal_applications
+      - get_portal_application

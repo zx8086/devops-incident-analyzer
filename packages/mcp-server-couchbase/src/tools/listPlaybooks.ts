@@ -16,7 +16,7 @@ export default (server: McpServer, _bucket: Bucket) => {
 					string,
 					(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
 				>
-			).readResourceByUri("playbook://");
+			).readResourceByUri!("playbook://");
 
 			if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 				return {
@@ -70,7 +70,7 @@ export default (server: McpServer, _bucket: Bucket) => {
 						string,
 						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
 					>
-				).readResourceByUri(resourceUri);
+				).readResourceByUri!(resourceUri);
 
 				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 					return {

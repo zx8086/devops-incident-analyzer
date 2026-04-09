@@ -153,7 +153,7 @@ export const createPluginParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		name: z.string().describe("Plugin name (use list-plugin-schemas to see available plugins)"),
-		config: z.record(z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
+		config: z.record(z.string(), z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
 		protocols: z
 			.array(z.enum(["grpc", "grpcs", "http", "https", "tcp", "tls", "udp"]))
 			.optional()
@@ -176,7 +176,7 @@ export const updatePluginParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		pluginId: z.string().describe("Plugin ID (obtainable from list-plugins tool)"),
 		name: z.string().optional().describe("Plugin name (use list-plugin-schemas to see available plugins)"),
-		config: z.record(z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
+		config: z.record(z.string(), z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
 		protocols: z
 			.array(z.enum(["grpc", "grpcs", "http", "https", "tcp", "tls", "udp"]))
 			.optional()

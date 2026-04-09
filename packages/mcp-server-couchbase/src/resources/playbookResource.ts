@@ -223,7 +223,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}
 
 		// Expose a method for tools to easily access resources by URI
-		(server as Record<string, unknown>).readResourceByUri = (async (resourceUri: string) => {
+		(server as unknown as Record<string, unknown>).readResourceByUri = (async (resourceUri: string) => {
 			try {
 				logger.info(`Handling readResourceByUri for: ${resourceUri}`);
 				// Simple URL parsing without using URL constructor (for compatibility)
@@ -239,7 +239,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				}
 
 				// Look through server resources for a matching URI
-				const serverInternal = server as Record<string, unknown>;
+				const serverInternal = server as unknown as Record<string, unknown>;
 				interface ResourceEntry {
 					uri?: string;
 					handler: (href: { href: string }, params: Record<string, unknown>) => Promise<unknown>;
@@ -255,9 +255,9 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 				} else if (typeof resourceMap === "object" && resourceMap !== null) {
 					for (const id in resourceMap as Record<string, ResourceEntry>) {
 						const resource = (resourceMap as Record<string, ResourceEntry>)[id];
-						if (resource.uri === resourceUri) {
+						if (resource?.uri === resourceUri) {
 							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
-							return resource.handler({ href: resourceUri }, {});
+							return resource!.handler({ href: resourceUri }, {});
 						}
 					}
 				}
@@ -275,11 +275,11 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}).bind(server);
 
 		// Work around the template issue by adding a custom handler for templates listing
-		const serverExt = server as Record<string, unknown>;
+		const serverExt = server as unknown as Record<string, unknown>;
 		type RequestHandler = (schema: { method: string }, handler: () => Promise<unknown>) => void;
 		(serverExt as Record<string, RequestHandler | (() => void)>).setRequestHandler =
 			(serverExt as Record<string, RequestHandler | undefined>).setRequestHandler || (() => {});
-		const setHandler = (serverExt as Record<string, RequestHandler>).setRequestHandler;
+		const setHandler = (serverExt as Record<string, RequestHandler>).setRequestHandler!;
 		setHandler(
 			{
 				method: "resources/templates/list",

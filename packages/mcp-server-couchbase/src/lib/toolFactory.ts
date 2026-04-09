@@ -18,14 +18,14 @@ export function createTool<T extends z.ZodObject<z.ZodRawShape>>(config: ToolCon
 	return (server: McpServer, bucket: Bucket) => {
 		const logger = createContextLogger(config.name);
 
-		server.tool(config.name, config.description, config.params.shape, async (params: z.infer<T>) => {
+		server.tool(config.name, config.description, config.params.shape, async (params) => {
 			logger.debug({ params }, `Processing ${config.name}`);
 
 			if (!bucket) {
 				throw createError("DB_ERROR", "Bucket is not initialized");
 			}
 
-			return config.handler(params, bucket);
+			return config.handler(params as z.infer<T>, bucket);
 		});
 	};
 }
@@ -37,8 +37,8 @@ export function createToolConfig<T extends z.ZodObject<z.ZodRawShape>>(config: {
 }) {
 	return (handler: (params: z.infer<T>, bucket: Bucket) => Promise<ToolResponse>) => {
 		return (server: McpServer, bucket: Bucket) => {
-			server.tool(config.name, config.description, config.params.shape, async (params: z.infer<T>) =>
-				handler(params, bucket),
+			server.tool(config.name, config.description, config.params.shape, async (params) =>
+				handler(params as z.infer<T>, bucket),
 			);
 		};
 	};

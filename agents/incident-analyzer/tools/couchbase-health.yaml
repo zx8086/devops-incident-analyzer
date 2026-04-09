@@ -8,7 +8,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status]
+      enum: [system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution]
       description: Type of health check to perform
     bucket:
       type: string
@@ -43,3 +43,41 @@ tool_mapping:
   mcp_server: couchbase
   mcp_patterns:
     - "capella_*"
+  action_tool_map:
+    system_vitals:
+      - capella_get_system_vitals
+      - capella_get_system_nodes
+      - capella_health_check
+      - capella_ping
+    fatal_requests:
+      - capella_get_fatal_requests
+      - capella_get_completed_requests
+    slow_queries:
+      - capella_get_longest_running_queries
+      - capella_get_most_expensive_queries
+      - capella_get_most_frequent_queries
+      - capella_get_largest_result_size_queries
+      - capella_get_largest_result_count_queries
+    expensive_queries:
+      - capella_get_most_expensive_queries
+      - capella_get_longest_running_queries
+      - capella_get_primary_index_queries
+    index_analysis:
+      - capella_get_system_indexes
+      - capella_get_indexes_to_drop
+      - capella_get_detailed_indexes
+    node_status:
+      - capella_get_system_nodes
+      - capella_get_system_vitals
+      - capella_get_diagnostics
+    document_ops:
+      - capella_get_document_by_id
+      - capella_get_scopes_and_collections
+      - capella_get_schema_for_collection
+      - capella_get_document_type_examples
+      - capella_analyze_document_structure
+    query_execution:
+      - capella_run_sql_plus_plus_query
+      - capella_get_prepared_statements
+      - capella_get_detailed_prepared_statements
+      - capella_suggest_query_optimizations

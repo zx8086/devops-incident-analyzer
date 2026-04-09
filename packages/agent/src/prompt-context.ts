@@ -1,10 +1,10 @@
 // agent/src/prompt-context.ts
-import { buildSystemPrompt, type LoadedAgent, loadAgent } from "@devops-agent/gitagent-bridge";
+import { buildSystemPrompt, type LoadedAgent, loadAgent, type ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { getAgentsDir } from "./paths.ts";
 
 let cachedAgent: LoadedAgent | null = null;
 
-function getAgent(): LoadedAgent {
+export function getAgent(): LoadedAgent {
 	if (!cachedAgent) {
 		cachedAgent = loadAgent(getAgentsDir());
 	}
@@ -20,4 +20,9 @@ export function buildSubAgentPrompt(agentName: string): string {
 	const subAgent = rootAgent.subAgents.get(agentName);
 	if (!subAgent) return buildSystemPrompt(rootAgent);
 	return buildSystemPrompt(subAgent);
+}
+
+export function getToolDefinitionForDataSource(dataSourceId: string): ToolDefinition | undefined {
+	const agent = getAgent();
+	return agent.tools.find((t) => t.tool_mapping?.mcp_server === dataSourceId);
 }

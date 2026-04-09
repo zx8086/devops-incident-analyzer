@@ -8,7 +8,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic]
+      enum: [consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops]
       description: Type of Kafka inspection to perform
     consumer_group:
       type: string
@@ -47,3 +47,45 @@ tool_mapping:
   mcp_patterns:
     - "kafka_*"
     - "ksql_*"
+  action_tool_map:
+    consumer_lag:
+      - kafka_list_consumer_groups
+      - kafka_describe_consumer_group
+      - kafka_get_consumer_group_lag
+    topic_throughput:
+      - kafka_list_topics
+      - kafka_describe_topic
+      - kafka_get_topic_offsets
+    dlq_messages:
+      - kafka_consume_messages
+      - kafka_get_message_by_offset
+    cluster_info:
+      - kafka_get_cluster_info
+      - kafka_describe_cluster
+    describe_topic:
+      - kafka_describe_topic
+      - kafka_get_topic_offsets
+      - kafka_list_topics
+    schema_registry:
+      - kafka_list_schemas
+      - kafka_get_schema
+      - kafka_get_schema_versions
+      - kafka_check_compatibility
+      - kafka_get_schema_config
+      - kafka_register_schema
+      - kafka_set_schema_config
+      - kafka_delete_schema_subject
+    ksql:
+      - ksql_get_server_info
+      - ksql_list_streams
+      - ksql_list_tables
+      - ksql_list_queries
+      - ksql_describe
+      - ksql_run_query
+      - ksql_execute_statement
+    write_ops:
+      - kafka_produce_message
+      - kafka_create_topic
+      - kafka_alter_topic_config
+      - kafka_delete_topic
+      - kafka_reset_consumer_group_offsets

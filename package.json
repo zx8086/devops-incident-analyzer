@@ -36,6 +36,9 @@
 			}
 		}
 	},
+	"overrides": {
+		"zod": "4.3.6"
+	},
 	"scripts": {
 		"dev": "bun run --filter '*' dev",
 		"test": "bun run --filter '*' test",

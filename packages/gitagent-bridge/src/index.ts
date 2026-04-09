@@ -8,9 +8,12 @@ export { buildSystemPrompt } from "./skill-loader.ts";
 export {
 	buildFacadeMap,
 	type FacadeMap,
+	getAllActionToolNames,
+	getAvailableActions,
 	getUncoveredTools,
 	matchesPattern,
 	type ResolvedMapping,
+	resolveActionTools,
 	resolveMapping,
 } from "./tool-mapping.ts";
 export { buildAllToolPrompts, buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";

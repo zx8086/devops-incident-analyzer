@@ -1,5 +1,6 @@
 // src/tools/elicitation-tool.ts
 import { z } from "zod";
+import type { MigrationAnalysis } from "../operations/migration-analyzer.js";
 import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
 import { contextDetector } from "../utils/context-detection.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
@@ -192,7 +193,10 @@ export class ElicitationOperations {
 			};
 		}
 
-		const elicitationSession = await this.migrationAnalyzer.createElicitationSession(migrationAnalysis, context);
+		const elicitationSession = await this.migrationAnalyzer.createElicitationSession(
+			migrationAnalysis as unknown as MigrationAnalysis,
+			context,
+		);
 
 		// Generate Claude Desktop friendly prompt
 		const claudeDesktopPrompt = this.generateClaudeDesktopPrompt(elicitationSession.requests, migrationAnalysis);

@@ -14,7 +14,7 @@ export const createPortalParametersSchema = z.object({
 	autoApproveDevelopers: z.boolean().optional().describe("Automatically approve new developer registrations"),
 	autoApproveApplications: z.boolean().optional().describe("Automatically approve new application registrations"),
 	customDomain: z.string().optional().describe("Custom domain for the portal (e.g., portal.company.com)"),
-	labels: z.record(z.string()).optional().describe("Custom labels for the portal"),
+	labels: z.record(z.string(), z.string()).optional().describe("Custom labels for the portal"),
 });
 
 export const getPortalParametersSchema = z.object({
@@ -30,7 +30,7 @@ export const updatePortalParametersSchema = z.object({
 	autoApproveDevelopers: z.boolean().optional().describe("Updated developer auto-approval setting"),
 	autoApproveApplications: z.boolean().optional().describe("Updated application auto-approval setting"),
 	customDomain: z.string().optional().describe("Updated custom domain"),
-	labels: z.record(z.string()).optional().describe("Updated custom labels"),
+	labels: z.record(z.string(), z.string()).optional().describe("Updated custom labels"),
 });
 
 export const deletePortalParametersSchema = z.object({

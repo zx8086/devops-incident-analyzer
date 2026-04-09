@@ -45,7 +45,12 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 				"No resource registry found on server instance (tried _resources, resources, _registeredResources)",
 			);
 		}
-		let resourcesIterable: Iterable<unknown>;
+		interface InternalResource {
+			uri?: string;
+			template?: { match: (uri: string) => Record<string, string> | null };
+			handler: (href: { href: string }, params: Record<string, unknown>) => Promise<unknown>;
+		}
+		let resourcesIterable: Iterable<InternalResource>;
 		if (resourceMap instanceof Map) {
 			resourcesIterable = resourceMap.values();
 		} else if (typeof resourceMap === "object") {
@@ -54,14 +59,12 @@ export function createServer(bucket: import("couchbase").Bucket): McpServer {
 			throw new Error("Resource registry is not iterable");
 		}
 		for (const resource of resourcesIterable) {
-			// Template match
 			if (resource.template?.match) {
 				const match = resource.template.match(resourceUri);
 				if (match) {
 					return await resource.handler({ href: resourceUri }, match);
 				}
 			}
-			// Static URI match
 			if (resource.uri && resource.uri === resourceUri) {
 				return await resource.handler({ href: resourceUri }, {});
 			}

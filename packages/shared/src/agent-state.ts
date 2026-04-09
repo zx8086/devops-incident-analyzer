@@ -43,6 +43,7 @@ export const ExtractedEntitiesSchema = z.object({
 			mentionedAs: z.string(),
 		}),
 	),
+	toolActions: z.record(z.string(), z.array(z.string())).optional(),
 });
 export type ExtractedEntities = z.infer<typeof ExtractedEntitiesSchema>;
 

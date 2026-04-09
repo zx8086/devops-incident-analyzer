@@ -294,7 +294,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	);
 
 	return {
-		port: server.port,
+		port: server.port ?? 0,
 		url: proxyUrl,
 		async close() {
 			server.stop(true);

@@ -86,6 +86,10 @@ export const ToolDefinitionSchema = z.object({
 		.object({
 			mcp_server: z.string().describe("MCP server this facade maps to"),
 			mcp_patterns: z.array(z.string()).describe("MCP tool name patterns: exact names or glob with * suffix"),
+			action_tool_map: z
+				.record(z.string(), z.array(z.string()))
+				.optional()
+				.describe("Maps action categories to specific MCP tool names"),
 		})
 		.optional(),
 });

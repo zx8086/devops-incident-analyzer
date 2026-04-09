@@ -1,10 +1,6 @@
 # Kafka MCP Server -- AWS Production Deployment Guide
 
-> **Version:** 1.0 | **Date:** 2026-04-08 | **Author:** Simon Owusu
-> **Audience:** AWS Implementation / Platform Engineering team
-> **Estimated time:** 45-60 minutes (excluding VPC endpoint propagation)
-
-Deploy a pre-built Kafka MCP Server container to AWS Bedrock AgentCore Runtime, connecting it to an existing production MSK cluster using IAM SASL authentication. No source code access required.
+Deploy a pre-built Kafka MCP Server container to AWS Bedrock AgentCore Runtime, connecting it to an existing production MSK cluster (using IAM SASL authentication - optional). No source code access required.
 
 ---
 
@@ -69,13 +65,13 @@ Developer Machine                           AWS Account (Private VPC)
 
 ## 2. Prerequisites
 
-### 2.1 Provided by Application Owner (Simon)
+### 2.1 Provided by Application Owner
 
 The application owner provides one of:
 
 | Item | Format | Notes |
 |------|--------|-------|
-| **Container image** pushed to your ECR | ECR URI | Simon pushes directly if he has cross-account ECR write access |
+| **Container image** pushed to your ECR | ECR URI | Owner pushes directly if he has cross-account ECR write access |
 | **Container image tarball** | `.tar.gz` file | If no cross-account access. See [Step 1b](#step-1b-load-from-tarball) for import. |
 | **MSK cluster ARN** | ARN string | Your existing production MSK cluster |
 
