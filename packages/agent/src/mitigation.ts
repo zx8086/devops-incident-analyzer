@@ -57,12 +57,12 @@ function buildActionProposalPrompt(availableTools: string[]): string {
 	const toolDescs: string[] = [];
 	if (availableTools.includes("notify-slack")) {
 		toolDescs.push(
-			'- notify-slack: params { channel (string), message (string, concise summary), severity (critical|high|medium|low|info) }',
+			"- notify-slack: params { channel (string), message (string, concise summary), severity (critical|high|medium|low|info) }",
 		);
 	}
 	if (availableTools.includes("create-ticket")) {
 		toolDescs.push(
-			'- create-ticket: params { title (string, under 80 chars), description (string, structured summary), severity (critical|high|medium|low), affected_services (string[]), datasources_queried (string[]) }',
+			"- create-ticket: params { title (string, under 80 chars), description (string, structured summary), severity (critical|high|medium|low), affected_services (string[]), datasources_queried (string[]) }",
 		);
 	}
 
@@ -95,14 +95,13 @@ export async function proposeMitigation(
 	}
 
 	const confidence = state.confidenceScore;
-	const confidenceHint = confidence > 0 && confidence < 0.6
-		? "\n\nNOTE: Report confidence is below 0.6. Lead with broader investigation steps and explicitly note data gaps."
-		: "";
+	const confidenceHint =
+		confidence > 0 && confidence < 0.6
+			? "\n\nNOTE: Report confidence is below 0.6. Lead with broader investigation steps and explicitly note data gaps."
+			: "";
 
 	const queriedSources = state.targetDataSources;
-	const sourceContext = queriedSources.length > 0
-		? `\nQueried datasources: ${queriedSources.join(", ")}`
-		: "";
+	const sourceContext = queriedSources.length > 0 ? `\nQueried datasources: ${queriedSources.join(", ")}` : "";
 
 	const truncated = report.slice(0, 3000);
 	let mitigationSteps: MitigationSteps = { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] };
@@ -137,10 +136,7 @@ export async function proposeMitigation(
 			logger.warn("Failed to parse mitigation JSON from LLM response");
 		}
 	} catch (error) {
-		logger.warn(
-			{ error: error instanceof Error ? error.message : String(error) },
-			"Mitigation generation failed",
-		);
+		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Mitigation generation failed");
 	}
 
 	// Step 2: Generate action proposals (only if action tools are configured)

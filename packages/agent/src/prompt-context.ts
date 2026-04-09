@@ -59,7 +59,5 @@ export function getToolDefinitionForDataSource(dataSourceId: string): ToolDefini
 
 export function getRunbookFilenames(): string[] {
 	const agent = getAgent();
-	return agent.knowledge
-		.filter((k) => k.category === "runbooks")
-		.map((k) => k.filename);
+	return agent.knowledge.filter((k) => k.category === "runbooks").map((k) => k.filename);
 }

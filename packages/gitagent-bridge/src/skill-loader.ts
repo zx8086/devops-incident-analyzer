@@ -1,6 +1,5 @@
 // gitagent-bridge/src/skill-loader.ts
-import type { KnowledgeEntry } from "./manifest-loader.ts";
-import type { LoadedAgent } from "./manifest-loader.ts";
+import type { KnowledgeEntry, LoadedAgent } from "./manifest-loader.ts";
 
 function buildKnowledgeSection(knowledge: KnowledgeEntry[]): string {
 	const byCategory = new Map<string, KnowledgeEntry[]>();

@@ -2,7 +2,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { type AgentManifest, AgentManifestSchema, KnowledgeIndexSchema, type ToolDefinition, ToolDefinitionSchema } from "./types.ts";
+import {
+	type AgentManifest,
+	AgentManifestSchema,
+	KnowledgeIndexSchema,
+	type ToolDefinition,
+	ToolDefinitionSchema,
+} from "./types.ts";
 
 export interface KnowledgeEntry {
 	category: string;
@@ -79,9 +85,7 @@ function loadKnowledge(agentDir: string): KnowledgeEntry[] {
 		const categoryDir = join(knowledgeDir, config.path);
 		if (!isDirectory(categoryDir)) continue;
 
-		const files = readdirSync(categoryDir).filter(
-			(f) => f.endsWith(".md") && f !== ".gitkeep",
-		);
+		const files = readdirSync(categoryDir).filter((f) => f.endsWith(".md") && f !== ".gitkeep");
 		for (const file of files) {
 			const content = readFileSync(join(categoryDir, file), "utf-8").trim();
 			if (content) {

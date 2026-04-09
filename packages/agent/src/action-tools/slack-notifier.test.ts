@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { executeSlackNotify, getSeverityColor, isSlackConfigured } from "./slack-notifier.ts";
 
 // Mock @slack/web-api
-const mockPostMessage = mock(() =>
-	Promise.resolve({ ok: true, ts: "1234567890.123456", channel: "C12345" }),
-);
+const mockPostMessage = mock(() => Promise.resolve({ ok: true, ts: "1234567890.123456", channel: "C12345" }));
 const mockFilesUpload = mock(() => Promise.resolve({ ok: true }));
 
 mock.module("@slack/web-api", () => ({

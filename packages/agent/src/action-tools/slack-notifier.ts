@@ -53,9 +53,7 @@ export async function executeSlackNotify(params: {
 						},
 						{
 							type: "context",
-							elements: [
-								{ type: "mrkdwn", text: `Severity: *${severityLabel}*` },
-							],
+							elements: [{ type: "mrkdwn", text: `Severity: *${severityLabel}*` }],
 						},
 					],
 				},

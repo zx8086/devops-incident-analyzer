@@ -23,9 +23,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (err instanceof z.ZodError) {
 			return json({ error: "Invalid request", details: err.issues }, { status: 400 });
 		}
-		return json(
-			{ error: err instanceof Error ? err.message : "Unknown error" },
-			{ status: 500 },
-		);
+		return json({ error: err instanceof Error ? err.message : "Unknown error" }, { status: 500 });
 	}
 };

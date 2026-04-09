@@ -11,8 +11,6 @@ export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-ge
 export { buildGraph } from "./graph.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
-export { proposeMitigation } from "./mitigation.ts";
-export { normalizeIncident } from "./normalizer.ts";
 export {
 	createMcpClient,
 	getAllTools,
@@ -20,6 +18,8 @@ export {
 	getToolsForDataSource,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
+export { proposeMitigation } from "./mitigation.ts";
+export { normalizeIncident } from "./normalizer.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";

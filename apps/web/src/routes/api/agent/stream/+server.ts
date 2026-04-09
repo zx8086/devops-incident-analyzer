@@ -129,7 +129,10 @@ export const POST: RequestHandler = async ({ request }) => {
 
 									// SIO-632: Notify frontend when confidence is below threshold
 									if (event.name === "checkConfidence" && event.data?.output?.lowConfidence === true) {
-										send({ type: "low_confidence", message: "Report confidence is below the review threshold. Results may be incomplete." });
+										send({
+											type: "low_confidence",
+											message: "Report confidence is below the review threshold. Results may be incomplete.",
+										});
 									}
 
 									// SIO-634, SIO-635: Emit pending action proposals for user confirmation

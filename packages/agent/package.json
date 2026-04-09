@@ -9,17 +9,19 @@
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
-		"@opentelemetry/api": "^1.9.0",
-		"@devops-agent/gitagent-bridge": "workspace:*",
-		"@devops-agent/shared": "workspace:*",
 		"@devops-agent/checkpointer": "workspace:*",
+		"@devops-agent/gitagent-bridge": "workspace:*",
 		"@devops-agent/observability": "workspace:*",
+		"@devops-agent/shared": "workspace:*",
+		"@langchain/aws": "catalog:",
+		"@langchain/core": "catalog:",
 		"@langchain/langgraph": "catalog:",
 		"@langchain/langgraph-checkpoint": "catalog:",
 		"@langchain/mcp-adapters": "catalog:",
+		"@linear/sdk": "^81.0.0",
+		"@opentelemetry/api": "^1.9.0",
+		"@slack/web-api": "^7.15.0",
 		"mammoth": "^1.8.0",
-		"@langchain/aws": "catalog:",
-		"@langchain/core": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

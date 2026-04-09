@@ -5,17 +5,13 @@ import { executeAction, getAvailableActionTools } from "./executor.ts";
 
 mock.module("./slack-notifier.ts", () => ({
 	isSlackConfigured: () => !!process.env.SLACK_BOT_TOKEN,
-	executeSlackNotify: mock(() =>
-		Promise.resolve({ sent: true, timestamp: "123.456", channel: "C123" }),
-	),
+	executeSlackNotify: mock(() => Promise.resolve({ sent: true, timestamp: "123.456", channel: "C123" })),
 	getSeverityColor: () => "#E01E5A",
 }));
 
 mock.module("./ticket-creator.ts", () => ({
 	isLinearConfigured: () => !!process.env.LINEAR_API_KEY,
-	executeCreateTicket: mock(() =>
-		Promise.resolve({ ticket_id: "INC-1", url: "https://linear.app/issue/INC-1" }),
-	),
+	executeCreateTicket: mock(() => Promise.resolve({ ticket_id: "INC-1", url: "https://linear.app/issue/INC-1" })),
 	severityToPriority: () => 1,
 	buildTicketDescription: () => "desc",
 }));
