@@ -1,6 +1,6 @@
 // apps/web/src/lib/stores/agent.svelte.ts
 
-import type { DataSourceContext, StreamEvent } from "@devops-agent/shared";
+import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 
 export interface ChatMessage {
@@ -42,6 +42,8 @@ function createAgentStore() {
 	let lastConfidence = $state<number | undefined>(undefined);
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let pendingAttachments = $state<AttachmentBlock[]>([]);
+	let pendingActions = $state<PendingAction[]>([]);
+	let actionResults = $state<ActionResult[]>([]);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -163,6 +165,9 @@ function createAgentStore() {
 			case "suggestions":
 				lastSuggestions = event.suggestions;
 				break;
+			case "pending_actions":
+				pendingActions = event.actions;
+				break;
 			case "done":
 				threadId = event.threadId;
 				lastResponseTime = event.responseTime;
@@ -201,6 +206,30 @@ function createAgentStore() {
 
 	function cancelStream() {
 		abortController?.abort();
+	}
+
+	async function executeAction(action: PendingAction, reportContent: string) {
+		try {
+			const res = await fetch("/api/agent/actions", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					action,
+					reportContent,
+					threadId,
+				}),
+			});
+			const result: ActionResult = await res.json();
+			actionResults = [...actionResults, result];
+			pendingActions = pendingActions.filter((a) => a.id !== action.id);
+			return result;
+		} catch {
+			return null;
+		}
+	}
+
+	function dismissAction(actionId: string) {
+		pendingActions = pendingActions.filter((a) => a.id !== actionId);
 	}
 
 	async function loadDataSources() {
@@ -266,6 +295,8 @@ function createAgentStore() {
 		lastSuggestions = [];
 		lastDataSourceContext = undefined;
 		pendingAttachments = [];
+		pendingActions = [];
+		actionResults = [];
 	}
 
 	return {
@@ -311,9 +342,17 @@ function createAgentStore() {
 		set pendingAttachments(v: AttachmentBlock[]) {
 			pendingAttachments = v;
 		},
+		get pendingActions() {
+			return pendingActions;
+		},
+		get actionResults() {
+			return actionResults;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
+		executeAction,
+		dismissAction,
 		loadDataSources,
 		stopHealthPolling,
 		clearChat,

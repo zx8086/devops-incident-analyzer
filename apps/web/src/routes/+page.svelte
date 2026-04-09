@@ -97,6 +97,10 @@ function handleSuggestionClick(suggestion: string) {
           isStreaming={false}
           onSuggestionClick={handleSuggestionClick}
           onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
+          pendingActions={i === agentStore.messages.length - 1 ? agentStore.pendingActions : []}
+          actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
+          onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
+          onActionDismiss={(id) => agentStore.dismissAction(id)}
         />
       {/each}
 

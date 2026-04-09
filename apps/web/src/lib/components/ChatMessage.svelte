@@ -1,6 +1,8 @@
 <script lang="ts">
 // apps/web/src/lib/components/ChatMessage.svelte
+import type { ActionResult, PendingAction } from "@devops-agent/shared";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
+import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
 import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
@@ -14,6 +16,10 @@ let {
 	isStreaming = false,
 	onSuggestionClick,
 	onFeedback,
+	pendingActions = [],
+	actionResults = [],
+	onActionApprove,
+	onActionDismiss,
 }: {
 	message: ChatMessage;
 	index: number;
@@ -21,6 +27,10 @@ let {
 	isStreaming?: boolean;
 	onSuggestionClick?: (s: string) => void;
 	onFeedback?: (index: number, score: "up" | "down") => void;
+	pendingActions?: PendingAction[];
+	actionResults?: ActionResult[];
+	onActionApprove?: (action: PendingAction) => void;
+	onActionDismiss?: (actionId: string) => void;
 } = $props();
 </script>
 
@@ -59,6 +69,17 @@ let {
 
         {#if !isStreaming && onFeedback}
           <FeedbackBar content={message.content} feedback={message.feedback} onFeedback={(score) => onFeedback?.(index, score)} />
+        {/if}
+
+        {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}
+          {#each pendingActions as action (action.id)}
+            <ActionConfirmationCard
+              {action}
+              onApprove={onActionApprove}
+              onDismiss={onActionDismiss}
+              result={actionResults.find((r) => r.actionId === action.id)}
+            />
+          {/each}
         {/if}
 
         {#if !isStreaming && message.suggestions && message.suggestions.length > 0 && onSuggestionClick}
