@@ -6,6 +6,7 @@ import {
 	type AgentManifest,
 	AgentManifestSchema,
 	KnowledgeIndexSchema,
+	type RunbookSelectionConfig,
 	type ToolDefinition,
 	ToolDefinitionSchema,
 } from "./types.ts";
@@ -24,6 +25,10 @@ export interface LoadedAgent {
 	skills: Map<string, string>;
 	subAgents: Map<string, LoadedAgent>;
 	knowledge: KnowledgeEntry[];
+	// SIO-640: Optional runbook selection config from knowledge/index.yaml.
+	// Presence of this field gates whether the runbook selector node is wired
+	// into the graph.
+	runbookSelection?: RunbookSelectionConfig;
 }
 
 export function loadAgent(agentDir: string): LoadedAgent {
@@ -66,19 +71,22 @@ export function loadAgent(agentDir: string): LoadedAgent {
 		}
 	}
 
-	const knowledge = loadKnowledge(agentDir);
-	return { manifest, soul, rules, tools, skills, subAgents, knowledge };
+	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir);
+	return { manifest, soul, rules, tools, skills, subAgents, knowledge, runbookSelection };
 }
 
-function loadKnowledge(agentDir: string): KnowledgeEntry[] {
+function loadKnowledge(agentDir: string): {
+	entries: KnowledgeEntry[];
+	runbookSelection?: RunbookSelectionConfig;
+} {
 	const knowledgeDir = join(agentDir, "knowledge");
 	const indexPath = join(knowledgeDir, "index.yaml");
 
-	if (!existsSync(indexPath)) return [];
+	if (!existsSync(indexPath)) return { entries: [] };
 
 	const indexYaml = parse(readFileSync(indexPath, "utf-8"));
 	const index = KnowledgeIndexSchema.safeParse(indexYaml);
-	if (!index.success) return [];
+	if (!index.success) return { entries: [] };
 
 	const entries: KnowledgeEntry[] = [];
 	for (const [category, config] of Object.entries(index.data.categories)) {
@@ -121,7 +129,7 @@ function loadKnowledge(agentDir: string): KnowledgeEntry[] {
 		}
 	}
 
-	return entries;
+	return { entries, runbookSelection: index.data.runbook_selection };
 }
 
 function loadOptionalFile(path: string): string {

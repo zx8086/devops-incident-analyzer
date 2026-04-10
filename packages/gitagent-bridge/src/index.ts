@@ -31,6 +31,8 @@ export {
 	type KnowledgeIndex,
 	KnowledgeIndexSchema,
 	type ModelConfig,
+	type RunbookSelectionConfig,
+	RunbookSelectionConfigSchema,
 	type ToolDefinition,
 	ToolDefinitionSchema,
 	type ToolMapping,

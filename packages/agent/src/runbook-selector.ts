@@ -9,7 +9,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
-import { getRunbookCatalog, type RunbookCatalogEntry } from "./prompt-context.ts";
+import { getAgent, getRunbookCatalog, type RunbookCatalogEntry } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:runbook-selector");
@@ -243,14 +243,28 @@ function formatIncidentSummary(state: AgentStateType): string {
 
 // Factory that binds production deps for the LangGraph wiring. Task 10 calls
 // this from graph.ts. The returned node function satisfies LangGraph's
-// node signature: (state, config) => Partial<state>.
-export function createSelectRunbooksNode(
-	getFallbackConfig: () => SeverityFallbackConfig,
-): (state: AgentStateType, config?: RunnableConfig) => Promise<Partial<AgentStateType>> {
+// node signature: (state, config) => Partial<state>. Throws
+// RunbookSelectionConfigError at first-call time if the loaded agent has no
+// runbook_selection block — this is the opt-in gate: wiring the node is
+// only valid when the agent config actually has fallback tiers defined.
+export function createSelectRunbooksNode(): (
+	state: AgentStateType,
+	config?: RunnableConfig,
+) => Promise<Partial<AgentStateType>> {
 	return async (state, config) => {
 		const runtime: SelectRunbooksRuntime = {
 			getCatalog: getRunbookCatalog,
-			getFallbackConfig,
+			getFallbackConfig: () => {
+				const agent = getAgent();
+				if (!agent.runbookSelection) {
+					throw new RunbookSelectionConfigError(
+						"knowledge/index.yaml has no runbook_selection block but the runbook selector " +
+							"is wired into the graph. Either remove the selectRunbooks node from graph.ts " +
+							"or add a runbook_selection block with fallback_by_severity for all four severities.",
+					);
+				}
+				return agent.runbookSelection.fallback_by_severity;
+			},
 			getLlm: () => createLlm("runbookSelector") as unknown as SelectorLlm,
 		};
 		return runSelectRunbooks(state, runtime, config);
