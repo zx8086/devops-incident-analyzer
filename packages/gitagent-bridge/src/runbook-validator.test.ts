@@ -160,11 +160,48 @@ function buildAuthority(tools: ToolDefinition[]): Set<string> {
 
 function validateRunbook(
 	runbookPath: string,
-	_content: string,
-	_authority: Set<string>,
+	content: string,
+	authority: Set<string>,
 ): ValidationReport {
-	// Task 5
-	return { runbookPath, missing: [], proseOnly: [], tailOnly: [], errors: [] };
+	const proseCitations = extractProseCitations(content);
+	const tailResult = extractTailSection(content);
+
+	const missing: Citation[] = [];
+
+	// Missing bucket: any citation whose name is not in authority
+	for (const c of proseCitations) {
+		if (!authority.has(c.name)) missing.push(c);
+	}
+	for (const c of tailResult.citations) {
+		if (!authority.has(c.name)) missing.push(c);
+	}
+
+	// Drift buckets: comparison of unique names between prose and tail sets
+	const proseNames = new Set(proseCitations.map((c) => c.name));
+	const tailNames = new Set(tailResult.citations.map((c) => c.name));
+
+	// proseOnly: dedupe by name (first occurrence wins)
+	const proseOnlySeen = new Set<string>();
+	const proseOnly: Citation[] = [];
+	for (const c of proseCitations) {
+		if (tailNames.has(c.name)) continue;
+		if (proseOnlySeen.has(c.name)) continue;
+		proseOnlySeen.add(c.name);
+		proseOnly.push(c);
+	}
+
+	const tailOnly: Citation[] = [];
+	for (const c of tailResult.citations) {
+		if (!proseNames.has(c.name)) tailOnly.push(c);
+	}
+
+	return {
+		runbookPath,
+		missing,
+		proseOnly,
+		tailOnly,
+		errors: tailResult.errors,
+	};
 }
 
 function formatReport(_report: ValidationReport): string {
@@ -189,7 +226,6 @@ function collectAgents(_agentsRoot: string): AgentFixture[] {
 // Suppress "declared but never read" warnings for stubs that are referenced
 // only in later tasks. Biome will remove these lines when the stubs get real
 // callers.
-void validateRunbook;
 void formatReport;
 void collectAgents;
 void existsSync;
@@ -449,5 +485,98 @@ describe("buildAuthority", () => {
 		const authority = buildAuthority(tools);
 		expect(authority.size).toBe(2);
 		expect(authority.has("kafka_describe_topic")).toBe(true);
+	});
+});
+
+describe("validateRunbook", () => {
+	const makeRunbook = (proseTools: string[], tailTools: string[]): string => {
+		const proseLines =
+			proseTools.length > 0
+				? ["## Investigation", ...proseTools.map((t) => `Use \`${t}\` here.`)]
+				: ["## Investigation", "Nothing to do."];
+		const tailLines = ["", "## All Tools Used Are Read-Only", tailTools.join(", ")];
+		return ["# Runbook", "", ...proseLines, ...tailLines].join("\n");
+	};
+
+	test("clean runbook -> clean report", () => {
+		const authority = new Set(["a_one", "a_two"]);
+		const content = makeRunbook(["a_one", "a_two"], ["a_one", "a_two"]);
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.missing).toEqual([]);
+		expect(report.proseOnly).toEqual([]);
+		expect(report.tailOnly).toEqual([]);
+		expect(report.errors).toEqual([]);
+		expect(isClean(report)).toBe(true);
+	});
+
+	test("prose cites missing tool -> missing bucket", () => {
+		const authority = new Set(["a_real"]);
+		const content = makeRunbook(["a_fake"], ["a_fake"]);
+		const report = validateRunbook("/fake/path.md", content, authority);
+		// cited in both prose and tail -> both copies land in missing
+		expect(report.missing).toHaveLength(2);
+		expect(report.missing.every((c) => c.name === "a_fake")).toBe(true);
+		// Same name in both prose and tail; neither proseOnly nor tailOnly
+		expect(report.proseOnly).toEqual([]);
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	test("prose cites tool not in tail -> proseOnly bucket", () => {
+		const authority = new Set(["a_one", "a_two"]);
+		const content = makeRunbook(["a_one", "a_two"], ["a_one"]);
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.missing).toEqual([]);
+		expect(report.proseOnly).toHaveLength(1);
+		expect(report.proseOnly[0]?.name).toBe("a_two");
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	test("tail lists tool not in prose -> tailOnly bucket", () => {
+		const authority = new Set(["a_one", "a_two"]);
+		const content = makeRunbook(["a_one"], ["a_one", "a_two"]);
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.missing).toEqual([]);
+		expect(report.proseOnly).toEqual([]);
+		expect(report.tailOnly).toHaveLength(1);
+		expect(report.tailOnly[0]?.name).toBe("a_two");
+	});
+
+	test("all three buckets populated simultaneously", () => {
+		const authority = new Set(["a_one"]);
+		// prose: a_one (valid), a_two (missing, prose only)
+		// tail:  a_one, a_three (missing, tail only)
+		const content = makeRunbook(["a_one", "a_two"], ["a_one", "a_three"]);
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.missing.map((c) => c.name).sort()).toEqual(["a_three", "a_two"]);
+		expect(report.proseOnly.map((c) => c.name)).toEqual(["a_two"]);
+		expect(report.tailOnly.map((c) => c.name)).toEqual(["a_three"]);
+		expect(isClean(report)).toBe(false);
+	});
+
+	test("structural tail error bubbles to errors bucket", () => {
+		const authority = new Set(["a_one"]);
+		const content = "# Runbook\n\n## Investigation\nUse `a_one`.\n";
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.errors).toContain("missing_tail_section");
+		expect(isClean(report)).toBe(false);
+	});
+
+	test("same tool cited multiple times in prose preserves line numbers", () => {
+		const authority = new Set(["a_one"]);
+		const content = [
+			"# Runbook",
+			"## Investigation",
+			"First mention: `a_fake`.",
+			"Second mention: `a_fake`.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"a_fake",
+		].join("\n");
+		const report = validateRunbook("/fake/path.md", content, authority);
+		expect(report.missing).toHaveLength(3); // 2 prose + 1 tail
+		const proseMissing = report.missing.filter((c) => c.source === "prose");
+		expect(proseMissing).toHaveLength(2);
+		expect(proseMissing[0]?.line).toBe(3);
+		expect(proseMissing[1]?.line).toBe(4);
 	});
 });
