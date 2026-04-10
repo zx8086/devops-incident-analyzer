@@ -144,9 +144,18 @@ function extractTailSection(content: string): TailSectionResult {
 	return { citations, errors };
 }
 
-function buildAuthority(_tools: ToolDefinition[]): Set<string> {
-	// Task 4
-	return new Set();
+function buildAuthority(tools: ToolDefinition[]): Set<string> {
+	const authority = new Set<string>();
+	for (const tool of tools) {
+		const actionMap = tool.tool_mapping?.action_tool_map;
+		if (!actionMap) continue;
+		for (const toolNames of Object.values(actionMap)) {
+			for (const name of toolNames) {
+				authority.add(name);
+			}
+		}
+	}
+	return authority;
 }
 
 function validateRunbook(
@@ -180,7 +189,6 @@ function collectAgents(_agentsRoot: string): AgentFixture[] {
 // Suppress "declared but never read" warnings for stubs that are referenced
 // only in later tasks. Biome will remove these lines when the stubs get real
 // callers.
-void buildAuthority;
 void validateRunbook;
 void formatReport;
 void collectAgents;
@@ -349,5 +357,97 @@ describe("extractTailSection", () => {
 		const content = ["## All Tools Used Are Read-Only", "a_one, a_two, a_one"].join("\n");
 		const result = extractTailSection(content);
 		expect(result.errors).toContain("duplicate_in_tail_section");
+	});
+});
+
+describe("buildAuthority", () => {
+	test("union across multiple tool definitions", () => {
+		const tools: ToolDefinition[] = [
+			{
+				name: "kafka-introspect",
+				description: "Kafka",
+				input_schema: { type: "object", properties: {} },
+				tool_mapping: {
+					mcp_server: "kafka",
+					mcp_patterns: ["kafka_*"],
+					action_tool_map: {
+						action_a: ["kafka_list_topics", "kafka_describe_topic"],
+						action_b: ["kafka_get_topic_offsets"],
+					},
+				},
+			},
+			{
+				name: "elastic-logs",
+				description: "Elastic",
+				input_schema: { type: "object", properties: {} },
+				tool_mapping: {
+					mcp_server: "elastic",
+					mcp_patterns: ["elasticsearch_*"],
+					action_tool_map: {
+						search: ["elasticsearch_search", "elasticsearch_count_documents"],
+					},
+				},
+			},
+		];
+		const authority = buildAuthority(tools);
+		expect(authority.has("kafka_list_topics")).toBe(true);
+		expect(authority.has("kafka_describe_topic")).toBe(true);
+		expect(authority.has("kafka_get_topic_offsets")).toBe(true);
+		expect(authority.has("elasticsearch_search")).toBe(true);
+		expect(authority.has("elasticsearch_count_documents")).toBe(true);
+		expect(authority.size).toBe(5);
+	});
+
+	test("tool without tool_mapping contributes nothing", () => {
+		const tools: ToolDefinition[] = [
+			{
+				name: "notify-slack",
+				description: "Slack",
+				input_schema: { type: "object", properties: {} },
+			},
+		];
+		const authority = buildAuthority(tools);
+		expect(authority.size).toBe(0);
+	});
+
+	test("tool with tool_mapping but no action_tool_map contributes nothing", () => {
+		const tools: ToolDefinition[] = [
+			{
+				name: "tool-a",
+				description: "A",
+				input_schema: { type: "object", properties: {} },
+				tool_mapping: {
+					mcp_server: "a",
+					mcp_patterns: ["a_*"],
+				},
+			},
+		];
+		const authority = buildAuthority(tools);
+		expect(authority.size).toBe(0);
+	});
+
+	test("empty tools array -> empty set", () => {
+		expect(buildAuthority([]).size).toBe(0);
+	});
+
+	test("duplicate tool names across actions are deduplicated", () => {
+		const tools: ToolDefinition[] = [
+			{
+				name: "kafka-introspect",
+				description: "Kafka",
+				input_schema: { type: "object", properties: {} },
+				tool_mapping: {
+					mcp_server: "kafka",
+					mcp_patterns: ["kafka_*"],
+					action_tool_map: {
+						action_a: ["kafka_list_topics", "kafka_describe_topic"],
+						action_b: ["kafka_describe_topic"],
+					},
+				},
+			},
+		];
+		const authority = buildAuthority(tools);
+		expect(authority.size).toBe(2);
+		expect(authority.has("kafka_describe_topic")).toBe(true);
 	});
 });
