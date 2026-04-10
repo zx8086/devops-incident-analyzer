@@ -35,3 +35,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Local reference implementations (not part of this repo)
 migrate/
+
+# Local git worktrees (kept outside the indexed tree)
+.worktrees/
+
+# Local-only build artifacts that exceed GitHub's per-file size limit
+kafka-mcp-agentcore.tar.gz
