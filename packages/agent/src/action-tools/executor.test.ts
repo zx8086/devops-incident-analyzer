@@ -3,17 +3,36 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { PendingAction } from "@devops-agent/shared";
 import { executeAction, getAvailableActionTools } from "./executor.ts";
 
-mock.module("./slack-notifier.ts", () => ({
-	isSlackConfigured: () => !!process.env.SLACK_BOT_TOKEN,
-	executeSlackNotify: mock(() => Promise.resolve({ sent: true, timestamp: "123.456", channel: "C123" })),
-	getSeverityColor: () => "#E01E5A",
+// Mock at the network boundary (SDKs), not sibling modules.
+// Sibling-module mocks via mock.module leak across test files in the same
+// Bun process and pollute ticket-creator.test.ts / slack-notifier.test.ts.
+const mockSlackPostMessage = mock(() => Promise.resolve({ ok: true, ts: "123.456", channel: "C123" }));
+const mockSlackFilesUpload = mock(() => Promise.resolve({ ok: true }));
+
+mock.module("@slack/web-api", () => ({
+	WebClient: class {
+		chat = { postMessage: mockSlackPostMessage };
+		files = { uploadV2: mockSlackFilesUpload };
+	},
 }));
 
-mock.module("./ticket-creator.ts", () => ({
-	isLinearConfigured: () => !!process.env.LINEAR_API_KEY,
-	executeCreateTicket: mock(() => Promise.resolve({ ticket_id: "INC-1", url: "https://linear.app/issue/INC-1" })),
-	severityToPriority: () => 1,
-	buildTicketDescription: () => "desc",
+const mockLinearCreateIssue = mock(() =>
+	Promise.resolve({
+		success: true,
+		issue: Promise.resolve({
+			id: "ISSUE-executor-123",
+			identifier: "INC-executor-1",
+			url: "https://linear.app/team/issue/INC-executor-1",
+		}),
+	}),
+);
+const mockLinearCreateAttachment = mock(() => Promise.resolve({ success: true }));
+
+mock.module("@linear/sdk", () => ({
+	LinearClient: class {
+		createIssue = mockLinearCreateIssue;
+		createAttachment = mockLinearCreateAttachment;
+	},
 }));
 
 describe("executor", () => {
@@ -25,6 +44,10 @@ describe("executor", () => {
 		process.env.LINEAR_API_KEY = "lin_api_test";
 		process.env.LINEAR_TEAM_ID = "team-id";
 		process.env.LINEAR_PROJECT_ID = "project-id";
+		mockSlackPostMessage.mockClear();
+		mockSlackFilesUpload.mockClear();
+		mockLinearCreateIssue.mockClear();
+		mockLinearCreateAttachment.mockClear();
 	});
 
 	afterEach(() => {
@@ -46,6 +69,7 @@ describe("executor", () => {
 
 	test("getAvailableActionTools returns empty when nothing configured", () => {
 		delete process.env.SLACK_BOT_TOKEN;
+		delete process.env.SLACK_DEFAULT_CHANNEL;
 		delete process.env.LINEAR_API_KEY;
 		const tools = getAvailableActionTools();
 		expect(tools).toEqual([]);
@@ -67,6 +91,7 @@ describe("executor", () => {
 		expect(result.status).toBe("success");
 		expect(result.tool).toBe("notify-slack");
 		expect(result.actionId).toBe("action-1");
+		expect(mockSlackPostMessage).toHaveBeenCalledTimes(1);
 	});
 
 	test("executeAction routes create-ticket correctly", async () => {
@@ -85,6 +110,7 @@ describe("executor", () => {
 		expect(result.status).toBe("success");
 		expect(result.tool).toBe("create-ticket");
 		expect(result.actionId).toBe("action-2");
+		expect(mockLinearCreateIssue).toHaveBeenCalledTimes(1);
 	});
 
 	test("executeAction returns error for unknown tool", async () => {
