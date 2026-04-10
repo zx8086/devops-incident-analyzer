@@ -52,20 +52,207 @@ export type SelectionMode =
 	| "skip.empty_catalog"
 	| "error.missing_severity";
 
-// Exported for testing; real config comes from the loaded agent in later tasks.
+export type SeverityFallbackConfig = Record<"critical" | "high" | "medium" | "low", string[]>;
+
 export interface RunbookSelectorDeps {
 	catalog: RunbookCatalogEntry[];
-	fallbackBySeverity: Record<"critical" | "high" | "medium" | "low", string[]>;
+	fallbackBySeverity: SeverityFallbackConfig;
 }
 
-export async function selectRunbooks(
-	_state: AgentStateType,
-	_config?: RunnableConfig,
+// Minimal LLM interface the selector needs. Both ChatBedrockConverse and the
+// test fake satisfy this shape, so no @langchain/aws mock is required at the
+// test layer.
+interface SelectorLlm {
+	invoke(
+		messages: Array<{ role: string; content: string }>,
+		config?: RunnableConfig,
+	): Promise<{ content: unknown }>;
+}
+
+// Internal dependency bundle. Tests pass fakes via the second overload; the
+// real LangGraph wiring uses createSelectRunbooksNode() to bind production
+// deps at graph build time. This sidesteps the sibling-module mock leak
+// problem that bit Task 5/6 by not requiring any module-level mocks of
+// ./llm.ts, ./prompt-context.ts, or @devops-agent/gitagent-bridge.
+export interface SelectRunbooksRuntime {
+	getCatalog: () => RunbookCatalogEntry[];
+	getFallbackConfig: () => SeverityFallbackConfig;
+	getLlm: () => SelectorLlm;
+}
+
+export async function runSelectRunbooks(
+	state: AgentStateType,
+	runtime: SelectRunbooksRuntime,
+	config?: RunnableConfig,
 ): Promise<Partial<AgentStateType>> {
-	// Placeholder. Implementation in Task 8.
-	logger.warn("selectRunbooks called before implementation");
-	void createLlm;
-	void extractTextFromContent;
-	void getRunbookCatalog;
-	return {};
+	const startTime = Date.now();
+	const catalog = runtime.getCatalog();
+
+	// Step 1: empty catalog -> skip router, leave state unchanged
+	if (catalog.length === 0) {
+		logger.info(
+			{ mode: "skip.empty_catalog", catalogSize: 0 },
+			"Runbook catalog is empty; skipping selection",
+		);
+		return {};
+	}
+
+	const validFilenames = new Set(catalog.map((e) => e.filename));
+	const severity = state.normalizedIncident?.severity;
+	const fallbackConfig = runtime.getFallbackConfig();
+
+	// Step 2: build router prompt
+	const lastMessage = state.messages.at(-1);
+	const rawInput = lastMessage ? extractTextFromContent(lastMessage.content).slice(0, 500) : "";
+	const incidentSummary = formatIncidentSummary(state);
+	const catalogBlock = catalog
+		.map((e) => `  - ${e.filename}: ${e.title} -- ${e.summary}`)
+		.join("\n");
+
+	const systemPrompt = `You are selecting operational runbooks for a DevOps incident investigation.
+Pick 0 to 2 runbooks from the catalog that best match the incident. If no
+runbook clearly applies, return an empty list. Do not guess.`;
+
+	const userPrompt = `Incident summary:
+${incidentSummary}
+  raw input: ${rawInput}
+
+Available runbooks:
+${catalogBlock}
+
+Return a JSON object matching this exact shape:
+{"filenames": ["name1.md", "name2.md"], "reasoning": "one sentence"}
+
+Rules:
+- Pick 0 to 2 filenames. Prefer 1 if a single runbook clearly applies.
+- Return empty filenames if no runbook clearly applies.
+- filenames must exactly match the list above. Do not invent new names.`;
+
+	// Step 3: invoke the LLM
+	const llm = runtime.getLlm();
+	let response: { content: unknown };
+	try {
+		response = await llm.invoke(
+			[
+				{ role: "system", content: systemPrompt },
+				{ role: "human", content: userPrompt },
+			],
+			config,
+		);
+	} catch (err) {
+		const isTimeout = err instanceof Error && err.name === "TimeoutError";
+		const mode: SelectionMode = isTimeout ? "fallback.timeout" : "fallback.api_error";
+		return enterFallback(mode, severity, fallbackConfig, startTime);
+	}
+
+	// Step 4: parse response
+	const text = String((response as { content: unknown }).content);
+	const jsonMatch = text.match(/\{[\s\S]*\}/);
+	if (!jsonMatch) {
+		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);
+	}
+
+	let parsed: RunbookSelectionResponse;
+	try {
+		const raw = JSON.parse(jsonMatch[0]);
+		parsed = RunbookSelectionResponseSchema.parse(raw);
+	} catch {
+		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);
+	}
+
+	// Step 5: validate filenames against the catalog
+	const validPicks = parsed.filenames.filter((f) => validFilenames.has(f));
+	const invalidPicks = parsed.filenames.filter((f) => !validFilenames.has(f));
+
+	if (parsed.filenames.length > 0 && validPicks.length === 0) {
+		return enterFallback("fallback.invalid_filenames", severity, fallbackConfig, startTime);
+	}
+
+	// Step 6: truncate to max 2
+	const truncated = validPicks.slice(0, 2);
+	let mode: SelectionMode = "llm";
+	if (parsed.filenames.length > 2) mode = "llm.truncated";
+	else if (invalidPicks.length > 0) mode = "llm.partial";
+	else if (truncated.length === 0) mode = "llm.empty";
+
+	logger.info(
+		{
+			mode,
+			count: truncated.length,
+			filenames: truncated.join(","),
+			reasoning: parsed.reasoning,
+			latencyMs: Date.now() - startTime,
+			catalogSize: catalog.length,
+		},
+		"Runbook selection complete",
+	);
+
+	return { selectedRunbooks: truncated };
+}
+
+function enterFallback(
+	mode: SelectionMode,
+	severity: string | undefined,
+	config: SeverityFallbackConfig,
+	startTime: number,
+): Partial<AgentStateType> {
+	if (!severity) {
+		logger.error(
+			{ mode: "error.missing_severity", latencyMs: Date.now() - startTime },
+			"Runbook selection fallback required but severity is missing",
+		);
+		throw new RunbookSelectionFallbackError(
+			`Runbook selector fallback required (${mode}) but state.normalizedIncident.severity is missing. ` +
+				`This indicates a bug in the normalize node or a malformed incident; refusing to guess.`,
+		);
+	}
+	const fallback = config[severity as keyof SeverityFallbackConfig] ?? [];
+	logger.info(
+		{
+			mode,
+			severity,
+			filenames: fallback.join(","),
+			count: fallback.length,
+			latencyMs: Date.now() - startTime,
+		},
+		"Runbook selection entered fallback path",
+	);
+	return { selectedRunbooks: fallback };
+}
+
+function formatIncidentSummary(state: AgentStateType): string {
+	const inc = state.normalizedIncident ?? {};
+	const lines: string[] = [];
+	lines.push(`  severity: ${inc.severity ?? "unspecified"}`);
+	if (inc.timeWindow) {
+		lines.push(`  time window: ${inc.timeWindow.from} to ${inc.timeWindow.to}`);
+	}
+	if (inc.affectedServices && inc.affectedServices.length > 0) {
+		lines.push(
+			`  affected services: ${inc.affectedServices.map((s) => s.name).join(", ")}`,
+		);
+	}
+	if (inc.extractedMetrics && inc.extractedMetrics.length > 0) {
+		const metrics = inc.extractedMetrics
+			.map((m) => `${m.name}${m.value ? `=${m.value}` : ""}${m.threshold ? ` (${m.threshold})` : ""}`)
+			.join(", ");
+		lines.push(`  extracted metrics: ${metrics}`);
+	}
+	return lines.join("\n");
+}
+
+// Factory that binds production deps for the LangGraph wiring. Task 10 calls
+// this from graph.ts. The returned node function satisfies LangGraph's
+// node signature: (state, config) => Partial<state>.
+export function createSelectRunbooksNode(
+	getFallbackConfig: () => SeverityFallbackConfig,
+): (state: AgentStateType, config?: RunnableConfig) => Promise<Partial<AgentStateType>> {
+	return async (state, config) => {
+		const runtime: SelectRunbooksRuntime = {
+			getCatalog: getRunbookCatalog,
+			getFallbackConfig,
+			getLlm: () => createLlm("runbookSelector") as unknown as SelectorLlm,
+		};
+		return runSelectRunbooks(state, runtime, config);
+	};
 }
