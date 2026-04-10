@@ -233,7 +233,7 @@ The `AgentState` is defined in `packages/agent/src/state.ts` using LangGraph's `
 **Purpose:** Correlates all datasource findings into a unified incident report. Produces a markdown report with summary, correlated timeline table, per-datasource findings, confidence score, and gap analysis.
 
 **Prompt construction:**
-- System prompt loaded from the orchestrator's SOUL.md + RULES.md + active skills via the gitagent bridge
+- System prompt loaded from the orchestrator's SOUL.md + RULES.md + active skills + knowledge base (runbooks, systems-map, slo-policies) via the gitagent bridge -- see [Gitagent Bridge > knowledge/ (Reference Knowledge)](gitagent-bridge.md#knowledge-reference-knowledge) for how runbooks inform the aggregator's correlation logic
 - On follow-ups with a prior answer, includes condensed prior context (not full conversation history)
 - Results block formatted as markdown sections per datasource with status, duration, and data
 - Explicit instruction to only reference data present in results -- no fabrication

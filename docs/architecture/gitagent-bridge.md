@@ -85,10 +85,15 @@ agents/
       propose-mitigation/
         SKILL.md                        # Procedure: safe remediation suggestions
     knowledge/
-      index.yaml                        # Knowledge base index
-      runbooks/.gitkeep                 # Operational runbooks (future)
-      systems-map/.gitkeep              # Infrastructure topology (future)
-      slo-policies/.gitkeep             # SLO thresholds (future)
+      index.yaml                        # Knowledge base category registry
+      runbooks/
+        kafka-consumer-lag.md           # Playbook: stalled/lagging Kafka consumers
+        high-error-rate.md              # Playbook: 5xx spikes on Kong Konnect
+        database-slow-queries.md        # Playbook: slow N1QL queries on Capella
+      systems-map/
+        service-dependencies.md         # 4-plane infrastructure dependency graph
+      slo-policies/
+        api-latency-slo.md              # Tiered latency/error-budget definitions
     compliance/
       risk-assessment.md                # Medium risk classification with justification
       allowed-actions.yaml              # Permitted read ops, prohibited write ops
@@ -214,12 +219,33 @@ This maps the `elastic-logs` facade to all MCP tools whose names start with `ela
 
 ### skills/*/SKILL.md (Procedural Knowledge)
 
-Skills are multi-step procedures that teach the agent how to perform complex reasoning tasks. They are loaded from `skills/<name>/SKILL.md` and appended to the system prompt as `## Skill: <name>` sections.
+Skills are multi-step procedures that teach the agent how to perform complex reasoning tasks. They are loaded from `skills/<name>/SKILL.md` and appended to the system prompt as `## Skill: <name>` sections. A skill is only loaded if its name is listed in the root `agent.yaml` under `skills:` -- skills are **named and explicitly activated**.
 
 The incident analyzer defines three skills:
 - **normalize-incident:** Transform raw alerts into structured incident objects with severity, time window, affected services, and datasource targets
 - **aggregate-findings:** Correlate findings across multiple datasources into a unified report
 - **propose-mitigation:** Generate safe, read-only remediation suggestions
+
+### knowledge/ (Reference Knowledge)
+
+The `knowledge/` directory contains reference material the agent can consult opportunistically when matching incident signals against known patterns. Unlike skills, knowledge entries are **bulk-loaded and always-on**: every file in every registered category is appended to the orchestrator's system prompt for the life of each request.
+
+`knowledge/index.yaml` declares categories and their paths. The incident analyzer registers three:
+- **runbooks/** -- Operational playbooks for common incident patterns (`kafka-consumer-lag.md`, `high-error-rate.md`, `database-slow-queries.md`). Each runbook describes identification steps, drill-down queries, and cross-datasource correlation, and references MCP tool names directly in prose.
+- **systems-map/** -- Service dependency graphs and topology (`service-dependencies.md`). Helps the agent reason about upstream/downstream blast radius.
+- **slo-policies/** -- SLO/SLA definitions and thresholds (`api-latency-slo.md`). Tier definitions, error budgets, and latency targets.
+
+**Skill vs knowledge at a glance:**
+
+| Dimension | Skill | Knowledge (runbook, etc.) |
+|---|---|---|
+| What it is | Procedure the agent performs | Reference material the agent consults |
+| Activation | Named in `agent.yaml:skills:` | Dropped into `knowledge/<category>/`, picked up via `index.yaml` |
+| Prompt presence | Only the listed skills | All entries in all registered categories |
+| Who decides when it applies | Pipeline node (e.g. `normalize` implies `normalize-incident`) | LLM pattern-matches signals against prose |
+| Tool-name binding | None | Runbooks reference MCP tools by name -- **not enforced at load time**, rename a tool and runbook prose silently rots |
+
+The tool-name convention is a footgun worth restating: if a runbook cites `capella_get_longest_running_queries` and someone renames the underlying MCP tool, nothing breaks at load time, `bun run yaml:check` does not catch it, and the LLM will cite a dead tool at runtime. The convention is enforced by code review and authorial discipline, not by the loader.
 
 ### compliance/ (Risk and Governance)
 
@@ -245,9 +271,18 @@ Two files define the compliance posture:
 3. `tools/*.yaml` -- each file parsed and validated against `ToolDefinitionSchema`
 4. `skills/<name>/SKILL.md` -- loaded for each skill listed in `manifest.skills`
 5. `agents/<name>/` -- recursively calls `loadAgent()` for each sub-agent listed in `manifest.agents`
+6. `knowledge/` -- delegated to `loadKnowledge()` (see below)
+
+**`loadKnowledge(agentDir: string): KnowledgeEntry[]`** reads reference material registered in `knowledge/index.yaml`. For each category declared there (`runbooks`, `systems-map`, `slo-policies`, ...), it walks the category's `path` directory and loads every `.md` file (excluding `.gitkeep`) into a `KnowledgeEntry` tagged with its category name. Non-empty contents only. If `index.yaml` is missing or fails `KnowledgeIndexSchema` validation, the loader returns an empty array -- knowledge is strictly additive and never blocks agent loading.
 
 **Return type:**
 ```typescript
+interface KnowledgeEntry {
+    category: string;    // e.g. "runbooks", "systems-map", "slo-policies"
+    filename: string;    // e.g. "kafka-consumer-lag.md"
+    content: string;     // trimmed file body
+}
+
 interface LoadedAgent {
     manifest: AgentManifest;
     soul: string;
@@ -255,6 +290,7 @@ interface LoadedAgent {
     tools: ToolDefinition[];
     skills: Map<string, string>;
     subAgents: Map<string, LoadedAgent>;
+    knowledge: KnowledgeEntry[];
 }
 ```
 
@@ -276,14 +312,19 @@ Region defaults to `eu-west-1` (overridable via `AWS_REGION` env var). Temperatu
 
 ### skill-loader.ts
 
-**Purpose:** Assembles the system prompt from SOUL.md, RULES.md, and skill content.
+**Purpose:** Assembles the system prompt from SOUL.md, RULES.md, skill content, and knowledge base entries.
 
 **`buildSystemPrompt(agent, activeSkills?): string`** concatenates:
 1. SOUL.md content (trimmed)
 2. RULES.md content (trimmed)
 3. Each active skill's SKILL.md content (with YAML frontmatter stripped), prefixed with `## Skill: <name>`
+4. Knowledge base section (if `agent.knowledge` is non-empty), built by `buildKnowledgeSection()`
 
 Sections are joined with `\n\n---\n\n` separators. If `activeSkills` is not provided, all skills in the agent's skills map are included.
+
+**`buildKnowledgeSection(knowledge): string`** groups `KnowledgeEntry[]` by category and emits a `## Knowledge Base` block. Each category becomes a `### <Title-Case-Category>` heading (e.g. `runbooks` -> `### Runbooks`), and each entry within a category becomes a `#### <filename>` block followed by the entry's content. Every runbook, systems-map document, and SLO policy file is **always-on**: the entire knowledge base sits in the orchestrator's system prompt for the life of every request. There is no per-request filtering.
+
+The practical consequence: the LLM pattern-matches incident signals against runbook prose during the `aggregate` and `validate` nodes. Runbooks are not dispatched, selected, or indexed -- they are reference material the model reads opportunistically.
 
 ### tool-prompt.ts
 

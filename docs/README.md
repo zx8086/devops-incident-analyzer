@@ -1,7 +1,7 @@
 # Documentation Index
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-09
+> **Last updated:** 2026-04-10
 
 Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates four MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect) to correlate DevOps incidents across 192 tools.
 
@@ -23,6 +23,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Set up logging and tracing | [Observability](operations/observability.md) |
 | Diagnose a problem | [Troubleshooting](operations/troubleshooting.md) |
 | Understand monorepo layout | [Monorepo Structure](development/monorepo-structure.md) |
+| Author skills and runbooks | [Authoring Skills and Runbooks](development/authoring-skills-and-runbooks.md) |
 | Run tests | [Testing](development/testing.md) |
 
 ---
@@ -62,6 +63,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Adding MCP Tools](development/adding-mcp-tools.md) | Step-by-step process for adding tools to any of the four MCP servers |
 | [Testing](development/testing.md) | Unit, integration, and MCP tool testing strategies |
 | [Action Tool Maps](development/action-tool-maps.md) | Action-driven tool selection: YAML maps, fallback chain, troubleshooting |
+| [Authoring Skills and Runbooks](development/authoring-skills-and-runbooks.md) | How to author orchestrator skills and knowledge-base runbooks, with tool-name footgun guidance |
 | [Frontend](development/frontend.md) | SvelteKit app, Svelte 5 runes, SSE streaming, component reference |
 
 ### Operations
@@ -90,3 +92,4 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 |------|--------|
 | 2026-04-04 | Initial documentation index created with Phase 1 foundation structure |
 | 2026-04-09 | Added Action Tool Maps development guide |
+| 2026-04-10 | SIO-639: Added Authoring Skills and Runbooks guide; fixed stale runbook/knowledge coverage in gitagent-bridge and agent-pipeline |
