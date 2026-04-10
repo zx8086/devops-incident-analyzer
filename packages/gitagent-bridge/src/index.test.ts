@@ -463,3 +463,75 @@ describe("KnowledgeIndexSchema: runbook_selection", () => {
 		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
 	});
 });
+
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+describe("loadAgent: runbook_selection filename validation", () => {
+	function makeTestAgent(indexYaml: string, runbookFiles: Record<string, string> = {}): string {
+		const dir = mkdtempSync(join(tmpdir(), "gitagent-test-"));
+		mkdirSync(join(dir, "knowledge", "runbooks"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`spec_version: "0.1.0"
+name: test
+version: 0.1.0
+description: test
+model:
+  preferred: claude-sonnet-4-6
+  constraints: { temperature: 0.2, max_tokens: 1024 }
+runtime: { max_turns: 10, timeout: 60 }
+compliance:
+  risk_tier: low
+  supervision: { human_in_the_loop: conditional, kill_switch: false }
+  recordkeeping: { audit_logging: false }
+  data_governance: { pii_handling: allow, data_classification: internal }
+`,
+		);
+		writeFileSync(join(dir, "knowledge", "index.yaml"), indexYaml);
+		for (const [name, content] of Object.entries(runbookFiles)) {
+			writeFileSync(join(dir, "knowledge", "runbooks", name), content);
+		}
+		return dir;
+	}
+
+	test("accepts config where every filename exists", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: ["a.md"]
+    high: []
+    medium: []
+    low: []
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).not.toThrow();
+		rmSync(dir, { recursive: true });
+	});
+
+	test("rejects config referencing nonexistent filename", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: ["missing.md"]
+    high: []
+    medium: []
+    low: []
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).toThrow(/missing\.md/);
+		rmSync(dir, { recursive: true });
+	});
+});

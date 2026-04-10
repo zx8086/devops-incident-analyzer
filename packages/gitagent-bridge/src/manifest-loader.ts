@@ -94,6 +94,33 @@ function loadKnowledge(agentDir: string): KnowledgeEntry[] {
 		}
 	}
 
+	// SIO-640: validate runbook_selection filenames exist on disk
+	if (index.data.runbook_selection) {
+		const runbooksCategory = index.data.categories.runbooks;
+		if (!runbooksCategory) {
+			throw new Error(
+				"knowledge/index.yaml: runbook_selection is present but categories.runbooks is not defined. " +
+					"runbook_selection requires a runbooks category.",
+			);
+		}
+		const runbooksDir = join(knowledgeDir, runbooksCategory.path);
+		const existingFiles = isDirectory(runbooksDir)
+			? new Set(readdirSync(runbooksDir).filter((f) => f.endsWith(".md")))
+			: new Set<string>();
+
+		const { fallback_by_severity } = index.data.runbook_selection;
+		for (const [severity, filenames] of Object.entries(fallback_by_severity)) {
+			for (const filename of filenames) {
+				if (!existingFiles.has(filename)) {
+					throw new Error(
+						`knowledge/index.yaml: runbook_selection.fallback_by_severity.${severity} references ` +
+							`"${filename}" but no such file exists under ${runbooksCategory.path}`,
+					);
+				}
+			}
+		}
+	}
+
 	return entries;
 }
 
