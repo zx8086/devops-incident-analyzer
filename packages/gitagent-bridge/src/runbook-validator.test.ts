@@ -168,11 +168,7 @@ function buildAuthority(tools: ToolDefinition[]): Set<string> {
 	return authority;
 }
 
-function validateRunbook(
-	runbookPath: string,
-	content: string,
-	authority: Set<string>,
-): ValidationReport {
+function validateRunbook(runbookPath: string, content: string, authority: Set<string>): ValidationReport {
 	const proseCitations = extractProseCitations(content);
 	const tailResult = extractTailSection(content);
 
@@ -359,23 +355,16 @@ describe("extractProseCitations", () => {
 		].join("\n");
 		const citations = extractProseCitations(content);
 		expect(citations).toHaveLength(2);
-		expect(citations.map((c) => c.name)).toEqual([
-			"kafka_list_topics",
-			"kafka_get_topic_offsets",
-		]);
+		expect(citations.map((c) => c.name)).toEqual(["kafka_list_topics", "kafka_get_topic_offsets"]);
 		expect(citations[0]?.line).toBe(1);
 		expect(citations[1]?.line).toBe(5);
 	});
 
 	test("multiple citations on one line", () => {
-		const content =
-			"Use `kafka_list_consumer_groups` and `kafka_describe_consumer_group` together.";
+		const content = "Use `kafka_list_consumer_groups` and `kafka_describe_consumer_group` together.";
 		const citations = extractProseCitations(content);
 		expect(citations).toHaveLength(2);
-		expect(citations.map((c) => c.name)).toEqual([
-			"kafka_list_consumer_groups",
-			"kafka_describe_consumer_group",
-		]);
+		expect(citations.map((c) => c.name)).toEqual(["kafka_list_consumer_groups", "kafka_describe_consumer_group"]);
 	});
 
 	test("empty content -> empty array", () => {
@@ -408,9 +397,7 @@ describe("extractTailSection", () => {
 	});
 
 	test("whitespace around names is trimmed", () => {
-		const content = ["## All Tools Used Are Read-Only", "  a_one  ,   a_two ,a_three  "].join(
-			"\n",
-		);
+		const content = ["## All Tools Used Are Read-Only", "  a_one  ,   a_two ,a_three  "].join("\n");
 		const result = extractTailSection(content);
 		expect(result.errors).toEqual([]);
 		expect(result.citations.map((c) => c.name)).toEqual(["a_one", "a_two", "a_three"]);
@@ -431,24 +418,15 @@ describe("extractTailSection", () => {
 	});
 
 	test("duplicate header -> duplicate_tail_section error", () => {
-		const content = [
-			"## All Tools Used Are Read-Only",
-			"a_one",
-			"",
-			"## All Tools Used Are Read-Only",
-			"a_two",
-		].join("\n");
+		const content = ["## All Tools Used Are Read-Only", "a_one", "", "## All Tools Used Are Read-Only", "a_two"].join(
+			"\n",
+		);
 		const result = extractTailSection(content);
 		expect(result.errors).toContain("duplicate_tail_section");
 	});
 
 	test("header followed immediately by next heading -> empty_tail_section", () => {
-		const content = [
-			"## All Tools Used Are Read-Only",
-			"",
-			"## Next Section",
-			"content",
-		].join("\n");
+		const content = ["## All Tools Used Are Read-Only", "", "## Next Section", "content"].join("\n");
 		const result = extractTailSection(content);
 		expect(result.errors).toContain("empty_tail_section");
 	});
