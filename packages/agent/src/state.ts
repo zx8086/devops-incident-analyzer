@@ -1,10 +1,14 @@
 // agent/src/state.ts
 
 import type {
+	ActionResult,
 	AttachmentMeta,
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
+	MitigationSteps,
+	NormalizedIncident,
+	PendingAction,
 	ToolPlanStep,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
@@ -82,6 +86,12 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-626: Datasources skipped by supervisor (e.g., MCP server not connected)
+	skippedDataSources: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
 	isFollowUp: Annotation<boolean>({
 		reducer: (_, next) => next,
 		default: () => false,
@@ -105,6 +115,51 @@ export const AgentState = Annotation.Root({
 	suggestions: Annotation<string[]>({
 		reducer: (_, next) => next,
 		default: () => [],
+	}),
+
+	// SIO-630: Structured incident data from normalize node
+	normalizedIncident: Annotation<NormalizedIncident>({
+		reducer: (_, next) => next,
+		default: () => ({}),
+	}),
+
+	// SIO-631: Mitigation steps from propose-mitigation node
+	mitigationSteps: Annotation<MitigationSteps>({
+		reducer: (_, next) => next,
+		default: () => ({ investigate: [], monitor: [], escalate: [], relatedRunbooks: [] }),
+	}),
+
+	// SIO-632: Confidence score extracted from aggregator output
+	confidenceScore: Annotation<number>({
+		reducer: (_, next) => next,
+		default: () => 0,
+	}),
+
+	// SIO-632: Set by checkConfidence when score is below the HITL threshold
+	lowConfidence: Annotation<boolean>({
+		reducer: (_, next) => next,
+		default: () => false,
+	}),
+
+	// SIO-634, SIO-635: Action proposals from mitigation node, awaiting user confirmation
+	pendingActions: Annotation<PendingAction[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-634, SIO-635: Results from executed actions
+	actionResults: Annotation<ActionResult[]>({
+		reducer: (prev, next) => [...prev, ...next],
+		default: () => [],
+	}),
+
+	// SIO-640: Runbook selector output.
+	//   null      -> selector did not run (default)
+	//   []        -> selector ran and chose no runbooks
+	//   [names]   -> selector chose these runbooks
+	selectedRunbooks: Annotation<string[] | null>({
+		reducer: (_, next) => next,
+		default: () => null,
 	}),
 });
 

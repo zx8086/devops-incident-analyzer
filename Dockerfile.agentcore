@@ -1,0 +1,70 @@
+# Dockerfile.agentcore
+# Container image for deploying MCP servers to AWS Bedrock AgentCore Runtime.
+# Parameterized via MCP_SERVER_PACKAGE build arg to support all 4 servers.
+#
+# Build:  docker build -f Dockerfile.agentcore -t kafka-mcp-agentcore .
+# Test:   docker run --rm -p 8000:8000 -e KAFKA_PROVIDER=local kafka-mcp-agentcore
+
+ARG MCP_SERVER_PACKAGE=mcp-server-kafka
+
+# -- Stage 1: Install dependencies --
+FROM oven/bun:1-alpine AS deps
+WORKDIR /app
+
+ARG MCP_SERVER_PACKAGE
+
+RUN apk add --no-cache dumb-init
+
+COPY package.json bun.lock bunfig.toml ./
+
+# Copy ALL workspace package.json manifests so bun sees a consistent workspace
+# structure and the frozen lockfile validates. Only source for the target server
+# is copied in the runtime stage.
+COPY packages/shared/package.json packages/shared/
+COPY packages/agent/package.json packages/agent/
+COPY packages/checkpointer/package.json packages/checkpointer/
+COPY packages/gitagent-bridge/package.json packages/gitagent-bridge/
+COPY packages/mcp-server-couchbase/package.json packages/mcp-server-couchbase/
+COPY packages/mcp-server-elastic/package.json packages/mcp-server-elastic/
+COPY packages/mcp-server-kafka/package.json packages/mcp-server-kafka/
+COPY packages/mcp-server-konnect/package.json packages/mcp-server-konnect/
+COPY packages/observability/package.json packages/observability/
+COPY apps/web/package.json apps/web/
+
+RUN bun install --frozen-lockfile --production
+
+# -- Stage 2: Runtime --
+FROM oven/bun:1-alpine AS runtime
+WORKDIR /app
+
+ARG MCP_SERVER_PACKAGE
+
+COPY --from=deps /usr/bin/dumb-init /usr/bin/dumb-init
+
+RUN addgroup -g 65532 -S appgroup && \
+    adduser -u 65532 -S appuser -G appgroup
+
+COPY --from=deps --chown=65532:65532 /app/node_modules ./node_modules
+COPY --from=deps --chown=65532:65532 /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=deps --chown=65532:65532 /app/packages/${MCP_SERVER_PACKAGE}/node_modules ./packages/${MCP_SERVER_PACKAGE}/node_modules
+
+COPY --chown=65532:65532 packages/shared/ packages/shared/
+COPY --chown=65532:65532 packages/${MCP_SERVER_PACKAGE}/ packages/${MCP_SERVER_PACKAGE}/
+
+# Bake the entrypoint path at build time so CMD uses exec form (no shell needed).
+# The unified index.ts reads MCP_TRANSPORT from env -- no separate entrypoint needed.
+ENV ENTRYPOINT_PATH=packages/${MCP_SERVER_PACKAGE}/src/index.ts
+ENV MCP_TRANSPORT=agentcore
+ENV MCP_PORT=8000
+ENV MCP_HOST=0.0.0.0
+
+USER 65532:65532
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget -q --spider http://localhost:8000/ping || exit 1
+
+# dumb-init as PID 1 for proper SIGTERM/SIGINT signal forwarding
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["sh", "-c", "bun run ${ENTRYPOINT_PATH}"]

@@ -2,8 +2,8 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import { logger } from "../lib/logger";
 import type { BucketInfo } from "../lib/types";
+import { logger } from "../utils/logger";
 
 export function registerDatabaseStructureResource(server: McpServer, bucket: Bucket): void {
 	server.resource("database-structure", "database://structure", async (uri) => {

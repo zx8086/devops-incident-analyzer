@@ -1,7 +1,7 @@
 /* src/lib/errorUtils.ts */
 
+import { logger } from "../utils/logger";
 import { createError } from "./errors";
-import { logger } from "./logger";
 import type { OperationResult } from "./types";
 
 export interface CouchbaseError extends Error {
@@ -44,31 +44,24 @@ export async function handleOperation<T>(
 export function handleAppError(error: unknown): never {
 	if (error instanceof Error) {
 		if (error.message.includes("document not found")) {
-			logger.warn({ error }, "Document not found");
 			throw createError("DOCUMENT_NOT_FOUND", error.message);
 		}
 		if (error.message.includes("invalid scope")) {
-			logger.warn({ error }, "Invalid scope name");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 		if (error.message.includes("invalid collection")) {
-			logger.warn({ error }, "Invalid collection name");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 		if (error.message.includes("authentication failed")) {
-			logger.error({ error }, "Authentication failed");
 			throw createError("AUTH_ERROR", error.message);
 		}
 		if (error.message.includes("query")) {
-			logger.error({ error }, "Query error");
 			throw createError("QUERY_ERROR", error.message);
 		}
 		if (error.message.includes("validation")) {
-			logger.warn({ error }, "Validation error");
 			throw createError("VALIDATION_ERROR", error.message);
 		}
 	}
 
-	logger.error({ error }, "Unhandled database error");
 	throw createError("DB_ERROR", "An unexpected database error occurred");
 }

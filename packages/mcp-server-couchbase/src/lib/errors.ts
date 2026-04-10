@@ -1,7 +1,5 @@
 /* src/lib/errors.ts */
 
-import { logger } from "./logger";
-
 /**
  * Application-level error codes
  * These are used for internal application errors and are mapped to
@@ -40,7 +38,7 @@ export class AppError extends Error {
 	 */
 	toMcpError(): unknown {
 		// Import inside the method to avoid circular dependencies
-		const { createMcpError, MCP_ERROR_CODES } = require("./mcpErrors");
+		const { createMcpError } = require("./mcpErrors");
 
 		// Map app error codes to MCP error codes
 		const mcpErrorCode = this.getMcpErrorCode();
@@ -90,18 +88,7 @@ export const errorMessages: Record<ErrorCode, string> = {
  */
 export function createError(code: ErrorCode, message?: string, originalError?: Error): AppError {
 	const errorMessage = message || errorMessages[code];
-	const error = new AppError(code, errorMessage, originalError);
-
-	logger.error(
-		{
-			code,
-			originalError: originalError?.message,
-			stack: originalError?.stack,
-		},
-		errorMessage,
-	);
-
-	return error;
+	return new AppError(code, errorMessage, originalError);
 }
 
 /**

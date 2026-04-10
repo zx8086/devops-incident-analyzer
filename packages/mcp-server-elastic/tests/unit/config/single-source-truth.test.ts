@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { defaultConfig, envVarMapping, getConfig } from "../../../src/config";
+import { defaultConfig, envVarMapping, getConfig } from "../../../src/config/index.js";
 
 describe("Single Source of Truth Configuration Pattern", () => {
 	test("should have no .default() calls in Zod schemas", () => {
-		const configPath = join(process.cwd(), "src/config.ts");
+		const configPath = join(process.cwd(), "src/config/schemas.ts");
 		const content = readFileSync(configPath, "utf-8");
 
 		// Count .default() occurrences in schema definitions
@@ -23,7 +23,9 @@ describe("Single Source of Truth Configuration Pattern", () => {
 			});
 
 			console.log("Found .default() calls in schemas:");
-			defaultLines.forEach((line) => console.log("  ", line));
+			for (const line of defaultLines) {
+				console.log("  ", line);
+			}
 		}
 
 		expect(defaultCalls).toBeNull();
@@ -92,8 +94,8 @@ describe("Single Source of Truth Configuration Pattern", () => {
 			process.env.LOG_LEVEL = "debug";
 
 			// Force config reload by clearing module cache if needed
-			delete require.cache[require.resolve("../../../src/config")];
-			const { getConfig: getConfigFresh } = require("../../../src/config");
+			delete require.cache[require.resolve("../../../src/config/index.js")];
+			const { getConfig: getConfigFresh } = require("../../../src/config/index.js");
 
 			const config = getConfigFresh();
 

@@ -2,8 +2,7 @@
 import type { AppConfig } from "../config/schemas.ts";
 import { normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
-import { getLogger } from "../logging/container.ts";
-import { traceToolCall } from "../telemetry/tracing.ts";
+import { traceToolCall } from "../utils/tracing.ts";
 
 type ToolResponse = {
 	content: Array<{ type: "text"; text: string }>;
@@ -52,8 +51,6 @@ export function wrapHandler<T>(
 	handler: (args: T) => Promise<ToolResponse>,
 ): (args: T) => Promise<ToolResponse> {
 	return async (args: T) => {
-		const logger = getLogger();
-
 		if (SCHEMA_REGISTRY_TOOLS.has(toolName) && !config.schemaRegistry.enabled) {
 			return ResponseBuilder.error(
 				"Schema Registry is not enabled. Set SCHEMA_REGISTRY_ENABLED=true and SCHEMA_REGISTRY_URL to enable.",
@@ -72,28 +69,9 @@ export function wrapHandler<T>(
 		}
 
 		return traceToolCall(toolName, async () => {
-			const startTime = Date.now();
 			try {
-				logger.debug(
-					{
-						args: Object.keys(args as Record<string, unknown>),
-					},
-					`Executing tool: ${toolName}`,
-				);
-				const result = await handler(args);
-				const duration = Date.now() - startTime;
-				logger.debug({ duration }, `Tool completed: ${toolName}`);
-				return result;
+				return await handler(args);
 			} catch (error) {
-				const duration = Date.now() - startTime;
-				logger.error(
-					{
-						error: error instanceof Error ? error.message : String(error),
-						stack: error instanceof Error ? error.stack : undefined,
-						duration,
-					},
-					`Tool failed: ${toolName}`,
-				);
 				const mcpError = normalizeError(error);
 				return ResponseBuilder.error(mcpError.message);
 			}

@@ -1,11 +1,25 @@
 // apps/web/src/lib/server/agent.ts
-import { buildGraph, createMcpClient } from "@devops-agent/agent";
+import { buildGraph, createMcpClient, getAgent } from "@devops-agent/agent";
+import { getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
+import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
 
-// SIO-606: Match gitagent-bridge getRecursionLimit(25) = 50.
-// Accounts for agent->tool round trips in each graph step.
-const RECURSION_LIMIT = 50;
+// SIO-621: Derive recursion limit from gitagent runtime.max_turns instead of hardcoding.
+// getRecursionLimit doubles max_turns to account for agent->tool round trips.
+function getGraphRecursionLimit(): number {
+	const agent = getAgent();
+	return getRecursionLimit(agent.manifest.runtime?.max_turns);
+}
+
+// SIO-621: Derive graph-level timeout from gitagent runtime.timeout (seconds).
+// Prevents runaway pipelines (e.g. 4 datasources with retries) from running indefinitely.
+const DEFAULT_GRAPH_TIMEOUT_S = 300;
+function getGraphTimeoutMs(): number {
+	const agent = getAgent();
+	const timeoutS = agent.manifest.runtime?.timeout ?? DEFAULT_GRAPH_TIMEOUT_S;
+	return timeoutS * 1000;
+}
 
 let mcpReady: Promise<void> | null = null;
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
@@ -50,6 +64,9 @@ export async function invokeAgent(
 		metadata?: Record<string, unknown>;
 	},
 ) {
+	// SIO-637: Kill switch prevents new graph invocations
+	if (isKillSwitchActive()) throw new KillSwitchError();
+
 	const { HumanMessage } = await import("@langchain/core/messages");
 	const graph = await getGraph();
 
@@ -83,7 +100,8 @@ export async function invokeAgent(
 				...(options.runId && { run_id: options.runId }),
 			},
 			version: "v2",
-			recursionLimit: RECURSION_LIMIT,
+			recursionLimit: getGraphRecursionLimit(),
+			signal: AbortSignal.timeout(getGraphTimeoutMs()),
 			...(options.metadata && { metadata: options.metadata }),
 		},
 	);

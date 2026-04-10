@@ -1,7 +1,7 @@
 // src/lib/progressReporting.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 // McpServer does not expose a direct notify/sendNotification method.
 // Progress is reported via logging. If SDK adds notification support in

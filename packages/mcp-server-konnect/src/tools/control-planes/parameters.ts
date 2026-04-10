@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { CommonSchemas } from "../../utils/validation.js";
 
-// =========================
-// Control Planes API Parameters
-// =========================
-
 export const listControlPlanesParameters = () =>
 	z.object({
 		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of control planes per page"),
@@ -35,10 +31,6 @@ export const checkControlPlaneGroupMembershipParameters = () =>
 		),
 	});
 
-// =========================
-// Control Plane CRUD Operations
-// =========================
-
 export const createControlPlaneParameters = () =>
 	z.object({
 		name: z.string().min(1).describe("Control plane name"),
@@ -53,7 +45,7 @@ export const createControlPlaneParameters = () =>
 			.default("pinned_certs")
 			.describe("Authentication type for data plane nodes"),
 		proxyUrls: z.array(z.string()).optional().describe("Custom proxy URLs for the control plane"),
-		labels: z.record(z.string()).optional().describe("Labels to associate with the control plane"),
+		labels: z.record(z.string(), z.string()).optional().describe("Labels to associate with the control plane"),
 	});
 
 export const updateControlPlaneParameters = () =>
@@ -61,17 +53,13 @@ export const updateControlPlaneParameters = () =>
 		controlPlaneId: CommonSchemas.uuid.describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		name: z.string().optional().describe("New control plane name"),
 		description: z.string().optional().describe("New control plane description"),
-		labels: z.record(z.string()).optional().describe("New labels for the control plane"),
+		labels: z.record(z.string(), z.string()).optional().describe("New labels for the control plane"),
 	});
 
 export const deleteControlPlaneParameters = () =>
 	z.object({
 		controlPlaneId: CommonSchemas.uuid.describe("Control Plane ID (obtainable from list-control-planes tool)"),
 	});
-
-// =========================
-// Data Plane Node Management
-// =========================
 
 export const listDataPlaneNodesParameters = () =>
 	z.object({
@@ -110,10 +98,6 @@ export const listDataPlaneTokensParameters = () =>
 		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of tokens per page"),
 		pageNumber: z.number().int().min(1).optional().describe("Page number to retrieve"),
 	});
-
-// =========================
-// Control Plane Configuration
-// =========================
 
 export const getControlPlaneConfigParameters = () =>
 	z.object({

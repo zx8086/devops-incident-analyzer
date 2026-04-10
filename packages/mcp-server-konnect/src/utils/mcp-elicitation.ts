@@ -6,7 +6,7 @@
  */
 
 import { elicitationBridge } from "./elicitation-bridge.js";
-import { createContextLogger } from "./mcp-logger.js";
+import { createContextLogger } from "./logger.js";
 
 const log = createContextLogger("elicitation");
 

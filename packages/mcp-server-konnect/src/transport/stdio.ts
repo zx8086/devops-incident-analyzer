@@ -1,7 +1,7 @@
 // src/transport/stdio.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("transport");
 

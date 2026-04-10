@@ -3,8 +3,10 @@
 import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { getLogger } from "../logging/container.ts";
+import { createContextLogger } from "../utils/logger.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
+
+const log = createContextLogger("transport");
 
 interface HttpTransportConfig {
 	port: number;
@@ -41,7 +43,6 @@ function badRequest(message: string): Response {
 
 function createStatelessHandler(serverFactory: ServerFactory) {
 	return async (req: Request): Promise<Response> => {
-		const logger = getLogger();
 		const server = serverFactory();
 		const transport = new WebStandardStreamableHTTPServerTransport({
 			sessionIdGenerator: undefined,
@@ -52,7 +53,7 @@ function createStatelessHandler(serverFactory: ServerFactory) {
 		try {
 			return await transport.handleRequest(req);
 		} catch (error) {
-			logger.error(
+			log.error(
 				{
 					error: error instanceof Error ? error.message : String(error),
 				},
@@ -70,7 +71,6 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 	const sessions = new Map<string, SessionEntry>();
 
 	async function handlePost(req: Request): Promise<Response> {
-		const logger = getLogger();
 		const sessionId = req.headers.get("mcp-session-id");
 
 		// Existing session: delegate to its transport
@@ -83,7 +83,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		const transport = new WebStandardStreamableHTTPServerTransport({
 			sessionIdGenerator: () => crypto.randomUUID(),
 			onsessioninitialized: (id) => {
-				logger.info({ sessionId: id }, "Session initialized");
+				log.info({ sessionId: id }, "Session initialized");
 			},
 		});
 
@@ -93,7 +93,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		transport.onclose = () => {
 			if (transport.sessionId) {
 				sessions.delete(transport.sessionId);
-				logger.info({ sessionId: transport.sessionId }, "Session closed");
+				log.info({ sessionId: transport.sessionId }, "Session closed");
 			}
 		};
 
@@ -128,7 +128,6 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 	}
 
 	async function closeAll(): Promise<void> {
-		const logger = getLogger();
 		const count = sessions.size;
 		for (const [id, session] of sessions) {
 			try {
@@ -140,7 +139,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 			sessions.delete(id);
 		}
 		if (count > 0) {
-			logger.info({ count }, "All sessions closed");
+			log.info({ count }, "All sessions closed");
 		}
 	}
 
@@ -151,7 +150,6 @@ export async function startHttpTransport(
 	serverFactory: ServerFactory,
 	config: HttpTransportConfig,
 ): Promise<HttpTransportResult> {
-	const logger = getLogger();
 	const isStateful = config.sessionMode === "stateful";
 
 	let postHandler: (req: Request) => Promise<Response>;
@@ -199,7 +197,7 @@ export async function startHttpTransport(
 		},
 
 		error: (error) => {
-			logger.error(
+			log.error(
 				{
 					error: error instanceof Error ? error.message : String(error),
 				},
@@ -212,7 +210,7 @@ export async function startHttpTransport(
 		},
 	});
 
-	logger.info(
+	log.info(
 		{
 			url: `http://${config.host}:${httpServer.port}${config.path}`,
 			sessionMode: config.sessionMode,
@@ -227,7 +225,7 @@ export async function startHttpTransport(
 				await closeAllSessions();
 			}
 			httpServer.stop(true);
-			logger.info("HTTP transport closed");
+			log.info("HTTP transport closed");
 		},
 	};
 }

@@ -1,10 +1,11 @@
 // src/tools/elicitation-tool.ts
 import { z } from "zod";
+import type { MigrationAnalysis } from "../operations/migration-analyzer.js";
 import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
 import { contextDetector } from "../utils/context-detection.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
-import { createContextLogger } from "../utils/mcp-logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { TagElicitationEngine } from "../utils/tag-elicitation.js";
 
 const log = createContextLogger("elicitation");
@@ -170,7 +171,7 @@ export class ElicitationOperations {
 		}
 
 		// Safely extract migration analysis with fallback
-		let migrationAnalysis;
+		let migrationAnalysis: Record<string, unknown>;
 		if (analysisResult.migrationAnalysis) {
 			migrationAnalysis = analysisResult.migrationAnalysis;
 		} else {
@@ -192,7 +193,10 @@ export class ElicitationOperations {
 			};
 		}
 
-		const elicitationSession = await this.migrationAnalyzer.createElicitationSession(migrationAnalysis, context);
+		const elicitationSession = await this.migrationAnalyzer.createElicitationSession(
+			migrationAnalysis as unknown as MigrationAnalysis,
+			context,
+		);
 
 		// Generate Claude Desktop friendly prompt
 		const claudeDesktopPrompt = this.generateClaudeDesktopPrompt(elicitationSession.requests, migrationAnalysis);
@@ -252,7 +256,7 @@ export class ElicitationOperations {
 			}
 
 			// Get next pending request if session not complete
-			let nextRequest;
+			let nextRequest: unknown;
 			if (!isSessionComplete && !response.cancelled) {
 				const _session = elicitationManager.getSessionResponses(sessionId);
 				// This would need implementation to find next pending request
@@ -533,7 +537,7 @@ export class ElicitationOperations {
 			const suggestions = req.suggestions || [];
 
 			prompt += `**${index + 1}. ${fieldName.toUpperCase()}**\n`;
-			prompt += `${req.message.replace(/[🏷️🌍👥]/gu, "").trim()}\n`;
+			prompt += `${req.message.replace(/\p{Emoji_Presentation}/gu, "").trim()}\n`;
 
 			if (suggestions.length > 0) {
 				prompt += `💡 **Suggestions:** ${suggestions.join(", ")}\n`;

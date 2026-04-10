@@ -28,3 +28,16 @@ export const ServerConfigSchema = z.object({
 	}),
 });
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
+
+export const SlackConfigSchema = z.object({
+	botToken: z.string().startsWith("xoxb-"),
+	defaultChannel: z.string(),
+});
+export type SlackConfig = z.infer<typeof SlackConfigSchema>;
+
+export const LinearConfigSchema = z.object({
+	apiKey: z.string().startsWith("lin_api_"),
+	teamId: z.string(),
+	projectId: z.string(),
+});
+export type LinearConfig = z.infer<typeof LinearConfigSchema>;

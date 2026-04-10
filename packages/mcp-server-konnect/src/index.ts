@@ -1,11 +1,11 @@
 // src/index.ts
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
-import { API_REGIONS, KongApi } from "./api/kong-api.js";
+import { KongApi } from "./api/kong-api.js";
 import { type Config, loadConfiguration } from "./config/index.js";
 import { createKonnectServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
-import { createContextLogger, logger } from "./utils/mcp-logger.js";
+import { createContextLogger, logger } from "./utils/logger.js";
 import { initializeTracing } from "./utils/tracing.js";
 
 const serverLog = createContextLogger("server");
@@ -15,9 +15,7 @@ interface KonnectDatasource {
 	config: Config;
 }
 
-const isMainModule = process.argv[1] && import.meta.url.includes(process.argv[1]);
-
-if (isMainModule) {
+if (import.meta.main) {
 	createMcpApplication<KonnectDatasource>({
 		name: "konnect-mcp-server",
 		logger: createBootstrapAdapter(logger),
@@ -26,7 +24,6 @@ if (isMainModule) {
 		telemetry: buildTelemetryConfig("konnect-mcp-server"),
 
 		initDatasource: async () => {
-			serverLog.info("Loading configuration");
 			const config = await loadConfiguration();
 
 			logger.level = config.application.logLevel;
@@ -38,7 +35,7 @@ if (isMainModule) {
 					version: runtimeInfo.version,
 					envSource: runtimeInfo.envSource,
 				},
-				"Runtime information",
+				"Starting Konnect MCP Server",
 			);
 
 			const api = new KongApi({
@@ -51,29 +48,19 @@ if (isMainModule) {
 
 		createServerFactory: (ds) => () => createKonnectServer(ds.api, ds.config),
 
-		createTransport: (serverFactory, ds) => createTransport(ds.config, serverFactory),
+		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
 
 		onStarted: (ds) => {
 			serverLog.info(
 				{
-					availableRegions: Object.values(API_REGIONS),
 					region: ds.config.kong.region,
 					environment: ds.config.application.environment,
-					logLevel: ds.config.application.logLevel,
+					transport: ds.config.transport.mode,
+					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
 					tracing: ds.config.tracing.enabled,
 					monitoring: ds.config.monitoring.enabled,
-					transport: ds.config.transport.mode,
-					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
 				},
-				"Server starting",
-			);
-
-			serverLog.info(
-				{
-					transport: ds.config.transport.mode,
-					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
-				},
-				"Server ready",
+				"Konnect MCP Server ready",
 			);
 		},
 	});

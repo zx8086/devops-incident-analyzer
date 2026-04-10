@@ -2,8 +2,8 @@
 
 import { type Bucket, type Cluster, connect } from "couchbase";
 import { config } from "../config";
+import { logger } from "../utils/logger";
 import { createError } from "./errors";
-import { logger } from "./logger";
 
 export class CouchbaseConnectionManager {
 	private static instance: CouchbaseConnectionManager;

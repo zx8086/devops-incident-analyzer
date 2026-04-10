@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { envVarMapping, getConfig } from "../../../src/config";
+import { envVarMapping, getConfig } from "../../../src/config/index.js";
 
 describe("New Configuration Sections Validation", () => {
 	test("should validate new server response handling configuration", () => {

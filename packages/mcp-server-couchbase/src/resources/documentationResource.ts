@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { createError } from "../lib/errors";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 /**
  * Configuration for the markdown documentation resource
@@ -286,8 +286,10 @@ export function registerMarkdownDocumentationResource(
 
 	// Fix the templates/list issue
 	logger.info("Setting up custom handler for resources/templates/list");
-	(server as any).setRequestHandler = (server as any).setRequestHandler || (() => {});
-	(server as any).setRequestHandler(
+	const serverRecord = server as unknown as Record<string, unknown>;
+	(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler =
+		(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler || (() => {});
+	(serverRecord as Record<string, (...args: unknown[]) => unknown>).setRequestHandler!(
 		{
 			method: "resources/templates/list",
 		},

@@ -1,10 +1,18 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
 	"files": {
-		"includes": ["**", "!**/.svelte-kit", "!migrate/*/guides"]
+		"includes": ["**", "!**/.svelte-kit", "!migrate"]
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
-	"linter": { "enabled": true, "rules": { "recommended": true } },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"suspicious": {
+				"noExplicitAny": "warn"
+			}
+		}
+	},
 	"formatter": { "enabled": true, "indentWidth": 2, "lineWidth": 120 },
 	"css": {
 		"parser": { "cssModules": true, "tailwindDirectives": true },

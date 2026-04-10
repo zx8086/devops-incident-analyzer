@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { performance } from "node:perf_hooks";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { getConfig } from "../../src/config.js";
+import { getConfig } from "../../src/config/index.js";
 import { createElasticsearchMCPServer } from "../../src/server.js";
 
 interface PerformanceMetrics {

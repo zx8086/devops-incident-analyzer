@@ -66,7 +66,7 @@ describe("gitagent prompt overlay", () => {
 
 	test("dynamic prompts resolve datasource context", () => {
 		const prompts = getToolPrompts();
-		const elasticPrompt = prompts.get("elastic-search-logs")!;
+		const elasticPrompt = prompts.get("elastic-search-logs") as string;
 		expect(elasticPrompt).toContain("elastic");
 		expect(elasticPrompt).toContain("kafka");
 		expect(elasticPrompt).toContain("couchbase");
@@ -75,7 +75,7 @@ describe("gitagent prompt overlay", () => {
 
 	test("dynamic prompts resolve compliance tier", () => {
 		const prompts = getToolPrompts();
-		const elasticPrompt = prompts.get("elastic-search-logs")!;
+		const elasticPrompt = prompts.get("elastic-search-logs") as string;
 		expect(elasticPrompt).toContain("medium");
 	});
 });

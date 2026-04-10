@@ -6,7 +6,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../src/config.js";
+import { getConfig } from "../../src/config/index.js";
 import { createElasticsearchMcpServer } from "../../src/server.js";
 
 describe("Notification Runtime Integration", () => {

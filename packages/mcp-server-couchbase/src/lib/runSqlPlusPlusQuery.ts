@@ -2,8 +2,8 @@
 
 import { config } from "../config";
 import type { SQLPPParser } from "../types";
+import { createContextLogger, measureOperation } from "../utils/logger";
 import { createError } from "./errors";
-import { createContextLogger, measureOperation } from "./logger";
 import type { OperationContext } from "./types";
 
 interface RunQueryResult {
@@ -20,7 +20,6 @@ export async function runSqlPlusPlusQuery(
 	const requestLogger = createContextLogger("runSqlPlusPlusQuery");
 
 	if (!ctx.lifespanContext.bucket) {
-		requestLogger.error("Bucket not initialized");
 		throw createError("DB_ERROR", "Bucket not initialized");
 	}
 

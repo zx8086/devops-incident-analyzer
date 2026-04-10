@@ -15,36 +15,77 @@ function trimLargeValues(obj: Record<string, unknown>): Record<string, unknown> 
 	const serialized = JSON.stringify(obj);
 	if (serialized.length <= MAX_FIELD_BYTES) return obj;
 
-	const trimmed: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(obj)) {
-		const valStr = JSON.stringify(value);
-		if (valStr.length > MAX_FIELD_BYTES) {
-			trimmed[key] = `[truncated: ${valStr.length} bytes]`;
+	// Greedy budget enforcement: truncate largest fields first until total fits
+	const entries = Object.entries(obj).map(([key, value]) => ({
+		key,
+		value,
+		size: JSON.stringify(value).length,
+	}));
+	entries.sort((a, b) => b.size - a.size);
+
+	let totalSize = serialized.length;
+	const result: Record<string, unknown> = {};
+
+	for (const entry of entries) {
+		if (totalSize > MAX_FIELD_BYTES && entry.size > 1024) {
+			const placeholder = `[truncated: ${entry.size} bytes]`;
+			result[entry.key] = placeholder;
+			totalSize -= entry.size - placeholder.length;
 		} else {
-			trimmed[key] = value;
+			result[entry.key] = entry.value;
 		}
 	}
-	return trimmed;
+
+	if (totalSize > MAX_FIELD_BYTES) {
+		return { _truncated: `[entire payload truncated: ${serialized.length} bytes]` };
+	}
+
+	return result;
+}
+
+function patchClient(client: Record<string, unknown>, label: string): boolean {
+	if (!client || typeof client.processInputs !== "function") return false;
+	client.processInputs = async (inputs: Record<string, unknown>) => trimLargeValues(inputs);
+	client.processOutputs = async (outputs: Record<string, unknown>) => trimLargeValues(outputs);
+	logger.info(`Patched ${label} LangSmith client payload limits`);
+	return true;
 }
 
 async function patchClientPayloadLimits(): Promise<void> {
 	// Monkey-patch the LangSmith Client singleton's processInputs/processOutputs
 	// to truncate oversized fields before they hit the API.
+	//
+	// Three client instances need patching:
+	// 1. CJS singleton (getDefaultLangChainClientSingleton via createRequire)
+	// 2. ESM singleton (the one LangChain runtime actually uses)
+	// 3. RunTree.sharedClient (static client that bypasses the tracer singleton)
 	try {
-		// Use createRequire to bypass Vite's strict ESM exports-map validation.
-		// The internal @langchain/core/singletons/tracer path isn't in the
-		// package's exports map, so Vite's SSR resolver rejects a bare
-		// dynamic import(). Node/Bun's require() resolves it fine at runtime.
 		const { createRequire } = await import("node:module");
 		const require = createRequire(import.meta.url);
-		const { getDefaultLangChainClientSingleton } = require("@langchain/core/singletons/tracer");
+		const singletonsPath = require.resolve("@langchain/core/singletons");
+		const tracerCjsPath = singletonsPath.replace(/singletons[/\\]index\.(c?js)$/, "singletons/tracer.$1");
 
-		// Force singleton creation so we can patch it before auto-tracer uses it
-		const client = getDefaultLangChainClientSingleton();
+		// Patch CJS singleton
+		const { getDefaultLangChainClientSingleton: getCjs } = require(tracerCjsPath);
+		patchClient(getCjs(), "CJS");
 
-		if (client && typeof client.processInputs === "function") {
-			client.processInputs = async (inputs: Record<string, unknown>) => trimLargeValues(inputs);
-			client.processOutputs = async (outputs: Record<string, unknown>) => trimLargeValues(outputs);
+		// Patch ESM singleton (Bun dual-package hazard: CJS and ESM have separate singletons)
+		const tracerEsmPath = tracerCjsPath.replace(/\.cjs$/, ".js");
+		const esmMod = await import(tracerEsmPath);
+		patchClient(esmMod.getDefaultLangChainClientSingleton(), "ESM");
+
+		// Patch RunTree.sharedClient -- a static Client() that some tracing paths use
+		// instead of the getDefaultLangChainClientSingleton() singletons.
+		// langsmith is a transitive dep (via @langchain/core), so resolve from core's context.
+		try {
+			const coreRequire = createRequire(singletonsPath);
+			const runTreesMod = coreRequire("langsmith/run_trees");
+			const RunTree = runTreesMod.RunTree as { getSharedClient?: () => Record<string, unknown> };
+			if (typeof RunTree?.getSharedClient === "function") {
+				patchClient(RunTree.getSharedClient(), "RunTree.sharedClient");
+			}
+		} catch {
+			// RunTree patching is best-effort; CJS/ESM singletons cover the primary path
 		}
 	} catch (error) {
 		// Graceful degradation: traces may be oversized but execution continues

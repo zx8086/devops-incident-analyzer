@@ -11,7 +11,7 @@ import type {
 	Scope,
 	StreamableRowPromise,
 } from "couchbase";
-import type { LoggerInterface } from "./lib/logger";
+import type { LoggerInterface } from "./utils/logger";
 
 /**
  * Environment configuration type
@@ -133,7 +133,7 @@ export interface CapellaConn {
  * Interface for Queryable Cluster with query method
  */
 export interface QueryableCluster extends Cluster {
-	query<TRow = any>(
+	query<TRow = unknown>(
 		statement: string,
 		options?: QueryOptions,
 	): StreamableRowPromise<QueryResult<TRow>, TRow, QueryMetaData>;
@@ -166,7 +166,7 @@ export interface ASTNode {
  * Document content interface
  */
 export interface DocumentContent {
-	[key: string]: any;
+	[key: string]: unknown;
 }
 
 /**

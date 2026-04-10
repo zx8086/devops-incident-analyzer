@@ -2,9 +2,9 @@
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
-import { logger } from "../lib/logger";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import type { DocumentContent } from "../lib/types";
+import { logger } from "../utils/logger";
 
 export function registerDocumentResource(server: McpServer, bucket: Bucket): void {
 	server.resource(

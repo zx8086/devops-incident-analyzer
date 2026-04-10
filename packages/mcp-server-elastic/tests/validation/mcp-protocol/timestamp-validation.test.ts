@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../../src/config";
+import { getConfig } from "../../../src/config/index.js";
 import { registerTimestampAnalysisTool } from "../../../src/tools/analytics/timestamp_analysis";
 import { registerSearchTool } from "../../../src/tools/core/search";
 import { safeCloseElasticsearchClient } from "../../utils/elasticsearch-client";

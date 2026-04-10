@@ -6,14 +6,11 @@ export type PortalManagementTool = {
 	method: string;
 	name: string;
 	description: string;
-	parameters: z.ZodObject<any, any, any, any>;
+	parameters: z.ZodObject;
 	category: string;
 };
 
 export const portalManagementTools = (): PortalManagementTool[] => [
-	// =========================
-	// Portal Management
-	// =========================
 	{
 		method: "list_portals",
 		name: "List Developer Portals",

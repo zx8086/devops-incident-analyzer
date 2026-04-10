@@ -2,7 +2,7 @@
 import type { KongApi } from "../../api/kong-api.js";
 import type { ApiRequestFilter } from "../../types.js";
 import { withErrorContext } from "../../utils/error-handling.js";
-import { createContextLogger } from "../../utils/mcp-logger.js";
+import { createContextLogger } from "../../utils/logger.js";
 
 const log = createContextLogger("tools");
 

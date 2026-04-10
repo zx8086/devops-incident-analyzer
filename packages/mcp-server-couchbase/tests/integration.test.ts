@@ -2,8 +2,8 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "../src/server";
-import { logger } from "../src/lib/logger";
 import toolRegistry from "../src/tools";
+import { logger } from "../src/utils/logger";
 import { mockConnection, mockServer } from "./test.utils";
 
 describe("Integration Tests", () => {

@@ -1,8 +1,8 @@
 /* src/tools/queryAnalysis/queryAnalysisUtils.ts */
 
 import type { Bucket } from "couchbase";
-import { logger } from "../../lib/logger";
 import type { ToolResponse } from "../../types";
+import { logger } from "../../utils/logger";
 
 /**
  * Execute a query and return formatted results
@@ -66,6 +66,7 @@ export async function executeAnalysisQuery(bucket: Bucket, queryString: string, 
 					text: `## Error Executing Query\n\n${error instanceof Error ? error.stack || error.message : typeof error === "object" ? JSON.stringify(error, null, 2) : String(error)}`,
 				},
 			],
+			isError: true,
 		};
 	}
 }

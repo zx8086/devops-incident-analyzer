@@ -6,9 +6,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
-import { logger } from "../lib/logger";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
+import { logger } from "../utils/logger";
 
 // Ensure all queries use only the collection name in the FROM clause when using scope context
 const runQuery = async (params: { scope_name: string; query: string }, bucket: Bucket) => {
@@ -40,9 +40,9 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 
 	try {
 		const result = await runSqlPlusPlusQuery({ lifespanContext: { bucket } }, scope_name, query, sqlppParser);
-		const rows = result.rows as any[];
+		const rows = result.rows as Record<string, unknown>[];
 
-		if (rows.length === 1 && "distinct_source_count" in rows[0]) {
+		if (rows.length === 1 && "distinct_source_count" in rows[0]!) {
 			return {
 				content: [{ type: "text" as const, text: `Found ${rows[0].distinct_source_count} distinct sources` }],
 				_meta: { rowCount: 1 },

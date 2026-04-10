@@ -2,7 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { logger } from "./logger";
+import { logger } from "../utils/logger";
 
 export function registerPrompts(server: McpServer): void {
 	server.tool(

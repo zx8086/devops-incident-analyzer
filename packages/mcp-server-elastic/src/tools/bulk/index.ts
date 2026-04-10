@@ -31,10 +31,6 @@ export class MultiGetError extends BulkOperationError {
 	}
 }
 
-// ============================================================================
-// BULK OPERATIONS
-// ============================================================================
-
 const bulkOperationsSchema = z.object({
 	operations: z.array(z.object({}).passthrough()),
 	index: z.string().optional(),
@@ -190,10 +186,6 @@ export const bulkOperations = {
 	},
 };
 
-// ============================================================================
-// MULTI GET
-// ============================================================================
-
 const multiGetSchema = z.object({
 	docs: z
 		.array(
@@ -294,5 +286,4 @@ export const multiGet = {
 	},
 };
 
-// Export all tools
 export const bulkTools = [bulkOperations, multiGet] as const;

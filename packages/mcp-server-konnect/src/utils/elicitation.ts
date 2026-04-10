@@ -425,7 +425,9 @@ export class KongElicitationPatterns {
 
 		// Add detected domains
 		if (context.detectedDomains?.length) {
-			context.detectedDomains.forEach((domain: string) => suggestions.add(domain));
+			for (const domain of context.detectedDomains) {
+				suggestions.add(domain);
+			}
 		}
 
 		// Extract from service names
@@ -443,7 +445,9 @@ export class KongElicitationPatterns {
 		}
 
 		// Add common defaults
-		["platform", "api", "devops", "backend", "frontend", "auth", "data"].forEach((d) => suggestions.add(d));
+		for (const d of ["platform", "api", "devops", "backend", "frontend", "auth", "data"]) {
+			suggestions.add(d);
+		}
 
 		return Array.from(suggestions).slice(0, 8);
 	}

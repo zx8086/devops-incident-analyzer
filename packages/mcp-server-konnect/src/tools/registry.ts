@@ -14,7 +14,7 @@ export interface MCPTool {
 	method: string;
 	name: string;
 	description: string;
-	parameters: z.ZodObject<any, any, any, any>;
+	parameters: z.ZodObject;
 	category: string;
 }
 

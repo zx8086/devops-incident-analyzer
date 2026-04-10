@@ -2,7 +2,7 @@
 
 /* Simple direct test of pagination functionality */
 
-import { getConfig } from "./src/config.js";
+import { getConfig } from "./src/config/index.js";
 import { createElasticsearchMcpServer } from "./src/server.js";
 
 async function testPagination() {

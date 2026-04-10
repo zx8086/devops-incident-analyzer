@@ -6,14 +6,11 @@ export type ConfigurationTool = {
 	method: string;
 	name: string;
 	description: string;
-	parameters: z.ZodObject<any, any, any, any>;
+	parameters: z.ZodObject;
 	category: string;
 };
 
 export const configurationTools = (): ConfigurationTool[] => [
-	// =========================
-	// Legacy List Tools (for backward compatibility)
-	// =========================
 	{
 		method: "list_services",
 		name: "List Services",
@@ -43,9 +40,6 @@ export const configurationTools = (): ConfigurationTool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Service CRUD Tools
-	// =========================
 	{
 		method: "create_service",
 		name: "Create Service",
@@ -75,9 +69,6 @@ export const configurationTools = (): ConfigurationTool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Route CRUD Tools
-	// =========================
 	{
 		method: "create_route",
 		name: "Create Route",
@@ -107,9 +98,6 @@ export const configurationTools = (): ConfigurationTool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Consumer CRUD Tools
-	// =========================
 	{
 		method: "create_consumer",
 		name: "Create Consumer",
@@ -139,9 +127,6 @@ export const configurationTools = (): ConfigurationTool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Plugin CRUD Tools
-	// =========================
 	{
 		method: "create_plugin",
 		name: "Create Plugin",

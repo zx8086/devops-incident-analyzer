@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getConfig } from "../../../src/config";
+import { getConfig } from "../../../src/config/index.js";
 
 // Bun automatically loads .env files, no need for dotenv
 describe("Environment Configuration", () => {

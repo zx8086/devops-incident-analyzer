@@ -27,9 +27,7 @@ export const CommonSchemas = {
  * Time range validation for analytics
  */
 export const timeRangeSchema = z.enum(["15M", "1H", "6H", "12H", "24H", "7D"], {
-	errorMap: () => ({
-		message: "Time range must be one of: 15M, 1H, 6H, 12H, 24H, 7D",
-	}),
+	message: "Time range must be one of: 15M, 1H, 6H, 12H, 24H, 7D",
 });
 
 /**
@@ -123,7 +121,7 @@ export function validateEntityName(name: string, entityType: string): { isValid:
 export const httpMethodSchema = z.enum(
 	["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"],
 	{
-		errorMap: () => ({ message: "Invalid HTTP method" }),
+		message: "Invalid HTTP method",
 	},
 );
 
@@ -131,21 +129,21 @@ export const httpMethodSchema = z.enum(
  * Validate protocols
  */
 export const protocolSchema = z.enum(["http", "https", "tcp", "tls", "grpc", "grpcs", "ws", "wss"], {
-	errorMap: () => ({ message: "Invalid protocol" }),
+	message: "Invalid protocol",
 });
 
 /**
  * Validate upstream algorithm
  */
 export const upstreamAlgorithmSchema = z.enum(["round-robin", "consistent-hashing", "least-connections", "ring-hash"], {
-	errorMap: () => ({ message: "Invalid upstream algorithm" }),
+	message: "Invalid upstream algorithm",
 });
 
 /**
  * Validate hash-on options for upstreams
  */
 export const hashOnSchema = z.enum(["none", "consumer", "ip", "header", "cookie", "path", "query_arg", "uri_capture"], {
-	errorMap: () => ({ message: "Invalid hash-on option" }),
+	message: "Invalid hash-on option",
 });
 
 /**

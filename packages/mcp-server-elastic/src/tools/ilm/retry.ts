@@ -11,23 +11,11 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const retryValidator = z.object({
 	index: z.string().min(1, "Index name cannot be empty"),
 });
 
 type RetryParams = z.infer<typeof retryValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmRetryMcpError(
 	error: Error | string,
@@ -48,10 +36,6 @@ function createIlmRetryMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_retry] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const retryHandler = async (args: any): Promise<SearchResult> => {

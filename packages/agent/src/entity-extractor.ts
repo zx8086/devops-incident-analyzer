@@ -7,6 +7,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { getAgent } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:entity-extractor");
@@ -21,8 +22,37 @@ const ExtractionSchema = z.object({
 	timeFrom: z.string().nullish(),
 	timeTo: z.string().nullish(),
 	services: z.array(z.string()).nullish(),
-	severity: z.enum(["critical", "high", "medium", "low"]).nullish(),
+	severity: z
+		.string()
+		.nullish()
+		.transform((v) => {
+			if (!v) return undefined;
+			const lower = v.toLowerCase().trim();
+			if (["critical", "high", "medium", "low"].includes(lower)) return lower;
+			return undefined;
+		}),
+	toolActions: z.record(z.string(), z.array(z.string())).nullish(),
 });
+
+function buildActionCatalog(): string {
+	try {
+		const agent = getAgent();
+		const lines: string[] = [];
+		for (const tool of agent.tools) {
+			if (tool.tool_mapping?.action_tool_map) {
+				const actions = Object.keys(tool.tool_mapping.action_tool_map);
+				lines.push(`- ${tool.tool_mapping.mcp_server}: ${actions.join(", ")}`);
+			}
+		}
+		if (lines.length === 0) return "";
+		return `\nFor each datasource, also identify which tool actions are most relevant to the query.
+Available actions per datasource:
+${lines.join("\n")}
+Return toolActions as { "datasource_id": ["action1", "action2"] }.`;
+	} catch {
+		return "";
+	}
+}
 
 export async function extractEntities(
 	state: AgentStateType,
@@ -40,11 +70,22 @@ export async function extractEntities(
 	const attachmentMeta = state.attachmentMeta ?? [];
 	const attachmentContext = buildAttachmentContext(attachmentMeta);
 
+	// SIO-630: Use normalized incident data as hints when available
+	const normalized = state.normalizedIncident;
+	const normalizationHint =
+		normalized?.severity || normalized?.affectedServices?.length || normalized?.timeWindow
+			? `\n\nNormalization context (use as hints, not overrides):
+${normalized.severity ? `- Inferred severity: ${normalized.severity}` : ""}
+${normalized.timeWindow ? `- Time window: ${normalized.timeWindow.from} to ${normalized.timeWindow.to}` : ""}
+${normalized.affectedServices?.length ? `- Affected services: ${normalized.affectedServices.map((s) => s.name).join(", ")}` : ""}
+${normalized.extractedMetrics?.length ? `- Metrics mentioned: ${normalized.extractedMetrics.map((m) => `${m.name}${m.value ? `=${m.value}` : ""}`).join(", ")}` : ""}`
+			: "";
+
 	const llm = createLlm("entityExtractor");
 	const systemPrompt = `Extract incident entities from the query. Available datasources: ${DATA_SOURCE_IDS.join(", ")}.
 Return JSON with: dataSources (array of {id, mentionedAs}), timeFrom, timeTo (ISO 8601), services (array), severity.
 Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect".
-If no specific datasource is mentioned, include all: elastic, kafka, couchbase, konnect.${attachmentContext ? `\n\n${attachmentContext}` : ""}`;
+If no specific datasource is mentioned, include all: elastic, kafka, couchbase, konnect.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}`;
 
 	const response = await llm.invoke(
 		[
@@ -62,7 +103,10 @@ If no specific datasource is mentioned, include all: elastic, kafka, couchbase, 
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
 			const parsed = ExtractionSchema.parse(JSON.parse(jsonMatch[0]));
-			const entities: ExtractedEntities = { dataSources: parsed.dataSources };
+			const entities: ExtractedEntities = {
+				dataSources: parsed.dataSources,
+				toolActions: parsed.toolActions ?? undefined,
+			};
 			const extractedIds = parsed.dataSources.map((d) => d.id);
 
 			// On follow-ups, if the LLM extracted a specific subset (not all datasources),

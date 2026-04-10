@@ -17,7 +17,7 @@ export const ComplianceSchema = z.object({
 	supervision: z
 		.object({
 			human_in_the_loop: z.enum(["always", "conditional", "advisory", "none"]).optional(),
-			escalation_triggers: z.array(z.record(z.unknown())).optional(),
+			escalation_triggers: z.array(z.record(z.string(), z.unknown())).optional(),
 			kill_switch: z.boolean().optional(),
 		})
 		.optional(),
@@ -56,7 +56,7 @@ export const AgentManifestSchema = z.object({
 	runtime: RuntimeConfigSchema.optional(),
 	skills: z.array(z.string()).optional(),
 	tools: z.array(z.string()).optional(),
-	agents: z.record(SubAgentRefSchema).optional(),
+	agents: z.record(z.string(), SubAgentRefSchema).optional(),
 	delegation: z
 		.object({
 			mode: z.enum(["auto", "explicit", "router"]),
@@ -71,8 +71,8 @@ export const ToolDefinitionSchema = z.object({
 	name: z.string(),
 	description: z.string(),
 	version: z.string().optional(),
-	input_schema: z.record(z.unknown()),
-	output_schema: z.record(z.unknown()).optional(),
+	input_schema: z.record(z.string(), z.unknown()),
+	output_schema: z.record(z.string(), z.unknown()).optional(),
 	annotations: z
 		.object({
 			requires_confirmation: z.boolean().optional(),
@@ -86,6 +86,10 @@ export const ToolDefinitionSchema = z.object({
 		.object({
 			mcp_server: z.string().describe("MCP server this facade maps to"),
 			mcp_patterns: z.array(z.string()).describe("MCP tool name patterns: exact names or glob with * suffix"),
+			action_tool_map: z
+				.record(z.string(), z.array(z.string()))
+				.optional()
+				.describe("Maps action categories to specific MCP tool names"),
 		})
 		.optional(),
 });
@@ -95,3 +99,29 @@ export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 export type ComplianceConfig = z.infer<typeof ComplianceSchema>;
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 export type ToolMapping = NonNullable<ToolDefinition["tool_mapping"]>;
+
+export const KnowledgeCategorySchema = z.object({
+	path: z.string(),
+	description: z.string(),
+});
+
+// SIO-640: Lazy runbook selection fallback config. When present, selectRunbooks
+// is wired into the graph; when absent, the feature is disabled entirely.
+export const RunbookSelectionConfigSchema = z.object({
+	fallback_by_severity: z.object({
+		critical: z.array(z.string()),
+		high: z.array(z.string()),
+		medium: z.array(z.string()),
+		low: z.array(z.string()),
+	}),
+});
+export type RunbookSelectionConfig = z.infer<typeof RunbookSelectionConfigSchema>;
+
+export const KnowledgeIndexSchema = z.object({
+	name: z.string(),
+	description: z.string(),
+	version: z.string(),
+	categories: z.record(z.string(), KnowledgeCategorySchema),
+	runbook_selection: RunbookSelectionConfigSchema.optional(),
+});
+export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;

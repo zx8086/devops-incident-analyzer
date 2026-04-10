@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { createError } from "../lib/errors";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(

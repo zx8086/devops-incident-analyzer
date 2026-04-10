@@ -33,17 +33,23 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		retryCount: 0,
 		alignmentRetries: 0,
 		alignmentHints: [] as string[],
+		skippedDataSources: [] as string[],
 		isFollowUp: false,
 		finalAnswer: "",
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],
 		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		confidenceScore: 0,
+		lowConfidence: false,
+		pendingActions: [],
+		actionResults: [],
+		selectedRunbooks: null,
 		...overrides,
 	};
 }
-
-// === CLASSIFIER (regex fast-path -- no LLM needed) ===
 
 describe("classifier: regex fast-path", () => {
 	test("classifies 'hello' as simple", async () => {
@@ -101,8 +107,6 @@ describe("classifier: regex fast-path", () => {
 		expect(result.queryComplexity).toBe("simple");
 	});
 });
-
-// === SUPERVISOR: routing logic ===
 
 describe("supervisor: datasource routing", () => {
 	test("routes to all 4 datasources when none specified", () => {
@@ -169,8 +173,6 @@ describe("supervisor: datasource routing", () => {
 	});
 });
 
-// === ALIGNMENT: gap detection ===
-
 describe("alignment: cross-datasource gap detection", () => {
 	test("no retry when all datasources returned successfully", () => {
 		const state = makeState({
@@ -230,8 +232,6 @@ describe("alignment: cross-datasource gap detection", () => {
 		expect(Array.isArray(result)).toBe(true);
 	});
 });
-
-// === VALIDATOR: anti-hallucination ===
 
 describe("validator: anti-hallucination checks", () => {
 	test("passes a well-formed answer referencing all datasources", () => {
@@ -296,8 +296,6 @@ describe("validator: anti-hallucination checks", () => {
 	});
 });
 
-// === GRAPH COMPILATION ===
-
 describe("graph: compilation smoke test", () => {
 	test("buildGraph compiles without errors", async () => {
 		// This tests that all nodes are wired correctly
@@ -308,8 +306,6 @@ describe("graph: compilation smoke test", () => {
 		expect(typeof graph.stream).toBe("function");
 	});
 });
-
-// === TOOL RETRY ===
 
 describe("tool-retry: exponential backoff", () => {
 	test("returns result on first success", async () => {

@@ -4,40 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 4 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent) that query existing MCP servers (184+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
+Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 4 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent) that query existing MCP servers (192+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
 
 ## Current State
 
-Green-field project. The monorepo workspace, packages, and agent code have not been scaffolded yet. The `migrate/` directory contains 5 production-ready reference implementations to copy patterns from. The `devops-incident-analyzer-setup-guide.md` is the full architecture blueprint (1265 lines, 7 phases).
+Fully implemented monorepo with 9 packages, 4 MCP servers, an 8-node LangGraph pipeline, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
-## Reference Implementations
+## Architecture
 
-`migrate/` contains proven, working code. **Always consult before implementing new patterns:**
-
-| Directory | What | Tools |
-|-----------|------|-------|
-| `migrate/b2b-devops-agent/` | **Primary reference**: LangGraph agent, SvelteKit UI, SSE streaming, observability | 63+ ES tools |
-| `migrate/mcp-server-elasticsearch/` | Elasticsearch MCP server (multi-tenant, SSE/stdio) | 63+ |
-| `migrate/kafka-mcp-server/` | Kafka MCP server (local/MSK/Confluent providers) | 30 |
-| `migrate/mcp-server-couchbase/` | Couchbase Capella MCP server (query analysis, playbooks) | 24+ |
-| `migrate/mcp-konnect/` | Kong Konnect MCP server (API gateway management) | 67 |
-
-## Target Architecture
-
-### Monorepo Structure (to be scaffolded)
+### Monorepo Structure
 
 ```
 agents/                    Gitagent YAML/Markdown definitions
   incident-analyzer/       Orchestrator: agent.yaml, SOUL.md, RULES.md, tools/, skills/
     agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/
 packages/
-  gitagent-bridge/         YAML-to-LangGraph adapter (~600-900 LOC)
+  gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
   agent/                   LangGraph supervisor + 8-node pipeline
-  mcp-server-elastic/      Copied from migrate/mcp-server-elasticsearch/
-  mcp-server-kafka/        Copied from migrate/kafka-mcp-server/
-  mcp-server-couchbase/    Copied from migrate/mcp-server-couchbase/
-  mcp-server-konnect/      Copied from migrate/mcp-konnect/
-  shared/                  Cross-package types and Zod schemas
+  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 69 tools)
+  mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 30 tools)
+  mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
+  mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
+  shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy
   checkpointer/            LangGraph state persistence (memory + bun:sqlite)
   observability/           OpenTelemetry + LangSmith, Pino logging
 apps/
@@ -61,25 +49,24 @@ START -> classify -> {simple: responder -> END, complex: entityExtractor}
 | capella-agent | :9082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | konnect-agent | :9083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
 
-Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. We do NOT rewrite MCP tools -- we copy existing servers and connect.
+Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. Sub-agents use action-driven tool selection (declared in tool YAML files) to filter 192+ MCP tools down to 5-25 per invocation, preventing context overflow.
 
-### Frontend (from b2b-devops-agent)
+### Frontend
 
 SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector.
 
 ## Commands
 
-Once scaffolded (after SIO-537 through SIO-540):
-
 ```bash
-bun install                                        # Install all workspace deps
-bun run dev                                        # All services
-bun run dev:web                                    # SvelteKit frontend (port 5173)
-bun run typecheck                                  # TypeScript check all packages
-bun run lint                                       # Biome check
-bun run lint:fix                                   # Biome auto-fix
-bun run test                                       # All packages
+bun install                                            # Install all workspace deps
+bun run dev                                            # All services
+bun run --filter @devops-agent/web dev                 # SvelteKit frontend (port 5173)
+bun run typecheck                                      # TypeScript check all packages
+bun run lint                                           # Biome check
+bun run lint:fix                                       # Biome auto-fix
+bun run test                                           # All packages
 bun run --filter '@devops-agent/gitagent-bridge' test  # Single package
+bun run yaml:check                                     # Validate agent YAML definitions
 ```
 
 ## Linear Project

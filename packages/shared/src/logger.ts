@@ -43,7 +43,7 @@ export interface EcsLoggerConfig {
 	serviceEnvironment?: string;
 }
 
-export function buildEcsOptions(config: EcsLoggerConfig): pino.LoggerOptions {
+export function buildEcsOptions(config: EcsLoggerConfig & { retentionPeriod?: string }): pino.LoggerOptions {
 	const environment = config.serviceEnvironment ?? getEnv("NODE_ENV") ?? "development";
 	const version = config.serviceVersion ?? "0.1.0";
 
@@ -56,10 +56,18 @@ export function buildEcsOptions(config: EcsLoggerConfig): pino.LoggerOptions {
 		convertReqRes: true,
 	});
 
+	const retentionPeriod = config.retentionPeriod;
+
 	return {
 		...ecsOptions,
 		mixin() {
 			const fields: Record<string, string> = {};
+
+			// SIO-637: Inject retention expiry so downstream systems can enforce TTL
+			if (retentionPeriod) {
+				const { getRetentionExpiresAt } = require("./retention.ts");
+				fields._retention_expires_at = getRetentionExpiresAt(retentionPeriod);
+			}
 
 			// OTEL trace context
 			const span = trace.getActiveSpan();
@@ -181,17 +189,32 @@ export function createFormattedDestination(fd: 1 | 2): { write(data: string): vo
 
 // -- Logger Factories --
 
-export function createMcpLogger(serviceName: string): pino.Logger {
+export interface McpLoggerOptions {
+	immutableChain?: boolean;
+	retentionPeriod?: string;
+}
+
+export function createMcpLogger(serviceName: string, options?: McpLoggerOptions): pino.Logger {
 	const level = getLogLevel();
-	const ecsOpts = buildEcsOptions({ serviceName });
+	const ecsConfig: EcsLoggerConfig & { retentionPeriod?: string } = { serviceName };
+	if (options?.retentionPeriod) ecsConfig.retentionPeriod = options.retentionPeriod;
+	const ecsOpts = buildEcsOptions(ecsConfig);
 
 	if (!isProdOrStaging()) {
-		// Dev: colorized human-readable output to stderr
-		return pino({ level, ...ecsOpts }, createFormattedDestination(2)).child({ service: serviceName });
+		let dest: { write(data: string): void } = createFormattedDestination(2);
+		if (options?.immutableChain) {
+			const { createHashChainDestination } = require("./immutable-log.ts");
+			dest = createHashChainDestination(dest);
+		}
+		return pino({ level, ...ecsOpts }, dest).child({ service: serviceName });
 	}
 
-	// Prod/staging: raw ECS NDJSON to stderr
-	return pino({ level, ...ecsOpts }, pino.destination({ dest: 2, sync: true })).child({ service: serviceName });
+	let dest: { write(data: string): void } = pino.destination({ dest: 2, sync: true });
+	if (options?.immutableChain) {
+		const { createHashChainDestination } = require("./immutable-log.ts");
+		dest = createHashChainDestination(dest);
+	}
+	return pino({ level, ...ecsOpts }, dest).child({ service: serviceName });
 }
 
 export function getChildLogger(parent: pino.Logger, component: string): pino.Logger {

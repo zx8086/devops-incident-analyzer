@@ -6,6 +6,10 @@ version: 1.0.0
 input_schema:
   type: object
   properties:
+    action:
+      type: string
+      enum: [search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics]
+      description: Type of Elasticsearch operation to perform
     service_name:
       type: string
       description: Service name to filter logs by
@@ -66,3 +70,81 @@ tool_mapping:
   mcp_server: elastic
   mcp_patterns:
     - "elasticsearch_*"
+  action_tool_map:
+    search:
+      - elasticsearch_search
+      - elasticsearch_multi_search
+      - elasticsearch_scroll_search
+      - elasticsearch_clear_scroll
+      - elasticsearch_count_documents
+      - elasticsearch_execute_sql_query
+      - elasticsearch_translate_sql_query
+      - elasticsearch_search_template
+      - elasticsearch_multi_search_template
+    cluster_health:
+      - elasticsearch_get_cluster_health
+      - elasticsearch_get_cluster_stats
+      - elasticsearch_diagnostics
+    node_info:
+      - elasticsearch_get_nodes_info
+      - elasticsearch_get_nodes_stats
+    index_management:
+      - elasticsearch_list_indices
+      - elasticsearch_indices_summary
+      - elasticsearch_get_index
+      - elasticsearch_get_index_info
+      - elasticsearch_get_mappings
+      - elasticsearch_get_index_settings
+      - elasticsearch_get_index_settings_advanced
+      - elasticsearch_create_index
+      - elasticsearch_delete_index
+      - elasticsearch_index_exists
+      - elasticsearch_update_index_settings
+      - elasticsearch_put_mapping
+      - elasticsearch_refresh_index
+      - elasticsearch_flush_index
+      - elasticsearch_rollover
+      - elasticsearch_field_usage_stats
+      - elasticsearch_disk_usage
+    shard_analysis:
+      - elasticsearch_get_shards
+    ingest_pipeline:
+      - elasticsearch_get_ingest_pipeline
+      - elasticsearch_simulate_ingest_pipeline
+      - elasticsearch_processor_grok
+    template_management:
+      - elasticsearch_get_index_template
+      - elasticsearch_put_index_template
+      - elasticsearch_delete_index_template
+      - elasticsearch_exists_index_template
+      - elasticsearch_exists_template
+    alias_management:
+      - elasticsearch_get_aliases
+      - elasticsearch_put_alias
+      - elasticsearch_delete_alias
+      - elasticsearch_update_aliases
+      - elasticsearch_exists_alias
+    document_ops:
+      - elasticsearch_get_document
+      - elasticsearch_index_document
+      - elasticsearch_update_document
+      - elasticsearch_delete_document
+      - elasticsearch_document_exists
+      - elasticsearch_bulk_operations
+      - elasticsearch_multi_get
+      - elasticsearch_reindex_documents
+      - elasticsearch_delete_by_query
+      - elasticsearch_update_by_query
+    snapshot:
+      - elasticsearch_get_data_lifecycle_stats
+      - elasticsearch_explain_data_lifecycle
+      - elasticsearch_ilm_get_lifecycle
+      - elasticsearch_ilm_explain_lifecycle
+      - elasticsearch_ilm_get_status
+    diagnostics:
+      - elasticsearch_diagnostics
+      - elasticsearch_get_cluster_health
+      - elasticsearch_get_cluster_stats
+      - elasticsearch_list_tasks
+      - elasticsearch_tasks_get_task
+      - elasticsearch_get_field_mapping

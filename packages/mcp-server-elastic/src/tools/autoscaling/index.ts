@@ -37,10 +37,6 @@ export class AutoscalingPolicyConfigError extends AutoscalingError {
 	}
 }
 
-// ============================================================================
-// GET AUTOSCALING CAPACITY
-// ============================================================================
-
 const getCapacitySchema = z.object({
 	masterTimeout: z.string().optional(),
 });
@@ -95,10 +91,6 @@ export const getCapacity = {
 		}
 	},
 };
-
-// ============================================================================
-// GET AUTOSCALING POLICY
-// ============================================================================
 
 const getPolicySchema = z.object({
 	name: z.string().min(1, "Policy name cannot be empty"),
@@ -166,10 +158,6 @@ export const getPolicy = {
 		}
 	},
 };
-
-// ============================================================================
-// PUT AUTOSCALING POLICY
-// ============================================================================
 
 const putPolicySchema = z.object({
 	name: z.string().min(1, "Policy name cannot be empty"),
@@ -239,10 +227,6 @@ export const putPolicy = {
 	operationType: OperationType.WRITE as const,
 	handler: withReadOnlyCheck("elasticsearch_autoscaling_put_policy", putPolicyImpl, OperationType.WRITE),
 };
-
-// ============================================================================
-// DELETE AUTOSCALING POLICY
-// ============================================================================
 
 const deletePolicySchema = z.object({
 	name: z.string().min(1, "Policy name cannot be empty"),
@@ -316,5 +300,4 @@ export const deletePolicy = {
 	handler: withReadOnlyCheck("elasticsearch_autoscaling_delete_policy", deletePolicyImpl, OperationType.DESTRUCTIVE),
 };
 
-// Export all tools
 export const autoscalingTools = [getCapacity, getPolicy, putPolicy, deletePolicy] as const;

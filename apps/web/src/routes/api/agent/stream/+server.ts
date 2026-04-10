@@ -2,7 +2,7 @@
 
 import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
 import { traceSpan } from "@devops-agent/observability";
-import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
+import { AttachmentBlockSchema, DataSourceContextSchema, redactPiiContent } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import { invokeAgent } from "$lib/server/agent";
@@ -81,16 +81,19 @@ export const POST: RequestHandler = async ({ request }) => {
 							const OUTPUT_NODES = new Set(["aggregate", "responder"]);
 							const PIPELINE_NODES = new Set([
 								"classify",
+								"normalize",
 								"entityExtractor",
 								"queryDataSource",
 								"align",
 								"aggregate",
+								"checkConfidence",
 								"validate",
+								"proposeMitigation",
 								"responder",
 								"followUp",
 							]);
 							const nodeStartTimes = new Map<string, number>();
-							let responseContent = "";
+							let _responseContent = "";
 							const toolsUsed = new Set<string>();
 
 							for await (const event of eventStream) {
@@ -99,8 +102,8 @@ export const POST: RequestHandler = async ({ request }) => {
 									const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
 									const nodeName = event.metadata?.langgraph_node;
 									if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
-										const content = String(event.data.chunk.content);
-										responseContent += content;
+										const content = redactPiiContent(String(event.data.chunk.content));
+										_responseContent += content;
 										send({ type: "message", content });
 									}
 								}
@@ -121,6 +124,22 @@ export const POST: RequestHandler = async ({ request }) => {
 										const suggestions = event.data?.output?.suggestions;
 										if (Array.isArray(suggestions) && suggestions.length > 0) {
 											send({ type: "suggestions", suggestions });
+										}
+									}
+
+									// SIO-632: Notify frontend when confidence is below threshold
+									if (event.name === "checkConfidence" && event.data?.output?.lowConfidence === true) {
+										send({
+											type: "low_confidence",
+											message: "Report confidence is below the review threshold. Results may be incomplete.",
+										});
+									}
+
+									// SIO-634, SIO-635: Emit pending action proposals for user confirmation
+									if (event.name === "proposeMitigation") {
+										const pendingActions = event.data?.output?.pendingActions;
+										if (Array.isArray(pendingActions) && pendingActions.length > 0) {
+											send({ type: "pending_actions", actions: pendingActions });
 										}
 									}
 								}

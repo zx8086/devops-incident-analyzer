@@ -1,7 +1,7 @@
 // src/config/loader.ts
 
 import { defaults } from "./defaults.ts";
-import { envMapping } from "./env-mapping.ts";
+import { envMapping } from "./envMapping.ts";
 import { toBool, toNumber } from "./helpers.ts";
 import { type AppConfig, configSchema } from "./schemas.ts";
 

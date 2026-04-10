@@ -12,14 +12,6 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { withSecurityValidation } from "../../utils/securityEnhancer.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Flexible phase structure for ILM policies
 const phaseSchema = z
 	.object({
 		actions: z.record(z.string(), z.unknown()).optional(),
@@ -57,10 +49,6 @@ const putLifecycleValidator = z.object({
 
 type _PutLifecycleParams = z.infer<typeof putLifecycleValidator>;
 
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
-
 function createIlmPutLifecycleMcpError(
 	error: Error | string,
 	context: {
@@ -79,10 +67,6 @@ function createIlmPutLifecycleMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_put_lifecycle] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const putLifecycleHandler = async (args: any): Promise<SearchResult> => {

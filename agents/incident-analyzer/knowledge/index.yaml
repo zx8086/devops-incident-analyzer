@@ -12,3 +12,20 @@ categories:
   slo-policies:
     path: slo-policies/
     description: SLO/SLA definitions and thresholds
+
+# SIO-640: Phase 2A lazy runbook selection fallback config.
+# Consumed by packages/agent/src/runbook-selector.ts when the LLM router
+# fails. Filenames must exist under categories.runbooks.path (validated
+# at load time by packages/gitagent-bridge/src/manifest-loader.ts).
+runbook_selection:
+  fallback_by_severity:
+    critical:
+      - kafka-consumer-lag.md
+      - high-error-rate.md
+      - database-slow-queries.md
+    high:
+      - kafka-consumer-lag.md
+      - high-error-rate.md
+      - database-slow-queries.md
+    medium: []
+    low: []

@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { CommonSchemas, timeRangeSchema } from "../../utils/validation.js";
 
-// =========================
-// Analytics API Parameters
-// =========================
-
 export const queryApiRequestsParameters = () =>
 	z.object({
 		timeRange: timeRangeSchema,

@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { config } from "../config";
-import { logger } from "../lib/logger";
+import { logger } from "../utils/logger";
 
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
@@ -42,7 +42,12 @@ export default (server: McpServer, _bucket: Bucket) => {
 				);
 
 				// Use the resource URI handler to get documentation listing
-				const resourceResult = await (server as any).readResourceByUri(resourceUri);
+				const resourceResult = await (
+					server as unknown as Record<
+						string,
+						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
+					>
+				).readResourceByUri!(resourceUri);
 
 				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
 					return {

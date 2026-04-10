@@ -1,11 +1,21 @@
 // shared/src/index.ts
 export {
+	type ActionResult,
+	ActionResultSchema,
+	type PendingAction,
+	PendingActionSchema,
+} from "./action-types.ts";
+export {
 	type DataSourceContext,
 	DataSourceContextSchema,
 	type DataSourceResult,
 	DataSourceResultSchema,
 	type ExtractedEntities,
 	ExtractedEntitiesSchema,
+	type MitigationSteps,
+	MitigationStepsSchema,
+	type NormalizedIncident,
+	NormalizedIncidentSchema,
 	type StreamEvent,
 	StreamEventSchema,
 	type ToolError,
@@ -17,6 +27,7 @@ export {
 	type ToolPlanStep,
 	ToolPlanStepSchema,
 } from "./agent-state.ts";
+export { type AgentCoreProxyHandle, startAgentCoreProxy } from "./agentcore-proxy.ts";
 export {
 	type AttachmentBlock,
 	AttachmentBlockSchema,
@@ -53,7 +64,16 @@ export {
 	type McpApplication,
 	type McpApplicationOptions,
 } from "./bootstrap.ts";
-export { type AgentConfig, AgentConfigSchema, type ServerConfig, ServerConfigSchema } from "./config.ts";
+export {
+	type AgentConfig,
+	AgentConfigSchema,
+	type LinearConfig,
+	LinearConfigSchema,
+	type ServerConfig,
+	ServerConfigSchema,
+	type SlackConfig,
+	SlackConfigSchema,
+} from "./config.ts";
 export {
 	type CapellaConfig,
 	CapellaConfigSchema,
@@ -66,6 +86,8 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
+export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts";
+export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {
 	buildEcsOptions,
 	createFormattedDestination,
@@ -75,8 +97,11 @@ export {
 	getChildLogger,
 	getEnv,
 	isProdOrStaging,
+	type McpLoggerOptions,
 	measureOperation,
 } from "./logger.ts";
+export { redactPiiContent } from "./pii-redactor.ts";
+export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
 	buildTelemetryConfig,
 	getTracer,
@@ -109,3 +134,8 @@ export {
 	withNestedTrace,
 	withTraceContextMiddleware,
 } from "./tracing/index.ts";
+export {
+	type AgentCoreTransportConfig,
+	type AgentCoreTransportResult,
+	startAgentCoreTransport,
+} from "./transport/agentcore.ts";

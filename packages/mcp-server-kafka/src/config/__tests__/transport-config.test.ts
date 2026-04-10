@@ -1,8 +1,19 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getConfig, resetConfigCache } from "../config.ts";
 
 describe("transport config", () => {
+	const savedTransport = process.env.MCP_TRANSPORT;
+
+	beforeEach(() => {
+		// Tests expect defaults -- clear any env overrides
+		delete process.env.MCP_TRANSPORT;
+		resetConfigCache();
+	});
+
 	afterEach(() => {
+		// Restore original env
+		if (savedTransport !== undefined) process.env.MCP_TRANSPORT = savedTransport;
+		else delete process.env.MCP_TRANSPORT;
 		resetConfigCache();
 	});
 

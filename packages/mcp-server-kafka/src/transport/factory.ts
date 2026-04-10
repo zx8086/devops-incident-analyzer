@@ -1,51 +1,68 @@
 // src/transport/factory.ts
+import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { splitCommaSeparated } from "../config/helpers.ts";
-import type { AppConfig } from "../config/schemas.ts";
-import { getLogger } from "../logging/container.ts";
+import type { TransportConfig } from "../config/schemas.ts";
+import { createContextLogger, logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
 import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
 
+const log = createContextLogger("transport");
+
 export interface TransportResult {
 	stdio?: StdioTransportResult;
 	http?: HttpTransportResult;
+	agentcore?: AgentCoreTransportResult;
 	closeAll(): Promise<void>;
 }
 
-export function resolveTransportMode(mode: string): { stdio: boolean; http: boolean } {
+export function resolveTransportMode(mode: string): { stdio: boolean; http: boolean; agentcore: boolean } {
 	switch (mode) {
 		case "http":
-			return { stdio: false, http: true };
+			return { stdio: false, http: true, agentcore: false };
 		case "both":
-			return { stdio: true, http: true };
+			return { stdio: true, http: true, agentcore: false };
+		case "agentcore":
+			return { stdio: false, http: false, agentcore: true };
 		default:
-			return { stdio: true, http: false };
+			return { stdio: true, http: false, agentcore: false };
 	}
 }
 
-export async function createTransport(config: AppConfig, serverFactory: () => McpServer): Promise<TransportResult> {
-	const logger = getLogger();
-	const { stdio: useStdio, http: useHttp } = resolveTransportMode(config.transport.mode);
-	logger.info({ mode: config.transport.mode, stdio: useStdio, http: useHttp }, "Resolving transport mode");
+export async function createTransport(
+	config: TransportConfig,
+	serverFactory: () => McpServer,
+): Promise<TransportResult> {
+	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
+	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
 
 	const result: TransportResult = {
 		async closeAll() {
+			if (result.agentcore) await result.agentcore.close();
 			if (result.http) await result.http.close();
 			if (result.stdio) await result.stdio.close();
 		},
 	};
 
+	if (useAgentCore) {
+		result.agentcore = await startAgentCoreTransport(serverFactory, createBootstrapAdapter(logger), {
+			port: config.port,
+			host: config.host,
+			path: config.path,
+		});
+	}
+
 	if (useHttp) {
-		const allowedOrigins = splitCommaSeparated(config.transport.allowedOrigins || undefined);
+		const allowedOrigins = splitCommaSeparated(config.allowedOrigins || undefined);
 		result.http = await startHttpTransport(serverFactory, {
-			port: config.transport.port,
-			host: config.transport.host,
-			path: config.transport.path,
-			sessionMode: config.transport.sessionMode,
-			idleTimeout: config.transport.idleTimeout,
-			apiKey: config.transport.apiKey || undefined,
+			port: config.port,
+			host: config.host,
+			path: config.path,
+			sessionMode: config.sessionMode,
+			idleTimeout: config.idleTimeout,
+			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
 		});
 	}
@@ -55,11 +72,12 @@ export async function createTransport(config: AppConfig, serverFactory: () => Mc
 		result.stdio = await startStdioTransport(server);
 	}
 
-	logger.info(
+	log.info(
 		{
-			mode: config.transport.mode,
+			mode: config.mode,
 			stdio: useStdio,
 			http: useHttp,
+			agentcore: useAgentCore,
 		},
 		"Transport initialized",
 	);

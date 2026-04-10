@@ -2,7 +2,20 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { type AgentManifest, AgentManifestSchema, type ToolDefinition, ToolDefinitionSchema } from "./types.ts";
+import {
+	type AgentManifest,
+	AgentManifestSchema,
+	KnowledgeIndexSchema,
+	type RunbookSelectionConfig,
+	type ToolDefinition,
+	ToolDefinitionSchema,
+} from "./types.ts";
+
+export interface KnowledgeEntry {
+	category: string;
+	filename: string;
+	content: string;
+}
 
 export interface LoadedAgent {
 	manifest: AgentManifest;
@@ -11,6 +24,11 @@ export interface LoadedAgent {
 	tools: ToolDefinition[];
 	skills: Map<string, string>;
 	subAgents: Map<string, LoadedAgent>;
+	knowledge: KnowledgeEntry[];
+	// SIO-640: Optional runbook selection config from knowledge/index.yaml.
+	// Presence of this field gates whether the runbook selector node is wired
+	// into the graph.
+	runbookSelection?: RunbookSelectionConfig;
 }
 
 export function loadAgent(agentDir: string): LoadedAgent {
@@ -53,7 +71,65 @@ export function loadAgent(agentDir: string): LoadedAgent {
 		}
 	}
 
-	return { manifest, soul, rules, tools, skills, subAgents };
+	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir);
+	return { manifest, soul, rules, tools, skills, subAgents, knowledge, runbookSelection };
+}
+
+function loadKnowledge(agentDir: string): {
+	entries: KnowledgeEntry[];
+	runbookSelection?: RunbookSelectionConfig;
+} {
+	const knowledgeDir = join(agentDir, "knowledge");
+	const indexPath = join(knowledgeDir, "index.yaml");
+
+	if (!existsSync(indexPath)) return { entries: [] };
+
+	const indexYaml = parse(readFileSync(indexPath, "utf-8"));
+	const index = KnowledgeIndexSchema.safeParse(indexYaml);
+	if (!index.success) return { entries: [] };
+
+	const entries: KnowledgeEntry[] = [];
+	for (const [category, config] of Object.entries(index.data.categories)) {
+		const categoryDir = join(knowledgeDir, config.path);
+		if (!isDirectory(categoryDir)) continue;
+
+		const files = readdirSync(categoryDir).filter((f) => f.endsWith(".md") && f !== ".gitkeep");
+		for (const file of files) {
+			const content = readFileSync(join(categoryDir, file), "utf-8").trim();
+			if (content) {
+				entries.push({ category, filename: file, content });
+			}
+		}
+	}
+
+	// SIO-640: validate runbook_selection filenames exist on disk
+	if (index.data.runbook_selection) {
+		const runbooksCategory = index.data.categories.runbooks;
+		if (!runbooksCategory) {
+			throw new Error(
+				"knowledge/index.yaml: runbook_selection is present but categories.runbooks is not defined. " +
+					"runbook_selection requires a runbooks category.",
+			);
+		}
+		const runbooksDir = join(knowledgeDir, runbooksCategory.path);
+		const existingFiles = isDirectory(runbooksDir)
+			? new Set(readdirSync(runbooksDir).filter((f) => f.endsWith(".md")))
+			: new Set<string>();
+
+		const { fallback_by_severity } = index.data.runbook_selection;
+		for (const [severity, filenames] of Object.entries(fallback_by_severity)) {
+			for (const filename of filenames) {
+				if (!existingFiles.has(filename)) {
+					throw new Error(
+						`knowledge/index.yaml: runbook_selection.fallback_by_severity.${severity} references ` +
+							`"${filename}" but no such file exists under ${runbooksCategory.path}`,
+					);
+				}
+			}
+		}
+	}
+
+	return { entries, runbookSelection: index.data.runbook_selection };
 }
 
 function loadOptionalFile(path: string): string {

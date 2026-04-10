@@ -112,10 +112,6 @@ MEMBERSHIP ANALYSIS:
   - Monitor group health and consistency
 `;
 
-// =========================
-// Control Plane CRUD Operations
-// =========================
-
 export const createControlPlanePrompt = () => `
 Create a new Kong control plane with specified configuration.
 
@@ -187,10 +183,6 @@ IMPORTANT: This operation permanently deletes:
   - All configuration history and analytics data
   - Cannot be undone
 `;
-
-// =========================
-// Data Plane Node Management
-// =========================
 
 export const listDataPlaneNodesPrompt = () => `
 List data plane nodes connected to a control plane.
@@ -327,10 +319,6 @@ TOKEN MANAGEMENT:
   - Track token lifecycle for security auditing
   - Plan token rotation strategies
 `;
-
-// =========================
-// Control Plane Configuration Management
-// =========================
 
 export const getControlPlaneConfigPrompt = () => `
 Get detailed configuration for a control plane.

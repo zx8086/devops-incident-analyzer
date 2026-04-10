@@ -13,7 +13,7 @@ import * as portalOps from "./tools/portal/operations.js";
 import * as portalManagementOps from "./tools/portal-management/operations.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
 import { formatError } from "./utils/error-handling.js";
-import { createContextLogger } from "./utils/mcp-logger.js";
+import { createContextLogger } from "./utils/logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
 import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
 import { traceToolCall } from "./utils/tracing.js";
@@ -21,10 +21,10 @@ import { traceToolCall } from "./utils/tracing.js";
 const log = createContextLogger("server");
 const toolsLog = createContextLogger("tools");
 
-export function createKonnectServer(api: KongApi, _config: Config): McpServer {
+export function createKonnectServer(api: KongApi, config: Config): McpServer {
 	const server = new McpServer({
-		name: "kong-konnect-mcp",
-		version: "2.0.0",
+		name: config.application.name,
+		version: config.application.version,
 		description:
 			"Comprehensive Kong Konnect API Gateway management with analytics, configuration, certificates, and more",
 	});
@@ -186,13 +186,10 @@ function registerTools(
 				let success = true;
 
 				try {
-					let result;
+					let result: unknown;
 
 					// Route to appropriate handler based on method
 					switch (tool.method) {
-						// ===========================
-						// Analytics Tools
-						// ===========================
 						case "query_api_requests":
 							result = await analyticsOps.queryApiRequests(
 								api,
@@ -218,9 +215,6 @@ function registerTools(
 							);
 							break;
 
-						// ===========================
-						// Control Planes Tools
-						// ===========================
 						case "list_control_planes":
 							result = await controlPlanesOps.listControlPlanes(
 								api,
@@ -251,7 +245,6 @@ function registerTools(
 							result = await controlPlanesOps.checkControlPlaneGroupMembership(api, args.controlPlaneId);
 							break;
 
-						// Control Plane CRUD Operations
 						case "create_control_plane":
 							result = await controlPlanesOps.createControlPlane(api, {
 								name: args.name,
@@ -276,7 +269,6 @@ function registerTools(
 							result = await controlPlanesOps.deleteControlPlane(api, args.controlPlaneId);
 							break;
 
-						// Data Plane Node Management
 						case "list_data_plane_nodes":
 							result = await controlPlanesOps.listDataPlaneNodes(
 								api,
@@ -292,7 +284,6 @@ function registerTools(
 							result = await controlPlanesOps.getDataPlaneNode(api, args.controlPlaneId, args.nodeId);
 							break;
 
-						// Data Plane Token Management
 						case "create_data_plane_token":
 							result = await controlPlanesOps.createDataPlaneToken(api, args.controlPlaneId, args.name, args.expiresAt);
 							break;
@@ -310,7 +301,6 @@ function registerTools(
 							result = await controlPlanesOps.revokeDataPlaneToken(api, args.controlPlaneId, args.tokenId);
 							break;
 
-						// Control Plane Configuration
 						case "get_control_plane_config":
 							result = await controlPlanesOps.getControlPlaneConfig(api, args.controlPlaneId);
 							break;
@@ -325,9 +315,6 @@ function registerTools(
 							});
 							break;
 
-						// ===========================
-						// Certificate Management Tools
-						// ===========================
 						case "list_certificates":
 							result = await certificatesOps.listCertificates(api, args.controlPlaneId, args.size, args.offset);
 							break;
@@ -365,10 +352,6 @@ function registerTools(
 							result = await certificatesOps.deleteCertificate(api, args.controlPlaneId, args.certificateId);
 							break;
 
-						// ===========================
-						// Configuration Management Tools
-						// ===========================
-						// Legacy list operations (backward compatibility)
 						case "list_services":
 							result = await configurationOps.listServices(api, args.controlPlaneId, args.size, args.offset);
 							break;
@@ -385,7 +368,6 @@ function registerTools(
 							result = await configurationOps.listPlugins(api, args.controlPlaneId, args.size, args.offset);
 							break;
 
-						// Service CRUD operations
 						case "create_service":
 							result = await configurationOps.createService(
 								api,
@@ -413,7 +395,6 @@ function registerTools(
 
 						// update_service and delete_service MOVED TO BLOCKED OPERATIONS
 
-						// Route CRUD operations
 						case "create_route":
 							result = await configurationOps.createRoute(
 								api,
@@ -440,7 +421,6 @@ function registerTools(
 
 						// update_route and delete_route MOVED TO BLOCKED OPERATIONS
 
-						// Consumer CRUD operations
 						case "create_consumer":
 							result = await configurationOps.createConsumer(
 								api,
@@ -470,7 +450,6 @@ function registerTools(
 
 						// delete_consumer MOVED TO BLOCKED OPERATIONS
 
-						// Plugin CRUD operations
 						case "create_plugin":
 							result = await configurationOps.createPlugin(
 								api,
@@ -499,10 +478,6 @@ function registerTools(
 							result = await configurationOps.listPluginSchemas(api, args.controlPlaneId);
 							break;
 
-						// ===========================
-						// Portal Management Tools
-						// ===========================
-						// Portal API Operations
 						case "list_portal_apis":
 							result = await portalOps.listApis(
 								api,
@@ -530,7 +505,6 @@ function registerTools(
 							result = await portalOps.fetchApiDocument(api, args.apiIdOrSlug, args.documentIdOrSlug, args.format);
 							break;
 
-						// Application Management Operations
 						case "list_portal_applications":
 							result = await portalOps.listApplications(
 								api,
@@ -570,7 +544,6 @@ function registerTools(
 							result = await portalOps.deleteApplication(api, args.applicationId);
 							break;
 
-						// Application Registration Operations
 						case "list_portal_application_registrations":
 							result = await portalOps.listApplicationRegistrations(
 								api,
@@ -598,7 +571,6 @@ function registerTools(
 							result = await portalOps.deleteApplicationRegistration(api, args.applicationId, args.registrationId);
 							break;
 
-						// Credential Management Operations
 						case "list_portal_credentials":
 							result = await portalOps.listCredentials(api, args.applicationId, args.pageSize, args.pageNumber);
 							break;
@@ -628,7 +600,6 @@ function registerTools(
 							result = await portalOps.regenerateApplicationSecret(api, args.applicationId);
 							break;
 
-						// Developer Authentication Operations
 						case "register_portal_developer":
 							result = await portalOps.registerDeveloper(api, {
 								email: args.email,
@@ -651,7 +622,6 @@ function registerTools(
 							result = await portalOps.logout(api);
 							break;
 
-						// Application Analytics Operations
 						case "query_portal_application_analytics":
 							result = await portalOps.queryApplicationAnalytics(api, args.applicationId, {
 								metrics: args.metrics,
@@ -661,9 +631,6 @@ function registerTools(
 							});
 							break;
 
-						// ===========================
-						// Portal Management Tools
-						// ===========================
 						case "list_portals":
 							result = await portalManagementOps.listPortals(api, args.pageSize, args.pageNumber);
 							break;
@@ -696,16 +663,11 @@ function registerTools(
 							result = await portalManagementOps.unpublishPortalProduct(api, args.portalId, args.productId);
 							break;
 
-						// ===========================
 						// TODO: Add remaining tool categories
-						// ===========================
 						// Upstream Management Tools
 						// Data Plane Tools
 						// Credentials Management Tools
 
-						// ===========================
-						// Elicitation Tools
-						// ===========================
 						case "analyze_migration_context":
 							result = await elicitationOps.analyzeContext(
 								args.userMessage,
@@ -792,4 +754,6 @@ function registerTools(
 		log.debug({ method: prefixedName, category: tool.category }, "Registering tool");
 		server.tool(prefixedName, tool.description, toolParams, tracedHandler);
 	});
+
+	log.info({ toolCount: allTools.length }, "All tools registered successfully");
 }

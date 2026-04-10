@@ -1,15 +1,23 @@
 // agent/src/sub-agent.ts
 
+import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
+import { getAllActionToolNames, resolveActionTools } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource } from "./mcp-bridge.ts";
-import { buildSubAgentPrompt } from "./prompt-context.ts";
+import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:sub-agent");
+
+// SIO-626: Prevent hung MCP servers from stalling the pipeline indefinitely.
+// 5 minutes: sub-agents with 70+ MCP tools need multiple LLM round-trips
+// (tool selection, invocation, result parsing) which routinely exceed 60s.
+const SUB_AGENT_TIMEOUT_MS = 300_000;
 
 const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
@@ -63,15 +71,18 @@ export function classifyToolError(message: string): { category: ToolErrorCategor
 	return { category: "unknown", retryable: true };
 }
 
-function extractToolErrors(messages: Array<{ _getType(): string; content: unknown; name?: string }>): ToolError[] {
+function extractToolErrors(
+	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
+): ToolError[] {
 	const errors: ToolError[] = [];
 	for (const msg of messages) {
 		if (msg._getType() !== "tool") continue;
-		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-		// Tool messages containing error indicators
-		const isError = /error|exception|failed|unauthorized|forbidden|timeout/i.test(content) && content.length < 2000; // Avoid false positives on large successful responses
-		if (!isError) continue;
+		// Use LangGraph ToolMessage.status as the error gate instead of regex on content.
+		// LangGraph ToolNode sets status="error" when the tool throws (including MCP isError:true).
+		// The old regex matched domain vocabulary like "totalErrorCount" causing false positives.
+		if (msg.status !== "error") continue;
 
+		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 		const { category, retryable } = classifyToolError(content);
 		errors.push({
 			toolName: msg.name ?? "unknown",
@@ -81,6 +92,47 @@ function extractToolErrors(messages: Array<{ _getType(): string; content: unknow
 		});
 	}
 	return errors;
+}
+
+const MAX_TOOLS_PER_AGENT = 25;
+const MIN_FILTERED_TOOLS = 5;
+
+function selectToolsByAction(
+	allTools: StructuredToolInterface[],
+	dataSourceId: string,
+	toolActions: Record<string, string[]> | undefined,
+	toolDef: ToolDefinition | undefined,
+): { tools: StructuredToolInterface[]; filtered: boolean } {
+	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
+		return { tools: allTools, filtered: false };
+	}
+
+	if (!toolDef?.tool_mapping?.action_tool_map) {
+		return { tools: allTools.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+	}
+
+	const actions = toolActions?.[dataSourceId];
+	if (actions && actions.length > 0) {
+		const { toolNames } = resolveActionTools(toolDef, actions);
+		if (toolNames.length > 0) {
+			const nameSet = new Set(toolNames);
+			const selected = allTools.filter((t) => nameSet.has(t.name));
+			if (selected.length >= MIN_FILTERED_TOOLS) {
+				return { tools: selected.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+			}
+		}
+	}
+
+	const allActionNames = getAllActionToolNames(toolDef);
+	if (allActionNames.length > 0) {
+		const nameSet = new Set(allActionNames);
+		const selected = allTools.filter((t) => nameSet.has(t.name));
+		if (selected.length >= MIN_FILTERED_TOOLS) {
+			return { tools: selected.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+		}
+	}
+
+	return { tools: allTools.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 }
 
 export async function queryDataSource(
@@ -97,11 +149,11 @@ export async function queryDataSource(
 	log.info({ agentName }, "Sub-agent starting");
 
 	try {
-		const tools = getToolsForDataSource(dataSourceId);
+		const allTools = getToolsForDataSource(dataSourceId);
 		const systemPrompt = buildSubAgentPrompt(agentName);
 		const llm = createLlm("subAgent");
 
-		if (tools.length === 0) {
+		if (allTools.length === 0) {
 			log.warn("No MCP tools available, skipping");
 			const result: DataSourceResult = {
 				dataSourceId,
@@ -113,7 +165,15 @@ export async function queryDataSource(
 			return { dataSourceResults: [result] };
 		}
 
-		log.info({ toolCount: tools.length }, "Creating ReAct agent with tools");
+		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
+		const toolDef = getToolDefinitionForDataSource(dataSourceId);
+		const { tools, filtered } = selectToolsByAction(
+			allTools,
+			dataSourceId,
+			state.extractedEntities.toolActions,
+			toolDef,
+		);
+		log.info({ toolCount: tools.length, totalTools: allTools.length, filtered }, "Creating ReAct agent with tools");
 
 		const agent = createReactAgent({
 			llm,
@@ -122,7 +182,6 @@ export async function queryDataSource(
 		});
 
 		// Only pass the last user message to prevent cross-datasource pollution
-		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
 		log.info("Invoking sub-agent");
@@ -130,6 +189,7 @@ export async function queryDataSource(
 			{ messages },
 			{
 				...config,
+				signal: AbortSignal.timeout(SUB_AGENT_TIMEOUT_MS),
 				runName: agentName,
 				metadata: {
 					...config?.metadata,

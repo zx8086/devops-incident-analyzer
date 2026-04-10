@@ -6,14 +6,11 @@ export type PortalTool = {
 	method: string;
 	name: string;
 	description: string;
-	parameters: z.ZodObject<any, any, any, any>;
+	parameters: z.ZodObject;
 	category: string;
 };
 
 export const portalTools = (): PortalTool[] => [
-	// =========================
-	// Portal API Operations
-	// =========================
 	{
 		method: "list_portal_apis",
 		name: "List Portal APIs",
@@ -50,9 +47,6 @@ export const portalTools = (): PortalTool[] => [
 		category: "portal",
 	},
 
-	// =========================
-	// Application Management Operations
-	// =========================
 	{
 		method: "list_portal_applications",
 		name: "List Portal Applications",
@@ -89,9 +83,6 @@ export const portalTools = (): PortalTool[] => [
 		category: "portal",
 	},
 
-	// =========================
-	// Application Registration Operations
-	// =========================
 	{
 		method: "list_portal_application_registrations",
 		name: "List Portal Application Registrations",
@@ -121,9 +112,6 @@ export const portalTools = (): PortalTool[] => [
 		category: "portal",
 	},
 
-	// =========================
-	// Credential Management Operations
-	// =========================
 	{
 		method: "list_portal_credentials",
 		name: "List Portal Credentials",
@@ -160,9 +148,6 @@ export const portalTools = (): PortalTool[] => [
 		category: "portal",
 	},
 
-	// =========================
-	// Developer Authentication Operations
-	// =========================
 	{
 		method: "register_portal_developer",
 		name: "Register Portal Developer",
@@ -192,9 +177,6 @@ export const portalTools = (): PortalTool[] => [
 		category: "portal",
 	},
 
-	// =========================
-	// Application Analytics Operations
-	// =========================
 	{
 		method: "query_portal_application_analytics",
 		name: "Query Portal Application Analytics",

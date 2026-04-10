@@ -63,3 +63,40 @@ export function buildFacadeMap(tools: ToolDefinition[], mcpToolNames: string[]):
 export function getUncoveredTools(facadeMap: FacadeMap, mcpToolNames: string[]): string[] {
 	return mcpToolNames.filter((name) => !facadeMap.mcpToFacade.has(name));
 }
+
+export function resolveActionTools(
+	toolDef: ToolDefinition,
+	actions: string[],
+): { toolNames: string[]; unmatchedActions: string[] } {
+	const actionMap = toolDef.tool_mapping?.action_tool_map;
+	if (!actionMap) {
+		return { toolNames: [], unmatchedActions: [...actions] };
+	}
+	const toolNames = new Set<string>();
+	const unmatchedActions: string[] = [];
+	for (const action of actions) {
+		const tools = actionMap[action];
+		if (tools && tools.length > 0) {
+			for (const name of tools) toolNames.add(name);
+		} else {
+			unmatchedActions.push(action);
+		}
+	}
+	return { toolNames: [...toolNames], unmatchedActions };
+}
+
+export function getAllActionToolNames(toolDef: ToolDefinition): string[] {
+	const actionMap = toolDef.tool_mapping?.action_tool_map;
+	if (!actionMap) return [];
+	const all = new Set<string>();
+	for (const tools of Object.values(actionMap)) {
+		for (const name of tools) all.add(name);
+	}
+	return [...all];
+}
+
+export function getAvailableActions(toolDef: ToolDefinition): string[] {
+	const actionMap = toolDef.tool_mapping?.action_tool_map;
+	if (!actionMap) return [];
+	return Object.keys(actionMap);
+}

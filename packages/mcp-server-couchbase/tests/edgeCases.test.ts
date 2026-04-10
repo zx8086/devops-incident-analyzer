@@ -1,8 +1,8 @@
 /* tests/edgeCases.test.ts */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { logger } from "../src/lib/logger";
 import toolRegistry from "../src/tools";
+import { logger } from "../src/utils/logger";
 import { mockConnection, mockServer } from "./test.utils";
 
 describe("Edge Cases and Error Scenarios", () => {

@@ -1,8 +1,8 @@
 /* src/lib/pingHandler.ts */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { logger } from "../utils/logger";
 import { connectionManager } from "./connectionManager";
-import { logger } from "./logger";
 
 export function registerPingHandlers(server: McpServer): void {
 	server.tool("capella_ping", "Checks the server and database connection status", {}, async () => {

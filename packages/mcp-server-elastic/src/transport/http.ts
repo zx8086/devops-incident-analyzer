@@ -3,8 +3,10 @@
 import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { logger } from "../utils/logger.js";
+import { createContextLogger } from "../utils/logger.js";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.js";
+
+const log = createContextLogger("transport");
 
 interface HttpTransportConfig {
 	port: number;
@@ -51,7 +53,7 @@ function createStatelessHandler(serverFactory: ServerFactory) {
 		try {
 			return await transport.handleRequest(req);
 		} catch (error) {
-			logger.error(
+			log.error(
 				{
 					error: error instanceof Error ? error.message : String(error),
 				},
@@ -81,7 +83,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		const transport = new WebStandardStreamableHTTPServerTransport({
 			sessionIdGenerator: () => crypto.randomUUID(),
 			onsessioninitialized: (id) => {
-				logger.info({ sessionId: id }, "Session initialized");
+				log.info({ sessionId: id }, "Session initialized");
 			},
 		});
 
@@ -91,7 +93,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 		transport.onclose = () => {
 			if (transport.sessionId) {
 				sessions.delete(transport.sessionId);
-				logger.info({ sessionId: transport.sessionId }, "Session closed");
+				log.info({ sessionId: transport.sessionId }, "Session closed");
 			}
 		};
 
@@ -137,7 +139,7 @@ function createStatefulHandlers(serverFactory: ServerFactory) {
 			sessions.delete(id);
 		}
 		if (count > 0) {
-			logger.info({ count }, "All sessions closed");
+			log.info({ count }, "All sessions closed");
 		}
 	}
 
@@ -195,7 +197,7 @@ export async function startHttpTransport(
 		},
 
 		error: (error) => {
-			logger.error(
+			log.error(
 				{
 					error: error instanceof Error ? error.message : String(error),
 				},
@@ -208,7 +210,7 @@ export async function startHttpTransport(
 		},
 	});
 
-	logger.info(
+	log.info(
 		{
 			url: `http://${config.host}:${httpServer.port}${config.path}`,
 			sessionMode: config.sessionMode,
@@ -223,7 +225,7 @@ export async function startHttpTransport(
 				await closeAllSessions();
 			}
 			httpServer.stop(true);
-			logger.info("HTTP transport closed");
+			log.info("HTTP transport closed");
 		},
 	};
 }

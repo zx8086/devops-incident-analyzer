@@ -7,14 +7,11 @@ export type Tool = {
 	method: string;
 	name: string;
 	description: string;
-	parameters: z.ZodObject<any, any, any, any>;
+	parameters: z.ZodObject;
 	category: string;
 };
 
 export const tools = (): Tool[] => [
-	// =========================
-	// API Requests Analytics Tools
-	// =========================
 	{
 		method: "query_api_requests",
 		name: "Query API Requests",
@@ -30,9 +27,6 @@ export const tools = (): Tool[] => [
 		category: "analytics",
 	},
 
-	// =========================
-	// Control Planes Configuration Tools
-	// =========================
 	{
 		method: "list_services",
 		name: "List Services",
@@ -62,9 +56,6 @@ export const tools = (): Tool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Control Planes Tools
-	// =========================
 	{
 		method: "list_control_planes",
 		name: "List Control Planes",
@@ -94,9 +85,6 @@ export const tools = (): Tool[] => [
 		category: "control_planes",
 	},
 
-	// =========================
-	// Service CRUD Tools
-	// =========================
 	{
 		method: "create_service",
 		name: "Create Service",
@@ -126,8 +114,5 @@ export const tools = (): Tool[] => [
 		category: "configuration",
 	},
 
-	// =========================
-	// Elicitation Tools
-	// =========================
 	...elicitationTools,
 ];

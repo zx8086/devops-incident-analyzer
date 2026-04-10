@@ -15,6 +15,7 @@ import {
 	requiresApproval,
 	resolveBedrockConfig,
 	resolveMapping,
+	type ToolDefinition,
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
@@ -65,7 +66,7 @@ describe("manifest-loader", () => {
 		expect(agent.subAgents.has("capella-agent")).toBe(true);
 		expect(agent.subAgents.has("konnect-agent")).toBe(true);
 
-		const elastic = agent.subAgents.get("elastic-agent")!;
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		expect(elastic.manifest.name).toBe("elastic-agent");
 		expect(elastic.manifest.model?.preferred).toBe("claude-haiku-4-5");
 		expect(elastic.soul).toContain("Elasticsearch specialist");
@@ -123,17 +124,32 @@ describe("skill-loader", () => {
 
 	test("handles sub-agent with no skills", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elastic = agent.subAgents.get("elastic-agent")!;
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		const prompt = buildSystemPrompt(elastic);
 		expect(prompt).toContain("Elasticsearch specialist");
 		expect(prompt).not.toContain("Skill:");
+	});
+
+	test("includes knowledge base in system prompt", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Knowledge Base");
+		expect(prompt).toContain("### Runbooks");
+		expect(prompt).toContain("high-error-rate.md");
+	});
+
+	test("sub-agent prompt does not include knowledge", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
+		const prompt = buildSystemPrompt(elastic);
+		expect(prompt).not.toContain("## Knowledge Base");
 	});
 });
 
 describe("tool-prompt", () => {
 	test("resolves template with full context", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		const resolved = buildToolPrompt(elasticTool, {
 			datasources: ["elastic", "kafka", "couchbase"],
 			complianceTier: "medium",
@@ -144,14 +160,14 @@ describe("tool-prompt", () => {
 
 	test("removes conditional blocks when context is missing", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		const resolved = buildToolPrompt(elasticTool, {});
 		expect(resolved).not.toContain("{{");
 		expect(resolved).not.toContain("}}");
 	});
 
 	test("falls back to static description when no template", () => {
-		const result = buildToolPrompt({ name: "test", description: "static desc" } as any, {});
+		const result = buildToolPrompt({ name: "test", description: "static desc" } as ToolDefinition, {});
 		expect(result).toBe("static desc");
 	});
 
@@ -263,7 +279,7 @@ describe("tool-mapping", () => {
 
 	test("tool_mapping is loaded from YAML for mapped tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs")!;
+		const elasticTool = agent.tools.find((t) => t.name === "elastic-search-logs") as ToolDefinition;
 		expect(elasticTool.tool_mapping).toBeDefined();
 		expect(elasticTool.tool_mapping?.mcp_server).toBe("elastic");
 		expect(elasticTool.tool_mapping?.mcp_patterns).toContain("elasticsearch_*");
@@ -271,7 +287,7 @@ describe("tool-mapping", () => {
 
 	test("tool_mapping is undefined for action tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const slackTool = agent.tools.find((t) => t.name === "notify-slack")!;
+		const slackTool = agent.tools.find((t) => t.name === "notify-slack") as ToolDefinition;
 		expect(slackTool.tool_mapping).toBeUndefined();
 	});
 });
@@ -305,7 +321,7 @@ describe("tool-schema", () => {
 			{ name: "tool-a", description: "A" },
 			{ name: "tool-b", description: "B" },
 		];
-		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a", "tool-b"]);
+		const result = validateToolSchemas(toolsWithoutMapping as ToolDefinition[], ["tool-a", "tool-b"]);
 		expect(result.valid).toBe(true);
 		expect(result.missing).toEqual([]);
 		expect(result.extra).toEqual([]);
@@ -316,9 +332,45 @@ describe("tool-schema", () => {
 			{ name: "tool-a", description: "A" },
 			{ name: "tool-b", description: "B" },
 		];
-		const result = validateToolSchemas(toolsWithoutMapping as any, ["tool-a"]);
+		const result = validateToolSchemas(toolsWithoutMapping as ToolDefinition[], ["tool-a"]);
 		expect(result.valid).toBe(false);
 		expect(result.missing).toContain("tool-b");
+	});
+});
+
+describe("knowledge-loader", () => {
+	test("loads knowledge entries from agent directory", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		expect(agent.knowledge).toBeDefined();
+		expect(Array.isArray(agent.knowledge)).toBe(true);
+	});
+
+	test("loads runbook entries with correct category", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const runbooks = agent.knowledge.filter((k) => k.category === "runbooks");
+		expect(runbooks.length).toBeGreaterThanOrEqual(1);
+		for (const entry of runbooks) {
+			expect(entry.filename).toMatch(/\.md$/);
+			expect(entry.content.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("loads systems-map entries", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const systemsMap = agent.knowledge.filter((k) => k.category === "systems-map");
+		expect(systemsMap.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("loads slo-policies entries", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const slo = agent.knowledge.filter((k) => k.category === "slo-policies");
+		expect(slo.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("skips .gitkeep files", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const gitkeeps = agent.knowledge.filter((k) => k.filename === ".gitkeep");
+		expect(gitkeeps.length).toBe(0);
 	});
 });
 
@@ -358,5 +410,128 @@ describe("compliance", () => {
 		};
 		expect(requiresApproval("mutate_production_db", compliance)).toBe(true);
 		expect(requiresApproval("read_logs", compliance)).toBe(false);
+	});
+});
+
+// SIO-640: runbook_selection schema + load-time validation
+import { KnowledgeIndexSchema } from "./types.ts";
+
+describe("KnowledgeIndexSchema: runbook_selection", () => {
+	test("accepts config with all four severity keys", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: {
+					critical: ["a.md", "b.md"],
+					high: ["a.md"],
+					medium: [],
+					low: [],
+				},
+			},
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
+	});
+
+	test("rejects config missing a severity key", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: {
+					critical: [],
+					high: [],
+					medium: [],
+					// low missing
+				},
+			},
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).toThrow();
+	});
+
+	test("accepts config with runbook_selection absent", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
+	});
+});
+
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+describe("loadAgent: runbook_selection filename validation", () => {
+	function makeTestAgent(indexYaml: string, runbookFiles: Record<string, string> = {}): string {
+		const dir = mkdtempSync(join(tmpdir(), "gitagent-test-"));
+		mkdirSync(join(dir, "knowledge", "runbooks"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`spec_version: "0.1.0"
+name: test
+version: 0.1.0
+description: test
+model:
+  preferred: claude-sonnet-4-6
+  constraints: { temperature: 0.2, max_tokens: 1024 }
+runtime: { max_turns: 10, timeout: 60 }
+compliance:
+  risk_tier: low
+  supervision: { human_in_the_loop: conditional, kill_switch: false }
+  recordkeeping: { audit_logging: false }
+  data_governance: { pii_handling: allow, data_classification: internal }
+`,
+		);
+		writeFileSync(join(dir, "knowledge", "index.yaml"), indexYaml);
+		for (const [name, content] of Object.entries(runbookFiles)) {
+			writeFileSync(join(dir, "knowledge", "runbooks", name), content);
+		}
+		return dir;
+	}
+
+	test("accepts config where every filename exists", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: ["a.md"]
+    high: []
+    medium: []
+    low: []
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).not.toThrow();
+		rmSync(dir, { recursive: true });
+	});
+
+	test("rejects config referencing nonexistent filename", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: ["missing.md"]
+    high: []
+    medium: []
+    low: []
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).toThrow(/missing\.md/);
+		rmSync(dir, { recursive: true });
 	});
 });

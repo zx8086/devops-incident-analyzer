@@ -1,7 +1,3 @@
-// =========================
-// Service CRUD Operation Prompts
-// =========================
-
 export const createServicePrompt = () => `
 Create a new service in a Kong control plane.
 
@@ -89,10 +85,6 @@ OUTPUT:
   - relatedTools: Array - Recommended cleanup actions
 `;
 
-// =========================
-// Route CRUD Operation Prompts
-// =========================
-
 export const createRoutePrompt = () => `
 Create a new route in a Kong control plane.
 
@@ -178,10 +170,6 @@ OUTPUT:
   - relatedTools: Array - Recommended follow-up actions
 `;
 
-// =========================
-// Consumer CRUD Operation Prompts
-// =========================
-
 export const createConsumerPrompt = () => `
 Create a new consumer in a Kong control plane.
 
@@ -250,10 +238,6 @@ OUTPUT:
   - warning: String - Information about credential cleanup
   - relatedTools: Array - Recommended follow-up actions
 `;
-
-// =========================
-// Plugin CRUD Operation Prompts
-// =========================
 
 export const createPluginPrompt = () => `
 Create a new plugin in a Kong control plane.
@@ -346,10 +330,6 @@ OUTPUT:
     - examples: Object - Example configurations
   - relatedTools: Array - Tools for creating and configuring plugins
 `;
-
-// =========================
-// Legacy List Operation Prompts (for existing tools)
-// =========================
 
 export const listServicesPrompt = () => `
 List all services associated with a control plane.

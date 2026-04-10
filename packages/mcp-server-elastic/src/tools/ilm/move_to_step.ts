@@ -11,14 +11,6 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const moveToStepValidator = z.object({
 	index: z.string().min(1, "Index name cannot be empty"),
 	currentStep: z.object({
@@ -34,10 +26,6 @@ const moveToStepValidator = z.object({
 });
 
 type _MoveToStepParams = z.infer<typeof moveToStepValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmMoveToStepMcpError(
 	error: Error | string,
@@ -58,10 +46,6 @@ function createIlmMoveToStepMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_move_to_step] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerMoveToStepTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const moveToStepHandler = async (args: any): Promise<SearchResult> => {

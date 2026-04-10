@@ -1,5 +1,6 @@
 // shared/src/agent-state.ts
 import { z } from "zod";
+import { PendingActionSchema } from "./action-types.ts";
 
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
@@ -32,7 +33,7 @@ export type DataSourceResult = z.infer<typeof DataSourceResultSchema>;
 
 export const ToolPlanStepSchema = z.object({
 	tool: z.string(),
-	args: z.record(z.unknown()),
+	args: z.record(z.string(), z.unknown()),
 });
 export type ToolPlanStep = z.infer<typeof ToolPlanStepSchema>;
 
@@ -43,8 +44,31 @@ export const ExtractedEntitiesSchema = z.object({
 			mentionedAs: z.string(),
 		}),
 	),
+	toolActions: z.record(z.string(), z.array(z.string())).optional(),
 });
 export type ExtractedEntities = z.infer<typeof ExtractedEntitiesSchema>;
+
+// SIO-630: Structured incident data produced by the normalize node
+export const NormalizedIncidentSchema = z.object({
+	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
+	timeWindow: z.object({ from: z.string(), to: z.string() }).optional(),
+	affectedServices: z
+		.array(z.object({ name: z.string(), namespace: z.string().optional(), deployment: z.string().optional() }))
+		.optional(),
+	extractedMetrics: z
+		.array(z.object({ name: z.string(), value: z.string().optional(), threshold: z.string().optional() }))
+		.optional(),
+});
+export type NormalizedIncident = z.infer<typeof NormalizedIncidentSchema>;
+
+// SIO-631: Mitigation steps produced by the propose-mitigation node
+export const MitigationStepsSchema = z.object({
+	investigate: z.array(z.string()),
+	monitor: z.array(z.string()),
+	escalate: z.array(z.string()),
+	relatedRunbooks: z.array(z.string()),
+});
+export type MitigationSteps = z.infer<typeof MitigationStepsSchema>;
 
 export const DataSourceContextSchema = z.object({
 	type: z.enum(["EXPLICIT", "INHERITED"]),
@@ -59,7 +83,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("tool_call"),
 		toolName: z.string(),
-		args: z.record(z.unknown()),
+		args: z.record(z.string(), z.unknown()),
 		dataSourceId: z.string().optional(),
 	}),
 	z.object({
@@ -80,6 +104,11 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		responseTime: z.number().optional(),
 		toolsUsed: z.array(z.string()).optional(),
 		dataSourceContext: DataSourceContextSchema.optional(),
+	}),
+	z.object({ type: z.literal("low_confidence"), message: z.string() }),
+	z.object({
+		type: z.literal("pending_actions"),
+		actions: z.array(PendingActionSchema),
 	}),
 	z.object({ type: z.literal("error"), message: z.string() }),
 ]);

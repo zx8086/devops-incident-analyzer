@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// =========================
-// Common Field Schemas
-// =========================
-
 /**
  * Standard pagination size parameter
  */
@@ -14,10 +10,6 @@ export const pageSizeSchema = z
 	.max(1000)
 	.default(100)
 	.describe("Number of items to return per page");
-
-// =========================
-// Service CRUD Operation Schemas
-// =========================
 
 export const createServiceParameters = () =>
 	z.object({
@@ -69,10 +61,6 @@ export const deleteServiceParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		serviceId: z.string().describe("Service ID (obtainable from list-services tool)"),
 	});
-
-// =========================
-// Route CRUD Operation Schemas
-// =========================
 
 export const createRouteParameters = () =>
 	z.object({
@@ -130,10 +118,6 @@ export const deleteRouteParameters = () =>
 		routeId: z.string().describe("Route ID (obtainable from list-routes tool)"),
 	});
 
-// =========================
-// Consumer CRUD Operation Schemas
-// =========================
-
 export const createConsumerParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
@@ -165,15 +149,11 @@ export const deleteConsumerParameters = () =>
 		consumerId: z.string().describe("Consumer ID (obtainable from list-consumers tool)"),
 	});
 
-// =========================
-// Plugin CRUD Operation Schemas
-// =========================
-
 export const createPluginParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		name: z.string().describe("Plugin name (use list-plugin-schemas to see available plugins)"),
-		config: z.record(z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
+		config: z.record(z.string(), z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
 		protocols: z
 			.array(z.enum(["grpc", "grpcs", "http", "https", "tcp", "tls", "udp"]))
 			.optional()
@@ -196,7 +176,7 @@ export const updatePluginParameters = () =>
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 		pluginId: z.string().describe("Plugin ID (obtainable from list-plugins tool)"),
 		name: z.string().optional().describe("Plugin name (use list-plugin-schemas to see available plugins)"),
-		config: z.record(z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
+		config: z.record(z.string(), z.any()).optional().describe("Plugin configuration object (varies by plugin type)"),
 		protocols: z
 			.array(z.enum(["grpc", "grpcs", "http", "https", "tcp", "tls", "udp"]))
 			.optional()
@@ -218,10 +198,6 @@ export const listPluginSchemasParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 	});
-
-// =========================
-// Legacy List Operation Schemas (for existing tools)
-// =========================
 
 export const listServicesParameters = () =>
 	z.object({

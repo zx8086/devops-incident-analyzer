@@ -11,24 +11,12 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// =============================================================================
-// 1. SIMPLIFIED SCHEMA APPROACH
-// =============================================================================
-
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Simple Zod validator for runtime validation only
 const stopValidator = z.object({
 	masterTimeout: z.string().optional(),
 	timeout: z.string().optional(),
 });
 
 type _StopParams = z.infer<typeof stopValidator>;
-
-// =============================================================================
-// 2. STANDARDIZED MCP ERROR HANDLING
-// =============================================================================
 
 function createIlmStopMcpError(
 	error: Error | string,
@@ -48,10 +36,6 @@ function createIlmStopMcpError(
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_ilm_stop] ${message}`, context.details);
 }
-
-// =============================================================================
-// 3. SIMPLIFIED TOOL IMPLEMENTATION
-// =============================================================================
 
 export const registerStopTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const stopHandler = async (args: any): Promise<SearchResult> => {
