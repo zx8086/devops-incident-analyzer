@@ -21,6 +21,7 @@ import {
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
+import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 
@@ -587,5 +588,100 @@ describe("RunbookFrontmatterSchema", () => {
 
 	test("rejects undefined (empty YAML parse result)", () => {
 		expect(() => RunbookFrontmatterSchema.parse(undefined)).toThrow();
+	});
+});
+
+describe("parseRunbookFrontmatter", () => {
+	test("1. no frontmatter", () => {
+		const input = "# Runbook\nBody";
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toBeUndefined();
+		expect(result.body).toBe("# Runbook\nBody");
+	});
+
+	test("2. empty frontmatter block throws", () => {
+		const input = "---\n---\n# Body";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("2b. frontmatter with only match (no axes) parses", () => {
+		const input = "---\ntriggers:\n  match: any\n---\n# Body";
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({ match: "any" });
+		expect(result.body).toBe("# Body");
+	});
+
+	test("3. severity only", () => {
+		const input = "---\ntriggers:\n  severity: [critical]\n---\n# Body";
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({ severity: ["critical"] });
+		expect(result.body).toBe("# Body");
+	});
+
+	test("4. all three axes + match", () => {
+		const input = [
+			"---",
+			"triggers:",
+			"  severity: [critical, high]",
+			"  services: [kafka]",
+			"  metrics: [lag]",
+			"  match: all",
+			"---",
+			"# Body",
+		].join("\n");
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({
+			severity: ["critical", "high"],
+			services: ["kafka"],
+			metrics: ["lag"],
+			match: "all",
+		});
+		expect(result.body).toBe("# Body");
+	});
+
+	test("5. frontmatter followed by paragraph", () => {
+		const input = [
+			"---",
+			"triggers:",
+			"  severity: [high]",
+			"---",
+			"",
+			"# Body",
+			"",
+			"Paragraph.",
+		].join("\n");
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({ severity: ["high"] });
+		expect(result.body.trim()).toBe("# Body\n\nParagraph.");
+	});
+
+	test("6. unknown trigger key (typo: metric)", () => {
+		const input = "---\ntriggers:\n  metric: [lag]\n---\n";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("7. invalid severity value", () => {
+		const input = "---\ntriggers:\n  severity: [criticall]\n---\n";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("8. invalid match value", () => {
+		const input = "---\ntriggers:\n  match: either\n---\n";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("9. unknown top-level frontmatter key", () => {
+		const input = "---\ntags: [kafka]\n---\n";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("10. missing closing ---", () => {
+		const input = "---\ntriggers:\n  severity: [high]\n# Body";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
+	test("11. malformed YAML", () => {
+		const input = "---\ntriggers: { severity: [critical\n---\n";
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
 	});
 });

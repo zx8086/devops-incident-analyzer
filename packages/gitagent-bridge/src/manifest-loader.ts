@@ -6,7 +6,9 @@ import {
 	type AgentManifest,
 	AgentManifestSchema,
 	KnowledgeIndexSchema,
+	RunbookFrontmatterSchema,
 	type RunbookSelectionConfig,
+	type RunbookTriggers,
 	type ToolDefinition,
 	ToolDefinitionSchema,
 } from "./types.ts";
@@ -130,6 +132,35 @@ function loadKnowledge(agentDir: string): {
 	}
 
 	return { entries, runbookSelection: index.data.runbook_selection };
+}
+
+// Detects, parses, validates, and strips YAML frontmatter from a runbook file's
+// content. Returns { triggers: undefined, body } when no frontmatter is present;
+// otherwise returns { triggers, body } with the stripped body. Throws on missing
+// closing delimiter, malformed YAML, or Zod validation failures (including empty
+// frontmatter blocks, which parse to undefined and are rejected by the schema).
+export function parseRunbookFrontmatter(content: string): {
+	triggers?: RunbookTriggers;
+	body: string;
+} {
+	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+		return { triggers: undefined, body: content };
+	}
+
+	const afterOpening = content.indexOf("\n") + 1;
+	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	if (!closingMatch || closingMatch.index === undefined) {
+		throw new Error("Runbook frontmatter: missing closing --- delimiter");
+	}
+
+	const frontmatterYaml = content.slice(afterOpening, afterOpening + closingMatch.index);
+	const bodyStart = afterOpening + closingMatch.index + closingMatch[0].length;
+	const body = content.slice(bodyStart);
+
+	const parsed = parse(frontmatterYaml);
+	const validated = RunbookFrontmatterSchema.parse(parsed);
+
+	return { triggers: validated.triggers, body };
 }
 
 function loadOptionalFile(path: string): string {
