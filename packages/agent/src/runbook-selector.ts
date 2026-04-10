@@ -4,7 +4,9 @@
 // orchestrator LLM to pick 0-2 runbooks from the catalog and writes the
 // selection to state.selectedRunbooks as a tri-state (null | [] | [names]).
 
+import type { RunbookTriggers } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
+import type { NormalizedIncident } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
@@ -229,6 +231,63 @@ function formatIncidentSummary(state: AgentStateType): string {
 		lines.push(`  extracted metrics: ${metrics}`);
 	}
 	return lines.join("\n");
+}
+
+// SIO-643: Per-axis matchers for the runbook trigger grammar. Each function
+// is a pure predicate over one axis of NormalizedIncident. The combinator
+// matchTriggers composes them based on the runbook's declared axes and its
+// optional match mode (any | all, default any).
+
+export function matchSeverityAxis(
+	allowed: Array<"critical" | "high" | "medium" | "low">,
+	incidentSeverity: NormalizedIncident["severity"],
+): boolean {
+	if (incidentSeverity === undefined) return false;
+	return allowed.includes(incidentSeverity);
+}
+
+export function matchServicesAxis(
+	patterns: string[],
+	affected: NormalizedIncident["affectedServices"],
+): boolean {
+	if (!affected || affected.length === 0) return false;
+	const lowerNames = affected.map((s) => s.name.toLowerCase());
+	return patterns.some((pattern) => {
+		const lowerPattern = pattern.toLowerCase();
+		return lowerNames.some((name) => name.includes(lowerPattern));
+	});
+}
+
+export function matchMetricsAxis(
+	patterns: string[],
+	extracted: NormalizedIncident["extractedMetrics"],
+): boolean {
+	if (!extracted || extracted.length === 0) return false;
+	const lowerNames = extracted.map((m) => m.name.toLowerCase());
+	return patterns.some((pattern) => {
+		const lowerPattern = pattern.toLowerCase();
+		return lowerNames.some((name) => name.includes(lowerPattern));
+	});
+}
+
+export function matchTriggers(triggers: RunbookTriggers, incident: NormalizedIncident): boolean {
+	const axisResults: boolean[] = [];
+
+	if (triggers.severity !== undefined) {
+		axisResults.push(matchSeverityAxis(triggers.severity, incident.severity));
+	}
+	if (triggers.services !== undefined) {
+		axisResults.push(matchServicesAxis(triggers.services, incident.affectedServices));
+	}
+	if (triggers.metrics !== undefined) {
+		axisResults.push(matchMetricsAxis(triggers.metrics, incident.extractedMetrics));
+	}
+
+	// No axes declared -> no match. Lint-level signal, not a crash.
+	if (axisResults.length === 0) return false;
+
+	const combinator = triggers.match ?? "any";
+	return combinator === "all" ? axisResults.every((r) => r) : axisResults.some((r) => r);
 }
 
 // Factory that binds production deps for the LangGraph wiring. Task 10 calls

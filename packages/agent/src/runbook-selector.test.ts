@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { HumanMessage } from "@langchain/core/messages";
 import type { RunbookCatalogEntry } from "./prompt-context.ts";
 import {
+	matchMetricsAxis,
+	matchServicesAxis,
+	matchSeverityAxis,
+	matchTriggers,
 	RunbookSelectionFallbackError,
 	runSelectRunbooks,
 	type SelectRunbooksRuntime,
@@ -180,5 +184,121 @@ describe("runSelectRunbooks", () => {
 			expect((err as Error).message).toContain("fallback.api_error");
 			expect((err as Error).message).toContain("severity is missing");
 		}
+	});
+});
+
+describe("matchSeverityAxis", () => {
+	test("severity in allowed list", () => {
+		expect(matchSeverityAxis(["critical", "high"], "critical")).toBe(true);
+	});
+
+	test("severity not in list", () => {
+		expect(matchSeverityAxis(["critical"], "low")).toBe(false);
+	});
+
+	test("severity undefined", () => {
+		expect(matchSeverityAxis(["critical"], undefined)).toBe(false);
+	});
+});
+
+describe("matchServicesAxis", () => {
+	test("pattern is substring of service name", () => {
+		expect(matchServicesAxis(["kafka"], [{ name: "kafka-broker" }])).toBe(true);
+	});
+
+	test("case-insensitive", () => {
+		expect(matchServicesAxis(["KAFKA"], [{ name: "kafka-broker" }])).toBe(true);
+	});
+
+	test("no match", () => {
+		expect(matchServicesAxis(["kafka"], [{ name: "auth-api" }])).toBe(false);
+	});
+
+	test("undefined affected services", () => {
+		expect(matchServicesAxis(["kafka"], undefined)).toBe(false);
+	});
+
+	test("empty affected services array", () => {
+		expect(matchServicesAxis(["kafka"], [])).toBe(false);
+	});
+
+	test("multiple patterns, any match wins", () => {
+		expect(matchServicesAxis(["kafka", "consumer"], [{ name: "user-consumer" }])).toBe(true);
+	});
+});
+
+describe("matchMetricsAxis", () => {
+	test("pattern is substring of metric name", () => {
+		expect(matchMetricsAxis(["lag"], [{ name: "consumer_lag" }])).toBe(true);
+	});
+
+	test("no match", () => {
+		expect(matchMetricsAxis(["lag"], [{ name: "latency" }])).toBe(false);
+	});
+
+	test("undefined metrics", () => {
+		expect(matchMetricsAxis(["lag"], undefined)).toBe(false);
+	});
+});
+
+describe("matchTriggers combinator", () => {
+	test("any: severity matches, services declared but no data", () => {
+		const triggers = { severity: ["critical" as const], services: ["kafka"] };
+		const incident = { severity: "critical" as const };
+		expect(matchTriggers(triggers, incident)).toBe(true);
+	});
+
+	test("any: neither axis matches", () => {
+		const triggers = { severity: ["critical" as const], services: ["kafka"] };
+		const incident = { severity: "low" as const };
+		expect(matchTriggers(triggers, incident)).toBe(false);
+	});
+
+	test("all: both declared axes match", () => {
+		const triggers = {
+			severity: ["critical" as const],
+			services: ["kafka"],
+			match: "all" as const,
+		};
+		const incident = {
+			severity: "critical" as const,
+			affectedServices: [{ name: "kafka-broker" }],
+		};
+		expect(matchTriggers(triggers, incident)).toBe(true);
+	});
+
+	test("all: one axis matches, other doesn't", () => {
+		const triggers = {
+			severity: ["critical" as const],
+			services: ["kafka"],
+			match: "all" as const,
+		};
+		const incident = {
+			severity: "critical" as const,
+			affectedServices: [{ name: "auth-api" }],
+		};
+		expect(matchTriggers(triggers, incident)).toBe(false);
+	});
+
+	test("all: one axis matches, other has no data", () => {
+		const triggers = {
+			severity: ["critical" as const],
+			services: ["kafka"],
+			match: "all" as const,
+		};
+		const incident = { severity: "critical" as const };
+		expect(matchTriggers(triggers, incident)).toBe(false);
+	});
+
+	test("no axes declared (only match combinator)", () => {
+		const triggers = { match: "any" as const };
+		const incident = { severity: "critical" as const };
+		expect(matchTriggers(triggers, incident)).toBe(false);
+	});
+
+	test("default combinator when match is undefined", () => {
+		const triggers = { severity: ["critical" as const] };
+		const incident = { severity: "critical" as const };
+		expect(matchTriggers(triggers, incident)).toBe(true);
 	});
 });
