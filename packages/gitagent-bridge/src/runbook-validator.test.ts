@@ -49,6 +49,14 @@ interface AgentFixture {
 	runbookPaths: string[];
 }
 
+interface SubAgentFixture {
+	parentName: string;
+	subAgentName: string;
+	parentTools: ToolDefinition[];
+	subAgent: LoadedAgent;
+	runbookPaths: string[];
+}
+
 // ============================================================================
 // Helpers (stubs - implemented in later tasks)
 // ============================================================================
@@ -167,6 +175,12 @@ function buildAuthority(tools: ToolDefinition[]): Set<string> {
 		}
 	}
 	return authority;
+}
+
+function buildSubAgentAuthority(parentTools: ToolDefinition[], subAgentFacadeNames: string[]): Set<string> {
+	const facadeSet = new Set(subAgentFacadeNames);
+	const relevantTools = parentTools.filter((t) => facadeSet.has(t.name));
+	return buildAuthority(relevantTools);
 }
 
 function validateRunbook(runbookPath: string, content: string, authority: Set<string>): ValidationReport {
@@ -540,6 +554,66 @@ describe("buildAuthority", () => {
 		const authority = buildAuthority(tools);
 		expect(authority.size).toBe(2);
 		expect(authority.has("kafka_describe_topic")).toBe(true);
+	});
+});
+
+describe("buildSubAgentAuthority", () => {
+	const makeTool = (name: string, actionMap: Record<string, string[]>): ToolDefinition => ({
+		name,
+		description: "test",
+		input_schema: { type: "object", properties: {} },
+		tool_mapping: {
+			mcp_server: name,
+			mcp_patterns: [`${name}_*`],
+			action_tool_map: actionMap,
+		},
+	});
+
+	const parentTools: ToolDefinition[] = [
+		makeTool("kafka-introspect", {
+			consumer_lag: ["kafka_list_consumer_groups", "kafka_get_consumer_group_lag"],
+			topic_info: ["kafka_list_topics", "kafka_describe_topic"],
+		}),
+		makeTool("elastic-logs", {
+			search: ["elasticsearch_search", "elasticsearch_count_documents"],
+		}),
+		makeTool("couchbase-health", {
+			vitals: ["capella_get_system_vitals"],
+		}),
+	];
+
+	test("facade in sub-agent list + tool in action_tool_map -> included", () => {
+		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect"]);
+		expect(authority.has("kafka_list_consumer_groups")).toBe(true);
+		expect(authority.has("kafka_get_consumer_group_lag")).toBe(true);
+		expect(authority.has("kafka_list_topics")).toBe(true);
+		expect(authority.has("kafka_describe_topic")).toBe(true);
+	});
+
+	test("facade NOT in sub-agent list -> entire facade's tools excluded", () => {
+		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect"]);
+		expect(authority.has("elasticsearch_search")).toBe(false);
+		expect(authority.has("elasticsearch_count_documents")).toBe(false);
+		expect(authority.has("capella_get_system_vitals")).toBe(false);
+	});
+
+	test("multiple facades in list -> union of their tools", () => {
+		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect", "elastic-logs"]);
+		expect(authority.has("kafka_list_consumer_groups")).toBe(true);
+		expect(authority.has("elasticsearch_search")).toBe(true);
+		expect(authority.has("capella_get_system_vitals")).toBe(false);
+		expect(authority.size).toBe(6); // 4 kafka + 2 elastic
+	});
+
+	test("empty facade list -> empty authority set", () => {
+		const authority = buildSubAgentAuthority(parentTools, []);
+		expect(authority.size).toBe(0);
+	});
+
+	test("unknown facade name -> silently skipped, authority contains only recognized facades", () => {
+		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect", "bogus-facade"]);
+		expect(authority.has("kafka_list_consumer_groups")).toBe(true);
+		expect(authority.size).toBe(4); // only the 4 kafka tools; bogus-facade silently ignored
 	});
 });
 
