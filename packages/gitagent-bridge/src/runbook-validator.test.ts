@@ -44,6 +44,7 @@ interface ValidationReport {
 
 interface AgentFixture {
 	name: string;
+	agentDir: string;
 	agent: LoadedAgent;
 	runbookPaths: string[];
 }
@@ -301,7 +302,7 @@ function collectAgents(agentsRoot: string): AgentFixture[] {
 		// skipping broken agents.
 		const agent = loadAgent(agentDir);
 
-		fixtures.push({ name: entry, agent, runbookPaths });
+		fixtures.push({ name: entry, agentDir, agent, runbookPaths });
 	}
 
 	return fixtures;
