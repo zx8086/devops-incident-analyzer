@@ -685,3 +685,89 @@ describe("parseRunbookFrontmatter", () => {
 		expect(() => parseRunbookFrontmatter(input)).toThrow();
 	});
 });
+
+describe("loadKnowledge: runbook frontmatter integration", () => {
+	function makeTestAgent(runbookFiles: Record<string, string>): string {
+		const dir = mkdtempSync(join(tmpdir(), "gitagent-trigger-test-"));
+		mkdirSync(join(dir, "knowledge", "runbooks"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`spec_version: "0.1.0"
+name: test
+version: 0.1.0
+description: test
+model:
+  preferred: claude-sonnet-4-6
+  constraints: { temperature: 0.2, max_tokens: 1024 }
+runtime: { max_turns: 10, timeout: 60 }
+compliance:
+  risk_tier: low
+  supervision: { human_in_the_loop: conditional, kill_switch: false }
+  recordkeeping: { audit_logging: false }
+  data_governance: { pii_handling: allow, data_classification: internal }
+`,
+		);
+		writeFileSync(
+			join(dir, "knowledge", "index.yaml"),
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+`,
+		);
+		for (const [name, content] of Object.entries(runbookFiles)) {
+			writeFileSync(join(dir, "knowledge", "runbooks", name), content);
+		}
+		return dir;
+	}
+
+	test("runbook with valid frontmatter populates triggers and strips content", () => {
+		const dir = makeTestAgent({
+			"a.md": "---\ntriggers:\n  severity: [critical]\n---\n# Runbook A\n\nBody.",
+		});
+		const agent = loadAgent(dir);
+		const runbookEntry = agent.knowledge.find((e) => e.filename === "a.md");
+		expect(runbookEntry).toBeDefined();
+		expect(runbookEntry?.triggers).toEqual({ severity: ["critical"] });
+		expect(runbookEntry?.content).toBe("# Runbook A\n\nBody.");
+		expect(runbookEntry?.content).not.toContain("---");
+		expect(runbookEntry?.content).not.toContain("triggers:");
+		rmSync(dir, { recursive: true });
+	});
+
+	test("runbook without frontmatter leaves triggers undefined", () => {
+		const dir = makeTestAgent({
+			"b.md": "# Runbook B\n\nBody with no frontmatter.",
+		});
+		const agent = loadAgent(dir);
+		const runbookEntry = agent.knowledge.find((e) => e.filename === "b.md");
+		expect(runbookEntry).toBeDefined();
+		expect(runbookEntry?.triggers).toBeUndefined();
+		expect(runbookEntry?.content).toBe("# Runbook B\n\nBody with no frontmatter.");
+		rmSync(dir, { recursive: true });
+	});
+
+	test("runbook with invalid frontmatter throws with file path in error", () => {
+		const dir = makeTestAgent({
+			"broken.md": "---\ntriggers:\n  severity: [criticall]\n---\n# Body",
+		});
+		expect(() => loadAgent(dir)).toThrow(/broken\.md/);
+		rmSync(dir, { recursive: true });
+	});
+
+	test("mixed runbooks (some with frontmatter, some without) all load correctly", () => {
+		const dir = makeTestAgent({
+			"with.md": "---\ntriggers:\n  services: [kafka]\n---\n# With",
+			"without.md": "# Without frontmatter",
+		});
+		const agent = loadAgent(dir);
+		const withEntry = agent.knowledge.find((e) => e.filename === "with.md");
+		const withoutEntry = agent.knowledge.find((e) => e.filename === "without.md");
+		expect(withEntry?.triggers).toEqual({ services: ["kafka"] });
+		expect(withEntry?.content).toBe("# With");
+		expect(withoutEntry?.triggers).toBeUndefined();
+		expect(withoutEntry?.content).toBe("# Without frontmatter");
+		rmSync(dir, { recursive: true });
+	});
+});

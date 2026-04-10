@@ -17,6 +17,7 @@ export interface KnowledgeEntry {
 	category: string;
 	filename: string;
 	content: string;
+	triggers?: RunbookTriggers;
 }
 
 export interface LoadedAgent {
@@ -97,9 +98,28 @@ function loadKnowledge(agentDir: string): {
 
 		const files = readdirSync(categoryDir).filter((f) => f.endsWith(".md") && f !== ".gitkeep");
 		for (const file of files) {
-			const content = readFileSync(join(categoryDir, file), "utf-8").trim();
-			if (content) {
-				entries.push({ category, filename: file, content });
+			const rawContent = readFileSync(join(categoryDir, file), "utf-8").trim();
+			if (!rawContent) continue;
+
+			// Only runbooks get frontmatter parsed. Other categories (systems-map,
+			// slo-policies) pass through verbatim.
+			if (category === "runbooks") {
+				try {
+					const { triggers, body } = parseRunbookFrontmatter(rawContent);
+					entries.push({
+						category,
+						filename: file,
+						content: body,
+						triggers,
+					});
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					throw new Error(
+						`Failed to parse runbook frontmatter in ${join(categoryDir, file)}: ${message}`,
+					);
+				}
+			} else {
+				entries.push({ category, filename: file, content: rawContent });
 			}
 		}
 	}
