@@ -5,7 +5,17 @@
 // action_tool_map union or if prose and tail disagree.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type LoadedAgent, loadAgent, type ToolDefinition } from "./index.ts";
 
@@ -271,21 +281,37 @@ function isClean(report: ValidationReport): boolean {
 	);
 }
 
-function collectAgents(_agentsRoot: string): AgentFixture[] {
-	// Task 7
-	return [];
+function collectAgents(agentsRoot: string): AgentFixture[] {
+	if (!existsSync(agentsRoot)) return [];
+	const entries = readdirSync(agentsRoot);
+	const fixtures: AgentFixture[] = [];
+
+	for (const entry of entries) {
+		const agentDir = join(agentsRoot, entry);
+		if (!statSync(agentDir).isDirectory()) continue;
+
+		const runbooksDir = join(agentDir, "knowledge", "runbooks");
+		if (!existsSync(runbooksDir)) continue;
+		if (!statSync(runbooksDir).isDirectory()) continue;
+
+		const runbookPaths = readdirSync(runbooksDir)
+			.filter((f) => f.endsWith(".md"))
+			.map((f) => join(runbooksDir, f));
+
+		if (runbookPaths.length === 0) continue;
+
+		// loadAgent throws if the agent definition is broken; we let it
+		// propagate so the test suite fails loudly rather than silently
+		// skipping broken agents.
+		const agent = loadAgent(agentDir);
+
+		fixtures.push({ name: entry, agent, runbookPaths });
+	}
+
+	return fixtures;
 }
 
-// Suppress "declared but never read" warnings for stubs that are referenced
-// only in later tasks. Biome will remove these lines when the stubs get real
-// callers.
-void collectAgents;
-void existsSync;
-void readdirSync;
 void readFileSync;
-void statSync;
-void join;
-void loadAgent;
 
 // ============================================================================
 // Tests
@@ -693,5 +719,83 @@ describe("formatReport", () => {
 		};
 		const text = formatReport(report);
 		expect(text).toContain("(none)");
+	});
+});
+
+describe("collectAgents", () => {
+	function makeTempAgentsRoot(): string {
+		return mkdtempSync(join(tmpdir(), "runbook-validator-test-"));
+	}
+
+	function writeAgentYaml(agentDir: string, name: string): void {
+		writeFileSync(
+			join(agentDir, "agent.yaml"),
+			`name: ${name}\nversion: 0.1.0\ndescription: test agent for runbook-validator tests\n`,
+		);
+	}
+
+	test("returns fixture for agent with runbooks", () => {
+		const root = makeTempAgentsRoot();
+		try {
+			const agentDir = join(root, "test-agent");
+			mkdirSync(join(agentDir, "knowledge", "runbooks"), { recursive: true });
+			writeAgentYaml(agentDir, "test-agent");
+			writeFileSync(join(agentDir, "knowledge", "runbooks", "rb1.md"), "# Runbook 1");
+			writeFileSync(join(agentDir, "knowledge", "runbooks", "rb2.md"), "# Runbook 2");
+
+			const fixtures = collectAgents(root);
+			expect(fixtures).toHaveLength(1);
+			expect(fixtures[0]?.name).toBe("test-agent");
+			expect(fixtures[0]?.runbookPaths).toHaveLength(2);
+			expect(fixtures[0]?.runbookPaths.every((p) => p.endsWith(".md"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	test("skips agent with no knowledge directory", () => {
+		const root = makeTempAgentsRoot();
+		try {
+			const agentDir = join(root, "plain-agent");
+			mkdirSync(agentDir, { recursive: true });
+			writeAgentYaml(agentDir, "plain-agent");
+
+			const fixtures = collectAgents(root);
+			expect(fixtures).toHaveLength(0);
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	test("skips agent with empty runbooks directory", () => {
+		const root = makeTempAgentsRoot();
+		try {
+			const agentDir = join(root, "empty-rb-agent");
+			mkdirSync(join(agentDir, "knowledge", "runbooks"), { recursive: true });
+			writeAgentYaml(agentDir, "empty-rb-agent");
+
+			const fixtures = collectAgents(root);
+			expect(fixtures).toHaveLength(0);
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	test("excludes .gitkeep from runbook paths", () => {
+		const root = makeTempAgentsRoot();
+		try {
+			const agentDir = join(root, "a");
+			mkdirSync(join(agentDir, "knowledge", "runbooks"), { recursive: true });
+			writeAgentYaml(agentDir, "a");
+			writeFileSync(join(agentDir, "knowledge", "runbooks", ".gitkeep"), "");
+			writeFileSync(join(agentDir, "knowledge", "runbooks", "real.md"), "# Real");
+
+			const fixtures = collectAgents(root);
+			expect(fixtures).toHaveLength(1);
+			expect(fixtures[0]?.runbookPaths).toHaveLength(1);
+			expect(fixtures[0]?.runbookPaths[0]?.endsWith("real.md")).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true });
+		}
 	});
 });
