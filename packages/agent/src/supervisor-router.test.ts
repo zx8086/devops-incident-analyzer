@@ -51,6 +51,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		lowConfidence: false,
 		pendingActions: [],
 		actionResults: [],
+		selectedRunbooks: null,
 		...overrides,
 	};
 }

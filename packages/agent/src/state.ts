@@ -152,6 +152,15 @@ export const AgentState = Annotation.Root({
 		reducer: (prev, next) => [...prev, ...next],
 		default: () => [],
 	}),
+
+	// SIO-640: Runbook selector output.
+	//   null      -> selector did not run (default)
+	//   []        -> selector ran and chose no runbooks
+	//   [names]   -> selector chose these runbooks
+	selectedRunbooks: Annotation<string[] | null>({
+		reducer: (_, next) => next,
+		default: () => null,
+	}),
 });
 
 export type AgentStateType = typeof AgentState.State;
