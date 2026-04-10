@@ -125,3 +125,22 @@ export const KnowledgeIndexSchema = z.object({
 	runbook_selection: RunbookSelectionConfigSchema.optional(),
 });
 export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;
+
+export const RunbookTriggersSchema = z
+	.object({
+		severity: z.array(z.enum(["critical", "high", "medium", "low"])).optional(),
+		services: z.array(z.string()).optional(),
+		metrics: z.array(z.string()).optional(),
+		match: z.enum(["any", "all"]).optional(),
+	})
+	.strict();
+
+export type RunbookTriggers = z.infer<typeof RunbookTriggersSchema>;
+
+export const RunbookFrontmatterSchema = z
+	.object({
+		triggers: RunbookTriggersSchema,
+	})
+	.strict();
+
+export type RunbookFrontmatter = z.infer<typeof RunbookFrontmatterSchema>;

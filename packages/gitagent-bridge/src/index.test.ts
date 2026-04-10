@@ -15,6 +15,8 @@ import {
 	requiresApproval,
 	resolveBedrockConfig,
 	resolveMapping,
+	RunbookFrontmatterSchema,
+	RunbookTriggersSchema,
 	type ToolDefinition,
 	validateToolSchemas,
 	withRelatedTools,
@@ -533,5 +535,57 @@ runbook_selection:
 		);
 		expect(() => loadAgent(dir)).toThrow(/missing\.md/);
 		rmSync(dir, { recursive: true });
+	});
+});
+
+describe("RunbookTriggersSchema", () => {
+	test("accepts all three axes + match combinator", () => {
+		const input = {
+			severity: ["critical", "high"],
+			services: ["kafka", "consumer"],
+			metrics: ["lag"],
+			match: "any",
+		};
+		expect(() => RunbookTriggersSchema.parse(input)).not.toThrow();
+	});
+
+	test("accepts empty object (all axes undefined)", () => {
+		expect(() => RunbookTriggersSchema.parse({})).not.toThrow();
+	});
+
+	test("rejects invalid severity value", () => {
+		const input = { severity: ["criticall"] };
+		expect(() => RunbookTriggersSchema.parse(input)).toThrow();
+	});
+
+	test("rejects invalid match value", () => {
+		const input = { match: "either" };
+		expect(() => RunbookTriggersSchema.parse(input)).toThrow();
+	});
+
+	test("rejects unknown key (strict mode)", () => {
+		const input = { metric: ["lag"] }; // typo: metric vs metrics
+		expect(() => RunbookTriggersSchema.parse(input)).toThrow();
+	});
+});
+
+describe("RunbookFrontmatterSchema", () => {
+	test("accepts object with triggers key", () => {
+		const input = { triggers: { severity: ["critical"] } };
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
+	});
+
+	test("rejects object without triggers key", () => {
+		const input = { tags: ["kafka"] };
+		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+	});
+
+	test("rejects object with triggers AND unknown top-level key", () => {
+		const input = { triggers: { severity: ["critical"] }, author: "dev" };
+		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+	});
+
+	test("rejects undefined (empty YAML parse result)", () => {
+		expect(() => RunbookFrontmatterSchema.parse(undefined)).toThrow();
 	});
 });
