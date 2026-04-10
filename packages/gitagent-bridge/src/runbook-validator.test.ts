@@ -999,3 +999,28 @@ describe("real agent runbook bindings", () => {
 		});
 	}
 });
+
+// ============================================================================
+// Production validation - real sub-agent runbooks (SIO-642)
+// ============================================================================
+
+const SUB_AGENT_FIXTURES = collectSubAgentFixtures(PRODUCTION_FIXTURES);
+
+describe("real sub-agent runbook bindings", () => {
+	for (const fixture of SUB_AGENT_FIXTURES) {
+		describe(`${fixture.parentName} > ${fixture.subAgentName}`, () => {
+			const authority = buildSubAgentAuthority(fixture.parentTools, fixture.subAgent.manifest.tools ?? []);
+
+			for (const runbookPath of fixture.runbookPaths) {
+				const basename = runbookPath.split("/").pop() ?? runbookPath;
+				test(`${basename} is clean`, () => {
+					const content = readFileSync(runbookPath, "utf-8");
+					const report = validateRunbook(runbookPath, content, authority);
+					if (!isClean(report)) {
+						throw new Error(`\n${formatReport(report)}`);
+					}
+				});
+			}
+		});
+	}
+});
