@@ -290,6 +290,38 @@ export function matchTriggers(triggers: RunbookTriggers, incident: NormalizedInc
 	return combinator === "all" ? axisResults.every((r) => r) : axisResults.some((r) => r);
 }
 
+// SIO-643: Deterministic pre-filter that narrows the runbook catalog before
+// the LLM router sees it. Three modes:
+//   noop     - no runbook declared triggers; filter is inactive, pass-through.
+//   narrowed - at least one trigger-declared runbook matched; the narrowed
+//              set is matched runbooks plus all trigger-less runbooks
+//              (trigger-less opts out of filtering, not out of the catalog).
+//   fallback - every trigger-declared runbook failed to match; fall through
+//              to the full catalog to avoid starving the LLM router.
+export function narrowCatalogByTriggers(
+	catalog: RunbookCatalogEntry[],
+	incident: NormalizedIncident,
+): { narrowed: RunbookCatalogEntry[]; mode: "noop" | "narrowed" | "fallback" } {
+	const withTriggers = catalog.filter((e) => e.triggers !== undefined);
+	const withoutTriggers = catalog.filter((e) => e.triggers === undefined);
+
+	// No runbook has triggers: the filter is a no-op
+	if (withTriggers.length === 0) {
+		return { narrowed: catalog, mode: "noop" };
+	}
+
+	// biome-ignore lint/style/noNonNullAssertion: filter above guarantees triggers is defined
+	const matched = withTriggers.filter((e) => matchTriggers(e.triggers!, incident));
+
+	// Zero matches: fall through to the full catalog
+	if (matched.length === 0) {
+		return { narrowed: catalog, mode: "fallback" };
+	}
+
+	// Narrowed set = matched trigger-declared runbooks + all trigger-less runbooks
+	return { narrowed: [...matched, ...withoutTriggers], mode: "narrowed" };
+}
+
 // Factory that binds production deps for the LangGraph wiring. Task 10 calls
 // this from graph.ts. The returned node function satisfies LangGraph's
 // node signature: (state, config) => Partial<state>. Throws

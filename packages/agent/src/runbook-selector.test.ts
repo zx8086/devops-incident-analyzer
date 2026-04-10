@@ -7,6 +7,7 @@ import {
 	matchServicesAxis,
 	matchSeverityAxis,
 	matchTriggers,
+	narrowCatalogByTriggers,
 	RunbookSelectionFallbackError,
 	runSelectRunbooks,
 	type SelectRunbooksRuntime,
@@ -300,5 +301,86 @@ describe("matchTriggers combinator", () => {
 		const triggers = { severity: ["critical" as const] };
 		const incident = { severity: "critical" as const };
 		expect(matchTriggers(triggers, incident)).toBe(true);
+	});
+});
+
+describe("narrowCatalogByTriggers", () => {
+	const entry = (filename: string, triggers?: RunbookCatalogEntry["triggers"]): RunbookCatalogEntry => ({
+		filename,
+		title: `Title of ${filename}`,
+		summary: `Summary of ${filename}`,
+		triggers,
+	});
+
+	test("noop: no runbook has triggers", () => {
+		const catalog = [entry("a.md"), entry("b.md"), entry("c.md")];
+		const result = narrowCatalogByTriggers(catalog, { severity: "critical" });
+		expect(result.mode).toBe("noop");
+		expect(result.narrowed).toEqual(catalog);
+	});
+
+	test("narrowed: one trigger-declared runbook matches", () => {
+		const catalog = [
+			entry("a.md", { severity: ["critical"] }),
+			entry("b.md", { severity: ["low"] }),
+			entry("c.md", { severity: ["high"] }),
+		];
+		const result = narrowCatalogByTriggers(catalog, { severity: "critical" });
+		expect(result.mode).toBe("narrowed");
+		expect(result.narrowed).toHaveLength(1);
+		expect(result.narrowed[0]?.filename).toBe("a.md");
+	});
+
+	test("narrowed: multiple trigger-declared runbooks match", () => {
+		const catalog = [
+			entry("a.md", { severity: ["critical", "high"] }),
+			entry("b.md", { severity: ["low"] }),
+			entry("c.md", { severity: ["critical"] }),
+		];
+		const result = narrowCatalogByTriggers(catalog, { severity: "critical" });
+		expect(result.mode).toBe("narrowed");
+		expect(result.narrowed).toHaveLength(2);
+		expect(result.narrowed.map((e) => e.filename).sort()).toEqual(["a.md", "c.md"]);
+	});
+
+	test("fallback: all runbooks have triggers, none match", () => {
+		const catalog = [
+			entry("a.md", { severity: ["critical"] }),
+			entry("b.md", { severity: ["high"] }),
+			entry("c.md", { severity: ["medium"] }),
+		];
+		const result = narrowCatalogByTriggers(catalog, { severity: "low" });
+		expect(result.mode).toBe("fallback");
+		expect(result.narrowed).toEqual(catalog);
+	});
+
+	test("narrowed: mixed catalog, one trigger match + trigger-less pass", () => {
+		const catalog = [
+			entry("a.md", { severity: ["critical"] }),
+			entry("b.md"), // trigger-less
+			entry("c.md"), // trigger-less
+		];
+		const result = narrowCatalogByTriggers(catalog, { severity: "critical" });
+		expect(result.mode).toBe("narrowed");
+		expect(result.narrowed).toHaveLength(3);
+		expect(result.narrowed.map((e) => e.filename).sort()).toEqual(["a.md", "b.md", "c.md"]);
+	});
+
+	test("fallback: mixed catalog, trigger-declared doesn't match", () => {
+		const catalog = [
+			entry("a.md", { severity: ["critical"] }),
+			entry("b.md"), // trigger-less
+			entry("c.md"), // trigger-less
+		];
+		const result = narrowCatalogByTriggers(catalog, { severity: "low" });
+		expect(result.mode).toBe("fallback");
+		expect(result.narrowed).toHaveLength(3);
+		expect(result.narrowed).toEqual(catalog);
+	});
+
+	test("noop: empty catalog (defensive)", () => {
+		const result = narrowCatalogByTriggers([], { severity: "critical" });
+		expect(result.mode).toBe("noop");
+		expect(result.narrowed).toEqual([]);
 	});
 });
