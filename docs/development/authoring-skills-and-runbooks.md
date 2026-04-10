@@ -229,6 +229,18 @@ Scenario: a new failure pattern where Konnect upstream timeouts correlate with K
 
 ---
 
+## Sub-Agent Runbooks (advanced)
+
+Sub-agents (e.g., `kafka-agent`, `capella-agent`) can have their own `knowledge/runbooks/` directories with deep, datasource-specific runbooks that are NOT shared with the orchestrator. This is supported by the existing `loadAgent()` and `buildSubAgentPrompt()` code paths with zero additional configuration -- drop a `knowledge/index.yaml` and one or more `runbooks/*.md` files into `agents/incident-analyzer/agents/<sub-agent-name>/knowledge/` and the sub-agent sees them in its system prompt automatically.
+
+Sub-agent runbooks are subject to a **strict authority rule**: a sub-agent runbook may only cite tool names that exist in the intersection of (the parent agent's tool facades) AND (the sub-agent's declared `tools:` list from its `agent.yaml`). A `kafka-agent` runbook citing `elasticsearch_search` fails validation because the kafka sub-agent cannot actually call elasticsearch tools at runtime.
+
+The SIO-642 extension of the runbook tool-name validator (SIO-641) enforces this rule statically. See `docs/superpowers/specs/2026-04-10-scoped-subagent-runbooks-design.md` for the full policy: when to author a sub-agent runbook, relationship to orchestrator runbooks (independent, duplication allowed, no cross-referencing), directory structure, and the authoring conventions.
+
+**No sub-agent runbooks exist in this repository today.** The capability is documented and validated; seeding is deferred until a concrete need emerges.
+
+---
+
 ## Related
 
 - [Gitagent Bridge](../architecture/gitagent-bridge.md) -- skill and knowledge loader internals
