@@ -105,10 +105,23 @@ export const KnowledgeCategorySchema = z.object({
 	description: z.string(),
 });
 
+// SIO-640: Lazy runbook selection fallback config. When present, selectRunbooks
+// is wired into the graph; when absent, the feature is disabled entirely.
+export const RunbookSelectionConfigSchema = z.object({
+	fallback_by_severity: z.object({
+		critical: z.array(z.string()),
+		high: z.array(z.string()),
+		medium: z.array(z.string()),
+		low: z.array(z.string()),
+	}),
+});
+export type RunbookSelectionConfig = z.infer<typeof RunbookSelectionConfigSchema>;
+
 export const KnowledgeIndexSchema = z.object({
 	name: z.string(),
 	description: z.string(),
 	version: z.string(),
 	categories: z.record(z.string(), KnowledgeCategorySchema),
+	runbook_selection: RunbookSelectionConfigSchema.optional(),
 });
 export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;

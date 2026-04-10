@@ -412,3 +412,54 @@ describe("compliance", () => {
 		expect(requiresApproval("read_logs", compliance)).toBe(false);
 	});
 });
+
+// SIO-640: runbook_selection schema + load-time validation
+import { KnowledgeIndexSchema } from "./types.ts";
+
+describe("KnowledgeIndexSchema: runbook_selection", () => {
+	test("accepts config with all four severity keys", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: {
+					critical: ["a.md", "b.md"],
+					high: ["a.md"],
+					medium: [],
+					low: [],
+				},
+			},
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
+	});
+
+	test("rejects config missing a severity key", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: {
+					critical: [],
+					high: [],
+					medium: [],
+					// low missing
+				},
+			},
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).toThrow();
+	});
+
+	test("accepts config with runbook_selection absent", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+		};
+		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
+	});
+});
