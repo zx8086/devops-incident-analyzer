@@ -172,24 +172,38 @@ Run a smoke query end-to-end with an incident that should match your new runbook
 
 ---
 
-## The Tool-Name Footgun
+## The Tool-Name Footgun (now enforced)
 
 Runbooks reference MCP tool names directly in prose (for example, `capella_get_longest_running_queries` or `kafka_get_consumer_group_lag`). These names correspond to entries in `agents/incident-analyzer/tools/*.yaml` `action_tool_map` blocks, which in turn correspond to the real tool names exposed by each MCP server.
 
-**There is no load-time enforcement of this binding.**
+**As of SIO-641, this binding is enforced statically by `bun test`.**
 
-Concretely, this means:
+The validator lives at `packages/gitagent-bridge/src/runbook-validator.test.ts`. It runs on every `bun test` invocation and fails if any runbook cites a tool name that is not present in the union of `action_tool_map` entries across the agent's `tools/*.yaml` files. It also fails if the prose backticks and the `## All Tools Used Are Read-Only` tail section disagree within a single runbook.
 
-- If someone renames a tool in `packages/mcp-server-*/src/tools/`, the runbook prose continues to cite the old name.
-- `bun run yaml:check` does not catch it.
-- `bun run typecheck` does not catch it.
-- The first sign of trouble is the LLM confidently telling a user to run a tool that no longer exists, at runtime.
+**Authoring rules enforced by the validator:**
 
-Until a brainstorm pass settles on a load-time validator (tracked as a Phase 2 improvement), the mitigation is procedural:
+1. Every tool name cited in prose (wrapped in single backticks, lowercase snake_case with at least one underscore) must exist in some `action_tool_map` entry in the agent's tool YAMLs.
+2. Every runbook must have a `## All Tools Used Are Read-Only` section at the bottom.
+3. The tail section must be a comma-separated list matching every tool name cited in prose. Extras in either direction fail the validator.
+4. The ordering constraint: if you need to cite a new tool in a runbook, add it to an `action_tool_map` entry first, then reference it in the runbook. Runbook-first authoring is not supported.
 
-1. When renaming or removing an MCP tool, grep `agents/incident-analyzer/knowledge/runbooks/` for the old name before merging.
-2. When reviewing a PR that adds a runbook, verify every MCP tool name mentioned matches a current entry in `agents/incident-analyzer/tools/*.yaml`.
-3. When reviewing a PR that changes a tool name, verify no runbook references the old name.
+**There is no escape hatch.** No inline exemption markers, no allowlist config. If the validator fails on a tool name, either the citation is wrong or the action map is wrong -- fix one or the other.
+
+**Failure output format:**
+
+```
+Runbook: /path/to/runbook.md
+
+Missing from action_tool_map (N): <line:name lines>
+Cited in prose but missing from "All Tools Used Are Read-Only" tail section (N): <lines>
+Listed in tail section but not cited in prose (N): <lines>
+Structural errors (N): <error names>
+
+Fix:
+  - For each "Missing" entry: verify the tool name, or add it to an action_tool_map.
+  - For each "prose only" entry: add the name to the tail section.
+  - For each "tail only" entry: either cite it in prose or remove it from the tail.
+```
 
 ---
 
@@ -212,6 +226,18 @@ Scenario: a new failure pattern where Konnect upstream timeouts correlate with K
 3. No manifest update needed -- `runbooks/` is already registered in `knowledge/index.yaml`.
 4. `bun run yaml:check && bun run typecheck && bun run lint`.
 5. Submit an incident query matching the new pattern and verify the aggregator's correlation block cites the runbook.
+
+---
+
+## Sub-Agent Runbooks (advanced)
+
+Sub-agents (e.g., `kafka-agent`, `capella-agent`) can have their own `knowledge/runbooks/` directories with deep, datasource-specific runbooks that are NOT shared with the orchestrator. This is supported by the existing `loadAgent()` and `buildSubAgentPrompt()` code paths with zero additional configuration -- drop a `knowledge/index.yaml` and one or more `runbooks/*.md` files into `agents/incident-analyzer/agents/<sub-agent-name>/knowledge/` and the sub-agent sees them in its system prompt automatically.
+
+Sub-agent runbooks are subject to a **strict authority rule**: a sub-agent runbook may only cite tool names that exist in the intersection of (the parent agent's tool facades) AND (the sub-agent's declared `tools:` list from its `agent.yaml`). A `kafka-agent` runbook citing `elasticsearch_search` fails validation because the kafka sub-agent cannot actually call elasticsearch tools at runtime.
+
+The SIO-642 extension of the runbook tool-name validator (SIO-641) enforces this rule statically. See `docs/superpowers/specs/2026-04-10-scoped-subagent-runbooks-design.md` for the full policy: when to author a sub-agent runbook, relationship to orchestrator runbooks (independent, duplication allowed, no cross-referencing), directory structure, and the authoring conventions.
+
+**No sub-agent runbooks exist in this repository today.** The capability is documented and validated; seeding is deferred until a concrete need emerges.
 
 ---
 
