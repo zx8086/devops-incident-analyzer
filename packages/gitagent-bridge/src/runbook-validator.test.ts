@@ -204,9 +204,62 @@ function validateRunbook(
 	};
 }
 
-function formatReport(_report: ValidationReport): string {
-	// Task 6
-	return "";
+function formatReport(report: ValidationReport): string {
+	const lines: string[] = [];
+	lines.push(`Runbook: ${report.runbookPath}`);
+	lines.push("");
+
+	lines.push(`Missing from action_tool_map (${report.missing.length}):`);
+	if (report.missing.length === 0) {
+		lines.push("  (none)");
+	} else {
+		for (const c of report.missing) {
+			lines.push(`  line ${c.line}: ${c.name}`);
+		}
+	}
+	lines.push("");
+
+	lines.push(
+		`Cited in prose but missing from "All Tools Used Are Read-Only" tail section (${report.proseOnly.length}):`,
+	);
+	if (report.proseOnly.length === 0) {
+		lines.push("  (none)");
+	} else {
+		for (const c of report.proseOnly) {
+			lines.push(`  line ${c.line}: ${c.name}`);
+		}
+	}
+	lines.push("");
+
+	lines.push(`Listed in tail section but not cited in prose (${report.tailOnly.length}):`);
+	if (report.tailOnly.length === 0) {
+		lines.push("  (none)");
+	} else {
+		for (const c of report.tailOnly) {
+			lines.push(`  line ${c.line}: ${c.name}`);
+		}
+	}
+	lines.push("");
+
+	lines.push(`Structural errors (${report.errors.length}):`);
+	if (report.errors.length === 0) {
+		lines.push("  (none)");
+	} else {
+		for (const e of report.errors) {
+			lines.push(`  ${e}`);
+		}
+	}
+	lines.push("");
+
+	lines.push("Fix:");
+	lines.push('  - For each "Missing" entry: verify the tool name, or add it to');
+	lines.push("    an action_tool_map in the agent's tools/*.yaml.");
+	lines.push('  - For each "prose only" entry: add the name to the');
+	lines.push('    "## All Tools Used Are Read-Only" tail section.');
+	lines.push('  - For each "tail only" entry: either cite it in prose or remove');
+	lines.push("    it from the tail section.");
+
+	return lines.join("\n");
 }
 
 function isClean(report: ValidationReport): boolean {
@@ -226,7 +279,6 @@ function collectAgents(_agentsRoot: string): AgentFixture[] {
 // Suppress "declared but never read" warnings for stubs that are referenced
 // only in later tasks. Biome will remove these lines when the stubs get real
 // callers.
-void formatReport;
 void collectAgents;
 void existsSync;
 void readdirSync;
@@ -578,5 +630,68 @@ describe("validateRunbook", () => {
 		expect(proseMissing).toHaveLength(2);
 		expect(proseMissing[0]?.line).toBe(3);
 		expect(proseMissing[1]?.line).toBe(4);
+	});
+});
+
+describe("formatReport", () => {
+	test("clean report output is still well-formed", () => {
+		// formatReport is called only on non-clean reports in practice.
+		// This test documents that even a clean report produces readable output.
+		const report: ValidationReport = {
+			runbookPath: "/fake/path.md",
+			missing: [],
+			proseOnly: [],
+			tailOnly: [],
+			errors: [],
+		};
+		const text = formatReport(report);
+		expect(text).toContain("/fake/path.md");
+		expect(text).toContain("Missing from action_tool_map (0)");
+	});
+
+	test("formats missing bucket with line numbers", () => {
+		const report: ValidationReport = {
+			runbookPath: "/x/y.md",
+			missing: [
+				{ name: "kafka_fake", line: 11, source: "prose" },
+				{ name: "capella_fake", line: 20, source: "tail" },
+			],
+			proseOnly: [],
+			tailOnly: [],
+			errors: [],
+		};
+		const text = formatReport(report);
+		expect(text).toContain("Missing from action_tool_map (2)");
+		expect(text).toContain("line 11: kafka_fake");
+		expect(text).toContain("line 20: capella_fake");
+	});
+
+	test("formats all four buckets together", () => {
+		const report: ValidationReport = {
+			runbookPath: "/x/y.md",
+			missing: [{ name: "m_one", line: 5, source: "prose" }],
+			proseOnly: [{ name: "p_one", line: 6, source: "prose" }],
+			tailOnly: [{ name: "t_one", line: 99, source: "tail" }],
+			errors: ["empty_tail_section"],
+		};
+		const text = formatReport(report);
+		expect(text).toContain("Missing from action_tool_map (1)");
+		expect(text).toContain("prose but missing from");
+		expect(text).toContain("Listed in tail section but not cited");
+		expect(text).toContain("Structural errors (1)");
+		expect(text).toContain("empty_tail_section");
+		expect(text).toContain("Fix:");
+	});
+
+	test("empty buckets print (none)", () => {
+		const report: ValidationReport = {
+			runbookPath: "/x/y.md",
+			missing: [{ name: "m_one", line: 5, source: "prose" }],
+			proseOnly: [],
+			tailOnly: [],
+			errors: [],
+		};
+		const text = formatReport(report);
+		expect(text).toContain("(none)");
 	});
 });
