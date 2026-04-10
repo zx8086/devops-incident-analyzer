@@ -66,7 +66,25 @@ function extractProseCitations(content: string): Citation[] {
 	const lines = content.split("\n");
 	let inFence = false;
 
-	for (let i = 0; i < lines.length; i++) {
+	// SIO-643: Skip leading YAML frontmatter block so its identifiers are not
+	// mistaken for prose citations. The frontmatter is parsed by the loader
+	// for runbooks; the validator should not re-interpret it.
+	let startLine = 0;
+	if (lines.length > 0 && (lines[0] ?? "").trim() === "---") {
+		// Find the closing --- delimiter
+		for (let i = 1; i < lines.length; i++) {
+			if ((lines[i] ?? "").trim() === "---") {
+				startLine = i + 1;
+				break;
+			}
+		}
+		// If we never found a closing delimiter, startLine stays 0 and we
+		// walk the full content. A missing closing delimiter is a load-time
+		// error (see parseRunbookFrontmatter) so reaching this branch here
+		// means the validator is being run on a malformed file anyway.
+	}
+
+	for (let i = startLine; i < lines.length; i++) {
 		const line = lines[i] ?? "";
 		const trimmed = line.trim();
 
@@ -413,6 +431,36 @@ describe("extractProseCitations", () => {
 
 	test("empty content -> empty array", () => {
 		expect(extractProseCitations("")).toEqual([]);
+	});
+
+	test("runbook with frontmatter skips frontmatter when extracting prose citations", () => {
+		const content = [
+			"---",
+			"triggers:",
+			"  severity: [high]",
+			"---",
+			"# Body",
+			"Use `kafka_list_topics` here.",
+		].join("\n");
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(1);
+		expect(citations[0]?.name).toBe("kafka_list_topics");
+		// Line number should point to the line within the original content
+		// that contained the backtick match
+		expect(citations[0]?.line).toBe(6);
+	});
+
+	test("frontmatter containing snake_case identifier is not extracted as citation", () => {
+		const content = [
+			"---",
+			"triggers:",
+			"  services: [kafka_consumer_group]",
+			"---",
+			"# Body",
+			"No tool citations here.",
+		].join("\n");
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(0);
 	});
 });
 
