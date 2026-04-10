@@ -311,8 +311,6 @@ function collectAgents(agentsRoot: string): AgentFixture[] {
 	return fixtures;
 }
 
-void readFileSync;
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -798,4 +796,30 @@ describe("collectAgents", () => {
 			rmSync(root, { recursive: true });
 		}
 	});
+});
+
+// ============================================================================
+// Production validation - real agents
+// ============================================================================
+
+const AGENTS_ROOT = join(import.meta.dir, "../../../agents");
+const PRODUCTION_FIXTURES = collectAgents(AGENTS_ROOT);
+
+describe("real agent runbook bindings", () => {
+	for (const fixture of PRODUCTION_FIXTURES) {
+		describe(fixture.name, () => {
+			const authority = buildAuthority(fixture.agent.tools);
+
+			for (const runbookPath of fixture.runbookPaths) {
+				const basename = runbookPath.split("/").pop() ?? runbookPath;
+				test(`${basename} is clean`, () => {
+					const content = readFileSync(runbookPath, "utf-8");
+					const report = validateRunbook(runbookPath, content, authority);
+					if (!isClean(report)) {
+						throw new Error(`\n${formatReport(report)}`);
+					}
+				});
+			}
+		});
+	}
 });
