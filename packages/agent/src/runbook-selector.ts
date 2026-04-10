@@ -63,10 +63,7 @@ export interface RunbookSelectorDeps {
 // test fake satisfy this shape, so no @langchain/aws mock is required at the
 // test layer.
 interface SelectorLlm {
-	invoke(
-		messages: Array<{ role: string; content: string }>,
-		config?: RunnableConfig,
-	): Promise<{ content: unknown }>;
+	invoke(messages: Array<{ role: string; content: string }>, config?: RunnableConfig): Promise<{ content: unknown }>;
 }
 
 // Internal dependency bundle. Tests pass fakes via the second overload; the
@@ -90,10 +87,7 @@ export async function runSelectRunbooks(
 
 	// Step 1: empty catalog -> skip router, leave state unchanged
 	if (catalog.length === 0) {
-		logger.info(
-			{ mode: "skip.empty_catalog", catalogSize: 0 },
-			"Runbook catalog is empty; skipping selection",
-		);
+		logger.info({ mode: "skip.empty_catalog", catalogSize: 0 }, "Runbook catalog is empty; skipping selection");
 		return {};
 	}
 
@@ -105,9 +99,7 @@ export async function runSelectRunbooks(
 	const lastMessage = state.messages.at(-1);
 	const rawInput = lastMessage ? extractTextFromContent(lastMessage.content).slice(0, 500) : "";
 	const incidentSummary = formatIncidentSummary(state);
-	const catalogBlock = catalog
-		.map((e) => `  - ${e.filename}: ${e.title} -- ${e.summary}`)
-		.join("\n");
+	const catalogBlock = catalog.map((e) => `  - ${e.filename}: ${e.title} -- ${e.summary}`).join("\n");
 
 	const systemPrompt = `You are selecting operational runbooks for a DevOps incident investigation.
 Pick 0 to 2 runbooks from the catalog that best match the incident. If no
@@ -228,9 +220,7 @@ function formatIncidentSummary(state: AgentStateType): string {
 		lines.push(`  time window: ${inc.timeWindow.from} to ${inc.timeWindow.to}`);
 	}
 	if (inc.affectedServices && inc.affectedServices.length > 0) {
-		lines.push(
-			`  affected services: ${inc.affectedServices.map((s) => s.name).join(", ")}`,
-		);
+		lines.push(`  affected services: ${inc.affectedServices.map((s) => s.name).join(", ")}`);
 	}
 	if (inc.extractedMetrics && inc.extractedMetrics.length > 0) {
 		const metrics = inc.extractedMetrics

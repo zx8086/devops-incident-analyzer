@@ -112,19 +112,13 @@ describe("runSelectRunbooks", () => {
 
 	test("5. all invalid filenames triggers fallback", async () => {
 		llmResponse = { content: '{"filenames":["bogus.md"],"reasoning":"pattern A"}' };
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: { severity: "critical" } }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "critical" } }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md"]);
 	});
 
 	test("6. malformed JSON triggers fallback", async () => {
 		llmResponse = { content: "not json" };
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: { severity: "critical" } }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "critical" } }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md"]);
 	});
 
@@ -140,35 +134,26 @@ describe("runSelectRunbooks", () => {
 		const err = new Error("timeout");
 		err.name = "TimeoutError";
 		llmError = err;
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: { severity: "medium" } }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "medium" } }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual([]);
 	});
 
 	test("9. api error triggers low fallback (empty)", async () => {
 		llmError = new Error("500 Internal Server Error");
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: { severity: "low" } }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "low" } }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual([]);
 	});
 
 	test("10. missing severity + router fails throws RunbookSelectionFallbackError", async () => {
 		llmError = new Error("api error");
-		await expect(
-			runSelectRunbooks(makeState({ normalizedIncident: {} }), buildRuntime()),
-		).rejects.toThrow(RunbookSelectionFallbackError);
+		await expect(runSelectRunbooks(makeState({ normalizedIncident: {} }), buildRuntime())).rejects.toThrow(
+			RunbookSelectionFallbackError,
+		);
 	});
 
 	test("11. missing severity + router succeeds returns pick", async () => {
 		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"A"}' };
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: {} }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: {} }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual(["a.md"]);
 	});
 
@@ -181,10 +166,7 @@ describe("runSelectRunbooks", () => {
 
 	test("13. high severity fallback returns single runbook", async () => {
 		llmError = new Error("api error");
-		const result = await runSelectRunbooks(
-			makeState({ normalizedIncident: { severity: "high" } }),
-			buildRuntime(),
-		);
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
 		expect(result.selectedRunbooks).toEqual(["a.md"]);
 	});
 
