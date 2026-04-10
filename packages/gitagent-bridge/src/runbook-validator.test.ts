@@ -74,9 +74,74 @@ function extractProseCitations(content: string): Citation[] {
 	return citations;
 }
 
-function extractTailSection(_content: string): TailSectionResult {
-	// Task 3
-	return { citations: [], errors: [] };
+function extractTailSection(content: string): TailSectionResult {
+	const lines = content.split("\n");
+	const HEADER = "## All Tools Used Are Read-Only";
+
+	// Find all occurrences of the header
+	const headerIndices: number[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		if ((lines[i] ?? "").trim() === HEADER) {
+			headerIndices.push(i);
+		}
+	}
+
+	if (headerIndices.length === 0) {
+		return { citations: [], errors: ["missing_tail_section"] };
+	}
+	if (headerIndices.length > 1) {
+		return { citations: [], errors: ["duplicate_tail_section"] };
+	}
+
+	const headerLine = headerIndices[0] as number;
+
+	// Find the first non-empty content line after the header
+	let contentLineIdx = -1;
+	for (let i = headerLine + 1; i < lines.length; i++) {
+		const trimmed = (lines[i] ?? "").trim();
+		if (trimmed === "") continue;
+		contentLineIdx = i;
+		break;
+	}
+
+	if (contentLineIdx === -1) {
+		return { citations: [], errors: ["empty_tail_section"] };
+	}
+
+	const contentLine = (lines[contentLineIdx] ?? "").trim();
+
+	// Reject if the next non-empty content is a heading or a fenced block
+	if (contentLine.startsWith("#")) {
+		return { citations: [], errors: ["empty_tail_section"] };
+	}
+	if (contentLine.startsWith("```")) {
+		return { citations: [], errors: ["malformed_tail_section"] };
+	}
+
+	// Parse comma-separated list
+	const names = contentLine
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+
+	// Check for duplicates within the list
+	const seen = new Set<string>();
+	const errors: string[] = [];
+	for (const name of names) {
+		if (seen.has(name)) {
+			errors.push("duplicate_in_tail_section");
+			break;
+		}
+		seen.add(name);
+	}
+
+	const citations: Citation[] = names.map((name) => ({
+		name,
+		line: contentLineIdx + 1,
+		source: "tail",
+	}));
+
+	return { citations, errors };
 }
 
 function buildAuthority(_tools: ToolDefinition[]): Set<string> {
@@ -115,7 +180,6 @@ function collectAgents(_agentsRoot: string): AgentFixture[] {
 // Suppress "declared but never read" warnings for stubs that are referenced
 // only in later tasks. Biome will remove these lines when the stubs get real
 // callers.
-void extractTailSection;
 void buildAuthority;
 void validateRunbook;
 void formatReport;
@@ -196,5 +260,94 @@ describe("extractProseCitations", () => {
 
 	test("empty content -> empty array", () => {
 		expect(extractProseCitations("")).toEqual([]);
+	});
+});
+
+describe("extractTailSection", () => {
+	test("standard section with comma-separated list", () => {
+		const content = [
+			"# Runbook",
+			"",
+			"## Investigation",
+			"Use `kafka_list_topics`.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"kafka_list_topics, kafka_describe_topic, kafka_get_topic_offsets",
+		].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toEqual([]);
+		expect(result.citations).toHaveLength(3);
+		expect(result.citations.map((c) => c.name)).toEqual([
+			"kafka_list_topics",
+			"kafka_describe_topic",
+			"kafka_get_topic_offsets",
+		]);
+		// All tail citations share the same line number (the content line)
+		expect(result.citations.every((c) => c.line === 7)).toBe(true);
+		expect(result.citations.every((c) => c.source === "tail")).toBe(true);
+	});
+
+	test("whitespace around names is trimmed", () => {
+		const content = ["## All Tools Used Are Read-Only", "  a_one  ,   a_two ,a_three  "].join(
+			"\n",
+		);
+		const result = extractTailSection(content);
+		expect(result.errors).toEqual([]);
+		expect(result.citations.map((c) => c.name)).toEqual(["a_one", "a_two", "a_three"]);
+	});
+
+	test("empty entries from trailing commas are ignored", () => {
+		const content = ["## All Tools Used Are Read-Only", "a_one, , a_two,"].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toEqual([]);
+		expect(result.citations.map((c) => c.name)).toEqual(["a_one", "a_two"]);
+	});
+
+	test("missing header -> missing_tail_section error", () => {
+		const content = "# Runbook\n\nJust some content without the tail section.";
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("missing_tail_section");
+		expect(result.citations).toEqual([]);
+	});
+
+	test("duplicate header -> duplicate_tail_section error", () => {
+		const content = [
+			"## All Tools Used Are Read-Only",
+			"a_one",
+			"",
+			"## All Tools Used Are Read-Only",
+			"a_two",
+		].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("duplicate_tail_section");
+	});
+
+	test("header followed immediately by next heading -> empty_tail_section", () => {
+		const content = [
+			"## All Tools Used Are Read-Only",
+			"",
+			"## Next Section",
+			"content",
+		].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("empty_tail_section");
+	});
+
+	test("header followed by fenced code block -> malformed_tail_section", () => {
+		const content = ["## All Tools Used Are Read-Only", "```", "some code", "```"].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("malformed_tail_section");
+	});
+
+	test("header at EOF with nothing after -> empty_tail_section", () => {
+		const content = "## All Tools Used Are Read-Only";
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("empty_tail_section");
+	});
+
+	test("duplicates within tail list -> duplicate_in_tail_section", () => {
+		const content = ["## All Tools Used Are Read-Only", "a_one, a_two, a_one"].join("\n");
+		const result = extractTailSection(content);
+		expect(result.errors).toContain("duplicate_in_tail_section");
 	});
 });
