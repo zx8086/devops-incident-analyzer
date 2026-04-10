@@ -31,7 +31,8 @@ export type LlmRole =
 	| "followUp"
 	| "normalizer"
 	| "mitigation"
-	| "actionProposal";
+	| "actionProposal"
+	| "runbookSelector";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -44,6 +45,7 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	normalizer: { temperature: 0 },
 	mitigation: { temperature: 0.2 },
 	actionProposal: { temperature: 0, maxTokens: 512 },
+	runbookSelector: { temperature: 0, maxTokens: 512 },
 };
 
 function buildChatModel(
