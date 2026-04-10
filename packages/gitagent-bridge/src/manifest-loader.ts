@@ -114,9 +114,7 @@ function loadKnowledge(agentDir: string): {
 					});
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
-					throw new Error(
-						`Failed to parse runbook frontmatter in ${join(categoryDir, file)}: ${message}`,
-					);
+					throw new Error(`Failed to parse runbook frontmatter in ${join(categoryDir, file)}: ${message}`);
 				}
 			} else {
 				entries.push({ category, filename: file, content: rawContent });

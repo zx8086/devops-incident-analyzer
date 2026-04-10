@@ -434,14 +434,9 @@ describe("extractProseCitations", () => {
 	});
 
 	test("runbook with frontmatter skips frontmatter when extracting prose citations", () => {
-		const content = [
-			"---",
-			"triggers:",
-			"  severity: [high]",
-			"---",
-			"# Body",
-			"Use `kafka_list_topics` here.",
-		].join("\n");
+		const content = ["---", "triggers:", "  severity: [high]", "---", "# Body", "Use `kafka_list_topics` here."].join(
+			"\n",
+		);
 		const citations = extractProseCitations(content);
 		expect(citations).toHaveLength(1);
 		expect(citations[0]?.name).toBe("kafka_list_topics");

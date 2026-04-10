@@ -12,11 +12,11 @@ import {
 	getUncoveredTools,
 	loadAgent,
 	matchesPattern,
+	RunbookFrontmatterSchema,
+	RunbookTriggersSchema,
 	requiresApproval,
 	resolveBedrockConfig,
 	resolveMapping,
-	RunbookFrontmatterSchema,
-	RunbookTriggersSchema,
 	type ToolDefinition,
 	validateToolSchemas,
 	withRelatedTools,
@@ -640,16 +640,7 @@ describe("parseRunbookFrontmatter", () => {
 	});
 
 	test("5. frontmatter followed by paragraph", () => {
-		const input = [
-			"---",
-			"triggers:",
-			"  severity: [high]",
-			"---",
-			"",
-			"# Body",
-			"",
-			"Paragraph.",
-		].join("\n");
+		const input = ["---", "triggers:", "  severity: [high]", "---", "", "# Body", "", "Paragraph."].join("\n");
 		const result = parseRunbookFrontmatter(input);
 		expect(result.triggers).toEqual({ severity: ["high"] });
 		expect(result.body.trim()).toBe("# Body\n\nParagraph.");

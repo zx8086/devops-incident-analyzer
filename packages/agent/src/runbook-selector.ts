@@ -262,10 +262,7 @@ export function matchSeverityAxis(
 	return allowed.includes(incidentSeverity);
 }
 
-export function matchServicesAxis(
-	patterns: string[],
-	affected: NormalizedIncident["affectedServices"],
-): boolean {
+export function matchServicesAxis(patterns: string[], affected: NormalizedIncident["affectedServices"]): boolean {
 	if (!affected || affected.length === 0) return false;
 	const lowerNames = affected.map((s) => s.name.toLowerCase());
 	return patterns.some((pattern) => {
@@ -274,10 +271,7 @@ export function matchServicesAxis(
 	});
 }
 
-export function matchMetricsAxis(
-	patterns: string[],
-	extracted: NormalizedIncident["extractedMetrics"],
-): boolean {
+export function matchMetricsAxis(patterns: string[], extracted: NormalizedIncident["extractedMetrics"]): boolean {
 	if (!extracted || extracted.length === 0) return false;
 	const lowerNames = extracted.map((m) => m.name.toLowerCase());
 	return patterns.some((pattern) => {

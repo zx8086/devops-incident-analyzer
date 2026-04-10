@@ -3,8 +3,8 @@ import {
 	buildSystemPrompt,
 	type LoadedAgent,
 	loadAgent,
-	requiresApproval,
 	type RunbookTriggers,
+	requiresApproval,
 	type ToolDefinition,
 } from "@devops-agent/gitagent-bridge";
 import { getAgentsDir } from "./paths.ts";
