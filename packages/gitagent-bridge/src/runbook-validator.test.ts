@@ -322,6 +322,35 @@ function collectAgents(agentsRoot: string): AgentFixture[] {
 	return fixtures;
 }
 
+function collectSubAgentFixtures(parentFixtures: AgentFixture[]): SubAgentFixture[] {
+	const fixtures: SubAgentFixture[] = [];
+
+	for (const parent of parentFixtures) {
+		for (const [subAgentName, subAgent] of parent.agent.subAgents) {
+			// Extract runbook entries from the already-loaded knowledge. Avoids
+			// a second filesystem walk; loadAgent() already recursed and
+			// populated each sub-agent's knowledge[] with its own runbooks.
+			const runbookEntries = subAgent.knowledge.filter((e) => e.category === "runbooks");
+			if (runbookEntries.length === 0) continue;
+
+			// Reconstruct absolute paths for each runbook file
+			const runbookPaths = runbookEntries.map((entry) =>
+				join(parent.agentDir, "agents", subAgentName, "knowledge", "runbooks", entry.filename),
+			);
+
+			fixtures.push({
+				parentName: parent.name,
+				subAgentName,
+				parentTools: parent.agent.tools,
+				subAgent,
+				runbookPaths,
+			});
+		}
+	}
+
+	return fixtures;
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -848,6 +877,100 @@ describe("collectAgents", () => {
 		} finally {
 			rmSync(root, { recursive: true });
 		}
+	});
+});
+
+describe("collectSubAgentFixtures", () => {
+	type KnowledgeEntryLike = { category: string; filename: string; content: string };
+
+	function makeSubAgent(knowledge: KnowledgeEntryLike[]): LoadedAgent {
+		return {
+			manifest: { name: "sub", version: "0.1.0", description: "test" },
+			soul: "",
+			rules: "",
+			tools: [],
+			skills: new Map(),
+			subAgents: new Map(),
+			knowledge,
+		} as unknown as LoadedAgent;
+	}
+
+	function makeParentFixture(
+		overrides: { subAgents?: Map<string, LoadedAgent>; agentDir?: string } = {},
+	): AgentFixture {
+		return {
+			name: "test-parent",
+			agentDir: overrides.agentDir ?? "/fake/parent",
+			agent: {
+				manifest: { name: "test-parent", version: "0.1.0", description: "test" },
+				soul: "",
+				rules: "",
+				tools: [],
+				skills: new Map(),
+				subAgents: overrides.subAgents ?? new Map(),
+				knowledge: [],
+			} as unknown as LoadedAgent,
+			runbookPaths: [],
+		};
+	}
+
+	test("parent with sub-agent that has runbook knowledge -> fixture emitted", () => {
+		const subAgents = new Map<string, LoadedAgent>();
+		subAgents.set(
+			"kafka-agent",
+			makeSubAgent([{ category: "runbooks", filename: "kafka-rebalance.md", content: "# Test" }]),
+		);
+		const parent = makeParentFixture({ subAgents, agentDir: "/fake/parent" });
+		const fixtures = collectSubAgentFixtures([parent]);
+		expect(fixtures).toHaveLength(1);
+		expect(fixtures[0]?.parentName).toBe("test-parent");
+		expect(fixtures[0]?.subAgentName).toBe("kafka-agent");
+		expect(fixtures[0]?.runbookPaths).toHaveLength(1);
+		expect(fixtures[0]?.runbookPaths[0]).toBe("/fake/parent/agents/kafka-agent/knowledge/runbooks/kafka-rebalance.md");
+	});
+
+	test("parent with sub-agents but no knowledge -> no fixtures", () => {
+		const subAgents = new Map<string, LoadedAgent>();
+		subAgents.set("kafka-agent", makeSubAgent([]));
+		const parent = makeParentFixture({ subAgents });
+		expect(collectSubAgentFixtures([parent])).toHaveLength(0);
+	});
+
+	test("parent with sub-agent that has non-runbook knowledge only -> no fixture", () => {
+		const subAgents = new Map<string, LoadedAgent>();
+		subAgents.set(
+			"kafka-agent",
+			makeSubAgent([{ category: "systems-map", filename: "topology.md", content: "# Topology" }]),
+		);
+		const parent = makeParentFixture({ subAgents });
+		expect(collectSubAgentFixtures([parent])).toHaveLength(0);
+	});
+
+	test("parent without sub-agents -> no fixtures", () => {
+		const parent = makeParentFixture();
+		expect(collectSubAgentFixtures([parent])).toHaveLength(0);
+	});
+
+	test("parent with multiple sub-agents, some with runbooks -> fixtures for only those with runbooks", () => {
+		const subAgents = new Map<string, LoadedAgent>();
+		subAgents.set("elastic-agent", makeSubAgent([]));
+		subAgents.set(
+			"kafka-agent",
+			makeSubAgent([
+				{ category: "runbooks", filename: "rb1.md", content: "# RB1" },
+				{ category: "runbooks", filename: "rb2.md", content: "# RB2" },
+			]),
+		);
+		subAgents.set("capella-agent", makeSubAgent([]));
+		const parent = makeParentFixture({ subAgents, agentDir: "/p" });
+		const fixtures = collectSubAgentFixtures([parent]);
+		expect(fixtures).toHaveLength(1);
+		expect(fixtures[0]?.subAgentName).toBe("kafka-agent");
+		expect(fixtures[0]?.runbookPaths).toHaveLength(2);
+		expect(fixtures[0]?.runbookPaths.slice().sort()).toEqual([
+			"/p/agents/kafka-agent/knowledge/runbooks/rb1.md",
+			"/p/agents/kafka-agent/knowledge/runbooks/rb2.md",
+		]);
 	});
 });
 
