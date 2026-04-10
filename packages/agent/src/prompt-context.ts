@@ -4,6 +4,7 @@ import {
 	type LoadedAgent,
 	loadAgent,
 	requiresApproval,
+	type RunbookTriggers,
 	type ToolDefinition,
 } from "@devops-agent/gitagent-bridge";
 import { getAgentsDir } from "./paths.ts";
@@ -90,17 +91,23 @@ export function getRunbookFilenames(): string[] {
 
 // SIO-640: Runbook catalog projection for the lazy selector. Parses each
 // runbook's first H1 as title and first non-empty paragraph as summary.
+// SIO-643: Passes through optional frontmatter triggers so the deterministic
+// pre-filter can narrow the catalog before the LLM router sees it.
 export interface RunbookCatalogEntry {
 	filename: string;
 	title: string;
 	summary: string;
+	triggers?: RunbookTriggers;
 }
 
 export function getRunbookCatalog(): RunbookCatalogEntry[] {
 	const agent = getAgent();
 	return agent.knowledge
 		.filter((k) => k.category === "runbooks")
-		.map((k) => parseRunbookCatalogEntry(k.filename, k.content));
+		.map((k) => ({
+			...parseRunbookCatalogEntry(k.filename, k.content),
+			triggers: k.triggers,
+		}));
 }
 
 function parseRunbookCatalogEntry(filename: string, content: string): RunbookCatalogEntry {
