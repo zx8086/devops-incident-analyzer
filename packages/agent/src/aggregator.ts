@@ -12,7 +12,12 @@ import type { AgentStateType } from "./state.ts";
 const logger = getLogger("agent:aggregator");
 
 function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): BaseMessage[] {
-	const systemPrompt = buildOrchestratorPrompt();
+	// SIO-640: Tri-state selectedRunbooks field drives the runbook filter.
+	//   null      -> no filter (preserve current behavior)
+	//   []        -> filter to zero runbooks (selector chose none)
+	//   [names]   -> filter to just these
+	const runbookFilter = state.selectedRunbooks ?? undefined;
+	const systemPrompt = buildOrchestratorPrompt({ runbookFilter });
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 	const userQuery = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
