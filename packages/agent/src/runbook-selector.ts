@@ -85,13 +85,29 @@ export async function runSelectRunbooks(
 	config?: RunnableConfig,
 ): Promise<Partial<AgentStateType>> {
 	const startTime = Date.now();
-	const catalog = runtime.getCatalog();
+	const fullCatalog = runtime.getCatalog();
 
 	// Step 1: empty catalog -> skip router, leave state unchanged
-	if (catalog.length === 0) {
+	if (fullCatalog.length === 0) {
 		logger.info({ mode: "skip.empty_catalog", catalogSize: 0 }, "Runbook catalog is empty; skipping selection");
 		return {};
 	}
+
+	// SIO-643: Pre-filter via trigger grammar before the LLM router sees the catalog.
+	// Triggers narrow, they do not gatekeep: zero matches -> full catalog fallback;
+	// no runbook has triggers -> noop. The filter can only reduce the router's work.
+	const incident = state.normalizedIncident ?? {};
+	const filterResult = narrowCatalogByTriggers(fullCatalog, incident);
+	const catalog = filterResult.narrowed;
+
+	logger.info(
+		{
+			trigger_filter_mode: filterResult.mode,
+			trigger_filter_input_size: fullCatalog.length,
+			trigger_filter_output_size: catalog.length,
+		},
+		`Runbook trigger filter: ${filterResult.mode}`,
+	);
 
 	const validFilenames = new Set(catalog.map((e) => e.filename));
 	const severity = state.normalizedIncident?.severity;

@@ -384,3 +384,104 @@ describe("narrowCatalogByTriggers", () => {
 		expect(result.narrowed).toEqual([]);
 	});
 });
+
+describe("runSelectRunbooks: trigger filter integration", () => {
+	function buildRuntimeWithCatalog(
+		catalog: RunbookCatalogEntry[],
+		capturedPrompt: { value: string },
+	): SelectRunbooksRuntime {
+		return {
+			getCatalog: () => catalog,
+			getFallbackConfig: () => ({
+				critical: [],
+				high: [],
+				medium: [],
+				low: [],
+			}),
+			getLlm: () => ({
+				invoke: async (messages: Array<{ role: string; content: string }>) => {
+					capturedPrompt.value = messages.map((m) => m.content).join("\n");
+					return { content: '{"filenames":[],"reasoning":"mock"}' };
+				},
+			}),
+		};
+	}
+
+	test("narrowed mode: LLM receives only matching runbooks plus trigger-less runbooks", async () => {
+		const catalog: RunbookCatalogEntry[] = [
+			{
+				filename: "match-a.md",
+				title: "Match A",
+				summary: "A",
+				triggers: { severity: ["critical"] },
+			},
+			{
+				filename: "match-b.md",
+				title: "Match B",
+				summary: "B",
+				triggers: { severity: ["critical"] },
+			},
+			{
+				filename: "nomatch.md",
+				title: "No Match",
+				summary: "X",
+				triggers: { severity: ["low"] },
+			},
+			{ filename: "free-1.md", title: "Free 1", summary: "F1" },
+			{ filename: "free-2.md", title: "Free 2", summary: "F2" },
+		];
+		const captured = { value: "" };
+		const runtime = buildRuntimeWithCatalog(catalog, captured);
+		const state = makeState({ normalizedIncident: { severity: "critical" } });
+
+		await runSelectRunbooks(state, runtime);
+
+		expect(captured.value).toContain("match-a.md");
+		expect(captured.value).toContain("match-b.md");
+		expect(captured.value).toContain("free-1.md");
+		expect(captured.value).toContain("free-2.md");
+		expect(captured.value).not.toContain("nomatch.md");
+	});
+
+	test("fallback mode: LLM receives full catalog when no trigger matches", async () => {
+		const catalog: RunbookCatalogEntry[] = [
+			{
+				filename: "critical-only.md",
+				title: "Crit",
+				summary: "C",
+				triggers: { severity: ["critical"] },
+			},
+			{
+				filename: "high-only.md",
+				title: "High",
+				summary: "H",
+				triggers: { severity: ["high"] },
+			},
+		];
+		const captured = { value: "" };
+		const runtime = buildRuntimeWithCatalog(catalog, captured);
+		const state = makeState({ normalizedIncident: { severity: "low" } });
+
+		await runSelectRunbooks(state, runtime);
+
+		expect(captured.value).toContain("critical-only.md");
+		expect(captured.value).toContain("high-only.md");
+	});
+
+	test("noop mode: no runbook has triggers, LLM receives full catalog", async () => {
+		const catalog: RunbookCatalogEntry[] = [
+			{ filename: "a.md", title: "A", summary: "A" },
+			{ filename: "b.md", title: "B", summary: "B" },
+			{ filename: "c.md", title: "C", summary: "C" },
+		];
+		const captured = { value: "" };
+		const runtime = buildRuntimeWithCatalog(catalog, captured);
+		const state = makeState({ normalizedIncident: { severity: "critical" } });
+
+		await runSelectRunbooks(state, runtime);
+
+		expect(captured.value).toContain("a.md");
+		expect(captured.value).toContain("b.md");
+		expect(captured.value).toContain("c.md");
+	});
+});
