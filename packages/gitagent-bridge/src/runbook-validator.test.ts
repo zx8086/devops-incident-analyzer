@@ -42,9 +42,36 @@ interface AgentFixture {
 // Helpers (stubs - implemented in later tasks)
 // ============================================================================
 
-function extractProseCitations(_content: string): Citation[] {
-	// Task 2
-	return [];
+function extractProseCitations(content: string): Citation[] {
+	const citations: Citation[] = [];
+	const lines = content.split("\n");
+	let inFence = false;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		const trimmed = line.trim();
+
+		// Toggle fenced code block state
+		if (trimmed.startsWith("```")) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+
+		// Find all backtick-wrapped segments on this line
+		const backtickRegex = /`([^`]+)`/g;
+		let match: RegExpExecArray | null = backtickRegex.exec(line);
+		while (match !== null) {
+			const inner = match[1] ?? "";
+			// Must be snake_case lowercase with at least one underscore
+			if (/^[a-z][a-z0-9_]*$/.test(inner) && inner.includes("_")) {
+				citations.push({ name: inner, line: i + 1, source: "prose" });
+			}
+			match = backtickRegex.exec(line);
+		}
+	}
+
+	return citations;
 }
 
 function extractTailSection(_content: string): TailSectionResult {
@@ -88,7 +115,6 @@ function collectAgents(_agentsRoot: string): AgentFixture[] {
 // Suppress "declared but never read" warnings for stubs that are referenced
 // only in later tasks. Biome will remove these lines when the stubs get real
 // callers.
-void extractProseCitations;
 void extractTailSection;
 void buildAuthority;
 void validateRunbook;
@@ -102,13 +128,73 @@ void join;
 void loadAgent;
 
 // ============================================================================
-// Tests - placeholder to confirm the file is picked up
+// Tests
 // ============================================================================
 
-describe("runbook-validator skeleton", () => {
-	test("placeholder passes", () => {
-		expect(
-			isClean({ runbookPath: "", missing: [], proseOnly: [], tailOnly: [], errors: [] }),
-		).toBe(true);
+describe("extractProseCitations", () => {
+	test("wrapped snake_case identifier with underscore -> citation", () => {
+		const content = "Use `kafka_list_consumer_groups` to enumerate groups.";
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(1);
+		expect(citations[0]).toEqual({
+			name: "kafka_list_consumer_groups",
+			line: 1,
+			source: "prose",
+		});
+	});
+
+	test("single-word backtick (no underscore) -> skipped", () => {
+		const content = "The `timeout` value is 10 seconds.";
+		expect(extractProseCitations(content)).toHaveLength(0);
+	});
+
+	test("PascalCase backtick -> skipped", () => {
+		const content = "State is `RebalanceInProgress` right now.";
+		expect(extractProseCitations(content)).toHaveLength(0);
+	});
+
+	test("hyphen-case backtick -> skipped", () => {
+		const content = "The `dead-letter` topic has poison messages.";
+		expect(extractProseCitations(content)).toHaveLength(0);
+	});
+
+	test("identifier with trailing punctuation outside backticks -> captured cleanly", () => {
+		const content = "Use `kafka_describe_topic`.";
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(1);
+		expect(citations[0]?.name).toBe("kafka_describe_topic");
+	});
+
+	test("identifier inside fenced code block -> skipped", () => {
+		const content = [
+			"Normal line with `kafka_list_topics`.",
+			"```bash",
+			"run `kafka_fake_tool_name` here",
+			"```",
+			"After fence: `kafka_get_topic_offsets`.",
+		].join("\n");
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(2);
+		expect(citations.map((c) => c.name)).toEqual([
+			"kafka_list_topics",
+			"kafka_get_topic_offsets",
+		]);
+		expect(citations[0]?.line).toBe(1);
+		expect(citations[1]?.line).toBe(5);
+	});
+
+	test("multiple citations on one line", () => {
+		const content =
+			"Use `kafka_list_consumer_groups` and `kafka_describe_consumer_group` together.";
+		const citations = extractProseCitations(content);
+		expect(citations).toHaveLength(2);
+		expect(citations.map((c) => c.name)).toEqual([
+			"kafka_list_consumer_groups",
+			"kafka_describe_consumer_group",
+		]);
+	});
+
+	test("empty content -> empty array", () => {
+		expect(extractProseCitations("")).toEqual([]);
 	});
 });
