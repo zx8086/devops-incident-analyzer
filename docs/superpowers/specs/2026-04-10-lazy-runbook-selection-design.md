@@ -28,6 +28,7 @@ This is **pre-emptive, not reactive.** No specific failure has been observed. Th
 - Token-cost optimization as a primary goal. Token savings are a side effect of a cleaner architecture, not the justification.
 - Semantic search, embeddings, or vector stores. Overkill for ~10 runbooks.
 - Retry logic in the selector. Failures go to observability, not retry loops.
+- **Sub-agent runbooks.** The `selectRunbooks` node operates on the orchestrator's `knowledge/runbooks/` only. Sub-agent runbooks (a capability documented by SIO-642) are NEVER passed to the selector. Sub-agent runbooks behave as always-on reference material within each sub-agent's own system prompt, a separate mechanism from the orchestrator's lazy selection. See `docs/superpowers/specs/2026-04-10-scoped-subagent-runbooks-design.md` for the full policy.
 
 ## Architecture
 
