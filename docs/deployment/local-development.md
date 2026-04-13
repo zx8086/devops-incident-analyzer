@@ -104,7 +104,7 @@ docker exec kafka /opt/kafka/bin/kafka-topics.sh \
 
 ## Option 1: Docker Compose
 
-Docker Compose starts all five services (four MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
+Docker Compose starts all six services (five MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
 
 ### Starting
 
@@ -126,9 +126,10 @@ docker compose up -d
 | Kafka MCP | `kafka-mcp` | 9081 | `http://localhost:9081/health` |
 | Couchbase MCP | `couchbase-mcp` | 9082 | `http://localhost:9082/health` |
 | Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
+| GitLab MCP | `gitlab-mcp` | 9084 | `http://localhost:9084/health` |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
-All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all four MCP servers to report healthy before starting. Health checks use:
+All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all five MCP servers to report healthy before starting. Health checks use:
 
 ```bash
 bun --eval "fetch('http://localhost:PORT/health').then(r => { if (!r.ok) process.exit(1) })"
@@ -184,6 +185,9 @@ MCP_TRANSPORT=http MCP_PORT=9082 bun packages/mcp-server-couchbase/src/index.ts
 
 # Terminal 4: Konnect MCP (port 9083)
 MCP_TRANSPORT=http MCP_PORT=9083 bun packages/mcp-server-konnect/src/index.ts
+
+# Terminal 5: GitLab MCP (port 9084)
+MCP_TRANSPORT=http MCP_PORT=9084 bun packages/mcp-server-gitlab/src/index.ts
 ```
 
 Each server logs its transport type, port, and tool count on startup:
@@ -194,7 +198,7 @@ Each server logs its transport type, port, and tool count on startup:
 
 ### Starting the Web Frontend
 
-In a fifth terminal:
+In a sixth terminal:
 
 ```bash
 bun run --filter @devops-agent/web dev
@@ -212,6 +216,7 @@ curl -s http://localhost:9080/health
 curl -s http://localhost:9081/health
 curl -s http://localhost:9082/health
 curl -s http://localhost:9083/health
+curl -s http://localhost:9084/health
 ```
 
 Each should return a 200 status with a JSON body containing the server name and tool count.
@@ -223,6 +228,7 @@ ELASTIC_MCP_URL=http://localhost:9080
 KAFKA_MCP_URL=http://localhost:9081
 COUCHBASE_MCP_URL=http://localhost:9082
 KONNECT_MCP_URL=http://localhost:9083
+GITLAB_MCP_URL=http://localhost:9084
 ```
 
 ---
@@ -237,6 +243,7 @@ Port numbers differ between local bare-metal, Docker Compose, and AgentCore depl
 | Kafka MCP | 9081 | 3000 | 8000 |
 | Couchbase MCP | 9082 | 8082 | 8000 |
 | Konnect MCP | 9083 | 8083 | 8000 |
+| GitLab MCP | 9084 | 8084 | 8000 |
 | Web Frontend | 5173 | 5173 | -- |
 
 In AgentCore, each MCP server runs in its own isolated microVM, so they all use port 8000 without conflict. The AgentCore Gateway handles routing.

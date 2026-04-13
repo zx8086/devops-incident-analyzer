@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-09
+> **Last updated:** 2026-04-13
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -53,6 +53,7 @@ LangSmith provides tracing, feedback collection, and evaluation for the agent pi
 | `KAFKA_LANGSMITH_PROJECT` | No | `kafka-mcp-server` | LangSmith project for Kafka MCP server traces |
 | `COUCHBASE_LANGSMITH_PROJECT` | No | `couchbase-mcp-server` | LangSmith project for Couchbase MCP server traces |
 | `KONNECT_LANGSMITH_PROJECT` | No | `konnect-mcp-server` | LangSmith project for Kong Konnect MCP server traces |
+| `GITLAB_LANGSMITH_PROJECT` | No | `gitlab-mcp-server` | LangSmith project for GitLab MCP server traces |
 
 Each MCP server writes traces to its own LangSmith project. This allows per-server dashboards while the main agent project captures the orchestration layer. Set `LANGSMITH_TRACING=false` to disable all tracing (useful for local development without a LangSmith account).
 
@@ -168,6 +169,23 @@ The region determines the Konnect API base URL. Ensure the access token has suff
 
 ---
 
+## GitLab MCP Server
+
+Authentication and connection configuration for the GitLab MCP server, which proxies requests to GitLab's native MCP endpoint and provides custom code analysis tools.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITLAB_INSTANCE_URL` | No | `https://gitlab.com` | GitLab instance base URL (supports self-hosted) |
+| `GITLAB_PERSONAL_ACCESS_TOKEN` | Yes | -- | Personal access token with `api` scope |
+| `GITLAB_DEFAULT_PROJECT_ID` | No | -- | Default project ID for queries (optional) |
+| `GITLAB_TIMEOUT` | No | `30000` | API request timeout in milliseconds |
+| `GITLAB_RETRY_ATTEMPTS` | No | `3` | Number of retry attempts for failed requests |
+| `GITLAB_RETRY_DELAY` | No | `1000` | Base delay between retry attempts in milliseconds |
+
+The personal access token requires the `api` scope for full MCP tool access. For self-hosted GitLab instances, set `GITLAB_INSTANCE_URL` to your instance URL (e.g., `https://gitlab.company.com`).
+
+---
+
 ## Agent Configuration
 
 Settings for the LangGraph supervisor agent, including model selection and state persistence.
@@ -195,6 +213,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `KAFKA_MCP_URL` | Yes | `http://localhost:9081` | Kafka MCP server URL |
 | `COUCHBASE_MCP_URL` | Yes | `http://localhost:9082` | Couchbase Capella MCP server URL |
 | `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
+| `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
@@ -227,3 +246,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 |------|--------|
 | 2026-04-04 | Initial environment variables reference created (Phase 3: Configuration + Deployment) |
 | 2026-04-09 | Fixed MCP server URL port defaults to match standardized ports (9080-9083) |
+| 2026-04-13 | Added GitLab MCP server env vars (SIO-647), added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |

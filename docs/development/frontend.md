@@ -3,7 +3,7 @@
 > **Targets:** SvelteKit 2.0 | Svelte 5 | Tailwind CSS v4 | Bun 1.3.9+
 > **Last updated:** 2026-04-04
 
-The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the four datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect).
+The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the five datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab).
 
 ---
 

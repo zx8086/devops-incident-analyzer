@@ -1,9 +1,9 @@
 # Agent Pipeline
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
-The agent pipeline is an 8-node LangGraph StateGraph that processes user queries through classification, entity extraction, parallel datasource querying, cross-datasource alignment, aggregation, validation, and follow-up generation. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence.
+The agent pipeline is a 12-node LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, parallel datasource querying, cross-datasource alignment, aggregation, confidence gating, validation, mitigation proposal, and follow-up generation. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence.
 
 ---
 
@@ -19,52 +19,71 @@ The agent pipeline is an 8-node LangGraph StateGraph that processes user queries
 | classify |-------> queryComplexity === "simple"
 +----+-----+                    |
      |                          v
-     | (complex)          +-----------+
-     v                    | responder |
-+----------------+        +-----+-----+
-| entityExtractor|              |
-+-------+--------+              v
-        |                 +----------+
-        v                 | followUp |
-+------------+            +-----+----+
-| supervisor |                  |
-| (fan-out)  |                  v
-+--+--+--+---+             +-------+
-   |  |  |  |              |  END  |
-   v  v  v  v              +-------+
-+--+--+--+--+--+
-| queryData-   |  (one per datasource, parallel)
-| Source       |
-+---------+----+
-          |
-          v
-+---------+----+
+     | (complex)          +-----------+     +----------+
+     v                    | responder |---->| followUp |---> END
++-----------+             +-----------+     +----------+
+| normalize |
++-----+-----+
+      |
+      v (if runbook_selection enabled)
++----------------+
+| selectRunbooks |
++-------+--------+
+        |
+        v
++----------------+
+| entityExtractor|
++-------+--------+
+        |
+        v
++------------+
+| supervisor |
+| (fan-out)  |
++-+--+--+--+-+--+
+  |  |  |  |  |
+  v  v  v  v  v
+elastic kafka capella konnect gitlab  (one per datasource, parallel)
+-agent  -agent -agent  -agent  -agent
+  |  |  |  |  |
+  +--+--+--+--+
+        |
+        v
++-------+------+
 |    align     | <--------+
-+---------+----+          |
-          |               |
-          | aligned       | retryTargets.length > 0
-          |               | && alignmentRetries < 2
-          v               |
-+---------+----+          |
++-------+------+          |
+        |                 |
+        | aligned         | retryTargets.length > 0
+        |                 | && alignmentRetries < 2
+        v                 |
++-------+------+          |
 |  aggregate   | ---------+  (via routeAfterAlignment)
-+---------+----+
-          |
-          v
-+---------+----+
++-------+------+
+        |
+        v
++-----------+------+
+| checkConfidence  |
++-------+----------+
+        |
+        v
++-------+------+
 |   validate   | <--------+
-+---------+----+          |
-          |               |
-          | pass          | fail && retryCount < 2
-          |               |
-          v               |
-+---------+----+          |
-|   followUp   | ---------+  (retries go back to aggregate)
-+---------+----+
-          |
-          v
-      +-------+
-      |  END  |
-      +-------+
++-------+------+          |
+        |                 |
+        | pass            | fail && retryCount < 2
+        v                 |
++------------------+      |
+| proposeMitigation| -----+  (retries go back to aggregate)
++-------+----------+
+        |
+        v
++-------+------+
+|   followUp   |
++-------+------+
+        |
+        v
+    +-------+
+    |  END  |
+    +-------+
 ```
 
 All nodes are wrapped with `traceNode()`, which creates an OpenTelemetry span under `agent.node.<name>` with the request ID and current datasource as span attributes.
@@ -205,7 +224,7 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 1. UI-selected datasources from the frontend (if any)
 2. LLM-extracted datasources from the query
 3. On follow-ups with a narrowed extraction, prefer extracted over UI selection
-4. Fallback: all four datasources
+4. Fallback: all five datasources
 
 **Inputs consumed:** `messages` (last human message), `targetDataSources` (UI selection), `isFollowUp`, `attachmentMeta`
 
@@ -224,7 +243,7 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 **Datasource selection (priority order):**
 1. UI-selected datasources (`targetDataSources` from state, source method: `ui-selected`)
 2. Entity-extracted datasources (source method: `entity-extracted`)
-3. Fallback to all four datasources (source method: `fallback-all`)
+3. Fallback to all five datasources (source method: `fallback-all`)
 
 **Validation checks before dispatch:**
 - Deduplicates datasource IDs
@@ -353,6 +372,7 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 - kafka: "List consumer group lag", "Show topic partition details"
 - couchbase: "Check bucket memory usage", "Show slow query analysis"
 - konnect: "List API gateway routes", "Show plugin configuration"
+- gitlab: "Show recent pipeline failures", "Check merge request activity"
 - generic: "Compare across all datasources", "Show a timeline of recent changes"
 
 **Inputs consumed:** `finalAnswer`, `dataSourceResults`
@@ -385,7 +405,7 @@ The graph branches at the `classify` node via a conditional edge:
 
 ```
 classify --> queryComplexity === "simple" --> responder --> followUp --> END
-classify --> queryComplexity === "complex" --> entityExtractor --> supervisor (fan-out)
+classify --> queryComplexity === "complex" --> normalize --> [selectRunbooks] --> entityExtractor --> supervisor (fan-out)
 ```
 
 The classifier defaults to "complex" when uncertain. This is intentional: it is better to query datasources unnecessarily than to miss a user's infrastructure question.
@@ -440,6 +460,7 @@ The `AGENT_NAMES` constant maps datasource IDs to agent names:
 | `kafka` | `kafka-agent` | `kafka-mcp` |
 | `couchbase` | `capella-agent` | `couchbase-mcp` |
 | `konnect` | `konnect-agent` | `konnect-mcp` |
+| `gitlab` | `gitlab-agent` | `gitlab-mcp` |
 
 Tool scoping is handled by `getToolsForDataSource()` in `mcp-bridge.ts`, which returns only the tools registered by the corresponding MCP server. If a datasource ID is not in the server map, the function returns all tools as a fallback (defensive behavior).
 
@@ -502,6 +523,7 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 | kafka | 30 | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
 | couchbase | 24 | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
 | konnect | 67 | 9 (api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management) | 3-12 |
+| gitlab | 21+ | 5 (issues, merge_requests, pipelines, search, code_analysis) | 3-12 |
 
 ### Fallback Chain
 
@@ -537,6 +559,10 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 | Sub-Agents (queryDataSource) | Claude Haiku 4.5 | 0.1 | 2048 | Speed-critical: many parallel tool calls per investigation |
 | Responder | Claude Sonnet 4.6 | 0.3 | 4096 | Quality matters for user-facing conversational responses |
 | Follow-Up Generator | Claude Sonnet 4.6 | 0.5 | 256 | Creative suggestions benefit from higher temperature, short output |
+| Runbook Selector | Claude Sonnet 4.6 | 0 | 512 | Picks 0-2 runbooks from catalog; deterministic output preferred |
+| Normalizer | Claude Haiku 4.5 | 0 | 2048 | Structured incident extraction, deterministic JSON output |
+| Mitigation Proposer | Claude Sonnet 4.6 | 0.1 | 4096 | Reasoning-heavy: generating actionable remediation steps |
+| Confidence Gate | None (deterministic) | N/A | N/A | HITL escalation check, no LLM needed |
 | Validator | None (deterministic) | N/A | N/A | Rule-based checks, no LLM needed |
 | Alignment | None (deterministic) | N/A | N/A | Gap detection and retry routing, no LLM needed |
 
@@ -550,3 +576,4 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-09 | Added Tool Selection section documenting action-driven filtering |
+| 2026-04-13 | Updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation), added GitLab sub-agent, updated diagrams and tables |

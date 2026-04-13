@@ -1,9 +1,9 @@
 # Monorepo Structure
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
-Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 9 packages, 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
+Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 10 packages, 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
 
 ---
 
@@ -29,6 +29,9 @@ devops-incident-analyzer/
         konnect-agent/
           agent.yaml
           SOUL.md
+        gitlab-agent/
+          agent.yaml
+          SOUL.md
       tools/                     Tool definitions (YAML)
       skills/                    Skill definitions (Markdown)
       compliance/                Compliance rules and audit templates
@@ -40,11 +43,12 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 8-node pipeline
+    agent/                       LangGraph supervisor and 12-node pipeline
     mcp-server-elastic/          Elasticsearch MCP server (69 tools)
     mcp-server-kafka/            Kafka MCP server (15 tools)
     mcp-server-couchbase/        Couchbase Capella MCP server (30 tools)
     mcp-server-konnect/          Kong Konnect MCP server (78 tools)
+    mcp-server-gitlab/           GitLab MCP server (proxy + code analysis, 21+ tools)
   apps/
     web/                         SvelteKit frontend
   docs/
@@ -100,6 +104,7 @@ The diagram shows how packages depend on each other. Arrows point from consumer 
 | mcp-server-kafka -----+
 | mcp-server-couchbase -+
 | mcp-server-konnect ---+
+| mcp-server-gitlab ----+
 +-----------------------+
 ```
 
@@ -108,7 +113,7 @@ Key relationships:
 - **web** depends on **agent** for the LangGraph pipeline and SSE streaming
 - **agent** depends on **gitagent-bridge** (YAML manifest loading), **checkpointer** (state persistence), **observability** (tracing and logging), and **shared** (types and schemas)
 - **gitagent-bridge** reads from the `agents/` directory at runtime
-- All four MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
+- All five MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
 - MCP servers are independent of each other and of the **agent** package -- the agent connects to them over the network via `@langchain/mcp-adapters`
 
 ---
@@ -179,25 +184,30 @@ Source: `packages/gitagent-bridge/src/`
 
 ### @devops-agent/agent
 
-LangGraph supervisor with an 8-node StateGraph pipeline. This is the core orchestration package that processes incident queries.
+LangGraph supervisor with a 12-node StateGraph pipeline. This is the core orchestration package that processes incident queries.
 
 | Node | Responsibility |
 |------|----------------|
 | `classify` | Determines if the query is simple (single-source) or complex (multi-source) |
+| `normalize` | Extracts structured NormalizedIncident (severity, time window, affected services) |
+| `selectRunbooks` | Optional: picks 0-2 runbooks from catalog via trigger grammar pre-filter then LLM |
 | `entityExtractor` | Extracts entities: service names, time ranges, error codes, cluster IDs |
 | `supervisor` | Plans which sub-agents to invoke based on extracted entities |
 | `queryDataSource` | Fan-out: dispatches queries to selected MCP server sub-agents in parallel |
 | `align` | Aligns timelines and correlates events across data sources |
 | `aggregate` | Merges sub-agent responses into a unified incident narrative |
+| `checkConfidence` | HITL gate: escalates to human when confidence < 0.6 or errors detected |
 | `validate` | Checks response completeness, flags gaps, suggests follow-ups |
+| `proposeMitigation` | Generates actionable remediation steps from validated report |
 | `followUp` | Generates contextual follow-up questions for the user |
 
 Pipeline flow:
 
 ```
-START -> classify -> [simple: followUp -> END]
-                  -> [complex: entityExtractor -> supervisor -> queryDataSource
-                     -> align -> aggregate -> validate -> followUp -> END]
+START -> classify -> [simple: responder -> followUp -> END]
+                  -> [complex: normalize -> [selectRunbooks] -> entityExtractor
+                     -> supervisor -> queryDataSource -> align -> aggregate
+                     -> checkConfidence -> validate -> proposeMitigation -> followUp -> END]
 ```
 
 The agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. It does not import MCP server code directly.
@@ -267,6 +277,22 @@ Source: `packages/mcp-server-konnect/src/`
 
 ---
 
+### @devops-agent/mcp-server-gitlab
+
+GitLab MCP server with 21+ tools for CI/CD pipelines, merge requests, code analysis, and issue tracking. Uses a hybrid proxy + custom tool architecture.
+
+| Capability | Details |
+|------------|---------|
+| Tools | 21+ tools: issues, merge requests, pipelines, search, code analysis (blame, diff, file content, tree, commits) |
+| Architecture | Proxy (forwards to GitLab `/api/v4/mcp`) + custom REST tools for code analysis |
+| Configuration | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL`, `GITLAB_DEFAULT_PROJECT_ID` |
+| Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
+| Port | 9084 (default) |
+
+Source: `packages/mcp-server-gitlab/src/`
+
+---
+
 ## App Reference
 
 ### @devops-agent/web
@@ -293,7 +319,7 @@ The frontend contains 9 components:
 | `CompletedProgress` | Summary of completed agent pipeline stages |
 | `FeedbackBar` | User feedback collection (thumbs up/down, comments) |
 | `FollowUpSuggestions` | Clickable follow-up questions generated by the validate node |
-| `DataSourceSelector` | Multi-select for Elasticsearch, Kafka, Couchbase, Konnect |
+| `DataSourceSelector` | Multi-select for Elasticsearch, Kafka, Couchbase, Konnect, GitLab |
 
 Source: `apps/web/src/`
 
@@ -303,7 +329,7 @@ Source: `apps/web/src/`
 
 ### agents/incident-analyzer/
 
-Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and four sub-agents are defined here.
+Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and five sub-agents are defined here.
 
 ```
 agents/incident-analyzer/
@@ -323,6 +349,9 @@ agents/incident-analyzer/
     konnect-agent/       Kong Konnect specialist
       agent.yaml         Tools: 78 Konnect tools via MCP port 9083
       SOUL.md            Persona: API gateway configuration and traffic analyst
+    gitlab-agent/        GitLab specialist
+      agent.yaml         Tools: 21+ GitLab tools via MCP port 9084
+      SOUL.md            Persona: CI/CD pipeline and code change analyst
   tools/                 Shared tool definitions (YAML)
   skills/                Multi-step skill definitions (Markdown)
   compliance/            Compliance rules and audit templates
@@ -413,3 +442,4 @@ Catalogs pin shared dependency versions across the workspace. Individual package
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial monorepo structure document created |
+| 2026-04-13 | Added mcp-server-gitlab (10th package), gitlab-agent (5th sub-agent), updated pipeline from 8 to 12 nodes |

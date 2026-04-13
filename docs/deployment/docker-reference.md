@@ -47,7 +47,7 @@ Local development images include all dependencies (not just production) and moun
 
 ## AgentCore Production Image
 
-The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the four MCP servers.
+The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the five MCP servers.
 
 ### Build Commands
 

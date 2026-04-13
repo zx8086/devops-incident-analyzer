@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 4 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent) that query existing MCP servers (192+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
+Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 5 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent, gitlab-agent) that query existing MCP servers (210+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, and GitLab. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
 
 ## Current State
 
-Fully implemented monorepo with 9 packages, 4 MCP servers, an 8-node LangGraph pipeline, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo with 10 packages, 5 MCP servers, a 12-node LangGraph pipeline, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
@@ -17,14 +17,15 @@ Fully implemented monorepo with 9 packages, 4 MCP servers, an 8-node LangGraph p
 ```
 agents/                    Gitagent YAML/Markdown definitions
   incident-analyzer/       Orchestrator: agent.yaml, SOUL.md, RULES.md, tools/, skills/
-    agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/
+    agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/, gitlab-agent/
 packages/
   gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
-  agent/                   LangGraph supervisor + 8-node pipeline
+  agent/                   LangGraph supervisor + 12-node pipeline
   mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 69 tools)
   mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 30 tools)
   mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
   mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
+  mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
   shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy
   checkpointer/            LangGraph state persistence (memory + bun:sqlite)
   observability/           OpenTelemetry + LangSmith, Pino logging
@@ -32,12 +33,12 @@ apps/
   web/                     SvelteKit frontend (Svelte 5 runes, Tailwind, SSE streaming)
 ```
 
-### Agent Pipeline (8-node LangGraph StateGraph)
+### Agent Pipeline (12-node LangGraph StateGraph)
 
 ```
-START -> classify -> {simple: responder -> END, complex: entityExtractor}
-  -> supervisor -> fan-out [elastic-agent, kafka-agent, capella-agent, konnect-agent]
-  -> align -> aggregate -> validate -> END
+START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
+  -> [selectRunbooks] -> entityExtractor -> fan-out [elastic, kafka, capella, konnect, gitlab]
+  -> align -> aggregate -> checkConfidence -> validate -> proposeMitigation -> followUp -> END
 ```
 
 ### Sub-Agents (named by MCP server)
@@ -48,8 +49,9 @@ START -> classify -> {simple: responder -> END, complex: entityExtractor}
 | kafka-agent | :9081 | Provider: `KAFKA_PROVIDER=local\|msk\|confluent`, feature gates for writes |
 | capella-agent | :9082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | konnect-agent | :9083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
+| gitlab-agent | :9084 | Token + instance: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
 
-Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. Sub-agents use action-driven tool selection (declared in tool YAML files) to filter 192+ MCP tools down to 5-25 per invocation, preventing context overflow.
+Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. Sub-agents use action-driven tool selection (declared in tool YAML files) to filter 210+ MCP tools down to 5-25 per invocation, preventing context overflow.
 
 ### Frontend
 
@@ -115,7 +117,7 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating names, obvious `@re
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket references (`SIO-XXX`), non-obvious algorithm explanations.
 
 ### Servers
-- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | Web: 5173
+- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
 - Kill background processes after testing
 

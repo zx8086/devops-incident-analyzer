@@ -1,9 +1,9 @@
 # MCP Server Integration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
-The agent connects to four MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 192 tools across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect. The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability.
+The agent connects to five MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, and GitLab. The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability.
 
 ---
 
@@ -19,27 +19,27 @@ The agent connects to four MCP (Model Context Protocol) servers over Streamable 
 |  |  - Independent per-server connections   | |
 |  |  - Streamable HTTP transport (/mcp)     | |
 |  |  - W3C traceparent injection            | |
-|  +-+----------+---------+---------+--------+ |
-|    |          |         |         |          |
-+----+----------+---------+---------+----------+
-     |          |         |         |
-     v          v         v         v
-+---------+ +-------+ +--------+ +---------+
-| elastic | | kafka | |couchbase| | konnect |
-|  -mcp   | | -mcp  | |  -mcp  | |  -mcp   |
-|         | |       | |        | |         |
-| 69      | | 15    | | 30     | | 78      |
-| tools   | | tools | | tools  | | tools   |
-|         | |       | |        | |         |
-| :9080   | | :9081 | | :9082  | | :9083   |
-+---------+ +-------+ +--------+ +---------+
-     |          |         |         |
-     v          v         v         v
-+---------+ +-------+ +--------+ +---------+
-| Elastic | | Kafka | |Couchbase| | Kong   |
-| search  | |Clusters| |Capella | |Konnect |
-| Clusters| |       | |Cluster | | API    |
-+---------+ +-------+ +--------+ +---------+
+|  +-+----------+---------+---------+--------+--------+ |
+|    |          |         |         |        |          |
++----+----------+---------+---------+--------+----------+
+     |          |         |         |        |
+     v          v         v         v        v
++---------+ +-------+ +--------+ +---------+ +---------+
+| elastic | | kafka | |couchbase| | konnect | | gitlab  |
+|  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   |
+|         | |       | |        | |         | |         |
+| 69      | | 15    | | 30     | | 78      | | 21+     |
+| tools   | | tools | | tools  | | tools   | | tools   |
+|         | |       | |        | |         | |         |
+| :9080   | | :9081 | | :9082  | | :9083   | | :9084   |
++---------+ +-------+ +--------+ +---------+ +---------+
+     |          |         |         |        |
+     v          v         v         v        v
++---------+ +-------+ +--------+ +---------+ +---------+
+| Elastic | | Kafka | |Couchbase| | Kong   | | GitLab  |
+| search  | |Clusters| |Capella | |Konnect | | API +   |
+| Clusters| |       | |Cluster | | API    | | Repos   |
++---------+ +-------+ +--------+ +---------+ +---------+
 ```
 
 Each MCP server runs as an independent Bun process, exposing tools via the `/mcp` HTTP endpoint and health status via `/health`. The agent connects to each server individually using `MultiServerMCPClient` from `@langchain/mcp-adapters`.
@@ -60,6 +60,7 @@ Server URLs are configured via environment variables:
 | `KAFKA_MCP_URL` | `http://localhost:9081` | Kafka MCP |
 | `CAPELLA_MCP_URL` | `http://localhost:9082` | Couchbase Capella MCP |
 | `KONNECT_MCP_URL` | `http://localhost:9083` | Kong Konnect MCP |
+| `GITLAB_MCP_URL` | `http://localhost:9084` | GitLab MCP |
 
 Each URL gets `/mcp` appended as the transport endpoint. The connection initialization in `createMcpClient()` uses `Promise.allSettled()` to connect to all servers concurrently and independently.
 
@@ -71,6 +72,7 @@ Promise.allSettled([
     connect("kafka-mcp",   kafkaUrl   + "/mcp"),
     connect("couchbase-mcp", capellaUrl + "/mcp"),
     connect("konnect-mcp", konnectUrl + "/mcp"),
+    connect("gitlab-mcp",  gitlabUrl  + "/mcp"),
 ])
 ```
 
@@ -83,7 +85,7 @@ If a server is unreachable at startup:
 
 ### Streamable HTTP Transport
 
-All four MCP servers use Streamable HTTP transport (SIO-595). The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
+All five MCP servers use Streamable HTTP transport (SIO-595). The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
 - `GET /health` -- health check endpoint for periodic polling
 - The standard MCP protocol messages over HTTP POST to `/mcp`
 
@@ -101,6 +103,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15 |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | 30 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 78 |
+| `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | 21+ |
 
 The mapping is defined in `mcp-bridge.ts`:
 
@@ -110,6 +113,7 @@ const serverMap: Record<string, string> = {
     kafka: "kafka-mcp",
     couchbase: "couchbase-mcp",
     konnect: "konnect-mcp",
+    gitlab: "gitlab-mcp",
 };
 ```
 
@@ -260,6 +264,23 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
+### GitLab MCP (21+ tools)
+
+**Purpose:** Read-only access to GitLab for CI/CD pipeline status, merge request history, issue tracking, code blame, commit diffs, and semantic code search. Correlates code changes with incident timing.
+
+**Architecture:** Unlike other MCP servers that implement tools directly, the GitLab MCP uses a hybrid proxy + custom pattern. It connects to GitLab's native MCP endpoint (`/api/v4/mcp`) at startup, discovers available tools, and re-registers them locally with a `gitlab_` prefix. Custom code-analysis tools (blame, commit diff, file content, repository tree, commit listing) are registered alongside the proxied tools.
+
+**Tool categories:**
+- Issues: create, get, notes, saved views (via proxy)
+- Merge requests: get, commits, diffs, pipelines, conflicts (via proxy)
+- Pipelines: manage, get jobs (via proxy)
+- Search: global search, labels, semantic code search with deferred retry for embedding readiness (via proxy)
+- Code analysis: file content, blame, commit diff, commit listing, repository tree (custom REST tools)
+
+**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping.
+
+**Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
+
 ---
 
 ## Dynamic Tool Prompts
@@ -303,3 +324,4 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
+| 2026-04-13 | Added GitLab MCP as 5th server (proxy + custom tools, OAuth, deferred retry) |

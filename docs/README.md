@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-04-10
 
-Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates four MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect) to correlate DevOps incidents across 192 tools.
+Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates five MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab) to correlate DevOps incidents across 210+ tools.
 
 ---
 
@@ -35,9 +35,9 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Document | Description |
 |----------|-------------|
 | [System Overview](architecture/system-overview.md) | High-level architecture, data flow, and component relationships |
-| [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 8-node StateGraph: classify, extract, supervise, query, align, aggregate, validate |
+| [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 12-node StateGraph: classify, normalize, selectRunbooks, extract, query, align, aggregate, validate, proposeMitigation, followUp |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
-| [MCP Integration](architecture/mcp-integration.md) | 4 MCP server connections, tool scoping, health monitoring, trace propagation |
+| [MCP Integration](architecture/mcp-integration.md) | 5 MCP server connections, tool scoping, health monitoring, trace propagation |
 
 ### Configuration
 
@@ -60,7 +60,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 |----------|-------------|
 | [Getting Started](development/getting-started.md) | Prerequisites, initial setup, first run, and development workflow |
 | [Monorepo Structure](development/monorepo-structure.md) | Package map, dependency graph, workspace configuration |
-| [Adding MCP Tools](development/adding-mcp-tools.md) | Step-by-step process for adding tools to any of the four MCP servers |
+| [Adding MCP Tools](development/adding-mcp-tools.md) | Step-by-step process for adding tools to any of the five MCP servers |
 | [Testing](development/testing.md) | Unit, integration, and MCP tool testing strategies |
 | [Action Tool Maps](development/action-tool-maps.md) | Action-driven tool selection: YAML maps, fallback chain, troubleshooting |
 | [Authoring Skills and Runbooks](development/authoring-skills-and-runbooks.md) | How to author orchestrator skills and knowledge-base runbooks, with tool-name footgun guidance |

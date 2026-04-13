@@ -1,9 +1,9 @@
 # MCP Server Configuration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
-Deep dive into how each of the four MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
+Deep dive into how each of the five MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
 
 For all environment variable names and defaults, see [Environment Variables](environment-variables.md).
 
@@ -249,9 +249,79 @@ The Konnect server supports MCP elicitation, where the server can prompt the age
 
 ---
 
+## GitLab MCP Server
+
+**Package:** `packages/mcp-server-gitlab`
+**Config directory:** `packages/mcp-server-gitlab/src/config/`
+**Tool count:** 21+ (dynamic, varies based on remote MCP endpoint discovery)
+
+### Configuration Schema
+
+```
+GitLabConfig
+  application:
+    name: string
+    version: string (semver)
+    environment: "development" | "staging" | "production" | "test"
+    logLevel: "debug" | "info" | "warn" | "error"
+  gitlab:
+    instanceUrl: string (required, URL)
+    personalAccessToken: string (required)
+    defaultProjectId?: string
+    timeout: number (1000-60000)
+    retryAttempts: number (0-5)
+    retryDelay: number (100-5000)
+  tracing:
+    enabled: boolean
+    apiKey?: string
+    project: string
+    endpoint: string (URL)
+    sessionName: string
+    tags: string[]
+    samplingRate: number (0-1)
+  monitoring:
+    enabled: boolean
+    healthCheckInterval: number (5000-300000)
+    metricsCollection: boolean
+  transport:
+    mode: "stdio" | "http" | "both" | "agentcore"
+    port: number (1024-65535)
+    host: string
+    path: string (starts with "/")
+    sessionMode: "stateless" | "stateful"
+    idleTimeout: number (10-255)
+    apiKey: string
+    allowedOrigins: string
+```
+
+### Hybrid Tool Architecture
+
+Unlike other MCP servers that implement all tools directly, the GitLab MCP server uses a two-source tool registration pattern:
+
+1. **Proxy tools** -- At startup, the server connects to GitLab's native MCP endpoint (`{instanceUrl}/api/v4/mcp`), discovers available tools, and re-registers them locally with a `gitlab_` prefix. These tools forward requests through the proxy client.
+
+2. **Custom code-analysis tools** -- Five tools implemented as direct REST API calls to GitLab's API v4: `gitlab_get_file_content`, `gitlab_get_blame`, `gitlab_get_commit_diff`, `gitlab_list_commits`, `gitlab_get_repository_tree`.
+
+Both categories are registered on the same `McpServer` instance and appear as a unified tool set to the agent.
+
+### Token Authentication
+
+| Variable | Purpose |
+|----------|---------|
+| `GITLAB_PERSONAL_ACCESS_TOKEN` | Authenticates all GitLab API requests (proxy and custom tools) |
+| `GITLAB_INSTANCE_URL` | Base URL for the GitLab instance (default: `https://gitlab.com`) |
+
+The token requires the `api` scope. For self-hosted GitLab instances, set the instance URL to your deployment (e.g., `https://gitlab.company.com`).
+
+### Deferred Retry for Embeddings
+
+The proxy layer includes special handling for GitLab's `semantic_code_search` tool. When a project's code embeddings haven't been indexed yet, GitLab returns an error indicating indexing is in progress. The proxy detects this pattern and retries with exponential backoff (10s, 20s, 40s) up to 3 times, giving the indexing process time to complete.
+
+---
+
 ## Transport Configuration
 
-All four MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across all servers.
+All five MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across all servers.
 
 ### Transport Modes
 
@@ -296,3 +366,4 @@ All four MCP servers share the same transport abstraction. The transport mode is
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial MCP server configuration reference created (Phase 3: Configuration + Deployment) |
+| 2026-04-13 | Added GitLab MCP server configuration (SIO-647): hybrid proxy + custom tools, token auth, deferred retry |

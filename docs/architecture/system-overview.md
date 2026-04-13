@@ -1,15 +1,15 @@
 # System Overview
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
-The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, and Kong Konnect API gateway metrics. A LangGraph supervisor orchestrates four specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
+The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, and GitLab CI/CD pipelines. A LangGraph supervisor orchestrates five specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
 ---
 
 ## System Purpose
 
-DevOps teams troubleshooting production incidents face a common problem: evidence is scattered across multiple observability platforms and data stores. Engineers jump between Elasticsearch for logs, Kafka for event pipelines, Couchbase for application state, and Kong Konnect for API gateway metrics -- manually correlating timestamps and building a mental model of causality.
+DevOps teams troubleshooting production incidents face a common problem: evidence is scattered across multiple observability platforms and data stores. Engineers jump between Elasticsearch for logs, Kafka for event pipelines, Couchbase for application state, Kong Konnect for API gateway metrics, and GitLab for recent code changes and CI/CD pipeline status -- manually correlating timestamps and building a mental model of causality.
 
 The Incident Analyzer automates this correlation. Given a natural language query like "why is the checkout service returning 500s?", it:
 
@@ -42,31 +42,31 @@ The agent is strictly read-only. It observes production systems but never mutate
          |
          | Send API (parallel fan-out)
          v
-+--------+---------+---------+---------+
-|        |         |         |         |
-| elastic| kafka   | capella | konnect |
-| -agent | -agent  | -agent  | -agent  |
-|        |         |         |         |
-+---+----+---+-----+---+-----+---+----+
-    |        |          |         |
-    v        v          v         v
-+------+ +------+ +--------+ +--------+
-| ES   | | Kafka| | Capella| | Konnect|
-| MCP  | | MCP  | | MCP    | | MCP    |
-| :9080| | :9081| | :9082  | | :9083  |
-| 69   | | 15   | | 30     | | 78     |
-| tools| | tools| | tools  | | tools  |
-+------+ +------+ +--------+ +--------+
-    |        |          |         |
-    v        v          v         v
-+------+ +------+ +--------+ +--------+
-| Elas-| |Kafka | |Couchbase| | Kong  |
-| tic- | |Clust-| |Capella  | |Konnect|
-| search| |ers  | |Cluster  | | API   |
-+------+ +------+ +--------+ +--------+
++--------+---------+---------+---------+---------+
+|        |         |         |         |         |
+| elastic| kafka   | capella | konnect | gitlab  |
+| -agent | -agent  | -agent  | -agent  | -agent  |
+|        |         |         |         |         |
++---+----+---+-----+---+-----+---+----+---+-----+
+    |        |          |         |         |
+    v        v          v         v         v
++------+ +------+ +--------+ +--------+ +--------+
+| ES   | | Kafka| | Capella| | Konnect| | GitLab |
+| MCP  | | MCP  | | MCP    | | MCP    | | MCP    |
+| :9080| | :9081| | :9082  | | :9083  | | :9084  |
+| 69   | | 15   | | 30     | | 78     | | 21+    |
+| tools| | tools| | tools  | | tools  | | tools  |
++------+ +------+ +--------+ +--------+ +--------+
+    |        |          |         |         |
+    v        v          v         v         v
++------+ +------+ +--------+ +--------+ +--------+
+| Elas-| |Kafka | |Couchbase| | Kong  | | GitLab |
+| tic- | |Clust-| |Capella  | |Konnect| | API +  |
+| search| |ers  | |Cluster  | | API   | | Repos  |
++------+ +------+ +--------+ +--------+ +--------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. The numbers above (69 + 15 + 30 + 78 = 192) represent the full tool set when all servers are connected.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. The numbers above (69 + 15 + 30 + 78 + 21 = 213) represent the full tool set when all servers are connected. The GitLab MCP tool count varies because it discovers proxy tools from the remote GitLab MCP endpoint at startup.
 
 ---
 
@@ -82,7 +82,7 @@ This separation means agent personality (SOUL.md), constraints (RULES.md), skill
 
 The supervisor does not execute sub-agents sequentially. It uses LangGraph's `Send` API to dispatch parallel executions of the `queryDataSource` node, one per target datasource. Each Send carries its own `currentDataSource` state, which scopes the sub-agent's MCP tool access to a single server.
 
-This fan-out pattern provides natural parallelism: all four datasource queries run concurrently, and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
+This fan-out pattern provides natural parallelism: all five datasource queries run concurrently, and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
 
 ### MCP as Tool Integration Layer
 
@@ -117,7 +117,7 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 8-node LangGraph StateGraph: classify, extract, fan-out, align, aggregate, validate |
+| Agent Orchestrator | `packages/agent` | 12-node LangGraph StateGraph: classify, normalize, selectRunbooks, extract, fan-out, align, aggregate, checkConfidence, validate, proposeMitigation, followUp |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
@@ -126,6 +126,7 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Kafka MCP | `packages/mcp-server-kafka` | 15 tools for cluster info, topic management, consumer groups, message consumption |
 | Couchbase MCP | `packages/mcp-server-couchbase` | 30 tools for cluster health, bucket management, N1QL queries, index analysis |
 | Konnect MCP | `packages/mcp-server-konnect` | 78 tools for services, routes, plugins, consumers, upstreams, analytics |
+| GitLab MCP | `packages/mcp-server-gitlab` | 21+ tools for CI/CD pipelines, merge requests, code analysis, issues (proxy + custom) |
 | Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 9 components, Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
@@ -172,6 +173,11 @@ packages/mcp-server-konnect
     +-- @devops-agent/shared
     +-- @devops-agent/observability
 
+packages/mcp-server-gitlab
+    +-- @devops-agent/shared
+    +-- @devops-agent/observability
+    +-- @modelcontextprotocol/sdk (proxy client)
+
 apps/web
     +-- @devops-agent/agent (server-side)
     +-- SvelteKit, Tailwind CSS v4
@@ -184,68 +190,93 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 ## Data Flow
 
 ```
-+-------+     +----------+     +---------+     +------------+
-| START | --> | classify  | --> | simple? | --> | responder  |
-+-------+     +----------+     +---------+     +-----+------+
-                                   |                  |
-                                   | no               v
-                                   v            +----------+
-                            +-----------+       | followUp |
-                            | entity    |       +-----+----+
-                            | Extractor |             |
-                            +-----+-----+             v
-                                  |              +-------+
-                                  v              |  END  |
-                            +-----------+        +-------+
-                            | supervisor|
-                            | (fan-out) |
-                            +-----+-----+
-                                  |
-                    +------+------+------+------+
-                    |      |      |      |      |
-                    v      v      v      v      |
-                 elastic kafka capella konnect  |
-                 -agent  -agent -agent  -agent  |
-                    |      |      |      |      |
-                    +------+------+------+------+
-                                  |
-                                  v
-                            +-----------+
-                  +-------> |   align   | <-------+
-                  |         +-----+-----+         |
-                  |               |               |
-                  | (gap/error)   | (aligned)     |
-                  |               v               |
-                  |         +-----------+         |
-                  +-------- | aggregate |         |
-                            +-----+-----+         |
-                                  |               |
-                                  v               |
-                            +-----------+         |
-                            | validate  | --------+
-                            +-----+-----+  (fail, retry)
-                                  |
-                                  | (pass)
-                                  v
-                            +-----------+
-                            | followUp  |
-                            +-----+-----+
-                                  |
-                                  v
-                            +-------+
-                            |  END  |
-                            +-------+
++-------+
+| START |
++---+---+
+    |
+    v
++----------+
+| classify |-------> queryComplexity === "simple"
++----+-----+                    |
+     |                          v
+     | (complex)          +-----------+     +----------+
+     v                    | responder |---->| followUp |---> END
++-----------+             +-----------+     +----------+
+| normalize |
++-----+-----+
+      |
+      v (if runbook_selection enabled)
++----------------+
+| selectRunbooks |
++-------+--------+
+        |
+        v
++----------------+
+| entityExtractor|
++-------+--------+
+        |
+        v
++------------+
+| supervisor |
+| (fan-out)  |
++-+--+--+--+-+
+  |  |  |  |  |
+  v  v  v  v  v
+elastic kafka capella konnect gitlab
+-agent  -agent -agent  -agent  -agent
+  |  |  |  |  |
+  +--+--+--+--+
+        |
+        v
++-------+------+
+|    align     | <--------+
++-------+------+          |
+        |                 |
+        v                 |
++-------+------+          |
+|  aggregate   | ---------+ (via routeAfterAlignment)
++-------+------+
+        |
+        v
++-----------+------+
+| checkConfidence  |
++-------+----------+
+        |
+        v
++-------+------+
+|   validate   | <--------+
++-------+------+          |
+        |                 |
+        | pass            | fail && retryCount < 2
+        v                 |
++------------------+      |
+| proposeMitigation| -----+ (retries go back to aggregate)
++-------+----------+
+        |
+        v
++-------+------+
+|   followUp   |
++-------+------+
+        |
+        v
+    +-------+
+    |  END  |
+    +-------+
 ```
 
 1. **classify** -- Routes query as simple (greetings, help) or complex (infrastructure investigation). Uses regex patterns first, falls back to LLM.
-2. **responder** -- Handles simple queries from general knowledge without querying datasources.
-3. **entityExtractor** -- Extracts services, time windows, severity, and target datasources from the query.
-4. **supervisor** -- Creates `Send` messages for parallel sub-agent dispatch. Validates agent names, checks MCP tool availability, skips datasources with no connected tools.
-5. **queryDataSource** -- Runs a ReAct agent with datasource-scoped MCP tools. Uses Claude Haiku for fast tool calling.
-6. **align** -- Checks that all targeted datasources returned results. Retries missing or transiently-failed datasources (max 2 alignment retries). Non-retryable errors (auth, session) are skipped.
-7. **aggregate** -- Correlates findings into a unified incident report with timeline, confidence score, and per-datasource attribution.
-8. **validate** -- Anti-hallucination check. Verifies answer length, datasource references, and timestamp authenticity. Failed validation retries aggregation (max 2 retries).
-9. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
+2. **normalize** -- Extracts a structured `NormalizedIncident` (severity, time window, affected services, metrics) from the user's query for downstream nodes.
+3. **selectRunbooks** (optional, SIO-640) -- Picks 0-2 runbooks from the catalog via trigger grammar pre-filter then LLM selection. Enabled when `knowledge/index.yaml` has a `runbook_selection` block.
+4. **responder** -- Handles simple queries from general knowledge without querying datasources.
+5. **entityExtractor** -- Extracts services, time windows, severity, and target datasources from the query.
+6. **supervisor** -- Creates `Send` messages for parallel sub-agent dispatch. Validates agent names, checks MCP tool availability, skips datasources with no connected tools.
+7. **queryDataSource** -- Runs a ReAct agent with datasource-scoped MCP tools. Uses Claude Haiku for fast tool calling.
+8. **align** -- Checks that all targeted datasources returned results. Retries missing or transiently-failed datasources (max 2 alignment retries). Non-retryable errors (auth, session) are skipped.
+9. **aggregate** -- Correlates findings into a unified incident report with timeline, confidence score, and per-datasource attribution.
+10. **checkConfidence** -- HITL gate: escalates to human approval when confidence < 0.6, errors are detected, or a production mutation is attempted.
+11. **validate** -- Anti-hallucination check. Verifies answer length, datasource references, and timestamp authenticity. Failed validation retries aggregation (max 2 retries).
+12. **proposeMitigation** -- Generates actionable mitigation steps based on the validated incident report.
+13. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
 
 ---
 
@@ -276,6 +307,7 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 | Kafka MCP Server | 9081 | Streamable HTTP (MCP) |
 | Couchbase Capella MCP Server | 9082 | Streamable HTTP (MCP) |
 | Kong Konnect MCP Server | 9083 | Streamable HTTP (MCP) |
+| GitLab MCP Server | 9084 | Streamable HTTP (MCP) |
 
 Each MCP server exposes two HTTP endpoints:
 - `POST /mcp` -- MCP protocol messages (tool calls, tool results)
@@ -302,3 +334,4 @@ The system enforces several security boundaries:
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
+| 2026-04-13 | Added GitLab as 5th datasource/MCP server, updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation) |

@@ -15,9 +15,9 @@ AgentCore Runtime hosts MCP servers inside isolated microVMs. Each server runs a
 - `GET /health` -- Readiness probe with detailed status
 - `POST /mcp` -- Streamable HTTP for MCP protocol messages
 
-The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all four MCP servers through one connection.
+The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all five MCP servers through one connection.
 
-Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the four servers using a build argument.
+Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the five servers using a build argument.
 
 ---
 
@@ -60,7 +60,7 @@ Each microVM receives its own IAM role with permissions scoped to the specific d
 
 ## Parameterized Dockerfile
 
-The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the four MCP servers using the `MCP_SERVER_PACKAGE` build argument.
+The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the five MCP servers using the `MCP_SERVER_PACKAGE` build argument.
 
 ### Build Argument
 
@@ -154,13 +154,14 @@ docker build \
   .
 ```
 
-Build commands for all four servers:
+Build commands for all five servers:
 
 ```bash
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-elastic -t elastic-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-kafka -t kafka-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-couchbase -t couchbase-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-konnect -t konnect-mcp-agentcore .
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-gitlab -t gitlab-mcp-agentcore .
 ```
 
 ### Step 2: Push to ECR

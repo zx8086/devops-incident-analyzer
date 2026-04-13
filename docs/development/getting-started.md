@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-04-04
 
-Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites, initial setup, first run, running tests, and the development workflow. Follow these steps to get a working local environment with all four MCP servers and the SvelteKit frontend.
+Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites, initial setup, first run, running tests, and the development workflow. Follow these steps to get a working local environment with all five MCP servers and the SvelteKit frontend.
 
 ---
 
@@ -122,7 +122,7 @@ For a single-command startup of all services:
 docker-compose up
 ```
 
-This starts all four MCP servers and the web frontend with the port mappings defined in `docker-compose.yml`. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
+This starts all five MCP servers and the web frontend with the port mappings defined in `docker-compose.yml`. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
 
 ---
 
@@ -207,8 +207,8 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 ## Where to Go Next
 
 - [Monorepo Structure](monorepo-structure.md) -- understand the package layout and dependency graph
-- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 8-node LangGraph pipeline processes incidents
-- [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the four MCP servers
+- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 12-node LangGraph pipeline processes incidents
+- [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the five MCP servers
 - [Local Development](../deployment/local-development.md) -- Docker Compose configuration and hot reload setup
 
 ---

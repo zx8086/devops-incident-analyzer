@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-13
 
 Symptom-based problem resolution for the DevOps Incident Analyzer. Issues are organized by subsystem: MCP servers, LangGraph agent, SvelteKit frontend, configuration, and AWS/AgentCore deployment.
 
@@ -20,6 +20,7 @@ lsof -i :9080    # Elastic MCP
 lsof -i :9081    # Kafka MCP
 lsof -i :9082    # Couchbase MCP
 lsof -i :9083    # Konnect MCP
+lsof -i :9084    # GitLab MCP
 ```
 
 If a port is occupied, kill the existing process:
@@ -100,6 +101,27 @@ Check datasource connectivity from inside the server process. Common causes:
 - Elasticsearch cluster in red/yellow state
 - Couchbase node failover in progress
 - Konnect API rate limiting
+- GitLab API token expired or insufficient scope
+
+### GitLab MCP Server Connection Issues
+
+**Symptoms:** GitLab tools fail with 401/403 errors, proxy tools return empty results, or semantic code search always times out.
+
+**Verify token and instance URL:**
+
+```bash
+curl -H "PRIVATE-TOKEN: $GITLAB_PERSONAL_ACCESS_TOKEN" "$GITLAB_INSTANCE_URL/api/v4/user"
+```
+
+If this returns 401, the token is expired or invalid. Generate a new token with `api` scope.
+
+**Check proxy connection:** The GitLab MCP server connects to GitLab's native MCP endpoint at startup. If this connection fails, proxy tools will be unavailable but custom code-analysis tools will still work. Check server logs for:
+
+```
+[gitlab-mcp] Failed to connect to GitLab MCP endpoint
+```
+
+**Semantic code search returns "embeddings not ready":** First-time use on a project triggers embedding indexing. The proxy retries automatically (10s, 20s, 40s). If it still fails after ~70 seconds, the project may not have code search enabled. Check in GitLab UI under Settings > General > Code Search.
 
 Increase the tool timeout if the datasource is slow but reachable:
 
@@ -366,7 +388,7 @@ Find and kill processes blocking MCP server ports:
 
 ```bash
 # Check all MCP ports
-for port in 9080 9081 9082 9083 5173; do
+for port in 9080 9081 9082 9083 9084 5173; do
   pid=$(lsof -ti :$port 2>/dev/null)
   if [ -n "$pid" ]; then
     echo "Port $port: PID $pid"
