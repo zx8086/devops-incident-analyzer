@@ -219,18 +219,34 @@ export class SecurityEnhancer {
 	private validateString(value: string, field: string): SecurityViolation[] {
 		const violations: SecurityViolation[] = [];
 
+		// Painless script exemption: ingest pipeline processors use Painless in
+		// "if", "source", and "script" fields. These legitimately contain quotes,
+		// comparison operators (==, !=), property access (ctx.field?.name), and
+		// keywords that overlap with SQL injection patterns.
+		const lowerField = field.toLowerCase();
+		const isPainlessScriptField =
+			lowerField.includes("processors") &&
+			(lowerField.endsWith(".if") ||
+				lowerField.endsWith(".source") ||
+				lowerField.endsWith(".script") ||
+				lowerField.endsWith(".lang"));
+
+		if (isPainlessScriptField) {
+			return violations;
+		}
+
 		// Elasticsearch-specific exemptions - expanded to cover more field types
 		const isElasticsearchField =
-			field.toLowerCase().includes("index") ||
-			field.toLowerCase().includes("pattern") ||
-			field.toLowerCase().includes("query") ||
-			field.toLowerCase().includes("alias") ||
-			field.toLowerCase().includes("repository") ||
-			field.toLowerCase().includes("snapshot") ||
-			field.toLowerCase().includes("policy") ||
-			field.toLowerCase().includes("template") ||
-			field.toLowerCase().includes("name") ||
-			field.toLowerCase().includes("id");
+			lowerField.includes("index") ||
+			lowerField.includes("pattern") ||
+			lowerField.includes("query") ||
+			lowerField.includes("alias") ||
+			lowerField.includes("repository") ||
+			lowerField.includes("snapshot") ||
+			lowerField.includes("policy") ||
+			lowerField.includes("template") ||
+			lowerField.includes("name") ||
+			lowerField.includes("id");
 
 		// Expanded patterns for legitimate Elasticsearch values
 		const isElasticsearchValue =
@@ -243,8 +259,15 @@ export class SecurityEnhancer {
 
 		// Check each pattern category
 		for (const [category, patterns] of this.suspiciousPatterns.entries()) {
-			// Skip command injection checks for legitimate Elasticsearch patterns
-			if (category === "command_injection" && isElasticsearchField && isElasticsearchValue) {
+			// Skip injection checks for legitimate Elasticsearch field values.
+			// ES identifiers (index names, pipeline IDs, policy names) contain
+			// hyphens, wildcards, and dots that trigger sql_injection (-- matches
+			// double-hyphens) and command_injection false positives.
+			if (
+				(category === "command_injection" || category === "sql_injection") &&
+				isElasticsearchField &&
+				isElasticsearchValue
+			) {
 				continue;
 			}
 
