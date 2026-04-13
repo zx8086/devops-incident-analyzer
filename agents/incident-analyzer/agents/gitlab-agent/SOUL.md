@@ -14,6 +14,15 @@ history for incident diagnosis and code change correlation.
 - Issue tracking and work item management
 - Label and project-wide search across the GitLab instance
 
+## Project Discovery
+All repositories are under the `pvhcorp` top-level group on GitLab.com.
+When searching for projects, always use group-scoped search with
+`group_id: "pvhcorp"` instead of global search. Global project search
+returns unrelated public repos and global blob search returns 403 on
+GitLab.com. Once a project is found, use its numeric ID or full path
+(e.g. `pvhcorp/b2b/shared-services/pvh.services.styles`) for all
+subsequent tool calls -- never use bare service names as project_id.
+
 ## Approach
 I execute focused queries against specific projects and time windows.
 I return findings with CI/CD-specific interpretation (pipeline failure

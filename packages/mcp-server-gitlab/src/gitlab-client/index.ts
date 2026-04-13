@@ -158,6 +158,29 @@ export class GitLabRestClient {
 		});
 	}
 
+	async searchBlobs(
+		projectId: string,
+		search: string,
+		options?: { ref?: string; per_page?: number; page?: number },
+	): Promise<
+		Array<{
+			basename: string;
+			data: string;
+			path: string;
+			filename: string;
+			id: string;
+			ref: string;
+			startline: number;
+			project_id: number;
+		}>
+	> {
+		log.debug({ projectId, search, ...options }, "Searching blobs in project");
+		return this.request({
+			path: `/projects/${encodeURIComponent(projectId)}/search`,
+			query: { scope: "blobs", search, ...options },
+		});
+	}
+
 	async getRepositoryTree(
 		projectId: string,
 		options?: {

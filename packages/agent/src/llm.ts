@@ -39,7 +39,7 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	classifier: { temperature: 0 },
 	subAgent: {},
 	aggregator: { temperature: 0.1 },
-	responder: { temperature: 0.3 },
+	responder: { temperature: 0.3, maxTokens: 16384 },
 	entityExtractor: { temperature: 0 },
 	followUp: { temperature: 0.5, maxTokens: 256 },
 	normalizer: { temperature: 0 },
@@ -66,7 +66,7 @@ const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 
 export function createLlm(role: LlmRole): ChatBedrockConverse {
 	const agent = getRootAgent();
-	const isLightweight = role === "classifier" || role === "entityExtractor";
+	const isLightweight = role === "classifier";
 
 	const modelConfig = isLightweight ? agent.subAgents.get("elastic-agent")?.manifest.model : agent.manifest.model;
 

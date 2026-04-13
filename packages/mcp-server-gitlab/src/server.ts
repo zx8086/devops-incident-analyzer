@@ -43,7 +43,7 @@ export function createGitLabServer(datasource: GitLabDatasource): McpServer {
 	// Register proxy tools from pre-discovered tool list
 	let proxyCount = 0;
 	if (discoveredTools && discoveredTools.length > 0) {
-		proxyCount = registerProxyTools(server, proxy, discoveredTools);
+		proxyCount = registerProxyTools(server, proxy, discoveredTools, restClient);
 	}
 
 	// Register code analysis tools via REST API

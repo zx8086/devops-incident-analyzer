@@ -9,6 +9,7 @@ import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { getAgent } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { withRetry } from "./tool-retry.ts";
 
 const logger = getLogger("agent:entity-extractor");
 
@@ -88,12 +89,16 @@ Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to
 Always include "gitlab" alongside other datasources for complex incidents -- GitLab provides supplementary code and deployment correlation context.
 If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", ")}.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}`;
 
-	const response = await llm.invoke(
-		[
-			{ role: "system", content: systemPrompt },
-			{ role: "human", content: query },
-		],
-		config,
+	const response = await withRetry(
+		() =>
+			llm.invoke(
+				[
+					{ role: "system", content: systemPrompt },
+					{ role: "human", content: query },
+				],
+				config,
+			),
+		{ maxRetries: 3, baseDelayMs: 1000, label: "entityExtractor:llm" },
 	);
 
 	const uiSelected = state.targetDataSources;

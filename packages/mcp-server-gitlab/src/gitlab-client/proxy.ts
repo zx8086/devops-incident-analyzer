@@ -95,13 +95,13 @@ export class GitLabMcpProxy {
 		return tools;
 	}
 
-	async callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
+	async callTool(toolName: string, args: Record<string, unknown>, options?: { timeout?: number }): Promise<unknown> {
 		if (!this.connected) {
 			throw new Error("Not connected to GitLab MCP server. Call connect() first.");
 		}
 
 		log.debug({ tool: toolName }, "Forwarding tool call to GitLab MCP");
-		return this.client.callTool({ name: toolName, arguments: args });
+		return this.client.callTool({ name: toolName, arguments: args }, undefined, options);
 	}
 
 	async disconnect(): Promise<void> {
