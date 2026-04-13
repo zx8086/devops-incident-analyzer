@@ -40,7 +40,7 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 
 export async function createTransport(
 	config: TransportConfig,
-	serverFactory: () => Promise<McpServer>,
+	serverFactory: () => McpServer,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
 	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
@@ -54,8 +54,7 @@ export async function createTransport(
 	};
 
 	if (useAgentCore) {
-		const server = await serverFactory();
-		result.agentcore = await startAgentCoreTransport(() => server, createBootstrapAdapter(logger), {
+		result.agentcore = await startAgentCoreTransport(serverFactory, createBootstrapAdapter(logger), {
 			port: config.port,
 			host: config.host,
 			path: config.path,
@@ -64,8 +63,7 @@ export async function createTransport(
 
 	if (useHttp) {
 		const allowedOrigins = splitCommaSeparated(config.allowedOrigins || undefined);
-		const server = await serverFactory();
-		result.http = await startHttpTransport(() => server, {
+		result.http = await startHttpTransport(serverFactory, {
 			port: config.port,
 			host: config.host,
 			path: config.path,
@@ -77,7 +75,7 @@ export async function createTransport(
 	}
 
 	if (useStdio) {
-		const server = await serverFactory();
+		const server = serverFactory();
 		result.stdio = await startStdioTransport(server);
 	}
 

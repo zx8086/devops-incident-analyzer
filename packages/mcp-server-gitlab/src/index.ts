@@ -3,7 +3,7 @@ import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } fr
 import { loadConfiguration } from "./config/index.js";
 import { GitLabRestClient } from "./gitlab-client/index.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
-import { createGitLabServer, type GitLabDatasource } from "./server.ts";
+import { createGitLabServer, discoverRemoteTools, type GitLabDatasource } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
@@ -40,7 +40,6 @@ if (import.meta.main) {
 				timeout: config.gitlab.timeout,
 			});
 
-			// Connect proxy to GitLab's MCP endpoint -- non-fatal if unavailable
 			try {
 				await proxy.connect();
 			} catch (error) {
@@ -50,37 +49,22 @@ if (import.meta.main) {
 				);
 			}
 
+			// Discover remote tools once at startup
+			const discoveredTools = proxy.isConnected() ? await discoverRemoteTools(proxy) : [];
+
 			const restClient = new GitLabRestClient({
 				instanceUrl: config.gitlab.instanceUrl,
 				personalAccessToken: config.gitlab.personalAccessToken,
 				timeout: config.gitlab.timeout,
 			});
 
-			return { proxy, restClient, config };
+			return { proxy, restClient, config, discoveredTools };
 		},
 
-		createServerFactory: (ds) => () => {
-			// createGitLabServer is async, but createMcpApplication expects sync factory.
-			// We return a placeholder and handle async registration in createTransport.
-			// This works because our transport factory calls serverFactory as async.
-			return createGitLabServer(ds) as unknown as ReturnType<
-				() => import("@modelcontextprotocol/sdk/server/mcp.js").McpServer
-			>;
-		},
+		// Sync factory: creates a new McpServer per request with pre-discovered tools
+		createServerFactory: (ds) => () => createGitLabServer(ds),
 
-		createTransport: async (serverFactory, ds) => {
-			// Since our server creation is async (proxy tool discovery), wrap it
-			const asyncServerFactory = async () => {
-				const result = serverFactory();
-				// If it's a promise (from our async createGitLabServer), await it
-				if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
-					return await (result as unknown as Promise<import("@modelcontextprotocol/sdk/server/mcp.js").McpServer>);
-				}
-				return result;
-			};
-
-			return createTransport(ds.config.transport, asyncServerFactory);
-		},
+		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
 
 		cleanupDatasource: async (ds) => {
 			await ds.proxy.disconnect();
@@ -91,6 +75,7 @@ if (import.meta.main) {
 				{
 					gitlabInstance: ds.config.gitlab.instanceUrl,
 					proxyConnected: ds.proxy.isConnected(),
+					proxyTools: ds.discoveredTools?.length ?? 0,
 					environment: ds.config.application.environment,
 					transport: ds.config.transport.mode,
 					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,

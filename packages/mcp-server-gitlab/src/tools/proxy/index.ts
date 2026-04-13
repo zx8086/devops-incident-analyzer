@@ -16,7 +16,6 @@ function buildZodShapeFromJsonSchema(inputSchema: ProxyToolInfo["inputSchema"]):
 	const shape: Record<string, z.ZodTypeAny> = {};
 
 	for (const [key, _prop] of Object.entries(properties)) {
-		// Use passthrough z.unknown() for each property -- actual validation is at the remote server
 		const field = z.unknown().describe(key);
 		shape[key] = required.has(key) ? field : field.optional();
 	}
@@ -24,8 +23,8 @@ function buildZodShapeFromJsonSchema(inputSchema: ProxyToolInfo["inputSchema"]):
 	return shape;
 }
 
-export async function registerProxyTools(server: McpServer, proxy: GitLabMcpProxy): Promise<string[]> {
-	const remoteTools = await proxy.listTools();
+// Synchronous registration using pre-discovered tools
+export function registerProxyTools(server: McpServer, proxy: GitLabMcpProxy, remoteTools: ProxyToolInfo[]): number {
 	const registered: string[] = [];
 
 	for (const tool of remoteTools) {
@@ -38,7 +37,6 @@ export async function registerProxyTools(server: McpServer, proxy: GitLabMcpProx
 					const result = (await proxy.callTool(tool.name, args)) as {
 						content?: Array<{ type: string; text: string }>;
 					};
-					// Normalize content type literals for MCP SDK compatibility
 					const content = (result.content ?? []).map((c) => ({
 						type: "text" as const,
 						text: typeof c.text === "string" ? c.text : JSON.stringify(c),
@@ -60,5 +58,5 @@ export async function registerProxyTools(server: McpServer, proxy: GitLabMcpProx
 	}
 
 	log.info({ count: registered.length, tools: registered }, "Proxy tools registered");
-	return registered;
+	return registered.length;
 }
