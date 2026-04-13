@@ -109,6 +109,7 @@ import { registerGetFieldMappingTool } from "./mapping/get_field_mapping.js";
 // import { registerAutoscalingPutPolicyTool } from "./autoscaling/put_policy.js";
 
 // Indices Analysis Tools (Field Usage Stats, Disk Usage, Data Lifecycle Stats, Enhanced Index Info)
+import { registerDeleteDataStreamTool } from "./indices/delete_data_stream.js";
 import { registerDiskUsageTool } from "./indices/disk_usage.js";
 import { registerExistsAliasTool } from "./indices/exists_alias.js";
 import { registerExistsIndexTemplateTool } from "./indices/exists_index_template.js";
@@ -143,9 +144,11 @@ import { registerListTasksTool } from "./tasks/list_tasks.js";
 
 // Diagnostics Tools
 import { registerElasticsearchDiagnostics } from "./diagnostics/index.js";
-// Ingest Pipeline Tools (Get Pipeline, Simulate Pipeline, Processor Grok)
+// Ingest Pipeline Tools (Get Pipeline, Put Pipeline, Delete Pipeline, Simulate Pipeline, Processor Grok)
+import { registerDeleteIngestPipelineTool } from "./ingest/delete_pipeline.js";
 import { registerGetIngestPipelineTool } from "./ingest/get_pipeline.js";
 import { registerProcessorGrokTool } from "./ingest/processor_grok.js";
+import { registerPutIngestPipelineTool } from "./ingest/put_pipeline.js";
 import { registerSimulateIngestPipelineTool } from "./ingest/simulate_pipeline.js";
 
 // Notification Tools (Progress tracking and status updates)
@@ -366,6 +369,7 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerExistsIndexTemplateTool(server, esClient);
 	registerExistsTemplateTool(server, esClient);
 	registerExplainDataLifecycleTool(server, esClient);
+	registerDeleteDataStreamTool(server, esClient);
 
 	// // Register Watcher Tools
 	// registerWatcherGetWatchTool(server, esClient);
@@ -384,6 +388,8 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 
 	// Register Ingest Pipeline Tools
 	registerGetIngestPipelineTool(server, esClient);
+	registerPutIngestPipelineTool(server, esClient);
+	registerDeleteIngestPipelineTool(server, esClient);
 	registerSimulateIngestPipelineTool(server, esClient);
 	registerProcessorGrokTool(server, esClient);
 

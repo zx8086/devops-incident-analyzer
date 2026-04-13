@@ -46,6 +46,10 @@ export const DESTRUCTIVE_TOOLS = new Set([
 	"enrich_delete_policy",
 	// Autoscaling destructive operations
 	"autoscaling_delete_policy",
+	// Data stream destructive operations
+	"delete_data_stream",
+	// Ingest pipeline destructive operations
+	"delete_ingest_pipeline",
 ]);
 
 export const WRITE_TOOLS = new Set([
@@ -72,6 +76,8 @@ export const WRITE_TOOLS = new Set([
 	"enrich_execute_policy",
 	// Autoscaling write operations
 	"autoscaling_put_policy",
+	// Ingest pipeline write operations
+	"put_ingest_pipeline",
 ]);
 
 export const DELETE_TOOLS = new Set([
@@ -86,6 +92,10 @@ export const DELETE_TOOLS = new Set([
 	"enrich_delete_policy",
 	// Autoscaling delete operations
 	"autoscaling_delete_policy",
+	// Data stream delete operations
+	"delete_data_stream",
+	// Ingest pipeline delete operations
+	"delete_ingest_pipeline",
 ]);
 
 export class ReadOnlyModeManager {

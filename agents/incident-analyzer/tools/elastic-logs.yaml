@@ -110,6 +110,8 @@ tool_mapping:
       - elasticsearch_get_shards
     ingest_pipeline:
       - elasticsearch_get_ingest_pipeline
+      - elasticsearch_put_ingest_pipeline
+      - elasticsearch_delete_ingest_pipeline
       - elasticsearch_simulate_ingest_pipeline
       - elasticsearch_processor_grok
     template_management:
@@ -141,6 +143,7 @@ tool_mapping:
       - elasticsearch_ilm_get_lifecycle
       - elasticsearch_ilm_explain_lifecycle
       - elasticsearch_ilm_get_status
+      - elasticsearch_delete_data_stream
     diagnostics:
       - elasticsearch_diagnostics
       - elasticsearch_get_cluster_health
