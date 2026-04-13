@@ -177,7 +177,7 @@ export const registerPutAliasTool: ToolRegistrationFunction = (server: McpServer
 			inputSchema: {
 				index: z.string(), // Index name to add the alias to. Cannot be empty. Supports patterns with wildcards
 				name: z.string(), // Alias name to create. Cannot be empty. Will overwrite existing alias with same name
-				filter: z.object({}).optional(), // Optional query filter to apply when accessing data through this alias
+				filter: z.object({}).passthrough().optional(), // Optional query filter to apply when accessing data through this alias
 				routing: z.string().optional(), // Optional routing value for operations performed through this alias
 				isWriteIndex: z.boolean().optional(), // Set to true to designate this as the write index for the alias (default: false)
 			},

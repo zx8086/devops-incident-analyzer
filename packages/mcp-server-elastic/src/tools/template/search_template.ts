@@ -173,7 +173,7 @@ export const registerSearchTemplateTool: ToolRegistrationFunction = (server: Mcp
 				index: z.string().optional(), // Index name or pattern to search
 				id: z.string().optional(), // Template ID stored in Elasticsearch
 				source: z.string().optional(), // Inline template source (Mustache template)
-				params: z.object({}).optional(), // Parameters to substitute in the template
+				params: z.object({}).passthrough().optional(), // Parameters to substitute in the template
 				explain: z.boolean().optional(), // Return detailed explanation of how each hit is scored
 				profile: z.boolean().optional(), // Return timing information about the execution of individual components
 				allowNoIndices: z.boolean().optional(), // Allow no indices when resolving wildcards

@@ -149,9 +149,9 @@ export const registerUpdateDocumentTool: ToolRegistrationFunction = (server: Mcp
 			inputSchema: {
 				index: z.string(), // REQUIRED: Name of the Elasticsearch index containing the document. Example: 'users', 'logs-2024.01'
 				id: z.string(), // REQUIRED: Unique identifier of the document to update
-				doc: z.object({}).optional(), // Partial document with fields to update
-				script: z.object({}).optional(), // Script to run for updating the document
-				upsert: z.object({}).optional(), // Document to create if the document doesn't exist
+				doc: z.object({}).passthrough().optional(), // Partial document with fields to update
+				script: z.object({}).passthrough().optional(), // Script to run for updating the document
+				upsert: z.object({}).passthrough().optional(), // Document to create if the document doesn't exist
 				docAsUpsert: z.boolean().optional(), // Use the doc as upsert value if document doesn't exist
 				detectNoop: z.boolean().optional(), // Whether to detect if the update is a no-op
 				scriptedUpsert: z.boolean().optional(), // Whether to run the script during upsert

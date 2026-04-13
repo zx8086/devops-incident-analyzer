@@ -136,7 +136,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 				"Execute multiple search templates in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for batch search operations, templated queries, performance optimization. Use when you need to run multiple parameterized searches efficiently using Elasticsearch search templates. TIP: Each search in searches array can specify its own template and parameters.",
 
 			inputSchema: {
-				searches: z.array(z.object({}).optional()), // Array of search requests to execute
+				searches: z.array(z.object({}).passthrough()), // Array of search requests to execute
 				index: z.string().optional(), // Default index to search if not specified in individual searches
 				maxConcurrentSearches: z.number().optional(), // Maximum number of concurrent searches
 				ccsMinimizeRoundtrips: z.boolean().optional(), // Minimize roundtrips for cross-cluster searches

@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
+import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -146,22 +147,30 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 	};
 
 	// Tool registration - WRITE operation
-	server.tool(
+	server.registerTool(
 		"elasticsearch_put_index_template",
-		"Create or update an index template in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for index standardization, mapping management, settings automation. Use when you need to define templates for automatic index configuration in Elasticsearch. TIP: Define 'indexPatterns' to control which indices use this template, set 'priority' for template precedence.",
+
 		{
-			name: z.string(), // Template name (cannot be empty)
-			indexPatterns: z.array(z.string().optional()).optional(), // Array of index patterns that this template applies to
-			template: z.object({}).optional(), // Template definition containing settings, mappings, and/or aliases
-			dataStream: z.object({}).optional(), // Data stream configuration (e.g. {} for default, or {hidden: true})
-			composedOf: z.array(z.string().optional()).optional(), // Array of component template names this template is composed of
-			priority: z.number().optional(), // Template priority (higher number = higher priority)
-			version: z.number().optional(), // Template version number
-			meta: z.object({}).optional(), // Metadata about the template
-			allowAutoCreate: z.boolean().optional(), // Allow automatic index creation
-			create: z.boolean().optional(), // If true, only create if template doesn't exist
-			masterTimeout: z.string().optional(), // Timeout for master node operations
+			title: "Put Index Template",
+
+			description:
+				"Create or update an index template in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for index standardization, mapping management, settings automation. Use when you need to define templates for automatic index configuration in Elasticsearch. TIP: Define 'indexPatterns' to control which indices use this template, set 'priority' for template precedence.",
+
+			inputSchema: {
+				name: z.string(), // Template name (cannot be empty)
+				indexPatterns: z.array(z.string()).optional(), // Array of index patterns that this template applies to
+				template: z.object({}).passthrough().optional(), // Template definition containing settings, mappings, and/or aliases
+				dataStream: z.object({}).passthrough().optional(), // Data stream configuration (e.g. {} for default, or {hidden: true})
+				composedOf: z.array(z.string()).optional(), // Array of component template names this template is composed of
+				priority: z.number().optional(), // Template priority (higher number = higher priority)
+				version: z.number().optional(), // Template version number
+				meta: z.object({}).passthrough().optional(), // Metadata about the template
+				allowAutoCreate: z.boolean().optional(), // Allow automatic index creation
+				create: z.boolean().optional(), // If true, only create if template doesn't exist
+				masterTimeout: z.string().optional(), // Timeout for master node operations
+			},
 		},
-		putIndexTemplateHandler,
+
+		withReadOnlyCheck("elasticsearch_put_index_template", putIndexTemplateHandler, OperationType.WRITE),
 	);
 };

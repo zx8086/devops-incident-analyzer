@@ -168,7 +168,7 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 
 			inputSchema: {
 				index: z.string().optional(), // Index pattern to count documents in. Use '*' for all indices
-				query: z.object({}).optional(), // Query DSL to filter documents. Default matches all
+				query: z.object({}).passthrough().optional(), // Query DSL to filter documents. Default matches all
 				analyzer: z.string().optional(),
 				analyzeWildcard: z.boolean().optional(),
 				defaultOperator: z.enum(["AND", "OR"]).optional(),

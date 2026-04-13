@@ -124,9 +124,9 @@ export const registerCreateIndexTool: ToolRegistrationFunction = (server: McpSer
 
 			inputSchema: {
 				index: z.string(), // Name of the index to create
-				aliases: z.object({}).optional(), // Index aliases to set during creation
-				mappings: z.object({}).optional(), // Field mappings for the index
-				settings: z.object({}).optional(), // Index settings configuration
+				aliases: z.object({}).passthrough().optional(), // Index aliases to set during creation
+				mappings: z.object({}).passthrough().optional(), // Field mappings for the index
+				settings: z.object({}).passthrough().optional(), // Index settings configuration
 				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
 				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
 				waitForActiveShards: z.any().optional(), // Number of active shards to wait for

@@ -144,13 +144,13 @@ export const registerPutMappingTool: ToolRegistrationFunction = (server: McpServ
 
 			inputSchema: {
 				index: z.string(), // Name of the index to update mapping for
-				properties: z.object({}).optional(), // Field mappings to add or update
-				runtime: z.object({}).optional(), // Runtime fields configuration
-				meta: z.object({}).optional(), // Metadata for the mapping
+				properties: z.object({}).passthrough().optional(), // Field mappings to add or update
+				runtime: z.object({}).passthrough().optional(), // Runtime fields configuration
+				meta: z.object({}).passthrough().optional(), // Metadata for the mapping
 				dynamic: z.enum(["true", "false", "strict", "runtime"]).optional(), // Dynamic mapping behavior
 				dateDetection: z.boolean().optional(), // Enable or disable date detection
 				dynamicDateFormats: z.array(z.string().optional()).optional(), // Dynamic date formats
-				dynamicTemplates: z.array(z.object({}).optional()).optional(), // Dynamic mapping templates
+				dynamicTemplates: z.array(z.object({}).passthrough()).optional(), // Dynamic mapping templates
 				numericDetection: z.boolean().optional(), // Enable or disable numeric detection
 				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
 				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')

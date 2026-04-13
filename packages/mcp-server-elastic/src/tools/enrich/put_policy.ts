@@ -177,9 +177,9 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 
 			inputSchema: {
 				name: z.string(), // Name of the enrich policy to create
-				geoMatch: z.object({}).optional(), // Configuration for geo_match enrich policy type
-				match: z.object({}).optional(), // Configuration for match enrich policy type
-				range: z.object({}).optional(), // Configuration for range enrich policy type
+				geoMatch: z.object({}).passthrough().optional(), // Configuration for geo_match enrich policy type
+				match: z.object({}).passthrough().optional(), // Configuration for match enrich policy type
+				range: z.object({}).passthrough().optional(), // Configuration for range enrich policy type
 				masterTimeout: z.string().optional(), // Timeout for master node operations. Examples: '30s', '1m'
 			},
 		},

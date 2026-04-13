@@ -263,8 +263,8 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 
 			inputSchema: {
 				index: z.string(), // Index name or pattern to update
-				query: z.object({}), // Query DSL to select documents to update
-				script: z.object({}).optional(), // Script to apply to matching documents
+				query: z.object({}).passthrough(), // Query DSL to select documents to update
+				script: z.object({}).passthrough().optional(), // Script to apply to matching documents
 				maxDocs: z.number().optional(),
 				conflicts: z.enum(["abort", "proceed"]).optional(),
 				refresh: z.boolean().optional(),
