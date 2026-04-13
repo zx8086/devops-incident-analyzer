@@ -59,11 +59,13 @@ tool_mapping:
       - gitlab_get_issue
       - gitlab_create_workitem_note
       - gitlab_get_workitem_notes
+      - gitlab_get_saved_view_work_items
     merge_requests:
       - gitlab_get_merge_request
       - gitlab_get_merge_request_commits
       - gitlab_get_merge_request_diffs
       - gitlab_get_merge_request_pipelines
+      - gitlab_get_merge_request_conflicts
       - gitlab_create_merge_request
     pipelines:
       - gitlab_manage_pipeline
