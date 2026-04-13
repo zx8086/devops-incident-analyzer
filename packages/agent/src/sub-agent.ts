@@ -24,6 +24,7 @@ const AGENT_NAMES: Record<string, string> = {
 	kafka: "kafka-agent",
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
+	gitlab: "gitlab-agent",
 };
 
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
@@ -56,6 +57,8 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 			/circuit_breaking_exception/i,
 			/too_many_requests/i,
 			/socket hang up/i,
+			/no embeddings/i,
+			/indexing is still ongoing/i,
 		],
 	},
 ];
