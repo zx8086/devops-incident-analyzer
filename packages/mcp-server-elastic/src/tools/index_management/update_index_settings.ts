@@ -240,7 +240,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 
 			inputSchema: {
 				index: z.string(), // Name of the index to update settings for
-				settings: z.object({}), // Index settings to update
+				settings: z.object({}).passthrough(), // Index settings to update (passthrough allows arbitrary ES setting keys)
 				preserveExisting: z.boolean().optional(), // Preserve existing settings that are not specified
 				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
 				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')

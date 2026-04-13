@@ -1,5 +1,6 @@
 /* src/tools/indices/index.ts */
 
+export { registerDeleteDataStreamTool } from "./delete_data_stream.js";
 export { registerDiskUsageTool } from "./disk_usage.js";
 export { registerExistsAliasTool } from "./exists_alias.js";
 export { registerExistsIndexTemplateTool } from "./exists_index_template.js";
