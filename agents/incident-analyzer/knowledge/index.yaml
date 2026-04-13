@@ -23,9 +23,12 @@ runbook_selection:
       - kafka-consumer-lag.md
       - high-error-rate.md
       - database-slow-queries.md
+      - code-change-correlation.md
     high:
       - kafka-consumer-lag.md
       - high-error-rate.md
       - database-slow-queries.md
-    medium: []
+      - code-change-correlation.md
+    medium:
+      - code-change-correlation.md
     low: []
