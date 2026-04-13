@@ -9,6 +9,7 @@ const SERVER_TO_DATASOURCE: Record<string, string> = {
 	"kafka-mcp": "kafka",
 	"couchbase-mcp": "couchbase",
 	"konnect-mcp": "konnect",
+	"gitlab-mcp": "gitlab",
 };
 
 export const GET: RequestHandler = async () => {
@@ -21,6 +22,7 @@ export const GET: RequestHandler = async () => {
 	if (process.env.KAFKA_MCP_URL) dataSources.push("kafka");
 	if (process.env.COUCHBASE_MCP_URL) dataSources.push("couchbase");
 	if (process.env.KONNECT_MCP_URL) dataSources.push("konnect");
+	if (process.env.GITLAB_MCP_URL) dataSources.push("gitlab");
 
 	// Report which are actually connected
 	const connected = getConnectedServers()

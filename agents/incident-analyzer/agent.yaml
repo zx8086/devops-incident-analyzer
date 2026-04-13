@@ -27,6 +27,7 @@ tools:
   - kafka-introspect
   - couchbase-health
   - konnect-gateway
+  - gitlab-api
   - notify-slack
   - create-ticket
 
@@ -38,6 +39,8 @@ agents:
   capella-agent:
     delegation: auto
   konnect-agent:
+    delegation: auto
+  gitlab-agent:
     delegation: auto
 
 delegation:

@@ -36,5 +36,12 @@ export const KonnectConfigSchema = z.object({
 });
 export type KonnectConfig = z.infer<typeof KonnectConfigSchema>;
 
-export const DATA_SOURCE_IDS = ["elastic", "kafka", "couchbase", "konnect"] as const;
+export const GitLabConfigSchema = z.object({
+	instanceUrl: z.string().url(),
+	personalAccessToken: z.string().min(1),
+	defaultProjectId: z.string().optional(),
+});
+export type GitLabConfig = z.infer<typeof GitLabConfigSchema>;
+
+export const DATA_SOURCE_IDS = ["elastic", "kafka", "couchbase", "konnect", "gitlab"] as const;
 export type DataSourceId = (typeof DATA_SOURCE_IDS)[number];

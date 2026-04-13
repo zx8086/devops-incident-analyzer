@@ -11,6 +11,7 @@ export interface McpClientConfig {
 	kafkaUrl?: string;
 	capellaUrl?: string;
 	konnectUrl?: string;
+	gitlabUrl?: string;
 }
 
 // SIO-595: All MCP servers use Streamable HTTP transport at /mcp
@@ -46,6 +47,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	}
 	if (config.konnectUrl) {
 		serverEntries.push({ name: "konnect-mcp", url: `${config.konnectUrl}/mcp` });
+	}
+	if (config.gitlabUrl) {
+		serverEntries.push({ name: "gitlab-mcp", url: `${config.gitlabUrl}/mcp` });
 	}
 
 	if (serverEntries.length === 0) {
@@ -116,6 +120,7 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 		kafka: "kafka-mcp",
 		couchbase: "couchbase-mcp",
 		konnect: "konnect-mcp",
+		gitlab: "gitlab-mcp",
 	};
 
 	const serverName = serverMap[dataSourceId];

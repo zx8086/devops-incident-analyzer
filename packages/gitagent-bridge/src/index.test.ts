@@ -41,14 +41,15 @@ describe("manifest-loader", () => {
 		expect(agent.rules).toContain("Must Always");
 	});
 
-	test("loads all 6 tool definitions", () => {
+	test("loads all 7 tool definitions", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		expect(agent.tools.length).toBe(6);
+		expect(agent.tools.length).toBe(7);
 		const toolNames = agent.tools.map((t) => t.name);
 		expect(toolNames).toContain("elastic-search-logs");
 		expect(toolNames).toContain("kafka-introspect");
 		expect(toolNames).toContain("couchbase-cluster-health");
 		expect(toolNames).toContain("konnect-api-gateway");
+		expect(toolNames).toContain("gitlab-api");
 		expect(toolNames).toContain("notify-slack");
 		expect(toolNames).toContain("create-ticket");
 	});
@@ -61,13 +62,14 @@ describe("manifest-loader", () => {
 		expect(agent.skills.has("propose-mitigation")).toBe(true);
 	});
 
-	test("loads all 4 sub-agents recursively", () => {
+	test("loads all 5 sub-agents recursively", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		expect(agent.subAgents.size).toBe(4);
+		expect(agent.subAgents.size).toBe(5);
 		expect(agent.subAgents.has("elastic-agent")).toBe(true);
 		expect(agent.subAgents.has("kafka-agent")).toBe(true);
 		expect(agent.subAgents.has("capella-agent")).toBe(true);
 		expect(agent.subAgents.has("konnect-agent")).toBe(true);
+		expect(agent.subAgents.has("gitlab-agent")).toBe(true);
 
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		expect(elastic.manifest.name).toBe("elastic-agent");
@@ -177,8 +179,9 @@ describe("tool-prompt", () => {
 	test("buildAllToolPrompts returns map for all tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const prompts = buildAllToolPrompts(agent);
-		expect(prompts.size).toBe(6);
+		expect(prompts.size).toBe(7);
 		expect(prompts.has("elastic-search-logs")).toBe(true);
+		expect(prompts.has("gitlab-api")).toBe(true);
 	});
 });
 
@@ -303,6 +306,7 @@ describe("tool-schema", () => {
 			"kafka_list_topics",
 			"capella_get_system_vitals",
 			"konnect_query_api_requests",
+			"gitlab_search",
 		];
 		const result = validateToolSchemas(agent.tools, mcpNames);
 		expect(result.valid).toBe(true);
@@ -316,7 +320,7 @@ describe("tool-schema", () => {
 		// No MCP tools match any patterns
 		const result = validateToolSchemas(agent.tools, ["some_unrelated_tool"]);
 		expect(result.valid).toBe(false);
-		expect(result.missing.length).toBe(4);
+		expect(result.missing.length).toBe(5);
 	});
 
 	test("backward compatibility: direct name comparison without tool_mapping", () => {

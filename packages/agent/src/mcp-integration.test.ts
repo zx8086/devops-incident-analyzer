@@ -34,13 +34,14 @@ describe("MCP tool scoping", () => {
 });
 
 describe("gitagent prompt overlay", () => {
-	test("getToolPrompts returns prompts for all 6 tools", () => {
+	test("getToolPrompts returns prompts for all 7 tools", () => {
 		const prompts = getToolPrompts();
-		expect(prompts.size).toBe(6);
+		expect(prompts.size).toBe(7);
 		expect(prompts.has("elastic-search-logs")).toBe(true);
 		expect(prompts.has("kafka-introspect")).toBe(true);
 		expect(prompts.has("couchbase-cluster-health")).toBe(true);
 		expect(prompts.has("konnect-api-gateway")).toBe(true);
+		expect(prompts.has("gitlab-api")).toBe(true);
 		expect(prompts.has("notify-slack")).toBe(true);
 		expect(prompts.has("create-ticket")).toBe(true);
 	});

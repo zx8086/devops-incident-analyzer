@@ -132,6 +132,24 @@
         "typescript": "catalog:dev",
       },
     },
+    "packages/mcp-server-gitlab": {
+      "name": "@devops-agent/mcp-server-gitlab",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/shared": "workspace:*",
+        "@langchain/core": "catalog:",
+        "@modelcontextprotocol/sdk": "catalog:",
+        "@opentelemetry/api": "^1.9.0",
+        "pino": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@biomejs/biome": "catalog:dev",
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
     "packages/mcp-server-kafka": {
       "name": "@devops-agent/mcp-server-kafka",
       "version": "0.1.0",
@@ -371,6 +389,8 @@
     "@devops-agent/mcp-server-couchbase": ["@devops-agent/mcp-server-couchbase@workspace:packages/mcp-server-couchbase"],
 
     "@devops-agent/mcp-server-elastic": ["@devops-agent/mcp-server-elastic@workspace:packages/mcp-server-elastic"],
+
+    "@devops-agent/mcp-server-gitlab": ["@devops-agent/mcp-server-gitlab@workspace:packages/mcp-server-gitlab"],
 
     "@devops-agent/mcp-server-kafka": ["@devops-agent/mcp-server-kafka@workspace:packages/mcp-server-kafka"],
 

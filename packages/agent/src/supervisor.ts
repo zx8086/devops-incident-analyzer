@@ -14,6 +14,7 @@ const AGENT_NAMES: Record<string, string> = {
 	kafka: "kafka-agent",
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
+	gitlab: "gitlab-agent",
 };
 
 type DelegationMode = "auto" | "explicit" | "router";

@@ -81,6 +81,8 @@ export {
 	type DataSourceId,
 	type ElasticDeploymentConfig,
 	ElasticDeploymentConfigSchema,
+	type GitLabConfig,
+	GitLabConfigSchema,
 	type KafkaProviderConfig,
 	KafkaProviderConfigSchema,
 	type KonnectConfig,

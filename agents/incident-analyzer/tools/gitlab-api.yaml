@@ -1,0 +1,80 @@
+name: gitlab-api
+description: >
+  Query GitLab API for CI/CD pipeline status, merge requests, commits,
+  code analysis, and repository health for incident investigation.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [issues, merge_requests, pipelines, search, code_analysis]
+      description: Type of GitLab operation to perform
+    project_id:
+      type: string
+      description: GitLab project ID or URL-encoded path
+    time_from:
+      type: string
+      format: date-time
+      description: Start of time window (ISO 8601)
+    time_to:
+      type: string
+      format: date-time
+      description: End of time window (ISO 8601)
+    query:
+      type: string
+      description: Search query or file path
+  required: [project_id]
+output_schema:
+  type: object
+  properties:
+    results:
+      type: array
+      items:
+        type: object
+    total_count: { type: integer }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Query GitLab for CI/CD, merge request, and code analysis data.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use elastic-logs to correlate GitLab deployment timing with log error spikes"
+  - "Use kafka-consumer-lag to check if deployment correlates with Kafka backpressure"
+  - "Use couchbase-cluster-health to verify database health around deployment time"
+  - "Use konnect-api-requests to check if API gateway errors appeared after deployment"
+
+tool_mapping:
+  mcp_server: gitlab
+  mcp_patterns:
+    - "gitlab_*"
+  action_tool_map:
+    issues:
+      - gitlab_create_issue
+      - gitlab_get_issue
+      - gitlab_create_workitem_note
+      - gitlab_get_workitem_notes
+    merge_requests:
+      - gitlab_get_merge_request
+      - gitlab_get_merge_request_commits
+      - gitlab_get_merge_request_diffs
+      - gitlab_get_merge_request_pipelines
+      - gitlab_create_merge_request
+    pipelines:
+      - gitlab_manage_pipeline
+      - gitlab_get_pipeline_jobs
+    search:
+      - gitlab_search
+      - gitlab_search_labels
+      - gitlab_semantic_code_search
+    code_analysis:
+      - gitlab_get_file_content
+      - gitlab_get_blame
+      - gitlab_get_commit_diff
+      - gitlab_list_commits
+      - gitlab_get_repository_tree

@@ -30,6 +30,7 @@ function getMcpConfig() {
 		kafkaUrl: process.env.KAFKA_MCP_URL,
 		capellaUrl: process.env.COUCHBASE_MCP_URL,
 		konnectUrl: process.env.KONNECT_MCP_URL,
+		gitlabUrl: process.env.GITLAB_MCP_URL,
 	};
 }
 
