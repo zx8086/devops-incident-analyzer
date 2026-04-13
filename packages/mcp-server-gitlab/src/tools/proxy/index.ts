@@ -12,7 +12,8 @@ const TOOL_PREFIX = "gitlab_";
 
 // GitLab returns this when a project's code embeddings haven't been built yet.
 // Indexing typically completes within 30-60 seconds of the first request.
-const EMBEDDINGS_NOT_READY_PATTERN = /no embeddings|indexing has been started|indexing is still ongoing|try again in a few minutes/i;
+const EMBEDDINGS_NOT_READY_PATTERN =
+	/no embeddings|indexing has been started|indexing is still ongoing|try again in a few minutes/i;
 const SEMANTIC_SEARCH_TOOL = "semantic_code_search";
 const EMBEDDINGS_MAX_RETRIES = 3;
 const EMBEDDINGS_BASE_DELAY_MS = 10_000; // 10s -> 20s -> 40s (~70s total worst case)
