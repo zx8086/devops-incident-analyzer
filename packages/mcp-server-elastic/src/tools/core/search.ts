@@ -52,7 +52,15 @@ const SearchParams = z.object({
 	_source: z
 		.union([z.array(z.string()), z.boolean(), z.string()])
 		.optional()
-		.describe("Fields to return in results"),
+		.describe(
+			"Fields to return from the stored document body (_source). Some indices strip fields from _source (OTel metric rollups, ILM-archived indices) -- if your requested field does not appear in hits, retry with the `fields` parameter instead, which reads from doc_values.",
+		),
+	fields: z
+		.array(z.union([z.string(), z.object({}).passthrough()]))
+		.optional()
+		.describe(
+			"Retrieve fields via doc_values / runtime fields, independent of _source. Use this when _source is sparse, stripped, or disabled -- common on OTel metric transforms and rollup indices. Accepts plain field names (['service.name', 'k8s.pod.name']) or {field, format} objects.",
+		),
 	highlight: z.object({}).passthrough().optional().describe("Highlight configuration"),
 });
 
@@ -119,7 +127,7 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			await progressTracker.updateProgress(10, "Validating and parsing search parameters");
 
 			// Zod has already parsed and transformed the parameters
-			const { index, query, size, from, sort, aggs, _source, highlight } = params;
+			const { index, query, size, from, sort, aggs, _source, fields, highlight } = params;
 
 			logger.debug(
 				{
@@ -187,6 +195,7 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				...(sort && { sort }),
 				...(aggs && { aggs }),
 				...(_source !== undefined && { _source }),
+				...(fields && fields.length > 0 && { fields }),
 				...(highlight && { highlight }),
 			};
 
@@ -294,7 +303,11 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 
 			const contentFragments = result.hits.hits.map((hit) => {
 				const highlightedFields = hit.highlight || {};
-				const sourceData = hit._source || {};
+				const sourceData = (hit._source || {}) as Record<string, unknown>;
+				const docValueFields = ((hit as { fields?: Record<string, unknown[]> }).fields || {}) as Record<
+					string,
+					unknown[]
+				>;
 				let content = `Document ID: ${hit._id}\nScore: ${hit._score}\n\n`;
 
 				for (const [field, highlights] of Object.entries(highlightedFields)) {
@@ -317,6 +330,24 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 						}
 						content += `${field}: ${formattedValue}\n`;
 					}
+				}
+
+				// Render doc_values / runtime fields returned via the `fields` API. ES always wraps
+				// field values in arrays; unwrap single-element arrays for readability. Skip keys
+				// already rendered from _source or highlight to avoid duplicate output.
+				for (const [field, values] of Object.entries(docValueFields)) {
+					if (field in highlightedFields || field in sourceData) continue;
+					if (!Array.isArray(values) || values.length === 0) continue;
+					const unwrapped = values.length === 1 ? values[0] : values;
+					let formattedValue: string;
+					if (typeof unwrapped === "string") {
+						formattedValue = unwrapped;
+					} else if (typeof unwrapped === "object" && unwrapped !== null) {
+						formattedValue = JSON.stringify(unwrapped, null, 2);
+					} else {
+						formattedValue = String(unwrapped);
+					}
+					content += `${field}: ${formattedValue}\n`;
 				}
 				return { type: "text", text: content.trim() } as TextContent;
 			});
