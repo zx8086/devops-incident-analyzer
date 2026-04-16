@@ -23,6 +23,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		messages: [],
 		queryComplexity: "complex" as const,
 		targetDataSources: [] as string[],
+		targetDeployments: [] as string[],
 		dataSourceResults: [] as DataSourceResult[],
 		currentDataSource: "",
 		extractedEntities: { dataSources: [] },

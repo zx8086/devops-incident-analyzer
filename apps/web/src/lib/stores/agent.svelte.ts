@@ -33,6 +33,9 @@ function createAgentStore() {
 	let selectedDataSources = $state<string[]>([]);
 	let connectedDataSources = $state<string[]>([]);
 	let availableDataSources = $state<string[]>([]);
+	// SIO-649: Available is populated from GET /api/deployments on mount; selected defaults to all.
+	let availableElasticDeployments = $state<string[]>([]);
+	let selectedElasticDeployments = $state<string[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -69,6 +72,9 @@ function createAgentStore() {
 		abortController = new AbortController();
 
 		try {
+			// SIO-649: Only send targetDeployments when Elastic is actually in scope. Empty array is
+			// valid (means "use default deployment") and distinct from undefined (multi-deployment off).
+			const includeDeployments = selectedDataSources.includes("elastic") && availableElasticDeployments.length > 0;
 			const response = await fetch("/api/agent/stream", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -76,6 +82,7 @@ function createAgentStore() {
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
 					dataSources: selectedDataSources,
+					...(includeDeployments && { targetDeployments: selectedElasticDeployments }),
 					...(attachmentsToSend && { attachments: attachmentsToSend }),
 					...(followUpContext?.isFollowUp && { isFollowUp: true }),
 					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
@@ -244,6 +251,16 @@ function createAgentStore() {
 			selectedDataSources = [];
 			connectedDataSources = [];
 		}
+		// SIO-649: Best-effort deployment list fetch. A failure here just hides the sub-selector.
+		try {
+			const res = await fetch("/api/deployments");
+			const data: { deployments?: string[] } = await res.json();
+			availableElasticDeployments = data.deployments ?? [];
+			selectedElasticDeployments = [...availableElasticDeployments];
+		} catch {
+			availableElasticDeployments = [];
+			selectedElasticDeployments = [];
+		}
 		startHealthPolling();
 	}
 
@@ -326,6 +343,15 @@ function createAgentStore() {
 		},
 		get availableDataSources() {
 			return availableDataSources;
+		},
+		get availableElasticDeployments() {
+			return availableElasticDeployments;
+		},
+		get selectedElasticDeployments() {
+			return selectedElasticDeployments;
+		},
+		set selectedElasticDeployments(v: string[]) {
+			selectedElasticDeployments = v;
 		},
 		get activeNodes() {
 			return activeNodes;

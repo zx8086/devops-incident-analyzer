@@ -1,8 +1,9 @@
 // src/config/loader.ts
 
 import { defaultConfig } from "./defaults.js";
+import { listDeploymentIds, loadDeploymentFromEnv } from "./deployments.js";
 import { envVarMapping } from "./envMapping.js";
-import type { Config } from "./schemas.js";
+import type { Config, DeploymentConfig } from "./schemas.js";
 import { ConfigSchema } from "./schemas.js";
 
 function parseEnvVar(value: string | undefined, type: "string" | "number" | "boolean"): unknown {
@@ -63,13 +64,42 @@ function loadConfigFromEnv(): Partial<Config> {
 			defaultConfig.server.monitoringPort,
 	};
 
+	// SIO-649: Load multi-deployment config if ELASTIC_DEPLOYMENTS is set, else fall back to
+	// legacy single-deployment ES_URL/ES_API_KEY vars. Both can coexist -- `url`/`apiKey`/etc
+	// below always describe the default deployment so the rest of the config stays stable.
+	const deploymentIds = listDeploymentIds();
+	const deployments: DeploymentConfig[] = [];
+	for (const id of deploymentIds) {
+		const deployment = loadDeploymentFromEnv(id);
+		if (deployment) deployments.push(deployment);
+	}
+
+	const hasMultiDeployment = deployments.length > 0;
+	const envDefaultId = parseEnvVar(Bun.env[envVarMapping.elasticsearch.defaultDeployment], "string") as
+		| string
+		| undefined;
+	const defaultDeploymentId = hasMultiDeployment
+		? envDefaultId && deployments.some((d) => d.id === envDefaultId)
+			? envDefaultId
+			: deployments[0]?.id
+		: undefined;
+
+	// Legacy single-deployment fields. When multi-deployment mode is active, these mirror the
+	// default deployment so tools that still read config.elasticsearch.url at startup keep working.
+	const defaultDeployment = hasMultiDeployment ? deployments.find((d) => d.id === defaultDeploymentId) : undefined;
+
 	// Load elasticsearch config
 	config.elasticsearch = {
-		url: (parseEnvVar(Bun.env[envVarMapping.elasticsearch.url], "string") as string) || defaultConfig.elasticsearch.url,
-		apiKey: parseEnvVar(Bun.env[envVarMapping.elasticsearch.apiKey], "string") as string,
-		username: parseEnvVar(Bun.env[envVarMapping.elasticsearch.username], "string") as string,
-		password: parseEnvVar(Bun.env[envVarMapping.elasticsearch.password], "string") as string,
-		caCert: parseEnvVar(Bun.env[envVarMapping.elasticsearch.caCert], "string") as string,
+		url:
+			defaultDeployment?.url ||
+			(parseEnvVar(Bun.env[envVarMapping.elasticsearch.url], "string") as string) ||
+			defaultConfig.elasticsearch.url,
+		apiKey: defaultDeployment?.apiKey ?? (parseEnvVar(Bun.env[envVarMapping.elasticsearch.apiKey], "string") as string),
+		username:
+			defaultDeployment?.username ?? (parseEnvVar(Bun.env[envVarMapping.elasticsearch.username], "string") as string),
+		password:
+			defaultDeployment?.password ?? (parseEnvVar(Bun.env[envVarMapping.elasticsearch.password], "string") as string),
+		caCert: defaultDeployment?.caCert ?? (parseEnvVar(Bun.env[envVarMapping.elasticsearch.caCert], "string") as string),
 		maxRetries:
 			(parseEnvVar(Bun.env[envVarMapping.elasticsearch.maxRetries], "number") as number) ||
 			defaultConfig.elasticsearch.maxRetries,
@@ -85,6 +115,7 @@ function loadConfigFromEnv(): Partial<Config> {
 		disablePrototypePoisoningProtection:
 			(parseEnvVar(Bun.env[envVarMapping.elasticsearch.disablePrototypePoisoningProtection], "boolean") as boolean) ??
 			defaultConfig.elasticsearch.disablePrototypePoisoningProtection,
+		...(hasMultiDeployment && { deployments, defaultDeploymentId }),
 	};
 
 	// Load logging config
@@ -151,13 +182,25 @@ function loadConfigFromEnv(): Partial<Config> {
 }
 
 export function validateEnvironment(): { valid: boolean; errors: string[]; warnings?: string[] } {
-	const requiredVars = ["ES_URL"];
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
-	for (const varName of requiredVars) {
-		if (!Bun.env[varName]) {
-			errors.push(`Missing required environment variable: ${varName}`);
+	// SIO-649: Either ES_URL (legacy single-deployment) or ELASTIC_DEPLOYMENTS (multi-deployment) must be set.
+	const deploymentIds = listDeploymentIds();
+	const hasMultiDeployment = deploymentIds.length > 0;
+
+	if (!hasMultiDeployment && !Bun.env.ES_URL) {
+		errors.push("Missing required environment variable: ES_URL (or configure ELASTIC_DEPLOYMENTS)");
+	}
+
+	if (hasMultiDeployment) {
+		for (const id of deploymentIds) {
+			const deployment = loadDeploymentFromEnv(id);
+			if (!deployment) {
+				errors.push(
+					`Deployment "${id}" listed in ELASTIC_DEPLOYMENTS but ELASTIC_${id.toUpperCase().replace(/-/g, "_")}_URL is missing`,
+				);
+			}
 		}
 	}
 

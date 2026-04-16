@@ -3,8 +3,22 @@
 import { withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { DEPLOYMENT_HEADER, runWithDeployment } from "../clients/context.js";
 import { createContextLogger } from "../utils/logger.js";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.js";
+
+// SIO-649: Read X-Elastic-Deployment from the request and run the handler inside the deployment
+// AsyncLocalStorage context so downstream tool handlers see the caller's deployment via the
+// registry Proxy. Missing/unknown headers fall through to the default deployment.
+function withDeploymentHeader(
+	handler: (req: Request) => Promise<Response> | Response,
+): (req: Request) => Promise<Response> {
+	return async (req: Request) => {
+		const deploymentId = req.headers.get(DEPLOYMENT_HEADER);
+		if (!deploymentId) return await handler(req);
+		return await runWithDeployment(deploymentId, () => Promise.resolve(handler(req)));
+	};
+}
 
 const log = createContextLogger("transport");
 
@@ -170,8 +184,10 @@ export async function startHttpTransport(
 	}
 
 	// Apply security middleware and W3C trace context extraction (SIO-602)
+	// SIO-649: withDeploymentHeader wraps postHandler so the deployment context is active
+	// before session routing, ensuring each tool call sees the correct client via the Proxy.
 	const securedPost = withTraceContextMiddleware(
-		withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey),
+		withApiKeyAuth(withOriginValidation(withDeploymentHeader(postHandler), config.allowedOrigins), config.apiKey),
 	);
 	const securedGet = withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey);
 	const securedDelete = withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey);

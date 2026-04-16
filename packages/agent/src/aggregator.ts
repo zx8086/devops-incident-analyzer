@@ -51,6 +51,19 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 			? `\n\nTOOL FAILURE GUIDANCE: ${failedSources.length} datasource(s) reported tool errors. When tool errors show repeated metadata/connection failures, the report summary must lead with the infrastructure connectivity problem (e.g. "brokers are unreachable") as the primary finding. Do not present connectivity failure as one possibility among equals -- state it as the leading diagnosis and list other causes as secondary.`
 			: "";
 
+	// SIO-649: When elastic fans out across multiple deployments, each result carries a
+	// deploymentId. The LLM must produce per-deployment findings rather than collapsing
+	// them into a single "elastic" section, otherwise distinct clusters get merged.
+	const elasticDeployments = [
+		...new Set(
+			state.dataSourceResults.filter((r) => r.dataSourceId === "elastic" && r.deploymentId).map((r) => r.deploymentId),
+		),
+	];
+	const perDeploymentGuidance =
+		elasticDeployments.length > 1
+			? `\n\nMULTI-DEPLOYMENT ELASTIC GUIDANCE: The elastic data source was queried across ${elasticDeployments.length} distinct deployments (${elasticDeployments.join(", ")}). Each "### elastic/<deploymentId>" section below is a DIFFERENT Elasticsearch cluster with its own nodes, shards, and metrics. In the findings section, produce a separate sub-section per deployment -- do NOT merge them into a single "Elastic" summary. Node IDs, instance names, and metrics from one deployment are not applicable to others. In the executive summary, identify issues per-deployment (e.g. "eu-cld: heap pressure; us-cld-monitor: healthy").`
+			: "";
+
 	const messages: BaseMessage[] = [new SystemMessage(systemPrompt)];
 
 	// On follow-ups with a prior answer, provide it as condensed context instead of
@@ -67,13 +80,40 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 		messages.push(new HumanMessage(`Current query: ${userQuery}`));
 	}
 
+	// SIO-632: Strict confidence format the regex below can always find. The HITL gate reads
+	// the parsed score -- if this is omitted, the gate treats the report as 0 confidence and
+	// may surface it as low-confidence to the user, which is worse than a real score.
+	const confidenceFormatRule = `\n\nCONFIDENCE LINE REQUIREMENT: End the report with a line in this EXACT format on its own line: "Confidence: 0.XX" where 0.XX is a decimal between 0.0 and 1.0 (e.g. "Confidence: 0.82"). This line MUST be present. Do not use percentages, ranges, or qualitative words like "high"/"medium"/"low" -- a parseable decimal is required for downstream routing.`;
+
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${confidenceFormatRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
 		),
 	);
 
 	return messages;
+}
+
+// Strict form: a line containing "Confidence:" or "**Confidence:**" or "Confidence Score:",
+// followed by a decimal. Anchored to line start (with optional markdown bullets / bold) so
+// it only matches a dedicated confidence line, not prose like "I'm confident in X 9.3".
+const STRICT_CONFIDENCE_RE = /^\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\**\s*([0-1](?:\.\d+)?)/im;
+// Loose fallback: old pattern, but we additionally require the number to be in [0, 1].
+const LOOSE_CONFIDENCE_RE = /confidence[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?)/i;
+
+export function extractConfidenceScore(answer: string): number {
+	const strict = answer.match(STRICT_CONFIDENCE_RE);
+	if (strict) {
+		const n = Number.parseFloat(strict[1] ?? "");
+		if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+	}
+	const loose = answer.match(LOOSE_CONFIDENCE_RE);
+	if (loose) {
+		const n = Number.parseFloat(loose[1] ?? "");
+		// Only accept fallback matches that look like a valid confidence score (0-1, not an index/version).
+		if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+	}
+	return 0;
 }
 
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
@@ -98,7 +138,10 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		.map((r) => {
 			const status = r.status === "success" ? "OK" : `ERROR: ${r.error ?? "unknown"}`;
 			const data = r.status === "success" ? String(r.data) : "No data";
-			const header = `### ${r.dataSourceId} [${status}] (${r.duration ?? 0}ms)`;
+			// SIO-649: include deploymentId so the LLM distinguishes per-deployment results
+			// when the elastic sub-agent fans out across multiple deployments
+			const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
+			const header = `### ${label} [${status}] (${r.duration ?? 0}ms)`;
 
 			// Surface tool-level errors so the LLM can distinguish "some tools failed"
 			// from "all tools failed" and identify the failure pattern (auth, connectivity, etc.)
@@ -123,11 +166,11 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const rawAnswer = String(response.content);
 	const answer = redactPiiContent(rawAnswer);
 
-	// SIO-632: Extract confidence score from the LLM-generated report for the HITL gate.
-	// The LLM may format this as "Confidence Score: 0.82", "**Confidence:** 0.85",
-	// "Confidence: 0.7/1.0", or just "0.82" after "confidence" heading.
-	const confidenceMatch = answer.match(/confidence[^0-9]*([0-9]+(?:\.[0-9]+)?)/i);
-	const confidenceScore = confidenceMatch ? Number.parseFloat(confidenceMatch[1] ?? "0") : 0;
+	// SIO-632 / SIO-649: Extract confidence score for the HITL gate. The prompt now requires
+	// a strict "Confidence: 0.XX" line, but we try the old loose pattern as a fallback for
+	// when the LLM slips (older checkpoints, response truncation). Both paths reject values
+	// outside [0, 1] so in-prose mentions like "confident in version 9.3.3" can't bleed in.
+	const confidenceScore = extractConfidenceScore(answer);
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore },

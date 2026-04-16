@@ -17,6 +17,8 @@ const StreamRequestSchema = z.object({
 	),
 	threadId: z.string().optional(),
 	dataSources: z.array(z.string()).optional(),
+	// SIO-649: Elastic deployment IDs to fan out to. Undefined = legacy single-deployment behavior.
+	targetDeployments: z.array(z.string()).optional(),
 	attachments: z.array(AttachmentBlockSchema).max(10).optional(),
 	isFollowUp: z.boolean().optional(),
 	dataSourceContext: DataSourceContextSchema.optional(),
@@ -68,6 +70,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								threadId,
 								runId,
 								dataSources: body.dataSources,
+								targetDeployments: body.targetDeployments,
 								isFollowUp: body.isFollowUp,
 								dataSourceContext: body.dataSourceContext,
 								attachmentContentBlocks: processedAttachments?.contentBlocks,

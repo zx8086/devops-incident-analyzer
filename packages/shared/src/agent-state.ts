@@ -21,6 +21,8 @@ export type ToolError = z.infer<typeof ToolErrorSchema>;
 
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
+	// SIO-649: Populated when the elastic sub-agent fans out across deployments.
+	deploymentId: z.string().optional(),
 	data: z.unknown(),
 	status: z.enum(["pending", "running", "success", "error"]),
 	duration: z.number().optional(),

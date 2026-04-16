@@ -34,6 +34,9 @@ export const envVarMapping = {
 		compression: "ES_COMPRESSION",
 		enableMetaHeader: "ES_ENABLE_META_HEADER",
 		disablePrototypePoisoningProtection: "ES_DISABLE_PROTOTYPE_POISONING_PROTECTION",
+		// SIO-649: Multi-deployment mode
+		deployments: "ELASTIC_DEPLOYMENTS",
+		defaultDeployment: "ELASTIC_DEFAULT_DEPLOYMENT",
 	},
 	logging: {
 		level: "LOG_LEVEL",

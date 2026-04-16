@@ -26,6 +26,30 @@ export const ServerConfigSchema = z.object({
 	monitoringPort: z.number().min(1024).max(65535),
 });
 
+// SIO-649: Per-deployment connection config. Auth is apiKey OR username+password (XOR) OR none (local dev).
+export const DeploymentConfigSchema = z
+	.object({
+		id: z.string().min(1),
+		url: z.string().url().min(1),
+		apiKey: z.string().optional(),
+		username: z.string().optional(),
+		password: z.string().optional(),
+		caCert: z.string().optional(),
+	})
+	.refine(
+		(data) => {
+			if (data.username) return !!data.password;
+			if (data.password) return !!data.username;
+			return true;
+		},
+		{
+			message: "Deployment auth requires apiKey, or both username+password, or neither",
+			path: ["username", "password"],
+		},
+	);
+
+export type DeploymentConfig = z.infer<typeof DeploymentConfigSchema>;
+
 export const ElasticsearchConfigSchema = z
 	.object({
 		url: z.string().url().min(1),
@@ -38,6 +62,10 @@ export const ElasticsearchConfigSchema = z
 		compression: z.boolean(),
 		enableMetaHeader: z.boolean(),
 		disablePrototypePoisoningProtection: z.boolean(),
+		// SIO-649: When populated, server runs in multi-deployment mode; `url`/`apiKey`/etc above
+		// describe the default deployment (kept for legacy single-deployment env vars).
+		deployments: z.array(DeploymentConfigSchema).optional(),
+		defaultDeploymentId: z.string().optional(),
 	})
 	.refine(
 		(data) => {
@@ -63,6 +91,17 @@ export const ElasticsearchConfigSchema = z
 			message:
 				"Either ES_API_KEY or both ES_USERNAME and ES_PASSWORD must be provided, or no auth for local development",
 			path: ["username", "password"],
+		},
+	)
+	.refine(
+		(data) => {
+			if (!data.deployments || data.deployments.length === 0) return true;
+			if (!data.defaultDeploymentId) return true;
+			return data.deployments.some((d) => d.id === data.defaultDeploymentId);
+		},
+		{
+			message: "defaultDeploymentId must match one of the configured deployments",
+			path: ["defaultDeploymentId"],
 		},
 	);
 

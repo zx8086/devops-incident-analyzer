@@ -4,6 +4,7 @@ import { onDestroy, onMount } from "svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
+import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
@@ -73,6 +74,10 @@ function handleSuggestionClick(suggestion: string) {
   </header>
 
   <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
+
+  {#if agentStore.selectedDataSources.includes("elastic")}
+    <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />
+  {/if}
 
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">
     <div class="max-w-4xl mx-auto py-4">

@@ -38,7 +38,11 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
 	classifier: { temperature: 0 },
 	subAgent: {},
-	aggregator: { temperature: 0.1 },
+	// SIO-649: Multi-deployment elastic fan-out produces reports with a per-deployment
+	// findings block (10 deployments = 10 tables) plus a mandatory trailing Confidence line.
+	// Default maxTokens was truncating the end of the report before the confidence line,
+	// leaving the HITL gate with a 0 score. 16384 matches responder for consistency.
+	aggregator: { temperature: 0.1, maxTokens: 16384 },
 	responder: { temperature: 0.3, maxTokens: 16384 },
 	entityExtractor: { temperature: 0 },
 	followUp: { temperature: 0.5, maxTokens: 256 },

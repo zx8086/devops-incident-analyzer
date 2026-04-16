@@ -8,7 +8,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
-import { getToolsForDataSource } from "./mcp-bridge.ts";
+import { getToolsForDataSource, withElasticDeployment } from "./mcp-bridge.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -138,34 +138,47 @@ function selectToolsByAction(
 	return { tools: allTools.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 }
 
-export async function queryDataSource(
+interface RunOptions {
+	deploymentId?: string;
+}
+
+// SIO-649: One sub-agent invocation. Extracted so the elastic branch can call it once per
+// selected deployment from queryDataSource. Non-elastic agents call it exactly once.
+// Use a structural type to side-step pino's strict Logger<TLevels, TCustomLevels> generics --
+// we only need the log methods here, not the full type surface.
+interface LogSink {
+	info: (...args: unknown[]) => unknown;
+	warn: (...args: unknown[]) => unknown;
+	error: (...args: unknown[]) => unknown;
+	child: (bindings: Record<string, unknown>) => LogSink;
+}
+
+async function runSubAgent(
 	state: AgentStateType,
-	config?: RunnableConfig,
-): Promise<Partial<AgentStateType>> {
-	const dataSourceId = state.currentDataSource;
-	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
+	dataSourceId: string,
+	agentName: string,
+	isRetry: boolean,
+	log: LogSink,
+	config: RunnableConfig | undefined,
+	options: RunOptions = {},
+): Promise<DataSourceResult> {
 	const startTime = Date.now();
-	// SIO-603: Request-scoped logger with requestId and dataSourceId
-	const isRetry = state.alignmentHints.length > 0;
-	const log = logger.child({ requestId: state.requestId, dataSourceId, isRetry });
-
-	log.info({ agentName }, "Sub-agent starting");
-
+	const { deploymentId } = options;
 	try {
 		const allTools = getToolsForDataSource(dataSourceId);
 		const systemPrompt = buildSubAgentPrompt(agentName);
 		const llm = createLlm("subAgent");
 
 		if (allTools.length === 0) {
-			log.warn("No MCP tools available, skipping");
-			const result: DataSourceResult = {
+			log.warn({ deploymentId }, "No MCP tools available, skipping");
+			return {
 				dataSourceId,
 				data: `No tools available for ${dataSourceId}. MCP server may not be connected.`,
 				status: "error",
 				duration: Date.now() - startTime,
 				error: "No MCP tools available",
+				...(deploymentId && { deploymentId }),
 			};
-			return { dataSourceResults: [result] };
 		}
 
 		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
@@ -176,7 +189,10 @@ export async function queryDataSource(
 			state.extractedEntities.toolActions,
 			toolDef,
 		);
-		log.info({ toolCount: tools.length, totalTools: allTools.length, filtered }, "Creating ReAct agent with tools");
+		log.info(
+			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
+			"Creating ReAct agent with tools",
+		);
 
 		const agent = createReactAgent({
 			llm,
@@ -184,22 +200,27 @@ export async function queryDataSource(
 			messageModifier: systemPrompt,
 		});
 
-		// Only pass the last user message to prevent cross-datasource pollution
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
-		log.info("Invoking sub-agent");
+		log.info({ deploymentId }, "Invoking sub-agent");
 		const response = await agent.invoke(
 			{ messages },
 			{
 				...config,
 				signal: AbortSignal.timeout(SUB_AGENT_TIMEOUT_MS),
-				runName: agentName,
+				runName: deploymentId ? `${agentName}[${deploymentId}]` : agentName,
 				metadata: {
 					...config?.metadata,
 					data_source_id: dataSourceId,
 					request_id: state.requestId,
+					...(deploymentId && { deployment_id: deploymentId }),
 				},
-				tags: [...(config?.tags ?? []), "sub-agent", `datasource:${dataSourceId}`],
+				tags: [
+					...(config?.tags ?? []),
+					"sub-agent",
+					`datasource:${dataSourceId}`,
+					...(deploymentId ? [`deployment:${deploymentId}`] : []),
+				],
 			},
 		);
 		const lastResponse = response.messages.at(-1);
@@ -212,6 +233,7 @@ export async function queryDataSource(
 		log.info(
 			{
 				duration,
+				deploymentId,
 				messageCount: response.messages.length,
 				responseLength: String(lastResponse?.content ?? "").length,
 				toolErrorCount: toolErrors.length,
@@ -220,29 +242,64 @@ export async function queryDataSource(
 			"Sub-agent completed",
 		);
 
-		const result: DataSourceResult = {
+		return {
 			dataSourceId,
 			data: lastResponse ? String(lastResponse.content) : "No response from sub-agent",
 			status: allToolsFailed ? "error" : "success",
 			duration,
 			toolOutputs: [],
 			isAlignmentRetry: isRetry,
+			...(deploymentId && { deploymentId }),
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(allToolsFailed && { error: `All ${toolErrors.length} tool calls failed` }),
 		};
-
-		return { dataSourceResults: [result] };
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		log.error({ duration, error: error instanceof Error ? error.message : String(error) }, "Sub-agent failed");
-		const result: DataSourceResult = {
+		log.error(
+			{ duration, deploymentId, error: error instanceof Error ? error.message : String(error) },
+			"Sub-agent failed",
+		);
+		return {
 			dataSourceId,
 			data: null,
 			status: "error",
 			duration,
 			isAlignmentRetry: isRetry,
+			...(deploymentId && { deploymentId }),
 			error: error instanceof Error ? error.message : String(error),
 		};
+	}
+}
+
+export async function queryDataSource(
+	state: AgentStateType,
+	config?: RunnableConfig,
+): Promise<Partial<AgentStateType>> {
+	const dataSourceId = state.currentDataSource;
+	const agentName = AGENT_NAMES[dataSourceId] ?? "elastic-agent";
+	const isRetry = state.alignmentHints.length > 0;
+	const log = logger.child({ requestId: state.requestId, dataSourceId, isRetry });
+
+	log.info({ agentName }, "Sub-agent starting");
+
+	// SIO-649: Fan out across selected deployments for elastic only. Other sub-agents ignore
+	// targetDeployments entirely -- empty/unset falls through to the non-fan-out path, which
+	// is the pre-SIO-649 behavior.
+	const deployments = dataSourceId === "elastic" ? state.targetDeployments : [];
+
+	if (deployments.length === 0) {
+		const result = await runSubAgent(state, dataSourceId, agentName, isRetry, log, config);
 		return { dataSourceResults: [result] };
 	}
+
+	log.info({ deployments }, "Elastic sub-agent fanning out across deployments");
+	const results: DataSourceResult[] = [];
+	// Sequential: simpler, respects MCP server rate limits, and keeps per-deployment traces ordered.
+	for (const deploymentId of deployments) {
+		const result = await withElasticDeployment(deploymentId, () =>
+			runSubAgent(state, dataSourceId, agentName, isRetry, log, config, { deploymentId }),
+		);
+		results.push(result);
+	}
+	return { dataSourceResults: results };
 }

@@ -58,6 +58,8 @@ export async function invokeAgent(
 		threadId: string;
 		runId?: string;
 		dataSources?: string[];
+		// SIO-649: Specific Elastic deployment IDs to query; the sub-agent fans out across them.
+		targetDeployments?: string[];
 		isFollowUp?: boolean;
 		dataSourceContext?: DataSourceContext;
 		attachmentContentBlocks?: MessageContentComplex[];
@@ -90,6 +92,7 @@ export async function invokeAgent(
 		{
 			messages: langchainMessages,
 			targetDataSources: options.dataSources ?? [],
+			targetDeployments: options.targetDeployments ?? [],
 			isFollowUp: options.isFollowUp ?? false,
 			requestId,
 			attachmentMeta: options.attachmentMeta ?? [],

@@ -54,6 +54,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		messages: [new HumanMessage("test incident")],
 		queryComplexity: "complex",
 		targetDataSources: [],
+		targetDeployments: [],
 		dataSourceResults: [],
 		currentDataSource: "",
 		extractedEntities: { dataSources: [] },

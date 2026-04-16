@@ -32,6 +32,12 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-649: Elastic deployment IDs to fan out to. Empty = single default deployment.
+	targetDeployments: Annotation<string[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+
 	// SIO-559: append reducer -- appends new results, empty array resets
 	dataSourceResults: Annotation<DataSourceResult[]>({
 		reducer: (prev, next) => {
