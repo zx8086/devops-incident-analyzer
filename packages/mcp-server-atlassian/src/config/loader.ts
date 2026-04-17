@@ -9,31 +9,35 @@ import { ConfigSchema } from "./schemas.js";
 
 const log = createContextLogger("config");
 
+function parseIncidentProjects(raw: string): string[] {
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
 export class ConfigurationManager {
 	private config: Config | null = null;
 
 	private loadFromEnvironment(): Partial<Config> {
+		const incidentProjectsRaw = getEnvVarWithDefault("ATLASSIAN_INCIDENT_PROJECTS", configDefaults.atlassian.incidentProjects);
 		return {
 			application: {
 				name: getEnvVarWithDefault("APPLICATION_NAME", configDefaults.application.name),
 				version: getEnvVarWithDefault("APPLICATION_VERSION", configDefaults.application.version),
-				environment: getEnvVarWithDefault(
-					"NODE_ENV",
-					configDefaults.application.environment,
-				) as Config["application"]["environment"],
-				logLevel: getEnvVarWithDefault(
-					"LOG_LEVEL",
-					configDefaults.application.logLevel,
-				) as Config["application"]["logLevel"],
+				environment: getEnvVarWithDefault("NODE_ENV", configDefaults.application.environment) as Config["application"]["environment"],
+				logLevel: getEnvVarWithDefault("LOG_LEVEL", configDefaults.application.logLevel) as Config["application"]["logLevel"],
 			},
 			atlassian: {
-				baseUrl: getEnvVarWithDefault("ATLASSIAN_BASE_URL", configDefaults.atlassian.baseUrl),
-				email: getEnvVar("ATLASSIAN_EMAIL") || undefined,
-				apiToken: getEnvVar("ATLASSIAN_API_TOKEN") || "",
-				cloudId: getEnvVar("ATLASSIAN_CLOUD_ID") || undefined,
+				mcpEndpoint: getEnvVarWithDefault("ATLASSIAN_MCP_URL", configDefaults.atlassian.mcpEndpoint),
+				siteName: getEnvVar("ATLASSIAN_SITE_NAME") || undefined,
+				readOnly: getEnvVarWithDefault("ATLASSIAN_READ_ONLY", configDefaults.atlassian.readOnly) === "true",
+				oauthCallbackPort: parseInt(
+					getEnvVarWithDefault("ATLASSIAN_OAUTH_CALLBACK_PORT", configDefaults.atlassian.oauthCallbackPort),
+					10,
+				),
+				incidentProjects: parseIncidentProjects(incidentProjectsRaw),
 				timeout: parseInt(getEnvVarWithDefault("ATLASSIAN_TIMEOUT", configDefaults.atlassian.timeout), 10),
-				retryAttempts: parseInt(getEnvVarWithDefault("ATLASSIAN_RETRY_ATTEMPTS", configDefaults.atlassian.retryAttempts), 10),
-				retryDelay: parseInt(getEnvVarWithDefault("ATLASSIAN_RETRY_DELAY", configDefaults.atlassian.retryDelay), 10),
 			},
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", configDefaults.tracing.enabled) === "true",
@@ -76,49 +80,21 @@ export class ConfigurationManager {
 			await initializeEnvironment();
 			const envConfig = this.loadFromEnvironment();
 			this.config = ConfigSchema.parse(envConfig);
-			this.logConfiguration(this.config);
+			if (this.config.atlassian.incidentProjects.length === 0) {
+				log.warn("ATLASSIAN_INCIDENT_PROJECTS is empty -- custom tools will fall back to 'project is not EMPTY'");
+			}
 			return this.config;
 		} catch (error) {
 			if (error instanceof z.ZodError) {
-				this.handleValidationError(error);
+				const issues = error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
+				log.error({ issues }, "Configuration validation failed");
 			}
 			throw error;
 		}
 	}
 
-	private handleValidationError(error: z.ZodError): void {
-		const issues = error.issues
-			.map((issue) => {
-				const path = issue.path.join(".");
-				return `  - ${path}: ${issue.message}`;
-			})
-			.join("\n");
-		log.error({ issues }, "Configuration validation failed");
-
-		for (const issue of error.issues) {
-			const path = issue.path.join(".");
-			if (path === "atlassian.apiToken") {
-				log.warn("TIP: Set ATLASSIAN_API_TOKEN environment variable with your Atlassian API token");
-			}
-		}
-	}
-
-	private logConfiguration(config: Config): void {
-		log.debug(
-			{
-				environment: config.application.environment,
-				logLevel: config.application.logLevel,
-				atlassianBaseUrl: config.atlassian.baseUrl,
-				tracingEnabled: config.tracing.enabled,
-			},
-			"Configuration loaded successfully",
-		);
-	}
-
 	public get(): Config {
-		if (!this.config) {
-			throw new Error("Configuration not loaded. Call load() first.");
-		}
+		if (!this.config) throw new Error("Configuration not loaded. Call load() first.");
 		return this.config;
 	}
 

@@ -14,15 +14,14 @@ export const ConfigSchema = z.object({
 
 	atlassian: z
 		.object({
-			cloudId: z.string().optional().describe("Atlassian Cloud ID"),
-			email: z.string().optional().describe("Atlassian account email for basic auth"),
-			apiToken: z.string().min(1, "Atlassian API token is required").describe("API token for authentication"),
-			baseUrl: z.string().url().describe("Atlassian base URL (e.g. https://your-domain.atlassian.net)"),
-			timeout: z.number().min(1000).max(60000).describe("API request timeout in milliseconds"),
-			retryAttempts: z.number().min(0).max(5).describe("Number of retry attempts for failed requests"),
-			retryDelay: z.number().min(100).max(5000).describe("Delay between retry attempts in milliseconds"),
+			mcpEndpoint: z.string().url().describe("Rovo MCP server URL"),
+			siteName: z.string().optional().describe("Atlassian site short name for cloudId match; first accessible resource used if unset"),
+			readOnly: z.boolean().describe("Filter write tools at registration time"),
+			oauthCallbackPort: z.number().int().min(1024).max(65535).describe("Port for OAuth redirect callback server"),
+			incidentProjects: z.array(z.string()).describe("Jira project keys treated as incident projects for custom tools"),
+			timeout: z.number().min(1000).max(60000).describe("Tool call timeout in milliseconds"),
 		})
-		.describe("Atlassian API configuration"),
+		.describe("Atlassian Rovo MCP configuration"),
 
 	tracing: z
 		.object({

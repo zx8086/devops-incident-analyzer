@@ -8,10 +8,11 @@ export const configDefaults = {
 		logLevel: "info",
 	},
 	atlassian: {
-		baseUrl: "https://your-domain.atlassian.net",
+		mcpEndpoint: "https://mcp.atlassian.com/v1/mcp",
+		readOnly: "true",
+		oauthCallbackPort: "9185",
+		incidentProjects: "",
 		timeout: "30000",
-		retryAttempts: "3",
-		retryDelay: "1000",
 	},
 	tracing: {
 		enabled: "false",
