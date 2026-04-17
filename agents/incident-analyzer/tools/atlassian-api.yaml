@@ -1,0 +1,71 @@
+name: atlassian-api
+description: >
+  Query Jira and Confluence via Atlassian Rovo MCP for linked incident
+  tickets, runbook pages, and historical incident trends. Read-only.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [incident_correlation, runbook_lookup, jira_query, confluence_query]
+      description: Type of Atlassian operation to perform
+    service:
+      type: string
+      description: Service name for incident or runbook search
+    time_from:
+      type: string
+      format: date-time
+      description: Start of time window (ISO 8601)
+    time_to:
+      type: string
+      format: date-time
+      description: End of time window (ISO 8601)
+    query:
+      type: string
+      description: JQL, CQL, or free-text query
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    results:
+      type: array
+      items:
+        type: object
+    total_count: { type: integer }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Query Atlassian for Jira incidents and Confluence runbooks.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- read-only queries only.{{/if}}
+
+related_tools:
+  - "Use elastic-logs to correlate Jira incident time windows with log spikes"
+  - "Use gitlab-api to cross-reference deploy timing with incident creation"
+  - "Use konnect-gateway to check whether API gateway errors align with ticket timeline"
+
+tool_mapping:
+  mcp_server: atlassian
+  mcp_patterns:
+    - "atlassian_*"
+    - "findLinkedIncidents"
+    - "getRunbookForAlert"
+    - "getIncidentHistory"
+  action_tool_map:
+    incident_correlation:
+      - findLinkedIncidents
+      - getIncidentHistory
+    runbook_lookup:
+      - getRunbookForAlert
+      - atlassian_searchConfluencePages
+    jira_query:
+      - atlassian_searchJiraIssuesUsingJql
+      - atlassian_getJiraIssue
+      - atlassian_getJiraIssueComments
+    confluence_query:
+      - atlassian_searchConfluencePages
+      - atlassian_getConfluencePage

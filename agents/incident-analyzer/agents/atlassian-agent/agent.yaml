@@ -1,0 +1,18 @@
+spec_version: "0.1.0"
+name: atlassian-agent
+version: 0.1.0
+description: Read-only Jira and Confluence specialist for incident context, runbook lookup, and historical correlation.
+
+model:
+  preferred: claude-haiku-4-5
+  constraints:
+    temperature: 0.1
+    max_tokens: 2048
+
+tools:
+  - atlassian-api
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact
