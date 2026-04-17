@@ -15,6 +15,7 @@ const labels: Record<string, string> = {
 	couchbase: "Capella",
 	konnect: "Konnect",
 	gitlab: "GitLab",
+	atlassian: "Atlassian",
 };
 
 function isConnected(id: string): boolean {
