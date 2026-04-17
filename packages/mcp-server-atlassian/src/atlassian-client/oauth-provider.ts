@@ -32,7 +32,7 @@ export interface AtlassianOAuthProviderOptions {
 function getStorageDir(): string {
 	const dir = join(homedir(), ".mcp-auth", "atlassian");
 	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true });
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
 	}
 	return dir;
 }
@@ -59,7 +59,7 @@ function loadState(mcpEndpoint: string): PersistedOAuthState {
 
 function saveState(mcpEndpoint: string, state: PersistedOAuthState): void {
 	const path = getStoragePath(mcpEndpoint);
-	writeFileSync(path, JSON.stringify(state, null, 2), "utf-8");
+	writeFileSync(path, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export class AtlassianOAuthProvider implements OAuthClientProvider {

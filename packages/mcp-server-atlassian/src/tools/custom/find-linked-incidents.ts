@@ -8,6 +8,10 @@ import { traceToolCall } from "../../utils/tracing.js";
 
 const log = createContextLogger("find-linked-incidents");
 
+function escapeJqlString(value: string): string {
+	return value.replace(/[\\"]/g, "\\$&");
+}
+
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to search for in Jira incidents"),
 	componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
@@ -82,9 +86,9 @@ export function buildJql({ service, componentLabel, withinDays, incidentProjects
 	}
 
 	if (componentLabel) {
-		parts.push(`(labels = "${componentLabel}" OR component = "${componentLabel}" OR text ~ "${service}")`);
+		parts.push(`(labels = "${escapeJqlString(componentLabel)}" OR component = "${escapeJqlString(componentLabel)}" OR text ~ "${escapeJqlString(service)}")`);
 	} else {
-		parts.push(`labels = "${service}"`);
+		parts.push(`labels = "${escapeJqlString(service)}"`);
 	}
 
 	parts.push(`created >= -${withinDays}d`);
@@ -97,12 +101,13 @@ export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof 
 
 	const severity = fields.priority?.name ?? fields.customfield_severity?.value ?? null;
 
-	let mttrMinutes: number | null = null;
-	if (fields.resolutiondate) {
-		const created = new Date(fields.created).getTime();
-		const resolved = new Date(fields.resolutiondate).getTime();
-		mttrMinutes = Math.round((resolved - created) / 60_000);
-	}
+	const resolvedAt = fields.resolutiondate ?? null;
+	const mttrMinutes = resolvedAt
+		? (() => {
+				const ms = new Date(resolvedAt).getTime() - new Date(fields.created).getTime();
+				return Number.isFinite(ms) ? Math.round(ms / 60000) : null;
+			})()
+		: null;
 
 	return {
 		key,
@@ -110,7 +115,7 @@ export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof 
 		status: fields.status.name,
 		severity,
 		createdAt: fields.created,
-		resolvedAt: fields.resolutiondate ?? null,
+		resolvedAt,
 		mttrMinutes,
 		url: siteUrl ? `${siteUrl}/browse/${key}` : undefined,
 	};

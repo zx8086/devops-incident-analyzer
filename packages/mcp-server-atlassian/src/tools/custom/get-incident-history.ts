@@ -105,11 +105,15 @@ export function aggregate(
 		bucket.incidentCount++;
 
 		if (issue.fields.resolutiondate) {
-			const mttrMs = new Date(issue.fields.resolutiondate).getTime() - created.getTime();
-			bucket.totalMttrMs += mttrMs;
-			bucket.resolvedCount++;
-			totalMttrMs += mttrMs;
-			totalResolved++;
+			const createdMs = created.getTime();
+			const resolvedMs = new Date(issue.fields.resolutiondate).getTime();
+			if (Number.isFinite(createdMs) && Number.isFinite(resolvedMs)) {
+				const mttrMs = resolvedMs - createdMs;
+				bucket.totalMttrMs += mttrMs;
+				bucket.resolvedCount++;
+				totalMttrMs += mttrMs;
+				totalResolved++;
+			}
 		} else {
 			bucket.unresolvedCount++;
 			totalUnresolved++;

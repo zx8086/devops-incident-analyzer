@@ -8,6 +8,10 @@ import { traceToolCall } from "../../utils/tracing.js";
 
 const log = createContextLogger("get-runbook-for-alert");
 
+function escapeCqlString(value: string): string {
+	return value.replace(/[\\"]/g, "\\$&");
+}
+
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1_000;
 
 export const InputSchema = z.object({
@@ -57,11 +61,11 @@ export interface GetRunbookContext {
 }
 
 export function buildCql({ service, errorKeywords, spaceKey }: BuildCqlArgs): string {
-	const textTerms = [service, ...errorKeywords].map((t) => `text ~ "${t}"`);
+	const textTerms = [service, ...errorKeywords].map((t) => `text ~ "${escapeCqlString(t)}"`);
 	const parts: string[] = [`(${textTerms.join(" OR ")})`];
 
 	if (spaceKey) {
-		parts.push(`space = "${spaceKey}"`);
+		parts.push(`space = "${escapeCqlString(spaceKey)}"`);
 	}
 
 	return `${parts.join(" AND ")} ORDER BY lastModified DESC`;

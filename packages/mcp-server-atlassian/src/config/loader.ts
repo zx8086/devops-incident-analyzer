@@ -56,7 +56,10 @@ export class ConfigurationManager {
 					getEnvVarWithDefault("LANGSMITH_PROJECT", configDefaults.tracing.project),
 				endpoint: getEnvVarWithDefault("LANGSMITH_ENDPOINT", configDefaults.tracing.endpoint),
 				sessionName: getEnvVarWithDefault("LANGSMITH_SESSION", configDefaults.tracing.sessionName),
-				tags: getEnvVar("LANGSMITH_TAGS")?.split(",") || [...configDefaults.tracing.tags],
+				tags: getEnvVar("LANGSMITH_TAGS")
+					?.split(",")
+					.map((s) => s.trim())
+					.filter((s) => s.length > 0) || [...configDefaults.tracing.tags],
 				samplingRate: parseFloat(getEnvVarWithDefault("LANGSMITH_SAMPLING_RATE", configDefaults.tracing.samplingRate)),
 			},
 			monitoring: {
