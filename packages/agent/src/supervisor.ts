@@ -15,6 +15,7 @@ const AGENT_NAMES: Record<string, string> = {
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
 	gitlab: "gitlab-agent",
+	atlassian: "atlassian-agent",
 };
 
 type DelegationMode = "auto" | "explicit" | "router";

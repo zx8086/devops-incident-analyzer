@@ -38,7 +38,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	// Datasources that return point-in-time state (not timestamped events) should not
 	// be penalized in the confidence score for lacking a timeline.
-	const STATUS_ORIENTED_SOURCES = new Set(["kafka", "couchbase", "konnect"]);
+	const STATUS_ORIENTED_SOURCES = new Set(["kafka", "couchbase", "konnect", "atlassian"]);
 	const hasEventSources = queriedSources.some((s) => !STATUS_ORIENTED_SOURCES.has(s));
 	const timelineGuidance = hasEventSources
 		? ""

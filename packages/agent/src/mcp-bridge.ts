@@ -26,6 +26,7 @@ export interface McpClientConfig {
 	capellaUrl?: string;
 	konnectUrl?: string;
 	gitlabUrl?: string;
+	atlassianUrl?: string;
 }
 
 // SIO-595: All MCP servers use Streamable HTTP transport at /mcp
@@ -75,6 +76,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	}
 	if (config.gitlabUrl) {
 		serverEntries.push({ name: "gitlab-mcp", url: `${config.gitlabUrl}/mcp` });
+	}
+	if (config.atlassianUrl) {
+		serverEntries.push({ name: "atlassian-mcp", url: `${config.atlassianUrl}/mcp` });
 	}
 
 	if (serverEntries.length === 0) {
@@ -148,6 +152,7 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 		couchbase: "couchbase-mcp",
 		konnect: "konnect-mcp",
 		gitlab: "gitlab-mcp",
+		atlassian: "atlassian-mcp",
 	};
 
 	const serverName = serverMap[dataSourceId];
