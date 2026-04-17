@@ -85,7 +85,7 @@ ${normalized.extractedMetrics?.length ? `- Metrics mentioned: ${normalized.extra
 	const llm = createLlm("entityExtractor");
 	const systemPrompt = `Extract incident entities from the query. Available datasources: ${DATA_SOURCE_IDS.join(", ")}.
 Return JSON with: dataSources (array of {id, mentionedAs}), timeFrom, timeTo (ISO 8601), services (array), severity.
-Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect", "gitlab" or "pipeline" or "merge request" or "CI/CD" or "commit" or "deploy" or "code change" to "gitlab".
+Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect", "gitlab" or "pipeline" or "merge request" or "CI/CD" or "commit" or "deploy" or "code change" to "gitlab", "jira" or "confluence" or "ticket" or "runbook" or "incident page" or "wiki" to "atlassian".
 Always include "gitlab" alongside other datasources for complex incidents -- GitLab provides supplementary code and deployment correlation context.
 If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", ")}.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}`;
 
