@@ -1,0 +1,28 @@
+{
+  "name": "@devops-agent/mcp-server-atlassian",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "dev": "bun --env-file=../../.env --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@devops-agent/shared": "workspace:*",
+    "@langchain/core": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@opentelemetry/api": "^1.9.0",
+    "pino": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:dev",
+    "@types/bun": "catalog:dev",
+    "bun-types": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "private": true
+}
