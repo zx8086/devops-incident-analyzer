@@ -41,15 +41,16 @@ describe("manifest-loader", () => {
 		expect(agent.rules).toContain("Must Always");
 	});
 
-	test("loads all 7 tool definitions", () => {
+	test("loads all 8 tool definitions", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		expect(agent.tools.length).toBe(7);
+		expect(agent.tools.length).toBe(8);
 		const toolNames = agent.tools.map((t) => t.name);
 		expect(toolNames).toContain("elastic-search-logs");
 		expect(toolNames).toContain("kafka-introspect");
 		expect(toolNames).toContain("couchbase-cluster-health");
 		expect(toolNames).toContain("konnect-api-gateway");
 		expect(toolNames).toContain("gitlab-api");
+		expect(toolNames).toContain("atlassian-api");
 		expect(toolNames).toContain("notify-slack");
 		expect(toolNames).toContain("create-ticket");
 	});
@@ -179,7 +180,7 @@ describe("tool-prompt", () => {
 	test("buildAllToolPrompts returns map for all tools", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const prompts = buildAllToolPrompts(agent);
-		expect(prompts.size).toBe(7);
+		expect(prompts.size).toBe(8);
 		expect(prompts.has("elastic-search-logs")).toBe(true);
 		expect(prompts.has("gitlab-api")).toBe(true);
 	});
@@ -307,6 +308,7 @@ describe("tool-schema", () => {
 			"capella_get_system_vitals",
 			"konnect_query_api_requests",
 			"gitlab_search",
+			"findLinkedIncidents",
 		];
 		const result = validateToolSchemas(agent.tools, mcpNames);
 		expect(result.valid).toBe(true);
@@ -320,7 +322,7 @@ describe("tool-schema", () => {
 		// No MCP tools match any patterns
 		const result = validateToolSchemas(agent.tools, ["some_unrelated_tool"]);
 		expect(result.valid).toBe(false);
-		expect(result.missing.length).toBe(5);
+		expect(result.missing.length).toBe(6);
 	});
 
 	test("backward compatibility: direct name comparison without tool_mapping", () => {
