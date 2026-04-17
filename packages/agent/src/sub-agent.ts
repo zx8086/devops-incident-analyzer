@@ -25,6 +25,7 @@ const AGENT_NAMES: Record<string, string> = {
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
 	gitlab: "gitlab-agent",
+	atlassian: "atlassian-agent",
 };
 
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
