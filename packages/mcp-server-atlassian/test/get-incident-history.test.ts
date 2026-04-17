@@ -1,7 +1,7 @@
 // test/get-incident-history.test.ts
 import { describe, expect, test } from "bun:test";
 import type { AtlassianMcpProxy } from "../src/atlassian-client/index.js";
-import { bucketKey, aggregate, getIncidentHistory } from "../src/tools/custom/get-incident-history.js";
+import { aggregate, bucketKey, getIncidentHistory } from "../src/tools/custom/get-incident-history.js";
 
 describe("getIncidentHistory.bucketKey", () => {
 	test("weekly bucket is ISO week start (Monday)", () => {
@@ -50,9 +50,7 @@ describe("getIncidentHistory (end-to-end)", () => {
 					{
 						type: "text",
 						text: JSON.stringify({
-							issues: [
-								{ fields: { created: "2026-04-13T10:00:00Z", resolutiondate: "2026-04-13T11:00:00Z" } },
-							],
+							issues: [{ fields: { created: "2026-04-13T10:00:00Z", resolutiondate: "2026-04-13T11:00:00Z" } }],
 						}),
 					},
 				],

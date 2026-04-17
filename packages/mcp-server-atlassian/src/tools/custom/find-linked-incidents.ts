@@ -13,8 +13,14 @@ export const InputSchema = z.object({
 	componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
 	withinDays: z.number().int().positive().default(30).describe("How many days back to search (default 30)"),
 	limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
-	incidentProjects: z.array(z.string()).default([]).describe("Jira project keys to scope the search (e.g. ['INC', 'OPS'])"),
-	siteUrl: z.string().optional().describe("Atlassian site URL for building browse links (e.g. https://tommy.atlassian.net)"),
+	incidentProjects: z
+		.array(z.string())
+		.default([])
+		.describe("Jira project keys to scope the search (e.g. ['INC', 'OPS'])"),
+	siteUrl: z
+		.string()
+		.optional()
+		.describe("Atlassian site URL for building browse links (e.g. https://tommy.atlassian.net)"),
 });
 
 export const ShapedIssueSchema = z.object({
@@ -89,8 +95,7 @@ export function buildJql({ service, componentLabel, withinDays, incidentProjects
 export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof ShapedIssueSchema> {
 	const { key, fields } = raw;
 
-	const severity =
-		fields.priority?.name ?? fields.customfield_severity?.value ?? null;
+	const severity = fields.priority?.name ?? fields.customfield_severity?.value ?? null;
 
 	let mttrMinutes: number | null = null;
 	if (fields.resolutiondate) {

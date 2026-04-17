@@ -17,8 +17,16 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "atlassian.mcpEndpoint", envVar: "ATLASSIAN_MCP_URL", default: configDefaults.atlassian.mcpEndpoint },
 	{ configPath: "atlassian.siteName", envVar: "ATLASSIAN_SITE_NAME", default: "" },
 	{ configPath: "atlassian.readOnly", envVar: "ATLASSIAN_READ_ONLY", default: configDefaults.atlassian.readOnly },
-	{ configPath: "atlassian.oauthCallbackPort", envVar: "ATLASSIAN_OAUTH_CALLBACK_PORT", default: configDefaults.atlassian.oauthCallbackPort },
-	{ configPath: "atlassian.incidentProjects", envVar: "ATLASSIAN_INCIDENT_PROJECTS", default: configDefaults.atlassian.incidentProjects },
+	{
+		configPath: "atlassian.oauthCallbackPort",
+		envVar: "ATLASSIAN_OAUTH_CALLBACK_PORT",
+		default: configDefaults.atlassian.oauthCallbackPort,
+	},
+	{
+		configPath: "atlassian.incidentProjects",
+		envVar: "ATLASSIAN_INCIDENT_PROJECTS",
+		default: configDefaults.atlassian.incidentProjects,
+	},
 	{ configPath: "atlassian.timeout", envVar: "ATLASSIAN_TIMEOUT", default: configDefaults.atlassian.timeout },
 
 	{ configPath: "tracing.enabled", envVar: "LANGSMITH_TRACING", default: configDefaults.tracing.enabled },
@@ -27,11 +35,23 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "tracing.endpoint", envVar: "LANGSMITH_ENDPOINT", default: configDefaults.tracing.endpoint },
 	{ configPath: "tracing.sessionName", envVar: "LANGSMITH_SESSION", default: configDefaults.tracing.sessionName },
 	{ configPath: "tracing.tags", envVar: "LANGSMITH_TAGS", default: configDefaults.tracing.tags.join(",") },
-	{ configPath: "tracing.samplingRate", envVar: "LANGSMITH_SAMPLING_RATE", default: configDefaults.tracing.samplingRate },
+	{
+		configPath: "tracing.samplingRate",
+		envVar: "LANGSMITH_SAMPLING_RATE",
+		default: configDefaults.tracing.samplingRate,
+	},
 
 	{ configPath: "monitoring.enabled", envVar: "MONITORING_ENABLED", default: configDefaults.monitoring.enabled },
-	{ configPath: "monitoring.healthCheckInterval", envVar: "HEALTH_CHECK_INTERVAL", default: configDefaults.monitoring.healthCheckInterval },
-	{ configPath: "monitoring.metricsCollection", envVar: "METRICS_COLLECTION", default: configDefaults.monitoring.metricsCollection },
+	{
+		configPath: "monitoring.healthCheckInterval",
+		envVar: "HEALTH_CHECK_INTERVAL",
+		default: configDefaults.monitoring.healthCheckInterval,
+	},
+	{
+		configPath: "monitoring.metricsCollection",
+		envVar: "METRICS_COLLECTION",
+		default: configDefaults.monitoring.metricsCollection,
+	},
 
 	{ configPath: "transport.mode", envVar: "MCP_TRANSPORT", default: configDefaults.transport.mode },
 	{ configPath: "transport.port", envVar: "MCP_PORT", default: configDefaults.transport.port },
@@ -40,5 +60,9 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "transport.sessionMode", envVar: "MCP_SESSION_MODE", default: configDefaults.transport.sessionMode },
 	{ configPath: "transport.idleTimeout", envVar: "MCP_IDLE_TIMEOUT", default: configDefaults.transport.idleTimeout },
 	{ configPath: "transport.apiKey", envVar: "MCP_API_KEY", default: configDefaults.transport.apiKey },
-	{ configPath: "transport.allowedOrigins", envVar: "MCP_ALLOWED_ORIGINS", default: configDefaults.transport.allowedOrigins },
+	{
+		configPath: "transport.allowedOrigins",
+		envVar: "MCP_ALLOWED_ORIGINS",
+		default: configDefaults.transport.allowedOrigins,
+	},
 ] as const;

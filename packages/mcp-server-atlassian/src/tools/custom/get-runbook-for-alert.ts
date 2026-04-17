@@ -144,11 +144,7 @@ export async function getRunbookForAlert(
 	return { service: ctx.service, cql, matches: scored };
 }
 
-export function registerGetRunbookForAlert(
-	server: McpServer,
-	proxy: AtlassianMcpProxy,
-	siteUrl?: string,
-): void {
+export function registerGetRunbookForAlert(server: McpServer, proxy: AtlassianMcpProxy, siteUrl?: string): void {
 	server.tool(
 		"getRunbookForAlert",
 		"Search Confluence for runbooks relevant to a service alert. Returns pages ranked by relevance score.",

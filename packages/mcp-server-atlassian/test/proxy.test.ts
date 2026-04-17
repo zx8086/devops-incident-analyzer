@@ -102,7 +102,9 @@ describe("AtlassianMcpProxy.callTool", () => {
 			callbackPort: 0,
 			client,
 			siteName: undefined,
-			reauth: async () => { reauthCalled++; },
+			reauth: async () => {
+				reauthCalled++;
+			},
 		});
 		await proxy.resolveCloudId();
 		const result = await proxy.callTool("searchJiraIssuesUsingJql", {});

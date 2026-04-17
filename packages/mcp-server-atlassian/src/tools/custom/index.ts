@@ -11,11 +11,7 @@ export interface CustomToolsOptions {
 	siteUrl?: string;
 }
 
-export function registerCustomTools(
-	server: McpServer,
-	proxy: AtlassianMcpProxy,
-	opts: CustomToolsOptions,
-): number {
+export function registerCustomTools(server: McpServer, proxy: AtlassianMcpProxy, opts: CustomToolsOptions): number {
 	registerFindLinkedIncidents(server, proxy, opts.incidentProjects, opts.siteUrl);
 	registerGetRunbookForAlert(server, proxy, opts.siteUrl);
 	registerGetIncidentHistory(server, proxy, opts.incidentProjects);

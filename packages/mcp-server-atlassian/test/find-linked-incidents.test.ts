@@ -1,7 +1,7 @@
 // test/find-linked-incidents.test.ts
 import { describe, expect, test } from "bun:test";
 import type { AtlassianMcpProxy } from "../src/atlassian-client/index.js";
-import { buildJql, shapeIssue, findLinkedIncidents } from "../src/tools/custom/find-linked-incidents.js";
+import { buildJql, findLinkedIncidents, shapeIssue } from "../src/tools/custom/find-linked-incidents.js";
 
 describe("findLinkedIncidents.buildJql", () => {
 	test("constrains to incidentProjects when provided", () => {

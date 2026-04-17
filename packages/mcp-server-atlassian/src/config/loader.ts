@@ -20,13 +20,22 @@ export class ConfigurationManager {
 	private config: Config | null = null;
 
 	private loadFromEnvironment(): Partial<Config> {
-		const incidentProjectsRaw = getEnvVarWithDefault("ATLASSIAN_INCIDENT_PROJECTS", configDefaults.atlassian.incidentProjects);
+		const incidentProjectsRaw = getEnvVarWithDefault(
+			"ATLASSIAN_INCIDENT_PROJECTS",
+			configDefaults.atlassian.incidentProjects,
+		);
 		return {
 			application: {
 				name: getEnvVarWithDefault("APPLICATION_NAME", configDefaults.application.name),
 				version: getEnvVarWithDefault("APPLICATION_VERSION", configDefaults.application.version),
-				environment: getEnvVarWithDefault("NODE_ENV", configDefaults.application.environment) as Config["application"]["environment"],
-				logLevel: getEnvVarWithDefault("LOG_LEVEL", configDefaults.application.logLevel) as Config["application"]["logLevel"],
+				environment: getEnvVarWithDefault(
+					"NODE_ENV",
+					configDefaults.application.environment,
+				) as Config["application"]["environment"],
+				logLevel: getEnvVarWithDefault(
+					"LOG_LEVEL",
+					configDefaults.application.logLevel,
+				) as Config["application"]["logLevel"],
 			},
 			atlassian: {
 				mcpEndpoint: getEnvVarWithDefault("ATLASSIAN_MCP_URL", configDefaults.atlassian.mcpEndpoint),

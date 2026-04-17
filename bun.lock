@@ -93,6 +93,24 @@
         "typescript": "catalog:dev",
       },
     },
+    "packages/mcp-server-atlassian": {
+      "name": "@devops-agent/mcp-server-atlassian",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/shared": "workspace:*",
+        "@langchain/core": "catalog:",
+        "@modelcontextprotocol/sdk": "catalog:",
+        "@opentelemetry/api": "^1.9.0",
+        "pino": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@biomejs/biome": "catalog:dev",
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
     "packages/mcp-server-couchbase": {
       "name": "@devops-agent/mcp-server-couchbase",
       "version": "0.1.0",
@@ -385,6 +403,8 @@
     "@devops-agent/checkpointer": ["@devops-agent/checkpointer@workspace:packages/checkpointer"],
 
     "@devops-agent/gitagent-bridge": ["@devops-agent/gitagent-bridge@workspace:packages/gitagent-bridge"],
+
+    "@devops-agent/mcp-server-atlassian": ["@devops-agent/mcp-server-atlassian@workspace:packages/mcp-server-atlassian"],
 
     "@devops-agent/mcp-server-couchbase": ["@devops-agent/mcp-server-couchbase@workspace:packages/mcp-server-couchbase"],
 

@@ -157,9 +157,7 @@ export class AtlassianMcpProxy {
 	}
 
 	async callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
-		const argsWithCloud: Record<string, unknown> = this.cloudId
-			? { cloudId: this.cloudId, ...args }
-			: { ...args };
+		const argsWithCloud: Record<string, unknown> = this.cloudId ? { cloudId: this.cloudId, ...args } : { ...args };
 
 		try {
 			return await this.client.callTool({ name: toolName, arguments: argsWithCloud });

@@ -15,8 +15,7 @@ export type { ConnectionContext };
 export { isTracingActive };
 
 export function initializeTracing(options?: TracingOptions): void {
-	const project =
-		process.env.ATLASSIAN_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "atlassian-mcp-server";
+	const project = process.env.ATLASSIAN_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "atlassian-mcp-server";
 	sharedInitializeTracing({ project, ...options });
 }
 

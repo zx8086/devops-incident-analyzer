@@ -15,7 +15,10 @@ export const ConfigSchema = z.object({
 	atlassian: z
 		.object({
 			mcpEndpoint: z.string().url().describe("Rovo MCP server URL"),
-			siteName: z.string().optional().describe("Atlassian site short name for cloudId match; first accessible resource used if unset"),
+			siteName: z
+				.string()
+				.optional()
+				.describe("Atlassian site short name for cloudId match; first accessible resource used if unset"),
 			readOnly: z.boolean().describe("Filter write tools at registration time"),
 			oauthCallbackPort: z.number().int().min(1024).max(65535).describe("Port for OAuth redirect callback server"),
 			incidentProjects: z.array(z.string()).describe("Jira project keys treated as incident projects for custom tools"),

@@ -1,7 +1,7 @@
 // test/get-runbook-for-alert.test.ts
 import { describe, expect, test } from "bun:test";
 import type { AtlassianMcpProxy } from "../src/atlassian-client/index.js";
-import { buildCql, scorePage, getRunbookForAlert } from "../src/tools/custom/get-runbook-for-alert.js";
+import { buildCql, getRunbookForAlert, scorePage } from "../src/tools/custom/get-runbook-for-alert.js";
 
 describe("getRunbookForAlert.buildCql", () => {
 	test("includes service and keywords joined with OR", () => {
@@ -47,16 +47,12 @@ describe("getRunbookForAlert.scorePage", () => {
 	});
 
 	test("recent update (within 90d) adds score", () => {
-		const recent = scorePage(
-			{ title: "Page", labels: [], lastUpdated: new Date().toISOString(), excerpt: "" },
-			"svc",
-			["err"],
-		);
-		const stale = scorePage(
-			{ title: "Page", labels: [], lastUpdated: "2020-01-01T00:00:00Z", excerpt: "" },
-			"svc",
-			["err"],
-		);
+		const recent = scorePage({ title: "Page", labels: [], lastUpdated: new Date().toISOString(), excerpt: "" }, "svc", [
+			"err",
+		]);
+		const stale = scorePage({ title: "Page", labels: [], lastUpdated: "2020-01-01T00:00:00Z", excerpt: "" }, "svc", [
+			"err",
+		]);
 		expect(recent).toBeGreaterThan(stale);
 	});
 });
@@ -70,8 +66,22 @@ describe("getRunbookForAlert (end-to-end)", () => {
 						type: "text",
 						text: JSON.stringify({
 							results: [
-								{ id: "p1", title: "Unrelated Page", spaceKey: "DOCS", labels: [], lastUpdated: "2020-01-01T00:00:00Z", excerpt: "" },
-								{ id: "p2", title: "checkout-api Runbook", spaceKey: "OPS", labels: ["runbook"], lastUpdated: new Date().toISOString(), excerpt: "" },
+								{
+									id: "p1",
+									title: "Unrelated Page",
+									spaceKey: "DOCS",
+									labels: [],
+									lastUpdated: "2020-01-01T00:00:00Z",
+									excerpt: "",
+								},
+								{
+									id: "p2",
+									title: "checkout-api Runbook",
+									spaceKey: "OPS",
+									labels: ["runbook"],
+									lastUpdated: new Date().toISOString(),
+									excerpt: "",
+								},
 							],
 						}),
 					},
