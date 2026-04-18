@@ -55,6 +55,8 @@ describe("POST /api/agent/stream — validation", () => {
 	test("returns 400 for invalid role enum", async () => {
 		const response = await POST(makeRequest({ messages: [{ role: "system", content: "x" }] }));
 		expect(response.status).toBe(400);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toBe("Invalid request");
 	});
 
 	test("returns 400 for non-JSON body", async () => {
