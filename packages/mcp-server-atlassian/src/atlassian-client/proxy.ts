@@ -5,8 +5,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createContextLogger } from "../utils/logger.js";
-import { waitForOAuthCallback } from "./oauth-callback.js";
-import { AtlassianOAuthProvider } from "./oauth-provider.js";
+import { waitForOAuthCallback } from "@devops-agent/shared";
+import { AtlassianOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider.js";
 
 const log = createContextLogger("proxy");
 
@@ -92,7 +92,7 @@ export class AtlassianMcpProxy {
 			if (error instanceof UnauthorizedError) {
 				log.info("OAuth authorization required -- waiting for browser callback...");
 
-				const { code } = await waitForOAuthCallback(this.options.callbackPort);
+				const { code } = await waitForOAuthCallback({ port: this.options.callbackPort, path: OAUTH_CALLBACK_PATH });
 				await this.transport.finishAuth(code);
 
 				// Reconnect with authorized transport
