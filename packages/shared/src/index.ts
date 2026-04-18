@@ -141,3 +141,9 @@ export {
 	type AgentCoreTransportResult,
 	startAgentCoreTransport,
 } from "./transport/agentcore.ts";
+export {
+	OAuthCallbackTimeoutError,
+	type OAuthCallbackOptions,
+	type OAuthCallbackResult,
+	waitForOAuthCallback,
+} from "./oauth-callback.ts";
