@@ -63,4 +63,23 @@ describe("applyStreamEvent", () => {
 		expect(next.pendingActions).toHaveLength(1);
 		expect(next.pendingActions[0]?.id).toBe("a-1");
 	});
+
+	test("records datasource_progress with immutable map copy", () => {
+		const initial = initialReducerState();
+		const next = applyStreamEvent(initial, {
+			type: "datasource_progress",
+			dataSourceId: "elastic",
+			status: "running",
+			message: "querying",
+		});
+		expect(next.dataSourceProgress.get("elastic")).toEqual({ status: "running", message: "querying" });
+		expect(initial.dataSourceProgress.size).toBe(0);
+	});
+
+	test("does not mutate input state when handling node_start", () => {
+		const before = initialReducerState();
+		const sizeBefore = before.activeNodes.size;
+		applyStreamEvent(before, { type: "node_start", nodeId: "x" });
+		expect(before.activeNodes.size).toBe(sizeBefore);
+	});
 });
