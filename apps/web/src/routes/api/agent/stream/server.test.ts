@@ -172,3 +172,22 @@ describe("POST /api/agent/stream — SSE stream", () => {
 		expect(messages).toEqual(["user-facing"]);
 	});
 });
+
+describe("POST /api/agent/stream — error path", () => {
+	test("emits an SSE error event when the agent throws", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			// biome-ignore lint/correctness/useYield: deliberately throws to exercise the error path
+			async *[Symbol.asyncIterator]() {
+				throw new Error("agent exploded");
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "trigger" }] }));
+		expect(response.status).toBe(200);
+
+		const events = await collectSse(response);
+		const errorEvent = events.find((e) => e.type === "error") as { type: "error"; message: string } | undefined;
+		expect(errorEvent).toBeDefined();
+		expect(errorEvent?.message).toContain("agent exploded");
+	});
+});
