@@ -2,6 +2,7 @@
 
 import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+import { parseSseChunks } from "./sse-buffer.ts";
 
 export interface ChatMessage {
 	role: "user" | "assistant";
@@ -94,27 +95,8 @@ function createAgentStore() {
 				throw new Error(`HTTP ${response.status}`);
 			}
 
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-
-				for (const line of lines) {
-					if (!line.startsWith("data: ")) continue;
-					try {
-						const event = JSON.parse(line.slice(6)) as StreamEvent;
-						handleEvent(event);
-					} catch {
-						// Skip malformed events
-					}
-				}
+			for await (const event of parseSseChunks(response.body)) {
+				handleEvent(event);
 			}
 		} catch (error) {
 			const isAbort = error instanceof DOMException && error.name === "AbortError";
