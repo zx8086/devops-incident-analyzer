@@ -2,9 +2,7 @@
 
 import type { StreamEvent } from "@devops-agent/shared";
 
-export async function* parseSseChunks(
-	stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<StreamEvent> {
+export async function* parseSseChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";

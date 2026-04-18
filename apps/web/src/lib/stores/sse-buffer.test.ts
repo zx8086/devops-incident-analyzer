@@ -1,3 +1,4 @@
+// apps/web/src/lib/stores/sse-buffer.test.ts
 import { describe, expect, test } from "bun:test";
 import type { StreamEvent } from "@devops-agent/shared";
 import { parseSseChunks } from "./sse-buffer.ts";
@@ -39,19 +40,13 @@ describe("parseSseChunks", () => {
 	});
 
 	test("skips malformed JSON without throwing", async () => {
-		const stream = chunksOf(
-			"data: {not-json}\n\n",
-			`data: ${JSON.stringify({ type: "message", content: "ok" })}\n\n`,
-		);
+		const stream = chunksOf("data: {not-json}\n\n", `data: ${JSON.stringify({ type: "message", content: "ok" })}\n\n`);
 		const events = await collect(stream);
 		expect(events).toEqual([{ type: "message", content: "ok" }]);
 	});
 
 	test("ignores lines that do not start with 'data: '", async () => {
-		const stream = chunksOf(
-			`event: ping\n`,
-			`data: ${JSON.stringify({ type: "message", content: "x" })}\n\n`,
-		);
+		const stream = chunksOf(`event: ping\n`, `data: ${JSON.stringify({ type: "message", content: "x" })}\n\n`);
 		const events = await collect(stream);
 		expect(events).toEqual([{ type: "message", content: "x" }]);
 	});
