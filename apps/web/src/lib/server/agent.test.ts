@@ -37,6 +37,9 @@ mock.module("@devops-agent/agent", () => ({
 		subAgents: new Map(),
 		knowledge: [],
 	}),
+	AttachmentError: class AttachmentError extends Error {},
+	flushLangSmithCallbacks: mock(() => Promise.resolve()),
+	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 }));
 
 mock.module("@devops-agent/gitagent-bridge", () => ({
@@ -55,10 +58,16 @@ mock.module("@devops-agent/gitagent-bridge", () => ({
 	},
 }));
 
-mock.module("@devops-agent/shared", () => ({
-	isKillSwitchActive: () => false,
-	KillSwitchError: class KillSwitchError extends Error {},
-}));
+mock.module("@devops-agent/shared", () => {
+	const { z } = require("zod");
+	return {
+		isKillSwitchActive: () => false,
+		KillSwitchError: class KillSwitchError extends Error {},
+		AttachmentBlockSchema: z.any(),
+		DataSourceContextSchema: z.any(),
+		redactPiiContent: (s: string) => s,
+	};
+});
 
 mock.module("@langchain/core/messages", () => ({
 	HumanMessage: class HumanMessage {

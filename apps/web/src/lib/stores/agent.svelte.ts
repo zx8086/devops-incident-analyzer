@@ -2,6 +2,8 @@
 
 import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+import { applyStreamEvent, type ReducerState } from "./agent-reducer.ts";
+import { parseSseChunks } from "./sse-buffer.ts";
 
 export interface ChatMessage {
 	role: "user" | "assistant";
@@ -94,27 +96,8 @@ function createAgentStore() {
 				throw new Error(`HTTP ${response.status}`);
 			}
 
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-
-				for (const line of lines) {
-					if (!line.startsWith("data: ")) continue;
-					try {
-						const event = JSON.parse(line.slice(6)) as StreamEvent;
-						handleEvent(event);
-					} catch {
-						// Skip malformed events
-					}
-				}
+			for await (const event of parseSseChunks(response.body)) {
+				handleEvent(event);
 			}
 		} catch (error) {
 			const isAbort = error instanceof DOMException && error.name === "AbortError";
@@ -150,43 +133,35 @@ function createAgentStore() {
 	}
 
 	function handleEvent(event: StreamEvent) {
-		switch (event.type) {
-			case "message":
-				currentContent += event.content;
-				break;
-			case "tool_call":
-				break;
-			case "datasource_progress":
-				dataSourceProgress = new Map([
-					...dataSourceProgress,
-					[event.dataSourceId, { status: event.status, message: event.message }],
-				]);
-				break;
-			case "node_start":
-				activeNodes = new Set([...activeNodes, event.nodeId]);
-				break;
-			case "node_end":
-				activeNodes = new Set([...activeNodes].filter((n) => n !== event.nodeId));
-				completedNodes = new Map([...completedNodes, [event.nodeId, { duration: event.duration }]]);
-				break;
-			case "suggestions":
-				lastSuggestions = event.suggestions;
-				break;
-			case "pending_actions":
-				pendingActions = event.actions;
-				break;
-			case "done":
-				threadId = event.threadId;
-				lastResponseTime = event.responseTime;
-				lastToolsUsed = event.toolsUsed ?? [];
-				lastRunId = event.runId;
-				lastConfidence = event.confidence;
-				lastDataSourceContext = event.dataSourceContext;
-				break;
-			case "error":
-				currentContent += `\n\n[Error: ${event.message}]`;
-				break;
-		}
+		const snapshot: ReducerState = {
+			currentContent,
+			threadId,
+			activeNodes,
+			completedNodes,
+			dataSourceProgress,
+			lastSuggestions,
+			lastResponseTime,
+			lastToolsUsed,
+			lastRunId,
+			lastConfidence,
+			lastDataSourceContext,
+			pendingActions,
+			actionResults,
+		};
+		const next = applyStreamEvent(snapshot, event);
+		currentContent = next.currentContent;
+		threadId = next.threadId;
+		activeNodes = next.activeNodes;
+		completedNodes = next.completedNodes;
+		dataSourceProgress = next.dataSourceProgress;
+		lastSuggestions = next.lastSuggestions;
+		lastResponseTime = next.lastResponseTime;
+		lastToolsUsed = next.lastToolsUsed;
+		lastRunId = next.lastRunId;
+		lastConfidence = next.lastConfidence;
+		lastDataSourceContext = next.lastDataSourceContext;
+		pendingActions = next.pendingActions;
+		actionResults = next.actionResults;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
