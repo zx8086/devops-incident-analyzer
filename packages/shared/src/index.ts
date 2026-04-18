@@ -102,6 +102,12 @@ export {
 	type McpLoggerOptions,
 	measureOperation,
 } from "./logger.ts";
+export {
+	type OAuthCallbackOptions,
+	type OAuthCallbackResult,
+	OAuthCallbackTimeoutError,
+	waitForOAuthCallback,
+} from "./oauth-callback.ts";
 export { redactPiiContent } from "./pii-redactor.ts";
 export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
