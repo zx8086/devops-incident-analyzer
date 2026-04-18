@@ -1,9 +1,6 @@
 // shared/src/__tests__/oauth-callback.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-	OAuthCallbackTimeoutError,
-	waitForOAuthCallback,
-} from "../oauth-callback.ts";
+import { OAuthCallbackTimeoutError, waitForOAuthCallback } from "../oauth-callback.ts";
 
 let serverPort = 19_400;
 
@@ -18,9 +15,7 @@ describe("waitForOAuthCallback", () => {
 
 		await Bun.sleep(50);
 
-		const res = await fetch(
-			`http://localhost:${serverPort}${path}?code=test_auth_code`,
-		);
+		const res = await fetch(`http://localhost:${serverPort}${path}?code=test_auth_code`);
 		expect(res.status).toBe(200);
 		const html = await res.text();
 		expect(html).toContain("Authorization Successful");
@@ -97,9 +92,7 @@ describe("waitForOAuthCallback", () => {
 		const res = await fetch(`http://localhost:${serverPort}/wrong-path`);
 		expect(res.status).toBe(404);
 
-		await fetch(
-			`http://localhost:${serverPort}${path}?code=cleanup`,
-		);
+		await fetch(`http://localhost:${serverPort}${path}?code=cleanup`);
 		await promise;
 	});
 
@@ -116,9 +109,7 @@ describe("waitForOAuthCallback", () => {
 		const res = await fetch(`http://localhost:${serverPort}${path}`);
 		expect(res.status).toBe(400);
 
-		await fetch(
-			`http://localhost:${serverPort}${path}?code=cleanup`,
-		);
+		await fetch(`http://localhost:${serverPort}${path}?code=cleanup`);
 		await promise;
 	});
 });

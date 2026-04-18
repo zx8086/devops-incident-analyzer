@@ -1,11 +1,11 @@
 // src/gitlab-client/proxy.ts
 
+import { waitForOAuthCallback } from "@devops-agent/shared";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createContextLogger } from "../utils/logger.js";
-import { waitForOAuthCallback } from "@devops-agent/shared";
 import { GitLabOAuthProvider, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_PORT } from "./oauth-provider.js";
 
 const log = createContextLogger("proxy");

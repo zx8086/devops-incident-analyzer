@@ -39,9 +39,7 @@ export interface OAuthCallbackResult {
 	code: string;
 }
 
-export async function waitForOAuthCallback(
-	options: OAuthCallbackOptions,
-): Promise<OAuthCallbackResult> {
+export async function waitForOAuthCallback(options: OAuthCallbackOptions): Promise<OAuthCallbackResult> {
 	const { port, path, logger } = options;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -74,12 +72,8 @@ export async function waitForOAuthCallback(
 				}
 
 				if (error) {
-					const description =
-						url.searchParams.get("error_description") || error;
-					logger?.error(
-						{ error: description },
-						"OAuth authorization failed",
-					);
+					const description = url.searchParams.get("error_description") || error;
+					logger?.error({ error: description }, "OAuth authorization failed");
 					settled = true;
 					clearTimeout(timer);
 					// Defer rejection so the HTTP response is delivered before the
@@ -95,26 +89,17 @@ export async function waitForOAuthCallback(
 					});
 				}
 
-				return new Response(
-					"Bad request: missing code or error parameter",
-					{ status: 400 },
-				);
+				return new Response("Bad request: missing code or error parameter", { status: 400 });
 			},
 		});
 
-		logger?.info(
-			{ port, path, timeoutMs },
-			"OAuth callback server started",
-		);
+		logger?.info({ port, path, timeoutMs }, "OAuth callback server started");
 
 		const timer = setTimeout(() => {
 			if (!settled) {
 				settled = true;
 				server.stop(true);
-				logger?.error(
-					{ port, timeoutMs },
-					"OAuth callback server timed out",
-				);
+				logger?.error({ port, timeoutMs }, "OAuth callback server timed out");
 				reject(new OAuthCallbackTimeoutError(timeoutMs));
 			}
 		}, timeoutMs);
