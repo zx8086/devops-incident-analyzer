@@ -1,6 +1,6 @@
 // apps/web/src/lib/server/agent.ts
 import { buildGraph, createMcpClient, getAgent } from "@devops-agent/agent";
-import { getRecursionLimit } from "@devops-agent/gitagent-bridge";
+import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
@@ -106,7 +106,10 @@ export async function invokeAgent(
 			version: "v2",
 			recursionLimit: getGraphRecursionLimit(),
 			signal: AbortSignal.timeout(getGraphTimeoutMs()),
-			...(options.metadata && { metadata: options.metadata }),
+			metadata: {
+				...complianceToMetadata(getAgent().manifest.compliance),
+				...options.metadata,
+			},
 		},
 	);
 }
