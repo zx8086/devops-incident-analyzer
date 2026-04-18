@@ -25,6 +25,7 @@ describe("GET /health", () => {
 
 	test("returns ok with all services false when no MCP URLs configured", async () => {
 		const response = await GET({} as Parameters<typeof GET>[0]);
+		expect(response.status).toBe(200);
 		const body = (await response.json()) as {
 			status: string;
 			timestamp: string;
@@ -32,6 +33,7 @@ describe("GET /health", () => {
 		};
 		expect(body.status).toBe("ok");
 		expect(typeof body.timestamp).toBe("string");
+		expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
 		expect(body.services).toEqual({
 			elastic: false,
 			kafka: false,
