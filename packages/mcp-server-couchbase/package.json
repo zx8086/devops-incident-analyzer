@@ -14,7 +14,7 @@
 		"@devops-agent/shared": "workspace:*",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.0",
-		"couchbase": "^4.5.0",
+		"couchbase": "^4.7.0",
 		"pino": "catalog:",
 		"zod": "catalog:"
 	},

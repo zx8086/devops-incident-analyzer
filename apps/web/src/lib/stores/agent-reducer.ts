@@ -76,5 +76,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			return { ...state, currentContent: `${state.currentContent}\n\n[Error: ${event.message}]` };
 		case "low_confidence":
 			return state;
+		case "run_id":
+			// Server emits run_id before graph output so feedback can be submitted early
+			return { ...state, lastRunId: event.runId };
+		case "attachment_warnings":
+			return state;
+		default:
+			return state;
 	}
 }

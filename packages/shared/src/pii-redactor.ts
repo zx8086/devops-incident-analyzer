@@ -23,8 +23,13 @@ const PII_PATTERNS: readonly PiiPattern[] = [
 		replacement: "[EMAIL_REDACTED]",
 	},
 	{
+		// Require at least one separator so bare 10-digit identifiers (ES node
+		// suffixes, sequence IDs) are not mistaken for phone numbers — especially
+		// when text is redacted chunk-by-chunk during SSE streaming, where a
+		// lookbehind on `^` would otherwise match arbitrary token boundaries.
 		name: "us_phone",
-		regex: /(?<=^|[\s,;:])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
+		regex:
+			/(?:\+?1[-.\s])?(?:\(\d{3}\)\s?\d{3}[-.\s]?\d{4}|\b\d{3}[-.\s]\d{3}[-.\s]?\d{4}\b|\b\d{3}[-.\s]?\d{3}[-.\s]\d{4}\b)/g,
 		replacement: "[PHONE_REDACTED]",
 	},
 	{

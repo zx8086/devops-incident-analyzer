@@ -39,9 +39,7 @@ if (import.meta.main) {
 			await proxy.resolveCloudId();
 			const discoveredTools = await discoverRemoteTools(proxy);
 
-			const siteUrl = config.atlassian.siteName
-				? `https://${config.atlassian.siteName}.atlassian.net`
-				: undefined;
+			const siteUrl = config.atlassian.siteName ? `https://${config.atlassian.siteName}.atlassian.net` : undefined;
 
 			return { proxy, config, discoveredTools, siteUrl };
 		},

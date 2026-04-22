@@ -45,6 +45,22 @@ describe("redactPiiContent", () => {
 		expect(redactPiiContent(input)).toBe(input);
 	});
 
+	// Phone regex must require a separator so bare 10-digit IDs (Elasticsearch
+	// node suffixes, sequence IDs) survive token-by-token streaming where chunk
+	// boundaries would otherwise satisfy a lookbehind.
+	test("does not redact bare 10-digit identifiers", () => {
+		expect(redactPiiContent("node-0000000088")).toBe("node-0000000088");
+		expect(redactPiiContent("instance-0000000147 (73 KB free)")).toBe("instance-0000000147 (73 KB free)");
+		expect(redactPiiContent("3102818847")).toBe("3102818847");
+		expect(redactPiiContent(" 0000000099 ")).toBe(" 0000000099 ");
+	});
+
+	test("does not redact bare digits split across streamed chunks", () => {
+		const chunks = ["Master node-", "0000000088", " JVM"];
+		const joined = chunks.map(redactPiiContent).join("");
+		expect(joined).toBe("Master node-0000000088 JVM");
+	});
+
 	test("passes through text with no PII unchanged", () => {
 		const input = "Kafka consumer lag is 5000 messages behind on topic orders.created";
 		expect(redactPiiContent(input)).toBe(input);

@@ -1,5 +1,7 @@
 // apps/web/src/lib/stores/agent.handleEvent.test.ts
+
 import { describe, expect, test } from "bun:test";
+import type { StreamEvent } from "@devops-agent/shared";
 import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 
 describe("applyStreamEvent", () => {
@@ -81,5 +83,24 @@ describe("applyStreamEvent", () => {
 		const sizeBefore = before.activeNodes.size;
 		applyStreamEvent(before, { type: "node_start", nodeId: "x" });
 		expect(before.activeNodes.size).toBe(sizeBefore);
+	});
+
+	test("captures run_id event so feedback can submit before done", () => {
+		const next = applyStreamEvent(initialReducerState(), { type: "run_id", runId: "r-early" });
+		expect(next.lastRunId).toBe("r-early");
+	});
+
+	test("passes through attachment_warnings without throwing", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "attachment_warnings",
+			warnings: ["truncated-pdf"],
+		});
+		expect(next.currentContent).toBe("");
+	});
+
+	test("returns state unchanged for unknown event types", () => {
+		const before = initialReducerState();
+		const after = applyStreamEvent(before, { type: "future_event_x" } as unknown as StreamEvent);
+		expect(after).toBe(before);
 	});
 });

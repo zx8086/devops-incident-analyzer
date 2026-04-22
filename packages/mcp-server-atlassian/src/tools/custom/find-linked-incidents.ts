@@ -86,7 +86,9 @@ export function buildJql({ service, componentLabel, withinDays, incidentProjects
 	}
 
 	if (componentLabel) {
-		parts.push(`(labels = "${escapeJqlString(componentLabel)}" OR component = "${escapeJqlString(componentLabel)}" OR text ~ "${escapeJqlString(service)}")`);
+		parts.push(
+			`(labels = "${escapeJqlString(componentLabel)}" OR component = "${escapeJqlString(componentLabel)}" OR text ~ "${escapeJqlString(service)}")`,
+		);
 	} else {
 		parts.push(`labels = "${escapeJqlString(service)}"`);
 	}

@@ -113,5 +113,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		actions: z.array(PendingActionSchema),
 	}),
 	z.object({ type: z.literal("error"), message: z.string() }),
+	z.object({ type: z.literal("run_id"), runId: z.string() }),
+	z.object({ type: z.literal("attachment_warnings"), warnings: z.array(z.string()) }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;
