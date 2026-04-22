@@ -288,7 +288,7 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 
 			inputSchema: {
 				index: z.string(), // Index name or pattern to search
-				query: z.object({}), // Query DSL to filter documents
+				query: z.object({}).passthrough(), // Query DSL to filter documents
 				scroll: z.string().optional(),
 				scrollId: z.string().optional(),
 				maxDocuments: z.number().optional(),

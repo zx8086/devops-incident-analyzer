@@ -132,7 +132,7 @@ export const registerIndexDocumentTool: ToolRegistrationFunction = (server: McpS
 			inputSchema: {
 				index: z.string(), // REQUIRED: Name of the Elasticsearch index to store the document. Example: 'users', 'logs-2024.01'
 				id: z.string().optional(), // Optional: Unique identifier for the document. If not provided, Elasticsearch will generate one
-				document: z.object({}), // REQUIRED: The JSON document to index
+				document: z.object({}).passthrough(), // REQUIRED: The JSON document to index
 				refresh: z.enum(["true", "false", "wait_for"]).optional(), // Whether to refresh the index after the operation
 				routing: z.string().optional(), // Custom routing value for document placement
 				pipeline: z.string().optional(), // Ingest pipeline to use for document processing

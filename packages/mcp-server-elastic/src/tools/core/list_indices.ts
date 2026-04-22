@@ -101,13 +101,21 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				"Listing indices",
 			);
 
-			// Build the cat indices request
+			// Build the cat indices request. Always include store.size_in_bytes when
+			// sorting by size so the sort key is numeric (defect 7); the formatted
+			// store.size column is only requested when includeSize displays it.
+			const includeBytes = params.sortBy === "size";
+			const headerParts = ["index", "health", "status", "docs.count"];
+			if (params.includeSize) {
+				headerParts.push("store.size", "creation.date.string");
+			}
+			if (includeBytes) {
+				headerParts.push("store.size_in_bytes");
+			}
 			const catParams = {
 				index: params.indexPattern,
 				format: "json" as const,
-				h: params.includeSize
-					? "index,health,status,docs.count,store.size,creation.date.string"
-					: "index,health,status,docs.count",
+				h: headerParts.join(","),
 			};
 
 			const response = await esClient.cat.indices(catParams);
@@ -127,9 +135,9 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			filteredIndices.sort((a: any, b: any) => {
 				switch (params.sortBy) {
 					case "size": {
-						const sizeA = Number.parseInt(a["store.size"]?.replace(/[^\d]/g, "") || "0", 10);
-						const sizeB = Number.parseInt(b["store.size"]?.replace(/[^\d]/g, "") || "0", 10);
-						return sizeB - sizeA; // Descending
+						const sizeA = Number.parseInt(a["store.size_in_bytes"] || "0", 10);
+						const sizeB = Number.parseInt(b["store.size_in_bytes"] || "0", 10);
+						return sizeB - sizeA; // Descending by raw byte count
 					}
 					case "docs": {
 						const docsA = Number.parseInt(a["docs.count"] || "0", 10);

@@ -148,13 +148,13 @@ export const registerWatcherExecuteWatchTool: ToolRegistrationFunction = (server
 
 			inputSchema: {
 				id: z.string().optional(), // Watch ID to execute
-				action_modes: z.object({}).optional(), // Override action execution modes
-				alternative_input: z.object({}).optional(), // Alternative input to use instead of the watch input
+				action_modes: z.object({}).passthrough().optional(), // Override action execution modes
+				alternative_input: z.object({}).passthrough().optional(), // Alternative input to use instead of the watch input
 				ignore_condition: z.boolean().optional(), // Whether to ignore the condition and always execute the actions
 				record_execution: z.boolean().optional(), // Whether to record the execution in the watch history
-				simulated_actions: z.object({}).optional(), // Actions to simulate instead of executing
-				trigger_data: z.object({}).optional(), // Trigger data to use for execution
-				watch: z.object({}).optional(), // Watch definition to execute inline
+				simulated_actions: z.object({}).passthrough().optional(), // Actions to simulate instead of executing
+				trigger_data: z.object({}).passthrough().optional(), // Trigger data to use for execution
+				watch: z.object({}).passthrough().optional(), // Watch definition to execute inline
 				debug: z.boolean().optional(), // Enable debug mode for execution
 			},
 		},

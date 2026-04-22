@@ -235,6 +235,31 @@ export class SecurityEnhancer {
 			return violations;
 		}
 
+		// ILM step exemption: phase/action values are drawn from closed ES enums
+		// (hot, warm, cold, frozen, delete) and step names are ES-controlled
+		// identifiers. The word "delete" otherwise trips the SQL pattern.
+		const isIlmStepField = lowerField.endsWith(".phase") || lowerField.endsWith(".action");
+		if (isIlmStepField) {
+			return violations;
+		}
+
+		// Ingest pipeline metadata exemption: tag/description on processors are
+		// documented free-text labels (e.g. "drop-future-dated-syslog") with no
+		// execution semantics. Common processor names like "drop" otherwise match
+		// the SQL keyword regex.
+		const isProcessorMetaField =
+			lowerField.includes("processors") && (lowerField.endsWith(".tag") || lowerField.endsWith(".description"));
+		if (isProcessorMetaField) {
+			return violations;
+		}
+
+		// _meta exemption: ES stores _meta verbatim and never interprets it.
+		// Any string under a _meta.* path is user-defined provenance metadata.
+		const isMetaField = lowerField.includes("_meta.") || lowerField === "_meta";
+		if (isMetaField) {
+			return violations;
+		}
+
 		// Elasticsearch-specific exemptions - expanded to cover more field types
 		const isElasticsearchField =
 			lowerField.includes("index") ||

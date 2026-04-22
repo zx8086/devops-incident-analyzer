@@ -36,6 +36,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Local reference implementations (not part of this repo)
 migrate/
 
+# Local reference material and ad-hoc artifacts (defect reports, scratch work)
+current/
+
 # Local git worktrees (kept outside the indexed tree)
 .worktrees/
 

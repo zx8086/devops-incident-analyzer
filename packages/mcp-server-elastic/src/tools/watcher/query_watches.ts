@@ -166,7 +166,7 @@ export const registerWatcherQueryWatchesTool: ToolRegistrationFunction = (server
 			inputSchema: {
 				from: z.number().min(0).optional(), // Starting offset for pagination
 				size: z.number().min(1).max(50).optional(), // Number of watches to return
-				query: z.object({}).optional(), // Query to filter watches
+				query: z.object({}).passthrough().optional(), // Query to filter watches
 				sort: z.any().optional(), // Sort criteria for results
 				search_after: z.array(z.any().optional()).optional(), // Values to search after for pagination
 			},

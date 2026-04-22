@@ -164,14 +164,14 @@ export const registerWatcherPutWatchTool: ToolRegistrationFunction = (server: Mc
 
 			inputSchema: {
 				id: z.string(), // Watch ID
-				actions: z.object({}).optional(), // Actions to execute when watch triggers
-				condition: z.object({}).optional(), // Condition that determines when to execute actions
-				input: z.object({}).optional(), // Input for the watch execution
-				metadata: z.object({}).optional(), // Watch metadata
+				actions: z.object({}).passthrough().optional(), // Actions to execute when watch triggers
+				condition: z.object({}).passthrough().optional(), // Condition that determines when to execute actions
+				input: z.object({}).passthrough().optional(), // Input for the watch execution
+				metadata: z.object({}).passthrough().optional(), // Watch metadata
 				throttle_period: z.string().optional(), // Throttle period for watch execution
 				throttle_period_in_millis: z.number().optional(), // Throttle period in milliseconds
-				transform: z.object({}).optional(), // Transform to apply to watch payload
-				trigger: z.object({}).optional(), // Trigger that determines when watch should run
+				transform: z.object({}).passthrough().optional(), // Transform to apply to watch payload
+				trigger: z.object({}).passthrough().optional(), // Trigger that determines when watch should run
 				active: z.boolean().optional(), // Whether the watch is active
 				if_primary_term: z.number().optional(), // Only perform operation if primary term matches
 				if_seq_no: z.number().optional(), // Only perform operation if sequence number matches
