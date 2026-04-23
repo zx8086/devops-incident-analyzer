@@ -11,6 +11,21 @@ function makeClient(overrides: Partial<McpClientLike> = {}): McpClientLike {
 }
 
 describe("AtlassianMcpProxy.resolveCloudId", () => {
+	test("passes empty arguments object to getAccessibleAtlassianResources (Rovo Zod requires object)", async () => {
+		const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
+		const client = makeClient({
+			callTool: async (req: { name: string; arguments?: Record<string, unknown> }) => {
+				calls.push({ name: req.name, arguments: req.arguments });
+				return { content: [{ type: "text", text: JSON.stringify([{ id: "c-x", name: "any" }]) }] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({ mcpEndpoint: "x", callbackPort: 0, client, siteName: undefined });
+		await proxy.resolveCloudId();
+		const call = calls.find((c) => c.name === "getAccessibleAtlassianResources");
+		expect(call).toBeDefined();
+		expect(call?.arguments).toEqual({});
+	});
+
 	test("selects first resource when siteName unset", async () => {
 		const client = makeClient({
 			callTool: async ({ name }: { name: string }) => {

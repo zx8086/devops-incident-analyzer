@@ -23,6 +23,10 @@ Triage priority:
 1. Linked incidents in the last 30 days matching the service
 2. Runbook pages ranked by title match, keywords, and freshness
 3. Incident history trends (count + MTTR) for the service
+4. For any issue flagged as Blocked, Waiting, or Stale (no update in >90d),
+   follow up with atlassian_getJiraIssue and atlassian_getJiraIssueComments
+   to fetch the description and latest comments before returning. Root-cause
+   signals live in the issue body and comment thread, not the search summary.
 
 ## Custom Tools
 - findLinkedIncidents: JQL-composed recent incident search with MTTR

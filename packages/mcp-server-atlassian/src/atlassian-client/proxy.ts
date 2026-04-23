@@ -110,7 +110,9 @@ export class AtlassianMcpProxy {
 	}
 
 	async resolveCloudId(): Promise<void> {
-		const response = await this.client.callTool({ name: "getAccessibleAtlassianResources" });
+		// Rovo's Zod schema requires an object for arguments even when the tool takes no params.
+		// Omitting it yields a -32602 "expected object, received undefined" from the server.
+		const response = await this.client.callTool({ name: "getAccessibleAtlassianResources", arguments: {} });
 
 		const textContent = response.content.find(
 			(c): c is { type: string; text: string } =>

@@ -39,10 +39,48 @@ const PII_PATTERNS: readonly PiiPattern[] = [
 	},
 ];
 
+// Corporate / directory domains where email addresses are already public to the
+// user (e.g. Jira ticket assignees). Emails matching these domains are restored
+// after pattern redaction so the rendered output stays consistent with what the
+// user can see directly in the source ticket.
+function getAllowedEmailDomains(): string[] {
+	const raw = process.env.PII_REDACTION_ALLOWED_DOMAINS;
+	if (!raw) return [];
+	return raw
+		.split(",")
+		.map((d) => d.trim().toLowerCase())
+		.filter((d) => d.length > 0);
+}
+
 export function redactPiiContent(text: string): string {
-	let result = text;
+	const allowedDomains = getAllowedEmailDomains();
+
+	// Preserve allowlisted emails by swapping them for sentinels before pattern
+	// redaction, then restoring after. Sentinels use a form that cannot match
+	// any PII pattern (no @ sign, no digit runs).
+	const preserved = new Map<string, string>();
+	let prepared = text;
+	if (allowedDomains.length > 0) {
+		const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+		prepared = text.replace(emailRegex, (match) => {
+			const domain = match.slice(match.indexOf("@") + 1).toLowerCase();
+			if (!allowedDomains.some((d) => domain === d || domain.endsWith(`.${d}`))) {
+				return match;
+			}
+			const sentinel = `PIIALLOWED${preserved.size}XENDX`;
+			preserved.set(sentinel, match);
+			return sentinel;
+		});
+	}
+
+	let result = prepared;
 	for (const pattern of PII_PATTERNS) {
 		result = result.replace(pattern.regex, pattern.replacement);
 	}
+
+	for (const [sentinel, original] of preserved) {
+		result = result.split(sentinel).join(original);
+	}
+
 	return result;
 }

@@ -1,5 +1,5 @@
 // shared/src/__tests__/pii-redactor.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { redactPiiContent } from "../pii-redactor.ts";
 
 describe("redactPiiContent", () => {
@@ -64,5 +64,62 @@ describe("redactPiiContent", () => {
 	test("passes through text with no PII unchanged", () => {
 		const input = "Kafka consumer lag is 5000 messages behind on topic orders.created";
 		expect(redactPiiContent(input)).toBe(input);
+	});
+});
+
+describe("redactPiiContent with PII_REDACTION_ALLOWED_DOMAINS", () => {
+	const originalValue = process.env.PII_REDACTION_ALLOWED_DOMAINS;
+
+	afterEach(() => {
+		if (originalValue === undefined) {
+			delete process.env.PII_REDACTION_ALLOWED_DOMAINS;
+		} else {
+			process.env.PII_REDACTION_ALLOWED_DOMAINS = originalValue;
+		}
+	});
+
+	test("preserves emails matching an allowlisted domain", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "pvh.com";
+		expect(redactPiiContent("assignee: edaengineering@pvh.com")).toBe("assignee: edaengineering@pvh.com");
+	});
+
+	test("preserves emails matching a subdomain of an allowlisted domain", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "pvh.com";
+		expect(redactPiiContent("ping team@corp.pvh.com")).toBe("ping team@corp.pvh.com");
+	});
+
+	test("still redacts emails outside the allowlist when one is configured", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "pvh.com";
+		const input = "internal team@pvh.com messaged customer@example.com";
+		const result = redactPiiContent(input);
+		expect(result).toContain("team@pvh.com");
+		expect(result).toContain("[EMAIL_REDACTED]");
+		expect(result).not.toContain("customer@example.com");
+	});
+
+	test("handles multiple allowlisted domains", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "pvh.com, tommy.com ";
+		const input = "a@pvh.com and b@tommy.com and c@outsider.io";
+		const result = redactPiiContent(input);
+		expect(result).toContain("a@pvh.com");
+		expect(result).toContain("b@tommy.com");
+		expect(result).toContain("[EMAIL_REDACTED]");
+		expect(result).not.toContain("outsider.io");
+	});
+
+	test("allowlist does not interfere with other PII redaction", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "pvh.com";
+		const input = "ops@pvh.com escalated from 192.168.1.5 -- SSN 123-45-6789";
+		const result = redactPiiContent(input);
+		expect(result).toContain("ops@pvh.com");
+		expect(result).toContain("[IP_REDACTED]");
+		expect(result).toContain("[SSN_REDACTED]");
+	});
+
+	test("empty or unset allowlist leaves all-email redaction behavior intact", () => {
+		process.env.PII_REDACTION_ALLOWED_DOMAINS = "";
+		expect(redactPiiContent("user@pvh.com")).toBe("[EMAIL_REDACTED]");
+		delete process.env.PII_REDACTION_ALLOWED_DOMAINS;
+		expect(redactPiiContent("user@pvh.com")).toBe("[EMAIL_REDACTED]");
 	});
 });
