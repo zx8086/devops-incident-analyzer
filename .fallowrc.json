@@ -1,0 +1,12 @@
+{
+	"$schema": "https://docs.fallow.tools/schema.json",
+	"ignoreDependencies": [
+		"pino",
+		"@opentelemetry/api",
+		"@langchain/aws",
+		"@langchain/langgraph",
+		"@langchain/langgraph-checkpoint",
+		"@langchain/mcp-adapters",
+		"yaml"
+	]
+}

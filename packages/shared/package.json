@@ -30,7 +30,6 @@
 	"devDependencies": {
 		"@types/bun": "catalog:dev",
 		"bun-types": "catalog:dev",
-		"pino-pretty": "^13.0.0",
 		"typescript": "catalog:dev"
 	},
 	"private": true
