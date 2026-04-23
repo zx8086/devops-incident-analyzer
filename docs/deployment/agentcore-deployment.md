@@ -1,7 +1,7 @@
 # AWS Bedrock AgentCore Deployment
 
 > **Targets:** Bun 1.3.9+ | AWS Bedrock AgentCore | Docker
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
 Guide for deploying MCP servers to AWS Bedrock AgentCore Runtime. Covers the container contract, parameterized Dockerfile, IAM policies, deployment steps, and local testing. Each MCP server is deployed as an independent AgentCore Runtime behind a shared AgentCore Gateway that the agent discovers tools through.
 
@@ -15,9 +15,9 @@ AgentCore Runtime hosts MCP servers inside isolated microVMs. Each server runs a
 - `GET /health` -- Readiness probe with detailed status
 - `POST /mcp` -- Streamable HTTP for MCP protocol messages
 
-The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all five MCP servers through one connection.
+The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all six MCP servers through one connection.
 
-Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the five servers using a build argument.
+Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the six servers using a build argument.
 
 ---
 
@@ -43,6 +43,7 @@ Each MCP server is deployed independently. The parameterized `Dockerfile.agentco
 |                                                   |
 | Single MCP endpoint for agent tool discovery      |
 | Aggregates: elastic + kafka + couchbase + konnect |
+|           + gitlab + atlassian                  |
 +---------------------------------------------------+
           |
           v
@@ -60,7 +61,7 @@ Each microVM receives its own IAM role with permissions scoped to the specific d
 
 ## Parameterized Dockerfile
 
-The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the five MCP servers using the `MCP_SERVER_PACKAGE` build argument.
+The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the six MCP servers using the `MCP_SERVER_PACKAGE` build argument.
 
 ### Build Argument
 
@@ -154,7 +155,7 @@ docker build \
   .
 ```
 
-Build commands for all five servers:
+Build commands for all six servers:
 
 ```bash
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-elastic -t elastic-mcp-agentcore .
@@ -162,6 +163,7 @@ docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-k
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-couchbase -t couchbase-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-konnect -t konnect-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-gitlab -t gitlab-mcp-agentcore .
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-atlassian -t atlassian-mcp-agentcore .
 ```
 
 ### Step 2: Push to ECR
@@ -247,6 +249,8 @@ Key parameters:
 | Elastic | `ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY` or `ELASTICSEARCH_USERNAME` + `ELASTICSEARCH_PASSWORD` | Authenticates directly to ES cluster, no AWS-specific IAM needed |
 | Couchbase | `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET` | Authenticates via Capella SDK credentials |
 | Konnect | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` | Uses Kong Konnect API token, region: `us\|eu\|au\|me\|in` |
+| GitLab | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` | Proxy to GitLab native MCP + custom REST tools |
+| Atlassian | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_MCP_URL`, `ATLASSIAN_OAUTH_CALLBACK_PORT`, `ATLASSIAN_READ_ONLY` | OAuth 2.0 flow to Atlassian Cloud; read-only enforced by default |
 
 ### Step 5: Register as Gateway Target
 
@@ -340,6 +344,14 @@ The Couchbase MCP server connects directly to Capella clusters using SDK credent
 
 The Konnect MCP server authenticates using a Konnect access token passed via environment variable. No additional IAM policy is needed beyond the base policy.
 
+### GitLab-Specific Policy
+
+The GitLab MCP server authenticates to GitLab using a personal access token (`GITLAB_PERSONAL_ACCESS_TOKEN`). No additional IAM policy is needed beyond the base policy.
+
+### Atlassian-Specific Policy
+
+The Atlassian MCP server authenticates to Atlassian Cloud via OAuth 2.0. Access tokens are obtained at runtime via the browser-based callback flow; no long-lived credentials are stored in AWS. No additional IAM policy is needed beyond the base policy.
+
 ---
 
 ## Deployment Scripts
@@ -361,6 +373,8 @@ Usage:
 MCP_SERVER=elastic ./scripts/agentcore/deploy.sh           # Deploys Elastic
 MCP_SERVER=couchbase ./scripts/agentcore/deploy.sh         # Deploys Couchbase
 MCP_SERVER=konnect ./scripts/agentcore/deploy.sh           # Deploys Konnect
+MCP_SERVER=gitlab ./scripts/agentcore/deploy.sh            # Deploys GitLab
+MCP_SERVER=atlassian ./scripts/agentcore/deploy.sh         # Deploys Atlassian
 ```
 
 The `MCP_SERVER` env var selects which server to deploy. The script is idempotent -- it creates resources if they do not exist and updates them if they do. On completion, it outputs connection information and saves deployment metadata to `.agentcore-deployment.json`.
@@ -374,6 +388,8 @@ Usage:
 MCP_SERVER=elastic ./scripts/agentcore/test-local.sh           # Tests elastic
 MCP_SERVER=couchbase ./scripts/agentcore/test-local.sh         # Tests couchbase
 MCP_SERVER=konnect ./scripts/agentcore/test-local.sh           # Tests konnect
+MCP_SERVER=gitlab ./scripts/agentcore/test-local.sh            # Tests gitlab
+MCP_SERVER=atlassian ./scripts/agentcore/test-local.sh         # Tests atlassian
 ```
 
 The script verifies `/ping`, `/health`, and `/mcp` endpoints against a running AgentCore-mode server. It checks that the MCP initialize response contains the expected server name (`<MCP_SERVER>-mcp-server`).
@@ -410,6 +426,18 @@ docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-k
 docker run --rm -p 8000:8000 -e KONNECT_ACCESS_TOKEN=your-token -e KONNECT_REGION=us konnect-mcp-agentcore
 ```
 
+**GitLab:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-gitlab -t gitlab-mcp-agentcore .
+docker run --rm -p 8000:8000 -e GITLAB_PERSONAL_ACCESS_TOKEN=glpat-xxx -e GITLAB_INSTANCE_URL=https://gitlab.com gitlab-mcp-agentcore
+```
+
+**Atlassian:**
+```bash
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-atlassian -t atlassian-mcp-agentcore .
+docker run --rm -p 8000:8000 -p 9185:9185 -e ATLASSIAN_SITE_NAME=your-site -e ATLASSIAN_READ_ONLY=true atlassian-mcp-agentcore
+```
+
 Or test without Docker by running with `MCP_TRANSPORT=agentcore`:
 
 ```bash
@@ -417,6 +445,8 @@ MCP_TRANSPORT=agentcore MCP_PORT=8000 KAFKA_PROVIDER=local bun run packages/mcp-
 MCP_TRANSPORT=agentcore MCP_PORT=8000 ELASTICSEARCH_URL=http://localhost:9200 bun run packages/mcp-server-elastic/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 CB_HOSTNAME=localhost bun run packages/mcp-server-couchbase/src/index.ts
 MCP_TRANSPORT=agentcore MCP_PORT=8000 KONNECT_ACCESS_TOKEN=test bun run packages/mcp-server-konnect/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 GITLAB_PERSONAL_ACCESS_TOKEN=glpat-xxx bun run packages/mcp-server-gitlab/src/index.ts
+MCP_TRANSPORT=agentcore MCP_PORT=8000 ATLASSIAN_SITE_NAME=your-site bun run packages/mcp-server-atlassian/src/index.ts
 ```
 
 ### Verify Endpoints
@@ -446,6 +476,8 @@ MCP_SERVER=kafka ./scripts/agentcore/test-local.sh
 MCP_SERVER=elastic ./scripts/agentcore/test-local.sh
 MCP_SERVER=couchbase ./scripts/agentcore/test-local.sh
 MCP_SERVER=konnect ./scripts/agentcore/test-local.sh
+MCP_SERVER=gitlab ./scripts/agentcore/test-local.sh
+MCP_SERVER=atlassian ./scripts/agentcore/test-local.sh
 ```
 
 It checks `/ping`, `/health`, `/mcp` initialize response (verifies server name matches), GET `/mcp` returns 405, and unknown paths return 404. Exit code 0 means all checks passed.
@@ -466,4 +498,5 @@ It checks `/ping`, `/health`, `/mcp` initialize response (verifies server name m
 | Date | Change |
 |------|--------|
 | 2026-04-07 | Updated to cover all 4 MCP servers with per-server env vars, build examples, and parameterized scripts |
+| 2026-04-23 | Added GitLab and Atlassian build examples, env vars, IAM policies, deploy.sh and test-local.sh entries (now 6 servers total) |
 | 2026-04-04 | Initial AgentCore deployment guide created (Phase 3: Configuration + Deployment), migrated from docs/agentbedrockcore/ |

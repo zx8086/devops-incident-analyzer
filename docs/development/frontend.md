@@ -1,9 +1,9 @@
 # Frontend Development
 
 > **Targets:** SvelteKit 2.0 | Svelte 5 | Tailwind CSS v4 | Bun 1.3.9+
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
-The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the five datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab).
+The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the six datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian).
 
 ---
 
@@ -334,3 +334,4 @@ Example skeleton:
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial version |
+| 2026-04-23 | Updated datasource count from 5 to 6 (added Atlassian alongside Elasticsearch, Kafka, Couchbase, Konnect, GitLab) |

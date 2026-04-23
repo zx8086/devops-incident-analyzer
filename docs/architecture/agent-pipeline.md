@@ -1,7 +1,7 @@
 # Agent Pipeline
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
 The agent pipeline is a 12-node LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, parallel datasource querying, cross-datasource alignment, aggregation, confidence gating, validation, mitigation proposal, and follow-up generation. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence.
 
@@ -39,13 +39,13 @@ The agent pipeline is a 12-node LangGraph StateGraph that processes user queries
 +------------+
 | supervisor |
 | (fan-out)  |
-+-+--+--+--+-+--+
-  |  |  |  |  |
-  v  v  v  v  v
-elastic kafka capella konnect gitlab  (one per datasource, parallel)
--agent  -agent -agent  -agent  -agent
-  |  |  |  |  |
-  +--+--+--+--+
++-+--+--+--+-+--+--+
+  |  |  |  |  |  |
+  v  v  v  v  v  v
+elastic kafka capella konnect gitlab atlassian  (one per datasource, parallel)
+-agent  -agent -agent  -agent  -agent -agent
+  |  |  |  |  |  |
+  +--+--+--+--+--+
         |
         v
 +-------+------+
@@ -224,7 +224,7 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 1. UI-selected datasources from the frontend (if any)
 2. LLM-extracted datasources from the query
 3. On follow-ups with a narrowed extraction, prefer extracted over UI selection
-4. Fallback: all five datasources
+4. Fallback: all six datasources
 
 **Inputs consumed:** `messages` (last human message), `targetDataSources` (UI selection), `isFollowUp`, `attachmentMeta`
 
@@ -243,7 +243,7 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 **Datasource selection (priority order):**
 1. UI-selected datasources (`targetDataSources` from state, source method: `ui-selected`)
 2. Entity-extracted datasources (source method: `entity-extracted`)
-3. Fallback to all five datasources (source method: `fallback-all`)
+3. Fallback to all six datasources (source method: `fallback-all`)
 
 **Validation checks before dispatch:**
 - Deduplicates datasource IDs
@@ -577,3 +577,4 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-09 | Added Tool Selection section documenting action-driven filtering |
 | 2026-04-13 | Updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation), added GitLab sub-agent, updated diagrams and tables |
+| 2026-04-23 | Added Atlassian sub-agent (6th datasource) to fan-out diagram and targeting fallback references |

@@ -1,9 +1,9 @@
 # Monorepo Structure
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
-Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 10 packages, 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
+Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 11 packages, 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
 
 ---
 
@@ -32,6 +32,9 @@ devops-incident-analyzer/
         gitlab-agent/
           agent.yaml
           SOUL.md
+        atlassian-agent/
+          agent.yaml
+          SOUL.md
       tools/                     Tool definitions (YAML)
       skills/                    Skill definitions (Markdown)
       compliance/                Compliance rules and audit templates
@@ -44,11 +47,12 @@ devops-incident-analyzer/
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
     agent/                       LangGraph supervisor and 12-node pipeline
-    mcp-server-elastic/          Elasticsearch MCP server (69 tools)
-    mcp-server-kafka/            Kafka MCP server (15 tools)
-    mcp-server-couchbase/        Couchbase Capella MCP server (30 tools)
-    mcp-server-konnect/          Kong Konnect MCP server (78 tools)
-    mcp-server-gitlab/           GitLab MCP server (proxy + code analysis, 21+ tools)
+    mcp-server-elastic/          Elasticsearch MCP server (~78 tools)
+    mcp-server-kafka/            Kafka MCP server (15 base + 15 optional)
+    mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
+    mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
+    mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
+    mcp-server-atlassian/        Atlassian MCP server (Jira/Confluence proxy + custom)
   apps/
     web/                         SvelteKit frontend
   docs/
@@ -105,6 +109,7 @@ The diagram shows how packages depend on each other. Arrows point from consumer 
 | mcp-server-couchbase -+
 | mcp-server-konnect ---+
 | mcp-server-gitlab ----+
+| mcp-server-atlassian -+
 +-----------------------+
 ```
 
@@ -113,7 +118,7 @@ Key relationships:
 - **web** depends on **agent** for the LangGraph pipeline and SSE streaming
 - **agent** depends on **gitagent-bridge** (YAML manifest loading), **checkpointer** (state persistence), **observability** (tracing and logging), and **shared** (types and schemas)
 - **gitagent-bridge** reads from the `agents/` directory at runtime
-- All five MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
+- All six MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
 - MCP servers are independent of each other and of the **agent** package -- the agent connects to them over the network via `@langchain/mcp-adapters`
 
 ---
@@ -218,11 +223,11 @@ Source: `packages/agent/src/`
 
 ### @devops-agent/mcp-server-elastic
 
-Elasticsearch MCP server with 69 tools for querying and managing Elasticsearch deployments.
+Elasticsearch MCP server with ~78 tools for querying and managing Elasticsearch deployments.
 
 | Capability | Details |
 |------------|---------|
-| Tools | 69 tools: index management, search, aggregations, cluster health, templates, ILM |
+| Tools | ~78 tools: index management, search, aggregations, cluster health, templates, ILM |
 | Multi-deployment | `ELASTIC_DEPLOYMENTS=prod,staging` with per-deployment URL and API key |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9080 (default) |
@@ -233,11 +238,11 @@ Source: `packages/mcp-server-elastic/src/`
 
 ### @devops-agent/mcp-server-kafka
 
-Kafka MCP server with 15 tools for topic management, consumer group inspection, and message operations.
+Kafka MCP server with 15 base tools (+15 optional) for topic management, consumer group inspection, and message operations.
 
 | Capability | Details |
 |------------|---------|
-| Tools | 15 tools: topic listing, consumer groups, offsets, message produce/consume |
+| Tools | 15 base + 8 schema-registry + 7 ksqlDB (optional): topic listing, consumer groups, offsets, message produce/consume |
 | Providers | `KAFKA_PROVIDER=local\|msk\|confluent` -- pluggable broker backends |
 | Feature gates | Write operations (produce, create topic) gated behind `KAFKA_ENABLE_WRITES` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
@@ -249,11 +254,11 @@ Source: `packages/mcp-server-kafka/src/`
 
 ### @devops-agent/mcp-server-couchbase
 
-Couchbase Capella MCP server with 30 tools for cluster management, query analysis, and operational playbooks.
+Couchbase Capella MCP server with ~15 tools for cluster management, query analysis, and operational playbooks.
 
 | Capability | Details |
 |------------|---------|
-| Tools | 30 tools: N1QL query, index management, bucket operations, playbooks |
+| Tools | ~15 tools: N1QL query, index management, bucket operations, playbooks |
 | Configuration | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9082 (default) |
@@ -264,11 +269,11 @@ Source: `packages/mcp-server-couchbase/src/`
 
 ### @devops-agent/mcp-server-konnect
 
-Kong Konnect MCP server with 78 tools for API gateway management across regions.
+Kong Konnect MCP server with 15 enhanced tools plus proxy surface for API gateway management across regions.
 
 | Capability | Details |
 |------------|---------|
-| Tools | 78 tools: services, routes, plugins, consumers, upstreams, certificates |
+| Tools | 15 enhanced + proxy surface: services, routes, plugins, consumers, upstreams, certificates |
 | Configuration | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9083 (default) |
@@ -279,17 +284,33 @@ Source: `packages/mcp-server-konnect/src/`
 
 ### @devops-agent/mcp-server-gitlab
 
-GitLab MCP server with 21+ tools for CI/CD pipelines, merge requests, code analysis, and issue tracking. Uses a hybrid proxy + custom tool architecture.
+GitLab MCP server with proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, and issue tracking. Uses a hybrid proxy + custom tool architecture.
 
 | Capability | Details |
 |------------|---------|
-| Tools | 21+ tools: issues, merge requests, pipelines, search, code analysis (blame, diff, file content, tree, commits) |
+| Tools | Proxy (from GitLab native MCP) + 5-8 custom REST tools: issues, merge requests, pipelines, search, code analysis (blame, diff, file content, tree, commits) |
 | Architecture | Proxy (forwards to GitLab `/api/v4/mcp`) + custom REST tools for code analysis |
 | Configuration | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL`, `GITLAB_DEFAULT_PROJECT_ID` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9084 (default) |
 
 Source: `packages/mcp-server-gitlab/src/`
+
+---
+
+### @devops-agent/mcp-server-atlassian
+
+Atlassian MCP server with proxy + custom tools for Jira issues, Confluence pages, and ticket metadata. Uses the same hybrid proxy + custom architecture as the GitLab MCP server.
+
+| Capability | Details |
+|------------|---------|
+| Tools | Proxy (from Atlassian Cloud MCP) + custom: Jira issue search, project listing, Confluence page content, incident-project filtering |
+| Architecture | Proxy (forwards to `https://mcp.atlassian.com/v1/mcp`) + custom tools for incident-specific filtering |
+| Configuration | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_MCP_URL` (upstream), `ATLASSIAN_OAUTH_CALLBACK_PORT`, `ATLASSIAN_READ_ONLY`, `ATLASSIAN_INCIDENT_PROJECTS` |
+| Transports | HTTP (Streamable HTTP), stdio, AgentCore |
+| Port | 9085 (default); OAuth callback on 9185 |
+
+Source: `packages/mcp-server-atlassian/src/`
 
 ---
 
@@ -319,7 +340,7 @@ The frontend contains 9 components:
 | `CompletedProgress` | Summary of completed agent pipeline stages |
 | `FeedbackBar` | User feedback collection (thumbs up/down, comments) |
 | `FollowUpSuggestions` | Clickable follow-up questions generated by the validate node |
-| `DataSourceSelector` | Multi-select for Elasticsearch, Kafka, Couchbase, Konnect, GitLab |
+| `DataSourceSelector` | Multi-select for Elasticsearch, Kafka, Couchbase, Konnect, GitLab, Atlassian |
 
 Source: `apps/web/src/`
 
@@ -329,7 +350,7 @@ Source: `apps/web/src/`
 
 ### agents/incident-analyzer/
 
-Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and five sub-agents are defined here.
+Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and six sub-agents are defined here.
 
 ```
 agents/incident-analyzer/
@@ -338,20 +359,23 @@ agents/incident-analyzer/
   RULES.md               Behavioral constraints: no destructive actions, cite sources
   agents/
     elastic-agent/       Elasticsearch specialist
-      agent.yaml         Tools: 69 ES tools via MCP port 9080
+      agent.yaml         Tools: ~78 ES tools via MCP port 9080
       SOUL.md            Persona: log and metric analysis expert
     kafka-agent/         Kafka specialist
-      agent.yaml         Tools: 15 Kafka tools via MCP port 9081
+      agent.yaml         Tools: 15 base + 15 optional Kafka tools via MCP port 9081
       SOUL.md            Persona: event streaming and consumer group analyst
     capella-agent/       Couchbase Capella specialist
-      agent.yaml         Tools: 30 Capella tools via MCP port 9082
+      agent.yaml         Tools: ~15 Capella tools via MCP port 9082
       SOUL.md            Persona: document database and query optimization expert
     konnect-agent/       Kong Konnect specialist
-      agent.yaml         Tools: 78 Konnect tools via MCP port 9083
+      agent.yaml         Tools: 15 enhanced + proxy Konnect tools via MCP port 9083
       SOUL.md            Persona: API gateway configuration and traffic analyst
     gitlab-agent/        GitLab specialist
-      agent.yaml         Tools: 21+ GitLab tools via MCP port 9084
+      agent.yaml         Tools: proxy + 5-8 custom GitLab tools via MCP port 9084
       SOUL.md            Persona: CI/CD pipeline and code change analyst
+    atlassian-agent/     Atlassian (Jira/Confluence) specialist
+      agent.yaml         Tools: proxy + custom Atlassian tools via MCP port 9085
+      SOUL.md            Persona: incident ticket and runbook-page analyst
   tools/                 Shared tool definitions (YAML)
   skills/                Multi-step skill definitions (Markdown)
   compliance/            Compliance rules and audit templates
@@ -443,3 +467,4 @@ Catalogs pin shared dependency versions across the workspace. Individual package
 |------|--------|
 | 2026-04-04 | Initial monorepo structure document created |
 | 2026-04-13 | Added mcp-server-gitlab (10th package), gitlab-agent (5th sub-agent), updated pipeline from 8 to 12 nodes |
+| 2026-04-23 | Added mcp-server-atlassian (11th package) and atlassian-agent (6th sub-agent); updated all tool-count placeholders |

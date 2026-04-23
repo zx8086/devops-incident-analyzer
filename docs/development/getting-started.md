@@ -1,9 +1,9 @@
 # Getting Started
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
-Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites, initial setup, first run, running tests, and the development workflow. Follow these steps to get a working local environment with all five MCP servers and the SvelteKit frontend.
+Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites, initial setup, first run, running tests, and the development workflow. Follow these steps to get a working local environment with all six MCP servers and the SvelteKit frontend.
 
 ---
 
@@ -26,7 +26,7 @@ curl -fsSL https://bun.sh/install | bash
 
 ### Required Accounts and Credentials
 
-The agent connects to four external data sources and uses AWS Bedrock for LLM inference. You need credentials for each service your development work touches. Not all credentials are required for every task -- if you are only working on the Kafka MCP server, you only need Kafka broker access and AWS Bedrock credentials.
+The agent connects to six external data sources and uses AWS Bedrock for LLM inference. You need credentials for each service your development work touches. Not all credentials are required for every task -- if you are only working on the Kafka MCP server, you only need Kafka broker access and AWS Bedrock credentials.
 
 | Service | What You Need | Who Provides It |
 |---------|---------------|-----------------|
@@ -35,6 +35,8 @@ The agent connects to four external data sources and uses AWS Bedrock for LLM in
 | Kafka | Broker endpoints (local, MSK, or Confluent) | Data platform team |
 | Couchbase Capella | Cluster hostname, username, password | Database team |
 | Kong Konnect | Access token, region (us, eu, au, me, in) | API platform team |
+| GitLab | Personal access token with `api` scope, instance URL | Source control team |
+| Atlassian | Jira/Confluence site name + user account for OAuth consent | IT / platform team |
 | LangSmith | API key, project name | Siobytes team lead |
 
 ---
@@ -58,7 +60,7 @@ cp .env.example .env
 Open `.env` in your editor and fill in the required values. Each variable has a comment explaining its purpose. At minimum, you need:
 
 - `AWS_REGION` and Bedrock model configuration
-- Credentials for at least one MCP server (Elasticsearch, Kafka, Couchbase, or Konnect)
+- Credentials for at least one MCP server (Elasticsearch, Kafka, Couchbase, Konnect, GitLab, or Atlassian)
 - `LANGSMITH_API_KEY` if you want trace observability
 
 Verify the setup compiles and passes lint:
@@ -76,7 +78,7 @@ Both commands should complete with zero errors. If `typecheck` fails, confirm yo
 
 ### Start MCP Servers
 
-Each MCP server runs as an independent process. Open four terminal windows (or use a terminal multiplexer) and start each server:
+Each MCP server runs as an independent process. Open six terminal windows (or use a terminal multiplexer) and start each server:
 
 ```bash
 # Terminal 1: Elasticsearch MCP (port 9080)
@@ -90,12 +92,18 @@ MCP_TRANSPORT=http MCP_PORT=9082 bun packages/mcp-server-couchbase/src/index.ts
 
 # Terminal 4: Konnect MCP (port 9083)
 MCP_TRANSPORT=http MCP_PORT=9083 bun packages/mcp-server-konnect/src/index.ts
+
+# Terminal 5: GitLab MCP (port 9084)
+MCP_TRANSPORT=http MCP_PORT=9084 bun packages/mcp-server-gitlab/src/index.ts
+
+# Terminal 6: Atlassian MCP (port 9085; OAuth callback on 9185)
+MCP_TRANSPORT=http MCP_PORT=9085 bun packages/mcp-server-atlassian/src/index.ts
 ```
 
 Each server logs its transport type, port, and tool count on startup. Verify you see output similar to:
 
 ```bash
-[mcp-server-elastic] Transport: sse | Port: 9080 | Tools: 69
+[mcp-server-elastic] Transport: sse | Port: 9080 | Tools: 78
 ```
 
 If a port is already in use, check for existing processes:
@@ -106,7 +114,7 @@ lsof -i :9080
 
 ### Start the Web Frontend
 
-In a fifth terminal, start the SvelteKit development server:
+In a seventh terminal, start the SvelteKit development server:
 
 ```bash
 bun run --filter @devops-agent/web dev
@@ -122,7 +130,7 @@ For a single-command startup of all services:
 docker-compose up
 ```
 
-This starts all five MCP servers and the web frontend with the port mappings defined in `docker-compose.yml`. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
+This starts all six MCP servers and the web frontend with the port mappings defined in `docker-compose.yml`. See [Local Development](../deployment/local-development.md) for Docker Compose configuration details.
 
 ---
 
@@ -208,7 +216,7 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 
 - [Monorepo Structure](monorepo-structure.md) -- understand the package layout and dependency graph
 - [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 12-node LangGraph pipeline processes incidents
-- [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the five MCP servers
+- [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the six MCP servers
 - [Local Development](../deployment/local-development.md) -- Docker Compose configuration and hot reload setup
 
 ---
@@ -218,3 +226,4 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial getting started guide created |
+| 2026-04-23 | Added GitLab and Atlassian MCP servers to prerequisites, credentials table, and startup commands (6 servers total) |

@@ -1,9 +1,9 @@
 # MCP Server Configuration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
-Deep dive into how each of the five MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
+Deep dive into how each of the six MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
 
 For all environment variable names and defaults, see [Environment Variables](environment-variables.md).
 
@@ -56,7 +56,7 @@ schemas.ts (Zod) -------> configSchema.parse()
 
 **Package:** `packages/mcp-server-elastic`
 **Config directory:** `packages/mcp-server-elastic/src/config/`
-**Tool count:** 69
+**Tool count:** ~78
 
 ### Configuration Schema
 
@@ -105,7 +105,7 @@ API key authentication is preferred for production because it supports scoped pe
 
 **Package:** `packages/mcp-server-kafka`
 **Config directory:** `packages/mcp-server-kafka/src/config/`
-**Tool count:** 30
+**Tool count:** 15 base + 15 optional (schema registry + ksqlDB)
 
 ### Configuration Schema
 
@@ -164,7 +164,7 @@ When `KSQL_ENABLED=true`, the server exposes tools for executing ksqlDB queries.
 
 **Package:** `packages/mcp-server-couchbase`
 **Config directory:** `packages/mcp-server-couchbase/src/config/`
-**Tool count:** 24
+**Tool count:** ~15
 
 ### Configuration Schema
 
@@ -203,7 +203,7 @@ The `CB_BUCKET` variable sets a default bucket for queries that do not specify o
 
 **Package:** `packages/mcp-server-konnect`
 **Config directory:** `packages/mcp-server-konnect/src/config/`
-**Tool count:** 67
+**Tool count:** 15 enhanced + proxy surface
 
 ### Configuration Schema
 
@@ -253,7 +253,7 @@ The Konnect server supports MCP elicitation, where the server can prompt the age
 
 **Package:** `packages/mcp-server-gitlab`
 **Config directory:** `packages/mcp-server-gitlab/src/config/`
-**Tool count:** 21+ (dynamic, varies based on remote MCP endpoint discovery)
+**Tool count:** proxy + 5-8 custom tools (dynamic, varies based on remote MCP endpoint discovery)
 
 ### Configuration Schema
 
@@ -319,9 +319,68 @@ The proxy layer includes special handling for GitLab's `semantic_code_search` to
 
 ---
 
+## Atlassian MCP Server
+
+**Package:** `packages/mcp-server-atlassian`
+**Config directory:** `packages/mcp-server-atlassian/src/config/`
+**Tool count:** proxy + custom tools (dynamic, discovered from Atlassian Cloud MCP endpoint at startup)
+
+### Configuration Schema
+
+```
+AtlassianConfig
+  application:
+    name: string
+    version: string (semver)
+    environment: "development" | "staging" | "production" | "test"
+    logLevel: "debug" | "info" | "warn" | "error"
+  atlassian:
+    upstreamUrl: string (required, URL)       # ATLASSIAN_MCP_URL
+    siteName: string (required)                # ATLASSIAN_SITE_NAME
+    oauthCallbackPort: number                  # ATLASSIAN_OAUTH_CALLBACK_PORT
+    readOnly: boolean                          # ATLASSIAN_READ_ONLY (default: true)
+    incidentProjects: string[]                 # ATLASSIAN_INCIDENT_PROJECTS (allowlist)
+    timeout: number                            # ATLASSIAN_TIMEOUT
+  tracing:
+    enabled: boolean
+    project: string
+    apiKey?: string
+  monitoring:
+    enabled: boolean
+    healthCheckInterval: number
+  transport:
+    mode: "stdio" | "http" | "agentcore"
+    port: number                               # ATLASSIAN_MCP_PORT (default: 9085)
+```
+
+### OAuth 2.0 Flow
+
+The Atlassian MCP server authenticates to Atlassian Cloud via OAuth 2.0. At startup:
+
+1. The server starts a local HTTP listener on `ATLASSIAN_OAUTH_CALLBACK_PORT` (default 9185) for the OAuth redirect.
+2. The user is directed to Atlassian's authorization URL to grant access to the configured `ATLASSIAN_SITE_NAME`.
+3. Atlassian redirects to the callback with an auth code, which the server exchanges for an access token.
+4. The token is used for all subsequent proxy calls to `ATLASSIAN_MCP_URL` (default `https://mcp.atlassian.com/v1/mcp`).
+
+Tokens are refreshed automatically when they near expiration.
+
+### Read-Only Mode
+
+`ATLASSIAN_READ_ONLY=true` (the default) disables all write operations: creating issues, transitioning issue states, adding comments, and editing Confluence pages. The incident analyzer's compliance layer depends on this flag being true.
+
+### Incident Project Allowlist
+
+`ATLASSIAN_INCIDENT_PROJECTS` restricts queries to a comma-separated allowlist of Jira project keys (e.g., `INC,OPS`). When set, the server filters proxied tool responses so that issues from other projects do not leak into incident investigations. When unset, all projects visible to the OAuth token are available.
+
+### Hybrid Tool Architecture
+
+Like the GitLab MCP, the Atlassian MCP combines proxy-discovered tools from the upstream Atlassian Cloud MCP endpoint with custom tools for incident-specific filtering. Proxied tools are prefixed with `atlassian_`.
+
+---
+
 ## Transport Configuration
 
-All five MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across all servers.
+All six MCP servers share the same transport abstraction. The transport mode is set via `MCP_TRANSPORT` and `MCP_PORT` environment variables, which are common across all servers.
 
 ### Transport Modes
 
@@ -367,3 +426,4 @@ All five MCP servers share the same transport abstraction. The transport mode is
 |------|--------|
 | 2026-04-04 | Initial MCP server configuration reference created (Phase 3: Configuration + Deployment) |
 | 2026-04-13 | Added GitLab MCP server configuration (SIO-647): hybrid proxy + custom tools, token auth, deferred retry |
+| 2026-04-23 | Added Atlassian MCP server configuration: OAuth 2.0, read-only mode, incident-project allowlist, hybrid proxy + custom |

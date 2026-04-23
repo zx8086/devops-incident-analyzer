@@ -1,7 +1,7 @@
 # Local Development Setup
 
 > **Targets:** Bun 1.3.9+ | Docker 24.0+ | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
 Instructions for running the full DevOps Incident Analyzer stack locally. Covers two approaches: Docker Compose (single command, all services) and bare-metal (individual Bun processes). Includes port assignments, health verification, and common startup issues.
 
@@ -104,7 +104,7 @@ docker exec kafka /opt/kafka/bin/kafka-topics.sh \
 
 ## Option 1: Docker Compose
 
-Docker Compose starts all six services (five MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
+Docker Compose starts all seven services (six MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
 
 ### Starting
 
@@ -127,9 +127,10 @@ docker compose up -d
 | Couchbase MCP | `couchbase-mcp` | 9082 | `http://localhost:9082/health` |
 | Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
 | GitLab MCP | `gitlab-mcp` | 9084 | `http://localhost:9084/health` |
+| Atlassian MCP | `atlassian-mcp` | 9085 | `http://localhost:9085/health` |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
-All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all five MCP servers to report healthy before starting. Health checks use:
+All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all six MCP servers to report healthy before starting. Health checks use:
 
 ```bash
 bun --eval "fetch('http://localhost:PORT/health').then(r => { if (!r.ok) process.exit(1) })"
@@ -188,6 +189,9 @@ MCP_TRANSPORT=http MCP_PORT=9083 bun packages/mcp-server-konnect/src/index.ts
 
 # Terminal 5: GitLab MCP (port 9084)
 MCP_TRANSPORT=http MCP_PORT=9084 bun packages/mcp-server-gitlab/src/index.ts
+
+# Terminal 6: Atlassian MCP (port 9085; OAuth callback on 9185)
+MCP_TRANSPORT=http MCP_PORT=9085 bun packages/mcp-server-atlassian/src/index.ts
 ```
 
 Each server logs its transport type, port, and tool count on startup:
@@ -198,7 +202,7 @@ Each server logs its transport type, port, and tool count on startup:
 
 ### Starting the Web Frontend
 
-In a sixth terminal:
+In a seventh terminal:
 
 ```bash
 bun run --filter @devops-agent/web dev
@@ -217,6 +221,7 @@ curl -s http://localhost:9081/health
 curl -s http://localhost:9082/health
 curl -s http://localhost:9083/health
 curl -s http://localhost:9084/health
+curl -s http://localhost:9085/health
 ```
 
 Each should return a 200 status with a JSON body containing the server name and tool count.
@@ -229,7 +234,10 @@ KAFKA_MCP_URL=http://localhost:9081
 COUCHBASE_MCP_URL=http://localhost:9082
 KONNECT_MCP_URL=http://localhost:9083
 GITLAB_MCP_URL=http://localhost:9084
+ATLASSIAN_MCP_URL_LOCAL=http://localhost:9085
 ```
+
+Note that `ATLASSIAN_MCP_URL` (without the `_LOCAL` suffix) points at the upstream Atlassian Cloud endpoint, not the local server. The agent connects to the local server via `ATLASSIAN_MCP_URL_LOCAL`.
 
 ---
 
@@ -244,6 +252,8 @@ Port numbers differ between local bare-metal, Docker Compose, and AgentCore depl
 | Couchbase MCP | 9082 | 8082 | 8000 |
 | Konnect MCP | 9083 | 8083 | 8000 |
 | GitLab MCP | 9084 | 8084 | 8000 |
+| Atlassian MCP | 9085 | 8085 | 8000 |
+| Atlassian OAuth callback | 9185 | 9185 | -- |
 | Web Frontend | 5173 | 5173 | -- |
 
 In AgentCore, each MCP server runs in its own isolated microVM, so they all use port 8000 without conflict. The AgentCore Gateway handles routing.
@@ -316,3 +326,4 @@ If a server exits immediately with a Zod validation error:
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial local development setup guide created (Phase 3: Configuration + Deployment) |
+| 2026-04-23 | Added Atlassian MCP server (port 9085, OAuth callback 9185) to all startup commands, health checks, and port tables |

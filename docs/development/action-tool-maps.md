@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
 > **Last updated:** 2026-04-09
 
-The action-driven tool selection system reduces the number of MCP tools passed to each sub-agent's ReAct loop. Without filtering, sub-agents receive 30-67 tools from their connected MCP server, which risks exceeding the LLM's context window and degrades tool selection accuracy. Action tool maps solve this by grouping MCP tools into named action categories in the tool YAML, then selecting only the categories relevant to the user's query.
+The action-driven tool selection system reduces the number of MCP tools passed to each sub-agent's ReAct loop. Without filtering, sub-agents receive 15-80 tools from their connected MCP server, which risks exceeding the LLM's context window and degrades tool selection accuracy. Action tool maps solve this by grouping MCP tools into named action categories in the tool YAML, then selecting only the categories relevant to the user's query.
 
 Developers need to maintain action tool maps when adding new MCP tools or modifying existing servers. This guide covers the YAML structure, the runtime selection flow, and troubleshooting.
 
@@ -21,7 +21,7 @@ Entity Extractor (buildActionCatalog -> LLM -> toolActions)
 Sub-Agent (selectToolsByAction -> resolveActionTools -> filtered tools)
     |
     v
-ReAct Agent (LLM with 5-25 tools instead of 30-67)
+ReAct Agent (LLM with 5-25 tools instead of 15-80)
 ```
 
 **Tool YAML:** Each datasource has a tool YAML in `agents/incident-analyzer/tools/` containing an `action_tool_map` that groups MCP tool names by purpose. The `input_schema.properties.action.enum` array lists all valid action categories.
@@ -168,10 +168,12 @@ If an MCP tool is removed from the server, remove its name from all action categ
 
 | File | Role |
 |------|------|
-| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 11 categories, 63 tools |
-| `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 8 categories, 30 tools |
-| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, 24 tools |
-| `agents/incident-analyzer/tools/konnect-gateway.yaml` | Konnect action map: 9 categories, 67 tools |
+| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 11 categories, ~78 tools |
+| `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 8 categories, 15 base + 15 optional tools |
+| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~15 tools |
+| `agents/incident-analyzer/tools/konnect-gateway.yaml` | Konnect action map: 9 categories, 15 enhanced + proxy tools |
+| `agents/incident-analyzer/tools/gitlab-api.yaml` | GitLab action map: CI/CD, merge-request, code-analysis categories (proxy + custom) |
+| `agents/incident-analyzer/tools/atlassian-api.yaml` | Atlassian action map: Jira issue search, Confluence pages, ticket metadata (proxy + custom) |
 | `packages/agent/src/sub-agent.ts` | `selectToolsByAction()` -- 3-tier fallback selection |
 | `packages/agent/src/entity-extractor.ts` | `buildActionCatalog()` -- builds action catalog for the LLM |
 | `packages/agent/src/prompt-context.ts` | `getToolDefinitionForDataSource()` -- resolves tool YAML by datasource ID |
@@ -276,3 +278,4 @@ The entity extractor returns actions that do not exist in the YAML.
 | Date | Change |
 |------|--------|
 | 2026-04-09 | Initial version |
+| 2026-04-23 | Added `gitlab-api.yaml` and `atlassian-api.yaml` action maps; updated tool counts to reflect 6-server reality |

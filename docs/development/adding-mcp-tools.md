@@ -1,7 +1,7 @@
 # Adding MCP Tools
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
 Adding and modifying MCP tools is the most common development task in this project. Each MCP server exposes tools via the Model Context Protocol, which the LangGraph agent discovers at runtime through `MultiServerMCPClient`. This guide walks through the full lifecycle of adding a tool, from the TypeScript implementation to the gitagent YAML definition.
 
@@ -13,7 +13,7 @@ Adding and modifying MCP tools is the most common development task in this proje
 Tool source file (packages/mcp-server-*/src/tools/)
      |
      v
-Server registration (server.tool() in tools/*.ts)
+Server registration (server.registerTool() in tools/*.ts)
      |
      v
 Feature gate check (wrapHandler in tools/wrap.ts)
@@ -45,7 +45,7 @@ src/tools/read/
   operations.ts       # Business logic functions
   parameters.ts       # Zod input schemas
   prompts.ts          # Tool description strings
-  tools.ts            # server.tool() registrations
+  tools.ts            # server.registerTool() registrations
 ```
 
 **Operation function:**
@@ -94,7 +94,7 @@ export const LIST_TOPICS_DESCRIPTION =
 
 ### Step 4: Register in the MCP Server
 
-Add the `server.tool()` call in the tools registration file. Use `wrapHandler` to get feature gate checks, tracing, and error normalization for free.
+Add the `server.registerTool()` call in the tools registration file. Use `wrapHandler` to get feature gate checks, tracing, and error normalization for free. (Historically this was `server.tool()`; the project migrated to `registerTool` after MCP SDK v1.17.5 made the old signature incompatible -- see `packages/mcp-server-elastic/src/tools/index.ts` for the compatibility wrapper.)
 
 ```typescript
 // src/tools/read/tools.ts
@@ -112,10 +112,12 @@ export function registerReadTools(
   service: KafkaService,
   config: AppConfig,
 ): void {
-  server.tool(
+  server.registerTool(
     "kafka_list_topics",
-    prompts.LIST_TOPICS_DESCRIPTION,
-    params.ListTopicsParams.shape,
+    {
+      description: prompts.LIST_TOPICS_DESCRIPTION,
+      inputSchema: params.ListTopicsParams.shape,
+    },
     wrapHandler("kafka_list_topics", config, async (args) => {
       const result = await ops.listTopics(service, args);
       return ResponseBuilder.success(result);
@@ -233,7 +235,7 @@ Do not change tool names after deployment. Tool names are part of the MCP contra
 
 - **snake_case** with a server prefix: `kafka_list_topics`, `kafka_get_cluster_info`
 - **verb-noun pattern**: `list_topics`, `get_cluster_info`, `describe_topic`, `consume_messages`
-- Server prefixes: `kafka_`, `elasticsearch_`, `capella_`, `konnect_`, `ksql_`
+- Server prefixes: `kafka_`, `elasticsearch_`, `capella_`, `konnect_`, `ksql_`, `gitlab_`, `atlassian_`
 
 ### Input/Output Schema
 
@@ -322,3 +324,4 @@ Kong Konnect tools may trigger elicitation gates for dangerous operations (plugi
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial version |
+| 2026-04-23 | Updated `server.tool()` references to `server.registerTool()` (MCP SDK v1.17.5+); added `gitlab_` and `atlassian_` to server-prefix list |

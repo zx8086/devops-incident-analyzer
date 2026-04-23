@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
 Symptom-based problem resolution for the DevOps Incident Analyzer. Issues are organized by subsystem: MCP servers, LangGraph agent, SvelteKit frontend, configuration, and AWS/AgentCore deployment.
 
@@ -21,6 +21,8 @@ lsof -i :9081    # Kafka MCP
 lsof -i :9082    # Couchbase MCP
 lsof -i :9083    # Konnect MCP
 lsof -i :9084    # GitLab MCP
+lsof -i :9085    # Atlassian MCP
+lsof -i :9185    # Atlassian OAuth callback
 ```
 
 If a port is occupied, kill the existing process:
@@ -418,3 +420,4 @@ kill -9 <pid>
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial version |
+| 2026-04-23 | Added Atlassian MCP port (9085) and OAuth callback port (9185) to port-conflict checklist |

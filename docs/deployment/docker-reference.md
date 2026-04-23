@@ -1,7 +1,7 @@
 # Docker Reference
 
 > **Targets:** Bun 1.3.9+ | Docker 24.0+ | Alpine Linux
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-23
 
 Reference for all Docker images in the DevOps Incident Analyzer monorepo. Covers the multi-stage build strategy, local development images, the parameterized AgentCore production image, and security practices.
 
@@ -39,6 +39,8 @@ Docker Compose uses per-service images defined in `docker-compose.yml`. Each ser
 | `kafka-mcp` | `packages/mcp-server-kafka` | 3000 | HTTP |
 | `couchbase-mcp` | `packages/mcp-server-couchbase` | 8082 | HTTP |
 | `konnect-mcp` | `packages/mcp-server-konnect` | 8083 | HTTP |
+| `gitlab-mcp` | `packages/mcp-server-gitlab` | 8084 | HTTP |
+| `atlassian-mcp` | `packages/mcp-server-atlassian` | 8085 | HTTP |
 | `agent-web` | `apps/web` | 5173 | -- |
 
 Local development images include all dependencies (not just production) and mount source directories as volumes for hot reload. They are not suitable for production deployment.
@@ -47,7 +49,7 @@ Local development images include all dependencies (not just production) and moun
 
 ## AgentCore Production Image
 
-The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the five MCP servers.
+The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the six MCP servers.
 
 ### Build Commands
 
@@ -75,6 +77,18 @@ docker build \
   -f Dockerfile.agentcore \
   --build-arg MCP_SERVER_PACKAGE=mcp-server-konnect \
   -t konnect-mcp-agentcore .
+
+# GitLab MCP
+docker build \
+  -f Dockerfile.agentcore \
+  --build-arg MCP_SERVER_PACKAGE=mcp-server-gitlab \
+  -t gitlab-mcp-agentcore .
+
+# Atlassian MCP
+docker build \
+  -f Dockerfile.agentcore \
+  --build-arg MCP_SERVER_PACKAGE=mcp-server-atlassian \
+  -t atlassian-mcp-agentcore .
 ```
 
 ### Build Argument
@@ -192,3 +206,4 @@ aws ecr start-image-scan \
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial Docker reference created (Phase 3: Configuration + Deployment) |
+| 2026-04-23 | Added GitLab and Atlassian MCP server build examples and local-dev rows (6 MCP servers total) |

@@ -25,6 +25,8 @@ The gitagent bridge is a two-layer system that separates agent behavior definiti
 |  agents/kafka-agent/          |
 |  agents/capella-agent/        |
 |  agents/konnect-agent/        |
+|  agents/gitlab-agent/         |
+|  agents/atlassian-agent/      |
 +---------------+---------------+
                 |
                 | loadAgent() parses + validates

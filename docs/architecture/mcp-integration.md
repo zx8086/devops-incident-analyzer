@@ -1,9 +1,9 @@
 # MCP Server Integration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
-The agent connects to five MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, and GitLab. The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability.
+The agent connects to six MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, and Atlassian (Jira/Confluence). The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability.
 
 ---
 
@@ -19,27 +19,27 @@ The agent connects to five MCP (Model Context Protocol) servers over Streamable 
 |  |  - Independent per-server connections   | |
 |  |  - Streamable HTTP transport (/mcp)     | |
 |  |  - W3C traceparent injection            | |
-|  +-+----------+---------+---------+--------+--------+ |
-|    |          |         |         |        |          |
-+----+----------+---------+---------+--------+----------+
-     |          |         |         |        |
-     v          v         v         v        v
-+---------+ +-------+ +--------+ +---------+ +---------+
-| elastic | | kafka | |couchbase| | konnect | | gitlab  |
-|  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   |
-|         | |       | |        | |         | |         |
-| 69      | | 15    | | 30     | | 78      | | 21+     |
-| tools   | | tools | | tools  | | tools   | | tools   |
-|         | |       | |        | |         | |         |
-| :9080   | | :9081 | | :9082  | | :9083   | | :9084   |
-+---------+ +-------+ +--------+ +---------+ +---------+
-     |          |         |         |        |
-     v          v         v         v        v
-+---------+ +-------+ +--------+ +---------+ +---------+
-| Elastic | | Kafka | |Couchbase| | Kong   | | GitLab  |
-| search  | |Clusters| |Capella | |Konnect | | API +   |
-| Clusters| |       | |Cluster | | API    | | Repos   |
-+---------+ +-------+ +--------+ +---------+ +---------+
+|  +-+----------+---------+---------+--------+--------+--------+ |
+|    |          |         |         |        |         |          |
++----+----------+---------+---------+--------+---------+----------+
+     |          |         |         |        |         |
+     v          v         v         v        v         v
++---------+ +-------+ +--------+ +---------+ +---------+ +----------+
+| elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
+|  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
+|         | |       | |        | |         | |         | |          |
+| ~78     | | 15+15 | | ~15    | | 15+prx  | | proxy+  | | proxy+   |
+| tools   | | opt   | | tools  | | tools   | | custom  | | custom   |
+|         | |       | |        | |         | |         | |          |
+| :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
++---------+ +-------+ +--------+ +---------+ +---------+ +----------+
+     |          |         |         |        |         |
+     v          v         v         v        v         v
++---------+ +-------+ +--------+ +---------+ +---------+ +----------+
+| Elastic | | Kafka | |Couchbase| | Kong   | | GitLab  | | Jira /   |
+| search  | |Clusters| |Capella | |Konnect | | API +   | | Conflu-  |
+| Clusters| |       | |Cluster | | API    | | Repos   | | ence     |
++---------+ +-------+ +--------+ +---------+ +---------+ +----------+
 ```
 
 Each MCP server runs as an independent Bun process, exposing tools via the `/mcp` HTTP endpoint and health status via `/health`. The agent connects to each server individually using `MultiServerMCPClient` from `@langchain/mcp-adapters`.
@@ -61,6 +61,7 @@ Server URLs are configured via environment variables:
 | `CAPELLA_MCP_URL` | `http://localhost:9082` | Couchbase Capella MCP |
 | `KONNECT_MCP_URL` | `http://localhost:9083` | Kong Konnect MCP |
 | `GITLAB_MCP_URL` | `http://localhost:9084` | GitLab MCP |
+| `ATLASSIAN_MCP_URL_LOCAL` | `http://localhost:9085` | Atlassian MCP (Jira/Confluence). Separate from `ATLASSIAN_MCP_URL` which is the upstream Atlassian Cloud endpoint. |
 
 Each URL gets `/mcp` appended as the transport endpoint. The connection initialization in `createMcpClient()` uses `Promise.allSettled()` to connect to all servers concurrently and independently.
 
@@ -73,6 +74,7 @@ Promise.allSettled([
     connect("couchbase-mcp", capellaUrl + "/mcp"),
     connect("konnect-mcp", konnectUrl + "/mcp"),
     connect("gitlab-mcp",  gitlabUrl  + "/mcp"),
+    connect("atlassian-mcp", atlassianUrl + "/mcp"),
 ])
 ```
 
@@ -85,7 +87,7 @@ If a server is unreachable at startup:
 
 ### Streamable HTTP Transport
 
-All five MCP servers use Streamable HTTP transport (SIO-595). The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
+All six MCP servers use Streamable HTTP transport (SIO-595). The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
 - `GET /health` -- health check endpoint for periodic polling
 - The standard MCP protocol messages over HTTP POST to `/mcp`
 
@@ -99,11 +101,12 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 69 |
-| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15 |
-| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | 30 |
-| `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 78 |
-| `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | 21+ |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~78 |
+| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15 base + 15 optional |
+| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
+| `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
+| `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
+| `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL_LOCAL` | proxy + custom |
 
 The mapping is defined in `mcp-bridge.ts`:
 
@@ -114,6 +117,7 @@ const serverMap: Record<string, string> = {
     couchbase: "couchbase-mcp",
     konnect: "konnect-mcp",
     gitlab: "gitlab-mcp",
+    atlassian: "atlassian-mcp",
 };
 ```
 
@@ -200,7 +204,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (69 tools)
+### Elasticsearch MCP (~78 tools)
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations.
 
@@ -216,7 +220,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Kafka MCP (15 tools)
+### Kafka MCP (15 base tools + 15 optional)
 
 **Purpose:** Read-only access to Kafka clusters for topic listing, consumer group lag monitoring, message consumption, and broker health checks.
 
@@ -230,7 +234,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Couchbase Capella MCP (30 tools)
+### Couchbase Capella MCP (~15 tools)
 
 **Purpose:** Read-only access to Couchbase Capella clusters for bucket health, N1QL query execution (SELECT only), index analysis, and system vitals.
 
@@ -245,7 +249,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Kong Konnect MCP (78 tools)
+### Kong Konnect MCP (15 enhanced tools + proxy surface)
 
 **Purpose:** Read-only access to Kong Konnect API gateway for service listing, route inspection, plugin configuration, consumer management, upstream health, and request analytics.
 
@@ -264,7 +268,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### GitLab MCP (21+ tools)
+### GitLab MCP (proxy + 5-8 custom tools)
 
 **Purpose:** Read-only access to GitLab for CI/CD pipeline status, merge request history, issue tracking, code blame, commit diffs, and semantic code search. Correlates code changes with incident timing.
 
@@ -280,6 +284,21 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 **Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
+
+### Atlassian MCP (proxy + custom tools)
+
+**Purpose:** Read-only access to Atlassian Cloud (Jira and Confluence) for incident ticket lookup, project metadata, runbook page retrieval, and ticket creation gated by compliance policy. Supplements GitLab code-change context with process and documentation context.
+
+**Architecture:** Proxy + custom pattern, like the GitLab MCP. Connects to Atlassian's hosted MCP endpoint (`https://mcp.atlassian.com/v1/mcp`) at startup via OAuth 2.0, discovers available tools, and re-registers them locally with an `atlassian_` prefix. Custom tools extend proxied capabilities with incident-specific filtering.
+
+**Tool categories:**
+- Jira: issue search, get issue, project listing, status transitions (gated by `ATLASSIAN_READ_ONLY`)
+- Confluence: page search, page content, space listing
+- Incident-project filtering: `ATLASSIAN_INCIDENT_PROJECTS` restricts visibility to an allowlist of projects
+
+**Configuration:** OAuth 2.0 with `ATLASSIAN_SITE_NAME` identifying the Cloud site. Callback port on `ATLASSIAN_OAUTH_CALLBACK_PORT` (default 9185). MCP server port on `ATLASSIAN_MCP_PORT` (default 9085). Read-only enforced by `ATLASSIAN_READ_ONLY=true` (default). Optional `ATLASSIAN_INCIDENT_PROJECTS` and `ATLASSIAN_TIMEOUT`.
+
+**Transport:** Streamable HTTP (`/mcp`), stdio, and AWS Bedrock AgentCore.
 
 ---
 
@@ -300,7 +319,7 @@ This produces different descriptions depending on the agent's active configurati
 
 ```
 Search Elasticsearch logs within a time window for a specific service.
-Available data sources: elastic-logs, kafka-introspect, couchbase-health, konnect-gateway, notify-slack, create-ticket.
+Available data sources: elastic-logs, kafka-introspect, couchbase-health, konnect-gateway, gitlab-api, atlassian-api, notify-slack, create-ticket.
 Compliance tier: medium -- all queries are logged.
 ```
 
@@ -325,3 +344,4 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-13 | Added GitLab MCP as 5th server (proxy + custom tools, OAuth, deferred retry) |
+| 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |

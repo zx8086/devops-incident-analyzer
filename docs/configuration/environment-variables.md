@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -54,6 +54,7 @@ LangSmith provides tracing, feedback collection, and evaluation for the agent pi
 | `COUCHBASE_LANGSMITH_PROJECT` | No | `couchbase-mcp-server` | LangSmith project for Couchbase MCP server traces |
 | `KONNECT_LANGSMITH_PROJECT` | No | `konnect-mcp-server` | LangSmith project for Kong Konnect MCP server traces |
 | `GITLAB_LANGSMITH_PROJECT` | No | `gitlab-mcp-server` | LangSmith project for GitLab MCP server traces |
+| `ATLASSIAN_LANGSMITH_PROJECT` | No | `atlassian-mcp-server` | LangSmith project for Atlassian MCP server traces |
 
 Each MCP server writes traces to its own LangSmith project. This allows per-server dashboards while the main agent project captures the orchestration layer. Set `LANGSMITH_TRACING=false` to disable all tracing (useful for local development without a LangSmith account).
 
@@ -186,6 +187,25 @@ The personal access token requires the `api` scope for full MCP tool access. For
 
 ---
 
+## Atlassian MCP Server
+
+OAuth 2.0 configuration for the Atlassian MCP server, which proxies Jira and Confluence tools from Atlassian's hosted MCP endpoint and adds incident-project filtering.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ATLASSIAN_MCP_URL` | No | `https://mcp.atlassian.com/v1/mcp` | Upstream Atlassian Cloud MCP endpoint the server proxies to |
+| `ATLASSIAN_MCP_URL_LOCAL` | Yes | `http://localhost:9085` | URL the agent uses to connect to the local Atlassian MCP server |
+| `ATLASSIAN_MCP_PORT` | No | `9085` | Local HTTP port the server listens on |
+| `ATLASSIAN_SITE_NAME` | Yes | -- | Atlassian Cloud site identifier (e.g., `your-company`) |
+| `ATLASSIAN_OAUTH_CALLBACK_PORT` | No | `9185` | Port for the OAuth 2.0 redirect handler |
+| `ATLASSIAN_READ_ONLY` | No | `true` | Disable all write operations (issue create, comment, transition) |
+| `ATLASSIAN_INCIDENT_PROJECTS` | No | -- | Comma-separated project keys to allowlist for incident queries |
+| `ATLASSIAN_TIMEOUT` | No | `30000` | API request timeout in milliseconds |
+
+The OAuth flow opens a local callback on `ATLASSIAN_OAUTH_CALLBACK_PORT` to receive the auth code, then exchanges it with Atlassian for an access token. `ATLASSIAN_READ_ONLY=true` is the default and is enforced by the incident analyzer's compliance layer.
+
+---
+
 ## Agent Configuration
 
 Settings for the LangGraph supervisor agent, including model selection and state persistence.
@@ -214,6 +234,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `COUCHBASE_MCP_URL` | Yes | `http://localhost:9082` | Couchbase Capella MCP server URL |
 | `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
+| `ATLASSIAN_MCP_URL_LOCAL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (distinct from `ATLASSIAN_MCP_URL`, which is the upstream Atlassian Cloud endpoint) |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
@@ -247,3 +268,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-04-04 | Initial environment variables reference created (Phase 3: Configuration + Deployment) |
 | 2026-04-09 | Fixed MCP server URL port defaults to match standardized ports (9080-9083) |
 | 2026-04-13 | Added GitLab MCP server env vars (SIO-647), added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |
+| 2026-04-23 | Added Atlassian MCP server env vars (ATLASSIAN_SITE_NAME, ATLASSIAN_MCP_URL upstream, ATLASSIAN_MCP_URL_LOCAL, ATLASSIAN_OAUTH_CALLBACK_PORT, ATLASSIAN_READ_ONLY, ATLASSIAN_INCIDENT_PROJECTS, ATLASSIAN_TIMEOUT, ATLASSIAN_MCP_PORT, ATLASSIAN_LANGSMITH_PROJECT) |

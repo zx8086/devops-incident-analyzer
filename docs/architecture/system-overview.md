@@ -1,15 +1,15 @@
 # System Overview
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-23
 
-The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, and GitLab CI/CD pipelines. A LangGraph supervisor orchestrates five specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
+The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, and Atlassian (Jira/Confluence) ticket and runbook metadata. A LangGraph supervisor orchestrates six specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
 ---
 
 ## System Purpose
 
-DevOps teams troubleshooting production incidents face a common problem: evidence is scattered across multiple observability platforms and data stores. Engineers jump between Elasticsearch for logs, Kafka for event pipelines, Couchbase for application state, Kong Konnect for API gateway metrics, and GitLab for recent code changes and CI/CD pipeline status -- manually correlating timestamps and building a mental model of causality.
+DevOps teams troubleshooting production incidents face a common problem: evidence is scattered across multiple observability platforms and data stores. Engineers jump between Elasticsearch for logs, Kafka for event pipelines, Couchbase for application state, Kong Konnect for API gateway metrics, GitLab for recent code changes and CI/CD pipeline status, and Atlassian (Jira/Confluence) for tickets and runbooks -- manually correlating timestamps and building a mental model of causality.
 
 The Incident Analyzer automates this correlation. Given a natural language query like "why is the checkout service returning 500s?", it:
 
@@ -42,31 +42,31 @@ The agent is strictly read-only. It observes production systems but never mutate
          |
          | Send API (parallel fan-out)
          v
-+--------+---------+---------+---------+---------+
-|        |         |         |         |         |
-| elastic| kafka   | capella | konnect | gitlab  |
-| -agent | -agent  | -agent  | -agent  | -agent  |
-|        |         |         |         |         |
-+---+----+---+-----+---+-----+---+----+---+-----+
-    |        |          |         |         |
-    v        v          v         v         v
-+------+ +------+ +--------+ +--------+ +--------+
-| ES   | | Kafka| | Capella| | Konnect| | GitLab |
-| MCP  | | MCP  | | MCP    | | MCP    | | MCP    |
-| :9080| | :9081| | :9082  | | :9083  | | :9084  |
-| 69   | | 15   | | 30     | | 78     | | 21+    |
-| tools| | tools| | tools  | | tools  | | tools  |
-+------+ +------+ +--------+ +--------+ +--------+
-    |        |          |         |         |
-    v        v          v         v         v
-+------+ +------+ +--------+ +--------+ +--------+
-| Elas-| |Kafka | |Couchbase| | Kong  | | GitLab |
-| tic- | |Clust-| |Capella  | |Konnect| | API +  |
-| search| |ers  | |Cluster  | | API   | | Repos  |
-+------+ +------+ +--------+ +--------+ +--------+
++--------+---------+---------+---------+---------+---------+
+|        |         |         |         |         |         |
+| elastic| kafka   | capella | konnect | gitlab  |atlassian|
+| -agent | -agent  | -agent  | -agent  | -agent  | -agent  |
+|        |         |         |         |         |         |
++---+----+---+-----+---+-----+---+----+---+-----+---+-----+
+    |        |          |         |         |         |
+    v        v          v         v         v         v
++------+ +------+ +--------+ +--------+ +--------+ +---------+
+| ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
+| MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
+| :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
+| ~78  | | 15+15| | ~15    | | 15+prx | | proxy+ | | proxy+  |
+| tools| | opt  | | tools  | | tools  | | custom | | custom  |
++------+ +------+ +--------+ +--------+ +--------+ +---------+
+    |        |          |         |         |         |
+    v        v          v         v         v         v
++------+ +------+ +--------+ +--------+ +--------+ +---------+
+| Elas-| |Kafka | |Couchbase| | Kong  | | GitLab | | Jira /  |
+| tic- | |Clust-| |Capella  | |Konnect| | API +  | | Conflu- |
+| search| |ers  | |Cluster  | | API   | | Repos  | | ence    |
++------+ +------+ +--------+ +--------+ +--------+ +---------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. The numbers above (69 + 15 + 30 + 78 + 21 = 213) represent the full tool set when all servers are connected. The GitLab MCP tool count varies because it discovers proxy tools from the remote GitLab MCP endpoint at startup.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
 
 ---
 
@@ -82,7 +82,7 @@ This separation means agent personality (SOUL.md), constraints (RULES.md), skill
 
 The supervisor does not execute sub-agents sequentially. It uses LangGraph's `Send` API to dispatch parallel executions of the `queryDataSource` node, one per target datasource. Each Send carries its own `currentDataSource` state, which scopes the sub-agent's MCP tool access to a single server.
 
-This fan-out pattern provides natural parallelism: all five datasource queries run concurrently, and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
+This fan-out pattern provides natural parallelism: all six datasource queries run concurrently, and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
 
 ### MCP as Tool Integration Layer
 
@@ -122,11 +122,12 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | 69 tools for cluster health, index management, search, snapshots, mappings |
-| Kafka MCP | `packages/mcp-server-kafka` | 15 tools for cluster info, topic management, consumer groups, message consumption |
-| Couchbase MCP | `packages/mcp-server-couchbase` | 30 tools for cluster health, bucket management, N1QL queries, index analysis |
-| Konnect MCP | `packages/mcp-server-konnect` | 78 tools for services, routes, plugins, consumers, upstreams, analytics |
-| GitLab MCP | `packages/mcp-server-gitlab` | 21+ tools for CI/CD pipelines, merge requests, code analysis, issues (proxy + custom) |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | ~78 tools for cluster health, index management, search, snapshots, mappings |
+| Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + 15 optional (schema registry + ksqlDB) for cluster info, topic management, consumer groups, message consumption |
+| Couchbase MCP | `packages/mcp-server-couchbase` | ~15 tools for cluster health, bucket management, N1QL queries, index analysis, playbooks |
+| Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
+| GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
+| Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
 | Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 9 components, Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
@@ -178,6 +179,11 @@ packages/mcp-server-gitlab
     +-- @devops-agent/observability
     +-- @modelcontextprotocol/sdk (proxy client)
 
+packages/mcp-server-atlassian
+    +-- @devops-agent/shared
+    +-- @devops-agent/observability
+    +-- @modelcontextprotocol/sdk (proxy client)
+
 apps/web
     +-- @devops-agent/agent (server-side)
     +-- SvelteKit, Tailwind CSS v4
@@ -219,13 +225,13 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 +------------+
 | supervisor |
 | (fan-out)  |
-+-+--+--+--+-+
-  |  |  |  |  |
-  v  v  v  v  v
-elastic kafka capella konnect gitlab
--agent  -agent -agent  -agent  -agent
-  |  |  |  |  |
-  +--+--+--+--+
++-+--+--+--+-+--+
+  |  |  |  |  |  |
+  v  v  v  v  v  v
+elastic kafka capella konnect gitlab atlassian
+-agent  -agent -agent  -agent  -agent -agent
+  |  |  |  |  |  |
+  +--+--+--+--+--+
         |
         v
 +-------+------+
@@ -308,6 +314,8 @@ elastic kafka capella konnect gitlab
 | Couchbase Capella MCP Server | 9082 | Streamable HTTP (MCP) |
 | Kong Konnect MCP Server | 9083 | Streamable HTTP (MCP) |
 | GitLab MCP Server | 9084 | Streamable HTTP (MCP) |
+| Atlassian MCP Server | 9085 | Streamable HTTP (MCP) |
+| Atlassian OAuth Callback | 9185 | HTTP (OAuth 2.0 redirect) |
 
 Each MCP server exposes two HTTP endpoints:
 - `POST /mcp` -- MCP protocol messages (tool calls, tool results)
@@ -335,3 +343,4 @@ The system enforces several security boundaries:
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-13 | Added GitLab as 5th datasource/MCP server, updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation) |
+| 2026-04-23 | Added Atlassian (Jira/Confluence) as 6th datasource/MCP server (port 9085, OAuth callback 9185) |
