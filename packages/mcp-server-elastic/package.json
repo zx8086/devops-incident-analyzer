@@ -14,7 +14,6 @@
 		"@devops-agent/shared": "workspace:*",
 		"@elastic/elasticsearch": "^9.3.4",
 		"@elastic/transport": "^9.3.5",
-		"@langchain/core": "catalog:",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.1",
 		"pino": "catalog:",
@@ -22,7 +21,6 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "catalog:dev",
-		"@elastic/elasticsearch-mock": "^2.1.0",
 		"@types/bun": "catalog:dev",
 		"bun-types": "catalog:dev",
 		"typescript": "catalog:dev"

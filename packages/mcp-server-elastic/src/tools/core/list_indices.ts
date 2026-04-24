@@ -6,7 +6,12 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
-import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
+import {
+	createPaginationHeader,
+	PaginationLimitError,
+	paginateResults,
+	responsePresets,
+} from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -34,7 +39,13 @@ const _listIndicesSchema = {
 		sortBy: {
 			type: "string",
 			enum: ["name", "size", "docs", "creation"],
-			description: "Sort order for results: 'name', 'size', 'docs', or 'creation'",
+			description:
+				"Sort key: 'name' (lexicographic), 'size' (store.size_in_bytes — not available for closed indices), 'docs' (docs.count), or 'creation' (creation date).",
+		},
+		sortOrder: {
+			type: "string",
+			enum: ["asc", "desc"],
+			description: "Sort direction. Default per key: size/docs/creation -> desc, name -> asc.",
 		},
 		includeSize: {
 			type: "boolean",
@@ -51,6 +62,7 @@ const listIndicesValidator = z.object({
 	excludeSystemIndices: z.boolean().optional(),
 	excludeDataStreams: z.boolean().optional(),
 	sortBy: z.enum(["name", "size", "docs", "creation"]).optional(),
+	sortOrder: z.enum(["asc", "desc"]).optional(),
 	includeSize: z.boolean().optional(),
 });
 
@@ -101,15 +113,20 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				"Listing indices",
 			);
 
-			// Build the cat indices request. Always include store.size_in_bytes when
-			// sorting by size so the sort key is numeric (defect 7); the formatted
-			// store.size column is only requested when includeSize displays it.
-			const includeBytes = params.sortBy === "size";
+			// Build the cat indices request. Request store.size_in_bytes whenever we
+			// sort or display size so the sort key is numeric (SIO-652); creation date
+			// is requested when sorting by creation or when includeSize is set.
+			const needsBytes = params.sortBy === "size" || params.includeSize === true;
+			const showSizeColumn = params.includeSize === true || params.sortBy === "size";
+			const needsCreation = params.sortBy === "creation" || params.includeSize === true;
 			const headerParts = ["index", "health", "status", "docs.count"];
-			if (params.includeSize) {
-				headerParts.push("store.size", "creation.date.string");
+			if (showSizeColumn) {
+				headerParts.push("store.size");
 			}
-			if (includeBytes) {
+			if (needsCreation) {
+				headerParts.push("creation.date.string");
+			}
+			if (needsBytes) {
 				headerParts.push("store.size_in_bytes");
 			}
 			const catParams = {
@@ -131,43 +148,105 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				return true;
 			});
 
-			// Sort indices
+			// SIO-655: before sorting, validate every row has the required key. Silent
+			// 0-fallbacks on undefined fields cause stable original-order output while
+			// metadata still claims the sort ran — the exact failure from the Apr 23
+			// addendum. Closed/frozen indices legitimately lack store.size_in_bytes;
+			// fail loud so the caller picks a different sortBy.
+			const sortKeyFieldBySortBy: Record<"size" | "docs" | "creation", string> = {
+				size: "store.size_in_bytes",
+				docs: "docs.count",
+				creation: "creation.date.string",
+			};
+			if (params.sortBy && params.sortBy !== "name") {
+				const requiredField = sortKeyFieldBySortBy[params.sortBy];
+				const missing = filteredIndices
+					.filter((row: any) => !row[requiredField])
+					.map((row: any) => row.index as string);
+				if (missing.length > 0) {
+					throw createMcpError(
+						`Cannot sort by '${params.sortBy}': ${missing.length}/${filteredIndices.length} indices missing '${requiredField}'. This usually means the result set includes closed or frozen-tier indices that do not expose this field. Retry with a different sortBy (e.g. 'name'), narrow the indexPattern, or exclude system indices.`,
+						{
+							toolName: "elasticsearch_list_indices",
+							type: "validation",
+							details: {
+								sortBy: params.sortBy,
+								requiredField,
+								missingCount: missing.length,
+								totalCount: filteredIndices.length,
+								sampleMissing: missing.slice(0, 10),
+							},
+						},
+					);
+				}
+			}
+
+			// Resolve effective sort order with per-key defaults.
+			const defaultOrderBySortBy: Record<"name" | "size" | "docs" | "creation", "asc" | "desc"> = {
+				size: "desc",
+				docs: "desc",
+				creation: "desc",
+				name: "asc",
+			};
+			const resolvedOrder: "asc" | "desc" =
+				params.sortOrder ?? (params.sortBy ? defaultOrderBySortBy[params.sortBy] : "asc");
+			const directionMultiplier = resolvedOrder === "asc" ? 1 : -1;
+
 			filteredIndices.sort((a: any, b: any) => {
 				switch (params.sortBy) {
 					case "size": {
-						const sizeA = Number.parseInt(a["store.size_in_bytes"] || "0", 10);
-						const sizeB = Number.parseInt(b["store.size_in_bytes"] || "0", 10);
-						return sizeB - sizeA; // Descending by raw byte count
+						const sizeA = Number.parseInt(a["store.size_in_bytes"], 10);
+						const sizeB = Number.parseInt(b["store.size_in_bytes"], 10);
+						return (sizeA - sizeB) * directionMultiplier;
 					}
 					case "docs": {
-						const docsA = Number.parseInt(a["docs.count"] || "0", 10);
-						const docsB = Number.parseInt(b["docs.count"] || "0", 10);
-						return docsB - docsA; // Descending
+						const docsA = Number.parseInt(a["docs.count"], 10);
+						const docsB = Number.parseInt(b["docs.count"], 10);
+						return (docsA - docsB) * directionMultiplier;
 					}
 					case "creation": {
 						const dateA = a["creation.date.string"] || "";
 						const dateB = b["creation.date.string"] || "";
-						return dateB.localeCompare(dateA); // Newest first
+						return dateA.localeCompare(dateB) * directionMultiplier;
 					}
 					default:
-						return a.index.localeCompare(b.index);
+						return a.index.localeCompare(b.index) * directionMultiplier;
 				}
 			});
 
-			// Apply pagination
-			const { results: paginatedIndices, metadata } = paginateResults(filteredIndices, {
-				limit: params.limit,
-				defaultLimit: responsePresets.list.defaultLimit,
-				maxLimit: responsePresets.list.maxLimit,
-			});
+			// Pagination. maxLimit matches the Zod schema cap (1000) rather than the
+			// shared list preset (100); callers that need more rows for enumeration
+			// rely on this (SIO-655). Over-cap requests now throw loud, not silent.
+			let paginatedIndices: any[];
+			let metadata: import("../../utils/responseHandling.js").ResponseMetadata;
+			try {
+				const paginated = paginateResults(filteredIndices, {
+					limit: params.limit,
+					defaultLimit: responsePresets.list.defaultLimit,
+					maxLimit: 1000,
+				});
+				paginatedIndices = paginated.results;
+				metadata = paginated.metadata;
+			} catch (error) {
+				if (error instanceof PaginationLimitError) {
+					throw createMcpError(`limit=${error.requested} exceeds the maximum of ${error.maxLimit} for this tool.`, {
+						toolName: "elasticsearch_list_indices",
+						type: "validation",
+						details: { requested: error.requested, maxLimit: error.maxLimit },
+					});
+				}
+				throw error;
+			}
 
-			// Transform to consistent format
+			// Transform to consistent format. Auto-include storeSize when the caller
+			// sorted by it so they see the field they sorted on (SIO-655).
+			const includeSizeInOutput = params.includeSize === true || params.sortBy === "size";
 			const indicesInfo = paginatedIndices.map((index: any) => ({
 				index: index.index,
 				health: index.health,
 				status: index.status,
 				docsCount: index["docs.count"] || "0",
-				...(params.includeSize && {
+				...(includeSizeInOutput && {
 					storeSize: index["store.size"] || "0b",
 					creationDate: index["creation.date.string"] || "unknown",
 				}),
@@ -176,12 +255,12 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			const summary = {
 				total_found: filteredIndices.length,
 				displayed: indicesInfo.length,
-				limit_applied: params.limit,
+				limit_applied: metadata.effectiveLimit,
 				filters_applied: {
 					excluded_system_indices: params.excludeSystemIndices,
 					excluded_data_streams: params.excludeDataStreams,
 				},
-				sorted_by: params.sortBy,
+				sorted_by: params.sortBy ? { key: params.sortBy, order: resolvedOrder } : null,
 			};
 
 			const duration = performance.now() - perfStart;
@@ -233,13 +312,14 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 		{
 			title: "List Elasticsearch Indices",
 			description:
-				"List indices with filtering. Uses Zod Schema for proper MCP parameter handling. TIP: Use this FIRST to check cluster size before other tools. Common patterns: {limit: 50, excludeSystemIndices: true} for overview, {indexPattern: 'logs-*', limit: 100} for specific indices.",
+				"List indices with filtering, sorting, and honest pagination metadata. sortBy='size' ranks by primary+replica store bytes (store.size_in_bytes) and is unavailable for closed/frozen indices — request will fail loud if any row lacks the field. limit honoured up to 1000. TIP: Use this FIRST to check cluster size. Common patterns: {limit: 50, excludeSystemIndices: true} for overview, {indexPattern: 'logs-*', sortBy: 'size'} for ranking by storage.",
 			inputSchema: {
 				indexPattern: z.string().optional(),
 				limit: z.number().min(1).max(1000).optional(),
 				excludeSystemIndices: z.boolean().optional(),
 				excludeDataStreams: z.boolean().optional(),
 				sortBy: z.enum(["name", "size", "docs", "creation"]).optional(),
+				sortOrder: z.enum(["asc", "desc"]).optional(),
 				includeSize: z.boolean().optional(),
 			},
 		},

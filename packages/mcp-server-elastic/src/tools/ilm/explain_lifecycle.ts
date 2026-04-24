@@ -9,7 +9,12 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, type ProgressTracker } from "../../utils/notifications.js";
-import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
+import {
+	createPaginationHeader,
+	PaginationLimitError,
+	paginateResults,
+	responsePresets,
+} from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const explainLifecycleValidator = z.object({
@@ -154,12 +159,28 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 				};
 			}
 
-			// Apply pagination with smart defaults for large datasets
-			const { results: displayedIndices, metadata } = paginateResults(indices, {
-				limit: params.limit,
-				defaultLimit: indices.length > 100 ? 50 : responsePresets.list.defaultLimit,
-				maxLimit: responsePresets.list.maxLimit,
-			});
+			// SIO-655: maxLimit matches the schema cap (500) so callers can request
+			// full result sets when needed; paginateResults throws on over-cap.
+			let displayedIndices: typeof indices;
+			let metadata: import("../../utils/responseHandling.js").ResponseMetadata;
+			try {
+				const paginated = paginateResults(indices, {
+					limit: params.limit,
+					defaultLimit: indices.length > 100 ? 50 : responsePresets.list.defaultLimit,
+					maxLimit: 500,
+				});
+				displayedIndices = paginated.results;
+				metadata = paginated.metadata;
+			} catch (error) {
+				if (error instanceof PaginationLimitError) {
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`limit=${error.requested} exceeds the maximum of ${error.maxLimit} for this tool.`,
+						{ requested: error.requested, maxLimit: error.maxLimit },
+					);
+				}
+				throw error;
+			}
 
 			// Warn about pagination if results are limited
 			const meta = metadata as any;
