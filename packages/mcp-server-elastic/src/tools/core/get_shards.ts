@@ -12,6 +12,7 @@ import {
 	responsePresets,
 } from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
+import { humaniseBytes } from "./list_indices.js";
 
 const _getShardsSchema = {
 	type: "object",
@@ -71,10 +72,15 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 
 			logger.debug({ index, limit, sortBy }, "Getting shard information");
 
+			// SIO-660: `store` on _cat/shards is formatted ("12.3gb") by default; the
+			// comparator previously stripped non-digits and sorted lexicographically
+			// (997kb > 12gb). With `bytes: "b"` the column becomes a raw integer, so
+			// the comparator can parse it directly. Humanised back in the response.
 			const response = await esClient.cat.shards({
 				...(index && { index }),
 				format: "json",
 				h: "index,shard,prirep,state,docs,store,ip,node",
+				...(sortBy === "size" && { bytes: "b" as const }),
 			});
 
 			const totalShards = response.length;
@@ -88,7 +94,19 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 				"Retrieved shard information",
 			);
 
-			const sortedShards = [...response];
+			// SIO-660: when sorting by size, rows without `store` (typically UNASSIGNED
+			// replicas or closed/frozen shards) can't be compared. Partition before sort
+			// and surface the excluded count in metadata so the result is honest rather
+			// than silently short.
+			let excludedForMissingStore = 0;
+			let sortedShards: typeof response;
+			if (sortBy === "size") {
+				const withStore = response.filter((row) => row.store);
+				excludedForMissingStore = response.length - withStore.length;
+				sortedShards = [...withStore];
+			} else {
+				sortedShards = [...response];
+			}
 
 			if (sortBy === "state") {
 				sortedShards.sort((a, b) => {
@@ -104,9 +122,11 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 					return (a.index as string).localeCompare(b.index as string);
 				});
 			} else if (sortBy === "size") {
+				// Rows without `store` were already partitioned out above. Remaining rows
+				// are guaranteed to have raw byte integers (bytes=b on cat.shards).
 				sortedShards.sort((a, b) => {
-					const sizeA = Number.parseInt((a.store as string)?.replace(/[^\d]/g, "") || "0", 10);
-					const sizeB = Number.parseInt((b.store as string)?.replace(/[^\d]/g, "") || "0", 10);
+					const sizeA = Number.parseInt((a.store as string) || "0", 10);
+					const sizeB = Number.parseInt((b.store as string) || "0", 10);
 					return sizeB - sizeA;
 				});
 			} else if (sortBy === "docs") {
@@ -150,7 +170,9 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 				prirep: shard.prirep,
 				state: shard.state,
 				docs: shard.docs,
-				store: shard.store,
+				// SIO-660: `store` is raw bytes only when we requested bytes=b (sortBy=size).
+				// Humanise in that case; otherwise pass through the ES-formatted string.
+				store: sortBy === "size" ? humaniseBytes(shard.store as string | undefined) : shard.store,
 				ip: shard.ip,
 				node: shard.node,
 			}));
@@ -164,6 +186,10 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 
 			if (unhealthyCount > 0) {
 				metadataText += `\n${unhealthyCount} unhealthy shards found`;
+			}
+			// SIO-660: disclose rows dropped from the sort because they lacked `store`.
+			if (excludedForMissingStore > 0) {
+				metadataText += `\n${excludedForMissingStore} shards excluded from size sort (unassigned or closed — no storage data)`;
 			}
 
 			return {
