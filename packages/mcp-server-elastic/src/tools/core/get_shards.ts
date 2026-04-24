@@ -5,7 +5,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
+import {
+	createPaginationHeader,
+	PaginationLimitError,
+	paginateResults,
+	responsePresets,
+} from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const _getShardsSchema = {
@@ -114,12 +119,28 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 				sortedShards.sort((a, b) => (a.index as string).localeCompare(b.index as string));
 			}
 
-			// Apply pagination
-			const { results: paginatedShards, metadata } = paginateResults(sortedShards, {
-				limit: limit,
-				defaultLimit: responsePresets.list.defaultLimit,
-				maxLimit: responsePresets.list.maxLimit,
-			});
+			// SIO-655: maxLimit now matches the schema cap (1000), and paginateResults
+			// throws on over-cap requests rather than silently clamping.
+			let paginatedShards: typeof sortedShards;
+			let metadata: import("../../utils/responseHandling.js").ResponseMetadata;
+			try {
+				const paginated = paginateResults(sortedShards, {
+					limit,
+					defaultLimit: responsePresets.list.defaultLimit,
+					maxLimit: 1000,
+				});
+				paginatedShards = paginated.results;
+				metadata = paginated.metadata;
+			} catch (error) {
+				if (error instanceof PaginationLimitError) {
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`limit=${error.requested} exceeds the maximum of ${error.maxLimit} for this tool.`,
+						{ requested: error.requested, maxLimit: error.maxLimit },
+					);
+				}
+				throw error;
+			}
 
 			const unhealthyCount = response.filter((s) => s.state !== "STARTED").length;
 

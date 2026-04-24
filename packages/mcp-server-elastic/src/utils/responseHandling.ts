@@ -20,7 +20,21 @@ export interface ResponseMetadata {
 	total: number;
 	returned: number;
 	truncated: boolean;
+	effectiveLimit: number;
 	summary?: string;
+}
+
+// SIO-655: reject limit > maxLimit instead of silently clamping. Silent clamping
+// paired with metadata that echoed the requested value caused callers to trust
+// results that were actually truncated. Handlers catch this and convert to McpError.
+export class PaginationLimitError extends RangeError {
+	constructor(
+		public readonly requested: number,
+		public readonly maxLimit: number,
+	) {
+		super(`Requested limit ${requested} exceeds maxLimit ${maxLimit} for this tool.`);
+		this.name = "PaginationLimitError";
+	}
 }
 
 export function paginateResults<T>(
@@ -29,8 +43,11 @@ export function paginateResults<T>(
 ): { results: T[]; metadata: ResponseMetadata } {
 	const { limit, maxLimit = 100, offset = 0, defaultLimit = 20 } = options;
 
-	// Use provided limit, fall back to defaultLimit if not provided
-	const effectiveLimit = Math.min(limit || defaultLimit, maxLimit);
+	if (limit !== undefined && limit > maxLimit) {
+		throw new PaginationLimitError(limit, maxLimit);
+	}
+
+	const effectiveLimit = limit ?? defaultLimit;
 	const startIndex = Math.max(0, offset);
 	const endIndex = startIndex + effectiveLimit;
 
@@ -39,6 +56,7 @@ export function paginateResults<T>(
 		total: items.length,
 		returned: results.length,
 		truncated: items.length > endIndex,
+		effectiveLimit,
 	};
 
 	if (metadata.truncated) {
