@@ -50,3 +50,6 @@ kafka-mcp-agentcore.tar.gz
 
 # Fallow incremental analysis cache
 .fallow/
+
+# Claude Code per-session state (plans, task outputs, transcripts) — local only
+.claude/
