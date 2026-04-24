@@ -4,12 +4,12 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import type { Client } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { registerListIndicesTool } from "../../../src/tools/core/list_indices.js";
+import { humaniseBytes, registerListIndicesTool } from "../../../src/tools/core/list_indices.js";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode.js";
 import { getToolFromServer } from "../../utils/elasticsearch-client.js";
 
 type CatRow = Record<string, string>;
-type CatParams = { index?: string; format: "json"; h: string };
+type CatParams = { index?: string; format: "json"; h: string; bytes?: "b" };
 type ContentBlock = { type: string; text: string };
 type ListIndicesResult = { content: ContentBlock[] };
 type ListIndicesArgs = {
@@ -23,14 +23,15 @@ type ListIndicesArgs = {
 };
 type Handler = (args: ListIndicesArgs) => Promise<ListIndicesResult>;
 
+// SIO-658: cat.indices returns store.size as raw bytes when bytes=b is set.
+// store.size_in_bytes is not a real column and was never populated.
 const fixtureRows: CatRow[] = [
 	{
 		index: "small-kb",
 		health: "green",
 		status: "open",
 		"docs.count": "10",
-		"store.size": "997.1kb",
-		"store.size_in_bytes": "1021030",
+		"store.size": "1021030",
 		"creation.date.string": "2026-04-01T00:00:00Z",
 	},
 	{
@@ -38,8 +39,7 @@ const fixtureRows: CatRow[] = [
 		health: "green",
 		status: "open",
 		"docs.count": "100",
-		"store.size": "746.8mb",
-		"store.size_in_bytes": "783091200",
+		"store.size": "783091200",
 		"creation.date.string": "2026-04-02T00:00:00Z",
 	},
 	{
@@ -47,8 +47,7 @@ const fixtureRows: CatRow[] = [
 		health: "green",
 		status: "open",
 		"docs.count": "1000000",
-		"store.size": "12.3gb",
-		"store.size_in_bytes": "13207024435",
+		"store.size": "13207024435",
 		"creation.date.string": "2026-04-03T00:00:00Z",
 	},
 ];
@@ -81,9 +80,11 @@ describe("list_indices size sort (defect 7)", () => {
 		handler = tool.handler as Handler;
 	});
 
-	test("requests store.size_in_bytes from cat.indices when sorting by size", async () => {
+	test("requests store.size column with bytes=b when sorting by size (SIO-658)", async () => {
 		await handler({ sortBy: "size", includeSize: true });
-		expect(calls.last?.h).toContain("store.size_in_bytes");
+		expect(calls.last?.h).toContain("store.size");
+		expect(calls.last?.h).not.toContain("store.size_in_bytes");
+		expect(calls.last?.bytes).toBe("b");
 	});
 
 	test("sorts by raw byte count, not lexicographic on formatted string", async () => {
@@ -93,10 +94,12 @@ describe("list_indices size sort (defect 7)", () => {
 		expect(parsed.map((row) => row.index)).toEqual(["large-gb", "medium-mb", "small-kb"]);
 	});
 
-	test("preserves human-readable storeSize in the response payload", async () => {
+	test("humanises storeSize in the response payload (SIO-658)", async () => {
 		const result = await handler({ sortBy: "size", includeSize: true });
 		const parsed = JSON.parse(result.content[result.content.length - 1].text) as Array<{ storeSize?: string }>;
 		expect(parsed[0].storeSize).toBe("12.3gb");
+		expect(parsed[1].storeSize).toBe("746.8mb");
+		expect(parsed[2].storeSize).toBe("997.1kb");
 	});
 });
 
@@ -126,13 +129,13 @@ function makeHandlerWith(rows: CatRow[]): Handler {
 }
 
 function genRows(count: number): CatRow[] {
+	// SIO-658: store.size holds raw bytes (bytes=b). No store.size_in_bytes.
 	return Array.from({ length: count }, (_, i) => ({
 		index: `idx-${String(i).padStart(4, "0")}`,
 		health: "green",
 		status: "open",
 		"docs.count": String(1000 - i),
-		"store.size": "1.0mb",
-		"store.size_in_bytes": String(1_000_000 - i),
+		"store.size": String(1_000_000 - i),
 		"creation.date.string": "2026-04-01T00:00:00Z",
 	}));
 }
@@ -203,16 +206,16 @@ describe("list_indices SIO-655: sortOrder and sort correctness", () => {
 		expect(parseSummary(result).sorted_by).toEqual({ key: "name", order: "asc" });
 	});
 
-	test("sortBy=size loud-fails when any row is missing store.size_in_bytes", async () => {
+	test("sortBy=size loud-fails when any row is missing store.size (SIO-658)", async () => {
 		const rows: CatRow[] = [
 			{
 				index: "good",
 				health: "green",
 				status: "open",
 				"docs.count": "10",
-				"store.size_in_bytes": "1000",
+				"store.size": "1000",
 			},
-			// Second row missing store.size_in_bytes — simulates closed/frozen index
+			// Second row missing store.size — simulates closed/frozen index (no bytes even with bytes=b).
 			{ index: "bad", health: "green", status: "close", "docs.count": "0" },
 		];
 		const handler = makeHandlerWith(rows);
@@ -225,6 +228,24 @@ describe("list_indices SIO-655: sortOrder and sort correctness", () => {
 		const handler = makeHandlerWith(genRows(3));
 		const result = await handler({});
 		expect(parseSummary(result).sorted_by).toBeNull();
+	});
+});
+
+describe("humaniseBytes (SIO-658)", () => {
+	test("tb / gb / mb / kb / b boundaries match ES _cat format", () => {
+		expect(humaniseBytes(String(1024 ** 4))).toBe("1.0tb");
+		expect(humaniseBytes("13207024435")).toBe("12.3gb");
+		expect(humaniseBytes("783091200")).toBe("746.8mb");
+		expect(humaniseBytes("1021030")).toBe("997.1kb");
+		expect(humaniseBytes("512")).toBe("512b");
+	});
+
+	test("missing, non-numeric, and non-positive inputs degrade to 0b", () => {
+		expect(humaniseBytes(undefined)).toBe("0b");
+		expect(humaniseBytes("")).toBe("0b");
+		expect(humaniseBytes("not-a-number")).toBe("0b");
+		expect(humaniseBytes("0")).toBe("0b");
+		expect(humaniseBytes("-1")).toBe("0b");
 	});
 });
 

@@ -68,7 +68,29 @@ const listIndicesValidator = z.object({
 
 type _ListIndicesParams = z.infer<typeof listIndicesValidator>;
 
-// MCP error handling
+// SIO-658: with bytes=b, cat.indices returns `store.size` as raw integer bytes.
+// Reconstruct the compact human form ES itself emits when bytes is unset
+// (e.g. "12.3gb", "746.8mb", "997.1kb") so the response payload stays readable.
+// Uses 1024-based units to match ES's own formatting.
+export function humaniseBytes(raw: string | undefined): string {
+	if (!raw) return "0b";
+	const n = Number.parseInt(raw, 10);
+	if (!Number.isFinite(n) || n <= 0) return "0b";
+	const units: Array<[number, string]> = [
+		[1024 ** 4, "tb"],
+		[1024 ** 3, "gb"],
+		[1024 ** 2, "mb"],
+		[1024, "kb"],
+	];
+	for (const [divisor, unit] of units) {
+		if (n >= divisor) {
+			const value = n / divisor;
+			// One decimal, matching ES _cat output (e.g. "12.3gb").
+			return `${value.toFixed(1)}${unit}`;
+		}
+	}
+	return `${n}b`;
+}
 
 function createMcpError(
 	error: Error | string,
@@ -113,10 +135,12 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				"Listing indices",
 			);
 
-			// Build the cat indices request. Request store.size_in_bytes whenever we
-			// sort or display size so the sort key is numeric (SIO-652); creation date
-			// is requested when sorting by creation or when includeSize is set.
-			const needsBytes = params.sortBy === "size" || params.includeSize === true;
+			// SIO-658: _cat/indices exposes `store.size` (not `store.size_in_bytes` — that
+			// column name doesn't exist). Its representation is controlled by `bytes`: with
+			// `bytes: "b"` it returns raw integer bytes; without it, a human-readable string
+			// like "12.3gb". Ask for bytes whenever we sort on size, so the numeric sort
+			// comparator has an integer to parse. The humanised form is reconstructed
+			// client-side for the response payload.
 			const showSizeColumn = params.includeSize === true || params.sortBy === "size";
 			const needsCreation = params.sortBy === "creation" || params.includeSize === true;
 			const headerParts = ["index", "health", "status", "docs.count"];
@@ -126,13 +150,11 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			if (needsCreation) {
 				headerParts.push("creation.date.string");
 			}
-			if (needsBytes) {
-				headerParts.push("store.size_in_bytes");
-			}
 			const catParams = {
 				index: params.indexPattern,
 				format: "json" as const,
 				h: headerParts.join(","),
+				...(showSizeColumn && { bytes: "b" as const }),
 			};
 
 			const response = await esClient.cat.indices(catParams);
@@ -151,10 +173,10 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			// SIO-655: before sorting, validate every row has the required key. Silent
 			// 0-fallbacks on undefined fields cause stable original-order output while
 			// metadata still claims the sort ran — the exact failure from the Apr 23
-			// addendum. Closed/frozen indices legitimately lack store.size_in_bytes;
-			// fail loud so the caller picks a different sortBy.
+			// addendum. Closed/frozen indices legitimately lack store.size (even with
+			// bytes=b); fail loud so the caller picks a different sortBy.
 			const sortKeyFieldBySortBy: Record<"size" | "docs" | "creation", string> = {
-				size: "store.size_in_bytes",
+				size: "store.size",
 				docs: "docs.count",
 				creation: "creation.date.string",
 			};
@@ -195,8 +217,9 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			filteredIndices.sort((a: any, b: any) => {
 				switch (params.sortBy) {
 					case "size": {
-						const sizeA = Number.parseInt(a["store.size_in_bytes"], 10);
-						const sizeB = Number.parseInt(b["store.size_in_bytes"], 10);
+						// store.size is raw bytes thanks to bytes=b above (SIO-658).
+						const sizeA = Number.parseInt(a["store.size"], 10);
+						const sizeB = Number.parseInt(b["store.size"], 10);
 						return (sizeA - sizeB) * directionMultiplier;
 					}
 					case "docs": {
@@ -247,7 +270,8 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				status: index.status,
 				docsCount: index["docs.count"] || "0",
 				...(includeSizeInOutput && {
-					storeSize: index["store.size"] || "0b",
+					// SIO-658: store.size is raw bytes (bytes=b); humanise for the payload.
+					storeSize: humaniseBytes(index["store.size"]),
 					creationDate: index["creation.date.string"] || "unknown",
 				}),
 			}));
