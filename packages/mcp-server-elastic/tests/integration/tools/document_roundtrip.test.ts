@@ -12,9 +12,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerMultiGetTool } from "../../../src/tools/bulk/multi_get.js";
 import { registerGetDocumentTool } from "../../../src/tools/document/get_document.js";
 import { registerIndexDocumentTool } from "../../../src/tools/document/index_document.js";
-import { registerMultiGetTool } from "../../../src/tools/bulk/multi_get.js";
 import { initializeReadOnlyManager } from "../../../src/utils/readOnlyMode.js";
 import { getToolFromServer } from "../../utils/elasticsearch-client.js";
 

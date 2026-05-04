@@ -157,4 +157,3 @@ describe("get_shards sortBy=docs (regression, unchanged by SIO-660)", () => {
 		}
 	});
 });
-
