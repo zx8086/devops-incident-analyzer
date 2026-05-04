@@ -47,7 +47,7 @@
 		"lint:fix": "biome check --write .",
 		"biome:check": "bunx biome check .",
 		"biome:check:write": "bunx biome check --write .",
-		"yaml:check": "yamllint -d relaxed agents/ .yamllint.yml",
+		"yaml:check": "yamllint -c .yamllint.yml agents/",
 		"fallow:check": "npx -y fallow",
 		"fallow:audit": "npx -y fallow audit",
 		"fallow:dead": "npx -y fallow dead-code",
