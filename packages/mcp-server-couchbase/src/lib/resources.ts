@@ -1,11 +1,9 @@
 /* src/lib/resources.ts */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { logger } from "../utils/logger";
 
-function getResourceLogger() {
-	const { logger } = require("./logger");
-	return logger.child({ context: "Resources" });
-}
+const resourceLogger = logger.child({ context: "Resources" });
 
 export function getResourcesList() {
 	return [
@@ -75,7 +73,6 @@ export function getPromptsList() {
 
 export function registerResourceMethods(server: McpServer): void {
 	server.tool("capella_resources_list", "List available resources", {}, async () => {
-		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Listing available resources");
 		return {
 			content: [
@@ -88,7 +85,6 @@ export function registerResourceMethods(server: McpServer): void {
 	});
 
 	server.tool("capella_prompts_list", "List available prompts", {}, async () => {
-		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Listing available prompts");
 		return {
 			content: [
@@ -101,7 +97,6 @@ export function registerResourceMethods(server: McpServer): void {
 	});
 
 	server.tool("capella_handle_resources_list", "Handle resources_list method call", {}, async () => {
-		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling resources_list method call");
 		return {
 			content: [
@@ -114,7 +109,6 @@ export function registerResourceMethods(server: McpServer): void {
 	});
 
 	server.tool("capella_handle_prompts_list", "Handle prompts_list method call", {}, async () => {
-		const resourceLogger = getResourceLogger();
 		resourceLogger.info("Handling prompts_list method call");
 		return {
 			content: [
