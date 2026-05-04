@@ -51,34 +51,74 @@ export const getConsumerRequestsParameters = () =>
 export const listServicesParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z.number().int().min(1).max(1000).default(100).describe("Number of services to return"),
+		size: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(100)
+			.describe(
+				"Number of services to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
 
 export const listRoutesParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z.number().int().min(1).max(1000).default(100).describe("Number of routes to return"),
+		size: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(100)
+			.describe(
+				"Number of routes to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
 
 export const listConsumersParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z.number().int().min(1).max(1000).default(100).describe("Number of consumers to return"),
+		size: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(100)
+			.describe(
+				"Number of consumers to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
 
 export const listPluginsParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z.number().int().min(1).max(1000).default(100).describe("Number of plugins to return"),
+		size: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(100)
+			.describe(
+				"Number of plugins to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
 
 export const listControlPlanesParameters = () =>
 	z.object({
-		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of control planes per page"),
+		pageSize: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(10)
+			.describe(
+				"Number of control planes per page. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.pagination.capped` in the response.",
+			),
 		pageNumber: z.number().int().min(1).optional().describe("Page number to retrieve"),
 		filterName: z.string().optional().describe("Filter control planes by name (contains)"),
 		filterClusterType: z.string().optional().describe("Filter by cluster type (e.g., 'kubernetes', 'docker')"),
@@ -95,7 +135,15 @@ export const getControlPlaneParameters = () =>
 export const listControlPlaneGroupMembershipsParameters = () =>
 	z.object({
 		groupId: z.string().describe("Control plane group ID (the ID of the control plane that acts as the group)"),
-		pageSize: z.number().int().min(1).max(1000).default(10).describe("Number of members to return per page"),
+		pageSize: z
+			.number()
+			.int()
+			.min(1)
+			.max(1000)
+			.default(10)
+			.describe(
+				"Number of members to return per page. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+			),
 		pageAfter: z.string().optional().describe("Cursor for pagination after a specific item"),
 	});
 

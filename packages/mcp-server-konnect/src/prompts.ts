@@ -54,11 +54,11 @@ List all services associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of services to return (1-1000, default: 100)
+  - size: Number - Number of services to return (1-1000, default: 100). Kong silently caps at 100 upstream.
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
-  - metadata: Object - Contains controlPlaneId, size, offset, nextOffset, totalCount
+  - metadata: Object - Contains controlPlaneId, requestedSize, effectiveSize, actualCount, capped, offset, nextOffset, totalCount
   - services: Array - List of services with details for each including:
     - serviceId: String - Unique identifier for the service
     - name: String - Display name of the service
@@ -81,11 +81,11 @@ List all routes associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of routes to return (1-1000, default: 100)
+  - size: Number - Number of routes to return (1-1000, default: 100). Kong silently caps at 100 upstream.
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
-  - metadata: Object - Contains controlPlaneId, size, offset, nextOffset, totalCount
+  - metadata: Object - Contains controlPlaneId, requestedSize, effectiveSize, actualCount, capped, offset, nextOffset, totalCount
   - routes: Array - List of routes with details for each including:
     - routeId: String - Unique identifier for the route
     - name: String - Display name of the route
@@ -106,11 +106,11 @@ List all consumers associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of consumers to return (1-1000, default: 100)
+  - size: Number - Number of consumers to return (1-1000, default: 100). Kong silently caps at 100 upstream.
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
-  - metadata: Object - Contains controlPlaneId, size, offset, nextOffset, totalCount
+  - metadata: Object - Contains controlPlaneId, requestedSize, effectiveSize, actualCount, capped, offset, nextOffset, totalCount
   - consumers: Array - List of consumers with details for each including:
     - consumerId: String - Unique identifier for the consumer
     - username: String - Username for this consumer
@@ -126,11 +126,11 @@ List all plugins associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of plugins to return (1-1000, default: 100)
+  - size: Number - Number of plugins to return (1-1000, default: 100). Kong silently caps at 100 upstream.
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
-  - metadata: Object - Contains controlPlaneId, size, offset, nextOffset, totalCount
+  - metadata: Object - Contains controlPlaneId, requestedSize, effectiveSize, actualCount, capped, offset, nextOffset, totalCount
   - plugins: Array - List of plugins with details for each including:
     - pluginId: String - Unique identifier for the plugin
     - name: String - Name of the plugin (e.g., rate-limiting, cors, etc.)
@@ -151,7 +151,7 @@ export const listControlPlanesPrompt = () => `
 List all control planes in your organization.
 
 INPUT:
-  - pageSize: Number - Number of control planes per page (1-1000, default: 10)
+  - pageSize: Number - Number of control planes per page (1-1000, default: 10). Kong silently caps at 100 upstream.
   - pageNumber: Number (optional) - Page number to retrieve
   - filterName: String (optional) - Filter control planes by name
   - filterClusterType: String (optional) - Filter by cluster type (kubernetes, docker, etc.)
@@ -160,7 +160,7 @@ INPUT:
   - sort: String (optional) - Sort field and direction (e.g. 'name,created_at desc')
 
 OUTPUT:
-  - metadata: Object - Contains pageSize, pageNumber, totalPages, totalCount, filters, sort
+  - metadata: Object - Contains requestedPageSize, effectivePageSize, actualCount, capped, pageNumber, totalPages, totalCount, filters, sort
   - controlPlanes: Array - List of control planes with details for each including:
     - controlPlaneId: String - Unique identifier for the control plane
     - name: String - Display name of the control plane
@@ -201,11 +201,11 @@ List all control planes that are members of a specific control plane group.
 
 INPUT:
   - groupId: String - ID of the control plane group (control plane that acts as the group)
-  - pageSize: Number - Number of members to return per page (1-1000, default: 10)
+  - pageSize: Number - Number of members to return per page (1-1000, default: 10). Kong silently caps at 100 upstream.
   - pageAfter: String (optional) - Cursor for pagination after a specific item
 
 OUTPUT:
-  - metadata: Object - Contains groupId, pageSize, pageAfter, nextPageAfter, totalCount
+  - metadata: Object - Contains groupId, requestedPageSize, effectivePageSize, actualCount, capped, pageAfter, nextPageAfter, totalCount
   - members: Array - List of member control planes with details for each including:
     - controlPlaneId: String - Unique identifier for the control plane
     - name: String - Display name of the control plane
