@@ -24,8 +24,10 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/agent/package.json packages/agent/
 COPY packages/checkpointer/package.json packages/checkpointer/
 COPY packages/gitagent-bridge/package.json packages/gitagent-bridge/
+COPY packages/mcp-server-atlassian/package.json packages/mcp-server-atlassian/
 COPY packages/mcp-server-couchbase/package.json packages/mcp-server-couchbase/
 COPY packages/mcp-server-elastic/package.json packages/mcp-server-elastic/
+COPY packages/mcp-server-gitlab/package.json packages/mcp-server-gitlab/
 COPY packages/mcp-server-kafka/package.json packages/mcp-server-kafka/
 COPY packages/mcp-server-konnect/package.json packages/mcp-server-konnect/
 COPY packages/observability/package.json packages/observability/
