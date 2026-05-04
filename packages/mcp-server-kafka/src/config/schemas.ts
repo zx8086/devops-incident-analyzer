@@ -18,6 +18,11 @@ export const mskSchema = z
 		bootstrapBrokers: z.string().describe("Comma-separated MSK bootstrap broker endpoints"),
 		clusterArn: z.string().describe("MSK cluster ARN for IAM authentication"),
 		region: z.string().describe("AWS region for MSK cluster"),
+		authMode: z
+			.enum(["iam", "tls", "none"])
+			.describe(
+				"MSK auth mode: 'iam' (SASL OAUTHBEARER + TLS, default), 'tls' (TLS-only no auth), 'none' (PLAINTEXT, unauthenticated cluster)",
+			),
 	})
 	.strict();
 

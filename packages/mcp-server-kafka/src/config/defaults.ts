@@ -13,6 +13,9 @@ export const defaults = {
 		bootstrapBrokers: "",
 		clusterArn: "",
 		region: "eu-west-1",
+		// PLAINTEXT is the default because the team's MSK cluster is unauthenticated.
+		// Set MSK_AUTH_MODE=iam (or =tls) explicitly to opt into authenticated paths.
+		authMode: "none" as const,
 	},
 	confluent: {
 		bootstrapServers: "",

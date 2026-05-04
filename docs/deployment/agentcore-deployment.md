@@ -239,13 +239,13 @@ Key parameters:
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | `protocol` | `MCP` | AgentCore handles MCP message routing |
-| `networkMode` | `PUBLIC` | Server can reach external data sources (Kafka brokers, Elasticsearch clusters) |
+| `networkMode` | `PUBLIC` or `VPC` | `PUBLIC` (default) for publicly-reachable data sources. `VPC` is required for VPC-private resources like a private MSK cluster -- pass subnets and security groups. The `deploy.sh` script switches modes based on `AGENTCORE_SUBNETS` / `AGENTCORE_SECURITY_GROUPS` env vars. |
 
 #### Per-Server Environment Variables
 
 | Server | Required Variables | Notes |
 |--------|-------------------|-------|
-| Kafka | `KAFKA_PROVIDER`, `MSK_CLUSTER_ARN` (for MSK), `AWS_REGION` | `KAFKA_PROVIDER=msk` for AWS MSK clusters |
+| Kafka | `KAFKA_PROVIDER`, `MSK_CLUSTER_ARN` and/or `MSK_BOOTSTRAP_BROKERS` (for MSK), `AWS_REGION`, `MSK_AUTH_MODE` (optional) | `KAFKA_PROVIDER=msk` for AWS MSK clusters. `MSK_AUTH_MODE=none\|tls\|iam` selects the auth path; defaults to `none` (unauthenticated PLAINTEXT). Set `MSK_AUTH_MODE=iam` explicitly to opt into the IAM-authenticated path. |
 | Elastic | `ELASTICSEARCH_URL`, `ELASTICSEARCH_API_KEY` or `ELASTICSEARCH_USERNAME` + `ELASTICSEARCH_PASSWORD` | Authenticates directly to ES cluster, no AWS-specific IAM needed |
 | Couchbase | `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET` | Authenticates via Capella SDK credentials |
 | Konnect | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` | Uses Kong Konnect API token, region: `us\|eu\|au\|me\|in` |
@@ -300,7 +300,7 @@ Every MCP server needs CloudWatch Logs access for container logging and ECR pull
 
 ### Kafka-Specific Policy
 
-The Kafka MCP server with MSK provider needs access to MSK cluster operations:
+The Kafka MCP server with MSK provider needs access to MSK cluster operations only when `MSK_AUTH_MODE=iam`. The default is `MSK_AUTH_MODE=none` (unauthenticated PLAINTEXT) -- in that mode `kafka-cluster:*` actions are not exercised and the deploy script skips this block. See [`agentcore-msk-no-auth.md`](agentcore-msk-no-auth.md) for the no-auth deployment path (default) and [`agentcore-msk-setup.md`](agentcore-msk-setup.md) for the IAM path (explicit opt-in).
 
 ```json
 {
@@ -378,6 +378,26 @@ MCP_SERVER=atlassian ./scripts/agentcore/deploy.sh         # Deploys Atlassian
 ```
 
 The `MCP_SERVER` env var selects which server to deploy. The script is idempotent -- it creates resources if they do not exist and updates them if they do. On completion, it outputs connection information and saves deployment metadata to `.agentcore-deployment.json`.
+
+#### Cross-Cutting Env Vars
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `MCP_SERVER` | No | `kafka` | Which MCP server to deploy: `kafka`, `elastic`, `couchbase`, `konnect`, `gitlab`, `atlassian` |
+| `AWS_REGION` | No | `eu-west-1` | Target AWS region |
+| `RUNTIME_NAME` | No | `<server>-mcp-server` | AgentCore runtime name |
+| `ECR_REPO` | No | `<server>-mcp-agentcore` | ECR repository name |
+| `AGENTCORE_SUBNETS` | No | -- | Comma-separated subnet IDs. When set, runtime uses `networkMode=VPC` (required for private MSK or other VPC-resident data sources). |
+| `AGENTCORE_SECURITY_GROUPS` | No | -- | Comma-separated security group IDs. Required when `AGENTCORE_SUBNETS` is set. |
+
+#### Kafka-Specific Env Vars (deploy.sh)
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `KAFKA_PROVIDER` | No | `msk` | `msk` or `local` (use `local` only for development clusters) |
+| `MSK_AUTH_MODE` | No | `none` | `none`, `tls`, or `iam`. Default `none` (unauthenticated PLAINTEXT) -- `kafka-cluster:*` IAM grants are skipped. Set `iam` explicitly for IAM-authenticated MSK. |
+| `MSK_CLUSTER_ARN` | No | -- | Forwarded to the runtime for broker discovery and `kafka_get_cluster_info`. |
+| `MSK_BOOTSTRAP_BROKERS` | No | -- | Forwarded to the runtime. When set, the runtime skips `GetBootstrapBrokers`. |
 
 ### test-local.sh
 

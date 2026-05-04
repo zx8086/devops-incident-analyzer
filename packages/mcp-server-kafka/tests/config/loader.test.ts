@@ -11,6 +11,9 @@ const ENV_KEYS = [
 	"KAFKA_CONSUME_MAX_MESSAGES",
 	"KAFKA_CONSUME_TIMEOUT_MS",
 	"LOCAL_BOOTSTRAP_SERVERS",
+	"MSK_BOOTSTRAP_BROKERS",
+	"MSK_CLUSTER_ARN",
+	"MSK_AUTH_MODE",
 	"SCHEMA_REGISTRY_ENABLED",
 	"SCHEMA_REGISTRY_URL",
 	"SCHEMA_REGISTRY_API_KEY",
@@ -114,5 +117,33 @@ describe("loadConfig", () => {
 		const config = loadConfig();
 		expect(config.schemaRegistry.enabled).toBe(false);
 		expect(config.schemaRegistry.url).toBe("");
+	});
+
+	test("defaults msk.authMode to none when MSK_AUTH_MODE is unset", () => {
+		const config = loadConfig();
+		expect(config.msk.authMode).toBe("none");
+	});
+
+	test("MSK_AUTH_MODE=iam maps to msk.authMode (explicit opt-in)", () => {
+		process.env.KAFKA_PROVIDER = "msk";
+		process.env.MSK_BOOTSTRAP_BROKERS = "b-1.example:9098";
+		process.env.MSK_AUTH_MODE = "iam";
+		const config = loadConfig();
+		expect(config.msk.authMode).toBe("iam");
+	});
+
+	test("MSK_AUTH_MODE=tls maps to msk.authMode", () => {
+		process.env.KAFKA_PROVIDER = "msk";
+		process.env.MSK_BOOTSTRAP_BROKERS = "b-1.example:9094";
+		process.env.MSK_AUTH_MODE = "tls";
+		const config = loadConfig();
+		expect(config.msk.authMode).toBe("tls");
+	});
+
+	test("MSK_AUTH_MODE rejects invalid values", () => {
+		process.env.KAFKA_PROVIDER = "msk";
+		process.env.MSK_BOOTSTRAP_BROKERS = "b-1.example:9092";
+		process.env.MSK_AUTH_MODE = "garbage";
+		expect(() => loadConfig()).toThrow();
 	});
 });

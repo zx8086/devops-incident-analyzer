@@ -10,6 +10,7 @@ export const envMapping: Record<string, string> = {
 	MSK_BOOTSTRAP_BROKERS: "msk.bootstrapBrokers",
 	MSK_CLUSTER_ARN: "msk.clusterArn",
 	AWS_REGION: "msk.region",
+	MSK_AUTH_MODE: "msk.authMode",
 	CONFLUENT_BOOTSTRAP_SERVERS: "confluent.bootstrapServers",
 	CONFLUENT_API_KEY: "confluent.apiKey",
 	CONFLUENT_API_SECRET: "confluent.apiSecret",

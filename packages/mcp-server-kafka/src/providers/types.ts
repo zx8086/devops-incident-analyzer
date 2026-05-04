@@ -1,6 +1,8 @@
 // src/providers/types.ts
 import type { ConnectionOptions, SASLOptions } from "@platformatic/kafka";
 
+export type MskAuthMode = "iam" | "tls" | "none";
+
 export interface KafkaConnectionConfig {
 	clientId: string;
 	bootstrapBrokers: string[];

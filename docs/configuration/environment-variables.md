@@ -116,8 +116,33 @@ The Kafka MCP server uses a provider system to support multiple Kafka deployment
 The provider determines authentication and connection behavior:
 
 - `local` -- Plain connection to local brokers, no authentication
-- `msk` -- AWS MSK with IAM authentication (uses `AWS_REGION` and IAM credentials)
+- `msk` -- AWS MSK; auth is selected via `MSK_AUTH_MODE` (see below). Defaults to IAM.
 - `confluent` -- Confluent Cloud with API key/secret authentication
+
+### MSK Auth Mode
+
+`MSK_AUTH_MODE` selects how the Kafka MCP server connects to an MSK cluster. It applies only when `KAFKA_PROVIDER=msk`.
+
+| Value | Behaviour | Bootstrap broker port (typical) |
+|-------|-----------|---------------------------------|
+| `none` (default) | Unauthenticated PLAINTEXT. Uses `BootstrapBrokerString`. The cluster must have been created with `Unauthenticated` enabled. | `9092` |
+| `tls` | TLS-only, no SASL. Uses `BootstrapBrokerStringTls`. | `9094` |
+| `iam` | SASL/OAUTHBEARER with IAM-signed token + TLS. Uses `BootstrapBrokerStringSaslIam`. Set explicitly to opt in. | `9098` |
+
+The default is `none` because the project's MSK cluster is provisioned without authentication. Existing IAM-authenticated deployments must set `MSK_AUTH_MODE=iam` explicitly. The resolved auth mode is logged at startup ("Creating Kafka provider"), so the connection posture is always visible from the logs.
+
+When `MSK_AUTH_MODE=none`, `kafka-cluster:*` IAM permissions are not required by the runtime. See [`docs/deployment/agentcore-msk-no-auth.md`](../deployment/agentcore-msk-no-auth.md) for the full no-auth deployment path.
+
+### MSK Connection
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MSK_BOOTSTRAP_BROKERS` | No | -- | Comma-separated bootstrap brokers. If set, skips runtime-side `GetBootstrapBrokers`. |
+| `MSK_CLUSTER_ARN` | No | -- | MSK cluster ARN. Used for broker discovery (when `MSK_BOOTSTRAP_BROKERS` is unset) and for `kafka_get_cluster_info`. |
+| `MSK_AUTH_MODE` | No | `iam` | See above. |
+| `AWS_REGION` | No | `eu-west-1` | AWS region for MSK and IAM token signing. |
+
+Either `MSK_BOOTSTRAP_BROKERS` or `MSK_CLUSTER_ARN` must be set when `KAFKA_PROVIDER=msk`.
 
 ### Feature Gates
 
