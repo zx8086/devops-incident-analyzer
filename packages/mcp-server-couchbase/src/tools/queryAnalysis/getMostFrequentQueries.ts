@@ -40,7 +40,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Most Frequently Executed Queries");
+			return executeAnalysisQuery(bucket, query, "Most Frequently Executed Queries", limit);
 		},
 	);
 };

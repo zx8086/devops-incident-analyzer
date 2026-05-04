@@ -40,7 +40,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Queries with Largest Result Counts");
+			return executeAnalysisQuery(bucket, query, "Queries with Largest Result Counts", limit);
 		},
 	);
 };

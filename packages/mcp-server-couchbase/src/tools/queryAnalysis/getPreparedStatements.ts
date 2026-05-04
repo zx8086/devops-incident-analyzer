@@ -30,7 +30,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Prepared Statements");
+			return executeAnalysisQuery(bucket, query, "Prepared Statements", limit);
 		},
 	);
 };

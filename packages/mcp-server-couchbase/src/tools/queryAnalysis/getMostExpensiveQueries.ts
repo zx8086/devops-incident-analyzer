@@ -55,7 +55,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			// Log the final query for debugging
 			logger.error(`Final N1QL Query:\n${query}`);
 
-			return executeAnalysisQuery(bucket, query, "Most Expensive Queries");
+			return executeAnalysisQuery(bucket, query, "Most Expensive Queries", limit);
 		},
 	);
 };

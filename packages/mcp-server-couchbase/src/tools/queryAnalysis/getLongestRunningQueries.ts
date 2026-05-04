@@ -40,7 +40,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Longest Running Queries");
+			return executeAnalysisQuery(bucket, query, "Longest Running Queries", limit);
 		},
 	);
 };
