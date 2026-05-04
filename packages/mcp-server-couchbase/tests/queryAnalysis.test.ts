@@ -1,12 +1,16 @@
 // tests/queryAnalysis.test.ts
-// SIO-667: pure unit tests for the buildQuery extractions in 6 queryAnalysis
-// tools and for the assertIdentifier helper. No Couchbase connection needed.
+// SIO-667 + SIO-668: pure unit tests for the buildQuery extractions across 9
+// queryAnalysis tools and for the assertIdentifier helper. No Couchbase
+// connection needed.
 
 import { describe, expect, test } from "bun:test";
 import { assertIdentifier, COUCHBASE_IDENTIFIER_RE } from "../src/lib/identifiers";
+import { buildQuery as buildCompletedRequests } from "../src/tools/queryAnalysis/getCompletedRequests";
 import { buildQuery as buildDetailedIndexes } from "../src/tools/queryAnalysis/getDetailedIndexes";
+import { buildQuery as buildDetailedPreparedStatements } from "../src/tools/queryAnalysis/getDetailedPreparedStatements";
 import { buildQuery as buildDocumentTypeExamples } from "../src/tools/queryAnalysis/getDocumentTypeExamples";
 import { buildQuery as buildIndexesToDrop } from "../src/tools/queryAnalysis/getIndexesToDrop";
+import { buildQuery as buildMostExpensiveQueries } from "../src/tools/queryAnalysis/getMostExpensiveQueries";
 import { buildQuery as buildSystemIndexes } from "../src/tools/queryAnalysis/getSystemIndexes";
 import { buildQuery as buildSystemNodes } from "../src/tools/queryAnalysis/getSystemNodes";
 import { buildQuery as buildSystemVitals } from "../src/tools/queryAnalysis/getSystemVitals";
@@ -295,5 +299,130 @@ describe("getSystemVitals.buildQuery", () => {
 		expect(query).toContain("$node_pattern");
 		expect(query).not.toContain(INJECTION_DQ);
 		expect(parameters.node_pattern).toBe(`%${INJECTION_DQ}%`);
+	});
+});
+
+// SIO-668: 3 leftover queryAnalysis tools that splice user input into SQL++.
+
+describe("getDetailedPreparedStatements.buildQuery", () => {
+	test("empty input produces no WHERE clause and empty parameters", () => {
+		const { query, parameters } = buildDetailedPreparedStatements({});
+		expect(query).not.toMatch(/WHERE/);
+		expect(parameters).toEqual({});
+	});
+
+	test("node_filter binds as full LIKE pattern in $node_pattern", () => {
+		const evil = 'foo"; DROP --';
+		const { query, parameters } = buildDetailedPreparedStatements({ node_filter: evil });
+		expect(query).toContain("$node_pattern");
+		expect(query).toContain("node LIKE $node_pattern");
+		expect(query).not.toContain(evil);
+		expect(parameters.node_pattern).toBe(`%${evil}%`);
+	});
+
+	test("query_pattern binds as full LIKE pattern in $query_pattern_like", () => {
+		const evil = "SELECT'; DROP --";
+		const { query, parameters } = buildDetailedPreparedStatements({ query_pattern: evil });
+		expect(query).toContain("$query_pattern_like");
+		expect(query).toContain("statement LIKE $query_pattern_like");
+		expect(query).not.toContain(evil);
+		expect(parameters.query_pattern_like).toBe(`%${evil}%`);
+	});
+
+	test("both filters together produce 2 placeholders + 2 parameters", () => {
+		const { query, parameters } = buildDetailedPreparedStatements({
+			node_filter: "n1",
+			query_pattern: "SELECT",
+		});
+		expect(query).toContain("$node_pattern");
+		expect(query).toContain("$query_pattern_like");
+		expect(query).toContain("AND");
+		expect(Object.keys(parameters).sort()).toEqual(["node_pattern", "query_pattern_like"]);
+	});
+
+	test("limit is spliced into the query (numeric, Zod-validated)", () => {
+		const { query } = buildDetailedPreparedStatements({ limit: 25 });
+		expect(query).toMatch(/LIMIT 25/);
+	});
+
+	test("WHERE is inserted before ORDER BY when both filters and limit are present", () => {
+		const { query } = buildDetailedPreparedStatements({ node_filter: "x", limit: 5 });
+		const wherePos = query.indexOf("WHERE");
+		const orderPos = query.indexOf("ORDER BY");
+		expect(wherePos).toBeGreaterThanOrEqual(0);
+		expect(wherePos).toBeLessThan(orderPos);
+	});
+});
+
+describe("getCompletedRequests.buildQuery", () => {
+	test("empty input returns base query with empty parameters", () => {
+		const { parameters } = buildCompletedRequests({});
+		expect(parameters).toEqual({});
+	});
+
+	test("status: 'fatal' binds as $status -- raw value not spliced", () => {
+		const { query, parameters } = buildCompletedRequests({ status: "fatal" });
+		expect(query).toContain("$status");
+		expect(query).toContain("state = $status");
+		// The literal `state = 'fatal'` form must NOT appear -- if it did the splice would still be live.
+		expect(query).not.toContain("state = 'fatal'");
+		expect(parameters.status).toBe("fatal");
+	});
+
+	test("status: 'all' skips the filter entirely (pre-SIO-668 behavior preserved)", () => {
+		const { query, parameters } = buildCompletedRequests({ status: "all" });
+		expect(query).not.toContain("$status");
+		expect(parameters).toEqual({});
+	});
+
+	test("period: 'quarter' rewrites DATE_ADD_STR to -3 month", () => {
+		const { query } = buildCompletedRequests({ period: "quarter" });
+		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -3, 'month')");
+	});
+
+	test("period: 'day' rewrites DATE_ADD_STR to -1 day", () => {
+		const { query } = buildCompletedRequests({ period: "day" });
+		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -1, 'day')");
+	});
+
+	test("status + period + limit compose correctly", () => {
+		const { query, parameters } = buildCompletedRequests({ status: "success", period: "week", limit: 100 });
+		expect(query).toContain("$status");
+		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -1, 'week')");
+		expect(query).toMatch(/LIMIT 100/);
+		expect(parameters.status).toBe("success");
+	});
+});
+
+describe("getMostExpensiveQueries.buildQuery", () => {
+	test("empty input returns base query with empty parameters", () => {
+		const { parameters } = buildMostExpensiveQueries({});
+		expect(parameters).toEqual({});
+	});
+
+	test("no template-literal markers leak into output", () => {
+		const { query } = buildMostExpensiveQueries({ period: "day", limit: 10 });
+		// `${` should never appear -- it would mean a JS template never resolved.
+		expect(query).not.toContain("${");
+	});
+
+	test("period: 'day' substitutes constant clause", () => {
+		const { query } = buildMostExpensiveQueries({ period: "day" });
+		expect(query).toContain("requestTime >= DATE_ADD_STR(NOW_STR(), -1, 'day')");
+	});
+
+	test("period: 'month' substitutes constant clause", () => {
+		const { query } = buildMostExpensiveQueries({ period: "month" });
+		expect(query).toContain("requestTime >= DATE_ADD_STR(NOW_STR(), -1, 'month')");
+	});
+
+	test("limit splices LIMIT N into output", () => {
+		const { query } = buildMostExpensiveQueries({ limit: 50 });
+		expect(query).toMatch(/LIMIT 50/);
+	});
+
+	test("parameters bag is always empty (no user literals to bind)", () => {
+		expect(buildMostExpensiveQueries({}).parameters).toEqual({});
+		expect(buildMostExpensiveQueries({ period: "week", limit: 10 }).parameters).toEqual({});
 	});
 });
