@@ -19,9 +19,26 @@
 #   RUNTIME_NAME            - AgentCore runtime name (default: <server>-mcp-server)
 #   ECR_REPO                - ECR repository name (default: <server>-mcp-agentcore)
 #
+# Networking (optional, all servers):
+#   AGENTCORE_SUBNETS       - Comma-separated subnet IDs. If set, runtime is
+#                             created in networkMode=VPC (required to reach
+#                             VPC-private resources like a private MSK cluster).
+#                             When unset, networkMode=PUBLIC is used.
+#   AGENTCORE_SECURITY_GROUPS - Comma-separated security group IDs. Required
+#                             when AGENTCORE_SUBNETS is set.
+#
+# For MCP_SERVER=kafka with KAFKA_PROVIDER=msk, the script auto-discovers
+# subnets and the primary security group from MSK_CLUSTER_ARN if neither
+# AGENTCORE_SUBNETS nor AGENTCORE_SECURITY_GROUPS is provided. Local
+# credentials need 'kafka:DescribeCluster' permission for this.
+#
 # Kafka-specific:
 #   KAFKA_PROVIDER          - Kafka provider type (default: msk)
-#   MSK_CLUSTER_ARN         - MSK cluster ARN (required for msk provider)
+#   MSK_CLUSTER_ARN         - MSK cluster ARN (used for broker discovery / metadata)
+#   MSK_BOOTSTRAP_BROKERS   - Bootstrap brokers (skips runtime-side broker discovery)
+#   MSK_AUTH_MODE           - iam (default) | tls | none. When 'none', the IAM
+#                             policy block for kafka-cluster:* is skipped because
+#                             the cluster does not enforce IAM auth.
 #
 # Elastic-specific:
 #   ELASTICSEARCH_URL       - Elasticsearch cluster URL
@@ -48,10 +65,56 @@ AWS_REGION="${AWS_REGION:-eu-west-1}"
 RUNTIME_NAME="${RUNTIME_NAME:-${MCP_SERVER}-mcp-server}"
 ECR_REPO="${ECR_REPO:-${MCP_SERVER}-mcp-agentcore}"
 KAFKA_PROVIDER="${KAFKA_PROVIDER:-msk}"
+# Default to 'none' to match the runtime default. Set MSK_AUTH_MODE=iam (or =tls)
+# explicitly to opt into authenticated paths.
+MSK_AUTH_MODE="${MSK_AUTH_MODE:-none}"
+AGENTCORE_SUBNETS="${AGENTCORE_SUBNETS:-}"
+AGENTCORE_SECURITY_GROUPS="${AGENTCORE_SECURITY_GROUPS:-}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 IMAGE_TAG="latest"
 ROLE_NAME="${RUNTIME_NAME}-agentcore-role"
+
+# Validate networking inputs early -- VPC requires both subnets and SGs.
+if [ -n "${AGENTCORE_SUBNETS}" ] && [ -z "${AGENTCORE_SECURITY_GROUPS}" ]; then
+  echo "Error: AGENTCORE_SUBNETS is set but AGENTCORE_SECURITY_GROUPS is not."
+  echo "Both are required for networkMode=VPC. Unset AGENTCORE_SUBNETS to use PUBLIC mode."
+  exit 1
+fi
+if [ -z "${AGENTCORE_SUBNETS}" ] && [ -n "${AGENTCORE_SECURITY_GROUPS}" ]; then
+  echo "Error: AGENTCORE_SECURITY_GROUPS is set but AGENTCORE_SUBNETS is not."
+  exit 1
+fi
+
+# For Kafka against MSK, derive VPC networking from the cluster ARN when the
+# user hasn't supplied subnets/SGs. MSK clusters are in-VPC by default; the
+# runtime needs ENIs in the same subnets+SG to reach the brokers.
+if [ "${MCP_SERVER}" = "kafka" ] \
+   && [ "${KAFKA_PROVIDER}" = "msk" ] \
+   && [ -n "${MSK_CLUSTER_ARN:-}" ] \
+   && [ -z "${AGENTCORE_SUBNETS}" ]; then
+  echo "Discovering VPC networking from MSK cluster..."
+  DISCOVERED_SUBNETS=$(aws kafka describe-cluster \
+    --cluster-arn "${MSK_CLUSTER_ARN}" \
+    --region "${AWS_REGION}" \
+    --query 'ClusterInfo.BrokerNodeGroupInfo.ClientSubnets' \
+    --output text 2>/dev/null | tr '\t' ',' || echo "")
+  DISCOVERED_SG=$(aws kafka describe-cluster \
+    --cluster-arn "${MSK_CLUSTER_ARN}" \
+    --region "${AWS_REGION}" \
+    --query 'ClusterInfo.BrokerNodeGroupInfo.SecurityGroups[0]' \
+    --output text 2>/dev/null || echo "")
+  if [ -n "${DISCOVERED_SUBNETS}" ] && [ -n "${DISCOVERED_SG}" ] && [ "${DISCOVERED_SG}" != "None" ]; then
+    AGENTCORE_SUBNETS="${DISCOVERED_SUBNETS}"
+    AGENTCORE_SECURITY_GROUPS="${DISCOVERED_SG}"
+    echo "  Subnets: ${AGENTCORE_SUBNETS}"
+    echo "  SG:      ${AGENTCORE_SECURITY_GROUPS}"
+  else
+    echo "  Could not discover subnets/SG from cluster ARN. Falling back to PUBLIC mode."
+    echo "  If brokers are VPC-private, set AGENTCORE_SUBNETS / AGENTCORE_SECURITY_GROUPS"
+    echo "  manually or grant 'kafka:DescribeCluster' to your local AWS credentials."
+  fi
+fi
 
 echo "================================================================"
 echo "  ${MCP_SERVER^} MCP Server -> AgentCore Runtime Deployment"
@@ -62,11 +125,16 @@ echo "  Runtime:      ${RUNTIME_NAME}"
 echo "  ECR Repo:     ${ECR_REPO}"
 echo "  Package:      ${MCP_SERVER_PACKAGE}"
 case "${MCP_SERVER}" in
-  kafka)    echo "  Kafka:        ${KAFKA_PROVIDER}" ;;
+  kafka)    echo "  Kafka:        ${KAFKA_PROVIDER} (auth=${MSK_AUTH_MODE})" ;;
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
   couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
 esac
+if [ -n "${AGENTCORE_SUBNETS}" ]; then
+  echo "  Network:      VPC (subnets=${AGENTCORE_SUBNETS}, sgs=${AGENTCORE_SECURITY_GROUPS})"
+else
+  echo "  Network:      PUBLIC"
+fi
 echo "================================================================"
 echo ""
 
@@ -164,8 +232,9 @@ POLICY_STATEMENTS='[
       "Resource": "*"
     }'
 
-# Add MSK permissions for kafka server
-if [ "${MCP_SERVER}" = "kafka" ]; then
+# Add MSK IAM permissions for kafka server only when the cluster enforces IAM auth.
+# When MSK_AUTH_MODE=none, kafka-cluster:* actions are unused and would be dead grants.
+if [ "${MCP_SERVER}" = "kafka" ] && [ "${MSK_AUTH_MODE}" != "none" ]; then
   POLICY_STATEMENTS="${POLICY_STATEMENTS}"',
     {
       "Sid": "MSKClusterAccess",
@@ -232,8 +301,12 @@ ENV_VARS="AWS_REGION=${AWS_REGION}"
 case "${MCP_SERVER}" in
   kafka)
     ENV_VARS="${ENV_VARS},KAFKA_PROVIDER=${KAFKA_PROVIDER}"
+    ENV_VARS="${ENV_VARS},MSK_AUTH_MODE=${MSK_AUTH_MODE}"
     if [ -n "${MSK_CLUSTER_ARN:-}" ]; then
       ENV_VARS="${ENV_VARS},MSK_CLUSTER_ARN=${MSK_CLUSTER_ARN}"
+    fi
+    if [ -n "${MSK_BOOTSTRAP_BROKERS:-}" ]; then
+      ENV_VARS="${ENV_VARS},MSK_BOOTSTRAP_BROKERS=${MSK_BOOTSTRAP_BROKERS}"
     fi
     ;;
   elastic)
@@ -274,6 +347,18 @@ case "${MCP_SERVER}" in
     ;;
 esac
 
+if [ -n "${AGENTCORE_SUBNETS}" ]; then
+  # VPC mode: build a JSON network-configuration so the CLI accepts subnet/SG arrays.
+  SUBNET_JSON=$(echo "${AGENTCORE_SUBNETS}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+  SG_JSON=$(echo "${AGENTCORE_SECURITY_GROUPS}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+  NETWORK_CONFIG=$(jq -n \
+    --argjson subnets "${SUBNET_JSON}" \
+    --argjson sgs "${SG_JSON}" \
+    '{networkMode: "VPC", networkModeConfig: {subnets: $subnets, securityGroups: $sgs}}')
+else
+  NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
+fi
+
 EXISTING_RUNTIME=$(aws bedrock-agentcore-control list-agent-runtimes \
   --region "${AWS_REGION}" \
   --query "agentRuntimeSummaries[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeId" \
@@ -285,7 +370,7 @@ if [ -n "${EXISTING_RUNTIME}" ] && [ "${EXISTING_RUNTIME}" != "None" ]; then
     --agent-runtime-id "${EXISTING_RUNTIME}" \
     --agent-runtime-artifact "containerConfiguration={containerUri=${ECR_URI}:${IMAGE_TAG}}" \
     --role-arn "${ROLE_ARN}" \
-    --network-configuration "networkMode=PUBLIC" \
+    --network-configuration "${NETWORK_CONFIG}" \
     --protocol-configuration "serverProtocol=MCP" \
     --environment-variables "${ENV_VARS}" \
     --region "${AWS_REGION}"
@@ -295,7 +380,7 @@ else
     --agent-runtime-name "${RUNTIME_NAME}" \
     --agent-runtime-artifact "containerConfiguration={containerUri=${ECR_URI}:${IMAGE_TAG}}" \
     --role-arn "${ROLE_ARN}" \
-    --network-configuration "networkMode=PUBLIC" \
+    --network-configuration "${NETWORK_CONFIG}" \
     --protocol-configuration "serverProtocol=MCP" \
     --environment-variables "${ENV_VARS}" \
     --region "${AWS_REGION}" \

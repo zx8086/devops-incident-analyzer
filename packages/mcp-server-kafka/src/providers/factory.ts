@@ -9,15 +9,22 @@ import type { KafkaProvider } from "./types.ts";
 
 export function createProvider(config: AppConfig): KafkaProvider {
 	const { kafka } = config;
-	logger.info({ type: kafka.provider }, "Creating Kafka provider");
+	const summary = providerSummary(config);
+	logger.info(summary, "Creating Kafka provider");
+
+	if (kafka.provider === "msk" && !process.env.MSK_AUTH_MODE) {
+		logger.warn(
+			{ resolvedAuthMode: config.msk.authMode },
+			"MSK_AUTH_MODE is unset; defaulting to 'none' (PLAINTEXT, unauthenticated). " +
+				"If your MSK cluster requires IAM auth, set MSK_AUTH_MODE=iam (or =tls for TLS-only).",
+		);
+	}
 
 	switch (kafka.provider) {
 		case "local":
-			logger.debug({ bootstrapServers: config.local.bootstrapServers }, "Using local Kafka provider");
 			return new LocalKafkaProvider(config.local.bootstrapServers, kafka.clientId);
 
 		case "confluent":
-			logger.debug({ bootstrapServers: config.confluent.bootstrapServers }, "Using Confluent Kafka provider");
 			return new ConfluentKafkaProvider(
 				config.confluent.bootstrapServers,
 				config.confluent.apiKey,
@@ -28,15 +35,33 @@ export function createProvider(config: AppConfig): KafkaProvider {
 			);
 
 		case "msk":
-			logger.debug({ region: config.msk.region }, "Using MSK Kafka provider");
 			return new MskKafkaProvider(
 				config.msk.bootstrapBrokers,
 				config.msk.clusterArn,
 				config.msk.region,
 				kafka.clientId,
+				config.msk.authMode,
 			);
 
 		default:
 			throw new KafkaProviderError(`Unknown provider: ${kafka.provider}`, "PROVIDER_NOT_FOUND", kafka.provider);
 	}
+}
+
+// Surface the resolved auth mode at info level so the connection posture is never
+// ambiguous from the logs -- especially important now that MSK defaults to PLAINTEXT.
+function providerSummary(config: AppConfig): Record<string, unknown> {
+	const { kafka } = config;
+	if (kafka.provider === "msk") {
+		return {
+			provider: "msk",
+			authMode: config.msk.authMode,
+			region: config.msk.region,
+			bootstrapSource: config.msk.bootstrapBrokers ? "env" : "discovery",
+		};
+	}
+	if (kafka.provider === "confluent") {
+		return { provider: "confluent", bootstrapServers: config.confluent.bootstrapServers };
+	}
+	return { provider: "local", bootstrapServers: config.local.bootstrapServers };
 }

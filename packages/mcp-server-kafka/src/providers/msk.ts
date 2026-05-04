@@ -1,7 +1,7 @@
 // src/providers/msk.ts
 
 import { KafkaProviderError } from "./errors.ts";
-import type { KafkaConnectionConfig, KafkaProvider } from "./types.ts";
+import type { KafkaConnectionConfig, KafkaProvider, MskAuthMode } from "./types.ts";
 
 interface CachedToken {
 	token: string;
@@ -10,7 +10,7 @@ interface CachedToken {
 
 export class MskKafkaProvider implements KafkaProvider {
 	readonly type = "msk" as const;
-	readonly name = "AWS MSK";
+	readonly name: string;
 	private cachedToken: CachedToken | null = null;
 	private resolvedBrokers: string | null = null;
 
@@ -19,14 +19,33 @@ export class MskKafkaProvider implements KafkaProvider {
 		private readonly clusterArn: string,
 		private readonly region: string,
 		private readonly clientId: string,
-	) {}
+		private readonly authMode: MskAuthMode = "iam",
+	) {
+		this.name = `AWS MSK (${authMode})`;
+	}
 
 	async getConnectionConfig(): Promise<KafkaConnectionConfig> {
 		const brokers = await this.resolveBrokers();
+		const bootstrapBrokers = brokers.split(",").map((s) => s.trim());
+
+		if (this.authMode === "none") {
+			return {
+				clientId: this.clientId,
+				bootstrapBrokers,
+			};
+		}
+
+		if (this.authMode === "tls") {
+			return {
+				clientId: this.clientId,
+				bootstrapBrokers,
+				tls: { rejectUnauthorized: true },
+			};
+		}
 
 		return {
 			clientId: this.clientId,
-			bootstrapBrokers: brokers.split(",").map((s) => s.trim()),
+			bootstrapBrokers,
 			sasl: {
 				mechanism: "OAUTHBEARER",
 				token: () => this.getToken(),
@@ -42,7 +61,7 @@ export class MskKafkaProvider implements KafkaProvider {
 
 	async getClusterMetadata(): Promise<Record<string, unknown>> {
 		if (!this.clusterArn) {
-			return { provider: "msk", note: "Cluster ARN not configured" };
+			return { provider: "msk", authMode: this.authMode, note: "Cluster ARN not configured" };
 		}
 
 		try {
@@ -53,6 +72,7 @@ export class MskKafkaProvider implements KafkaProvider {
 			});
 			return {
 				provider: "msk",
+				authMode: this.authMode,
 				clusterArn: this.clusterArn,
 				region: this.region,
 				...(response.ClusterInfo ?? {}),
@@ -60,6 +80,7 @@ export class MskKafkaProvider implements KafkaProvider {
 		} catch (error) {
 			return {
 				provider: "msk",
+				authMode: this.authMode,
 				clusterArn: this.clusterArn,
 				region: this.region,
 				awsError: error instanceof Error ? error.message : String(error),
@@ -118,13 +139,14 @@ export class MskKafkaProvider implements KafkaProvider {
 			const client = new KafkaClient({ region: this.region });
 			const response = await client.send(new GetBootstrapBrokersCommand({ ClusterArn: this.clusterArn }));
 
-			const brokers =
-				response.BootstrapBrokerStringSaslIam ??
-				response.BootstrapBrokerStringPublicSaslIam ??
-				response.BootstrapBrokerString;
+			const brokers = pickBrokerString(response, this.authMode);
 
 			if (!brokers) {
-				throw new KafkaProviderError("No bootstrap brokers found for MSK cluster", "PROVIDER_CONFIG_INVALID", "msk");
+				throw new KafkaProviderError(
+					`No bootstrap brokers found for MSK cluster (authMode=${this.authMode})`,
+					"PROVIDER_CONFIG_INVALID",
+					"msk",
+				);
 			}
 
 			this.resolvedBrokers = brokers;
@@ -139,4 +161,23 @@ export class MskKafkaProvider implements KafkaProvider {
 			);
 		}
 	}
+}
+
+interface BootstrapBrokersResponse {
+	BootstrapBrokerString?: string;
+	BootstrapBrokerStringTls?: string;
+	BootstrapBrokerStringSaslIam?: string;
+	BootstrapBrokerStringPublicSaslIam?: string;
+	BootstrapBrokerStringPublicTls?: string;
+	BootstrapBrokerStringPublic?: string;
+}
+
+export function pickBrokerString(response: BootstrapBrokersResponse, authMode: MskAuthMode): string | undefined {
+	if (authMode === "iam") {
+		return response.BootstrapBrokerStringSaslIam ?? response.BootstrapBrokerStringPublicSaslIam ?? undefined;
+	}
+	if (authMode === "tls") {
+		return response.BootstrapBrokerStringTls ?? response.BootstrapBrokerStringPublicTls ?? undefined;
+	}
+	return response.BootstrapBrokerString ?? response.BootstrapBrokerStringPublic ?? undefined;
 }

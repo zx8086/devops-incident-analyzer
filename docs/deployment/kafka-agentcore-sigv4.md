@@ -1,5 +1,7 @@
 # Kafka MCP to AgentCore: SigV4 Connection Guide
 
+The diagram below assumes IAM-authenticated MSK (port 9098, SASL/OAUTHBEARER + TLS). The SigV4 proxy itself is auth-mode-agnostic -- it signs the AgentCore invoke request, not the Kafka connection. For an unauthenticated MSK cluster (PLAINTEXT, port 9092) replace the in-VPC arrow with `MSK_AUTH_MODE=none` and see [`agentcore-msk-no-auth.md`](agentcore-msk-no-auth.md).
+
 ---
 
 ## Network Topology

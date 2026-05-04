@@ -132,10 +132,22 @@ The provider determines connection behavior, authentication, and which AWS servi
 | Provider | Auth Method | Connection | Additional Services |
 |----------|------------|------------|---------------------|
 | `local` | None (PLAINTEXT) | Direct broker connection | None |
-| `msk` | AWS IAM (SASL/OAUTHBEARER) | MSK bootstrap brokers | CloudWatch metrics, MSK API |
+| `msk` | Selectable via `MSK_AUTH_MODE`: IAM (default), TLS-only, or none | MSK bootstrap brokers | CloudWatch metrics, MSK API |
 | `confluent` | API key/secret (SASL/PLAIN) | Confluent Cloud endpoint | Schema Registry, ksqlDB |
 
 The provider is set once via `KAFKA_PROVIDER` and determines which authentication path the connection factory uses. Switching providers does not require code changes -- only environment variable updates.
+
+For the `msk` provider, `MSK_AUTH_MODE` selects the auth path:
+
+| `MSK_AUTH_MODE` | Connection | Bootstrap broker string used |
+|-----------------|-----------|-----------------------------|
+| `none` (default) | PLAINTEXT, unauthenticated | `BootstrapBrokerString` |
+| `tls` | TLS only, no SASL | `BootstrapBrokerStringTls` |
+| `iam` | SASL/OAUTHBEARER + TLS (explicit opt-in) | `BootstrapBrokerStringSaslIam` |
+
+The default is `none`. IAM-authenticated MSK requires `MSK_AUTH_MODE=iam` set explicitly. The resolved auth mode is included in the startup log line ("Creating Kafka provider").
+
+`MSK_AUTH_MODE=none` requires the cluster to have been created with `Unauthenticated` enabled. See [`docs/deployment/agentcore-msk-no-auth.md`](../deployment/agentcore-msk-no-auth.md) for the full deployment path.
 
 ### Feature Gates
 
