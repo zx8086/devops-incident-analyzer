@@ -1,4 +1,4 @@
-/* src/tools/queryAnalysis/getSystemIndexes.ts */
+// src/tools/queryAnalysis/getSystemIndexes.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
@@ -6,6 +6,38 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { n1qlSystemIndexes } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
+
+export type SystemIndexesInput = {
+	bucket_name?: string;
+	index_type?: string;
+	include_system?: boolean;
+};
+
+export function buildQuery(input: SystemIndexesInput): {
+	query: string;
+	parameters: Record<string, unknown>;
+} {
+	const { bucket_name, index_type, include_system } = input;
+	const whereClauses: string[] = [];
+	const parameters: Record<string, unknown> = {};
+
+	if (bucket_name) {
+		whereClauses.push("t.keyspace_id = $bucket_name");
+		parameters.bucket_name = bucket_name;
+	}
+	if (index_type) {
+		whereClauses.push("t.using = $index_type");
+		parameters.index_type = index_type;
+	}
+	if (include_system !== true) {
+		whereClauses.push("t.`namespace` != 'system'");
+	}
+
+	const whereFragment = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+	const query = n1qlSystemIndexes.replace("/* WHERE_CLAUSES */", whereFragment);
+
+	return { query, parameters };
+}
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
@@ -16,39 +48,10 @@ export default (server: McpServer, bucket: Bucket) => {
 			index_type: z.string().optional().describe("Filter by index type (e.g., GSI, FTS)"),
 			include_system: z.boolean().optional().describe("Whether to include system indexes"),
 		},
-		async ({ bucket_name, index_type, include_system }) => {
-			logger.info({ bucket_name, index_type, include_system }, "Getting system indexes");
-
-			// Modify query based on parameters
-			let query = n1qlSystemIndexes;
-
-			// Build WHERE clause for filtering
-			const whereClauses = [];
-
-			if (bucket_name) {
-				whereClauses.push(`t.keyspace_id = '${bucket_name}'`);
-			}
-
-			if (index_type) {
-				whereClauses.push(`t.using = '${index_type}'`);
-			}
-
-			if (include_system !== true) {
-				whereClauses.push(`t.\`namespace\` != 'system'`);
-			}
-
-			// Apply WHERE clauses if any
-			if (whereClauses.length > 0) {
-				const whereClause = `WHERE ${whereClauses.join(" AND ")}`;
-
-				if (query.includes("WHERE")) {
-					query = query.replace(/WHERE.*?FROM/s, `WHERE ${whereClauses.join(" AND ")} FROM`);
-				} else {
-					query = query.replace("FROM system:indexes t;", `FROM system:indexes t ${whereClause};`);
-				}
-			}
-
-			return executeAnalysisQuery(bucket, query, "System Indexes");
+		async (input) => {
+			logger.info(input, "Getting system indexes");
+			const { query, parameters } = buildQuery(input);
+			return executeAnalysisQuery(bucket, query, "System Indexes", undefined, parameters);
 		},
 	);
 };

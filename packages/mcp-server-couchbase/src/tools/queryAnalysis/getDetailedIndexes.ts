@@ -1,4 +1,4 @@
-/* src/tools/queryAnalysis/getDetailedIndexes.ts */
+// src/tools/queryAnalysis/getDetailedIndexes.ts
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
@@ -6,6 +6,80 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { detailedIndexesQuery } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
+
+export type DetailedIndexesInput = {
+	bucket_name?: string;
+	scope_name?: string;
+	collection_name?: string;
+	state?: string;
+	has_condition?: boolean;
+	is_primary?: boolean;
+	index_type?: string;
+	sort_by?: "name" | "state" | "keyspace_id" | "last_scan_time";
+};
+
+export function buildQuery(input: DetailedIndexesInput): {
+	query: string;
+	parameters: Record<string, unknown>;
+} {
+	const { bucket_name, scope_name, collection_name, state, has_condition, is_primary, index_type, sort_by } = input;
+	const whereClauses: string[] = [];
+	const parameters: Record<string, unknown> = {};
+
+	if (bucket_name) {
+		whereClauses.push("(t.bucket_id = $bucket_name OR t.keyspace_id = $bucket_name)");
+		parameters.bucket_name = bucket_name;
+	}
+	if (scope_name) {
+		whereClauses.push("t.scope_id = $scope_name");
+		parameters.scope_name = scope_name;
+	}
+	if (collection_name) {
+		whereClauses.push("t.keyspace_id = $collection_name");
+		parameters.collection_name = collection_name;
+	}
+	if (state) {
+		whereClauses.push("t.state = $state");
+		parameters.state = state;
+	}
+	if (has_condition === true) {
+		whereClauses.push("t.condition IS NOT NULL");
+	} else if (has_condition === false) {
+		whereClauses.push("t.condition IS NULL");
+	}
+	if (is_primary === true) {
+		whereClauses.push("t.is_primary = true");
+	} else if (is_primary === false) {
+		whereClauses.push("(t.is_primary IS MISSING OR t.is_primary = false)");
+	}
+	if (index_type) {
+		whereClauses.push("t.using = $index_type");
+		parameters.index_type = index_type;
+	}
+
+	let orderByField: string;
+	switch (sort_by) {
+		case "name":
+			orderByField = "t.name";
+			break;
+		case "state":
+			orderByField = "t.state";
+			break;
+		case "last_scan_time":
+			orderByField = "t.metadata.last_scan_time";
+			break;
+		default:
+			orderByField = "t.keyspace_id, t.name";
+			break;
+	}
+
+	const whereFragment = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+	const query = detailedIndexesQuery
+		.replace("/* WHERE_CLAUSES */", whereFragment)
+		.replace("/* ORDER_BY */", orderByField);
+
+	return { query, parameters };
+}
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
@@ -25,92 +99,10 @@ export default (server: McpServer, bucket: Bucket) => {
 				.default("keyspace_id")
 				.describe("Sort results by field"),
 		},
-		async ({ bucket_name, scope_name, collection_name, state, has_condition, is_primary, index_type, sort_by }) => {
-			logger.info(
-				{
-					bucket_name,
-					scope_name,
-					collection_name,
-					state,
-					has_condition,
-					is_primary,
-					index_type,
-					sort_by,
-				},
-				"Getting detailed indexes information",
-			);
-
-			// Modify query based on parameters
-			let query = detailedIndexesQuery;
-
-			// Build WHERE clause for filtering
-			const whereClauses = [];
-
-			if (bucket_name) {
-				whereClauses.push(`t.bucket_id = '${bucket_name}' OR t.keyspace_id = '${bucket_name}'`);
-			}
-
-			if (scope_name) {
-				whereClauses.push(`t.scope_id = '${scope_name}'`);
-			}
-
-			if (collection_name) {
-				whereClauses.push(`t.keyspace_id = '${collection_name}'`);
-			}
-
-			if (state) {
-				whereClauses.push(`t.state = '${state}'`);
-			}
-
-			if (has_condition === true) {
-				whereClauses.push(`t.condition IS NOT NULL`);
-			} else if (has_condition === false) {
-				whereClauses.push(`t.condition IS NULL`);
-			}
-
-			if (is_primary === true) {
-				whereClauses.push(`t.is_primary = true`);
-			} else if (is_primary === false) {
-				whereClauses.push(`(t.is_primary IS MISSING OR t.is_primary = false)`);
-			}
-
-			if (index_type) {
-				whereClauses.push(`t.using = '${index_type}'`);
-			}
-
-			// Apply WHERE clauses if any
-			if (whereClauses.length > 0) {
-				const whereClause = `WHERE ${whereClauses.join(" AND ")}`;
-
-				// Replace existing WHERE or add new one
-				if (query.includes("WHERE")) {
-					query = query.replace(/WHERE.*?(?=ORDER BY|$)/s, `${whereClause} `);
-				} else {
-					query = query.replace(/ORDER BY/i, `${whereClause} ORDER BY`);
-				}
-			}
-
-			// Apply sorting
-			let orderByField: string;
-			switch (sort_by) {
-				case "name":
-					orderByField = "t.name";
-					break;
-				case "state":
-					orderByField = "t.state";
-					break;
-				case "last_scan_time":
-					orderByField = "t.metadata.last_scan_time";
-					break;
-				default:
-					orderByField = "t.keyspace_id, t.name";
-					break;
-			}
-
-			// Replace ORDER BY clause
-			query = query.replace(/ORDER BY.*?(?=;|$)/i, `ORDER BY ${orderByField}`);
-
-			return executeAnalysisQuery(bucket, query, "Detailed Index Information");
+		async (input) => {
+			logger.info(input, "Getting detailed indexes information");
+			const { query, parameters } = buildQuery(input);
+			return executeAnalysisQuery(bucket, query, "Detailed Index Information", undefined, parameters);
 		},
 	);
 };

@@ -104,17 +104,19 @@ WHERE phaseCounts.\`primaryScan\` IS NOT MISSING
 ORDER BY resultCount DESC;
 `;
 
+// SIO-667: outer WHERE goes into the /* WHERE_CLAUSES */ marker so callers
+// don't replace the inner sub-SELECT WHERE by accident.
 export const n1qlSystemIndexes: string = `
 SELECT
-    (SELECT 
-        COUNT(*) 
+    (SELECT
+        COUNT(*)
     FROM system:indexes
     WHERE UPPER(statement) NOT LIKE '% SYSTEM:%'
     AND UPPER(statement) NOT LIKE 'INFER %'
     AND UPPER(statement) NOT LIKE 'CREATE INDEX%'
 ) AS total_count,
 t.*
-FROM system:indexes t;
+FROM system:indexes t /* WHERE_CLAUSES */;
 `;
 
 export const n1qlCompletedRequests: string = `
@@ -217,8 +219,10 @@ SELECT * FROM system:prepareds
 ORDER BY uses DESC;
 `;
 
+// SIO-667: WHERE_CLAUSES and ORDER_BY markers let buildQuery splice composed
+// predicates / sort fields without regex-replacing against arbitrary SQL.
 export const detailedIndexesQuery: string = `
 SELECT t.*
-FROM system:indexes t
-ORDER BY t.keyspace_id, t.name;
+FROM system:indexes t /* WHERE_CLAUSES */
+ORDER BY /* ORDER_BY */;
 `;
