@@ -14,20 +14,29 @@ import { logger } from "../../utils/logger";
  *   the response includes a "Limit Application" section that exposes how many
  *   rows were actually returned vs requested -- so callers don't trust an
  *   echoed value when the SQL++ predicate filtered more than expected.
- * @returns Formatted tool response with query results
+ * @param parameters Optional named-parameter bag (SIO-667). When provided and
+ *   non-empty, forwarded to `cluster.query(stmt, { parameters })` so user-supplied
+ *   values bind as N1QL literals instead of being string-interpolated. Closes
+ *   the SQL++ injection class on filter-only queryAnalysis tools.
  */
 export async function executeAnalysisQuery(
 	bucket: Bucket,
 	queryString: string,
 	title?: string,
 	requestedLimit?: number,
+	parameters?: Record<string, unknown>,
 ): Promise<ToolResponse> {
 	try {
 		logger.info(`Executing analysis query: ${title || "Unnamed query"}`);
 
-		// Execute the query
+		const hasParameters = parameters !== undefined && Object.keys(parameters).length > 0;
+		if (hasParameters) {
+			// Log keys only -- values may be user-controlled.
+			logger.debug({ paramKeys: Object.keys(parameters as Record<string, unknown>) }, "Query bound parameters");
+		}
+
 		const cluster = bucket.cluster;
-		const result = await cluster.query(queryString);
+		const result = hasParameters ? await cluster.query(queryString, { parameters }) : await cluster.query(queryString);
 		const rows = await result.rows;
 
 		// Format the title with count information
