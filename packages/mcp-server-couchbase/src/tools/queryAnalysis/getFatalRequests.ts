@@ -70,7 +70,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Fatal Query Requests");
+			return executeAnalysisQuery(bucket, query, "Fatal Query Requests", limit);
 		},
 	);
 };

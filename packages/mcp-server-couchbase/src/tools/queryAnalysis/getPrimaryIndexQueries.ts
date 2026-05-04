@@ -30,7 +30,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Queries Using Primary Indexes");
+			return executeAnalysisQuery(bucket, query, "Queries Using Primary Indexes", limit);
 		},
 	);
 };
