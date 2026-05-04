@@ -2,8 +2,10 @@
 
 import type { Bucket, Cluster } from "couchbase";
 
+type ToolHandler = (input: Record<string, unknown>) => Promise<unknown>;
+
 export class MockBucket implements Partial<Bucket> {
-	private documents: Map<string, any> = new Map();
+	private documents: Map<string, unknown> = new Map();
 
 	scope(_name: string) {
 		return {
@@ -14,7 +16,7 @@ export class MockBucket implements Partial<Bucket> {
 					if (!doc) throw new Error("Document not found");
 					return { content: doc };
 				},
-				upsert: async (id: string, content: any) => {
+				upsert: async (id: string, content: unknown) => {
 					if (!id || !content) throw new Error("Missing parameters for upsert");
 					let parsedContent: unknown;
 					try {
@@ -74,21 +76,21 @@ export const mockConnection = {
 };
 
 export const mockServer = {
-	registeredTools: {} as Record<string, { schema: any; handler: any }>,
-	tool: (...args: any[]) => {
+	registeredTools: {} as Record<string, { schema: unknown; handler: ToolHandler }>,
+	tool: (...args: unknown[]) => {
 		let name: string;
 		let schema: unknown;
 		let handler: unknown;
 		if (args.length === 4) {
-			[name, , schema, handler] = args;
+			[name, , schema, handler] = args as [string, unknown, unknown, unknown];
 		} else if (args.length === 3) {
-			[name, schema, handler] = args;
+			[name, schema, handler] = args as [string, unknown, unknown];
 		} else {
 			throw new Error("Invalid tool registration signature");
 		}
 		mockServer.registeredTools[name] = {
 			schema,
-			handler: typeof handler === "function" ? handler : undefined,
+			handler: typeof handler === "function" ? (handler as ToolHandler) : async () => undefined,
 		};
 		return mockServer;
 	},

@@ -6,6 +6,8 @@ import { z } from "zod";
 import { config } from "../config";
 import { logger } from "../utils/logger";
 
+type ReadResourceByUri = (uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>;
+
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"capella_list_documentation",
@@ -42,14 +44,10 @@ export default (server: McpServer, _bucket: Bucket) => {
 				);
 
 				// Use the resource URI handler to get documentation listing
-				const resourceResult = await (
-					server as unknown as Record<
-						string,
-						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
-					>
-				).readResourceByUri!(resourceUri);
+				const readResourceByUri = (server as unknown as { readResourceByUri: ReadResourceByUri }).readResourceByUri;
+				const resourceResult = await readResourceByUri(resourceUri);
 
-				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
+				if (!resourceResult?.contents?.length) {
 					return {
 						content: [
 							{

@@ -5,6 +5,8 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../utils/logger";
 
+type ReadResourceByUri = (uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>;
+
 export default (server: McpServer, _bucket: Bucket) => {
 	server.tool(
 		"capella_read_documentation",
@@ -38,14 +40,10 @@ export default (server: McpServer, _bucket: Bucket) => {
 					"Reading documentation",
 				);
 
-				const resourceResult = await (
-					server as unknown as Record<
-						string,
-						(uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>
-					>
-				).readResourceByUri!(resourceUri);
+				const readResourceByUri = (server as unknown as { readResourceByUri: ReadResourceByUri }).readResourceByUri;
+				const resourceResult = await readResourceByUri(resourceUri);
 
-				if (!resourceResult || !resourceResult.contents || resourceResult.contents.length === 0) {
+				if (!resourceResult?.contents?.length) {
 					return {
 						content: [
 							{

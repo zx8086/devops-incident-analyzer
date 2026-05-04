@@ -1,11 +1,11 @@
 /* tests/resources.test.ts */
 
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-// import { McpServer } from '@modelcontextprotocol/sdk';
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getResourcesList, registerResourceMethods } from "../src/lib/resources";
 
 describe("Resource Methods", () => {
-	let mockServer: any;
+	let mockServer: { tool: ReturnType<typeof mock>; method: ReturnType<typeof mock> };
 
 	beforeEach(() => {
 		mockServer = {

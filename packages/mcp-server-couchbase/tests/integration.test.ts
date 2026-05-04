@@ -1,19 +1,20 @@
 /* tests/integration.test.ts */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createServer } from "../src/server";
 import toolRegistry from "../src/tools";
 import { logger } from "../src/utils/logger";
 import { mockConnection, mockServer } from "./test.utils";
 
 describe("Integration Tests", () => {
-	let server: any;
+	let server: Awaited<ReturnType<typeof createServer>>;
 	const TEST_DOC_ID = "integration_test_doc";
 
 	beforeAll(async () => {
 		// Register all tools with mock server
 		Object.values(toolRegistry).forEach((registerTool) => {
-			registerTool(mockServer as any, mockConnection.defaultBucket);
+			registerTool(mockServer as unknown as McpServer, mockConnection.defaultBucket);
 		});
 		server = await createServer(mockConnection);
 	});

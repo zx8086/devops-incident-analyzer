@@ -257,7 +257,7 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 						const resource = (resourceMap as Record<string, ResourceEntry>)[id];
 						if (resource?.uri === resourceUri) {
 							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
-							return resource!.handler({ href: resourceUri }, {});
+							return resource.handler({ href: resourceUri }, {});
 						}
 					}
 				}
@@ -275,11 +275,10 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 		}).bind(server);
 
 		// Work around the template issue by adding a custom handler for templates listing
-		const serverExt = server as unknown as Record<string, unknown>;
 		type RequestHandler = (schema: { method: string }, handler: () => Promise<unknown>) => void;
-		(serverExt as Record<string, RequestHandler | (() => void)>).setRequestHandler =
-			(serverExt as Record<string, RequestHandler | undefined>).setRequestHandler || (() => {});
-		const setHandler = (serverExt as Record<string, RequestHandler>).setRequestHandler!;
+		const serverExt = server as unknown as Record<string, RequestHandler | undefined>;
+		const setHandler: RequestHandler = serverExt.setRequestHandler ?? (() => {});
+		serverExt.setRequestHandler = setHandler;
 		setHandler(
 			{
 				method: "resources/templates/list",
