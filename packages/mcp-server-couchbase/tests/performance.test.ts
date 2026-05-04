@@ -1,6 +1,7 @@
 /* tests/performance.test.ts */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import toolRegistry from "../src/tools";
 import { logger } from "../src/utils/logger";
 import { mockConnection, mockServer } from "./test.utils";
@@ -12,7 +13,7 @@ describe("Performance Tests", () => {
 
 	beforeAll(async () => {
 		Object.values(toolRegistry).forEach((registerTool) => {
-			registerTool(mockServer as any, mockConnection.defaultBucket);
+			registerTool(mockServer as unknown as McpServer, mockConnection.defaultBucket);
 		});
 	});
 

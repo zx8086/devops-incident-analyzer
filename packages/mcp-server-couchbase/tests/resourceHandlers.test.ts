@@ -1,12 +1,12 @@
 /* tests/resourceHandlers.test.ts */
 
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-// import { McpServer } from '@modelcontextprotocol/sdk';
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerResources } from "../src/lib/resourceHandlers";
 import type { capellaConn } from "../src/types";
 
 describe("Resource Handlers", () => {
-	let mockServer: any;
+	let mockServer: { tool: ReturnType<typeof mock> };
 	let mockCapellaConn: capellaConn;
 
 	beforeEach(() => {
@@ -31,7 +31,7 @@ describe("Resource Handlers", () => {
 						]),
 				}),
 			},
-		} as any;
+		} as unknown as capellaConn;
 	});
 
 	describe("Resource Handlers", () => {

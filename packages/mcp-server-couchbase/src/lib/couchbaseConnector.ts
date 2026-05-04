@@ -2,20 +2,17 @@
 
 import { CouchbaseError, connect } from "couchbase";
 import { config } from "../config";
+import { createContextLogger } from "../utils/logger";
 import { validateCouchbaseConfigOrThrow } from "./configValidation";
 import { createError } from "./errors";
 
-function getDbLogger() {
-	const { createContextLogger } = require("./logger");
-	return createContextLogger("Database");
-}
+const dbLogger = createContextLogger("Database");
 
 export async function getCluster() {
 	try {
 		validateCouchbaseConfigOrThrow(config.database);
 
-		const dbLogger = getDbLogger();
-		dbLogger.info("Connecting to Couchbase cluster", { url: config.database.connectionString });
+		dbLogger.info({ url: config.database.connectionString }, "Connecting to Couchbase cluster");
 		const cluster = await connect(config.database.connectionString, {
 			username: config.database.username,
 			password: config.database.password,
@@ -25,10 +22,13 @@ export async function getCluster() {
 		const scope = bucket.scope(config.database.defaultScope);
 		const collection = scope.collection("_default");
 
-		dbLogger.info("Successfully connected to Couchbase", {
-			bucket: config.database.bucketName,
-			scope: config.database.defaultScope,
-		});
+		dbLogger.info(
+			{
+				bucket: config.database.bucketName,
+				scope: config.database.defaultScope,
+			},
+			"Successfully connected to Couchbase",
+		);
 
 		return {
 			cluster,
@@ -42,11 +42,13 @@ export async function getCluster() {
 			CouchbaseError,
 		};
 	} catch (error) {
-		const dbLogger = getDbLogger();
-		dbLogger.error("Failed to connect to Couchbase", {
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		});
+		dbLogger.error(
+			{
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			},
+			"Failed to connect to Couchbase",
+		);
 		throw createError(
 			"DB_ERROR",
 			"Failed to connect to Couchbase",
