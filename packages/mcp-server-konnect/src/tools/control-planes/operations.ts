@@ -33,10 +33,18 @@ export async function listControlPlanes(
 			sort,
 		);
 
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+		const actualCount = result.data.length;
+		const effectivePageSize = Math.min(pageSize, actualCount);
+		const capped = pageSize > actualCount && actualCount === 100;
+
 		// Transform the response to have consistent field names
 		return {
 			metadata: {
-				pageSize: pageSize,
+				requestedPageSize: pageSize,
+				effectivePageSize,
+				actualCount,
+				capped,
 				pageNumber: pageNumber || 1,
 				totalPages: result.meta.page_count,
 				totalCount: result.meta.total_count,
@@ -132,11 +140,19 @@ export async function listControlPlaneGroupMemberships(
 	)(async () => {
 		const result = await api.listControlPlaneGroupMemberships(groupId, pageSize, pageAfter);
 
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+		const actualCount = result.data.length;
+		const effectivePageSize = Math.min(pageSize, actualCount);
+		const capped = pageSize > actualCount && actualCount === 100;
+
 		// Transform the response to have consistent field names
 		return {
 			metadata: {
 				groupId: groupId,
-				pageSize: pageSize,
+				requestedPageSize: pageSize,
+				effectivePageSize,
+				actualCount,
+				capped,
 				pageAfter: pageAfter || null,
 				nextPageAfter: result.meta?.next_page?.after || null,
 				totalCount: result.meta?.total_count || 0,
@@ -351,11 +367,19 @@ export async function listDataPlaneNodes(
 	)(async () => {
 		const result = await api.listDataPlaneNodes(controlPlaneId, pageSize, pageNumber, filterStatus, filterHostname);
 
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+		const actualCount = (result.items || result.data)?.length ?? 0;
+		const effectivePageSize = Math.min(pageSize, actualCount);
+		const capped = pageSize > actualCount && actualCount === 100;
+
 		return {
 			metadata: {
 				controlPlaneId: controlPlaneId,
 				pagination: {
-					pageSize: pageSize,
+					requestedPageSize: pageSize,
+					effectivePageSize,
+					actualCount,
+					capped,
 					pageNumber: pageNumber || 1,
 					totalPages: Math.ceil((result.page?.total_count || result.meta?.page?.total_count || 0) / pageSize),
 					totalItems: result.page?.total_count || result.meta?.page?.total_count || 0,
@@ -516,11 +540,19 @@ export async function listDataPlaneTokens(api: KongApi, controlPlaneId: string, 
 	)(async () => {
 		const result = await api.listDataPlaneTokens(controlPlaneId, pageSize, pageNumber);
 
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+		const actualCount = result.data?.length ?? 0;
+		const effectivePageSize = Math.min(pageSize, actualCount);
+		const capped = pageSize > actualCount && actualCount === 100;
+
 		return {
 			metadata: {
 				controlPlaneId: controlPlaneId,
 				pagination: {
-					pageSize: pageSize,
+					requestedPageSize: pageSize,
+					effectivePageSize,
+					actualCount,
+					capped,
 					pageNumber: pageNumber || 1,
 					totalPages: result.meta?.page?.total || 1,
 					totalItems: result.meta?.page?.total_count || 0,

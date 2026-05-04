@@ -14,11 +14,20 @@ export async function listServices(api: KongApi, controlPlaneId: string, size = 
 	log.debug({ controlPlaneId }, "Listing services");
 	const result = await api.listServices(controlPlaneId, size, offset);
 
+	// SIO-663: derive applied-pagination metadata from observed result, not request.
+	// Kong silently caps `size` at 100 upstream; echoing the requested value misled callers.
+	const actualCount = result.data.length;
+	const effectiveSize = Math.min(size, actualCount);
+	const capped = size > actualCount && actualCount === 100;
+
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			size: size,
+			requestedSize: size,
+			effectiveSize,
+			actualCount,
+			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
@@ -324,11 +333,19 @@ export async function listRoutes(api: KongApi, controlPlaneId: string, size = 10
 	log.debug({ controlPlaneId }, "Listing routes");
 	const result = await api.listRoutes(controlPlaneId, size, offset);
 
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	const actualCount = result.data.length;
+	const effectiveSize = Math.min(size, actualCount);
+	const capped = size > actualCount && actualCount === 100;
+
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			size: size,
+			requestedSize: size,
+			effectiveSize,
+			actualCount,
+			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
@@ -622,11 +639,19 @@ export async function listConsumers(api: KongApi, controlPlaneId: string, size =
 	log.debug({ controlPlaneId }, "Listing consumers");
 	const result = await api.listConsumers(controlPlaneId, size, offset);
 
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	const actualCount = result.data.length;
+	const effectiveSize = Math.min(size, actualCount);
+	const capped = size > actualCount && actualCount === 100;
+
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			size: size,
+			requestedSize: size,
+			effectiveSize,
+			actualCount,
+			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
@@ -863,11 +888,19 @@ export async function listPlugins(api: KongApi, controlPlaneId: string, size = 1
 	log.debug({ controlPlaneId }, "Listing plugins");
 	const result = await api.listPlugins(controlPlaneId, size, offset);
 
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	const actualCount = result.data.length;
+	const effectiveSize = Math.min(size, actualCount);
+	const capped = size > actualCount && actualCount === 100;
+
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			size: size,
+			requestedSize: size,
+			effectiveSize,
+			actualCount,
+			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,

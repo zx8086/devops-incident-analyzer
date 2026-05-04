@@ -19,6 +19,11 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 	)(async () => {
 		const result = await api.listCertificates(controlPlaneId, size, offset);
 
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+		const actualCount = result.data.length;
+		const effectiveSize = Math.min(size, actualCount);
+		const capped = size > actualCount && actualCount === 100;
+
 		// Analyze certificate health (expiration dates, etc.)
 		const now = new Date();
 		const _thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -27,7 +32,10 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 		return {
 			metadata: {
 				controlPlaneId: controlPlaneId,
-				size: size,
+				requestedSize: size,
+				effectiveSize,
+				actualCount,
+				capped,
 				offset: offset || null,
 				nextOffset: result.offset,
 				totalCount: result.total,

@@ -8,10 +8,18 @@ export async function listPortals(api: KongApi, pageSize = 10, pageNumber?: numb
 	log.debug({ pageSize }, "Listing portals");
 	const result = await api.listPortals(pageSize, pageNumber);
 
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+	const actualCount = result.data?.length ?? 0;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+
 	return {
 		metadata: {
 			pagination: {
-				pageSize: pageSize,
+				requestedPageSize: pageSize,
+				effectivePageSize,
+				actualCount,
+				capped,
 				pageNumber: pageNumber || 1,
 				totalPages: result.meta?.page?.total || 1,
 				totalItems: result.meta?.page?.total_count || 0,
@@ -220,11 +228,19 @@ export async function listPortalProducts(api: KongApi, portalId: string, pageSiz
 	log.debug({ portalId, pageSize }, "Listing portal products");
 	const result = await api.listPortalProducts(portalId, pageSize, pageNumber);
 
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
+	const actualCount = result.data?.length ?? 0;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+
 	return {
 		metadata: {
 			portalId: portalId,
 			pagination: {
-				pageSize: pageSize,
+				requestedPageSize: pageSize,
+				effectivePageSize,
+				actualCount,
+				capped,
 				pageNumber: pageNumber || 1,
 				totalPages: result.meta?.page?.total || 1,
 				totalItems: result.meta?.page?.total_count || 0,
