@@ -19,6 +19,7 @@ const putIndexTemplateValidator = z.object({
 	template: z.object({}).passthrough().optional(),
 	dataStream: z.object({}).passthrough().optional(),
 	composedOf: z.array(z.string()).optional(),
+	ignoreMissingComponentTemplates: z.array(z.string()).optional(),
 	priority: z.number().optional(),
 	version: z.number().optional(),
 	meta: z.object({}).passthrough().optional(),
@@ -64,6 +65,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 				template,
 				dataStream,
 				composedOf,
+				ignoreMissingComponentTemplates,
 				priority,
 				version,
 				meta,
@@ -81,6 +83,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 					template,
 					data_stream: dataStream,
 					composed_of: composedOf,
+					ignore_missing_component_templates: ignoreMissingComponentTemplates,
 					priority,
 					version,
 					_meta: meta,
@@ -162,6 +165,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 				template: z.object({}).passthrough().optional(), // Template definition containing settings, mappings, and/or aliases
 				dataStream: z.object({}).passthrough().optional(), // Data stream configuration (e.g. {} for default, or {hidden: true})
 				composedOf: z.array(z.string()).optional(), // Array of component template names this template is composed of
+				ignoreMissingComponentTemplates: z.array(z.string()).optional(), // Names of optional components in composedOf to skip if absent (Fleet @custom extensions)
 				priority: z.number().optional(), // Template priority (higher number = higher priority)
 				version: z.number().optional(), // Template version number
 				meta: z.object({}).passthrough().optional(), // Metadata about the template
