@@ -94,7 +94,7 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 				const countResult = await esClient.count({
 					index: params.index,
 					query: params.query,
-				} as any);
+				});
 				estimatedTotal = countResult.count;
 
 				await notificationManager.sendInfo(`Found ${estimatedTotal} documents matching update query`, {
