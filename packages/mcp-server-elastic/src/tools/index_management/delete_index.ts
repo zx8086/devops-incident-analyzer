@@ -15,20 +15,22 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const deleteIndexValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	timeout: z.string().optional(),
-	masterTimeout: z.string().optional(),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to delete"),
+	timeout: z.string().optional().describe("Operation timeout (e.g., '30s')"),
+	masterTimeout: z.string().optional().describe("Master node timeout (e.g., '30s')"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
 });
 
-type _DeleteIndexParams = z.infer<typeof deleteIndexValidator>;
+type DeleteIndexParams = z.infer<typeof deleteIndexValidator>;
 
-// MCP error handling
 function createDeleteIndexMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,7 +49,7 @@ function createDeleteIndexMcpError(
 
 // Tool implementation
 export const registerDeleteIndexTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteIndexHandler = async (args: any): Promise<SearchResult> => {
+	const deleteIndexHandler = async (args: DeleteIndexParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -115,14 +117,7 @@ export const registerDeleteIndexTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Delete an entire index in Elasticsearch. Best for index cleanup, data lifecycle management, removing obsolete indices. Use when you need to permanently remove complete Elasticsearch indices and all their documents. DESTRUCTIVE OPERATION. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to delete
-				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
-				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-			},
+			inputSchema: deleteIndexValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_delete_index", deleteIndexHandler, OperationType.DESTRUCTIVE),

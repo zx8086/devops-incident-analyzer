@@ -1,13 +1,15 @@
 /* src/tools/index_management/reindex_with_notifications.ts */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
+import type { SearchResult } from "../types.js";
 
-// Tool validator
 const reindexWithNotificationsValidator = z.object({
 	source: z
 		.object({
@@ -27,13 +29,13 @@ const reindexWithNotificationsValidator = z.object({
 	requests_per_second: z.number().min(1).default(1000).describe("Throttling for the reindex operation"),
 });
 
-type _ReindexWithNotificationsParams = z.infer<typeof reindexWithNotificationsValidator>;
+type ReindexWithNotificationsParams = z.infer<typeof reindexWithNotificationsValidator>;
 
-/**
- * Reindex documents with comprehensive notifications
- */
 export const registerReindexWithNotifications = (server: McpServer, esClient: Client) => {
-	const handler = async (toolArgs: any, _extra: any): Promise<any> => {
+	const handler = async (
+		toolArgs: ReindexWithNotificationsParams,
+		_extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+	): Promise<SearchResult> => {
 		try {
 			// Always validate parameters
 			const params = reindexWithNotificationsValidator.parse(toolArgs);
@@ -139,10 +141,12 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 			// Start the reindex operation
 			await tracker.updateProgress(40, "Starting reindex operation");
 
-			const reindexRequest: any = {
+			const reindexRequest: estypes.ReindexRequest = {
 				source: {
 					index: params.source.index,
-					...(params.source.query && { query: params.source.query }),
+					...(params.source.query && {
+						query: params.source.query as unknown as estypes.QueryDslQueryContainer,
+					}),
 				},
 				dest: {
 					index: params.dest.index,
@@ -154,7 +158,7 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 				requests_per_second: params.requests_per_second,
 			};
 
-			let reindexResult: any;
+			let reindexResult: estypes.ReindexResponse;
 
 			if (params.wait_for_completion) {
 				// Synchronous reindex with progress simulation
@@ -304,24 +308,7 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 			description:
 				"Reindex documents from source to destination with comprehensive progress notifications and status updates. Supports both synchronous and asynchronous modes with real-time progress tracking and error reporting.",
 
-			inputSchema: {
-				source: z
-					.object({
-						index: z.string().min(1).describe("Source index pattern or name"),
-						query: z.record(z.string(), z.any()).optional().describe("Optional query to filter source documents"),
-					})
-					.describe("Source configuration"),
-				dest: z
-					.object({
-						index: z.string().min(1).describe("Destination index name"),
-						pipeline: z.string().optional().describe("Ingest pipeline to apply during reindexing"),
-					})
-					.describe("Destination configuration"),
-				conflicts: z.enum(["abort", "proceed"]).default("abort").describe("How to handle version conflicts"),
-				refresh: z.boolean().default(true).describe("Whether to refresh the destination index"),
-				wait_for_completion: z.boolean().default(false).describe("Whether to wait for completion or return task ID"),
-				requests_per_second: z.number().min(1).default(1000).describe("Throttling for the reindex operation"),
-			},
+			inputSchema: reindexWithNotificationsValidator.shape,
 		},
 
 		withNotificationContext(handler),

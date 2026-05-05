@@ -15,18 +15,20 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const refreshIndexValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to refresh"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
 });
 
-type _RefreshIndexParams = z.infer<typeof refreshIndexValidator>;
+type RefreshIndexParams = z.infer<typeof refreshIndexValidator>;
 
-// MCP error handling
 function createRefreshIndexMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -45,7 +47,7 @@ function createRefreshIndexMcpError(
 
 // Tool implementation
 export const registerRefreshIndexTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const refreshIndexHandler = async (args: any): Promise<SearchResult> => {
+	const refreshIndexHandler = async (args: RefreshIndexParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -111,12 +113,7 @@ export const registerRefreshIndexTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Refresh an index in Elasticsearch. Best for data visibility, search consistency, real-time operations. Use when you need to make recently indexed documents immediately searchable in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to refresh
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-			},
+			inputSchema: refreshIndexValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_refresh_index", refreshIndexHandler, OperationType.WRITE),

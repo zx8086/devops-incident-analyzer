@@ -1,7 +1,7 @@
 /* src/tools/index_management/put_mapping.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -10,34 +10,32 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { coerceBoolean } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Zod validator for runtime validation
 const putMappingValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	properties: z.object({}).passthrough().optional(),
-	runtime: z.object({}).passthrough().optional(),
-	meta: z.object({}).passthrough().optional(),
-	dynamic: z.enum(["true", "false", "strict", "runtime"]).optional(),
-	dateDetection: coerceBoolean.optional(),
-	dynamicDateFormats: z.array(z.string()).optional(),
-	dynamicTemplates: z.array(z.object({}).passthrough()).optional(),
-	numericDetection: coerceBoolean.optional(),
-	timeout: z.string().optional(),
-	masterTimeout: z.string().optional(),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-	writeIndexOnly: coerceBoolean.optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to update mapping for"),
+	properties: z.object({}).passthrough().optional().describe("Field mappings to add or update"),
+	runtime: z.object({}).passthrough().optional().describe("Runtime fields configuration"),
+	meta: z.object({}).passthrough().optional().describe("Metadata for the mapping"),
+	dynamic: z.enum(["true", "false", "strict", "runtime"]).optional().describe("Dynamic mapping behavior"),
+	dateDetection: coerceBoolean.optional().describe("Enable or disable date detection"),
+	dynamicDateFormats: z.array(z.string()).optional().describe("Dynamic date formats"),
+	dynamicTemplates: z.array(z.object({}).passthrough()).optional().describe("Dynamic mapping templates"),
+	numericDetection: coerceBoolean.optional().describe("Enable or disable numeric detection"),
+	timeout: z.string().optional().describe("Operation timeout (e.g., '30s')"),
+	masterTimeout: z.string().optional().describe("Master node timeout (e.g., '30s')"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
+	writeIndexOnly: coerceBoolean.optional().describe("Update only the write index for aliases"),
 });
 
-type _PutMappingParams = z.infer<typeof putMappingValidator>;
+type PutMappingParams = z.infer<typeof putMappingValidator>;
 
-// MCP error handling
 function createPutMappingMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found" | "resource_already_exists"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found" | "resource_already_exists"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -57,22 +55,23 @@ function createPutMappingMcpError(
 
 // Tool implementation
 export const registerPutMappingTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const putMappingHandler = async (args: any): Promise<SearchResult> => {
+	const putMappingHandler = async (args: PutMappingParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = putMappingValidator.parse(args);
 
 			const result = await esClient.indices.putMapping({
 				index: params.index,
-				properties: params.properties,
-				runtime: params.runtime,
-				_meta: params.meta,
+				properties: params.properties as unknown as Record<string, estypes.MappingProperty> | undefined,
+				runtime: params.runtime as unknown as Record<string, estypes.MappingRuntimeField> | undefined,
+				_meta: params.meta as estypes.Metadata | undefined,
 				dynamic: params.dynamic,
 				date_detection: params.dateDetection,
 				dynamic_date_formats: params.dynamicDateFormats,
-				dynamic_templates: params.dynamicTemplates,
+				dynamic_templates: params.dynamicTemplates as unknown as
+					| Record<string, estypes.MappingDynamicTemplate>[]
+					| undefined,
 				numeric_detection: params.numericDetection,
 				timeout: params.timeout,
 				master_timeout: params.masterTimeout,
@@ -80,7 +79,7 @@ export const registerPutMappingTool: ToolRegistrationFunction = (server: McpServ
 				allow_no_indices: params.allowNoIndices,
 				expand_wildcards: params.expandWildcards,
 				write_index_only: params.writeIndexOnly,
-			} as any);
+			});
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
@@ -142,23 +141,7 @@ export const registerPutMappingTool: ToolRegistrationFunction = (server: McpServ
 			description:
 				"Update index mappings in Elasticsearch. Best for schema evolution, field addition, mapping modifications. Use when you need to add new fields or update existing field mappings in Elasticsearch indices. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to update mapping for
-				properties: z.object({}).passthrough().optional(), // Field mappings to add or update
-				runtime: z.object({}).passthrough().optional(), // Runtime fields configuration
-				meta: z.object({}).passthrough().optional(), // Metadata for the mapping
-				dynamic: z.enum(["true", "false", "strict", "runtime"]).optional(), // Dynamic mapping behavior
-				dateDetection: z.boolean().optional(), // Enable or disable date detection
-				dynamicDateFormats: z.array(z.string().optional()).optional(), // Dynamic date formats
-				dynamicTemplates: z.array(z.object({}).passthrough()).optional(), // Dynamic mapping templates
-				numericDetection: z.boolean().optional(), // Enable or disable numeric detection
-				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
-				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-				writeIndexOnly: z.boolean().optional(), // Update only the write index for aliases
-			},
+			inputSchema: putMappingValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_put_mapping", putMappingHandler, OperationType.WRITE),

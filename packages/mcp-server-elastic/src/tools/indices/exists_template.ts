@@ -14,20 +14,21 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const existsTemplateValidator = z.object({
-	name: z.union([z.string(), z.array(z.string())]),
-	flatSettings: booleanField().optional(),
-	local: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+	name: z
+		.union([z.string(), z.array(z.string())])
+		.describe("Legacy template name(s) to check existence for. Examples: 'template1', ['template1', 'template2']"),
+	flatSettings: booleanField().optional().describe("Return settings in flat format"),
+	local: booleanField().optional().describe("Return local information, do not retrieve the state from master node"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 });
 
-type _ExistsTemplateParams = z.infer<typeof existsTemplateValidator>;
+type ExistsTemplateParams = z.infer<typeof existsTemplateValidator>;
 
-// MCP error handling
 function createExistsTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -44,7 +45,7 @@ function createExistsTemplateMcpError(
 
 // Tool implementation
 export const registerExistsTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const existsTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const existsTemplateHandler = async (args: ExistsTemplateParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = existsTemplateValidator.parse(args);
@@ -113,12 +114,7 @@ export const registerExistsTemplateTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Check existence of legacy index templates in Elasticsearch. Best for legacy template validation, migration planning, compatibility checks. Use when you need to verify legacy index template presence in Elasticsearch (deprecated, use composable templates instead).",
 
-			inputSchema: {
-				name: z.any(), // Legacy template name(s) to check existence for. Examples: 'template1', ['template1', 'template2']
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				local: z.boolean().optional(), // Return local information, do not retrieve the state from master node
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-			},
+			inputSchema: existsTemplateValidator.shape,
 		},
 
 		existsTemplateHandler,

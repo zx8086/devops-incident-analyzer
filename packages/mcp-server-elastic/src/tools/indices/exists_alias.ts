@@ -14,25 +14,34 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const existsAliasValidator = z.object({
-	name: z.union([z.string(), z.array(z.string())]),
-	index: z.union([z.string(), z.array(z.string())]).optional(),
-	allowNoIndices: booleanField().optional(),
+	name: z
+		.union([z.string(), z.array(z.string())])
+		.describe("Alias name(s) to check existence for. Examples: 'logs', ['alias1', 'alias2']"),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Index name(s) or pattern(s) to check for aliases"),
+	allowNoIndices: booleanField()
+		.optional()
+		.describe("Whether to ignore if a wildcard indices expression resolves into no concrete indices"),
 	expandWildcards: z
 		.enum(["all", "open", "closed", "hidden", "none"])
 		.or(z.array(z.enum(["all", "open", "closed", "hidden", "none"])))
-		.optional(),
-	ignoreUnavailable: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+		.optional()
+		.describe("Type of index that wildcard patterns can match"),
+	ignoreUnavailable: booleanField()
+		.optional()
+		.describe("Whether specified concrete indices should be ignored when unavailable"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 });
 
-type _ExistsAliasParams = z.infer<typeof existsAliasValidator>;
+type ExistsAliasParams = z.infer<typeof existsAliasValidator>;
 
-// MCP error handling
 function createExistsAliasMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -49,7 +58,7 @@ function createExistsAliasMcpError(
 
 // Tool implementation
 export const registerExistsAliasTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const existsAliasHandler = async (args: any): Promise<SearchResult> => {
+	const existsAliasHandler = async (args: ExistsAliasParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = existsAliasValidator.parse(args);
@@ -117,14 +126,7 @@ export const registerExistsAliasTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Check if index or data stream aliases exist in Elasticsearch. Best for alias validation, deployment verification, configuration checks. Use when you need to verify alias presence before operations in Elasticsearch.",
 
-			inputSchema: {
-				name: z.any(), // Alias name(s) to check existence for. Examples: 'logs', ['alias1', 'alias2']
-				index: z.any().optional(), // Index name(s) or pattern(s) to check for aliases
-				allowNoIndices: z.boolean().optional(), // Whether to ignore if a wildcard indices expression resolves into no concrete indices
-				expandWildcards: z.any().optional(), // Type of index that wildcard patterns can match
-				ignoreUnavailable: z.boolean().optional(), // Whether specified concrete indices should be ignored when unavailable
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-			},
+			inputSchema: existsAliasValidator.shape,
 		},
 
 		existsAliasHandler,

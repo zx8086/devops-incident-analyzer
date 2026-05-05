@@ -14,19 +14,20 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const explainDataLifecycleValidator = z.object({
-	index: z.union([z.string(), z.array(z.string())]),
-	includeDefaults: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.describe("Data stream or index name(s) to explain lifecycle for. Examples: 'logs-*', ['stream1', 'stream2']"),
+	includeDefaults: booleanField().optional().describe("Whether to return default values in the response"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 });
 
-type _ExplainDataLifecycleParams = z.infer<typeof explainDataLifecycleValidator>;
+type ExplainDataLifecycleParams = z.infer<typeof explainDataLifecycleValidator>;
 
-// MCP error handling
 function createExplainDataLifecycleMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "lifecycle_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -44,7 +45,7 @@ function createExplainDataLifecycleMcpError(
 
 // Tool implementation
 export const registerExplainDataLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const explainDataLifecycleHandler = async (args: any): Promise<SearchResult> => {
+	const explainDataLifecycleHandler = async (args: ExplainDataLifecycleParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = explainDataLifecycleValidator.parse(args);
@@ -119,11 +120,7 @@ export const registerExplainDataLifecycleTool: ToolRegistrationFunction = (serve
 			description:
 				"Get data stream lifecycle status and execution details in Elasticsearch. Best for lifecycle monitoring, troubleshooting, policy analysis. Use when you need to understand data stream lifecycle execution status and configuration in Elasticsearch.",
 
-			inputSchema: {
-				index: z.any(), // Data stream or index name(s) to explain lifecycle for. Examples: 'logs-*', ['stream1', 'stream2']
-				includeDefaults: z.boolean().optional(), // Whether to return default values in the response
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-			},
+			inputSchema: explainDataLifecycleValidator.shape,
 		},
 
 		explainDataLifecycleHandler,

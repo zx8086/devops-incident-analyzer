@@ -14,25 +14,31 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const diskUsageValidator = z.object({
-	index: z.union([z.string(), z.array(z.string())]),
-	allowNoIndices: booleanField().optional(),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.describe("Index name(s) or pattern(s) to analyze disk usage for. Examples: 'logs-*', ['users', 'products']"),
+	allowNoIndices: booleanField()
+		.optional()
+		.describe("Whether to ignore if a wildcard indices expression resolves into no concrete indices"),
 	expandWildcards: z
 		.enum(["all", "open", "closed", "hidden", "none"])
 		.or(z.array(z.enum(["all", "open", "closed", "hidden", "none"])))
-		.optional(),
-	flush: booleanField().optional(),
-	ignoreUnavailable: booleanField().optional(),
-	runExpensiveTasks: booleanField().optional(),
+		.optional()
+		.describe("Type of index that wildcard patterns can match"),
+	flush: booleanField().optional().describe("Whether to flush the index before getting the disk usage"),
+	ignoreUnavailable: booleanField()
+		.optional()
+		.describe("Whether specified concrete indices should be ignored when unavailable"),
+	runExpensiveTasks: booleanField().optional().describe("Whether to run expensive disk usage tasks"),
 });
 
-type _DiskUsageParams = z.infer<typeof diskUsageValidator>;
+type DiskUsageParams = z.infer<typeof diskUsageValidator>;
 
-// MCP error handling
 function createDiskUsageMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "permission_denied";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -49,7 +55,7 @@ function createDiskUsageMcpError(
 
 // Tool implementation
 export const registerDiskUsageTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const diskUsageHandler = async (args: any): Promise<SearchResult> => {
+	const diskUsageHandler = async (args: DiskUsageParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = diskUsageValidator.parse(args);
@@ -117,14 +123,7 @@ export const registerDiskUsageTool: ToolRegistrationFunction = (server: McpServe
 			description:
 				"Analyze index disk usage per field in Elasticsearch. Best for storage optimization, field analysis, capacity planning. Use when you need to understand disk consumption patterns and optimize storage usage for Elasticsearch indices and data streams.",
 
-			inputSchema: {
-				index: z.any(), // Index name(s) or pattern(s) to analyze disk usage for. Examples: 'logs-*', ['users', 'products']
-				allowNoIndices: z.boolean().optional(), // Whether to ignore if a wildcard indices expression resolves into no concrete indices
-				expandWildcards: z.any().optional(), // Type of index that wildcard patterns can match
-				flush: z.boolean().optional(), // Whether to flush the index before getting the disk usage
-				ignoreUnavailable: z.boolean().optional(), // Whether specified concrete indices should be ignored when unavailable
-				runExpensiveTasks: z.boolean().optional(), // Whether to run expensive disk usage tasks
-			},
+			inputSchema: diskUsageValidator.shape,
 		},
 
 		diskUsageHandler,

@@ -14,28 +14,38 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getIndexSettingsAdvancedValidator = z.object({
-	index: z.union([z.string(), z.array(z.string())]).optional(),
-	name: z.union([z.string(), z.array(z.string())]).optional(),
-	allowNoIndices: booleanField().optional(),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Index name(s) or pattern(s) to get settings for. Examples: 'logs-*', ['users', 'products']"),
+	name: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Setting name(s) to retrieve. If not specified, all settings are returned"),
+	allowNoIndices: booleanField()
+		.optional()
+		.describe("Whether to ignore if a wildcard indices expression resolves into no concrete indices"),
 	expandWildcards: z
 		.enum(["all", "open", "closed", "hidden", "none"])
 		.or(z.array(z.enum(["all", "open", "closed", "hidden", "none"])))
-		.optional(),
-	flatSettings: booleanField().optional(),
-	ignoreUnavailable: booleanField().optional(),
-	includeDefaults: booleanField().optional(),
-	local: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+		.optional()
+		.describe("Type of index that wildcard patterns can match"),
+	flatSettings: booleanField().optional().describe("Return settings in flat format"),
+	ignoreUnavailable: booleanField()
+		.optional()
+		.describe("Whether specified concrete indices should be ignored when unavailable"),
+	includeDefaults: booleanField().optional().describe("Whether to return default values in the response"),
+	local: booleanField().optional().describe("Return local information, do not retrieve the state from master node"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 });
 
-type _GetIndexSettingsAdvancedParams = z.infer<typeof getIndexSettingsAdvancedValidator>;
+type GetIndexSettingsAdvancedParams = z.infer<typeof getIndexSettingsAdvancedValidator>;
 
-// MCP error handling
 function createGetIndexSettingsAdvancedMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "setting_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -57,7 +67,7 @@ function createGetIndexSettingsAdvancedMcpError(
 
 // Tool implementation
 export const registerGetIndexSettingsAdvancedTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getIndexSettingsAdvancedHandler = async (args: any): Promise<SearchResult> => {
+	const getIndexSettingsAdvancedHandler = async (args: GetIndexSettingsAdvancedParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = getIndexSettingsAdvancedValidator.parse(args);
@@ -144,17 +154,7 @@ export const registerGetIndexSettingsAdvancedTool: ToolRegistrationFunction = (s
 			description:
 				"Get comprehensive index settings from Elasticsearch with advanced options. Best for configuration analysis, performance tuning, troubleshooting. Use when you need detailed index settings including data stream backing indices in Elasticsearch.",
 
-			inputSchema: {
-				index: z.any().optional(), // Index name(s) or pattern(s) to get settings for. Examples: 'logs-*', ['users', 'products']
-				name: z.any().optional(), // Setting name(s) to retrieve. If not specified, all settings are returned
-				allowNoIndices: z.boolean().optional(), // Whether to ignore if a wildcard indices expression resolves into no concrete indices
-				expandWildcards: z.any().optional(), // Type of index that wildcard patterns can match
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				ignoreUnavailable: z.boolean().optional(), // Whether specified concrete indices should be ignored when unavailable
-				includeDefaults: z.boolean().optional(), // Whether to return default values in the response
-				local: z.boolean().optional(), // Return local information, do not retrieve the state from master node
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-			},
+			inputSchema: getIndexSettingsAdvancedValidator.shape,
 		},
 
 		getIndexSettingsAdvancedHandler,

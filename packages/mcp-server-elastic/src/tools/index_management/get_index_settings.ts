@@ -15,23 +15,25 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getIndexSettingsValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	name: z.string().optional(),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-	flatSettings: coerceBoolean.optional(),
-	includeDefaults: coerceBoolean.optional(),
-	local: coerceBoolean.optional(),
-	masterTimeout: z.string().optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to get settings for"),
+	name: z.string().optional().describe("Specific setting name to retrieve"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
+	flatSettings: coerceBoolean.optional().describe("Return settings in flat format"),
+	includeDefaults: coerceBoolean.optional().describe("Include default settings"),
+	local: coerceBoolean.optional().describe("Return local information only"),
+	masterTimeout: z.string().optional().describe("Master node timeout (e.g., '30s')"),
 });
 
-type _GetIndexSettingsParams = z.infer<typeof getIndexSettingsValidator>;
+type GetIndexSettingsParams = z.infer<typeof getIndexSettingsValidator>;
 
-// MCP error handling
 function createGetIndexSettingsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -50,7 +52,7 @@ function createGetIndexSettingsMcpError(
 
 // Tool implementation
 export const registerGetIndexSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getIndexSettingsHandler = async (args: any): Promise<SearchResult> => {
+	const getIndexSettingsHandler = async (args: GetIndexSettingsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -121,17 +123,7 @@ export const registerGetIndexSettingsTool: ToolRegistrationFunction = (server: M
 			description:
 				"Get index settings from Elasticsearch. Best for configuration review, performance analysis, troubleshooting. Use when you need to inspect index-level settings and configurations in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to get settings for
-				name: z.string().optional(), // Specific setting name to retrieve
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				includeDefaults: z.boolean().optional(), // Include default settings
-				local: z.boolean().optional(), // Return local information only
-				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-			},
+			inputSchema: getIndexSettingsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_get_index_settings", getIndexSettingsHandler, OperationType.READ),

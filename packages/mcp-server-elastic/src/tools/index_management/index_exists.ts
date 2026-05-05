@@ -15,21 +15,23 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const indexExistsValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-	flatSettings: coerceBoolean.optional(),
-	includeDefaults: coerceBoolean.optional(),
-	local: coerceBoolean.optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to check existence for"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
+	flatSettings: coerceBoolean.optional().describe("Return settings in flat format"),
+	includeDefaults: coerceBoolean.optional().describe("Include default settings"),
+	local: coerceBoolean.optional().describe("Return local information only"),
 });
 
-type _IndexExistsParams = z.infer<typeof indexExistsValidator>;
+type IndexExistsParams = z.infer<typeof indexExistsValidator>;
 
-// MCP error handling
 function createIndexExistsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,7 +49,7 @@ function createIndexExistsMcpError(
 
 // Tool implementation
 export const registerIndexExistsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const indexExistsHandler = async (args: any): Promise<SearchResult> => {
+	const indexExistsHandler = async (args: IndexExistsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -108,15 +110,7 @@ export const registerIndexExistsTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Check if an index exists in Elasticsearch. Best for index validation, conditional operations, deployment checks. Use when you need to verify index presence in Elasticsearch clusters before performing operations or creating indices. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to check existence for
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				includeDefaults: z.boolean().optional(), // Include default settings
-				local: z.boolean().optional(), // Return local information only
-			},
+			inputSchema: indexExistsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_index_exists", indexExistsHandler, OperationType.READ),
