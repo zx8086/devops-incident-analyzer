@@ -11,7 +11,10 @@ import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const rolloverValidator = z.object({
-	alias: z.string().min(1, "Alias name cannot be empty").describe("Alias name for the data stream or index to roll over"),
+	alias: z
+		.string()
+		.min(1, "Alias name cannot be empty")
+		.describe("Alias name for the data stream or index to roll over"),
 	newIndex: z.string().optional().describe("Name of the new index to create during rollover"),
 	aliases: z
 		.record(

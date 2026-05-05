@@ -15,7 +15,10 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Zod validator for runtime validation
 const ackWatchValidator = z.object({
 	watch_id: z.string().min(1, "Watch ID cannot be empty").describe("Watch ID to acknowledge"),
-	action_id: z.union([z.string(), z.array(z.string())]).optional().describe("Action ID(s) to acknowledge"),
+	action_id: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Action ID(s) to acknowledge"),
 });
 
 type AckWatchParams = z.infer<typeof ackWatchValidator>;

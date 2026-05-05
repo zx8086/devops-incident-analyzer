@@ -227,7 +227,10 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			await progressTracker.updateProgress(55, "Search request prepared, configuring highlighting");
 
 			if (indexMappings.properties) {
-				const textFields: Record<string, { pre_tags: string[]; post_tags: string[]; fragment_size: number; number_of_fragments: number }> = {};
+				const textFields: Record<
+					string,
+					{ pre_tags: string[]; post_tags: string[]; fragment_size: number; number_of_fragments: number }
+				> = {};
 				for (const [fieldName, fieldData] of Object.entries(indexMappings.properties)) {
 					if (
 						fieldData.type === "text" ||

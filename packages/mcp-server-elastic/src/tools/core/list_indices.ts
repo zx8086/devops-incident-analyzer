@@ -183,9 +183,7 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			};
 			if (params.sortBy && params.sortBy !== "name") {
 				const requiredField = sortKeyFieldBySortBy[params.sortBy] as keyof estypes.CatIndicesIndicesRecord;
-				const missing = filteredIndices
-					.filter((row) => !row[requiredField])
-					.map((row) => row.index ?? "");
+				const missing = filteredIndices.filter((row) => !row[requiredField]).map((row) => row.index ?? "");
 				if (missing.length > 0) {
 					throw createMcpError(
 						`Cannot sort by '${params.sortBy}': ${missing.length}/${filteredIndices.length} indices missing '${requiredField}'. This usually means the result set includes closed or frozen-tier indices that do not expose this field. Retry with a different sortBy (e.g. 'name'), narrow the indexPattern, or exclude system indices.`,

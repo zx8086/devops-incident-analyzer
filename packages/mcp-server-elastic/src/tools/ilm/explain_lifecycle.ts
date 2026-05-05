@@ -20,10 +20,7 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 const explainLifecycleValidator = z.object({
 	index: z.string().optional().describe("Index pattern. Use '*' for all indices"),
 	onlyErrors: z.boolean().optional().describe("Only show indices with ILM errors"),
-	onlyManaged: z
-		.boolean()
-		.optional()
-		.describe("Only show ILM-managed indices. Highly recommended for large clusters"),
+	onlyManaged: z.boolean().optional().describe("Only show ILM-managed indices. Highly recommended for large clusters"),
 	masterTimeout: z.string().optional().describe("Master node timeout"),
 	limit: z
 		.number()
