@@ -20,24 +20,24 @@ const searchTemplateValidator = z.object({
 	explain: z.boolean().optional(),
 	profile: z.boolean().optional(),
 	allowNoIndices: z.boolean().optional(),
-	expandWildcards: z.string().optional(),
+	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
 	ignoreUnavailable: z.boolean().optional(),
 	ignoreThrottled: z.boolean().optional(),
 	preference: z.string().optional(),
 	routing: z.string().optional(),
 	scroll: z.string().optional(),
-	searchType: z.string().optional(),
+	searchType: z.enum(["query_then_fetch", "dfs_query_then_fetch"]).optional(),
 	typedKeys: z.boolean().optional(),
 });
 
-type _SearchTemplateParams = z.infer<typeof searchTemplateValidator>;
+type SearchTemplateParams = z.infer<typeof searchTemplateValidator>;
 
 // MCP error handling
 function createSearchTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_not_found" | "query_parsing" | "index_not_found";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -55,7 +55,7 @@ function createSearchTemplateMcpError(
 
 // Tool implementation
 export const registerSearchTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const searchTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const searchTemplateHandler = async (args: SearchTemplateParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -90,13 +90,13 @@ export const registerSearchTemplateTool: ToolRegistrationFunction = (server: Mcp
 					explain,
 					profile,
 					allow_no_indices: allowNoIndices,
-					expand_wildcards: expandWildcards as any,
+					expand_wildcards: expandWildcards,
 					ignore_unavailable: ignoreUnavailable,
 					ignore_throttled: ignoreThrottled,
 					preference,
 					routing,
 					scroll,
-					search_type: searchType as any,
+					search_type: searchType,
 					typed_keys: typedKeys,
 				},
 				{
@@ -169,23 +169,7 @@ export const registerSearchTemplateTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Execute a search template in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for parameterized queries, reusable search patterns, query standardization. Use when you need to run templated searches with dynamic parameters in Elasticsearch. TIP: Use either id for stored templates or source for inline templates, provide params for variable substitution.",
 
-			inputSchema: {
-				index: z.string().optional(), // Index name or pattern to search
-				id: z.string().optional(), // Template ID stored in Elasticsearch
-				source: z.string().optional(), // Inline template source (Mustache template)
-				params: z.object({}).passthrough().optional(), // Parameters to substitute in the template
-				explain: z.boolean().optional(), // Return detailed explanation of how each hit is scored
-				profile: z.boolean().optional(), // Return timing information about the execution of individual components
-				allowNoIndices: z.boolean().optional(), // Allow no indices when resolving wildcards
-				expandWildcards: z.string().optional(), // Type of index wildcards to expand (open, closed, hidden, none, all)
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				ignoreThrottled: z.boolean().optional(), // Ignore throttled indices
-				preference: z.string().optional(), // Specify the node or shard to perform the search on
-				routing: z.string().optional(), // Routing value
-				scroll: z.string().optional(), // Scroll timeout
-				searchType: z.string().optional(), // Search operation type
-				typedKeys: z.boolean().optional(), // Specify whether aggregation names should be prefixed by their type
-			},
+			inputSchema: searchTemplateValidator.shape,
 		},
 
 		searchTemplateHandler,

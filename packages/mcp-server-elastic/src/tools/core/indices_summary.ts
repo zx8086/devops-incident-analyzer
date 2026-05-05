@@ -1,7 +1,7 @@
 /* src/tools/core/indices_summary.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -15,9 +15,12 @@ const indicesSummaryValidator = z.object({
 	groupBy: z.enum(["prefix", "date", "type"]).optional(),
 });
 
-type _IndicesSummaryParams = z.infer<typeof indicesSummaryValidator>;
+type IndicesSummaryParams = z.infer<typeof indicesSummaryValidator>;
 
-function createIndicesSummaryMcpError(error: Error | string, context: { type: string; details?: any }): McpError {
+function createIndicesSummaryMcpError(
+	error: Error | string,
+	context: { type: string; details?: Record<string, unknown> },
+): McpError {
 	const message = error instanceof Error ? error.message : error;
 
 	if (message.includes("index_not_found")) {
@@ -39,7 +42,7 @@ function createIndicesSummaryMcpError(error: Error | string, context: { type: st
 }
 
 export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const indicesSummaryHandler = async (args: any): Promise<SearchResult> => {
+	const indicesSummaryHandler = async (args: IndicesSummaryParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -107,7 +110,7 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 				}
 			}
 
-			const patterns = new Map<string, any[]>();
+			const patterns = new Map<string, estypes.CatIndicesIndicesRecord[]>();
 			for (const index of response) {
 				if (!index.index) continue;
 
@@ -194,7 +197,7 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 			);
 			throw createIndicesSummaryMcpError(error instanceof Error ? error : new Error(String(error)), {
 				type: "indices_summary",
-				details: args,
+				details: args as Record<string, unknown>,
 			});
 		}
 	};
@@ -210,10 +213,7 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Get a high-level summary of indices without overwhelming detail in Elasticsearch. Best for cluster overview, index organization analysis, storage planning. Use when you need to understand index patterns, health distribution, and storage usage across your Elasticsearch cluster. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				indexPattern: z.string().optional(), // Elasticsearch index pattern to summarize (supports wildcards like logs-*, app-*)
-				groupBy: z.enum(["prefix", "date", "type"]).optional(), // How to group Elasticsearch indices for summary analysis
-			},
+			inputSchema: indicesSummaryValidator.shape,
 		},
 
 		indicesSummaryHandler,

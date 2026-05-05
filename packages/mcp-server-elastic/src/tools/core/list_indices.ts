@@ -1,6 +1,6 @@
 /* src/tools/core/list_indices.ts */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -66,7 +66,7 @@ const listIndicesValidator = z.object({
 	includeSize: z.boolean().optional(),
 });
 
-type _ListIndicesParams = z.infer<typeof listIndicesValidator>;
+type ListIndicesParams = z.infer<typeof listIndicesValidator>;
 
 // SIO-658: with bytes=b, cat.indices returns `store.size` as raw integer bytes.
 // Reconstruct the compact human form ES itself emits when bytes is unset
@@ -97,7 +97,7 @@ function createMcpError(
 	context: {
 		toolName: string;
 		type: "validation" | "execution" | "connection" | "not_found";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -116,7 +116,7 @@ function createMcpError(
 
 export const registerListIndicesTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	// Tool handler
-	const listIndicesHandler = async (args: any): Promise<SearchResult> => {
+	const listIndicesHandler = async (args: ListIndicesParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -160,11 +160,12 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			const response = await esClient.cat.indices(catParams);
 
 			// Apply filtering
-			const filteredIndices = response.filter((index: any) => {
-				if (params.excludeSystemIndices && index.index.startsWith(".")) {
+			const filteredIndices: estypes.CatIndicesIndicesRecord[] = response.filter((index) => {
+				const name = index.index ?? "";
+				if (params.excludeSystemIndices && name.startsWith(".")) {
 					return false;
 				}
-				if (params.excludeDataStreams && index.index.includes(".ds-")) {
+				if (params.excludeDataStreams && name.includes(".ds-")) {
 					return false;
 				}
 				return true;
@@ -181,10 +182,10 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				creation: "creation.date.string",
 			};
 			if (params.sortBy && params.sortBy !== "name") {
-				const requiredField = sortKeyFieldBySortBy[params.sortBy];
+				const requiredField = sortKeyFieldBySortBy[params.sortBy] as keyof estypes.CatIndicesIndicesRecord;
 				const missing = filteredIndices
-					.filter((row: any) => !row[requiredField])
-					.map((row: any) => row.index as string);
+					.filter((row) => !row[requiredField])
+					.map((row) => row.index ?? "");
 				if (missing.length > 0) {
 					throw createMcpError(
 						`Cannot sort by '${params.sortBy}': ${missing.length}/${filteredIndices.length} indices missing '${requiredField}'. This usually means the result set includes closed or frozen-tier indices that do not expose this field. Retry with a different sortBy (e.g. 'name'), narrow the indexPattern, or exclude system indices.`,
@@ -214,33 +215,33 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				params.sortOrder ?? (params.sortBy ? defaultOrderBySortBy[params.sortBy] : "asc");
 			const directionMultiplier = resolvedOrder === "asc" ? 1 : -1;
 
-			filteredIndices.sort((a: any, b: any) => {
+			filteredIndices.sort((a, b) => {
 				switch (params.sortBy) {
 					case "size": {
 						// store.size is raw bytes thanks to bytes=b above (SIO-658).
-						const sizeA = Number.parseInt(a["store.size"], 10);
-						const sizeB = Number.parseInt(b["store.size"], 10);
+						const sizeA = Number.parseInt(a["store.size"] ?? "0", 10);
+						const sizeB = Number.parseInt(b["store.size"] ?? "0", 10);
 						return (sizeA - sizeB) * directionMultiplier;
 					}
 					case "docs": {
-						const docsA = Number.parseInt(a["docs.count"], 10);
-						const docsB = Number.parseInt(b["docs.count"], 10);
+						const docsA = Number.parseInt(a["docs.count"] ?? "0", 10);
+						const docsB = Number.parseInt(b["docs.count"] ?? "0", 10);
 						return (docsA - docsB) * directionMultiplier;
 					}
 					case "creation": {
-						const dateA = a["creation.date.string"] || "";
-						const dateB = b["creation.date.string"] || "";
+						const dateA = a["creation.date.string"] ?? "";
+						const dateB = b["creation.date.string"] ?? "";
 						return dateA.localeCompare(dateB) * directionMultiplier;
 					}
 					default:
-						return a.index.localeCompare(b.index) * directionMultiplier;
+						return (a.index ?? "").localeCompare(b.index ?? "") * directionMultiplier;
 				}
 			});
 
 			// Pagination. maxLimit matches the Zod schema cap (1000) rather than the
 			// shared list preset (100); callers that need more rows for enumeration
 			// rely on this (SIO-655). Over-cap requests now throw loud, not silent.
-			let paginatedIndices: any[];
+			let paginatedIndices: estypes.CatIndicesIndicesRecord[];
 			let metadata: import("../../utils/responseHandling.js").ResponseMetadata;
 			try {
 				const paginated = paginateResults(filteredIndices, {
@@ -264,14 +265,14 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			// Transform to consistent format. Auto-include storeSize when the caller
 			// sorted by it so they see the field they sorted on (SIO-655).
 			const includeSizeInOutput = params.includeSize === true || params.sortBy === "size";
-			const indicesInfo = paginatedIndices.map((index: any) => ({
+			const indicesInfo = paginatedIndices.map((index) => ({
 				index: index.index,
 				health: index.health,
 				status: index.status,
 				docsCount: index["docs.count"] || "0",
 				...(includeSizeInOutput && {
 					// SIO-658: store.size is raw bytes (bytes=b); humanise for the payload.
-					storeSize: humaniseBytes(index["store.size"]),
+					storeSize: humaniseBytes(index["store.size"] ?? undefined),
 					creationDate: index["creation.date.string"] || "unknown",
 				}),
 			}));
@@ -337,15 +338,7 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			title: "List Elasticsearch Indices",
 			description:
 				"List indices with filtering, sorting, and honest pagination metadata. sortBy='size' ranks by primary+replica store bytes (store.size_in_bytes) and is unavailable for closed/frozen indices — request will fail loud if any row lacks the field. limit honoured up to 1000. TIP: Use this FIRST to check cluster size. Common patterns: {limit: 50, excludeSystemIndices: true} for overview, {indexPattern: 'logs-*', sortBy: 'size'} for ranking by storage.",
-			inputSchema: {
-				indexPattern: z.string().optional(),
-				limit: z.number().min(1).max(1000).optional(),
-				excludeSystemIndices: z.boolean().optional(),
-				excludeDataStreams: z.boolean().optional(),
-				sortBy: z.enum(["name", "size", "docs", "creation"]).optional(),
-				sortOrder: z.enum(["asc", "desc"]).optional(),
-				includeSize: z.boolean().optional(),
-			},
+			inputSchema: listIndicesValidator.shape,
 		},
 		withReadOnlyCheck("elasticsearch_list_indices", listIndicesHandler, OperationType.READ),
 	);

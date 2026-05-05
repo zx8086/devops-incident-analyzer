@@ -43,7 +43,7 @@ const getTermVectorsSchema = z.object({
 	term_statistics: booleanField().optional(),
 	routing: z.string().optional(),
 	version: z.number().optional(),
-	version_type: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+	version_type: z.enum(["internal", "external", "external_gte"]).optional(),
 	filter: z.object({}).passthrough().optional(),
 	per_field_analyzer: z.record(z.string(), z.string()).optional(),
 	preference: z.string().optional(),
@@ -93,7 +93,7 @@ export const getTermVectors = {
 					per_field_analyzer: args.per_field_analyzer,
 					preference: args.preference,
 					realtime: args.realtime,
-				} as any,
+				},
 				{
 					opaqueId: "elasticsearch_get_term_vectors",
 				},
@@ -159,7 +159,7 @@ const getMultiTermVectorsSchema = z.object({
 				term_statistics: booleanField().optional(),
 				routing: z.string().optional(),
 				version: z.number().optional(),
-				version_type: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+				version_type: z.enum(["internal", "external", "external_gte"]).optional(),
 			}),
 		)
 		.optional(),
@@ -211,7 +211,7 @@ export const getMultiTermVectors = {
 						version_type: doc.version_type,
 					})),
 					ids: args.ids,
-				} as any,
+				},
 				{
 					opaqueId: "elasticsearch_get_multi_term_vectors",
 				},

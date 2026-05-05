@@ -83,10 +83,10 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 		const result = await client.helpers.bulk(
 			{
 				datasource: args.operations,
-				onDocument(doc: any) {
+				onDocument(doc) {
 					return {
 						index: {
-							_index: args.index || doc._index,
+							_index: args.index || (doc as { _index?: string })._index,
 							routing: args.routing,
 							pipeline: args.pipeline,
 							refresh: args.refresh,
@@ -94,6 +94,7 @@ const bulkOperationsImpl = async (client: Client, args: z.infer<typeof bulkOpera
 							timeout: args.timeout,
 							wait_for_active_shards: args.waitForActiveShards,
 						},
+						// biome-ignore lint/suspicious/noExplicitAny: SIO-672 - bulk helper onDocument expects strict BulkAction; runtime-validated by Zod.
 					} as any;
 				},
 				flushBytes: args.flushBytes,
@@ -196,7 +197,7 @@ const multiGetSchema = z.object({
 				routing: z.string().optional(),
 				stored_fields: z.array(z.string()).optional(),
 				version: z.number().optional(),
-				version_type: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+				version_type: z.enum(["internal", "external", "external_gte"]).optional(),
 			}),
 		)
 		.optional(),
@@ -237,7 +238,7 @@ export const multiGet = {
 			}
 
 			const result = await client.mget({
-				docs: args.docs as any,
+				docs: args.docs,
 				index: args.index,
 				preference: args.preference,
 				realtime: args.realtime,
@@ -251,7 +252,10 @@ export const multiGet = {
 			logger.debug(
 				{
 					docsRequested: args.docs.length,
+					// SIO-672: MgetResponseItem is a union; "found" only exists on hit variants.
+					// biome-ignore lint/suspicious/noExplicitAny: response-shape narrowing
 					docsFound: result.docs?.filter((doc) => (doc as any).found).length || 0,
+					// biome-ignore lint/suspicious/noExplicitAny: response-shape narrowing
 					docsNotFound: result.docs?.filter((doc) => !(doc as any).found).length || 0,
 				},
 				"Multi-get operation completed successfully",

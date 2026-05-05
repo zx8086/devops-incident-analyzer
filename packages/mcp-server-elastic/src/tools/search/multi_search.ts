@@ -1,7 +1,7 @@
 /* src/tools/search/multi_search.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -24,12 +24,12 @@ const multiSearchValidator = z.object({
 	typedKeys: booleanField().optional(),
 });
 
-type _MultiSearchParams = z.infer<typeof multiSearchValidator>;
+type MultiSearchParams = z.infer<typeof multiSearchValidator>;
 
 // MCP error handling
 function createMultiSearchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -43,7 +43,7 @@ function createMultiSearchMcpError(
 
 // Tool implementation
 export const registerMultiSearchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const multiSearchHandler = async (args: any): Promise<SearchResult> => {
+	const multiSearchHandler = async (args: MultiSearchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		let tracker: ProgressTracker | undefined;
 		let params: z.infer<typeof multiSearchValidator> | undefined;
@@ -110,7 +110,7 @@ export const registerMultiSearchTool: ToolRegistrationFunction = (server: McpSer
 			await tracker.updateProgress(25, `Submitting ${searchCount} searches for parallel execution`);
 
 			const result = await esClient.msearch({
-				searches: params.searches,
+				searches: params.searches as unknown as estypes.MsearchRequestItem[],
 				index: params.index,
 				max_concurrent_searches: params.maxConcurrentSearches,
 				ccs_minimize_roundtrips: params.ccsMinimizeRoundtrips,
@@ -247,14 +247,7 @@ export const registerMultiSearchTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Perform multiple searches in Elasticsearch in a single request. Best for batch search operations, dashboard queries, parallel search execution. Use when you need to execute multiple Query DSL searches across different Elasticsearch indices efficiently. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				searches: z.array(z.object({}).passthrough()).optional(),
-				index: z.string().optional(),
-				maxConcurrentSearches: z.number().optional(),
-				ccsMinimizeRoundtrips: z.boolean().optional(),
-				restTotalHitsAsInt: z.boolean().optional(),
-				typedKeys: z.boolean().optional(),
-			},
+			inputSchema: multiSearchValidator.shape,
 		},
 
 		multiSearchHandler,

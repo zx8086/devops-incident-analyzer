@@ -37,19 +37,7 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Perform bulk operations in Elasticsearch for high-throughput data ingestion. Best for batch indexing, bulk updates, mass data import, performance optimization. Use when you need to efficiently index, update, or delete large volumes of documents in Elasticsearch.",
 
-			inputSchema: {
-				operations: z.array(z.object({}).passthrough()),
-				index: z.string().optional(),
-				routing: z.string().optional(),
-				pipeline: z.string().optional(),
-				refresh: z.string().optional(),
-				requireAlias: booleanField().optional(),
-				timeout: z.string().optional(),
-				waitForActiveShards: z.string().optional(),
-				flushBytes: z.number().optional(),
-				concurrency: z.number().optional(),
-				retries: z.number().optional(),
-			},
+			inputSchema: BulkOperationsParams.shape,
 		},
 
 		async (params: BulkOperationsParamsType): Promise<SearchResult> => {
@@ -144,6 +132,7 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 									timeout: params.timeout,
 									wait_for_active_shards: params.waitForActiveShards,
 								},
+								// biome-ignore lint/suspicious/noExplicitAny: SIO-672 - bulk helper onDocument expects strict BulkAction; runtime-validated by Zod.
 							} as any;
 						},
 						flushBytes: params.flushBytes,

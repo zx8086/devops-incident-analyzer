@@ -18,7 +18,7 @@ const MultiGetParams = z.object({
 				routing: z.string().optional(),
 				stored_fields: z.array(z.string()).optional(),
 				version: z.number().optional(),
-				version_type: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+				version_type: z.enum(["internal", "external", "external_gte"]).optional(),
 			}),
 		)
 		.optional(),
@@ -51,7 +51,7 @@ export const registerMultiGetTool: ToolRegistrationFunction = (server: McpServer
 		async (params: MultiGetParamsType): Promise<SearchResult> => {
 			try {
 				const result = await esClient.mget({
-					docs: params.docs as any,
+					docs: params.docs,
 					index: params.index,
 					preference: params.preference,
 					realtime: params.realtime,

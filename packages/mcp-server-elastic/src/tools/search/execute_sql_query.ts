@@ -18,12 +18,12 @@ const executeSqlQueryValidator = z.object({
 	fetchSize: z.number().optional(),
 });
 
-type _ExecuteSqlQueryParams = z.infer<typeof executeSqlQueryValidator>;
+type ExecuteSqlQueryParams = z.infer<typeof executeSqlQueryValidator>;
 
 // MCP error handling
 function createExecuteSqlQueryMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -37,7 +37,7 @@ function createExecuteSqlQueryMcpError(
 
 // Tool implementation
 export const registerExecuteSqlQueryTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const executeSqlQueryHandler = async (args: any): Promise<SearchResult> => {
+	const executeSqlQueryHandler = async (args: ExecuteSqlQueryParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -94,11 +94,7 @@ export const registerExecuteSqlQueryTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Execute a SQL query using Elasticsearch SQL API. PARAMETER: 'query' (SQL string). Best for familiar SQL syntax, structured queries, data analysis. Example: {query: 'SELECT * FROM logs-* WHERE status = 500 LIMIT 100'}. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				query: z.string().optional(), // SQL query to execute. Example: 'SELECT * FROM logs-* LIMIT 10'
-				format: z.enum(["json", "csv", "tsv", "txt", "yaml", "cbor", "smile"]).optional(),
-				fetchSize: z.number().optional(),
-			},
+			inputSchema: executeSqlQueryValidator.shape,
 		},
 
 		executeSqlQueryHandler,

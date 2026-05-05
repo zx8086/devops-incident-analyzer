@@ -1,7 +1,7 @@
 /* src/tools/search/count_documents.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -30,12 +30,12 @@ const countDocumentsValidator = z.object({
 	terminateAfter: z.number().optional(),
 });
 
-type _CountDocumentsParams = z.infer<typeof countDocumentsValidator>;
+type CountDocumentsParams = z.infer<typeof countDocumentsValidator>;
 
 // MCP error handling
 function createCountDocumentsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -49,7 +49,7 @@ function createCountDocumentsMcpError(
 
 // Tool implementation
 export const registerCountDocumentsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const countDocumentsHandler = async (args: any): Promise<SearchResult> => {
+	const countDocumentsHandler = async (args: CountDocumentsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -73,7 +73,7 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 			const result = await esClient.count(
 				{
 					index: params.index,
-					...(finalQuery && { query: finalQuery }), // Only include query if not empty
+					...(finalQuery && { query: finalQuery as unknown as estypes.QueryDslQueryContainer }), // Only include query if not empty
 					analyzer: params.analyzer,
 					analyze_wildcard: params.analyzeWildcard,
 					default_operator: params.defaultOperator,
@@ -166,23 +166,7 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Count documents in Elasticsearch. PARAMETERS: index (string, default *), query (object, default match_all). Best for data analysis, result set sizing. Example: {index: logs-*, query: {match: {status: error}}}. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string().optional(), // Index pattern to count documents in. Use '*' for all indices
-				query: z.object({}).passthrough().optional(), // Query DSL to filter documents. Default matches all
-				analyzer: z.string().optional(),
-				analyzeWildcard: z.boolean().optional(),
-				defaultOperator: z.enum(["AND", "OR"]).optional(),
-				df: z.string().optional(),
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-				ignoreThrottled: z.boolean().optional(),
-				ignoreUnavailable: z.boolean().optional(),
-				allowNoIndices: z.boolean().optional(),
-				minScore: z.number().optional(),
-				preference: z.string().optional(),
-				routing: z.string().optional(),
-				q: z.string().optional(),
-				terminateAfter: z.number().optional(),
-			},
+			inputSchema: countDocumentsValidator.shape,
 		},
 
 		countDocumentsHandler,

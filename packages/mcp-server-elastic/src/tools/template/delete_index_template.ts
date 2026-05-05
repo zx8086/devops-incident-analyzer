@@ -17,14 +17,14 @@ const deleteIndexTemplateValidator = z.object({
 	masterTimeout: z.string().optional(),
 });
 
-type _DeleteIndexTemplateParams = z.infer<typeof deleteIndexTemplateValidator>;
+type DeleteIndexTemplateParams = z.infer<typeof deleteIndexTemplateValidator>;
 
 // MCP error handling
 function createTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_not_found" | "access_denied";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -41,7 +41,7 @@ function createTemplateMcpError(
 
 // Tool implementation
 export const registerDeleteIndexTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteIndexTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const deleteIndexTemplateHandler = async (args: DeleteIndexTemplateParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -119,10 +119,7 @@ export const registerDeleteIndexTemplateTool: ToolRegistrationFunction = (server
 			description:
 				"Delete an index template in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for template management, configuration cleanup, removing unused templates. Use when you need to remove Elasticsearch index templates that define settings and mappings for new indices. WARNING: This is a destructive operation that cannot be undone.",
 
-			inputSchema: {
-				name: z.string(), // Template name (cannot be empty)
-				masterTimeout: z.string().optional(), // Timeout for master node operations
-			},
+			inputSchema: deleteIndexTemplateValidator.shape,
 		},
 
 		deleteIndexTemplateHandler,

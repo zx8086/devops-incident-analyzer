@@ -1,7 +1,7 @@
 /* src/tools/search/scroll_search.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -24,12 +24,12 @@ const scrollSearchValidator = z.object({
 	restTotalHitsAsInt: booleanField().optional(),
 });
 
-type _ScrollSearchParams = z.infer<typeof scrollSearchValidator>;
+type ScrollSearchParams = z.infer<typeof scrollSearchValidator>;
 
 // MCP error handling
 function createScrollSearchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -43,7 +43,7 @@ function createScrollSearchMcpError(
 
 // Tool implementation
 export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const scrollSearchHandler = async (args: any): Promise<SearchResult> => {
+	const scrollSearchHandler = async (args: ScrollSearchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		let tracker: ProgressTracker | undefined;
 		let params: z.infer<typeof scrollSearchValidator> | undefined;
@@ -126,7 +126,7 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 
 			const scrollSearch = esClient.helpers.scrollSearch({
 				index: params.index,
-				query: params.query,
+				query: params.query as unknown as estypes.QueryDslQueryContainer,
 				scroll: params.scroll,
 			});
 
@@ -286,14 +286,7 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Perform scroll search in Elasticsearch for large result sets. Best for pagination, large dataset retrieval, memory-efficient iteration. Use when you need to retrieve all documents from large result sets without overwhelming memory in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Index name or pattern to search
-				query: z.object({}).passthrough(), // Query DSL to filter documents
-				scroll: z.string().optional(),
-				scrollId: z.string().optional(),
-				maxDocuments: z.number().optional(),
-				restTotalHitsAsInt: z.boolean().optional(),
-			},
+			inputSchema: scrollSearchValidator.shape,
 		},
 
 		scrollSearchHandler,
