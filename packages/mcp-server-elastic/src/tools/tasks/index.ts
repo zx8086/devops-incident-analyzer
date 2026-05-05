@@ -37,7 +37,8 @@ const listTasksSchema = z.object({
 	groupBy: z.enum(["nodes", "parents", "none"]).optional(),
 	nodes: z.union([z.string(), z.array(z.string())]).optional(),
 	parentTaskId: z.string().optional(),
-	timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
+	// Elasticsearch Duration accepts string ("30s") or special values -1/0; not arbitrary numbers.
+	timeout: z.union([z.string(), z.literal(-1), z.literal(0)]).optional(),
 	waitForCompletion: booleanField().optional(),
 });
 
@@ -64,7 +65,7 @@ export const listTasks = {
 				group_by: args.groupBy,
 				nodes: args.nodes,
 				parent_task_id: args.parentTaskId,
-				timeout: args.timeout as any,
+				timeout: args.timeout,
 				wait_for_completion: args.waitForCompletion,
 			});
 
@@ -103,7 +104,8 @@ export const listTasks = {
 
 const getTaskSchema = z.object({
 	taskId: z.string().min(1, "Task ID cannot be empty"),
-	timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
+	// Elasticsearch Duration accepts string ("30s") or special values -1/0; not arbitrary numbers.
+	timeout: z.union([z.string(), z.literal(-1), z.literal(0)]).optional(),
 	waitForCompletion: booleanField().optional(),
 });
 
@@ -125,7 +127,7 @@ export const getTask = {
 
 			const result = await client.tasks.get({
 				task_id: args.taskId,
-				timeout: args.timeout as any,
+				timeout: args.timeout,
 				wait_for_completion: args.waitForCompletion,
 			});
 

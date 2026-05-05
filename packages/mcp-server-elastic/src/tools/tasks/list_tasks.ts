@@ -14,7 +14,8 @@ const ListTasksParams = z.object({
 	groupBy: z.enum(["nodes", "parents", "none"]).optional(),
 	nodes: z.union([z.string(), z.array(z.string())]).optional(),
 	parentTaskId: z.string().optional(),
-	timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
+	// Elasticsearch Duration accepts string ("30s") or special values -1/0; not arbitrary numbers.
+	timeout: z.union([z.string(), z.literal(-1), z.literal(0)]).optional(),
 	waitForCompletion: booleanField().optional(),
 });
 
@@ -32,15 +33,7 @@ export const registerListTasksTool: ToolRegistrationFunction = (server: McpServe
 			description:
 				"Get information about tasks currently running on Elasticsearch cluster nodes. Best for cluster monitoring, performance troubleshooting, operation tracking. Use when you need to monitor long-running operations like reindexing, searches, or bulk operations in Elasticsearch.",
 
-			inputSchema: {
-				actions: z.union([z.string(), z.array(z.string())]).optional(),
-				detailed: booleanField().optional(),
-				groupBy: z.enum(["nodes", "parents", "none"]).optional(),
-				nodes: z.union([z.string(), z.array(z.string())]).optional(),
-				parentTaskId: z.string().optional(),
-				timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
-				waitForCompletion: booleanField().optional(),
-			},
+			inputSchema: ListTasksParams.shape,
 		},
 
 		async (params: ListTasksParamsType): Promise<SearchResult> => {
@@ -51,7 +44,7 @@ export const registerListTasksTool: ToolRegistrationFunction = (server: McpServe
 					group_by: params.groupBy,
 					nodes: params.nodes,
 					parent_task_id: params.parentTaskId,
-					timeout: params.timeout as any,
+					timeout: params.timeout,
 					wait_for_completion: params.waitForCompletion,
 				});
 				return {

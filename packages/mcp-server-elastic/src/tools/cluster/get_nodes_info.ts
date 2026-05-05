@@ -21,7 +21,7 @@ const nodesInfoValidator = z.object({
 	summary: z.boolean().optional(),
 });
 
-type _NodesInfoParams = z.infer<typeof nodesInfoValidator>;
+type NodesInfoParams = z.infer<typeof nodesInfoValidator>;
 
 // Helper function to format node info summary
 function formatNodeInfoSummary(result: any): string {
@@ -76,7 +76,7 @@ function createNodesInfoMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "cluster_unhealthy" | "node_unavailable";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -93,7 +93,7 @@ function createNodesInfoMcpError(
 
 // Tool implementation
 export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const nodesInfoHandler = async (args: any): Promise<SearchResult> => {
+	const nodesInfoHandler = async (args: NodesInfoParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -280,14 +280,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Get node information (static configuration). WARNING: Full info exceeds 1MB per node. SAFE OPTIONS: {metric: 'name'} for node list, {metric: 'os,jvm'} for basic info, {metric: 'process,transport'} for network info. The 'compact' parameter auto-selects essential metrics. NEVER use empty {} - it will fail. READ operation - safe for production use.",
 
-			inputSchema: {
-				nodeId: z.string().optional(), // Specific node ID, or '_local' for current node, or leave empty for all
-				metric: z.string().optional(), // Specific metrics: 'name', 'os', 'jvm', 'process', 'thread_pool', 'transport', 'http', 'plugins', 'ingest'. Combine: 'os,jvm'
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				timeout: z.string().optional(), // Timeout for the request (e.g., '30s', '1m')
-				compact: z.boolean().optional(), // Auto-select essential metrics (os,jvm,process,transport). Overrides 'metric' parameter
-				summary: z.boolean().optional(), // Return summarized node information instead of full details
-			},
+			inputSchema: nodesInfoValidator.shape,
 		},
 
 		nodesInfoHandler,

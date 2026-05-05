@@ -104,4 +104,4 @@ export type ToolFunction = (server: McpServer, esClient: Client) => void;
 export type ToolHandler = (params: ToolParams, extra: Record<string, unknown>) => Promise<SearchResult>;
 
 // Tool registration function type
-export type ToolRegistrationFunction = (server: any, esClient: any) => void;
+export type ToolRegistrationFunction = (server: McpServer, esClient: Client) => void;
