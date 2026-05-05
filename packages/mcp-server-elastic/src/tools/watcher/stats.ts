@@ -20,16 +20,16 @@ const watcherStatsValidator = z.object({
 			z.enum(["_all", "queued_watches", "current_watches", "pending_watches"]),
 			z.array(z.enum(["_all", "queued_watches", "current_watches", "pending_watches"])),
 		])
-		.optional(),
-	emit_stacktraces: booleanField().optional(),
+		.optional()
+		.describe("Limit the information returned to specific metrics"),
+	emit_stacktraces: booleanField().optional().describe("Whether to emit stack traces of currently running watches"),
 });
 
-type _WatcherStatsParams = z.infer<typeof watcherStatsValidator>;
+type WatcherStatsParams = z.infer<typeof watcherStatsValidator>;
 
-// MCP error handling
 function createWatcherStatsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,7 +47,7 @@ function createWatcherStatsMcpError(
 
 // Tool implementation
 export const registerWatcherStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const watcherStatsHandler = async (args: any): Promise<SearchResult> => {
+	const watcherStatsHandler = async (args: WatcherStatsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -103,10 +103,7 @@ export const registerWatcherStatsTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Get Elasticsearch Watcher statistics and metrics. Best for performance monitoring, service analysis, execution tracking. Use when you need to monitor Watcher service performance and execution statistics in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				metric: z.any().optional(), // Limit the information returned to specific metrics
-				emit_stacktraces: z.boolean().optional(), // Whether to emit stack traces of currently running watches
-			},
+			inputSchema: watcherStatsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_stats", watcherStatsHandler, OperationType.READ),

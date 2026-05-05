@@ -14,15 +14,14 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const activateWatchValidator = z.object({
-	watch_id: z.string().min(1, "Watch ID cannot be empty"),
+	watch_id: z.string().min(1, "Watch ID cannot be empty").describe("Watch ID to activate"),
 });
 
-type _ActivateWatchParams = z.infer<typeof activateWatchValidator>;
+type ActivateWatchParams = z.infer<typeof activateWatchValidator>;
 
-// MCP error handling
 function createActivateWatchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "watch_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -41,7 +40,7 @@ function createActivateWatchMcpError(
 
 // Tool implementation
 export const registerWatcherActivateWatchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const activateWatchHandler = async (args: any): Promise<SearchResult> => {
+	const activateWatchHandler = async (args: ActivateWatchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -104,9 +103,7 @@ export const registerWatcherActivateWatchTool: ToolRegistrationFunction = (serve
 			description:
 				"Activate a watch in Elasticsearch Watcher. Best for monitoring automation, alerting management, watch lifecycle control. Use when you need to enable watch execution for Elasticsearch alerting and monitoring workflows. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				watch_id: z.string(), // Watch ID to activate
-			},
+			inputSchema: activateWatchValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_activate_watch", activateWatchHandler, OperationType.WRITE),

@@ -14,15 +14,14 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const deleteWatchValidator = z.object({
-	id: z.string().min(1, "Watch ID cannot be empty"),
+	id: z.string().min(1, "Watch ID cannot be empty").describe("Watch ID to delete"),
 });
 
-type _DeleteWatchParams = z.infer<typeof deleteWatchValidator>;
+type DeleteWatchParams = z.infer<typeof deleteWatchValidator>;
 
-// MCP error handling
 function createDeleteWatchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "watch_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -41,7 +40,7 @@ function createDeleteWatchMcpError(
 
 // Tool implementation
 export const registerWatcherDeleteWatchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteWatchHandler = async (args: any): Promise<SearchResult> => {
+	const deleteWatchHandler = async (args: DeleteWatchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -104,9 +103,7 @@ export const registerWatcherDeleteWatchTool: ToolRegistrationFunction = (server:
 			description:
 				"Delete a watch from Elasticsearch Watcher. Best for watch cleanup, configuration management, removing unused monitors. Use when you need to permanently remove watch definitions from Elasticsearch alerting system. IMPORTANT: Use only this API, not direct index deletion. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				id: z.string(), // Watch ID to delete
-			},
+			inputSchema: deleteWatchValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_delete_watch", deleteWatchHandler, OperationType.WRITE),

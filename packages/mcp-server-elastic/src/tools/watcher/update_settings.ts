@@ -14,18 +14,17 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const updateWatcherSettingsValidator = z.object({
-	"index.auto_expand_replicas": z.string().optional(),
-	"index.number_of_replicas": z.number().optional(),
-	master_timeout: z.string().optional(),
-	timeout: z.string().optional(),
+	"index.auto_expand_replicas": z.string().optional().describe("Auto expand replicas setting"),
+	"index.number_of_replicas": z.number().optional().describe("Number of replica shards"),
+	master_timeout: z.string().optional().describe("Explicit operation timeout for connection to master node"),
+	timeout: z.string().optional().describe("Explicit operation timeout"),
 });
 
-type _UpdateWatcherSettingsParams = z.infer<typeof updateWatcherSettingsValidator>;
+type UpdateWatcherSettingsParams = z.infer<typeof updateWatcherSettingsValidator>;
 
-// MCP error handling
 function createUpdateWatcherSettingsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -43,7 +42,7 @@ function createUpdateWatcherSettingsMcpError(
 
 // Tool implementation
 export const registerWatcherUpdateSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const updateWatcherSettingsHandler = async (args: any): Promise<SearchResult> => {
+	const updateWatcherSettingsHandler = async (args: UpdateWatcherSettingsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -104,12 +103,7 @@ export const registerWatcherUpdateSettingsTool: ToolRegistrationFunction = (serv
 			description:
 				"Update Elasticsearch Watcher index settings for .watches index. Best for configuration management, performance tuning, allocation control. Use when you need to modify Watcher internal index settings like replicas and allocation in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				"index.auto_expand_replicas": z.string().optional(), // Auto expand replicas setting
-				"index.number_of_replicas": z.number().optional(), // Number of replica shards
-				master_timeout: z.string().optional(), // Explicit operation timeout for connection to master node
-				timeout: z.string().optional(), // Explicit operation timeout
-			},
+			inputSchema: updateWatcherSettingsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_update_settings", updateWatcherSettingsHandler, OperationType.WRITE),

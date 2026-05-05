@@ -14,15 +14,14 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getWatcherSettingsValidator = z.object({
-	masterTimeout: z.string().optional(),
+	masterTimeout: z.string().optional().describe("Explicit operation timeout for connection to master node"),
 });
 
-type _GetWatcherSettingsParams = z.infer<typeof getWatcherSettingsValidator>;
+type GetWatcherSettingsParams = z.infer<typeof getWatcherSettingsValidator>;
 
-// MCP error handling
 function createGetWatcherSettingsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -40,7 +39,7 @@ function createGetWatcherSettingsMcpError(
 
 // Tool implementation
 export const registerWatcherGetSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getWatcherSettingsHandler = async (args: any): Promise<SearchResult> => {
+	const getWatcherSettingsHandler = async (args: GetWatcherSettingsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -95,9 +94,7 @@ export const registerWatcherGetSettingsTool: ToolRegistrationFunction = (server:
 			description:
 				"Get Elasticsearch Watcher index settings for .watches index. Best for configuration review, troubleshooting, system analysis. Use when you need to inspect Watcher internal index settings in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				masterTimeout: z.string().optional(), // Explicit operation timeout for connection to master node
-			},
+			inputSchema: getWatcherSettingsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_get_settings", getWatcherSettingsHandler, OperationType.READ),

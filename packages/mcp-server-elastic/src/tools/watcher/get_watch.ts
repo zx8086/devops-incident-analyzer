@@ -14,15 +14,14 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getWatchValidator = z.object({
-	id: z.string().min(1, "Watch ID cannot be empty"),
+	id: z.string().min(1, "Watch ID cannot be empty").describe("Watch ID to retrieve"),
 });
 
-type _GetWatchParams = z.infer<typeof getWatchValidator>;
+type GetWatchParams = z.infer<typeof getWatchValidator>;
 
-// MCP error handling
 function createGetWatchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "watch_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -41,7 +40,7 @@ function createGetWatchMcpError(
 
 // Tool implementation
 export const registerWatcherGetWatchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getWatchHandler = async (args: any): Promise<SearchResult> => {
+	const getWatchHandler = async (args: GetWatchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -104,9 +103,7 @@ export const registerWatcherGetWatchTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Get a watch configuration from Elasticsearch Watcher. Best for monitoring automation, alerting configuration, watch inspection. Use when you need to retrieve watch definitions for Elasticsearch alerting and monitoring workflows. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				id: z.string(), // Watch ID to retrieve
-			},
+			inputSchema: getWatchValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_get_watch", getWatchHandler, OperationType.READ),
