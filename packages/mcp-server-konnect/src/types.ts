@@ -1,7 +1,7 @@
 export interface ApiRequestFilter {
 	field: string;
 	operator: string;
-	value: any;
+	value: string | number | string[] | number[];
 }
 
 export interface TimeRange {
@@ -153,7 +153,7 @@ export interface Plugin {
 	id: string;
 	name: string;
 	enabled: boolean;
-	config: Record<string, any>;
+	config: Record<string, unknown>;
 	protocols: string[];
 	tags?: string[];
 	consumer?: {
@@ -178,7 +178,7 @@ export interface GroupMember {
 	cp_group_member_status?: {
 		status: string;
 		message: string;
-		conflicts?: any[];
+		conflicts?: unknown[];
 	};
 	created_at: string;
 	updated_at: string;
@@ -211,7 +211,7 @@ export interface Upstream {
 	hash_fallback_uri_capture?: string;
 	hash_on_uri_capture?: string;
 	slots: number;
-	healthchecks?: any;
+	healthchecks?: unknown;
 	tags?: string[];
 	host_header?: string;
 	client_certificate?: string;
