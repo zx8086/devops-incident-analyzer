@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type { ToolHandler } from "../registry.js";
+import * as configurationOps from "./operations.js";
 import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
@@ -8,7 +10,18 @@ export type ConfigurationTool = {
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
+	handler: ToolHandler;
 };
+
+// Mirrors the legacy server.ts switch default branch -- update/delete variants
+// for service, route, consumer, plugin were intentionally not dispatched
+// ("MOVED TO BLOCKED OPERATIONS"). Preserve that behaviour at the closure level
+// rather than silently wiring them through.
+const blockedOperationHandler =
+	(method: string): ToolHandler =>
+	async () => {
+		throw new Error(`Unknown tool method: ${method}`);
+	};
 
 export const configurationTools = (): ConfigurationTool[] => [
 	{
@@ -17,6 +30,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.listServicesPrompt(),
 		parameters: parameters.listServicesParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.listServices(api, args.controlPlaneId, args.size, args.offset),
 	},
 	{
 		method: "list_routes",
@@ -24,6 +38,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.listRoutesPrompt(),
 		parameters: parameters.listRoutesParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.listRoutes(api, args.controlPlaneId, args.size, args.offset),
 	},
 	{
 		method: "list_consumers",
@@ -31,6 +46,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.listConsumersPrompt(),
 		parameters: parameters.listConsumersParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.listConsumers(api, args.controlPlaneId, args.size, args.offset),
 	},
 	{
 		method: "list_plugins",
@@ -38,6 +54,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.listPluginsPrompt(),
 		parameters: parameters.listPluginsParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.listPlugins(api, args.controlPlaneId, args.size, args.offset),
 	},
 
 	{
@@ -46,6 +63,25 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.createServicePrompt(),
 		parameters: parameters.createServiceParameters(),
 		category: "configuration",
+		handler: async (args, { api, extra }) =>
+			configurationOps.createService(
+				api,
+				args.controlPlaneId,
+				{
+					name: args.name,
+					host: args.host,
+					port: args.port,
+					protocol: args.protocol,
+					path: args.path,
+					retries: args.retries,
+					connectTimeout: args.connectTimeout,
+					writeTimeout: args.writeTimeout,
+					readTimeout: args.readTimeout,
+					tags: args.tags,
+					enabled: args.enabled,
+				},
+				extra,
+			),
 	},
 	{
 		method: "get_service",
@@ -53,6 +89,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.getServicePrompt(),
 		parameters: parameters.getServiceParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.getService(api, args.controlPlaneId, args.serviceId),
 	},
 	{
 		method: "update_service",
@@ -60,6 +97,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.updateServicePrompt(),
 		parameters: parameters.updateServiceParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("update_service"),
 	},
 	{
 		method: "delete_service",
@@ -67,6 +105,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.deleteServicePrompt(),
 		parameters: parameters.deleteServiceParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("delete_service"),
 	},
 
 	{
@@ -75,6 +114,24 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.createRoutePrompt(),
 		parameters: parameters.createRouteParameters(),
 		category: "configuration",
+		handler: async (args, { api, extra }) =>
+			configurationOps.createRoute(
+				api,
+				args.controlPlaneId,
+				{
+					name: args.name,
+					protocols: args.protocols,
+					methods: args.methods,
+					hosts: args.hosts,
+					paths: args.paths,
+					serviceId: args.serviceId,
+					stripPath: args.stripPath,
+					preserveHost: args.preserveHost,
+					regexPriority: args.regexPriority,
+					tags: args.tags,
+				},
+				extra,
+			),
 	},
 	{
 		method: "get_route",
@@ -82,6 +139,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.getRoutePrompt(),
 		parameters: parameters.getRouteParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.getRoute(api, args.controlPlaneId, args.routeId),
 	},
 	{
 		method: "update_route",
@@ -89,6 +147,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.updateRoutePrompt(),
 		parameters: parameters.updateRouteParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("update_route"),
 	},
 	{
 		method: "delete_route",
@@ -96,6 +155,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.deleteRoutePrompt(),
 		parameters: parameters.deleteRouteParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("delete_route"),
 	},
 
 	{
@@ -104,6 +164,18 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.createConsumerPrompt(),
 		parameters: parameters.createConsumerParameters(),
 		category: "configuration",
+		handler: async (args, { api, extra }) =>
+			configurationOps.createConsumer(
+				api,
+				args.controlPlaneId,
+				{
+					username: args.username,
+					customId: args.customId,
+					tags: args.tags,
+					enabled: args.enabled,
+				},
+				extra,
+			),
 	},
 	{
 		method: "get_consumer",
@@ -111,6 +183,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.getConsumerPrompt(),
 		parameters: parameters.getConsumerParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.getConsumer(api, args.controlPlaneId, args.consumerId),
 	},
 	{
 		method: "update_consumer",
@@ -118,6 +191,13 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.updateConsumerPrompt(),
 		parameters: parameters.updateConsumerParameters(),
 		category: "configuration",
+		handler: async (args, { api }) =>
+			configurationOps.updateConsumer(api, args.controlPlaneId, args.consumerId, {
+				username: args.username,
+				customId: args.customId,
+				tags: args.tags,
+				enabled: args.enabled,
+			}),
 	},
 	{
 		method: "delete_consumer",
@@ -125,6 +205,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.deleteConsumerPrompt(),
 		parameters: parameters.deleteConsumerParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("delete_consumer"),
 	},
 
 	{
@@ -133,6 +214,22 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.createPluginPrompt(),
 		parameters: parameters.createPluginParameters(),
 		category: "configuration",
+		handler: async (args, { api, extra }) =>
+			configurationOps.createPlugin(
+				api,
+				args.controlPlaneId,
+				{
+					name: args.name,
+					config: args.config,
+					protocols: args.protocols,
+					consumerId: args.consumerId,
+					serviceId: args.serviceId,
+					routeId: args.routeId,
+					tags: args.tags,
+					enabled: args.enabled,
+				},
+				extra,
+			),
 	},
 	{
 		method: "get_plugin",
@@ -140,6 +237,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.getPluginPrompt(),
 		parameters: parameters.getPluginParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.getPlugin(api, args.controlPlaneId, args.pluginId),
 	},
 	{
 		method: "update_plugin",
@@ -147,6 +245,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.updatePluginPrompt(),
 		parameters: parameters.updatePluginParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("update_plugin"),
 	},
 	{
 		method: "delete_plugin",
@@ -154,6 +253,7 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.deletePluginPrompt(),
 		parameters: parameters.deletePluginParameters(),
 		category: "configuration",
+		handler: blockedOperationHandler("delete_plugin"),
 	},
 	{
 		method: "list_plugin_schemas",
@@ -161,5 +261,6 @@ export const configurationTools = (): ConfigurationTool[] => [
 		description: prompts.listPluginSchemasPrompt(),
 		parameters: parameters.listPluginSchemasParameters(),
 		category: "configuration",
+		handler: async (args, { api }) => configurationOps.listPluginSchemas(api, args.controlPlaneId),
 	},
 ];

@@ -1,21 +1,33 @@
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
+import type { KongApi } from "../api/kong-api.js";
 
-// Import all tool modules
 import { analyticsTools } from "./analytics/tools.js";
 import { certificatesTools } from "./certificates/tools.js";
 import { configurationTools } from "./configuration/tools.js";
 import { controlPlanesTools } from "./control-planes/tools.js";
-import { elicitationTools } from "./elicitation-tool.js";
+import { type ElicitationOperations, elicitationTools } from "./elicitation-tool.js";
 import { portalTools } from "./portal/tools.js";
 import { portalManagementTools } from "./portal-management/tools.js";
 
-// Common tool interface
+// SIO-670 PR0: handler context shared by all per-tool closures.
+// Conservative shape for PR0 -- PR2 will introduce generics, PR3 will narrow args via z.infer.
+export type ToolHandlerContext = {
+	api: KongApi;
+	elicitationOps: ElicitationOperations;
+	extra: RequestHandlerExtra<ServerRequest, ServerNotification>;
+};
+
+export type ToolHandler = (args: any, ctx: ToolHandlerContext) => Promise<unknown>;
+
 export interface MCPTool {
 	method: string;
 	name: string;
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
+	handler: ToolHandler;
 }
 
 /**
@@ -26,7 +38,7 @@ export function getAllTools(): MCPTool[] {
 		// Analytics tools (2 tools)
 		...analyticsTools(),
 
-		// Control planes tools (4 tools)
+		// Control planes tools (14 tools)
 		...controlPlanesTools(),
 
 		// Certificate management tools (5 tools)
@@ -43,11 +55,6 @@ export function getAllTools(): MCPTool[] {
 
 		// Elicitation tools (4 tools) - Smart information gathering for migrations
 		...elicitationTools,
-
-		// TODO: Add remaining tool categories
-		// ...upstreamsTools(), - Upstream and target management
-		// Data plane tools integrated in control_planes category above
-		// ...credentialsTools(), - Consumer credentials and SNI management
 	];
 }
 
@@ -99,7 +106,7 @@ export function validateToolRegistry(): { isValid: boolean; errors: string[] } {
 		methods.add(tool.method);
 
 		// Validate tool structure
-		if (!tool.method || !tool.name || !tool.description || !tool.parameters || !tool.category) {
+		if (!tool.method || !tool.name || !tool.description || !tool.parameters || !tool.category || !tool.handler) {
 			errors.push(`Invalid tool structure for method: ${tool.method}`);
 		}
 	}
