@@ -86,7 +86,7 @@ export const registerReindexWithNotifications = (server: McpServer, esClient: Cl
 				const countResponse = await esClient.count({
 					index: params.source.index,
 					...(params.source.query && { query: params.source.query }),
-				} as any);
+				});
 
 				totalDocs = countResponse.count;
 

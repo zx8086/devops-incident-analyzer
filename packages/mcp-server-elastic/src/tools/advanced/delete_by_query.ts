@@ -66,8 +66,8 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 				await tracker.updateProgress(10, "Counting documents to be deleted");
 				const countResult = await esClient.count({
 					index: params.index,
-					body: { query: params.query },
-				} as any);
+					query: params.query,
+				});
 				documentsToDelete = countResult.count;
 
 				await notificationManager.sendWarning(
