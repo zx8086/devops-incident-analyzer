@@ -1,7 +1,7 @@
 /* src/tools/index_management/update_index_settings.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -10,28 +10,29 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { coerceBoolean } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Zod validator for runtime validation
 const updateIndexSettingsValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	settings: z.object({}).passthrough(),
-	preserveExisting: coerceBoolean.optional(),
-	timeout: z.string().optional(),
-	masterTimeout: z.string().optional(),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-	flatSettings: coerceBoolean.optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to update settings for"),
+	settings: z
+		.object({})
+		.passthrough()
+		.describe("Index settings to update (passthrough allows arbitrary ES setting keys)"),
+	preserveExisting: coerceBoolean.optional().describe("Preserve existing settings that are not specified"),
+	timeout: z.string().optional().describe("Operation timeout (e.g., '30s')"),
+	masterTimeout: z.string().optional().describe("Master node timeout (e.g., '30s')"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
+	flatSettings: coerceBoolean.optional().describe("Accept settings in flat format"),
 });
 
-type _UpdateIndexSettingsParams = z.infer<typeof updateIndexSettingsValidator>;
+type UpdateIndexSettingsParams = z.infer<typeof updateIndexSettingsValidator>;
 
-// MCP error handling
 function createUpdateIndexSettingsMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found" | "resource_already_exists"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found" | "resource_already_exists"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -51,14 +52,12 @@ function createUpdateIndexSettingsMcpError(
 
 // Tool implementation
 export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const updateIndexSettingsHandler = async (args: any): Promise<SearchResult> => {
+	const updateIndexSettingsHandler = async (args: UpdateIndexSettingsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = updateIndexSettingsValidator.parse(args);
 
-			// Log the settings being applied for debugging
 			logger.debug(
 				{
 					index: params.index,
@@ -67,34 +66,32 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 				"Updating index settings",
 			);
 
-			// Check if settings object is empty or contains only empty objects
-			const hasValidSettings = (settings: any): boolean => {
-				if (!settings || typeof settings !== "object") return false;
+			const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+				typeof value === "object" && value !== null && !Array.isArray(value);
 
-				// Check for deeply nested empty objects
-				const checkNested = (obj: any): boolean => {
-					if (typeof obj !== "object" || obj === null) return true;
+			const hasValidSettings = (settings: unknown): boolean => {
+				const checkNested = (obj: unknown): boolean => {
+					if (!isPlainObject(obj)) return true;
 					const keys = Object.keys(obj);
 					if (keys.length === 0) return false;
 
 					return keys.some((key) => {
 						const value = obj[key];
-						if (typeof value === "object" && value !== null) {
+						if (isPlainObject(value)) {
 							return checkNested(value);
 						}
-						return true; // Primitive values are valid
+						return true;
 					});
 				};
 
-				return checkNested(settings);
+				return isPlainObject(settings) && checkNested(settings);
 			};
 
 			if (!hasValidSettings(params.settings)) {
 				throw new Error("Settings object is empty or contains no valid settings to update");
 			}
 
-			// Filter out common read-only settings that cause validation errors
-			const filterReadOnlySettings = (settings: any): any => {
+			const filterReadOnlySettings = (settings: Record<string, unknown>): Record<string, unknown> => {
 				const readOnlyPrefixes = [
 					"index.uuid",
 					"index.version",
@@ -104,16 +101,13 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 					"index.verified_before_close",
 				];
 
-				const filterObject = (obj: any): any => {
-					if (typeof obj !== "object" || obj === null) return obj;
-
-					const filtered: any = {};
+				const filterObject = (obj: Record<string, unknown>): Record<string, unknown> => {
+					const filtered: Record<string, unknown> = {};
 					for (const [key, value] of Object.entries(obj)) {
-						const fullPath = key;
-						const isReadOnly = readOnlyPrefixes.some((prefix) => fullPath.startsWith(prefix));
+						const isReadOnly = readOnlyPrefixes.some((prefix) => key.startsWith(prefix));
 
 						if (!isReadOnly) {
-							if (typeof value === "object" && value !== null) {
+							if (isPlainObject(value)) {
 								const filteredValue = filterObject(value);
 								if (Object.keys(filteredValue).length > 0) {
 									filtered[key] = filteredValue;
@@ -122,7 +116,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 								filtered[key] = value;
 							}
 						} else {
-							logger.debug(`Filtering out read-only setting: ${fullPath}`);
+							logger.debug(`Filtering out read-only setting: ${key}`);
 						}
 					}
 					return filtered;
@@ -140,7 +134,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 			const result = await esClient.indices.putSettings(
 				{
 					index: params.index,
-					body: filteredSettings, // Use body parameter for settings
+					settings: filteredSettings as unknown as estypes.IndicesIndexSettings,
 					preserve_existing: params.preserveExisting,
 					timeout: params.timeout,
 					master_timeout: params.masterTimeout,
@@ -202,7 +196,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 					details: {
 						index: args.index,
 						settings: args.settings,
-						isDataStream: (args.index as string).startsWith(".ds-"),
+						isDataStream: args.index.startsWith(".ds-"),
 						suggestion: "Try using flat setting names like 'index.lifecycle.name' instead of nested objects",
 					},
 				});
@@ -238,17 +232,7 @@ export const registerUpdateIndexSettingsTool: ToolRegistrationFunction = (server
 			description:
 				"Update index settings in Elasticsearch. Best for performance tuning, configuration changes, index optimization. Use when you need to modify index settings for better performance or functionality in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to update settings for
-				settings: z.object({}).passthrough(), // Index settings to update (passthrough allows arbitrary ES setting keys)
-				preserveExisting: z.boolean().optional(), // Preserve existing settings that are not specified
-				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
-				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-				flatSettings: z.boolean().optional(), // Accept settings in flat format
-			},
+			inputSchema: updateIndexSettingsValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_update_index_settings", updateIndexSettingsHandler, OperationType.WRITE),

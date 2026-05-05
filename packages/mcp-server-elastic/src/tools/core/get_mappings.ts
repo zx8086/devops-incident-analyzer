@@ -16,14 +16,14 @@ const getMappingsValidator = z.object({
 	index: z.string().trim().min(1).optional(),
 });
 
-type _GetMappingsParams = z.infer<typeof getMappingsValidator>;
+type GetMappingsParams = z.infer<typeof getMappingsValidator>;
 
 // MCP error handling
 function createGetMappingsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -39,7 +39,7 @@ function createGetMappingsMcpError(
 
 // Tool implementation
 export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getMappingsHandler = async (args: any): Promise<SearchResult> => {
+	const getMappingsHandler = async (args: GetMappingsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -99,9 +99,7 @@ export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpSer
 			title: "Get Field Mappings",
 			description:
 				"Get field mappings for Elasticsearch indices. Uses direct JSON Schema and standardized MCP error codes. PARAMETER: 'index' (string, default '*'). Best for understanding document structure, field types, and analyzers. Example: {index: 'logs-*'}",
-			inputSchema: {
-				index: z.string().optional(), // Name of the Elasticsearch index to get mappings for. Use '*' for all indices
-			},
+			inputSchema: getMappingsValidator.shape,
 		},
 		getMappingsHandler,
 	);

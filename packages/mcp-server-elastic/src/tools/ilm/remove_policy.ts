@@ -12,16 +12,19 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const removePolicyValidator = z.object({
-	index: z.string().min(1, "Index name cannot be empty"),
+	index: z
+		.string()
+		.min(1, "Index name cannot be empty")
+		.describe("Index name or pattern to remove ILM policy from (cannot be empty)"),
 });
 
-type _RemovePolicyParams = z.infer<typeof removePolicyValidator>;
+type RemovePolicyParams = z.infer<typeof removePolicyValidator>;
 
 function createIlmRemovePolicyMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "permission" | "index_not_found" | "no_policy";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -38,9 +41,9 @@ function createIlmRemovePolicyMcpError(
 }
 
 export const registerRemovePolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const removePolicyHandler = async (args: any): Promise<SearchResult> => {
+	const removePolicyHandler = async (args: RemovePolicyParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
-		let params: z.infer<typeof removePolicyValidator> | undefined;
+		let params: RemovePolicyParams | undefined;
 
 		try {
 			// Simple validation - no complex parameter extraction
@@ -156,12 +159,9 @@ Operation completed at: ${new Date().toISOString()}`,
 			description:
 				"Remove ILM policy from indices. Remove Index Lifecycle Management policy assignment from indices, stopping automated lifecycle management. Uses direct JSON Schema and standardized MCP error codes. Examples: {index: logs-*}, {index: my-index-000001}",
 
-			inputSchema: {
-				index: z.string(), // Index name or pattern to remove ILM policy from (cannot be empty)
-			},
+			inputSchema: removePolicyValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		withReadOnlyCheck("elasticsearch_ilm_remove_policy", removePolicyHandler, OperationType.WRITE),
 	);
 };

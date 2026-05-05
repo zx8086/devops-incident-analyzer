@@ -17,14 +17,14 @@ const clusterStatsValidator = z.object({
 	timeout: z.string().optional(),
 });
 
-type _ClusterStatsParams = z.infer<typeof clusterStatsValidator>;
+type ClusterStatsParams = z.infer<typeof clusterStatsValidator>;
 
 // MCP error handling
 function createClusterStatsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "cluster_unhealthy" | "node_unavailable";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -41,7 +41,7 @@ function createClusterStatsMcpError(
 
 // Tool implementation
 export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const clusterStatsHandler = async (args: any): Promise<SearchResult> => {
+	const clusterStatsHandler = async (args: ClusterStatsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -162,10 +162,7 @@ export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Get comprehensive cluster statistics from Elasticsearch. Best for cluster monitoring, capacity planning, performance analysis. Use when you need detailed metrics about cluster-wide operations, storage, and resource utilization in Elasticsearch. READ operation - safe for production use.",
 
-			inputSchema: {
-				nodeId: z.string().optional(), // A comma-separated list of node IDs or names to limit returned information. Leave empty for all nodes.
-				timeout: z.string().optional(), // Explicit operation timeout (e.g., '30s', '1m')
-			},
+			inputSchema: clusterStatsValidator.shape,
 		},
 
 		clusterStatsHandler,

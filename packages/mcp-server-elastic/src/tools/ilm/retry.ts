@@ -12,7 +12,10 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const retryValidator = z.object({
-	index: z.string().min(1, "Index name cannot be empty"),
+	index: z
+		.string()
+		.min(1, "Index name cannot be empty")
+		.describe("Index name or pattern to retry ILM policy execution for (cannot be empty)"),
 });
 
 type RetryParams = z.infer<typeof retryValidator>;
@@ -21,7 +24,7 @@ function createIlmRetryMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "permission" | "index_not_found" | "no_failed_step";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -38,7 +41,7 @@ function createIlmRetryMcpError(
 }
 
 export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const retryHandler = async (args: any): Promise<SearchResult> => {
+	const retryHandler = async (args: RetryParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		let params: RetryParams | undefined;
 
@@ -226,12 +229,9 @@ Operation completed at: ${new Date().toISOString()}`,
 			description:
 				"Retry ILM policy execution. Retry Index Lifecycle Management policy execution for indices in ERROR state. Uses direct JSON Schema and standardized MCP error codes. Examples: {index: logs-*}, {index: failed-index-000001}",
 
-			inputSchema: {
-				index: z.string(), // Index name or pattern to retry ILM policy execution for (cannot be empty)
-			},
+			inputSchema: retryValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		withReadOnlyCheck("elasticsearch_ilm_retry", retryHandler, OperationType.WRITE),
 	);
 };

@@ -12,20 +12,18 @@ import type { SearchResult, TextContent, ToolRegistrationFunction } from "../typ
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const deletePolicyValidator = z.object({
-	name: z.string().min(1, "Policy name cannot be empty"),
-	masterTimeout: z.string().optional(),
+	name: z.string().min(1, "Policy name cannot be empty").describe("Name of the enrich policy to delete"),
+	masterTimeout: z.string().optional().describe("Timeout for master node operations. Examples: '30s', '1m'"),
 });
 
 type DeletePolicyParams = z.infer<typeof deletePolicyValidator>;
 
-// MCP error handling
 function createDeletePolicyMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "policy_not_found" | "timeout" | "policy_in_use";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -43,7 +41,7 @@ function createDeletePolicyMcpError(
 
 // Tool implementation
 export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deletePolicyHandler = async (args: any): Promise<SearchResult> => {
+	const deletePolicyHandler = async (args: DeletePolicyParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -132,10 +130,7 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 			description:
 				"Delete an enrich policy and its index in Elasticsearch. Best for policy cleanup, configuration management, removing unused enrichment. Use when you need to remove enrich policies and their associated indices from Elasticsearch.",
 
-			inputSchema: {
-				name: z.string(), // Name of the enrich policy to delete
-				masterTimeout: z.string().optional(), // Timeout for master node operations. Examples: '30s', '1m'
-			},
+			inputSchema: deletePolicyValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_enrich_delete_policy", deletePolicyImpl, OperationType.DELETE),

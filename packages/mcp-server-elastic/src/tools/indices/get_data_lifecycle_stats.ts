@@ -14,14 +14,13 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Zod validator for runtime validation (empty object)
 const getDataLifecycleStatsValidator = z.object({});
 
-type _GetDataLifecycleStatsParams = z.infer<typeof getDataLifecycleStatsValidator>;
+type GetDataLifecycleStatsParams = z.infer<typeof getDataLifecycleStatsValidator>;
 
-// MCP error handling
 function createGetDataLifecycleStatsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "feature_not_available";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -41,7 +40,7 @@ function createGetDataLifecycleStatsMcpError(
 
 // Tool implementation
 export const registerGetDataLifecycleStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getDataLifecycleStatsHandler = async (args: any): Promise<SearchResult> => {
+	const getDataLifecycleStatsHandler = async (args: GetDataLifecycleStatsParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters (should be empty)
 			const _params = getDataLifecycleStatsValidator.parse(args);
@@ -98,7 +97,7 @@ export const registerGetDataLifecycleStatsTool: ToolRegistrationFunction = (serv
 			description:
 				"Get data stream lifecycle statistics from Elasticsearch. Best for data stream monitoring, lifecycle analysis, storage planning. Use when you need to track data stream lifecycle management and retention policies in Elasticsearch.",
 
-			inputSchema: {},
+			inputSchema: getDataLifecycleStatsValidator.shape,
 		},
 
 		getDataLifecycleStatsHandler,

@@ -1,7 +1,7 @@
 /* src/tools/index_management/create_index.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -9,26 +9,27 @@ import { logger } from "../../utils/logger.js";
 import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Zod validator for runtime validation
 const createIndexValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	aliases: z.object({}).passthrough().optional(),
-	mappings: z.object({}).passthrough().optional(),
-	settings: z.object({}).passthrough().optional(),
-	timeout: z.string().optional(),
-	masterTimeout: z.string().optional(),
-	waitForActiveShards: z.union([z.literal("all"), z.number().min(1).max(9)]).optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to create"),
+	aliases: z.object({}).passthrough().optional().describe("Index aliases to set during creation"),
+	mappings: z.object({}).passthrough().optional().describe("Field mappings for the index"),
+	settings: z.object({}).passthrough().optional().describe("Index settings configuration"),
+	timeout: z.string().optional().describe("Operation timeout (e.g., '30s')"),
+	masterTimeout: z.string().optional().describe("Master node timeout (e.g., '30s')"),
+	waitForActiveShards: z
+		.union([z.literal("all"), z.number().min(1).max(9)])
+		.optional()
+		.describe("Number of active shards to wait for"),
 });
 
-type _CreateIndexParams = z.infer<typeof createIndexValidator>;
+type CreateIndexParams = z.infer<typeof createIndexValidator>;
 
-// MCP error handling
 function createCreateIndexMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_already_exists" | "resource_already_exists"; details?: any },
+	context: {
+		type: "validation" | "execution" | "index_already_exists" | "resource_already_exists";
+		details?: unknown;
+	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -48,23 +49,22 @@ function createCreateIndexMcpError(
 
 // Tool implementation
 export const registerCreateIndexTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const createIndexHandler = async (args: any): Promise<SearchResult> => {
+	const createIndexHandler = async (args: CreateIndexParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = createIndexValidator.parse(args);
 
 			const result = await esClient.indices.create(
 				{
 					index: params.index,
-					aliases: params.aliases,
-					mappings: params.mappings,
-					settings: params.settings,
+					aliases: params.aliases as unknown as Record<string, estypes.IndicesAlias> | undefined,
+					mappings: params.mappings as unknown as estypes.MappingTypeMapping | undefined,
+					settings: params.settings as unknown as estypes.IndicesIndexSettings | undefined,
 					timeout: params.timeout,
 					master_timeout: params.masterTimeout,
 					wait_for_active_shards: params.waitForActiveShards,
-				} as any,
+				},
 				{
 					opaqueId: "elasticsearch_create_index",
 				},
@@ -122,15 +122,7 @@ export const registerCreateIndexTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Create an index in Elasticsearch with custom settings and mappings. Best for index initialization, schema definition, data structure setup. Use when you need to create new Elasticsearch indices with specific configurations for document storage. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to create
-				aliases: z.object({}).passthrough().optional(), // Index aliases to set during creation
-				mappings: z.object({}).passthrough().optional(), // Field mappings for the index
-				settings: z.object({}).passthrough().optional(), // Index settings configuration
-				timeout: z.string().optional(), // Operation timeout (e.g., '30s')
-				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
-				waitForActiveShards: z.any().optional(), // Number of active shards to wait for
-			},
+			inputSchema: createIndexValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_create_index", createIndexHandler, OperationType.WRITE),

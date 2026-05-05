@@ -126,7 +126,7 @@ export const getFieldMapping = {
 				ignore_unavailable: args.ignoreUnavailable,
 				allow_no_indices: args.allowNoIndices,
 				expand_wildcards: args.expandWildcards,
-			} as any);
+			});
 
 			logger.debug(
 				{

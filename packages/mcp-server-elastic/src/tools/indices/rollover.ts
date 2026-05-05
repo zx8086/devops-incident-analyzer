@@ -1,7 +1,7 @@
 /* src/tools/indices/rollover.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -10,13 +10,12 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Zod validator for runtime validation
 const rolloverValidator = z.object({
-	alias: z.string().min(1, "Alias name cannot be empty"),
-	newIndex: z.string().optional(),
+	alias: z
+		.string()
+		.min(1, "Alias name cannot be empty")
+		.describe("Alias name for the data stream or index to roll over"),
+	newIndex: z.string().optional().describe("Name of the new index to create during rollover"),
 	aliases: z
 		.record(
 			z.string(),
@@ -29,7 +28,8 @@ const rolloverValidator = z.object({
 				searchRouting: z.string().optional(),
 			}),
 		)
-		.optional(),
+		.optional()
+		.describe("Aliases to add to the new index"),
 	conditions: z
 		.object({
 			minAge: z.string().optional(),
@@ -48,19 +48,22 @@ const rolloverValidator = z.object({
 			maxPrimaryShardDocs: z.number().optional(),
 			minPrimaryShardDocs: z.number().optional(),
 		})
-		.optional(),
-	mappings: z.object({}).passthrough().optional(),
-	settings: z.object({}).passthrough().optional(),
-	dryRun: booleanField().optional(),
-	masterTimeout: z.string().optional(),
-	timeout: z.string().optional(),
-	waitForActiveShards: z.union([z.number(), z.enum(["all", "index-setting"])]).optional(),
-	lazy: booleanField().optional(),
+		.optional()
+		.describe("Rollover conditions"),
+	mappings: z.object({}).passthrough().optional().describe("Mapping definition for the new index"),
+	settings: z.object({}).passthrough().optional().describe("Settings for the new index"),
+	dryRun: booleanField().optional().describe("Whether to perform a dry run without actually rolling over"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
+	timeout: z.string().optional().describe("Timeout for the rollover operation"),
+	waitForActiveShards: z
+		.union([z.number(), z.enum(["all", "index-setting"])])
+		.optional()
+		.describe("Number of active shards to wait for"),
+	lazy: booleanField().optional().describe("Whether to perform lazy rollover"),
 });
 
-type _RolloverParams = z.infer<typeof rolloverValidator>;
+type RolloverParams = z.infer<typeof rolloverValidator>;
 
-// MCP error handling
 function createRolloverMcpError(
 	error: Error | string,
 	context: {
@@ -71,7 +74,7 @@ function createRolloverMcpError(
 			| "rollover_conditions_not_met"
 			| "index_already_exists"
 			| "permission_denied";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -90,11 +93,10 @@ function createRolloverMcpError(
 
 // Tool implementation
 export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const rolloverHandler = async (args: any): Promise<SearchResult> => {
+	const rolloverHandler = async (args: RolloverParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = rolloverValidator.parse(args);
 
 			logger.debug(
@@ -110,10 +112,10 @@ export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer
 				{
 					alias: params.alias,
 					new_index: params.newIndex,
-					aliases: params.aliases as any,
-					conditions: params.conditions as any,
-					mappings: params.mappings,
-					settings: params.settings,
+					aliases: params.aliases as unknown as Record<string, estypes.IndicesAlias> | undefined,
+					conditions: params.conditions as unknown as estypes.IndicesRolloverRolloverConditions | undefined,
+					mappings: params.mappings as unknown as estypes.MappingTypeMapping | undefined,
+					settings: params.settings as Record<string, unknown> | undefined,
 					dry_run: params.dryRun,
 					master_timeout: params.masterTimeout,
 					timeout: params.timeout,
@@ -197,19 +199,7 @@ export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer
 			description:
 				"Roll over to a new index in Elasticsearch for data streams or aliases. Best for index lifecycle management, data stream rotation, automated archiving. Use when you need to create new indices based on size, age, or document count thresholds in Elasticsearch.",
 
-			inputSchema: {
-				alias: z.string(), // Alias name for the data stream or index to roll over
-				newIndex: z.string().optional(), // Name of the new index to create during rollover
-				aliases: z.object({}).passthrough().optional(), // Aliases to add to the new index
-				conditions: z.object({}).passthrough().optional(), // Rollover conditions
-				mappings: z.object({}).passthrough().optional(), // Mapping definition for the new index
-				settings: z.object({}).passthrough().optional(), // Settings for the new index
-				dryRun: z.boolean().optional(), // Whether to perform a dry run without actually rolling over
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-				timeout: z.string().optional(), // Timeout for the rollover operation
-				waitForActiveShards: z.any().optional(), // Number of active shards to wait for
-				lazy: z.boolean().optional(), // Whether to perform lazy rollover
-			},
+			inputSchema: rolloverValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_rollover", rolloverHandler, OperationType.WRITE),

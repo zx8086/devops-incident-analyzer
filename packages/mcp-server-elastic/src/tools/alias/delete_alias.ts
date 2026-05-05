@@ -12,23 +12,27 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const deleteAliasValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	name: z.string().min(1, "Alias name cannot be empty"),
-	timeout: z.string().optional(),
-	masterTimeout: z.string().optional(),
+	index: z
+		.string()
+		.min(1, "Index cannot be empty")
+		.describe("Index name to remove the alias from. Supports patterns with wildcards"),
+	name: z
+		.string()
+		.min(1, "Alias name cannot be empty")
+		.describe("Alias name to delete. Must exist on the specified index"),
+	timeout: z.string().optional().describe("Timeout for the request (e.g., '30s', '1m')"),
+	masterTimeout: z.string().optional().describe("Timeout for waiting for master node response (e.g., '30s', '1m')"),
 });
 
-type _DeleteAliasParams = z.infer<typeof deleteAliasValidator>;
+type DeleteAliasParams = z.infer<typeof deleteAliasValidator>;
 
-// MCP error handling
 function createMcpError(
 	error: Error | string,
 	context: {
 		toolName: string;
 		type: "validation" | "execution" | "connection" | "alias_not_found" | "invalid_alias";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -47,7 +51,7 @@ function createMcpError(
 // Tool implementation
 export const registerDeleteAliasTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	// Tool handler
-	const deleteAliasHandler = async (args: any): Promise<SearchResult> => {
+	const deleteAliasHandler = async (args: DeleteAliasParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -165,12 +169,7 @@ export const registerDeleteAliasTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Delete an alias from an index in Elasticsearch. Best for alias cleanup, configuration management, removing unused references. Use when you need to remove named references to Elasticsearch indices during maintenance or restructuring. DESTRUCTIVE: Permanently removes alias configuration and may break applications relying on the alias.",
 
-			inputSchema: {
-				index: z.string(), // Index name to remove the alias from. Cannot be empty. Supports patterns with wildcards
-				name: z.string(), // Alias name to delete. Cannot be empty. Must exist on the specified index
-				timeout: z.string().optional(), // Timeout for the request (e.g., '30s', '1m'). Optional
-				masterTimeout: z.string().optional(), // Timeout for waiting for master node response (e.g., '30s', '1m'). Optional
-			},
+			inputSchema: deleteAliasValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_delete_alias", deleteAliasHandler, OperationType.DESTRUCTIVE),

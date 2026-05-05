@@ -10,7 +10,8 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Define the parameter schema
 const GetTaskParams = z.object({
 	taskId: z.string().min(1, "Task ID cannot be empty"),
-	timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
+	// Elasticsearch Duration accepts string ("30s") or special values -1/0; not arbitrary numbers.
+	timeout: z.union([z.string(), z.literal(-1), z.literal(0)]).optional(),
 	waitForCompletion: booleanField().optional(),
 });
 
@@ -28,18 +29,14 @@ export const registerGetTaskTool: ToolRegistrationFunction = (server: McpServer,
 			description:
 				"Get information about a specific Elasticsearch task. Best for task monitoring, operation tracking, performance analysis. Use when you need to inspect the status and details of running or completed tasks in Elasticsearch.",
 
-			inputSchema: {
-				taskId: z.string().min(1, "Task ID cannot be empty"),
-				timeout: z.union([z.string(), z.number(), z.literal(-1), z.literal(0)]).optional(),
-				waitForCompletion: booleanField().optional(),
-			},
+			inputSchema: GetTaskParams.shape,
 		},
 
 		async (params: GetTaskParamsType): Promise<SearchResult> => {
 			try {
 				const result = await esClient.tasks.get({
 					task_id: params.taskId,
-					timeout: params.timeout as any,
+					timeout: params.timeout,
 					wait_for_completion: params.waitForCompletion,
 				});
 				return {

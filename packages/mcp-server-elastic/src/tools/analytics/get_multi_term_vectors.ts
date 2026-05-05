@@ -24,7 +24,7 @@ const GetMultiTermVectorsParams = z.object({
 				term_statistics: booleanField().optional(),
 				routing: z.string().optional(),
 				version: z.number().optional(),
-				version_type: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+				version_type: z.enum(["internal", "external", "external_gte"]).optional(),
 			}),
 		)
 		.optional(),
@@ -67,7 +67,7 @@ export const registerGetMultiTermVectorsTool: ToolRegistrationFunction = (server
 							version_type: doc.version_type,
 						})),
 						ids: params.ids,
-					} as any,
+					},
 					{
 						opaqueId: "elasticsearch_get_multi_term_vectors",
 					},

@@ -21,7 +21,7 @@ const nodesStatsValidator = z.object({
 	summary: z.boolean().optional(),
 });
 
-type _NodesStatsParams = z.infer<typeof nodesStatsValidator>;
+type NodesStatsParams = z.infer<typeof nodesStatsValidator>;
 
 // Helper function to format node stats summary
 function formatNodeStatsSummary(result: any): string {
@@ -110,7 +110,7 @@ function createNodesStatsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "cluster_unhealthy" | "node_unavailable";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -127,7 +127,7 @@ function createNodesStatsMcpError(
 
 // Tool implementation
 export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const nodesStatsHandler = async (args: any): Promise<SearchResult> => {
+	const nodesStatsHandler = async (args: NodesStatsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -325,14 +325,7 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 			description:
 				"Get node statistics. WARNING: Returns massive data without metric filter. BEST PRACTICES: {metric: 'jvm', level: 'node'} for JVM summary, {metric: 'os'} for system stats, {metric: 'fs'} for disk only, {metric: 'indices', indexMetric: 'docs,store'} for index metrics. NEVER use empty {} or {metric: 'indices'} without indexMetric. READ operation - safe for production use.",
 
-			inputSchema: {
-				nodeId: z.string().optional(), // Specific node ID, or leave empty for all nodes
-				metric: z.string().optional(), // CRITICAL: Specify exact metrics needed. Options: 'os', 'jvm', 'fs', 'process', 'http', 'transport', 'indices'. Combine: 'os,jvm'
-				indexMetric: z.string().optional(), // When using 'indices' metric, MUST specify: 'docs', 'store', 'indexing', 'search', 'segments', etc.
-				level: z.enum(["node", "indices", "shards"]).optional(), // Aggregation level. Use 'node' for node-level stats (default)
-				timeout: z.string().optional(), // Timeout for the request (e.g., '30s', '1m')
-				summary: z.boolean().optional(), // Return summarized node statistics instead of full details
-			},
+			inputSchema: nodesStatsValidator.shape,
 		},
 
 		nodesStatsHandler,

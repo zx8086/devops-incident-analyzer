@@ -1,7 +1,7 @@
 /* src/tools/watcher/query_watches.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -10,26 +10,25 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Direct JSON Schema definition
-// FIXED: Original JSON Schema definition removed - now using Zod schema inline
-
-// Zod validator for runtime validation
 const queryWatchesValidator = z.object({
-	from: z.number().min(0).optional(),
-	size: z.number().min(1).max(50).optional(),
-	query: z.object({}).passthrough().optional(),
+	from: z.number().min(0).optional().describe("Starting offset for pagination"),
+	size: z.number().min(1).max(50).optional().describe("Number of watches to return"),
+	query: z.object({}).passthrough().optional().describe("Query to filter watches"),
 	sort: z
 		.union([z.string(), z.object({}).passthrough(), z.array(z.union([z.string(), z.object({}).passthrough()]))])
-		.optional(),
-	search_after: z.array(z.union([z.number(), z.string(), booleanField(), z.null()])).optional(),
+		.optional()
+		.describe("Sort criteria for results"),
+	search_after: z
+		.array(z.union([z.number(), z.string(), booleanField(), z.null()]))
+		.optional()
+		.describe("Values to search after for pagination"),
 });
 
-type _QueryWatchesParams = z.infer<typeof queryWatchesValidator>;
+type QueryWatchesParams = z.infer<typeof queryWatchesValidator>;
 
-// MCP error handling
 function createQueryWatchesMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,19 +46,18 @@ function createQueryWatchesMcpError(
 
 // Tool implementation
 export const registerWatcherQueryWatchesTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const queryWatchesHandler = async (args: any): Promise<SearchResult> => {
+	const queryWatchesHandler = async (args: QueryWatchesParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = queryWatchesValidator.parse(args);
 
 			const result = await esClient.watcher.queryWatches({
 				from: params.from,
-				size: params.size || 20, // Default size if not specified
-				query: params.query,
-				sort: params.sort as any,
-				search_after: params.search_after as any,
+				size: params.size || 20,
+				query: params.query as unknown as estypes.QueryDslQueryContainer | undefined,
+				sort: params.sort as unknown as estypes.Sort | undefined,
+				search_after: params.search_after as unknown as estypes.SortResults | undefined,
 			});
 
 			const duration = performance.now() - perfStart;
@@ -163,13 +161,7 @@ export const registerWatcherQueryWatchesTool: ToolRegistrationFunction = (server
 			description:
 				"Query and filter watches in Elasticsearch Watcher. Best for watch discovery, configuration management, monitoring overview. Use when you need to search and paginate through watch definitions in Elasticsearch alerting system. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				from: z.number().min(0).optional(), // Starting offset for pagination
-				size: z.number().min(1).max(50).optional(), // Number of watches to return
-				query: z.object({}).passthrough().optional(), // Query to filter watches
-				sort: z.any().optional(), // Sort criteria for results
-				search_after: z.array(z.any().optional()).optional(), // Values to search after for pagination
-			},
+			inputSchema: queryWatchesValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_query_watches", queryWatchesHandler, OperationType.READ),

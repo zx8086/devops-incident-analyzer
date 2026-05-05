@@ -3,7 +3,7 @@
 
 /* SIMPLIFIED VERSION: Direct JSON Schema + MCP Error Codes */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -39,7 +39,6 @@ const bodySchema = z.union([
 		.passthrough(),
 ]);
 
-// Simple Zod validator for runtime validation only
 const putLifecycleValidator = z.object({
 	policy: z.string().min(1, "Policy identifier cannot be empty"),
 	body: bodySchema,
@@ -47,13 +46,13 @@ const putLifecycleValidator = z.object({
 	timeout: z.string().optional(),
 });
 
-type _PutLifecycleParams = z.infer<typeof putLifecycleValidator>;
+type PutLifecycleParams = z.infer<typeof putLifecycleValidator>;
 
 function createIlmPutLifecycleMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "permission" | "policy_conflict";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -69,11 +68,10 @@ function createIlmPutLifecycleMcpError(
 }
 
 export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const putLifecycleHandler = async (args: any): Promise<SearchResult> => {
+	const putLifecycleHandler = async (args: PutLifecycleParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Simple validation - no complex parameter extraction
 			const params = putLifecycleValidator.parse(args);
 
 			logger.debug(
@@ -86,38 +84,25 @@ export const registerPutLifecycleTool: ToolRegistrationFunction = (server: McpSe
 				"Creating/updating ILM policy",
 			);
 
-			// Extract the correct policy body format for Elasticsearch API
-			// The Elasticsearch client expects the body to contain the ENTIRE policy structure
-			let policyBody: any;
-
-			// Check if body already has 'policy' wrapper (wrapped format) - use as-is
-			if ("policy" in params.body && params.body.policy) {
-				// Body format: { policy: { phases: {...} } }
-				policyBody = params.body;
-			}
-			// Check if body has 'phases' directly (direct format) - wrap it
-			else if ("phases" in params.body) {
-				// Body format: { phases: {...} } -> wrap as { policy: { phases: {...} } }
-				policyBody = { policy: params.body };
-			}
-			// Otherwise assume it's already properly formatted
-			else {
-				policyBody = params.body;
-			}
+			// The validator accepts either { policy: { phases: ... } } (wrapped) or
+			// { phases: ... } (direct). Both shapes are coerced to the SDK's IlmPolicy
+			// (the inner { phases: ..., _meta?: ... } object) before being passed flat.
+			const ilmPolicy =
+				"policy" in params.body && params.body.policy
+					? (params.body.policy as unknown as estypes.IlmPolicy)
+					: (params.body as unknown as estypes.IlmPolicy);
 
 			logger.debug(
 				{
 					policy: params.policy,
-					bodyStructure: Object.keys(policyBody),
-					hasPolicyWrapper: "policy" in policyBody,
-					hasPhases: policyBody.policy ? "phases" in policyBody.policy : "phases" in policyBody,
+					hasPhases: "phases" in ilmPolicy,
 				},
 				"Elasticsearch ILM API call",
 			);
 
 			const result = await esClient.ilm.putLifecycle({
 				name: params.policy,
-				body: policyBody,
+				policy: ilmPolicy,
 				master_timeout: params.masterTimeout,
 				timeout: params.timeout,
 			});
@@ -228,49 +213,7 @@ Operation completed at: ${new Date().toISOString()}`,
 			description:
 				"Create or update ILM policy. Define Index Lifecycle Management policy with automated transitions through hot, warm, cold, and delete phases. FIXED: Uses flexible Zod Schema supporting both wrapped ({policy: {phases: {...}}}) and direct ({phases: {...}}) formats for proper MCP parameter handling.",
 
-			inputSchema: {
-				policy: z.string().min(1),
-				body: z.union([
-					// Format 1: {policy: {phases: {...}}} - wrapped format
-					z
-						.object({
-							policy: z
-								.object({
-									phases: z
-										.record(
-											z.string(),
-											z
-												.object({
-													actions: z.record(z.string(), z.unknown()).optional(),
-													min_age: z.string().optional(),
-												})
-												.passthrough(),
-										)
-										.optional(),
-								})
-								.passthrough(),
-						})
-						.passthrough(),
-					// Format 2: {phases: {...}} - direct format
-					z
-						.object({
-							phases: z
-								.record(
-									z.string(),
-									z
-										.object({
-											actions: z.record(z.string(), z.unknown()).optional(),
-											min_age: z.string().optional(),
-										})
-										.passthrough(),
-								)
-								.optional(),
-						})
-						.passthrough(),
-				]),
-				masterTimeout: z.string().optional(),
-				timeout: z.string().optional(),
-			},
+			inputSchema: putLifecycleValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_ilm_put_lifecycle", secureHandler, OperationType.WRITE),

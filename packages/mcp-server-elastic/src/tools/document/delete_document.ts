@@ -12,26 +12,39 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const deleteDocumentValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	id: z.string().min(1, "Document ID cannot be empty"),
-	routing: z.string().optional(),
-	refresh: z.enum(["true", "false", "wait_for"]).optional(),
-	version: z.number().optional(),
-	versionType: z.enum(["internal", "external", "external_gte", "force"]).optional(),
-	ifSeqNo: z.number().optional(),
-	ifPrimaryTerm: z.number().optional(),
-	timeout: z.string().optional(),
-	waitForActiveShards: z.union([z.literal("all"), z.number().min(1).max(9)]).optional(),
+	index: z
+		.string()
+		.min(1, "Index cannot be empty")
+		.describe("REQUIRED: Name of the Elasticsearch index containing the document. Example: 'users', 'logs-2024.01'"),
+	id: z
+		.string()
+		.min(1, "Document ID cannot be empty")
+		.describe("REQUIRED: Unique identifier of the document to delete"),
+	routing: z.string().optional().describe("Custom routing value for document placement"),
+	refresh: z
+		.enum(["true", "false", "wait_for"])
+		.optional()
+		.describe("Whether to refresh the index after the operation"),
+	version: z.number().optional().describe("Expected document version for optimistic concurrency control"),
+	versionType: z
+		.enum(["internal", "external", "external_gte"])
+		.optional()
+		.describe("Version type for concurrency control"),
+	ifSeqNo: z.number().optional().describe("Sequence number for optimistic concurrency control"),
+	ifPrimaryTerm: z.number().optional().describe("Primary term for optimistic concurrency control"),
+	timeout: z.string().optional().describe("Operation timeout (e.g., '5s', '1m')"),
+	waitForActiveShards: z
+		.union([z.literal("all"), z.number().min(1).max(9)])
+		.optional()
+		.describe("Number of active shards to wait for"),
 });
 
-type _DeleteDocumentParams = z.infer<typeof deleteDocumentValidator>;
+type DeleteDocumentParams = z.infer<typeof deleteDocumentValidator>;
 
-// MCP error handling
 function createDeleteDocumentMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "document_not_found" | "version_conflict"; details?: any },
+	context: { type: "validation" | "execution" | "document_not_found" | "version_conflict"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -51,7 +64,7 @@ function createDeleteDocumentMcpError(
 
 // Tool implementation
 export const registerDeleteDocumentTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteDocumentHandler = async (args: any): Promise<SearchResult> => {
+	const deleteDocumentHandler = async (args: DeleteDocumentParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -69,7 +82,7 @@ export const registerDeleteDocumentTool: ToolRegistrationFunction = (server: Mcp
 				if_primary_term: params.ifPrimaryTerm,
 				timeout: params.timeout,
 				wait_for_active_shards: params.waitForActiveShards,
-			} as any);
+			});
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
@@ -132,18 +145,7 @@ export const registerDeleteDocumentTool: ToolRegistrationFunction = (server: Mcp
 			description:
 				"Delete a document from Elasticsearch by index and id. Best for removing specific documents, data cleanup, document lifecycle management. Use when you need to permanently remove individual JSON documents from Elasticsearch indices with optimistic concurrency control. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // REQUIRED: Name of the Elasticsearch index containing the document. Example: 'users', 'logs-2024.01'
-				id: z.string(), // REQUIRED: Unique identifier of the document to delete
-				routing: z.string().optional(), // Custom routing value for document placement
-				refresh: z.enum(["true", "false", "wait_for"]).optional(), // Whether to refresh the index after the operation
-				version: z.number().optional(), // Expected document version for optimistic concurrency control
-				versionType: z.enum(["internal", "external", "external_gte", "force"]).optional(), // Version type for concurrency control
-				ifSeqNo: z.number().optional(), // Sequence number for optimistic concurrency control
-				ifPrimaryTerm: z.number().optional(), // Primary term for optimistic concurrency control
-				timeout: z.string().optional(), // Operation timeout (e.g., '5s', '1m')
-				waitForActiveShards: z.any().optional(), // Number of active shards to wait for
-			},
+			inputSchema: deleteDocumentValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_delete_document", deleteDocumentHandler, OperationType.DESTRUCTIVE),

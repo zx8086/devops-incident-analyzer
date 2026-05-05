@@ -1,6 +1,6 @@
 /* src/tools/core/search.ts */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -14,14 +14,6 @@ interface MappingResponse {
 			properties?: Record<string, { type: string }>;
 		};
 	};
-}
-
-interface SearchQueryBody {
-	from?: number;
-	size?: number;
-	aggs?: any;
-	highlight?: any;
-	[key: string]: unknown;
 }
 
 // Zod schema for Elasticsearch search parameters - OBJECT ONLY format
@@ -71,7 +63,7 @@ function createSearchMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "query_parsing";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -143,8 +135,9 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			);
 
 			// Log warning for potential timestamp issues if range queries are used
-			if (query && typeof query === "object" && (query as any).range?.["@timestamp"]) {
-				const rangeQuery = (query as any).range["@timestamp"];
+			const queryRange = (query as { range?: Record<string, unknown> } | undefined)?.range;
+			if (queryRange?.["@timestamp"]) {
+				const rangeQuery = queryRange["@timestamp"];
 				logger.debug({ rangeQuery, currentTime: new Date().toISOString() }, "Time range query detected");
 
 				await notificationManager.sendInfo("Time range query detected", {
@@ -186,17 +179,20 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				});
 			}
 
-			// Build search request from natural parameters
-			const searchRequest: SearchQueryBody & { index: string } = {
+			// Build search request from natural parameters. aggs/highlight/sort/fields/query
+			// come from Zod passthrough validators which TS sees as `Record<string, unknown>`;
+			// double-cast to the SDK's strict shapes since runtime structure is user-supplied
+			// and forwarded as-is to Elasticsearch.
+			const searchRequest: estypes.SearchRequest = {
 				index: index || "*",
-				query: finalQuery,
+				query: finalQuery as unknown as estypes.QueryDslQueryContainer,
 				size: size ?? 10,
 				...(from !== undefined && { from }),
-				...(sort && { sort }),
-				...(aggs && { aggs }),
+				...(sort && { sort: sort as unknown as estypes.Sort }),
+				...(aggs && { aggs: aggs as unknown as Record<string, estypes.AggregationsAggregationContainer> }),
 				...(_source !== undefined && { _source }),
-				...(fields && fields.length > 0 && { fields }),
-				...(highlight && { highlight }),
+				...(fields && fields.length > 0 && { fields: fields as unknown as estypes.QueryDslFieldAndFormat[] }),
+				...(highlight && { highlight: highlight as unknown as estypes.SearchHighlight }),
 			};
 
 			// Check for potentially expensive operations
@@ -231,7 +227,10 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			await progressTracker.updateProgress(55, "Search request prepared, configuring highlighting");
 
 			if (indexMappings.properties) {
-				const textFields: Record<string, any> = {};
+				const textFields: Record<
+					string,
+					{ pre_tags: string[]; post_tags: string[]; fragment_size: number; number_of_fragments: number }
+				> = {};
 				for (const [fieldName, fieldData] of Object.entries(indexMappings.properties)) {
 					if (
 						fieldData.type === "text" ||

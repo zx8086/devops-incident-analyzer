@@ -1,7 +1,7 @@
 /* src/tools/template/put_index_template.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -28,14 +28,14 @@ const putIndexTemplateValidator = z.object({
 	masterTimeout: z.string().optional(),
 });
 
-type _PutIndexTemplateParams = z.infer<typeof putIndexTemplateValidator>;
+type PutIndexTemplateParams = z.infer<typeof putIndexTemplateValidator>;
 
 // MCP error handling
 function createTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_already_exists" | "invalid_template" | "access_denied";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -53,7 +53,7 @@ function createTemplateMcpError(
 
 // Tool implementation
 export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const putIndexTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const putIndexTemplateHandler = async (args: PutIndexTemplateParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -80,13 +80,13 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 				{
 					name,
 					index_patterns: indexPatterns,
-					template,
-					data_stream: dataStream,
+					template: template as unknown as estypes.IndicesPutIndexTemplateIndexTemplateMapping | undefined,
+					data_stream: dataStream as unknown as estypes.IndicesDataStreamVisibility | undefined,
 					composed_of: composedOf,
 					ignore_missing_component_templates: ignoreMissingComponentTemplates,
 					priority,
 					version,
-					_meta: meta,
+					_meta: meta as unknown as estypes.Metadata | undefined,
 					allow_auto_create: allowAutoCreate,
 					create,
 					master_timeout: masterTimeout,
@@ -159,20 +159,7 @@ export const registerPutIndexTemplateTool: ToolRegistrationFunction = (server: M
 			description:
 				"Create or update an index template in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for index standardization, mapping management, settings automation. Use when you need to define templates for automatic index configuration in Elasticsearch. TIP: Define 'indexPatterns' to control which indices use this template, set 'priority' for template precedence.",
 
-			inputSchema: {
-				name: z.string(), // Template name (cannot be empty)
-				indexPatterns: z.array(z.string()).optional(), // Array of index patterns that this template applies to
-				template: z.object({}).passthrough().optional(), // Template definition containing settings, mappings, and/or aliases
-				dataStream: z.object({}).passthrough().optional(), // Data stream configuration (e.g. {} for default, or {hidden: true})
-				composedOf: z.array(z.string()).optional(), // Array of component template names this template is composed of
-				ignoreMissingComponentTemplates: z.array(z.string()).optional(), // Names of optional components in composedOf to skip if absent (Fleet @custom extensions)
-				priority: z.number().optional(), // Template priority (higher number = higher priority)
-				version: z.number().optional(), // Template version number
-				meta: z.object({}).passthrough().optional(), // Metadata about the template
-				allowAutoCreate: z.boolean().optional(), // Allow automatic index creation
-				create: z.boolean().optional(), // If true, only create if template doesn't exist
-				masterTimeout: z.string().optional(), // Timeout for master node operations
-			},
+			inputSchema: putIndexTemplateValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_put_index_template", putIndexTemplateHandler, OperationType.WRITE),

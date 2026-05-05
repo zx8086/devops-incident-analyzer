@@ -14,20 +14,22 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const existsIndexTemplateValidator = z.object({
-	name: z.string().min(1, "Template name cannot be empty"),
-	local: booleanField().optional(),
-	flatSettings: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+	name: z
+		.string()
+		.min(1, "Template name cannot be empty")
+		.describe("Index template name to check existence for. Example: 'logs-template'"),
+	local: booleanField().optional().describe("Return local information, do not retrieve the state from master node"),
+	flatSettings: booleanField().optional().describe("Return settings in flat format"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 });
 
-type _ExistsIndexTemplateParams = z.infer<typeof existsIndexTemplateValidator>;
+type ExistsIndexTemplateParams = z.infer<typeof existsIndexTemplateValidator>;
 
-// MCP error handling
 function createExistsIndexTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -44,7 +46,7 @@ function createExistsIndexTemplateMcpError(
 
 // Tool implementation
 export const registerExistsIndexTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const existsIndexTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const existsIndexTemplateHandler = async (args: ExistsIndexTemplateParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = existsIndexTemplateValidator.parse(args);
@@ -113,12 +115,7 @@ export const registerExistsIndexTemplateTool: ToolRegistrationFunction = (server
 			description:
 				"Check if index templates exist in Elasticsearch. Best for template validation, deployment verification, configuration checks. Use when you need to verify index template presence before operations in Elasticsearch.",
 
-			inputSchema: {
-				name: z.string(), // Index template name to check existence for. Example: 'logs-template'
-				local: z.boolean().optional(), // Return local information, do not retrieve the state from master node
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-			},
+			inputSchema: existsIndexTemplateValidator.shape,
 		},
 
 		existsIndexTemplateHandler,

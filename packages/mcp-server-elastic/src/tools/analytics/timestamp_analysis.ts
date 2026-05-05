@@ -216,29 +216,7 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 			description:
 				"Analyze timestamp distribution in Elasticsearch indices to identify data quality issues. Helps diagnose why time range queries may return unexpected results. Provides statistics and sample analysis.",
 
-			inputSchema: {
-				type: "object",
-				properties: {
-					index: {
-						type: "string",
-						description: "Index pattern to analyze (e.g., 'logs-*', '.ds-logs-*')",
-					},
-					timestampField: {
-						type: "string",
-						description: "Timestamp field to analyze (default: '@timestamp')",
-						default: "@timestamp",
-					},
-					sampleSize: {
-						type: "number",
-						description: "Number of recent documents to sample for analysis (1-1000, default: 100)",
-						minimum: 1,
-						maximum: 1000,
-						default: 100,
-					},
-				},
-				required: ["index"],
-				additionalProperties: false,
-			},
+			inputSchema: timestampAnalysisSchema.shape,
 		},
 
 		handler,

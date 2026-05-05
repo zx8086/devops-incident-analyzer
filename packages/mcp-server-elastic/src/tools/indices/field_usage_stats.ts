@@ -14,24 +14,33 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const fieldUsageStatsValidator = z.object({
-	index: z.union([z.string(), z.array(z.string())]),
-	allowNoIndices: booleanField().optional(),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.describe("Index name(s) or pattern(s) to get field usage stats for. Examples: 'logs-*', ['users', 'products']"),
+	allowNoIndices: booleanField()
+		.optional()
+		.describe("Whether to ignore if a wildcard indices expression resolves into no concrete indices"),
 	expandWildcards: z
 		.enum(["all", "open", "closed", "hidden", "none"])
 		.or(z.array(z.enum(["all", "open", "closed", "hidden", "none"])))
-		.optional(),
-	ignoreUnavailable: booleanField().optional(),
-	fields: z.union([z.string(), z.array(z.string())]).optional(),
+		.optional()
+		.describe("Type of index that wildcard patterns can match"),
+	ignoreUnavailable: booleanField()
+		.optional()
+		.describe("Whether specified concrete indices should be ignored when unavailable"),
+	fields: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Field name(s) to get usage stats for. If not specified, stats for all fields are returned"),
 });
 
-type _FieldUsageStatsParams = z.infer<typeof fieldUsageStatsValidator>;
+type FieldUsageStatsParams = z.infer<typeof fieldUsageStatsValidator>;
 
-// MCP error handling
 function createFieldUsageStatsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "field_not_found";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -48,7 +57,7 @@ function createFieldUsageStatsMcpError(
 
 // Tool implementation
 export const registerFieldUsageStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const fieldUsageStatsHandler = async (args: any): Promise<SearchResult> => {
+	const fieldUsageStatsHandler = async (args: FieldUsageStatsParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = fieldUsageStatsValidator.parse(args);
@@ -115,13 +124,7 @@ export const registerFieldUsageStatsTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Get field usage statistics per shard and field in Elasticsearch. Best for query optimization, field analysis, performance tuning. Use when you need to understand which fields are accessed during queries for Elasticsearch index optimization.",
 
-			inputSchema: {
-				index: z.any(), // Index name(s) or pattern(s) to get field usage stats for. Examples: 'logs-*', ['users', 'products']
-				allowNoIndices: z.boolean().optional(), // Whether to ignore if a wildcard indices expression resolves into no concrete indices
-				expandWildcards: z.any().optional(), // Type of index that wildcard patterns can match
-				ignoreUnavailable: z.boolean().optional(), // Whether specified concrete indices should be ignored when unavailable
-				fields: z.any().optional(), // Field name(s) to get usage stats for. If not specified, stats for all fields are returned
-			},
+			inputSchema: fieldUsageStatsValidator.shape,
 		},
 
 		fieldUsageStatsHandler,

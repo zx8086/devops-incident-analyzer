@@ -6,14 +6,19 @@
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
+
+const getStatusValidator = z.object({});
+
+type GetStatusParams = z.infer<typeof getStatusValidator>;
 
 function createIlmStatusMcpError(
 	error: Error | string,
 	context: {
 		type: "execution" | "permission";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -27,7 +32,7 @@ function createIlmStatusMcpError(
 }
 
 export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getStatusHandler = async (_args: any): Promise<SearchResult> => {
+	const getStatusHandler = async (_args: GetStatusParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -108,10 +113,9 @@ Status checked at: ${new Date().toISOString()}`,
 			description:
 				"Get ILM status. Check if Index Lifecycle Management is running and operational. Uses direct JSON Schema and standardized MCP error codes. No parameters required.",
 
-			inputSchema: {},
+			inputSchema: getStatusValidator.shape,
 		},
 
-		// Direct JSON Schema
 		getStatusHandler,
 	);
 };

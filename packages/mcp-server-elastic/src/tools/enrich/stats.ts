@@ -11,19 +11,17 @@ import type { SearchResult, TextContent, ToolRegistrationFunction } from "../typ
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const statsValidator = z.object({
-	masterTimeout: z.string().optional(),
+	masterTimeout: z.string().optional().describe("Timeout for master node operations. Examples: '30s', '1m'"),
 });
 
-type _StatsParams = z.infer<typeof statsValidator>;
+type StatsParams = z.infer<typeof statsValidator>;
 
-// MCP error handling
 function createStatsMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "coordinator_unavailable" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -40,7 +38,7 @@ function createStatsMcpError(
 
 // Tool implementation
 export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const statsHandler = async (args: any): Promise<SearchResult> => {
+	const statsHandler = async (args: StatsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -109,9 +107,7 @@ export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Get Elasticsearch enrich coordinator statistics and execution status. Best for performance monitoring, policy tracking, enrichment analysis. Use when you need to monitor enrich policy execution and coordinator performance in Elasticsearch.",
 
-			inputSchema: {
-				masterTimeout: z.string().optional(), // Timeout for master node operations. Examples: '30s', '1m'
-			},
+			inputSchema: statsValidator.shape,
 		},
 
 		statsHandler,

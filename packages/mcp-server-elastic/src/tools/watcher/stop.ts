@@ -14,15 +14,14 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const stopWatcherValidator = z.object({
-	master_timeout: z.string().optional(),
+	master_timeout: z.string().optional().describe("Explicit operation timeout for connection to master node"),
 });
 
-type _StopWatcherParams = z.infer<typeof stopWatcherValidator>;
+type StopWatcherParams = z.infer<typeof stopWatcherValidator>;
 
-// MCP error handling
 function createStopWatcherMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -40,7 +39,7 @@ function createStopWatcherMcpError(
 
 // Tool implementation
 export const registerWatcherStopTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const stopWatcherHandler = async (args: any): Promise<SearchResult> => {
+	const stopWatcherHandler = async (args: StopWatcherParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -95,9 +94,7 @@ export const registerWatcherStopTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Stop the Elasticsearch Watcher service. Best for service management, monitoring deactivation, maintenance operations. Use when you need to disable the Watcher service for Elasticsearch maintenance or troubleshooting. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				master_timeout: z.string().optional(), // Explicit operation timeout for connection to master node
-			},
+			inputSchema: stopWatcherValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_stop", stopWatcherHandler, OperationType.WRITE),

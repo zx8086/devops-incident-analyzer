@@ -15,20 +15,22 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const flushIndexValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	ignoreUnavailable: coerceBoolean.optional(),
-	allowNoIndices: coerceBoolean.optional(),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
-	force: coerceBoolean.optional(),
-	waitIfOngoing: coerceBoolean.optional(),
+	index: z.string().min(1, "Index cannot be empty").describe("Name of the index to flush"),
+	ignoreUnavailable: coerceBoolean.optional().describe("Ignore unavailable indices"),
+	allowNoIndices: coerceBoolean.optional().describe("Allow wildcards that match no indices"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
+	force: coerceBoolean.optional().describe("Force the flush operation even if not required"),
+	waitIfOngoing: coerceBoolean.optional().describe("Wait if another flush operation is ongoing"),
 });
 
-type _FlushIndexParams = z.infer<typeof flushIndexValidator>;
+type FlushIndexParams = z.infer<typeof flushIndexValidator>;
 
-// MCP error handling
 function createFlushIndexMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "index_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "index_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,7 +49,7 @@ function createFlushIndexMcpError(
 
 // Tool implementation
 export const registerFlushIndexTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const flushIndexHandler = async (args: any): Promise<SearchResult> => {
+	const flushIndexHandler = async (args: FlushIndexParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -115,14 +117,7 @@ export const registerFlushIndexTool: ToolRegistrationFunction = (server: McpServ
 			description:
 				"Flush an Elasticsearch index to ensure all data is written to disk. Best for data persistence, index optimization, ensuring durability. Use when you need to force Elasticsearch to write buffered data to storage for consistency. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Name of the index to flush
-				ignoreUnavailable: z.boolean().optional(), // Ignore unavailable indices
-				allowNoIndices: z.boolean().optional(), // Allow wildcards that match no indices
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-				force: z.boolean().optional(), // Force the flush operation even if not required
-				waitIfOngoing: z.boolean().optional(), // Wait if another flush operation is ongoing
-			},
+			inputSchema: flushIndexValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_flush_index", flushIndexHandler, OperationType.WRITE),

@@ -1,7 +1,7 @@
 /* src/tools/template/multi_search_template.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -21,14 +21,14 @@ const multiSearchTemplateValidator = z.object({
 	typedKeys: z.boolean().optional(),
 });
 
-type _MultiSearchTemplateParams = z.infer<typeof multiSearchTemplateValidator>;
+type MultiSearchTemplateParams = z.infer<typeof multiSearchTemplateValidator>;
 
 // MCP error handling
 function createMultiSearchTemplateMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "template_not_found" | "query_parsing" | "index_not_found";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -46,7 +46,7 @@ function createMultiSearchTemplateMcpError(
 
 // Tool implementation
 export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const multiSearchTemplateHandler = async (args: any): Promise<SearchResult> => {
+	const multiSearchTemplateHandler = async (args: MultiSearchTemplateParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -56,9 +56,10 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 
 			logger.debug({ searchCount: searches.length, index }, "Executing multi-search template");
 
+			// SIO-669: prefer top-level `search_templates` over deprecated `body` wrapper.
 			const result = await esClient.msearchTemplate(
 				{
-					body: searches,
+					search_templates: searches as unknown as estypes.MsearchTemplateRequestItem[],
 					index,
 					max_concurrent_searches: maxConcurrentSearches,
 					ccs_minimize_roundtrips: ccsMinimizeRoundtrips,
@@ -135,14 +136,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 			description:
 				"Execute multiple search templates in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for batch search operations, templated queries, performance optimization. Use when you need to run multiple parameterized searches efficiently using Elasticsearch search templates. TIP: Each search in searches array can specify its own template and parameters.",
 
-			inputSchema: {
-				searches: z.array(z.object({}).passthrough()), // Array of search requests to execute
-				index: z.string().optional(), // Default index to search if not specified in individual searches
-				maxConcurrentSearches: z.number().optional(), // Maximum number of concurrent searches
-				ccsMinimizeRoundtrips: z.boolean().optional(), // Minimize roundtrips for cross-cluster searches
-				restTotalHitsAsInt: z.boolean().optional(), // Return total hits as integer instead of object
-				typedKeys: z.boolean().optional(), // Specify whether aggregation names should be prefixed by their type
-			},
+			inputSchema: multiSearchTemplateValidator.shape,
 		},
 
 		multiSearchTemplateHandler,

@@ -12,9 +12,9 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const deleteLifecycleValidator = z.object({
-	policy: z.string().min(1, "Policy identifier cannot be empty"),
-	masterTimeout: z.string().optional(),
-	timeout: z.string().optional(),
+	policy: z.string().min(1, "Policy identifier cannot be empty").describe("Policy name to delete (required)"),
+	masterTimeout: z.string().optional().describe("Master node timeout"),
+	timeout: z.string().optional().describe("Request timeout"),
 });
 
 type DeleteLifecycleParams = z.infer<typeof deleteLifecycleValidator>;
@@ -23,7 +23,7 @@ function createIlmDeleteMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "not_found" | "in_use" | "permission";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -40,7 +40,7 @@ function createIlmDeleteMcpError(
 }
 
 export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteLifecycleHandler = async (args: any): Promise<SearchResult> => {
+	const deleteLifecycleHandler = async (args: DeleteLifecycleParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		let params: DeleteLifecycleParams | undefined;
 
@@ -177,14 +177,9 @@ export const registerDeleteLifecycleTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Delete an ILM policy. DESTRUCTIVE OPERATION: Cannot be undone. Policy must not be in use by any indices or templates. Examples: {policy: old-logs-policy}. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				policy: z.string().min(1).describe("Policy name to delete (required)"),
-				masterTimeout: z.string().optional().describe("Master node timeout"),
-				timeout: z.string().optional().describe("Request timeout"),
-			},
+			inputSchema: deleteLifecycleValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		withReadOnlyCheck("elasticsearch_ilm_delete_lifecycle", deleteLifecycleHandler, OperationType.DELETE),
 	);
 };

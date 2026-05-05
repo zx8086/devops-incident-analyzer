@@ -9,9 +9,17 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const deleteDataStreamValidator = z.object({
-	name: z.string().min(1, "Data stream name cannot be empty"),
-	expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(),
+	name: z
+		.string()
+		.min(1, "Data stream name cannot be empty")
+		.describe("Data stream name or wildcard pattern (e.g., 'logs-*', 'profiling-events-*')"),
+	expandWildcards: z
+		.enum(["all", "open", "closed", "hidden", "none"])
+		.optional()
+		.describe("Which indices to expand wildcards to"),
 });
+
+type DeleteDataStreamParams = z.infer<typeof deleteDataStreamValidator>;
 
 function createDeleteDataStreamMcpError(
 	error: Error | string,
@@ -33,7 +41,7 @@ function createDeleteDataStreamMcpError(
 }
 
 export const registerDeleteDataStreamTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const deleteDataStreamHandler = async (args: unknown): Promise<SearchResult> => {
+	const deleteDataStreamHandler = async (args: DeleteDataStreamParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -71,9 +79,9 @@ export const registerDeleteDataStreamTool: ToolRegistrationFunction = (server: M
 			}
 
 			if (error instanceof Error && error.message.includes("data_stream_missing_exception")) {
-				throw createDeleteDataStreamMcpError(`Data stream not found: ${(args as { name?: string })?.name}`, {
+				throw createDeleteDataStreamMcpError(`Data stream not found: ${args.name}`, {
 					type: "not_found",
-					details: { name: (args as { name?: string })?.name },
+					details: { name: args.name },
 				});
 			}
 
@@ -90,10 +98,7 @@ export const registerDeleteDataStreamTool: ToolRegistrationFunction = (server: M
 			title: "Delete Data Stream",
 			description:
 				"Delete a data stream and all its backing indices. This is the correct way to remove time-series data (logs, metrics, traces). Cannot use delete_index on data stream backing indices -- use this tool instead. DESTRUCTIVE OPERATION: deletes the data stream and ALL backing indices permanently.",
-			inputSchema: {
-				name: z.string(), // Data stream name or wildcard pattern (e.g., 'logs-*', 'profiling-events-*')
-				expandWildcards: z.enum(["all", "open", "closed", "hidden", "none"]).optional(), // Which indices to expand wildcards to
-			},
+			inputSchema: deleteDataStreamValidator.shape,
 		},
 		withReadOnlyCheck("elasticsearch_delete_data_stream", deleteDataStreamHandler, OperationType.DESTRUCTIVE),
 	);

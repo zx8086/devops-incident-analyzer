@@ -14,31 +14,40 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const getIndexInfoValidator = z.object({
-	index: z.union([z.string(), z.array(z.string())]),
-	allowNoIndices: booleanField().optional(),
+	index: z
+		.union([z.string(), z.array(z.string())])
+		.describe(
+			"Index name(s) or pattern(s) to get info for. Use '*' for all indices. Examples: 'logs-*', ['users', 'products'], '*'",
+		),
+	allowNoIndices: booleanField()
+		.optional()
+		.describe("Whether to ignore if a wildcard indices expression resolves into no concrete indices"),
 	expandWildcards: z
 		.enum(["all", "open", "closed", "hidden", "none"])
 		.or(z.array(z.enum(["all", "open", "closed", "hidden", "none"])))
-		.optional(),
-	flatSettings: booleanField().optional(),
-	ignoreUnavailable: booleanField().optional(),
-	includeDefaults: booleanField().optional(),
-	local: booleanField().optional(),
-	masterTimeout: z.string().optional(),
+		.optional()
+		.describe("Type of index that wildcard patterns can match"),
+	flatSettings: booleanField().optional().describe("Return settings in flat format"),
+	ignoreUnavailable: booleanField()
+		.optional()
+		.describe("Whether specified concrete indices should be ignored when unavailable"),
+	includeDefaults: booleanField().optional().describe("Whether to return default values in the response"),
+	local: booleanField().optional().describe("Return local information, do not retrieve the state from master node"),
+	masterTimeout: z.string().optional().describe("Timeout for connection to master node"),
 	features: z
 		.enum(["aliases", "mappings", "settings"])
 		.or(z.array(z.enum(["aliases", "mappings", "settings"])))
-		.optional(),
+		.optional()
+		.describe("Feature(s) to retrieve from indices. Allows filtering response content"),
 });
 
-type _GetIndexInfoParams = z.infer<typeof getIndexInfoValidator>;
+type GetIndexInfoParams = z.infer<typeof getIndexInfoValidator>;
 
-// MCP error handling
 function createGetIndexInfoMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "index_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -55,7 +64,7 @@ function createGetIndexInfoMcpError(
 
 // Tool implementation
 export const registerGetIndexInfoTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getIndexInfoHandler = async (args: any): Promise<SearchResult> => {
+	const getIndexInfoHandler = async (args: GetIndexInfoParams): Promise<SearchResult> => {
 		try {
 			// Validate parameters
 			const params = getIndexInfoValidator.parse(args);
@@ -132,17 +141,7 @@ export const registerGetIndexInfoTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Get comprehensive index information from Elasticsearch including aliases, mappings, and settings. Best for index inspection, configuration analysis, data stream monitoring. Empty {} parameters will default to getting info for all indices ('*'). Use when you need detailed metadata about Elasticsearch indices with feature filtering capabilities for selective information retrieval.",
 
-			inputSchema: {
-				index: z.any(), // Index name(s) or pattern(s) to get info for. Use '*' for all indices. Examples: 'logs-*', ['users', 'products'], '*'
-				allowNoIndices: z.boolean().optional(), // Whether to ignore if a wildcard indices expression resolves into no concrete indices
-				expandWildcards: z.any().optional(), // Type of index that wildcard patterns can match
-				flatSettings: z.boolean().optional(), // Return settings in flat format
-				ignoreUnavailable: z.boolean().optional(), // Whether specified concrete indices should be ignored when unavailable
-				includeDefaults: z.boolean().optional(), // Whether to return default values in the response
-				local: z.boolean().optional(), // Return local information, do not retrieve the state from master node
-				masterTimeout: z.string().optional(), // Timeout for connection to master node
-				features: z.any().optional(), // Feature(s) to retrieve from indices. Allows filtering response content
-			},
+			inputSchema: getIndexInfoValidator.shape,
 		},
 
 		getIndexInfoHandler,

@@ -14,16 +14,18 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Zod validator for runtime validation
 const ackWatchValidator = z.object({
-	watch_id: z.string().min(1, "Watch ID cannot be empty"),
-	action_id: z.union([z.string(), z.array(z.string())]).optional(),
+	watch_id: z.string().min(1, "Watch ID cannot be empty").describe("Watch ID to acknowledge"),
+	action_id: z
+		.union([z.string(), z.array(z.string())])
+		.optional()
+		.describe("Action ID(s) to acknowledge"),
 });
 
-type _AckWatchParams = z.infer<typeof ackWatchValidator>;
+type AckWatchParams = z.infer<typeof ackWatchValidator>;
 
-// MCP error handling
 function createAckWatchMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "watch_not_found"; details?: any },
+	context: { type: "validation" | "execution" | "watch_not_found"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -42,7 +44,7 @@ function createAckWatchMcpError(
 
 // Tool implementation
 export const registerWatcherAckWatchTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const ackWatchHandler = async (args: any): Promise<SearchResult> => {
+	const ackWatchHandler = async (args: AckWatchParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -106,10 +108,7 @@ export const registerWatcherAckWatchTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Acknowledge a watch in Elasticsearch Watcher to throttle actions. Best for alert management, action throttling, notification control. Use when you need to manually acknowledge watch actions to prevent repeated executions in Elasticsearch alerting. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				watch_id: z.string(), // Watch ID to acknowledge
-				action_id: z.any().optional(), // Action ID(s) to acknowledge
-			},
+			inputSchema: ackWatchValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_watcher_ack_watch", ackWatchHandler, OperationType.WRITE),

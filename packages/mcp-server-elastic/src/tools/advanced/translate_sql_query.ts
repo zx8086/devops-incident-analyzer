@@ -27,9 +27,8 @@ export const registerTranslateSqlQueryTool: ToolRegistrationFunction = (server: 
 			inputSchema: TranslateSqlQueryParams.shape,
 		},
 
-		async (params: any): Promise<SearchResult> => {
-			// Validate params with Zod schema
-			const validatedParams = TranslateSqlQueryParams.parse(params) as TranslateSqlQueryParamsType;
+		async (params: TranslateSqlQueryParamsType): Promise<SearchResult> => {
+			const validatedParams = TranslateSqlQueryParams.parse(params);
 			try {
 				const result = await esClient.sql.translate({
 					query: validatedParams.query,

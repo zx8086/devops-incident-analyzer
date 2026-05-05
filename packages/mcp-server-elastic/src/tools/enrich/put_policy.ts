@@ -23,11 +23,11 @@ const enrichSourceValidator = z.object({
 });
 
 const putPolicyValidator = z.object({
-	name: z.string().min(1, "Policy name cannot be empty"),
-	geoMatch: enrichSourceValidator.optional(),
-	match: enrichSourceValidator.optional(),
-	range: enrichSourceValidator.optional(),
-	masterTimeout: z.string().optional(),
+	name: z.string().min(1, "Policy name cannot be empty").describe("Name of the enrich policy to create"),
+	geoMatch: enrichSourceValidator.optional().describe("Configuration for geo_match enrich policy type"),
+	match: enrichSourceValidator.optional().describe("Configuration for match enrich policy type"),
+	range: enrichSourceValidator.optional().describe("Configuration for range enrich policy type"),
+	masterTimeout: z.string().optional().describe("Timeout for master node operations. Examples: '30s', '1m'"),
 });
 
 type PutPolicyParams = z.infer<typeof putPolicyValidator>;
@@ -37,7 +37,7 @@ function createPutPolicyMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "policy_already_exists" | "index_not_found" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -55,7 +55,7 @@ function createPutPolicyMcpError(
 
 // Tool implementation
 export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const putPolicyHandler = async (args: any): Promise<SearchResult> => {
+	const putPolicyHandler = async (args: PutPolicyParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -175,15 +175,9 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 			description:
 				"Create an enrich policy in Elasticsearch. Best for data enrichment setup, reference data integration, document enhancement workflows. Use when you need to define policies for adding reference data to documents during ingestion in Elasticsearch.",
 
-			inputSchema: {
-				name: z.string(), // Name of the enrich policy to create
-				geoMatch: z.object({}).passthrough().optional(), // Configuration for geo_match enrich policy type
-				match: z.object({}).passthrough().optional(), // Configuration for match enrich policy type
-				range: z.object({}).passthrough().optional(), // Configuration for range enrich policy type
-				masterTimeout: z.string().optional(), // Timeout for master node operations. Examples: '30s', '1m'
-			},
+			inputSchema: putPolicyValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_enrich_put_policy", putPolicyImpl, OperationType.WRITE) as any,
+		withReadOnlyCheck("elasticsearch_enrich_put_policy", putPolicyImpl, OperationType.WRITE),
 	);
 };

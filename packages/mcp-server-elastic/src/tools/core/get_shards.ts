@@ -42,9 +42,12 @@ const getShardsValidator = z.object({
 	sortBy: z.enum(["state", "index", "size", "docs"]).optional(),
 });
 
-type _GetShardsParams = z.infer<typeof getShardsValidator>;
+type GetShardsParams = z.infer<typeof getShardsValidator>;
 
-function createGetShardsMcpError(error: Error | string, context: { type: string; details?: any }): McpError {
+function createGetShardsMcpError(
+	error: Error | string,
+	context: { type: string; details?: Record<string, unknown> },
+): McpError {
 	const message = error instanceof Error ? error.message : error;
 
 	if (message.includes("index_not_found")) {
@@ -63,7 +66,7 @@ function createGetShardsMcpError(error: Error | string, context: { type: string;
 }
 
 export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getShardsHandler = async (args: any): Promise<SearchResult> => {
+	const getShardsHandler = async (args: GetShardsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -210,7 +213,7 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 			);
 			throw createGetShardsMcpError(error instanceof Error ? error : new Error(String(error)), {
 				type: "get_shards",
-				details: args,
+				details: args as Record<string, unknown>,
 			});
 		}
 	};
@@ -226,11 +229,7 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 			description:
 				"Get shard information. WARNING: Clusters often have 1000+ shards. Check cluster stats first to see shard count. If >500 shards, MUST use 'limit' or will fail. Patterns: {limit: 100, sortBy: 'state'} for health check, {limit: 50, sortBy: 'size'} for storage analysis. Empty {} only works for small clusters (<500 shards). FIXED: Uses Zod Schema for proper MCP parameter handling.",
 
-			inputSchema: {
-				index: z.string().optional(),
-				limit: z.number().min(1).max(1000).optional(),
-				sortBy: z.enum(["state", "index", "size", "docs"]).optional(),
-			},
+			inputSchema: getShardsValidator.shape,
 		},
 
 		getShardsHandler,

@@ -14,21 +14,21 @@ import type { SearchResult, TextContent, ToolRegistrationFunction } from "../typ
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const executePolicyValidator = z.object({
-	name: z.string().min(1, "Policy name cannot be empty"),
-	masterTimeout: z.string().optional(),
-	waitForCompletion: booleanField().optional(),
+	name: z.string().min(1, "Policy name cannot be empty").describe("Name of the enrich policy to execute"),
+	masterTimeout: z.string().optional().describe("Timeout for master node operations. Examples: '30s', '1m'"),
+	waitForCompletion: booleanField()
+		.optional()
+		.describe("Whether to wait for the policy execution to complete before returning"),
 });
 
 type ExecutePolicyParams = z.infer<typeof executePolicyValidator>;
 
-// MCP error handling
 function createExecutePolicyMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "policy_not_found" | "execution_failed" | "timeout";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -46,7 +46,7 @@ function createExecutePolicyMcpError(
 
 // Tool implementation
 export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const executePolicyHandler = async (args: any): Promise<SearchResult> => {
+	const executePolicyHandler = async (args: ExecutePolicyParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -227,11 +227,7 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 			description:
 				"Execute Elasticsearch enrich policy to create the enrich index. Best for policy activation, data preparation, enrichment setup. Use when you need to build the enrich index from source data for document enrichment in Elasticsearch.",
 
-			inputSchema: {
-				name: z.string(), // Name of the enrich policy to execute
-				masterTimeout: z.string().optional(), // Timeout for master node operations. Examples: '30s', '1m'
-				waitForCompletion: z.boolean().optional(), // Whether to wait for the policy execution to complete before returning
-			},
+			inputSchema: executePolicyValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_enrich_execute_policy", executePolicyImpl, OperationType.WRITE),

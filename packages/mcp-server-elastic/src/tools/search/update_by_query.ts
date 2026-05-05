@@ -1,7 +1,7 @@
 /* src/tools/search/update_by_query.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -33,12 +33,12 @@ const updateByQueryValidator = z.object({
 	slices: z.number().optional(),
 });
 
-type _UpdateByQueryParams = z.infer<typeof updateByQueryValidator>;
+type UpdateByQueryParams = z.infer<typeof updateByQueryValidator>;
 
 // MCP error handling
 function createUpdateByQueryMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution"; details?: any },
+	context: { type: "validation" | "execution"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -52,7 +52,7 @@ function createUpdateByQueryMcpError(
 
 // Tool implementation
 export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const updateByQueryHandler = async (args: any): Promise<SearchResult> => {
+	const updateByQueryHandler = async (args: UpdateByQueryParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		let tracker: ProgressTracker | undefined;
 		let params: z.infer<typeof updateByQueryValidator> | undefined;
@@ -93,7 +93,7 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 				await tracker.updateProgress(10, "Counting documents matching query");
 				const countResult = await esClient.count({
 					index: params.index,
-					query: params.query,
+					query: params.query as unknown as estypes.QueryDslQueryContainer,
 				});
 				estimatedTotal = countResult.count;
 
@@ -116,8 +116,8 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 			const result = await esClient.updateByQuery(
 				{
 					index: params.index,
-					query: params.query,
-					script: params.script,
+					query: params.query as unknown as estypes.QueryDslQueryContainer,
+					script: params.script as unknown as estypes.Script | undefined,
 					max_docs: params.maxDocs,
 					conflicts: params.conflicts,
 					refresh: params.refresh,
@@ -261,23 +261,7 @@ export const registerUpdateByQueryTool: ToolRegistrationFunction = (server: McpS
 			description:
 				"Update documents by query in Elasticsearch. Best for bulk document updates, field modifications, script-based transformations. Use when you need to update multiple documents based on query conditions rather than individual document updates. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // Index name or pattern to update
-				query: z.object({}).passthrough(), // Query DSL to select documents to update
-				script: z.object({}).passthrough().optional(), // Script to apply to matching documents
-				maxDocs: z.number().optional(),
-				conflicts: z.enum(["abort", "proceed"]).optional(),
-				refresh: z.boolean().optional(),
-				timeout: z.string().optional(),
-				waitForActiveShards: z.any().optional(),
-				waitForCompletion: z.boolean().optional(),
-				requestsPerSecond: z.number().optional(),
-				scroll: z.string().optional(),
-				scrollSize: z.number().optional(),
-				searchType: z.enum(["query_then_fetch", "dfs_query_then_fetch"]).optional(),
-				searchTimeout: z.string().optional(),
-				slices: z.number().optional(),
-			},
+			inputSchema: updateByQueryValidator.shape,
 		},
 
 		updateByQueryHandler,

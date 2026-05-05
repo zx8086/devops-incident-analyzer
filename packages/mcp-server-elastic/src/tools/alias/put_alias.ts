@@ -12,24 +12,34 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const putAliasValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	name: z.string().min(1, "Alias name cannot be empty"),
-	filter: z.record(z.string(), z.unknown()).optional(),
-	routing: z.string().optional(),
-	isWriteIndex: z.boolean().optional(),
+	index: z
+		.string()
+		.min(1, "Index cannot be empty")
+		.describe("Index name to add the alias to. Supports patterns with wildcards"),
+	name: z
+		.string()
+		.min(1, "Alias name cannot be empty")
+		.describe("Alias name to create. Will overwrite existing alias with same name"),
+	filter: z
+		.record(z.string(), z.unknown())
+		.optional()
+		.describe("Optional query filter to apply when accessing data through this alias"),
+	routing: z.string().optional().describe("Optional routing value for operations performed through this alias"),
+	isWriteIndex: z
+		.boolean()
+		.optional()
+		.describe("Set to true to designate this as the write index for the alias (default: false)"),
 });
 
-type _PutAliasParams = z.infer<typeof putAliasValidator>;
+type PutAliasParams = z.infer<typeof putAliasValidator>;
 
-// MCP error handling
 function createMcpError(
 	error: Error | string,
 	context: {
 		toolName: string;
 		type: "validation" | "execution" | "connection" | "alias_already_exists" | "invalid_alias";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -48,7 +58,7 @@ function createMcpError(
 // Tool implementation
 export const registerPutAliasTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	// Tool handler
-	const putAliasHandler = async (args: any): Promise<SearchResult> => {
+	const putAliasHandler = async (args: PutAliasParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -174,13 +184,7 @@ export const registerPutAliasTool: ToolRegistrationFunction = (server: McpServer
 			description:
 				"Add an alias to an index in Elasticsearch. Best for alias creation, index abstraction, application decoupling. Use when you need to create named references to Elasticsearch indices for easier management and zero-downtime operations. DESTRUCTIVE: Creates permanent alias configuration that affects index access patterns.",
 
-			inputSchema: {
-				index: z.string(), // Index name to add the alias to. Cannot be empty. Supports patterns with wildcards
-				name: z.string(), // Alias name to create. Cannot be empty. Will overwrite existing alias with same name
-				filter: z.object({}).passthrough().optional(), // Optional query filter to apply when accessing data through this alias
-				routing: z.string().optional(), // Optional routing value for operations performed through this alias
-				isWriteIndex: z.boolean().optional(), // Set to true to designate this as the write index for the alias (default: false)
-			},
+			inputSchema: putAliasValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_put_alias", putAliasHandler, OperationType.WRITE),

@@ -12,17 +12,17 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const startValidator = z.object({
-	masterTimeout: z.string().optional(),
-	timeout: z.string().optional(),
+	masterTimeout: z.string().optional().describe("Master node timeout"),
+	timeout: z.string().optional().describe("Request timeout"),
 });
 
-type _StartParams = z.infer<typeof startValidator>;
+type StartParams = z.infer<typeof startValidator>;
 
 function createIlmStartMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "permission" | "already_started";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -38,7 +38,7 @@ function createIlmStartMcpError(
 }
 
 export const registerStartTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const startHandler = async (args: any): Promise<SearchResult> => {
+	const startHandler = async (args: StartParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -137,13 +137,9 @@ Operation completed at: ${new Date().toISOString()}`,
 			description:
 				"Start ILM. Start the Index Lifecycle Management plugin to resume automated operations. Uses direct JSON Schema and standardized MCP error codes. Examples: {} (no params needed), {masterTimeout: 30s}.",
 
-			inputSchema: {
-				masterTimeout: z.string().optional(), // Master node timeout
-				timeout: z.string().optional(), // Request timeout
-			},
+			inputSchema: startValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		withReadOnlyCheck("elasticsearch_ilm_start", startHandler, OperationType.WRITE),
 	);
 };

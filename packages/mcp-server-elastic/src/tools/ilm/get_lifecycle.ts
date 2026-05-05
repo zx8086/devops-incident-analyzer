@@ -3,69 +3,39 @@
 
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-const _getLifecycleSchema = {
-	type: "object",
-	properties: {
-		policy: {
-			type: "string",
-			description:
-				"Policy name(s) to retrieve. Supports comma-separated list for multiple policies (e.g., 'policy1,policy2,policy3')",
-		},
-		masterTimeout: {
-			type: "string",
-			description: "Master node timeout",
-		},
-		timeout: {
-			type: "string",
-			description: "Request timeout",
-		},
-		limit: {
-			type: "number",
-			minimum: 1,
-			maximum: 100,
-			description: "Maximum number of policies to return. Range: 1-100",
-		},
-		summary: {
-			type: "boolean",
-			description: "Return summarized policy information instead of full details",
-		},
-		includeIndices: {
-			type: "boolean",
-			description: "Include list of indices using each policy",
-		},
-		sortBy: {
-			type: "string",
-			enum: ["name", "modified_date", "version", "indices_count"],
-			description: "Sort policies by specified field",
-		},
-	},
-	additionalProperties: false,
-};
-
-// Simple Zod validator for runtime validation only
 const getLifecycleValidator = z.object({
-	policy: z.string().optional(),
-	masterTimeout: z.string().optional(),
-	timeout: z.string().optional(),
-	limit: z.number().min(1).max(100).optional(),
-	summary: z.boolean().optional(),
-	includeIndices: z.boolean().optional(),
-	sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
+	policy: z
+		.string()
+		.optional()
+		.describe(
+			"Policy name(s) to retrieve. Supports comma-separated list for multiple policies (e.g., 'policy1,policy2,policy3')",
+		),
+	masterTimeout: z.string().optional().describe("Master node timeout"),
+	timeout: z.string().optional().describe("Request timeout"),
+	limit: z.number().min(1).max(100).optional().describe("Maximum number of policies to return. Range: 1-100"),
+	summary: z.boolean().optional().describe("Return summarized policy information instead of full details"),
+	includeIndices: z.boolean().optional().describe("Include list of indices using each policy"),
+	sortBy: z
+		.enum(["name", "modified_date", "version", "indices_count"])
+		.optional()
+		.describe("Sort policies by specified field"),
 });
 
-type _GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
+type GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
 
 function createIlmMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "not_found" | "permission";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -81,9 +51,12 @@ function createIlmMcpError(
 }
 
 export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getLifecycleHandler = async (args: any, extra?: any): Promise<SearchResult> => {
+	const getLifecycleHandler = async (
+		args: GetLifecycleParams,
+		extra?: RequestHandlerExtra<ServerRequest, ServerNotification>,
+	): Promise<SearchResult> => {
 		const perfStart = performance.now();
-		let params: z.infer<typeof getLifecycleValidator> | undefined;
+		let params: GetLifecycleParams | undefined;
 
 		try {
 			logger.debug(
@@ -326,15 +299,9 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 			description:
 				"Get ILM policies. PARAMETERS: 'policy' (string, optional - supports comma-separated list for multiple policies), 'limit' (number 1-100), 'summary' (boolean), 'sortBy' (enum). Examples: {limit: 50, summary: true} or {policy: 'policy1,policy2,policy3'}. Uses Zod Schema for proper MCP parameter handling.",
 
-			inputSchema: {
-				policy: z.string().optional(),
-				limit: z.number().min(1).max(100).optional(),
-				summary: z.boolean().optional(),
-				sortBy: z.enum(["name", "modified_date", "version", "indices_count"]).optional(),
-			},
+			inputSchema: getLifecycleValidator.shape,
 		},
 
-		// Use Zod schema instead
 		getLifecycleHandler,
 	);
 };
