@@ -18,21 +18,29 @@ import {
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const explainLifecycleValidator = z.object({
-	index: z.string().optional(),
-	onlyErrors: z.boolean().optional(),
-	onlyManaged: z.boolean().optional(),
-	masterTimeout: z.string().optional(),
-	limit: z.number().min(1).max(500).optional(),
-	includeDetails: z.boolean().optional(),
+	index: z.string().optional().describe("Index pattern. Use '*' for all indices"),
+	onlyErrors: z.boolean().optional().describe("Only show indices with ILM errors"),
+	onlyManaged: z
+		.boolean()
+		.optional()
+		.describe("Only show ILM-managed indices. Highly recommended for large clusters"),
+	masterTimeout: z.string().optional().describe("Master node timeout"),
+	limit: z
+		.number()
+		.min(1)
+		.max(500)
+		.optional()
+		.describe("Maximum number of indices to return. Without this, returns ALL matching indices"),
+	includeDetails: z.boolean().optional().describe("Include full lifecycle details (false for compact output)"),
 });
 
-type _ExplainLifecycleParams = z.infer<typeof explainLifecycleValidator>;
+type ExplainLifecycleParams = z.infer<typeof explainLifecycleValidator>;
 
 function createIlmExplainMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "not_found" | "permission";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -48,9 +56,9 @@ function createIlmExplainMcpError(
 }
 
 export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const explainLifecycleHandler = async (args: any): Promise<SearchResult> => {
+	const explainLifecycleHandler = async (args: ExplainLifecycleParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
-		let params: z.infer<typeof explainLifecycleValidator> | undefined;
+		let params: ExplainLifecycleParams | undefined;
 		let tracker: ProgressTracker | undefined;
 
 		try {
@@ -411,17 +419,9 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			description:
 				"Explain ILM status for indices. WARNING: Large clusters have 1000+ indices! ALWAYS specify filters to avoid truncation. Examples: {onlyManaged: true, limit: 50}, {index: 'logs-*', limit: 100}, {onlyErrors: true}. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string().optional(), // Index pattern. Use '*' for all indices
-				onlyErrors: z.boolean().optional(), // Only show indices with ILM errors
-				onlyManaged: z.boolean().optional(), // Only show ILM-managed indices. Highly recommended for large clusters
-				masterTimeout: z.string().optional(), // Master node timeout
-				limit: z.number().min(1).max(500).optional(), // Maximum number of indices to return. Without this, returns ALL matching indices
-				includeDetails: z.boolean().optional(), // Include full lifecycle details (false for compact output)
-			},
+			inputSchema: explainLifecycleValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		explainLifecycleHandler,
 	);
 };

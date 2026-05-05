@@ -12,17 +12,17 @@ import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const stopValidator = z.object({
-	masterTimeout: z.string().optional(),
-	timeout: z.string().optional(),
+	masterTimeout: z.string().optional().describe("Master node timeout"),
+	timeout: z.string().optional().describe("Request timeout"),
 });
 
-type _StopParams = z.infer<typeof stopValidator>;
+type StopParams = z.infer<typeof stopValidator>;
 
 function createIlmStopMcpError(
 	error: Error | string,
 	context: {
 		type: "validation" | "execution" | "permission" | "not_running";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -38,7 +38,7 @@ function createIlmStopMcpError(
 }
 
 export const registerStopTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const stopHandler = async (args: any): Promise<SearchResult> => {
+	const stopHandler = async (args: StopParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -139,13 +139,9 @@ Operation completed at: ${new Date().toISOString()}`,
 			description:
 				"Stop ILM. Stop the Index Lifecycle Management plugin to halt automated operations. Uses direct JSON Schema and standardized MCP error codes. Examples: {} (no params needed), {masterTimeout: 30s}.",
 
-			inputSchema: {
-				masterTimeout: z.string().optional(), // Master node timeout
-				timeout: z.string().optional(), // Request timeout
-			},
+			inputSchema: stopValidator.shape,
 		},
 
-		// Direct JSON Schema - no Zod conversion
 		withReadOnlyCheck("elasticsearch_ilm_stop", stopHandler, OperationType.WRITE),
 	);
 };
