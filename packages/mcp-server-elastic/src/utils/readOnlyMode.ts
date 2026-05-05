@@ -228,23 +228,24 @@ export function initializeReadOnlyManager(readOnlyMode: boolean, strictMode = tr
 	readOnlyManager = new ReadOnlyModeManager(readOnlyMode, strictMode);
 }
 
-// Decorator function for tools
-export function withReadOnlyCheck<T extends any[], R>(
+// SIO-669: preserve the wrapped handler's signature so the result satisfies
+// MCP SDK's ToolCallback<Args> shape without an `as any` cast at the call site.
+export function withReadOnlyCheck<TArgs, TExtra, TResult extends SearchResult>(
 	toolName: string,
-	toolFunction: (...args: T) => Promise<R>,
+	toolFunction: (args: TArgs, extra: TExtra) => Promise<TResult>,
 	operationType?: OperationType,
-) {
-	return async (...args: T): Promise<R> => {
+): (args: TArgs, extra: TExtra) => Promise<TResult> {
+	return async (args: TArgs, extra: TExtra): Promise<TResult> => {
 		const check = readOnlyManager.checkOperation(toolName, operationType);
 
 		if (!check.allowed) {
-			return readOnlyManager.createBlockedResponse(toolName) as R;
+			return readOnlyManager.createBlockedResponse(toolName) as TResult;
 		}
 
-		const result = await toolFunction(...args);
+		const result = await toolFunction(args, extra);
 
 		if (check.warning) {
-			return readOnlyManager.createWarningResponse(toolName, result as any) as R;
+			return readOnlyManager.createWarningResponse(toolName, result) as TResult;
 		}
 
 		return result;

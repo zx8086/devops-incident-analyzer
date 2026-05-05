@@ -250,7 +250,7 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 				conflicts: z.enum(["abort", "proceed"]).optional(),
 				refresh: booleanField().optional(),
 				timeout: z.string().optional(),
-				waitForActiveShards: z.union([z.string(), z.number()]).optional(),
+				waitForActiveShards: z.union([z.literal("all"), z.number()]).optional(),
 				waitForCompletion: booleanField().optional(),
 				requestsPerSecond: z.number().optional(),
 				scroll: z.string().optional(),
@@ -261,6 +261,6 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 			},
 		},
 
-		withReadOnlyCheck("elasticsearch_delete_by_query", deleteByQueryImpl, OperationType.DELETE) as any,
+		withReadOnlyCheck("elasticsearch_delete_by_query", deleteByQueryImpl, OperationType.DELETE),
 	);
 };
