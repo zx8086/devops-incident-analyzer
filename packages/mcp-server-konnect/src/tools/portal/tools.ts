@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type { ToolHandler } from "../registry.js";
+import * as portalOps from "./operations.js";
 import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
@@ -8,6 +10,7 @@ export type PortalTool = {
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
+	handler: ToolHandler;
 };
 
 export const portalTools = (): PortalTool[] => [
@@ -17,6 +20,8 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.listApisPrompt(),
 		parameters: parameters.listApisParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.listApis(api, args.pageSize, args.pageNumber, args.filterName, args.filterStatus, args.sort),
 	},
 	{
 		method: "fetch_portal_api",
@@ -24,6 +29,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.fetchApiPrompt(),
 		parameters: parameters.fetchApiParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.fetchApi(api, args.apiIdOrSlug),
 	},
 	{
 		method: "get_portal_api_actions",
@@ -31,6 +37,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.getApiActionsPrompt(),
 		parameters: parameters.getApiActionsParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.getApiActions(api, args.apiIdOrSlug),
 	},
 	{
 		method: "list_portal_api_documents",
@@ -38,6 +45,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.listApiDocumentsPrompt(),
 		parameters: parameters.listApiDocumentsParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.listApiDocuments(api, args.apiIdOrSlug),
 	},
 	{
 		method: "fetch_portal_api_document",
@@ -45,6 +53,8 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.fetchApiDocumentPrompt(),
 		parameters: parameters.fetchApiDocumentParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.fetchApiDocument(api, args.apiIdOrSlug, args.documentIdOrSlug, args.format),
 	},
 
 	{
@@ -53,6 +63,15 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.listApplicationsPrompt(),
 		parameters: parameters.listApplicationsParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.listApplications(
+				api,
+				args.portalId,
+				args.pageSize,
+				args.pageNumber,
+				args.filterName,
+				args.filterAuthStrategy,
+			),
 	},
 	{
 		method: "create_portal_application",
@@ -60,6 +79,15 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.createApplicationPrompt(),
 		parameters: parameters.createApplicationParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.createApplication(api, {
+				name: args.name,
+				description: args.description,
+				clientId: args.clientId,
+				redirectUri: args.redirectUri,
+				authStrategyId: args.authStrategyId,
+				scopes: args.scopes,
+			}),
 	},
 	{
 		method: "get_portal_application",
@@ -67,6 +95,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.getApplicationPrompt(),
 		parameters: parameters.getApplicationParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.getApplication(api, args.applicationId),
 	},
 	{
 		method: "update_portal_application",
@@ -74,6 +103,13 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.updateApplicationPrompt(),
 		parameters: parameters.updateApplicationParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.updateApplication(api, args.applicationId, {
+				name: args.name,
+				description: args.description,
+				redirectUri: args.redirectUri,
+				scopes: args.scopes,
+			}),
 	},
 	{
 		method: "delete_portal_application",
@@ -81,6 +117,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.deleteApplicationPrompt(),
 		parameters: parameters.deleteApplicationParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.deleteApplication(api, args.applicationId),
 	},
 
 	{
@@ -89,6 +126,15 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.listApplicationRegistrationsPrompt(),
 		parameters: parameters.listApplicationRegistrationsParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.listApplicationRegistrations(
+				api,
+				args.applicationId,
+				args.pageSize,
+				args.pageNumber,
+				args.filterStatus,
+				args.filterApiName,
+			),
 	},
 	{
 		method: "create_portal_application_registration",
@@ -96,6 +142,12 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.createApplicationRegistrationPrompt(),
 		parameters: parameters.createApplicationRegistrationParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.createApplicationRegistration(api, args.applicationId, {
+				apiId: args.apiId,
+				apiProductVersionId: args.apiProductVersionId,
+				requestReason: args.requestReason,
+			}),
 	},
 	{
 		method: "get_portal_application_registration",
@@ -103,6 +155,8 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.getApplicationRegistrationPrompt(),
 		parameters: parameters.getApplicationRegistrationParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.getApplicationRegistration(api, args.applicationId, args.registrationId),
 	},
 	{
 		method: "delete_portal_application_registration",
@@ -110,6 +164,8 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.deleteApplicationRegistrationPrompt(),
 		parameters: parameters.deleteApplicationRegistrationParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.deleteApplicationRegistration(api, args.applicationId, args.registrationId),
 	},
 
 	{
@@ -118,6 +174,8 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.listCredentialsPrompt(),
 		parameters: parameters.listCredentialsParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.listCredentials(api, args.applicationId, args.pageSize, args.pageNumber),
 	},
 	{
 		method: "create_portal_credential",
@@ -125,6 +183,13 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.createCredentialPrompt(),
 		parameters: parameters.createCredentialParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.createCredential(api, args.applicationId, {
+				credentialType: args.credentialType,
+				name: args.name,
+				scopes: args.scopes,
+				expiresAt: args.expiresAt,
+			}),
 	},
 	{
 		method: "update_portal_credential",
@@ -132,6 +197,12 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.updateCredentialPrompt(),
 		parameters: parameters.updateCredentialParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.updateCredential(api, args.applicationId, args.credentialId, {
+				name: args.name,
+				scopes: args.scopes,
+				expiresAt: args.expiresAt,
+			}),
 	},
 	{
 		method: "delete_portal_credential",
@@ -139,6 +210,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.deleteCredentialPrompt(),
 		parameters: parameters.deleteCredentialParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.deleteCredential(api, args.applicationId, args.credentialId),
 	},
 	{
 		method: "regenerate_portal_application_secret",
@@ -146,6 +218,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.regenerateApplicationSecretPrompt(),
 		parameters: parameters.regenerateApplicationSecretParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.regenerateApplicationSecret(api, args.applicationId),
 	},
 
 	{
@@ -154,6 +227,14 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.registerDeveloperPrompt(),
 		parameters: parameters.registerDeveloperParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.registerDeveloper(api, {
+				email: args.email,
+				fullName: args.fullName,
+				password: args.password,
+				organization: args.organization,
+				customAttributes: args.customAttributes,
+			}),
 	},
 	{
 		method: "authenticate_portal_developer",
@@ -161,6 +242,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.authenticatePrompt(),
 		parameters: parameters.authenticateParameters(),
 		category: "portal",
+		handler: async (args, { api }) => portalOps.authenticate(api, args.username, args.password),
 	},
 	{
 		method: "get_portal_developer_me",
@@ -168,6 +250,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.getDeveloperMePrompt(),
 		parameters: parameters.getDeveloperMeParameters(),
 		category: "portal",
+		handler: async (_args, { api }) => portalOps.getDeveloperMe(api),
 	},
 	{
 		method: "logout_portal_developer",
@@ -175,6 +258,7 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.logoutPrompt(),
 		parameters: parameters.logoutParameters(),
 		category: "portal",
+		handler: async (_args, { api }) => portalOps.logout(api),
 	},
 
 	{
@@ -183,5 +267,12 @@ export const portalTools = (): PortalTool[] => [
 		description: prompts.queryApplicationAnalyticsPrompt(),
 		parameters: parameters.queryApplicationAnalyticsParameters(),
 		category: "portal",
+		handler: async (args, { api }) =>
+			portalOps.queryApplicationAnalytics(api, args.applicationId, {
+				metrics: args.metrics,
+				dimensions: args.dimensions,
+				timeRange: args.timeRange,
+				granularity: args.granularity,
+			}),
 	},
 ];

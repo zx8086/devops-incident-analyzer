@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type { ToolHandler } from "../registry.js";
+import * as analyticsOps from "./operations.js";
 import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
@@ -8,6 +10,7 @@ export type AnalyticsTool = {
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
+	handler: ToolHandler;
 };
 
 export const analyticsTools = (): AnalyticsTool[] => [
@@ -17,6 +20,18 @@ export const analyticsTools = (): AnalyticsTool[] => [
 		description: prompts.queryApiRequestsPrompt(),
 		parameters: parameters.queryApiRequestsParameters(),
 		category: "analytics",
+		handler: async (args, { api }) =>
+			analyticsOps.queryApiRequests(
+				api,
+				args.timeRange,
+				args.statusCodes,
+				args.excludeStatusCodes,
+				args.httpMethods,
+				args.consumerIds,
+				args.serviceIds,
+				args.routeIds,
+				args.maxResults,
+			),
 	},
 	{
 		method: "get_consumer_requests",
@@ -24,5 +39,14 @@ export const analyticsTools = (): AnalyticsTool[] => [
 		description: prompts.getConsumerRequestsPrompt(),
 		parameters: parameters.getConsumerRequestsParameters(),
 		category: "analytics",
+		handler: async (args, { api }) =>
+			analyticsOps.getConsumerRequests(
+				api,
+				args.consumerId,
+				args.timeRange,
+				args.successOnly,
+				args.failureOnly,
+				args.maxResults,
+			),
 	},
 ];

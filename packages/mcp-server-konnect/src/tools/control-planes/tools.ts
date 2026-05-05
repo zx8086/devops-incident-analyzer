@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type { ToolHandler } from "../registry.js";
+import * as controlPlanesOps from "./operations.js";
 import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
@@ -8,6 +10,7 @@ export type ControlPlanesTool = {
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
+	handler: ToolHandler;
 };
 
 export const controlPlanesTools = (): ControlPlanesTool[] => [
@@ -17,6 +20,17 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.listControlPlanesPrompt(),
 		parameters: parameters.listControlPlanesParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.listControlPlanes(
+				api,
+				args.pageSize,
+				args.pageNumber,
+				args.filterName,
+				args.filterClusterType,
+				args.filterCloudGateway,
+				args.labels,
+				args.sort,
+			),
 	},
 	{
 		method: "get_control_plane",
@@ -24,6 +38,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.getControlPlanePrompt(),
 		parameters: parameters.getControlPlaneParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.getControlPlane(api, args.controlPlaneId),
 	},
 	{
 		method: "list_control_plane_group_memberships",
@@ -31,6 +46,8 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.listControlPlaneGroupMembershipsPrompt(),
 		parameters: parameters.listControlPlaneGroupMembershipsParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.listControlPlaneGroupMemberships(api, args.groupId, args.pageSize, args.pageAfter),
 	},
 	{
 		method: "check_control_plane_group_membership",
@@ -38,6 +55,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.checkControlPlaneGroupMembershipPrompt(),
 		parameters: parameters.checkControlPlaneGroupMembershipParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.checkControlPlaneGroupMembership(api, args.controlPlaneId),
 	},
 
 	{
@@ -46,6 +64,16 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.createControlPlanePrompt(),
 		parameters: parameters.createControlPlaneParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.createControlPlane(api, {
+				name: args.name,
+				description: args.description,
+				clusterType: args.clusterType,
+				cloudGateway: args.cloudGateway,
+				authType: args.authType,
+				proxyUrls: args.proxyUrls,
+				labels: args.labels,
+			}),
 	},
 	{
 		method: "update_control_plane",
@@ -53,6 +81,12 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.updateControlPlanePrompt(),
 		parameters: parameters.updateControlPlaneParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.updateControlPlane(api, args.controlPlaneId, {
+				name: args.name,
+				description: args.description,
+				labels: args.labels,
+			}),
 	},
 	{
 		method: "delete_control_plane",
@@ -60,6 +94,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.deleteControlPlanePrompt(),
 		parameters: parameters.deleteControlPlaneParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.deleteControlPlane(api, args.controlPlaneId),
 	},
 
 	{
@@ -68,6 +103,15 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.listDataPlaneNodesPrompt(),
 		parameters: parameters.listDataPlaneNodesParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.listDataPlaneNodes(
+				api,
+				args.controlPlaneId,
+				args.pageSize,
+				args.pageNumber,
+				args.filterStatus,
+				args.filterHostname,
+			),
 	},
 	{
 		method: "get_data_plane_node",
@@ -75,6 +119,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.getDataPlaneNodePrompt(),
 		parameters: parameters.getDataPlaneNodeParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.getDataPlaneNode(api, args.controlPlaneId, args.nodeId),
 	},
 
 	{
@@ -83,6 +128,8 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.createDataPlaneTokenPrompt(),
 		parameters: parameters.createDataPlaneTokenParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.createDataPlaneToken(api, args.controlPlaneId, args.name, args.expiresAt),
 	},
 	{
 		method: "list_data_plane_tokens",
@@ -90,6 +137,8 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.listDataPlaneTokensPrompt(),
 		parameters: parameters.listDataPlaneTokensParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.listDataPlaneTokens(api, args.controlPlaneId, args.pageSize, args.pageNumber),
 	},
 	{
 		method: "revoke_data_plane_token",
@@ -97,6 +146,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.revokeDataPlaneTokenPrompt(),
 		parameters: parameters.revokeDataPlaneTokenParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.revokeDataPlaneToken(api, args.controlPlaneId, args.tokenId),
 	},
 
 	{
@@ -105,6 +155,7 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.getControlPlaneConfigPrompt(),
 		parameters: parameters.getControlPlaneConfigParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) => controlPlanesOps.getControlPlaneConfig(api, args.controlPlaneId),
 	},
 	{
 		method: "update_control_plane_config",
@@ -112,5 +163,13 @@ export const controlPlanesTools = (): ControlPlanesTool[] => [
 		description: prompts.updateControlPlaneConfigPrompt(),
 		parameters: parameters.updateControlPlaneConfigParameters(),
 		category: "control_planes",
+		handler: async (args, { api }) =>
+			controlPlanesOps.updateControlPlaneConfig(api, args.controlPlaneId, {
+				proxyUrl: args.proxyUrl,
+				telemetryUrl: args.telemetryUrl,
+				authType: args.authType,
+				cloudGateway: args.cloudGateway,
+				analyticsEnabled: args.analyticsEnabled,
+			}),
 	},
 ];

@@ -7,6 +7,7 @@ import { elicitationManager, kongElicitationPatterns } from "../utils/elicitatio
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
 import { createContextLogger } from "../utils/logger.js";
 import { TagElicitationEngine } from "../utils/tag-elicitation.js";
+import type { ToolHandler } from "./registry.js";
 
 const log = createContextLogger("elicitation");
 
@@ -583,7 +584,17 @@ export class ElicitationOperations {
 }
 
 // Tool definitions for registration
-export const elicitationTools = [
+
+type ElicitationToolEntry = {
+	method: string;
+	name: string;
+	description: string;
+	parameters: z.ZodObject;
+	category: string;
+	handler: ToolHandler;
+};
+
+export const elicitationTools: ElicitationToolEntry[] = [
 	{
 		method: "analyze_migration_context",
 		name: "Analyze Migration Context",
@@ -592,7 +603,7 @@ Analyze Kong migration context and determine what information needs to be elicit
 
 This tool performs intelligent analysis of:
 - User messages for explicit information
-- File paths for environment/domain hints  
+- File paths for environment/domain hints
 - Deck configurations for service details
 - Git context for team information
 
@@ -600,6 +611,8 @@ Returns confidence scores and identifies missing mandatory information (domain, 
 `,
 		parameters: analyzeContextParameters(),
 		category: "elicitation",
+		handler: async (args, { elicitationOps }) =>
+			elicitationOps.analyzeContext(args.userMessage, args.deckFiles, args.deckConfigs, args.gitContext),
 	},
 	{
 		method: "create_elicitation_session",
@@ -617,6 +630,27 @@ Returns session ID and list of elicitation requests.
 `,
 		parameters: createElicitationSessionParameters(),
 		category: "elicitation",
+		handler: async (args, { elicitationOps }) => {
+			const sessionResult = await elicitationOps.createElicitationSession(args.analysisResult, args.context);
+			const enhancedResult = sessionResult as Record<string, unknown>;
+
+			// Enhance result for Claude Desktop compatibility
+			if (sessionResult.needsUserInput && sessionResult.claudeDesktopPrompt) {
+				enhancedResult.content = [
+					{
+						type: "text",
+						text: sessionResult.claudeDesktopPrompt,
+					},
+				];
+
+				// Add structured guidance for Claude Desktop
+				if (sessionResult.directInstructions) {
+					enhancedResult.guidance = sessionResult.directInstructions;
+				}
+			}
+
+			return enhancedResult;
+		},
 	},
 	{
 		method: "process_elicitation_response",
@@ -634,6 +668,8 @@ Returns success status and next steps.
 `,
 		parameters: processElicitationResponseParameters(),
 		category: "elicitation",
+		handler: async (args, { elicitationOps }) =>
+			elicitationOps.processElicitationResponse(args.sessionId, args.requestId, args.response),
 	},
 	{
 		method: "get_session_status",
@@ -649,5 +685,6 @@ Returns:
 `,
 		parameters: getSessionStatusParameters(),
 		category: "elicitation",
+		handler: async (args, { elicitationOps }) => elicitationOps.getSessionStatus(args.sessionId),
 	},
 ];
