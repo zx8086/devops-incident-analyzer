@@ -12,22 +12,29 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const indexDocumentValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	id: z.string().optional(),
-	document: z.object({}).passthrough(),
-	refresh: z.enum(["true", "false", "wait_for"]).optional(),
-	routing: z.string().optional(),
-	pipeline: z.string().optional(),
+	index: z
+		.string()
+		.min(1, "Index cannot be empty")
+		.describe("REQUIRED: Name of the Elasticsearch index to store the document. Example: 'users', 'logs-2024.01'"),
+	id: z
+		.string()
+		.optional()
+		.describe("Optional: Unique identifier for the document. If not provided, Elasticsearch will generate one"),
+	document: z.object({}).passthrough().describe("REQUIRED: The JSON document to index"),
+	refresh: z
+		.enum(["true", "false", "wait_for"])
+		.optional()
+		.describe("Whether to refresh the index after the operation"),
+	routing: z.string().optional().describe("Custom routing value for document placement"),
+	pipeline: z.string().optional().describe("Ingest pipeline to use for document processing"),
 });
 
-type _IndexDocumentParams = z.infer<typeof indexDocumentValidator>;
+type IndexDocumentParams = z.infer<typeof indexDocumentValidator>;
 
-// MCP error handling
 function createIndexDocumentMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "document_already_exists" | "version_conflict"; details?: any },
+	context: { type: "validation" | "execution" | "document_already_exists" | "version_conflict"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -47,7 +54,7 @@ function createIndexDocumentMcpError(
 
 // Tool implementation
 export const registerIndexDocumentTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const indexDocumentHandler = async (args: any): Promise<SearchResult> => {
+	const indexDocumentHandler = async (args: IndexDocumentParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -129,14 +136,7 @@ export const registerIndexDocumentTool: ToolRegistrationFunction = (server: McpS
 			description:
 				"Index a JSON document into Elasticsearch. Best for adding new documents, bulk data ingestion, real-time indexing. Use when you need to store structured JSON documents in Elasticsearch indices with optional routing and pipeline processing. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // REQUIRED: Name of the Elasticsearch index to store the document. Example: 'users', 'logs-2024.01'
-				id: z.string().optional(), // Optional: Unique identifier for the document. If not provided, Elasticsearch will generate one
-				document: z.object({}).passthrough(), // REQUIRED: The JSON document to index
-				refresh: z.enum(["true", "false", "wait_for"]).optional(), // Whether to refresh the index after the operation
-				routing: z.string().optional(), // Custom routing value for document placement
-				pipeline: z.string().optional(), // Ingest pipeline to use for document processing
-			},
+			inputSchema: indexDocumentValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_index_document", indexDocumentHandler, OperationType.WRITE),

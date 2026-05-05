@@ -8,11 +8,16 @@ import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 const processorGrokValidator = z.object({
-	filter: z.string().optional(),
+	filter: z
+		.string()
+		.optional()
+		.describe("Filter patterns by name or content substring (case-insensitive). E.g., 'SYSLOG', 'IP', 'TIMESTAMP'."),
 });
 
+type ProcessorGrokParams = z.infer<typeof processorGrokValidator>;
+
 export const registerProcessorGrokTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const handler = async (args: any): Promise<SearchResult> => {
+	const handler = async (args: ProcessorGrokParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -77,9 +82,7 @@ export const registerProcessorGrokTool: ToolRegistrationFunction = (server: McpS
 			title: "Get Grok Patterns",
 			description:
 				"Get built-in grok patterns available for use in ingest pipeline grok processors. Use {filter} to search for patterns by name or content (e.g., filter: 'SYSLOG' to find syslog-related patterns). Useful for debugging grok failures by verifying which patterns exist. READ operation - safe for production use.",
-			inputSchema: {
-				filter: z.string().optional(), // Filter patterns by name or content substring (case-insensitive). E.g., 'SYSLOG', 'IP', 'TIMESTAMP'.
-			},
+			inputSchema: processorGrokValidator.shape,
 		},
 		handler,
 	);

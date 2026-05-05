@@ -50,15 +50,14 @@ const updateAliasesValidator = z.object({
 	masterTimeout: z.string().optional(),
 });
 
-type _UpdateAliasesParams = z.infer<typeof updateAliasesValidator>;
+type UpdateAliasesParams = z.infer<typeof updateAliasesValidator>;
 
-// MCP error handling
 function createMcpError(
 	error: Error | string,
 	context: {
 		toolName: string;
 		type: "validation" | "execution" | "connection" | "alias_not_found" | "invalid_alias";
-		details?: any;
+		details?: unknown;
 	},
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
@@ -74,12 +73,11 @@ function createMcpError(
 	return new McpError(errorCodeMap[context.type], `[${context.toolName}] ${message}`, context.details);
 }
 
-// Validate alias actions
-function validateAliasActions(actions: any[]): void {
+function validateAliasActions(actions: Array<Record<string, unknown>>): void {
 	const validActionTypes = ["add", "remove", "remove_index"];
 
 	for (let i = 0; i < actions.length; i++) {
-		const action = actions[i];
+		const action = actions[i] ?? {};
 		const actionKeys = Object.keys(action);
 
 		if (actionKeys.length !== 1) {
@@ -93,12 +91,11 @@ function validateAliasActions(actions: any[]): void {
 			);
 		}
 
-		const actionConfig = action[actionType as keyof typeof action];
+		const actionConfig = action[actionType] as Record<string, unknown> | undefined;
 		if (!actionConfig || typeof actionConfig !== "object") {
 			throw new Error(`Action ${i}: Action configuration must be an object`);
 		}
 
-		// Validate required fields based on action type
 		if (actionType === "add" || actionType === "remove") {
 			if (!actionConfig.index || !actionConfig.alias) {
 				throw new Error(`Action ${i}: ${actionType} actions require 'index' and 'alias' fields`);
@@ -114,15 +111,13 @@ function validateAliasActions(actions: any[]): void {
 // Tool implementation
 export const registerUpdateAliasesTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	// Tool handler
-	const updateAliasesHandler = async (args: any): Promise<SearchResult> => {
+	const updateAliasesHandler = async (args: UpdateAliasesParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
-			// Validate parameters
 			const params = updateAliasesValidator.parse(args);
 
-			// Validate alias actions structure
-			validateAliasActions(params.actions);
+			validateAliasActions(params.actions as Array<Record<string, unknown>>);
 
 			logger.debug(
 				{
@@ -254,11 +249,7 @@ export const registerUpdateAliasesTool: ToolRegistrationFunction = (server: McpS
 			description:
 				"Update index aliases in Elasticsearch using the aliases API. Best for alias management, index switching, zero-downtime deployments. Use when you need to atomically add, remove, or modify multiple index aliases in Elasticsearch. DESTRUCTIVE: Actions are performed atomically but modify alias configurations permanently. TIP: Use [{add: {index: new-index, alias: my-alias}}, {remove: {index: old-index, alias: my-alias}}] for zero-downtime index switching.",
 
-			inputSchema: {
-				actions: z.array(z.object({}).passthrough()), // Array of alias actions to perform atomically. Each action should have 'add', 'remove', or 'remove_index' key with appropriate configuration
-				timeout: z.string().optional(), // Timeout for the request (e.g., '30s', '1m'). Optional
-				masterTimeout: z.string().optional(), // Timeout for waiting for master node response (e.g., '30s', '1m'). Optional
-			},
+			inputSchema: updateAliasesValidator.shape,
 		},
 
 		withReadOnlyCheck("elasticsearch_update_aliases", updateAliasesHandler, OperationType.DESTRUCTIVE),

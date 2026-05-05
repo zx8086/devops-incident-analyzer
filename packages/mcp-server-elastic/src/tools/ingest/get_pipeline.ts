@@ -8,9 +8,16 @@ import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 const getPipelineValidator = z.object({
-	id: z.string().optional(),
-	summary: z.boolean().optional(),
+	id: z.string().optional().describe("Pipeline ID or wildcard pattern. Leave empty to get ALL pipelines."),
+	summary: z
+		.boolean()
+		.optional()
+		.describe(
+			"Return summarized pipeline info (processor types, on_failure presence, grok patterns) instead of full JSON definitions.",
+		),
 });
+
+type GetPipelineParams = z.infer<typeof getPipelineValidator>;
 
 function summarizePipelines(pipelines: Record<string, any>): string {
 	const lines: string[] = ["## Ingest Pipeline Summary\n"];
@@ -51,7 +58,7 @@ function summarizePipelines(pipelines: Record<string, any>): string {
 }
 
 export const registerGetIngestPipelineTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const handler = async (args: any): Promise<SearchResult> => {
+	const handler = async (args: GetPipelineParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -107,10 +114,7 @@ export const registerGetIngestPipelineTool: ToolRegistrationFunction = (server: 
 			title: "Get Ingest Pipeline",
 			description:
 				"Get ingest pipeline definitions. Returns processor chains, on_failure handlers, grok patterns, and rename mappings. Use {summary: true} to get a concise overview of all pipelines including processor counts, grok patterns, and whether on_failure handlers exist. Essential for investigating ingest pipeline failures. READ operation - safe for production use.",
-			inputSchema: {
-				id: z.string().optional(), // Pipeline ID or wildcard pattern. Leave empty to get ALL pipelines.
-				summary: z.boolean().optional(), // Return summarized pipeline info (processor types, on_failure presence, grok patterns) instead of full JSON definitions.
-			},
+			inputSchema: getPipelineValidator.shape,
 		},
 		handler,
 	);

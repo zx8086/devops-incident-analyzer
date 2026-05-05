@@ -51,7 +51,7 @@ export const registerGetFieldMappingTool: ToolRegistrationFunction = (server: Mc
 					ignore_unavailable: params.ignoreUnavailable,
 					allow_no_indices: params.allowNoIndices,
 					expand_wildcards: params.expandWildcards,
-				} as any);
+				});
 				return {
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) } as TextContent],
 				};

@@ -1,6 +1,6 @@
 // tools/ingest/simulate_pipeline.ts
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -8,14 +8,24 @@ import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 const simulatePipelineValidator = z.object({
-	id: z.string().optional(),
-	docs: z.array(z.record(z.string(), z.unknown())),
-	pipeline: z.record(z.string(), z.unknown()).optional(),
-	verbose: z.boolean().optional(),
+	id: z
+		.string()
+		.optional()
+		.describe("ID of an existing pipeline to simulate. Omit if providing an inline pipeline definition."),
+	docs: z
+		.array(z.record(z.string(), z.unknown()))
+		.describe("Array of sample documents. Each should have {_source: {...}} with the document body."),
+	pipeline: z
+		.record(z.string(), z.unknown())
+		.optional()
+		.describe("Inline pipeline definition with {description, processors: [...]}. Use instead of {id}."),
+	verbose: z.boolean().optional().describe("Show the result after each processor step, not just the final output."),
 });
 
+type SimulatePipelineParams = z.infer<typeof simulatePipelineValidator>;
+
 export const registerSimulateIngestPipelineTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const handler = async (args: any): Promise<SearchResult> => {
+	const handler = async (args: SimulatePipelineParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 		const requestId = Math.random().toString(36).substring(7);
 
@@ -38,7 +48,7 @@ export const registerSimulateIngestPipelineTool: ToolRegistrationFunction = (ser
 				{
 					id: params.id,
 					docs,
-					pipeline: params.pipeline as any,
+					pipeline: params.pipeline as estypes.IngestPipeline | undefined,
 					verbose: params.verbose,
 				},
 				{ opaqueId: "elasticsearch_simulate_ingest_pipeline" },
@@ -83,12 +93,7 @@ export const registerSimulateIngestPipelineTool: ToolRegistrationFunction = (ser
 			title: "Simulate Ingest Pipeline",
 			description:
 				"Simulate an ingest pipeline on sample documents to test processor behavior and debug failures. Pass {id} to test an existing pipeline, or provide an inline {pipeline} definition. Use {verbose: true} to see the output after each processor step. Useful for debugging grok pattern failures by running sample log lines through the pipeline. READ operation - does not modify any data.",
-			inputSchema: {
-				id: z.string().optional(), // ID of an existing pipeline to simulate. Omit if providing an inline pipeline definition.
-				docs: z.array(z.record(z.string(), z.unknown())), // Array of sample documents. Each should have {_source: {...}} with the document body.
-				pipeline: z.record(z.string(), z.unknown()).optional(), // Inline pipeline definition with {description, processors: [...]}. Use instead of {id}.
-				verbose: z.boolean().optional(), // Show the result after each processor step, not just the final output.
-			},
+			inputSchema: simulatePipelineValidator.shape,
 		},
 		handler,
 	);

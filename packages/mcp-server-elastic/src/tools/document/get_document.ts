@@ -12,27 +12,34 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
-// Zod validator for runtime validation
 const getDocumentValidator = z.object({
-	index: z.string().min(1, "Index cannot be empty"),
-	id: z.string().min(1, "Document ID cannot be empty"),
-	source: booleanField().optional(),
-	sourceExcludes: z.array(z.string()).optional(),
-	sourceIncludes: z.array(z.string()).optional(),
-	routing: z.string().optional(),
-	preference: z.string().optional(),
-	realtime: booleanField().optional(),
-	refresh: booleanField().optional(),
-	version: z.number().optional(),
-	versionType: z.enum(["internal", "external", "external_gte", "force"]).optional(),
+	index: z
+		.string()
+		.min(1, "Index cannot be empty")
+		.describe("REQUIRED: Name of the Elasticsearch index containing the document. Example: 'users', 'logs-2024.01'"),
+	id: z
+		.string()
+		.min(1, "Document ID cannot be empty")
+		.describe("REQUIRED: Unique identifier of the document to retrieve. Example: '123', 'user-456'"),
+	source: booleanField().optional().describe("Whether to return the _source field"),
+	sourceExcludes: z.array(z.string()).optional().describe("Fields to exclude from the _source"),
+	sourceIncludes: z.array(z.string()).optional().describe("Fields to include in the _source"),
+	routing: z.string().optional().describe("Custom routing value"),
+	preference: z.string().optional().describe("Preference for shard selection"),
+	realtime: booleanField().optional().describe("Whether to perform a real-time get"),
+	refresh: booleanField().optional().describe("Whether to refresh before retrieval"),
+	version: z.number().optional().describe("Expected document version for optimistic concurrency control"),
+	versionType: z
+		.enum(["internal", "external", "external_gte"])
+		.optional()
+		.describe("Version type for concurrency control"),
 });
 
-type _GetDocumentParams = z.infer<typeof getDocumentValidator>;
+type GetDocumentParams = z.infer<typeof getDocumentValidator>;
 
-// MCP error handling
 function createGetDocumentMcpError(
 	error: Error | string,
-	context: { type: "validation" | "execution" | "document_not_found" | "version_conflict"; details?: any },
+	context: { type: "validation" | "execution" | "document_not_found" | "version_conflict"; details?: unknown },
 ): McpError {
 	const message = error instanceof Error ? error.message : error;
 
@@ -52,7 +59,7 @@ function createGetDocumentMcpError(
 
 // Tool implementation
 export const registerGetDocumentTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const getDocumentHandler = async (args: any): Promise<SearchResult> => {
+	const getDocumentHandler = async (args: GetDocumentParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
 
 		try {
@@ -71,7 +78,7 @@ export const registerGetDocumentTool: ToolRegistrationFunction = (server: McpSer
 				refresh: params.refresh,
 				version: params.version,
 				version_type: params.versionType,
-			} as any);
+			});
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
@@ -123,19 +130,7 @@ export const registerGetDocumentTool: ToolRegistrationFunction = (server: McpSer
 			description:
 				"Get a document from Elasticsearch by index and id. Best for retrieving specific JSON documents, document validation, real-time data access. This tool REQUIRES both 'index' and 'id' parameters - it cannot work with empty {}. Use when you need to fetch individual documents by their unique identifier from Elasticsearch indices. Uses direct JSON Schema and standardized MCP error codes.",
 
-			inputSchema: {
-				index: z.string(), // REQUIRED: Name of the Elasticsearch index containing the document. Example: 'users', 'logs-2024.01'
-				id: z.string(), // REQUIRED: Unique identifier of the document to retrieve. Example: '123', 'user-456'
-				source: z.boolean().optional(), // Whether to return the _source field
-				sourceExcludes: z.array(z.string().optional()).optional(), // Fields to exclude from the _source (optional)
-				sourceIncludes: z.array(z.string().optional()).optional(), // Fields to include in the _source (optional)
-				routing: z.string().optional(), // Custom routing value (optional)
-				preference: z.string().optional(), // Preference for shard selection (optional)
-				realtime: z.boolean().optional(), // Whether to perform a real-time get
-				refresh: z.boolean().optional(), // Whether to refresh before retrieval
-				version: z.number().optional(), // Expected document version for optimistic concurrency control (optional)
-				versionType: z.enum(["internal", "external", "external_gte", "force"]).optional(), // Version type for concurrency control (optional)
-			},
+			inputSchema: getDocumentValidator.shape,
 		},
 
 		getDocumentHandler,

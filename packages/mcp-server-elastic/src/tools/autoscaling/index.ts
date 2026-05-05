@@ -161,7 +161,12 @@ export const getPolicy = {
 
 const putPolicySchema = z.object({
 	name: z.string().min(1, "Policy name cannot be empty"),
-	policy: z.any(),
+	policy: z
+		.object({
+			roles: z.array(z.string()),
+			deciders: z.record(z.string(), z.unknown()),
+		})
+		.describe("Autoscaling policy with roles and deciders"),
 	masterTimeout: z.string().optional(),
 	timeout: z.string().optional(),
 });

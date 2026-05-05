@@ -5,25 +5,35 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import type { ToolRegistrationFunction } from "../types.js";
+import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
-// Schema for diagnostic options
 const diagnosticsValidator = z.object({
-	includeMetrics: z.boolean().optional().default(true),
-	includeRecentRequests: z.boolean().optional().default(false),
-	includeSlowQueries: z.boolean().optional().default(true),
-	timeWindowMinutes: z.number().min(1).max(60).optional().default(5),
+	includeMetrics: z.boolean().optional().default(true).describe("Include detailed transport metrics in the report"),
+	includeRecentRequests: z
+		.boolean()
+		.optional()
+		.default(false)
+		.describe("Include list of recent requests (can be verbose)"),
+	includeSlowQueries: z.boolean().optional().default(true).describe("Include details about slow queries (>2 seconds)"),
+	timeWindowMinutes: z
+		.number()
+		.min(1)
+		.max(60)
+		.optional()
+		.default(5)
+		.describe("Time window for analysis in minutes (1-60)"),
 });
 
-type _DiagnosticsParams = z.infer<typeof diagnosticsValidator>;
+type DiagnosticsParams = z.infer<typeof diagnosticsValidator>;
+
+type ClusterInfoResponse = Awaited<ReturnType<Client["info"]>>;
 
 export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
-	const handler = async (toolArgs: any): Promise<any> => {
+	const handler = async (toolArgs: DiagnosticsParams): Promise<SearchResult> => {
 		try {
 			const params = diagnosticsValidator.parse(toolArgs);
 
-			// Generate basic health report using standard client info
-			let clusterInfo: any;
+			let clusterInfo: ClusterInfoResponse;
 			try {
 				clusterInfo = await esClient.info();
 			} catch (error) {
@@ -88,9 +98,8 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 			// Performance recommendations
 			output += "## Performance Recommendations\n\n";
 
-			const majorVersion = clusterInfo.version?.number
-				? Number.parseInt(clusterInfo.version.number.split(".")[0], 10)
-				: 0;
+			const versionNumber = clusterInfo.version?.number;
+			const majorVersion = versionNumber ? Number.parseInt(versionNumber.split(".")[0] ?? "0", 10) : 0;
 			if (majorVersion < 8) {
 				output += "- Consider upgrading to Elasticsearch 8.x for better performance and security\n";
 			}
@@ -140,7 +149,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 			return {
 				content: [
 					{
-						type: "text",
+						type: "text" as const,
 						text: output,
 					},
 				],
@@ -178,30 +187,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 			description:
 				"Generate comprehensive Elasticsearch transport and performance diagnostics report. Provides insights into connection health, request patterns, slow queries, error rates, and performance recommendations.",
 
-			inputSchema: {
-				includeMetrics: z
-					.boolean()
-					.optional()
-					.default(true)
-					.describe("Include detailed transport metrics in the report"),
-				includeRecentRequests: z
-					.boolean()
-					.optional()
-					.default(false)
-					.describe("Include list of recent requests (can be verbose)"),
-				includeSlowQueries: z
-					.boolean()
-					.optional()
-					.default(true)
-					.describe("Include details about slow queries (>2 seconds)"),
-				timeWindowMinutes: z
-					.number()
-					.min(1)
-					.max(60)
-					.optional()
-					.default(5)
-					.describe("Time window for analysis in minutes (1-60)"),
-			},
+			inputSchema: diagnosticsValidator.shape,
 		},
 
 		handler,
