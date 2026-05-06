@@ -1,45 +1,4 @@
 // src/utils/tool-tracer.ts
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-import { traceToolCall } from "./tracing.js";
-
-type McpHandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
-
-const SENSITIVE_PARAMS = new Set([
-	"cert",
-	"certificate",
-	"key",
-	"privateKey",
-	"private_key",
-	"certAlt",
-	"keyAlt",
-	"secret",
-	"token",
-	"password",
-	"apiKey",
-	"api_key",
-]);
-
-function _sanitizeParameters(args: Record<string, unknown>): Record<string, unknown> {
-	if (!args || typeof args !== "object") return args;
-	const sanitized = { ...args };
-	for (const param of SENSITIVE_PARAMS) {
-		if (param in sanitized) {
-			sanitized[param] = "[REDACTED]";
-		}
-	}
-	return sanitized;
-}
-
-export function createTracedToolHandler(
-	originalHandler: (args: Record<string, unknown>, extra: McpHandlerExtra) => Promise<unknown>,
-	toolName: string,
-) {
-	return async (args: Record<string, unknown>, extra: McpHandlerExtra) => {
-		return traceToolCall(toolName, () => originalHandler(args, extra));
-	};
-}
-
 export class ToolPerformanceCollector {
 	private metrics = new Map<
 		string,
