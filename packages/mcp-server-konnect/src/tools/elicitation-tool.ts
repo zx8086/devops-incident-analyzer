@@ -1,8 +1,10 @@
 // src/tools/elicitation-tool.ts
 import { z } from "zod";
-import type { MigrationAnalysis } from "../operations/migration-analyzer.js";
+import type { DeckConfiguration, MigrationAnalysis } from "../operations/migration-analyzer.js";
 import { MigrationAnalyzer } from "../operations/migration-analyzer.js";
+import type { DetectionResult } from "../utils/context-detection.js";
 import { contextDetector } from "../utils/context-detection.js";
+import type { ElicitationRequest } from "../utils/elicitation.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
 import { createContextLogger } from "../utils/logger.js";
@@ -25,8 +27,7 @@ const log = createContextLogger("elicitation");
 export const analyzeContextParameters = z.object({
 	userMessage: z.string().optional().describe("User's original migration request"),
 	deckFiles: z.array(z.string()).optional().describe("Paths to Kong deck YAML files"),
-	// biome-ignore lint/suspicious/noExplicitAny: parsed deck configs are arbitrary YAML-derived shapes
-	deckConfigs: z.array(z.any()).optional().describe("Parsed deck configurations"),
+	deckConfigs: z.array(z.unknown()).optional().describe("Parsed deck configurations"),
 	gitContext: z
 		.object({
 			branch: z.string().optional(),
@@ -38,10 +39,8 @@ export const analyzeContextParameters = z.object({
 });
 
 export const createElicitationSessionParameters = z.object({
-	// biome-ignore lint/suspicious/noExplicitAny: analysis result forwarded verbatim from analyze-context
-	analysisResult: z.any().describe("Migration analysis result from analyze-context"),
-	// biome-ignore lint/suspicious/noExplicitAny: original migration context shape varies by caller
-	context: z.any().describe("Original migration context"),
+	analysisResult: z.unknown().describe("Migration analysis result from analyze-context"),
+	context: z.unknown().describe("Original migration context"),
 });
 
 export const processElicitationResponseParameters = z.object({
@@ -49,8 +48,7 @@ export const processElicitationResponseParameters = z.object({
 	requestId: z.string().describe("Elicitation request ID"),
 	response: z
 		.object({
-			// biome-ignore lint/suspicious/noExplicitAny: response payload shape is request-specific
-			data: z.any().optional(),
+			data: z.unknown().optional(),
 			declined: z.boolean().optional(),
 			cancelled: z.boolean().optional(),
 			error: z.string().optional(),
@@ -83,11 +81,11 @@ export class ElicitationOperations {
 	async analyzeContext(
 		userMessage?: string,
 		deckFiles?: string[],
-		deckConfigs?: any[],
-		gitContext?: any,
+		deckConfigs?: DeckConfiguration[],
+		gitContext?: { branch?: string; repoName?: string; teamMembers?: string[] },
 	): Promise<{
-		contextDetection: any;
-		migrationAnalysis: any;
+		contextDetection: DetectionResult;
+		migrationAnalysis: MigrationAnalysis;
 		elicitationRequired: boolean;
 		recommendations: string[];
 		summary: string;
@@ -131,10 +129,13 @@ export class ElicitationOperations {
 	 * Now compatible with both Claude Code and Claude Desktop
 	 */
 	async createElicitationSession(
+		// biome-ignore lint/suspicious/noExplicitAny: accepts either a parsed analysis object, a JSON string of one, or null; reshaped at runtime.
 		analysisResult: any,
+		// biome-ignore lint/suspicious/noExplicitAny: caller-supplied context blob passed through to elicitation messaging without structural constraint.
 		context: any,
 	): Promise<{
 		sessionId: string;
+		// biome-ignore lint/suspicious/noExplicitAny: requests are ElicitationRequest objects but their `schema` field is a Zod schema with open generic.
 		requests: any[];
 		summary: string;
 		needsUserInput: boolean;
@@ -208,7 +209,10 @@ export class ElicitationOperations {
 		);
 
 		// Generate Claude Desktop friendly prompt
-		const claudeDesktopPrompt = this.generateClaudeDesktopPrompt(elicitationSession.requests, migrationAnalysis);
+		const claudeDesktopPrompt = this.generateClaudeDesktopPrompt(
+			elicitationSession.requests,
+			migrationAnalysis as unknown as MigrationAnalysis,
+		);
 		const directInstructions = this.generateDirectInstructions(elicitationSession.requests);
 
 		return {
@@ -234,7 +238,7 @@ export class ElicitationOperations {
 		sessionId: string,
 		requestId: string,
 		response: {
-			data?: any;
+			data?: unknown;
 			declined?: boolean;
 			cancelled?: boolean;
 			error?: string;
@@ -243,7 +247,7 @@ export class ElicitationOperations {
 		success: boolean;
 		message: string;
 		sessionComplete: boolean;
-		nextRequest?: any;
+		nextRequest?: unknown;
 	}> {
 		try {
 			const processedResponse = elicitationManager.processResponse(sessionId, requestId, response);
@@ -292,9 +296,9 @@ export class ElicitationOperations {
 	 */
 	async getSessionStatus(sessionId: string): Promise<{
 		sessionId: string;
-		summary: any;
+		summary: { total: number; completed: number; declined: number; cancelled: number; pending: number };
 		isComplete: boolean;
-		responses: Record<string, any>;
+		responses: Record<string, unknown>;
 		recommendations: string[];
 	}> {
 		const summary = elicitationManager.getSessionSummary(sessionId);
@@ -317,12 +321,12 @@ export class ElicitationOperations {
 	 */
 	async generateTagAssignments(
 		sessionId: string,
-		migrationAnalysis: any,
+		migrationAnalysis: MigrationAnalysis,
 	): Promise<{
 		success: boolean;
 		tagAssignments: Record<string, string[]>;
 		summary: string;
-		validationResults: any;
+		validationResults: { valid: boolean; errors: string[] };
 	}> {
 		const isComplete = elicitationManager.isSessionComplete(sessionId);
 
@@ -343,11 +347,13 @@ export class ElicitationOperations {
 		let environment: string | null = null;
 		let team: string | null = null;
 
-		// Map responses based on order: domain, environment, team
+		// Map responses based on order: domain, environment, team. Each
+		// response.data is `unknown` (the elicitation framework can't know
+		// per-request shape ahead of time); narrow defensively.
 		const responseArray = Array.from(responses.values());
-		if (responseArray[0]?.data) domain = responseArray[0].data;
-		if (responseArray[1]?.data) environment = responseArray[1].data;
-		if (responseArray[2]?.data) team = responseArray[2].data;
+		if (typeof responseArray[0]?.data === "string") domain = responseArray[0].data;
+		if (typeof responseArray[1]?.data === "string") environment = responseArray[1].data;
+		if (typeof responseArray[2]?.data === "string") team = responseArray[2].data;
 
 		// CRITICAL: Validate all mandatory fields are provided - NO FALLBACKS
 		if (!domain || !environment || !team) {
@@ -403,7 +409,7 @@ export class ElicitationOperations {
 	}
 
 	// Private helper methods
-	private generateAnalysisSummary(contextDetection: any, migrationAnalysis: any): string {
+	private generateAnalysisSummary(contextDetection: DetectionResult, migrationAnalysis: MigrationAnalysis): string {
 		let summary = `**Migration Context Analysis**\n\n`;
 
 		// Context detection summary
@@ -437,16 +443,20 @@ export class ElicitationOperations {
 		return summary;
 	}
 
-	private serializeSchema(_schema: z.ZodSchema<any>): any {
-		// Convert Zod schema to JSON-serializable format
-		// This is a simplified version - would need full implementation
+	// biome-ignore lint/suspicious/noExplicitAny: ZodSchema<any> is the standard untyped Zod generic. Returns a JSON Schema-shaped object.
+	private serializeSchema(_schema: z.ZodSchema<any>): Record<string, unknown> {
+		// Convert Zod schema to JSON-serializable format.
+		// Stub: would need full implementation to walk the schema tree.
 		return {
 			type: "object",
 			description: "User response schema",
 		};
 	}
 
-	private generateCompletionRecommendations(summary: any, isComplete: boolean): string[] {
+	private generateCompletionRecommendations(
+		summary: { total: number; completed: number; declined: number; cancelled: number; pending: number },
+		isComplete: boolean,
+	): string[] {
 		const recommendations: string[] = [];
 
 		if (!isComplete) {
@@ -507,7 +517,10 @@ export class ElicitationOperations {
 		};
 	}
 
-	private generateTagAssignmentSummary(tagAssignments: Record<string, string[]>, validationResults: any): string {
+	private generateTagAssignmentSummary(
+		tagAssignments: Record<string, string[]>,
+		validationResults: { valid: boolean; errors: string[]; warnings?: string[] },
+	): string {
 		let summary = `**Tag Assignment Summary**\n\n`;
 
 		const entityCount = Object.keys(tagAssignments).length;
@@ -533,7 +546,7 @@ export class ElicitationOperations {
 	/**
 	 * Generate Claude Desktop friendly prompt
 	 */
-	private generateClaudeDesktopPrompt(requests: any[], migrationAnalysis: any): string {
+	private generateClaudeDesktopPrompt(requests: ElicitationRequest[], migrationAnalysis: MigrationAnalysis): string {
 		const entityCount = migrationAnalysis.entityCounts?.total || 0;
 
 		let prompt = `## 🚨 Missing Information for Kong Deployment\n\n`;
@@ -569,7 +582,7 @@ export class ElicitationOperations {
 	/**
 	 * Generate direct instructions for Claude Desktop
 	 */
-	private generateDirectInstructions(requests: any[]): string {
+	private generateDirectInstructions(requests: ElicitationRequest[]): string {
 		const fields = requests.map((req) => this.extractFieldFromRequest(req));
 		return `To proceed, please provide: ${fields.map((f) => `${f}=your_${f}`).join(", ")}`;
 	}
@@ -577,7 +590,7 @@ export class ElicitationOperations {
 	/**
 	 * Extract field name from request
 	 */
-	private extractFieldFromRequest(request: any): string {
+	private extractFieldFromRequest(request: ElicitationRequest): string {
 		if (request.id?.includes("domain") || request.message?.toLowerCase().includes("domain")) {
 			return "domain";
 		}
@@ -611,7 +624,13 @@ Returns confidence scores and identifies missing mandatory information (domain, 
 		parameters: analyzeContextParameters,
 		category: "elicitation",
 		handler: async (args: AnalyzeContextArgs, { elicitationOps }) =>
-			elicitationOps.analyzeContext(args.userMessage, args.deckFiles, args.deckConfigs, args.gitContext),
+			// deckConfigs comes through as unknown[] (parsed YAML); analyze layer treats each entry as DeckConfiguration via index access.
+			elicitationOps.analyzeContext(
+				args.userMessage,
+				args.deckFiles,
+				args.deckConfigs as DeckConfiguration[] | undefined,
+				args.gitContext,
+			),
 	},
 	{
 		method: "create_elicitation_session",

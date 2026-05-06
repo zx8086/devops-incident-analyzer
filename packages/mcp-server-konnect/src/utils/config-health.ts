@@ -5,12 +5,12 @@
  * Run with: bun run src/utils/config-health.ts
  */
 
-import { type ConfigurationHealth, configManager } from "../config/index.js";
+import { type Config, type ConfigurationHealth, configManager } from "../config/index.js";
 import { getRuntimeInfo } from "./env.js";
 
 interface HealthCheckResult {
 	success: boolean;
-	config?: any;
+	config?: Config;
 	health?: ConfigurationHealth;
 	error?: string;
 }
@@ -107,29 +107,35 @@ async function runConfigurationHealthCheck(): Promise<HealthCheckResult> {
 			console.error("   Server ready to start");
 			return { success: true, config, health };
 		}
-	} catch (error: any) {
+	} catch (error: unknown) {
 		console.error(`\n${"=".repeat(60)}`);
 		console.error("ERROR: CONFIGURATION HEALTH CHECK FAILED");
-		console.error(`   Error: ${error.message}`);
+		const errMessage = error instanceof Error ? error.message : String(error);
+		console.error(`   Error: ${errMessage}`);
 
-		if (error.name === "ZodError") {
+		// ZodError carries .name === "ZodError" and an .issues array.
+		const zodError =
+			error && typeof error === "object" && (error as { name?: unknown }).name === "ZodError"
+				? (error as { issues?: Array<{ path: Array<string | number>; message: string }> })
+				: null;
+		if (zodError) {
 			console.error("\nINFO: Validation Errors:");
-			error.issues?.forEach((issue: any, index: number) => {
+			zodError.issues?.forEach((issue, index) => {
 				console.error(`   ${index + 1}. ${issue.path.join(".")}: ${issue.message}`);
 			});
 
 			console.error("\nTIP: Common Solutions:");
-			if (error.issues?.some((i: any) => i.path.includes("accessToken"))) {
+			if (zodError.issues?.some((i) => i.path.includes("accessToken"))) {
 				console.error("   - Set KONNECT_ACCESS_TOKEN in your .env file");
 				console.error("   - Get your token from: https://cloud.konghq.com/");
 			}
-			if (error.issues?.some((i: any) => i.path.includes("apiKey"))) {
+			if (zodError.issues?.some((i) => i.path.includes("apiKey"))) {
 				console.error("   - Set LANGSMITH_API_KEY in your .env file");
 				console.error("   - Or set LANGSMITH_TRACING=false to disable tracing");
 			}
 		}
 
-		return { success: false, error: error.message };
+		return { success: false, error: errMessage };
 	}
 }
 
@@ -214,8 +220,9 @@ async function runProductionSafetyCheck(): Promise<boolean> {
 
 		console.error("SUCCESS: Production safety check passed");
 		return true;
-	} catch (error: any) {
-		console.error(`ERROR: Production safety check failed: ${error.message}`);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`ERROR: Production safety check failed: ${message}`);
 		return false;
 	}
 }
@@ -233,8 +240,9 @@ async function exportConfigSchema(): Promise<void> {
 		console.error("   - tracing: LangSmith tracing settings (enabled, apiKey, project)");
 		console.error("   - monitoring: Performance monitoring configuration");
 		console.error("   - runtime: Bun/Node.js runtime settings");
-	} catch (error: any) {
-		console.error(`ERROR: Failed to export schema: ${error.message}`);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`ERROR: Failed to export schema: ${message}`);
 	}
 }
 

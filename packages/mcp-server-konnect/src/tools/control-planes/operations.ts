@@ -56,7 +56,7 @@ export async function listControlPlanes(
 				},
 				sort: sort || null,
 			},
-			controlPlanes: result.data.map((cp: any) => ({
+			controlPlanes: result.data.map((cp) => ({
 				controlPlaneId: cp.id,
 				name: cp.name,
 				description: cp.description,
@@ -157,7 +157,7 @@ export async function listControlPlaneGroupMemberships(
 				nextPageAfter: result.meta?.next_page?.after || null,
 				totalCount: result.meta?.total_count || 0,
 			},
-			members: result.data.map((member: any) => ({
+			members: result.data.map((member) => ({
 				controlPlaneId: member.id,
 				name: member.name,
 				description: member.description,
@@ -294,7 +294,7 @@ export async function updateControlPlane(
 		"control-plane",
 		controlPlaneId,
 	)(async () => {
-		const requestData: any = {};
+		const requestData: Record<string, unknown> = {};
 
 		if (controlPlaneData.name !== undefined) requestData.name = controlPlaneData.name;
 		if (controlPlaneData.description !== undefined) requestData.description = controlPlaneData.description;
@@ -390,7 +390,7 @@ export async function listDataPlaneNodes(
 				},
 			},
 			nodes:
-				(result.items || result.data)?.map((node: any) => ({
+				(result.items || result.data)?.map((node) => ({
 					nodeId: node.id,
 					hostname: node.hostname,
 					status: node.connection_state?.is_connected ? "connected" : "disconnected",
@@ -413,11 +413,11 @@ export async function listDataPlaneNodes(
 				totalNodes: result.page?.total_count || result.meta?.page?.total_count || 0,
 				connectedNodes:
 					(result.items || result.data)?.filter(
-						(n: any) => n.connection_state?.is_connected || n.status === "connected",
+						(n) => n.connection_state?.is_connected || n.status === "connected",
 					).length || 0,
 				disconnectedNodes:
 					(result.items || result.data)?.filter(
-						(n: any) => !n.connection_state?.is_connected && n.status !== "connected",
+						(n) => !n.connection_state?.is_connected && n.status !== "connected",
 					).length || 0,
 				overallHealth: result.summary?.health_status || "healthy",
 			},
@@ -559,7 +559,7 @@ export async function listDataPlaneTokens(api: KongApi, controlPlaneId: string, 
 				},
 			},
 			tokens:
-				result.data?.map((token: any) => ({
+				result.data?.map((token) => ({
 					tokenId: token.id,
 					name: token.name,
 					status: token.status,
@@ -662,7 +662,7 @@ export async function updateControlPlaneConfig(
 		"control-plane",
 		controlPlaneId,
 	)(async () => {
-		const requestData: any = {};
+		const requestData: Record<string, unknown> = {};
 
 		if (configData.proxyUrl !== undefined) requestData.proxy_url = configData.proxyUrl;
 		if (configData.telemetryUrl !== undefined) requestData.telemetry_url = configData.telemetryUrl;

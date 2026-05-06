@@ -51,7 +51,7 @@ export function withErrorContext<T>(
 	return async (apiCall: () => Promise<T>): Promise<T> => {
 		try {
 			return await apiCall();
-		} catch (error: any) {
+		} catch (error: unknown) {
 			const context: ErrorContext = {
 				operation,
 				resource,
@@ -60,18 +60,29 @@ export function withErrorContext<T>(
 				troubleshooting: generateTroubleshootingTips(error, operation, resource),
 			};
 
-			// Extract status code from error message or axios error
+			// Extract status code from axios error response or message text.
 			let statusCode: number | undefined;
-			if (error.response?.status) {
-				statusCode = error.response.status;
-			} else if (error.message?.includes("Status ")) {
-				const match = error.message.match(/Status (\d+)/);
-				if (match) {
-					statusCode = parseInt(match[1], 10);
+			let errMessage = "Unknown error occurred";
+			if (error && typeof error === "object") {
+				const errObj = error as {
+					response?: { status?: unknown };
+					statusCode?: unknown;
+					message?: unknown;
+				};
+				if (typeof errObj.response?.status === "number") {
+					statusCode = errObj.response.status;
+				} else if (typeof errObj.message === "string" && errObj.message.includes("Status ")) {
+					const match = errObj.message.match(/Status (\d+)/);
+					if (match?.[1]) {
+						statusCode = parseInt(match[1], 10);
+					}
 				}
+				if (typeof errObj.message === "string") errMessage = errObj.message;
+			} else if (typeof error === "string") {
+				errMessage = error;
 			}
 
-			throw new KongMCPError(error.message || "Unknown error occurred", context, statusCode);
+			throw new KongMCPError(errMessage, context, statusCode);
 		}
 	};
 }
@@ -79,11 +90,16 @@ export function withErrorContext<T>(
 /**
  * Generate contextual troubleshooting tips based on error type
  */
-export function generateTroubleshootingTips(error: any, operation: string, resource?: string): string[] {
+export function generateTroubleshootingTips(error: unknown, operation: string, resource?: string): string[] {
 	const tips: string[] = [];
 
-	// Status code specific tips
-	const statusCode = error.response?.status || error.statusCode;
+	// Status code specific tips. error may be axios-style or a plain Error;
+	// tolerate either shape via a structural cast.
+	const errObj =
+		error && typeof error === "object"
+			? (error as { response?: { status?: unknown }; statusCode?: unknown; message?: unknown })
+			: undefined;
+	const statusCode = errObj?.response?.status ?? errObj?.statusCode;
 
 	switch (statusCode) {
 		case 401:
@@ -123,7 +139,7 @@ export function generateTroubleshootingTips(error: any, operation: string, resou
 			break;
 
 		default:
-			if (error.message?.includes("Network Error")) {
+			if (typeof errObj?.message === "string" && errObj.message.includes("Network Error")) {
 				tips.push("Check your internet connection");
 				tips.push("Verify the Kong Konnect API endpoint is accessible");
 				tips.push("Check if there are firewall restrictions");
@@ -210,6 +226,7 @@ export function formatError(error: unknown, traceContext?: TraceContext): string
 /**
  * Validate common Kong entity fields
  */
+// biome-ignore lint/suspicious/noExplicitAny: validates loosely-typed user-supplied entity payloads; field access is defensive.
 export function validateKongEntity(data: any, entityType: string): string[] {
 	const errors: string[] = [];
 

@@ -32,7 +32,7 @@ async function main() {
 		"NODE_ENV",
 	];
 
-	const results: Record<string, any> = {};
+	const results: Record<string, unknown> = {};
 
 	for (const varName of testVars) {
 		const bunValue = typeof Bun !== "undefined" ? Bun.env[varName] : undefined;

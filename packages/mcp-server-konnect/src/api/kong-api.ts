@@ -31,8 +31,8 @@ import type {
 	PortalInfo,
 	PortalProduct,
 	Route,
-	SNI,
 	Service,
+	SNI,
 	TimeRange,
 	Upstream,
 	UpstreamHealth,
@@ -119,7 +119,8 @@ export class KongApi {
 					}
 
 					if (axiosError.response.status === 401) {
-						errorMessage += "\n\nTroubleshooting: Check that KONNECT_ACCESS_TOKEN is set correctly and has not expired.";
+						errorMessage +=
+							"\n\nTroubleshooting: Check that KONNECT_ACCESS_TOKEN is set correctly and has not expired.";
 					} else if (axiosError.response.status === 403) {
 						errorMessage +=
 							"\n\nTroubleshooting: Your access token may not have sufficient permissions for this operation.";
@@ -217,19 +218,14 @@ export class KongApi {
 	}
 
 	async checkControlPlaneGroupMembership(controlPlaneId: string): Promise<GroupMembershipStatus> {
-		return this.kongRequest<GroupMembershipStatus>(
-			`/control-planes/${controlPlaneId}/group-member-status`,
-		);
+		return this.kongRequest<GroupMembershipStatus>(`/control-planes/${controlPlaneId}/group-member-status`);
 	}
 
 	async createControlPlane(controlPlaneData: Record<string, unknown>): Promise<ControlPlane> {
 		return this.kongRequest<ControlPlane>(`/control-planes`, "POST", controlPlaneData);
 	}
 
-	async updateControlPlane(
-		controlPlaneId: string,
-		controlPlaneData: Record<string, unknown>,
-	): Promise<ControlPlane> {
+	async updateControlPlane(controlPlaneId: string, controlPlaneData: Record<string, unknown>): Promise<ControlPlane> {
 		return this.kongRequest<ControlPlane>(`/control-planes/${controlPlaneId}`, "PATCH", controlPlaneData);
 	}
 
@@ -239,10 +235,7 @@ export class KongApi {
 
 	// Data Plane Node Management (deprecated - using newer /nodes endpoint below)
 
-	async createDataPlaneToken(
-		controlPlaneId: string,
-		tokenData: Record<string, unknown>,
-	): Promise<DataPlaneToken> {
+	async createDataPlaneToken(controlPlaneId: string, tokenData: Record<string, unknown>): Promise<DataPlaneToken> {
 		return this.kongRequest<DataPlaneToken>(`/control-planes/${controlPlaneId}/tokens`, "POST", tokenData);
 	}
 
@@ -270,18 +263,10 @@ export class KongApi {
 		controlPlaneId: string,
 		configData: Record<string, unknown>,
 	): Promise<ControlPlaneConfig> {
-		return this.kongRequest<ControlPlaneConfig>(
-			`/control-planes/${controlPlaneId}/config`,
-			"PATCH",
-			configData,
-		);
+		return this.kongRequest<ControlPlaneConfig>(`/control-planes/${controlPlaneId}/config`, "PATCH", configData);
 	}
 
-	async listServices(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Service>> {
+	async listServices(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Service>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/services?size=${size}`;
 
 		if (offset) {
@@ -296,11 +281,7 @@ export class KongApi {
 	}
 
 	async createService(controlPlaneId: string, serviceData: Record<string, unknown>): Promise<Service> {
-		return this.kongRequest<Service>(
-			`/control-planes/${controlPlaneId}/core-entities/services`,
-			"POST",
-			serviceData,
-		);
+		return this.kongRequest<Service>(`/control-planes/${controlPlaneId}/core-entities/services`, "POST", serviceData);
 	}
 
 	async updateService(
@@ -316,17 +297,10 @@ export class KongApi {
 	}
 
 	async deleteService(controlPlaneId: string, serviceId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/control-planes/${controlPlaneId}/core-entities/services/${serviceId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/control-planes/${controlPlaneId}/core-entities/services/${serviceId}`, "DELETE");
 	}
 
-	async listRoutes(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Route>> {
+	async listRoutes(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Route>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/routes?size=${size}`;
 
 		if (offset) {
@@ -344,11 +318,7 @@ export class KongApi {
 		return this.kongRequest<Route>(`/control-planes/${controlPlaneId}/core-entities/routes`, "POST", routeData);
 	}
 
-	async updateRoute(
-		controlPlaneId: string,
-		routeId: string,
-		routeData: Record<string, unknown>,
-	): Promise<Route> {
+	async updateRoute(controlPlaneId: string, routeId: string, routeData: Record<string, unknown>): Promise<Route> {
 		return this.kongRequest<Route>(
 			`/control-planes/${controlPlaneId}/core-entities/routes/${routeId}`,
 			"PUT",
@@ -357,17 +327,10 @@ export class KongApi {
 	}
 
 	async deleteRoute(controlPlaneId: string, routeId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/control-planes/${controlPlaneId}/core-entities/routes/${routeId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/control-planes/${controlPlaneId}/core-entities/routes/${routeId}`, "DELETE");
 	}
 
-	async listConsumers(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Consumer>> {
+	async listConsumers(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Consumer>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/consumers?size=${size}`;
 
 		if (offset) {
@@ -402,17 +365,10 @@ export class KongApi {
 	}
 
 	async deleteConsumer(controlPlaneId: string, consumerId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/control-planes/${controlPlaneId}/core-entities/consumers/${consumerId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/control-planes/${controlPlaneId}/core-entities/consumers/${consumerId}`, "DELETE");
 	}
 
-	async listPlugins(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Plugin>> {
+	async listPlugins(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Plugin>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/plugins?size=${size}`;
 
 		if (offset) {
@@ -427,18 +383,10 @@ export class KongApi {
 	}
 
 	async createPlugin(controlPlaneId: string, pluginData: Record<string, unknown>): Promise<Plugin> {
-		return this.kongRequest<Plugin>(
-			`/control-planes/${controlPlaneId}/core-entities/plugins`,
-			"POST",
-			pluginData,
-		);
+		return this.kongRequest<Plugin>(`/control-planes/${controlPlaneId}/core-entities/plugins`, "POST", pluginData);
 	}
 
-	async updatePlugin(
-		controlPlaneId: string,
-		pluginId: string,
-		pluginData: Record<string, unknown>,
-	): Promise<Plugin> {
+	async updatePlugin(controlPlaneId: string, pluginId: string, pluginData: Record<string, unknown>): Promise<Plugin> {
 		return this.kongRequest<Plugin>(
 			`/control-planes/${controlPlaneId}/core-entities/plugins/${pluginId}`,
 			"PUT",
@@ -447,10 +395,7 @@ export class KongApi {
 	}
 
 	async deletePlugin(controlPlaneId: string, pluginId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/control-planes/${controlPlaneId}/core-entities/plugins/${pluginId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/control-planes/${controlPlaneId}/core-entities/plugins/${pluginId}`, "DELETE");
 	}
 
 	async listPluginSchemas(controlPlaneId: string): Promise<KongListResponse<PluginSchema>> {
@@ -459,11 +404,7 @@ export class KongApi {
 		);
 	}
 
-	async listCertificates(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Certificate>> {
+	async listCertificates(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Certificate>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/certificates?size=${size}`;
 
 		if (offset) {
@@ -473,10 +414,7 @@ export class KongApi {
 		return this.kongRequest<KongListResponse<Certificate>>(endpoint);
 	}
 
-	async getCertificate(
-		controlPlaneId: string,
-		certificateId: string,
-	): Promise<KongEntityResponse<Certificate>> {
+	async getCertificate(controlPlaneId: string, certificateId: string): Promise<KongEntityResponse<Certificate>> {
 		return this.kongRequest<KongEntityResponse<Certificate>>(
 			`/control-planes/${controlPlaneId}/core-entities/certificates/${certificateId}`,
 		);
@@ -512,11 +450,7 @@ export class KongApi {
 		);
 	}
 
-	async listUpstreams(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<Upstream>> {
+	async listUpstreams(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<Upstream>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/upstreams?size=${size}`;
 
 		if (offset) {
@@ -581,11 +515,7 @@ export class KongApi {
 		);
 	}
 
-	async listSNIs(
-		controlPlaneId: string,
-		size = 100,
-		offset?: string,
-	): Promise<KongListResponse<SNI>> {
+	async listSNIs(controlPlaneId: string, size = 100, offset?: string): Promise<KongListResponse<SNI>> {
 		let endpoint = `/control-planes/${controlPlaneId}/core-entities/snis?size=${size}`;
 
 		if (offset) {
@@ -751,10 +681,7 @@ export class KongApi {
 	}
 
 	async deletePortalApplicationRegistration(applicationId: string, registrationId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/api/v3/applications/${applicationId}/registrations/${registrationId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`, "DELETE");
 	}
 
 	async listPortalCredentials(
@@ -793,17 +720,11 @@ export class KongApi {
 	}
 
 	async deletePortalCredential(applicationId: string, credentialId: string): Promise<void> {
-		return this.kongRequest<void>(
-			`/api/v3/applications/${applicationId}/credentials/${credentialId}`,
-			"DELETE",
-		);
+		return this.kongRequest<void>(`/api/v3/applications/${applicationId}/credentials/${credentialId}`, "DELETE");
 	}
 
 	async regeneratePortalApplicationSecret(applicationId: string): Promise<PortalApplicationSecret> {
-		return this.kongRequest<PortalApplicationSecret>(
-			`/api/v3/applications/${applicationId}/regenerate-secret`,
-			"POST",
-		);
+		return this.kongRequest<PortalApplicationSecret>(`/api/v3/applications/${applicationId}/regenerate-secret`, "POST");
 	}
 
 	async registerPortalDeveloper(developerData: Record<string, unknown>): Promise<PortalDeveloper> {

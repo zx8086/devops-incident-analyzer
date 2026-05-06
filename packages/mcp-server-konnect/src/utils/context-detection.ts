@@ -271,6 +271,7 @@ export class ContextDetector {
 	/**
 	 * Detect context from Kong deck configuration
 	 */
+	// biome-ignore lint/suspicious/noExplicitAny: deck configs are arbitrary user-supplied YAML; pattern matching tolerates any shape.
 	detectFromDeckConfig(configs: any[]): DetectionResult {
 		const result: DetectionResult = {
 			domain: [],
@@ -302,6 +303,7 @@ export class ContextDetector {
 
 			// Service analysis
 			if (config.services) {
+				// biome-ignore lint/suspicious/noExplicitAny: nested user-supplied YAML; structural pattern access only.
 				config.services.forEach((service: any) => {
 					// Protocol detection
 					if (service.protocol) {
@@ -334,6 +336,7 @@ export class ContextDetector {
 
 			// Plugin analysis
 			if (config.plugins) {
+				// biome-ignore lint/suspicious/noExplicitAny: nested user-supplied YAML; structural pattern access only.
 				const pluginTypes = config.plugins.map((plugin: any) => plugin.name);
 
 				// Infer service type from plugins

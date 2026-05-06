@@ -148,6 +148,7 @@ function registerTools(
 		// SIO-670 PR0: per-tool handlers live on each tool entry; the wrapper here
 		// stays in server.ts because tracing, perf metrics, and the MCP content
 		// envelope are cross-cutting and identical for every tool.
+		// biome-ignore lint/suspicious/noExplicitAny: dispatcher across many tool schemas (also covers MCP RequestHandlerExtra generics passed through from the SDK).
 		const handler = async (args: any, extra: RequestHandlerExtra<any, any>) => {
 			const startTime = Date.now();
 			let success = true;
@@ -158,7 +159,7 @@ function registerTools(
 				return {
 					content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
 				};
-			} catch (error: any) {
+			} catch (error: unknown) {
 				success = false;
 				const duration = Date.now() - startTime;
 				performanceCollector.recordToolExecution(`konnect_${tool.method}`, duration, success);
@@ -170,6 +171,7 @@ function registerTools(
 		};
 
 		const prefixedName = `konnect_${tool.method}`;
+		// biome-ignore lint/suspicious/noExplicitAny: traced wrapper mirrors the dispatcher signature (args, RequestHandlerExtra generics, return type all passthrough).
 		const tracedHandler = async (args: any, extra: RequestHandlerExtra<any, any>): Promise<any> =>
 			traceToolCall(prefixedName, () => handler(args, extra));
 

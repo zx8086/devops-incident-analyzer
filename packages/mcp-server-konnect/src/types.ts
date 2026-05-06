@@ -256,6 +256,11 @@ export interface DataPlaneNode {
 	hostname: string;
 	ip: string;
 	last_seen: string;
+	last_ping?: string;
+	sync_status?: string;
+	compatibility?: string;
+	compatibility_status?: { state?: string; [key: string]: unknown };
+	connection_state?: { is_connected?: boolean; [key: string]: unknown };
 	config_hash?: string;
 	config_synced_at?: string;
 	config_version?: string;
@@ -414,16 +419,20 @@ export interface PortalApplication {
 	description?: string;
 	reference_id?: string;
 	auth_strategy_id?: string;
-	auth_strategy?: string;
+	// auth_strategy is returned inline as an object summary; consumers reach
+	// for `.name`.
+	auth_strategy?: { id?: string; name?: string; [key: string]: unknown };
 	client_id?: string;
 	client_secret?: string;
 	redirect_uri?: string;
 	scopes?: string[];
 	status?: string;
-	registrations?: unknown[];
-	credentials?: unknown[];
+	registrations?: PortalApplicationRegistration[];
+	credentials?: PortalCredential[];
 	request_count?: number;
 	last_used_at?: string;
+	registration_count?: number;
+	credential_count?: number;
 	created_at: string;
 	updated_at: string;
 	labels?: Record<string, string>;
@@ -563,7 +572,11 @@ export interface DataPlaneToken {
 
 export interface PluginSchema {
 	name: string;
+	description?: string;
+	required?: string[];
+	examples?: unknown[];
 	fields?: Record<string, unknown>;
+	[key: string]: unknown;
 }
 
 export interface ControlPlaneConfig {

@@ -10,18 +10,35 @@ import { z } from "zod";
  * - Transparent information requests
  */
 
+// Loose context payload passed into elicitation message builders. Each caller
+// only sets the fields that apply to its scenario (e.g. detectedDomains for
+// domain elicitation, filepath for environment elicitation).
+export interface ElicitationContext {
+	detectedDomains?: string[];
+	detectedEnv?: string;
+	domain?: string;
+	entityName?: string;
+	entityConfig?: Record<string, unknown>;
+	filepath?: string;
+	serviceNames?: string[];
+	userMessage?: string;
+	suggestedTags?: string[];
+	[key: string]: unknown;
+}
+
 // Elicitation response types
 export interface ElicitationRequest {
 	id: string;
 	message: string;
+	// biome-ignore lint/suspicious/noExplicitAny: ZodSchema<any> is the standard untyped schema slot Zod uses.
 	schema: z.ZodSchema<any>;
-	context?: Record<string, any>;
+	context?: Record<string, unknown>;
 	required: boolean;
 	suggestions?: string[];
 	timeout?: number;
 }
 
-export interface ElicitationResponse<T = any> {
+export interface ElicitationResponse<T = unknown> {
 	requestId: string;
 	data?: T;
 	declined: boolean;
@@ -33,7 +50,7 @@ export interface ElicitationSession {
 	sessionId: string;
 	requests: ElicitationRequest[];
 	responses: Map<string, ElicitationResponse>;
-	context: Record<string, any>;
+	context: Record<string, unknown>;
 	createdAt: Date;
 }
 
@@ -56,7 +73,7 @@ export class ElicitationManager {
 	/**
 	 * Create a new elicitation session for gathering information
 	 */
-	createSession(context?: Record<string, any>): ElicitationSession {
+	createSession(context?: Record<string, unknown>): ElicitationSession {
 		const sessionId = `elicit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 		const session: ElicitationSession = {
@@ -77,12 +94,13 @@ export class ElicitationManager {
 	addRequest(
 		sessionId: string,
 		message: string,
+		// biome-ignore lint/suspicious/noExplicitAny: ZodSchema<any> is the standard untyped Zod schema slot.
 		schema: z.ZodSchema<any>,
 		options: {
 			required?: boolean;
 			suggestions?: string[];
 			timeout?: number;
-			context?: Record<string, any>;
+			context?: Record<string, unknown>;
 		} = {},
 	): ElicitationRequest {
 		const session = this.sessions.get(sessionId);
@@ -337,7 +355,7 @@ export class KongElicitationPatterns {
 		entityType: "service" | "route" | "plugin" | "consumer",
 		context: {
 			entityName?: string;
-			entityConfig?: any;
+			entityConfig?: Record<string, unknown>;
 			suggestedTags?: string[];
 		} = {},
 	): ElicitationRequest {
@@ -356,8 +374,7 @@ export class KongElicitationPatterns {
 		);
 	}
 
-	// Helper methods for building contextual messages
-	private buildDomainMessage(context: any): string {
+	private buildDomainMessage(context: ElicitationContext): string {
 		let message = "INFO: **Domain Classification Required**\n\n";
 		message += "What domain should this Kong configuration be tagged with?\n";
 
@@ -375,7 +392,7 @@ export class KongElicitationPatterns {
 		return message;
 	}
 
-	private buildEnvironmentMessage(context: any): string {
+	private buildEnvironmentMessage(context: ElicitationContext): string {
 		let message = "INFO: **Environment Specification Required**\n\n";
 		message += "Which environment is this Kong configuration for?\n";
 
@@ -390,7 +407,7 @@ export class KongElicitationPatterns {
 		return message;
 	}
 
-	private buildTeamMessage(context: any): string {
+	private buildTeamMessage(context: ElicitationContext): string {
 		let message = "👥 **Team Ownership Required**\n\n";
 		message += "Which team owns this Kong configuration?\n";
 
@@ -404,7 +421,7 @@ export class KongElicitationPatterns {
 		return message;
 	}
 
-	private buildContextualTagsMessage(entityType: string, context: any): string {
+	private buildContextualTagsMessage(entityType: string, context: ElicitationContext): string {
 		let message = `INFO: **${entityType.charAt(0).toUpperCase() + entityType.slice(1)} Classification Required**\n\n`;
 		message += `Help classify this ${entityType} for better operational intelligence:\n`;
 
@@ -420,7 +437,7 @@ export class KongElicitationPatterns {
 		return message;
 	}
 
-	private generateDomainSuggestions(context: any): string[] {
+	private generateDomainSuggestions(context: ElicitationContext): string[] {
 		const suggestions = new Set<string>();
 
 		// Add detected domains

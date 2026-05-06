@@ -32,7 +32,7 @@ export async function listServices(api: KongApi, controlPlaneId: string, size = 
 			nextOffset: result.offset,
 			totalCount: result.total,
 		},
-		services: result.data.map((service: any) => ({
+		services: result.data.map((service) => ({
 			serviceId: service.id,
 			name: service.name,
 			host: service.host,
@@ -80,6 +80,7 @@ export async function createService(
 		tags?: string[];
 		enabled?: boolean;
 	},
+	// biome-ignore lint/suspicious/noExplicitAny: MCP RequestHandlerExtra generics are passthrough request/transport types; consumers don't constrain them.
 	extra?: RequestHandlerExtra<any, any>,
 ) {
 	log.debug({ controlPlaneId, name: serviceData.name, host: serviceData.host }, "Creating service");
@@ -264,7 +265,7 @@ export async function updateService(
 	},
 ) {
 	log.debug({ controlPlaneId, serviceId }, "Updating service");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (serviceData.name !== undefined) requestData.name = serviceData.name;
 	if (serviceData.host !== undefined) requestData.host = serviceData.host;
@@ -350,7 +351,7 @@ export async function listRoutes(api: KongApi, controlPlaneId: string, size = 10
 			nextOffset: result.offset,
 			totalCount: result.total,
 		},
-		routes: result.data.map((route: any) => ({
+		routes: result.data.map((route) => ({
 			routeId: route.id,
 			name: route.name,
 			protocols: route.protocols,
@@ -397,6 +398,7 @@ export async function createRoute(
 		regexPriority?: number;
 		tags?: string[];
 	},
+	// biome-ignore lint/suspicious/noExplicitAny: MCP RequestHandlerExtra generics are passthrough request/transport types; consumers don't constrain them.
 	extra?: RequestHandlerExtra<any, any>,
 ) {
 	log.debug({ controlPlaneId, name: routeData.name || null }, "Creating route");
@@ -471,7 +473,7 @@ export async function createRoute(
 			);
 		}
 	}
-	const requestData: any = {
+	const requestData: Record<string, unknown> = {
 		protocols: routeData.protocols || ["http", "https"],
 		strip_path: routeData.stripPath ?? true,
 		preserve_host: routeData.preserveHost ?? false,
@@ -571,7 +573,7 @@ export async function updateRoute(
 	},
 ) {
 	log.debug({ controlPlaneId, routeId }, "Updating route");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (routeData.name !== undefined) requestData.name = routeData.name;
 	if (routeData.protocols !== undefined) requestData.protocols = routeData.protocols;
@@ -656,7 +658,7 @@ export async function listConsumers(api: KongApi, controlPlaneId: string, size =
 			nextOffset: result.offset,
 			totalCount: result.total,
 		},
-		consumers: result.data.map((consumer: any) => ({
+		consumers: result.data.map((consumer) => ({
 			consumerId: consumer.id,
 			username: consumer.username,
 			customId: consumer.custom_id,
@@ -687,6 +689,7 @@ export async function createConsumer(
 		tags?: string[];
 		enabled?: boolean;
 	},
+	// biome-ignore lint/suspicious/noExplicitAny: MCP RequestHandlerExtra generics are passthrough request/transport types; consumers don't constrain them.
 	extra?: RequestHandlerExtra<any, any>,
 ) {
 	log.debug({ controlPlaneId, username: consumerData.username || null }, "Creating consumer");
@@ -765,7 +768,7 @@ export async function createConsumer(
 			);
 		}
 	}
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (consumerData.username) requestData.username = consumerData.username;
 	if (consumerData.customId) requestData.custom_id = consumerData.customId;
@@ -836,7 +839,7 @@ export async function updateConsumer(
 	},
 ) {
 	log.debug({ controlPlaneId, consumerId }, "Updating consumer");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (consumerData.username !== undefined) requestData.username = consumerData.username;
 	if (consumerData.customId !== undefined) requestData.custom_id = consumerData.customId;
@@ -905,7 +908,7 @@ export async function listPlugins(api: KongApi, controlPlaneId: string, size = 1
 			nextOffset: result.offset,
 			totalCount: result.total,
 		},
-		plugins: result.data.map((plugin: any) => ({
+		plugins: result.data.map((plugin) => ({
 			pluginId: plugin.id,
 			name: plugin.name,
 			enabled: plugin.enabled,
@@ -938,7 +941,7 @@ export async function createPlugin(
 	controlPlaneId: string,
 	pluginData: {
 		name: string;
-		config?: Record<string, any>;
+		config?: Record<string, unknown>;
 		protocols?: string[];
 		consumerId?: string;
 		serviceId?: string;
@@ -946,6 +949,7 @@ export async function createPlugin(
 		tags?: string[];
 		enabled?: boolean;
 	},
+	// biome-ignore lint/suspicious/noExplicitAny: MCP RequestHandlerExtra generics are passthrough request/transport types; consumers don't constrain them.
 	extra?: RequestHandlerExtra<any, any>,
 ) {
 	log.debug({ controlPlaneId, name: pluginData.name }, "Creating plugin");
@@ -1020,7 +1024,7 @@ export async function createPlugin(
 			);
 		}
 	}
-	const requestData: any = {
+	const requestData: Record<string, unknown> = {
 		name: pluginData.name,
 		enabled: pluginData.enabled ?? true,
 	};
@@ -1104,7 +1108,7 @@ export async function updatePlugin(
 	pluginId: string,
 	pluginData: {
 		name?: string;
-		config?: Record<string, any>;
+		config?: Record<string, unknown>;
 		protocols?: string[];
 		consumerId?: string;
 		serviceId?: string;
@@ -1114,7 +1118,7 @@ export async function updatePlugin(
 	},
 ) {
 	log.debug({ controlPlaneId, pluginId }, "Updating plugin");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (pluginData.name !== undefined) requestData.name = pluginData.name;
 	if (pluginData.config !== undefined) requestData.config = pluginData.config;
@@ -1178,7 +1182,7 @@ export async function listPluginSchemas(api: KongApi, controlPlaneId: string) {
 
 	return {
 		schemas: result.data
-			? result.data.map((schema: any) => ({
+			? result.data.map((schema) => ({
 					name: schema.name,
 					description: schema.description,
 					fields: schema.fields,

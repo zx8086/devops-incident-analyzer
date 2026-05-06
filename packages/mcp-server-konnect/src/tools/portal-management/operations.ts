@@ -26,7 +26,7 @@ export async function listPortals(api: KongApi, pageSize = 10, pageNumber?: numb
 			},
 		},
 		portals:
-			result.data?.map((portal: any) => ({
+			result.data?.map((portal) => ({
 				portalId: portal.id,
 				name: portal.name,
 				description: portal.description,
@@ -170,7 +170,7 @@ export async function updatePortal(
 	},
 ) {
 	log.debug({ portalId }, "Updating portal");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (portalData.name !== undefined) requestData.name = portalData.name;
 	if (portalData.description !== undefined) requestData.description = portalData.description;
@@ -247,7 +247,7 @@ export async function listPortalProducts(api: KongApi, portalId: string, pageSiz
 			},
 		},
 		products:
-			result.data?.map((product: any) => ({
+			result.data?.map((product) => ({
 				productId: product.id,
 				name: product.name,
 				description: product.description,

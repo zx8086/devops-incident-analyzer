@@ -11,7 +11,7 @@ export interface ElicitationSchema {
 			type: string;
 			description: string;
 			enum?: string[];
-			default?: any;
+			default?: unknown;
 		}
 	>;
 	required: string[];
