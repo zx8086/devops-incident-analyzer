@@ -18,61 +18,24 @@ export interface CommonRequestParams {
 	allowNoIndices?: boolean;
 }
 
-// Base parameter type for all tools
-export interface ToolParams {
-	index?: string | string[];
-	queryBody?: unknown;
-	[key: string]: unknown;
-}
-
 // Content types
 export interface TextContent {
 	type: "text";
 	text: string;
-	[key: string]: unknown;
-}
-
-export interface ImageContent {
-	type: "image";
-	data: string;
-	mimeType: string;
-	[key: string]: unknown;
-}
-
-export interface AudioContent {
-	type: "audio";
-	data: string;
-	mimeType: string;
-	[key: string]: unknown;
-}
-
-export interface ResourceContent {
-	type: "resource";
-	resource:
-		| {
-				text: string;
-				uri: string;
-				mimeType?: string;
-				[key: string]: unknown;
-		  }
-		| {
-				uri: string;
-				blob: string;
-				mimeType?: string;
-				[key: string]: unknown;
-		  };
-	[key: string]: unknown;
+	annotations?: {
+		audience?: ("user" | "assistant")[];
+		priority?: number;
+		lastModified?: string;
+	};
+	_meta?: Record<string, unknown>;
 }
 
 // Search result type
 export interface SearchResult {
-	content: (TextContent | ImageContent | AudioContent | ResourceContent)[];
-	_meta?: {
-		[key: string]: unknown;
-	};
-	structuredContent?: {
-		[key: string]: unknown;
-	};
+	content: TextContent[];
+	_meta?: Record<string, unknown>;
+	structuredContent?: Record<string, unknown>;
+	// Required for SDK CallToolResult assignability ($loose schema -> open index signature)
 	[key: string]: unknown;
 }
 
@@ -99,9 +62,6 @@ export interface ElasticsearchError {
 }
 
 export type ToolFunction = (server: McpServer, esClient: Client) => void;
-
-// Tool handler type
-export type ToolHandler = (params: ToolParams, extra: Record<string, unknown>) => Promise<SearchResult>;
 
 // Tool registration function type
 export type ToolRegistrationFunction = (server: McpServer, esClient: Client) => void;
