@@ -1,4 +1,19 @@
-import axios, { type AxiosRequestConfig } from "axios";
+// src/api/portal-api.ts
+import axios, { type AxiosError, type AxiosRequestConfig, type Method } from "axios";
+import type {
+	KongListResponse,
+	PortalAnalyticsResponse,
+	PortalApiActions,
+	PortalApiDocument,
+	PortalApiDocumentTree,
+	PortalApiSummary,
+	PortalApplication,
+	PortalApplicationRegistration,
+	PortalApplicationSecret,
+	PortalAuthSession,
+	PortalCredential,
+	PortalDeveloper,
+} from "../types.js";
 import { createContextLogger } from "../utils/logger.js";
 import { API_REGIONS } from "./kong-api.js";
 
@@ -10,13 +25,14 @@ export interface PortalApiOptions {
 	portalDomain?: string; // Allow explicit portal domain override
 }
 
-/**
- * Portal API Client for Kong Konnect Developer Portal endpoints
- *
- * This client handles portal-specific operations that require
- * the portal domain (e.g., {portalId}.{region}.kongportals.com)
- * rather than the management API domain.
- */
+// JSON-serializable bodies. Tools layer validates with Zod before calling.
+export type PortalRequestBody = Record<string, unknown> | unknown[] | null;
+
+// Portal API Client for Kong Konnect Developer Portal endpoints
+//
+// This client handles portal-specific operations that require the portal
+// domain (e.g., {portalId}.{region}.kongportals.com) rather than the
+// management API domain.
 export class PortalApi {
 	private baseUrl: string;
 	private apiKey: string;
@@ -27,11 +43,10 @@ export class PortalApi {
 		this.portalId = portalId;
 		this.region = options.apiRegion || process.env.KONNECT_REGION || API_REGIONS.US;
 
-		// Use explicit domain if provided, otherwise construct from portalId
 		if (options.portalDomain) {
 			this.baseUrl = `https://${options.portalDomain}`;
 		} else {
-			// Use the correct portal domain format: {portal-subdomain}.{region}.portal.konghq.com
+			// Default portal domain format: {portal-subdomain}.{region}.portal.konghq.com
 			this.baseUrl = `https://${portalId}.${this.region}.portal.konghq.com`;
 		}
 
@@ -46,10 +61,7 @@ export class PortalApi {
 		}
 	}
 
-	/**
-	 * Makes authenticated requests to Portal APIs with consistent error handling
-	 */
-	async portalRequest<T>(endpoint: string, method = "GET", data: any = null): Promise<T> {
+	async portalRequest<T>(endpoint: string, method = "GET", data: PortalRequestBody = null): Promise<T> {
 		try {
 			const url = `${this.baseUrl}${endpoint}`;
 			log.debug({ url }, "Making portal API request");
@@ -61,7 +73,7 @@ export class PortalApi {
 			};
 
 			const config: AxiosRequestConfig = {
-				method: method as any,
+				method: method as Method,
 				url,
 				headers,
 				timeout: 30000,
@@ -73,37 +85,42 @@ export class PortalApi {
 
 			const response = await axios(config);
 			log.debug({ status: response.status }, "Received portal API response");
-			return response.data;
-		} catch (error: any) {
-			log.error({ error: error.message }, "Portal API request failed");
+			return response.data as T;
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.error({ error: message }, "Portal API request failed");
 
 			let errorMessage = `Portal API Error`;
 
-			if (error.response) {
-				const status = error.response.status;
-				const data = error.response.data;
+			if (axios.isAxiosError(error)) {
+				const axiosError = error as AxiosError<unknown>;
+				if (axiosError.response) {
+					const status = axiosError.response.status;
+					const data = axiosError.response.data;
 
-				errorMessage += ` (Status ${status}): ${JSON.stringify(data)}`;
+					errorMessage += ` (Status ${status}): ${JSON.stringify(data)}`;
 
-				if (status === 401) {
-					errorMessage +=
-						"\n\nTroubleshooting: Check that KONNECT_ACCESS_TOKEN is set correctly and has portal access permissions.";
-				} else if (status === 404) {
-					errorMessage += `\n\nTroubleshooting: Portal ${this.portalId} may not exist or endpoint ${endpoint} may not be available.`;
-				} else if (status === 403) {
-					errorMessage += "\n\nTroubleshooting: Token may not have permission to access this portal or resource.";
-				} else if (status === 429) {
-					errorMessage += "\n\nTroubleshooting: Rate limit exceeded. Please wait before making more requests.";
+					if (status === 401) {
+						errorMessage +=
+							"\n\nTroubleshooting: Check that KONNECT_ACCESS_TOKEN is set correctly and has portal access permissions.";
+					} else if (status === 404) {
+						errorMessage += `\n\nTroubleshooting: Portal ${this.portalId} may not exist or endpoint ${endpoint} may not be available.`;
+					} else if (status === 403) {
+						errorMessage += "\n\nTroubleshooting: Token may not have permission to access this portal or resource.";
+					} else if (status === 429) {
+						errorMessage += "\n\nTroubleshooting: Rate limit exceeded. Please wait before making more requests.";
+					}
+
+					throw new Error(errorMessage);
 				}
-
-				throw new Error(errorMessage);
-			} else if (error.request) {
-				errorMessage += `: Network error - could not reach portal ${this.portalId}.${this.region}.kongportals.com`;
-				errorMessage += "\n\nTroubleshooting: Check internet connection and portal domain accessibility.";
-			} else {
-				errorMessage += `: ${error.message}`;
+				if (axiosError.request) {
+					errorMessage += `: Network error - could not reach portal ${this.portalId}.${this.region}.kongportals.com`;
+					errorMessage += "\n\nTroubleshooting: Check internet connection and portal domain accessibility.";
+					throw new Error(errorMessage);
+				}
 			}
 
+			errorMessage += `: ${message}`;
 			throw new Error(errorMessage);
 		}
 	}
@@ -113,30 +130,37 @@ export class PortalApi {
 		pageNumber?: number,
 		filterName?: string,
 		filterAuthStrategy?: string,
-	): Promise<any> {
+	): Promise<KongListResponse<PortalApplication>> {
 		let endpoint = `/api/v3/applications?page[size]=${pageSize}`;
 
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
 		if (filterName) endpoint += `&filter[name][contains]=${encodeURIComponent(filterName)}`;
 		if (filterAuthStrategy) endpoint += `&filter[auth_strategy_id][eq]=${filterAuthStrategy}`;
 
-		return this.portalRequest<any>(endpoint);
+		return this.portalRequest<KongListResponse<PortalApplication>>(endpoint);
 	}
 
-	async createApplication(applicationData: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications`, "POST", applicationData);
+	async createApplication(applicationData: Record<string, unknown>): Promise<PortalApplication> {
+		return this.portalRequest<PortalApplication>(`/api/v3/applications`, "POST", applicationData);
 	}
 
-	async getApplication(applicationId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}`);
+	async getApplication(applicationId: string): Promise<PortalApplication> {
+		return this.portalRequest<PortalApplication>(`/api/v3/applications/${applicationId}`);
 	}
 
-	async updateApplication(applicationId: string, applicationData: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}`, "PATCH", applicationData);
+	async updateApplication(
+		applicationId: string,
+		applicationData: Record<string, unknown>,
+	): Promise<PortalApplication> {
+		return this.portalRequest<PortalApplication>(
+			`/api/v3/applications/${applicationId}`,
+			"PATCH",
+			applicationData,
+		);
 	}
 
-	async deleteApplication(applicationId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}`, "DELETE");
+	async deleteApplication(applicationId: string): Promise<void> {
+		return this.portalRequest<void>(`/api/v3/applications/${applicationId}`, "DELETE");
 	}
 
 	async listApplicationRegistrations(
@@ -145,74 +169,117 @@ export class PortalApi {
 		pageNumber?: number,
 		filterStatus?: string,
 		filterApiName?: string,
-	): Promise<any> {
+	): Promise<KongListResponse<PortalApplicationRegistration>> {
 		let endpoint = `/api/v3/applications/${applicationId}/registrations?page[size]=${pageSize}`;
 
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
 		if (filterStatus) endpoint += `&filter[status][eq]=${filterStatus}`;
 		if (filterApiName) endpoint += `&filter[api_name][contains]=${encodeURIComponent(filterApiName)}`;
 
-		return this.portalRequest<any>(endpoint);
+		return this.portalRequest<KongListResponse<PortalApplicationRegistration>>(endpoint);
 	}
 
-	async createApplicationRegistration(applicationId: string, registrationData: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/registrations`, "POST", registrationData);
+	async createApplicationRegistration(
+		applicationId: string,
+		registrationData: Record<string, unknown>,
+	): Promise<PortalApplicationRegistration> {
+		return this.portalRequest<PortalApplicationRegistration>(
+			`/api/v3/applications/${applicationId}/registrations`,
+			"POST",
+			registrationData,
+		);
 	}
 
-	async getApplicationRegistration(applicationId: string, registrationId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`);
+	async getApplicationRegistration(
+		applicationId: string,
+		registrationId: string,
+	): Promise<PortalApplicationRegistration> {
+		return this.portalRequest<PortalApplicationRegistration>(
+			`/api/v3/applications/${applicationId}/registrations/${registrationId}`,
+		);
 	}
 
-	async deleteApplicationRegistration(applicationId: string, registrationId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`, "DELETE");
+	async deleteApplicationRegistration(applicationId: string, registrationId: string): Promise<void> {
+		return this.portalRequest<void>(
+			`/api/v3/applications/${applicationId}/registrations/${registrationId}`,
+			"DELETE",
+		);
 	}
 
-	async listCredentials(applicationId: string, pageSize = 10, pageNumber?: number): Promise<any> {
+	async listCredentials(
+		applicationId: string,
+		pageSize = 10,
+		pageNumber?: number,
+	): Promise<KongListResponse<PortalCredential>> {
 		let endpoint = `/api/v3/applications/${applicationId}/credentials?page[size]=${pageSize}`;
 
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
 
-		return this.portalRequest<any>(endpoint);
+		return this.portalRequest<KongListResponse<PortalCredential>>(endpoint);
 	}
 
-	async createCredential(applicationId: string, credentialData: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/credentials`, "POST", credentialData);
+	async createCredential(
+		applicationId: string,
+		credentialData: Record<string, unknown>,
+	): Promise<PortalCredential> {
+		return this.portalRequest<PortalCredential>(
+			`/api/v3/applications/${applicationId}/credentials`,
+			"POST",
+			credentialData,
+		);
 	}
 
-	async updateCredential(applicationId: string, credentialId: string, credentialData: any): Promise<any> {
-		return this.portalRequest<any>(
+	async updateCredential(
+		applicationId: string,
+		credentialId: string,
+		credentialData: Record<string, unknown>,
+	): Promise<PortalCredential> {
+		return this.portalRequest<PortalCredential>(
 			`/api/v3/applications/${applicationId}/credentials/${credentialId}`,
 			"PATCH",
 			credentialData,
 		);
 	}
 
-	async deleteCredential(applicationId: string, credentialId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/credentials/${credentialId}`, "DELETE");
+	async deleteCredential(applicationId: string, credentialId: string): Promise<void> {
+		return this.portalRequest<void>(
+			`/api/v3/applications/${applicationId}/credentials/${credentialId}`,
+			"DELETE",
+		);
 	}
 
-	async regenerateApplicationSecret(applicationId: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/regenerate-secret`, "POST");
+	async regenerateApplicationSecret(applicationId: string): Promise<PortalApplicationSecret> {
+		return this.portalRequest<PortalApplicationSecret>(
+			`/api/v3/applications/${applicationId}/regenerate-secret`,
+			"POST",
+		);
 	}
 
-	async registerDeveloper(developerData: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/register`, "POST", developerData);
+	async registerDeveloper(developerData: Record<string, unknown>): Promise<PortalDeveloper> {
+		return this.portalRequest<PortalDeveloper>(`/api/v3/register`, "POST", developerData);
 	}
 
-	async authenticateDeveloper(credentials: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/authenticate`, "POST", credentials);
+	async authenticateDeveloper(credentials: Record<string, unknown>): Promise<PortalAuthSession> {
+		return this.portalRequest<PortalAuthSession>(`/api/v3/authenticate`, "POST", credentials);
 	}
 
-	async getDeveloperMe(): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/me`);
+	async getDeveloperMe(): Promise<PortalDeveloper> {
+		return this.portalRequest<PortalDeveloper>(`/api/v3/me`);
 	}
 
-	async logoutDeveloper(): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/logout`, "POST");
+	async logoutDeveloper(): Promise<void> {
+		return this.portalRequest<void>(`/api/v3/logout`, "POST");
 	}
 
-	async queryApplicationAnalytics(applicationId: string, analyticsQuery: any): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/applications/${applicationId}/analytics`, "POST", analyticsQuery);
+	async queryApplicationAnalytics(
+		applicationId: string,
+		analyticsQuery: Record<string, unknown>,
+	): Promise<PortalAnalyticsResponse> {
+		return this.portalRequest<PortalAnalyticsResponse>(
+			`/api/v3/applications/${applicationId}/analytics`,
+			"POST",
+			analyticsQuery,
+		);
 	}
 
 	async listPortalApis(
@@ -221,7 +288,7 @@ export class PortalApi {
 		filterName?: string,
 		filterStatus?: string,
 		sort?: string,
-	): Promise<any> {
+	): Promise<KongListResponse<PortalApiSummary>> {
 		let endpoint = `/api/v3/apis?page[size]=${pageSize}`;
 
 		if (pageNumber) endpoint += `&page[number]=${pageNumber}`;
@@ -229,29 +296,33 @@ export class PortalApi {
 		if (filterStatus) endpoint += `&filter[status][eq]=${filterStatus}`;
 		if (sort) endpoint += `&sort=${encodeURIComponent(sort)}`;
 
-		return this.portalRequest<any>(endpoint);
+		return this.portalRequest<KongListResponse<PortalApiSummary>>(endpoint);
 	}
 
-	async fetchPortalApi(apiIdOrSlug: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/apis/${apiIdOrSlug}`);
+	async fetchPortalApi(apiIdOrSlug: string): Promise<PortalApiSummary> {
+		return this.portalRequest<PortalApiSummary>(`/api/v3/apis/${apiIdOrSlug}`);
 	}
 
-	async getPortalApiActions(apiIdOrSlug: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/apis/${apiIdOrSlug}/actions`);
+	async getPortalApiActions(apiIdOrSlug: string): Promise<PortalApiActions> {
+		return this.portalRequest<PortalApiActions>(`/api/v3/apis/${apiIdOrSlug}/actions`);
 	}
 
-	async listPortalApiDocuments(apiIdOrSlug: string): Promise<any> {
-		return this.portalRequest<any>(`/api/v3/apis/${apiIdOrSlug}/documents`);
+	async listPortalApiDocuments(apiIdOrSlug: string): Promise<PortalApiDocumentTree> {
+		return this.portalRequest<PortalApiDocumentTree>(`/api/v3/apis/${apiIdOrSlug}/documents`);
 	}
 
-	async fetchPortalApiDocument(apiIdOrSlug: string, documentIdOrSlug: string, format = "json"): Promise<any> {
+	async fetchPortalApiDocument(
+		apiIdOrSlug: string,
+		documentIdOrSlug: string,
+		format = "json",
+	): Promise<PortalApiDocument> {
 		const formatParam = format !== "json" ? `?format=${format}` : "";
-		return this.portalRequest<any>(`/api/v3/apis/${apiIdOrSlug}/documents/${documentIdOrSlug}${formatParam}`);
+		return this.portalRequest<PortalApiDocument>(
+			`/api/v3/apis/${apiIdOrSlug}/documents/${documentIdOrSlug}${formatParam}`,
+		);
 	}
 
-	/**
-	 * Get portal info (useful for debugging and validation)
-	 */
+	// Useful for debugging and validation
 	getPortalInfo() {
 		return {
 			portalId: this.portalId,
@@ -261,9 +332,6 @@ export class PortalApi {
 		};
 	}
 
-	/**
-	 * Test portal connectivity
-	 */
 	async testConnection(): Promise<boolean> {
 		try {
 			await this.listPortalApis(1);
