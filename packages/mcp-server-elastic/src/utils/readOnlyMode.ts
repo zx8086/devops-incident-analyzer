@@ -228,26 +228,13 @@ export function initializeReadOnlyManager(readOnlyMode: boolean, strictMode = tr
 	readOnlyManager = new ReadOnlyModeManager(readOnlyMode, strictMode);
 }
 
-// SIO-669: preserve the wrapped handler's signature so the result satisfies
-// MCP SDK's ToolCallback<Args> shape without an `as any` cast at the call site.
-export function withReadOnlyCheck<TArgs, TExtra, TResult extends SearchResult>(
-	toolName: string,
-	toolFunction: (args: TArgs, extra: TExtra) => Promise<TResult>,
-	operationType?: OperationType,
-): (args: TArgs, extra: TExtra) => Promise<TResult> {
-	return async (args: TArgs, extra: TExtra): Promise<TResult> => {
-		const check = readOnlyManager.checkOperation(toolName, operationType);
-
-		if (!check.allowed) {
-			return readOnlyManager.createBlockedResponse(toolName) as TResult;
-		}
-
-		const result = await toolFunction(args, extra);
-
-		if (check.warning) {
-			return readOnlyManager.createWarningResponse(toolName, result) as TResult;
-		}
-
-		return result;
-	};
+// SIO-671: lazy accessor used by the shared bootstrap chokepoint. The
+// chokepoint config is built before initDatasource runs (where the singleton
+// is initialized), so consumers must reach through this function to capture
+// the manager at dispatch time, not at options-construction time.
+export function getReadOnlyManager(): ReadOnlyModeManager {
+	if (!readOnlyManager) {
+		throw new Error("readOnlyManager has not been initialized. Call initializeReadOnlyManager() first.");
+	}
+	return readOnlyManager;
 }

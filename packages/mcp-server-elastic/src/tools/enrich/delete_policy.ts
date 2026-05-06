@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -110,7 +109,7 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 		}
 	};
 
-	// Implementation function without read-only checks for withReadOnlyCheck wrapper
+	// SIO-671: read-only enforcement is now handled by the shared chokepoint.
 	const deletePolicyImpl = async (
 		params: DeletePolicyParams,
 		_extra: Record<string, unknown>,
@@ -133,6 +132,6 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 			inputSchema: deletePolicyValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_enrich_delete_policy", deletePolicyImpl, OperationType.DELETE),
+		deletePolicyImpl,
 	);
 };

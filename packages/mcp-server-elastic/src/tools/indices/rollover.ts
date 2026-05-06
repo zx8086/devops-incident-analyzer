@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -202,6 +201,6 @@ export const registerRolloverTool: ToolRegistrationFunction = (server: McpServer
 			inputSchema: rolloverValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_rollover", rolloverHandler, OperationType.WRITE),
+		rolloverHandler,
 	);
 };

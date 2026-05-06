@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -164,6 +163,6 @@ export const registerWatcherQueryWatchesTool: ToolRegistrationFunction = (server
 			inputSchema: queryWatchesValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_watcher_query_watches", queryWatchesHandler, OperationType.READ),
+		queryWatchesHandler,
 	);
 };

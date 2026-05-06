@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { coerceBoolean } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -120,6 +119,6 @@ export const registerFlushIndexTool: ToolRegistrationFunction = (server: McpServ
 			inputSchema: flushIndexValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_flush_index", flushIndexHandler, OperationType.WRITE),
+		flushIndexHandler,
 	);
 };

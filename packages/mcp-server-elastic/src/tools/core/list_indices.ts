@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import {
 	createPaginationHeader,
 	PaginationLimitError,
@@ -338,6 +337,6 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				"List indices with filtering, sorting, and honest pagination metadata. sortBy='size' ranks by primary+replica store bytes (store.size_in_bytes) and is unavailable for closed/frozen indices — request will fail loud if any row lacks the field. limit honoured up to 1000. TIP: Use this FIRST to check cluster size. Common patterns: {limit: 50, excludeSystemIndices: true} for overview, {indexPattern: 'logs-*', sortBy: 'size'} for ranking by storage.",
 			inputSchema: listIndicesValidator.shape,
 		},
-		withReadOnlyCheck("elasticsearch_list_indices", listIndicesHandler, OperationType.READ),
+		listIndicesHandler,
 	);
 };

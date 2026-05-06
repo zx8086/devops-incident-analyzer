@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const putPipelineValidator = z.object({
@@ -115,6 +114,6 @@ export const registerPutIngestPipelineTool: ToolRegistrationFunction = (server: 
 				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
 			},
 		},
-		withReadOnlyCheck("elasticsearch_put_ingest_pipeline", putPipelineHandler, OperationType.WRITE),
+		putPipelineHandler,
 	);
 };

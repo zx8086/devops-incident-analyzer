@@ -6,6 +6,7 @@ import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.j
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
+import { getReadOnlyManager } from "./utils/readOnlyMode.js";
 import { initializeTracing } from "./utils/tracing.js";
 
 if (import.meta.main) {
@@ -46,6 +47,20 @@ if (import.meta.main) {
 		},
 
 		createServerFactory: (esClient) => () => createMcpServerInstance(config, esClient),
+
+		// SIO-671: hoisted from per-tool withReadOnlyCheck wrappers. The shared
+		// bootstrap installs a single dispatcher-level chokepoint per server.
+		// The wrapper defers manager lookup to call time because the singleton
+		// is initialized inside initDatasource (after this options literal is
+		// evaluated).
+		readOnly: {
+			manager: {
+				checkOperation: (toolName) => getReadOnlyManager().checkOperation(toolName),
+				createBlockedResponse: (toolName) => getReadOnlyManager().createBlockedResponse(toolName),
+				createWarningResponse: (toolName, originalResponse) =>
+					getReadOnlyManager().createWarningResponse(toolName, originalResponse as never),
+			},
+		},
 
 		createTransport: (serverFactory) =>
 			createTransport(

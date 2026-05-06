@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
-import { readOnlyManager } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -41,11 +40,7 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 		},
 
 		async (params: BulkOperationsParamsType): Promise<SearchResult> => {
-			// Check read-only mode first
-			const readOnlyCheck = readOnlyManager.checkOperation("elasticsearch_bulk_operations");
-			if (!readOnlyCheck.allowed) {
-				return readOnlyManager.createBlockedResponse("elasticsearch_bulk_operations");
-			}
+			// SIO-671: read-only enforcement is now handled by the shared chokepoint.
 
 			// Validation: Ensure index is provided globally or per-document
 			const hasGlobalIndex = !!params.index;
@@ -68,23 +63,9 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 			);
 
 			try {
-				if (readOnlyCheck.warning) {
-					logger.warn(
-						{
-							tool: "elasticsearch_bulk_operations",
-							operationCount: params.operations.length,
-							warning: "This may create, update, or delete multiple documents",
-						},
-						"CRITICAL: About to perform bulk operations",
-					);
-
-					await notificationManager.sendWarning(`About to perform ${params.operations.length} bulk operations`, {
-						tool: "elasticsearch_bulk_operations",
-						operation_count: params.operations.length,
-						target_index: params.index || "multiple indices",
-						warning: "This may create, update, or delete multiple documents",
-					});
-				}
+				// SIO-671: read-only warnings are now attached at the dispatcher
+				// chokepoint; the per-tool branch that wired notificationManager
+				// off readOnlyCheck.warning is no longer needed here.
 
 				// Send initial status
 				await notificationManager.sendInfo(`Starting bulk operations processing`, {
@@ -199,10 +180,6 @@ export const registerBulkOperationsTool: ToolRegistrationFunction = (server: Mcp
 					} as TextContent,
 				];
 				const response: SearchResult = { content };
-
-				if (readOnlyCheck.warning) {
-					return readOnlyManager.createWarningResponse("elasticsearch_bulk_operations", response);
-				}
 
 				return response;
 			} catch (error) {

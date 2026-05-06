@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const deletePipelineValidator = z.object({
@@ -98,6 +97,6 @@ export const registerDeleteIngestPipelineTool: ToolRegistrationFunction = (serve
 				masterTimeout: z.string().optional(), // Master node timeout (e.g., '30s')
 			},
 		},
-		withReadOnlyCheck("elasticsearch_delete_ingest_pipeline", deletePipelineHandler, OperationType.DESTRUCTIVE),
+		deletePipelineHandler,
 	);
 };

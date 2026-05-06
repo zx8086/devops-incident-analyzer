@@ -3,7 +3,7 @@ import type { Client } from "@elastic/elasticsearch";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
+import { OperationType } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { WaitForActiveShards } from "../types.js";
 
@@ -138,7 +138,7 @@ export const deleteByQuery = {
 		"Delete documents by query in Elasticsearch. Best for bulk document deletion, data cleanup, removing documents matching specific criteria. Use when you need to delete multiple documents based on query conditions rather than individual document IDs in Elasticsearch.",
 	inputSchema: deleteByQuerySchema.shape,
 	operationType: OperationType.DELETE as const,
-	handler: withReadOnlyCheck("elasticsearch_delete_by_query", deleteByQueryImpl, OperationType.DELETE),
+	handler: deleteByQueryImpl,
 };
 
 const translateSqlQuerySchema = z.object({

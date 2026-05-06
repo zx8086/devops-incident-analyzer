@@ -7,7 +7,6 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -207,7 +206,7 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 		}
 	};
 
-	// Implementation function without read-only checks for withReadOnlyCheck wrapper
+	// SIO-671: read-only enforcement is now handled by the shared chokepoint.
 	const executePolicyImpl = async (
 		params: ExecutePolicyParams,
 		_extra: Record<string, unknown>,
@@ -230,6 +229,6 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 			inputSchema: executePolicyValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_enrich_execute_policy", executePolicyImpl, OperationType.WRITE),
+		executePolicyImpl,
 	);
 };

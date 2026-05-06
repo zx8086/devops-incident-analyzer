@@ -1,6 +1,7 @@
 // shared/src/bootstrap.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pino from "pino";
+import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 
 export type { TelemetryConfig };
@@ -36,6 +37,10 @@ export interface McpApplicationOptions<T> {
 	createTransport: (serverFactory: () => McpServer, datasource: T) => Promise<BootstrapTransportResult>;
 	cleanupDatasource?: (datasource: T) => Promise<void>;
 	onStarted?: (datasource: T) => void;
+	// SIO-671: opt-in dispatcher-level read-only enforcement. When supplied,
+	// every McpServer produced by createServerFactory has its tools/call
+	// handler wrapped to consult the manager before delegating.
+	readOnly?: ReadOnlyMiddlewareConfig;
 }
 
 export interface McpApplication<T> {
@@ -59,7 +64,15 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		const datasource = await options.initDatasource();
 
 		// Step 4: Create server factory
-		const serverFactory = options.createServerFactory(datasource);
+		const innerFactory = options.createServerFactory(datasource);
+		const readOnlyConfig = options.readOnly;
+		const serverFactory: () => McpServer = readOnlyConfig
+			? () => {
+					const server = innerFactory();
+					installReadOnlyChokepoint(server, readOnlyConfig.manager);
+					return server;
+				}
+			: innerFactory;
 
 		// Step 5: Start transport
 		const transport = await options.createTransport(serverFactory, datasource);
