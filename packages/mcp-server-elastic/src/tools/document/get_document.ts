@@ -118,7 +118,6 @@ export const registerGetDocumentTool: ToolRegistrationFunction = (server: McpSer
 		}
 	};
 
-	// Tool registration (no withReadOnlyCheck for read operation)
 	// Tool registration using modern registerTool method
 
 	server.registerTool(

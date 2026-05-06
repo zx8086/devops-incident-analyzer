@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -106,6 +105,6 @@ export const registerWatcherUpdateSettingsTool: ToolRegistrationFunction = (serv
 			inputSchema: updateWatcherSettingsValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_watcher_update_settings", updateWatcherSettingsHandler, OperationType.WRITE),
+		updateWatcherSettingsHandler,
 	);
 };

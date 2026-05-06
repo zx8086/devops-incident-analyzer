@@ -8,7 +8,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { withSecurityValidation } from "../../utils/securityEnhancer.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -216,6 +215,6 @@ Operation completed at: ${new Date().toISOString()}`,
 			inputSchema: putLifecycleValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_ilm_put_lifecycle", secureHandler, OperationType.WRITE),
+		secureHandler,
 	);
 };

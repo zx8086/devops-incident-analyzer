@@ -4,7 +4,6 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 // Define the parameter schema
@@ -70,6 +69,6 @@ export const registerAutoscalingPutPolicyTool: ToolRegistrationFunction = (serve
 			inputSchema: PutAutoscalingPolicyParams.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_autoscaling_put_policy", putAutoscalingPolicyImpl, OperationType.WRITE),
+		putAutoscalingPolicyImpl,
 	);
 };

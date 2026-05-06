@@ -3,7 +3,7 @@ import type { Client } from "@elastic/elasticsearch";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
+import { OperationType } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 
 // Define task-specific error types
@@ -237,7 +237,7 @@ export const cancelTask = {
 		"Cancel a running Elasticsearch task. Best for operation control, resource management, stopping long-running operations. Use when you need to terminate tasks that are taking too long or consuming too many resources in Elasticsearch. WARNING: Task management API is beta.",
 	inputSchema: cancelTaskSchema.shape,
 	operationType: OperationType.WRITE as const,
-	handler: withReadOnlyCheck("elasticsearch_cancel_task", cancelTaskImpl, OperationType.WRITE),
+	handler: cancelTaskImpl,
 };
 
 export const tasksTools = [listTasks, getTask, cancelTask] as const;

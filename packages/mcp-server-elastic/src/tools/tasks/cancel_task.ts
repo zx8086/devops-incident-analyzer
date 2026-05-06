@@ -4,7 +4,6 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -69,6 +68,6 @@ export const registerCancelTaskTool: ToolRegistrationFunction = (server: McpServ
 			inputSchema: CancelTaskParams.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_tasks_cancel_task", cancelTaskImpl, OperationType.WRITE),
+		cancelTaskImpl,
 	);
 };

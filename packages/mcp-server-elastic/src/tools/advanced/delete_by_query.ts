@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction, WaitForActiveShards } from "../types.js";
 
@@ -261,6 +260,6 @@ export const registerDeleteByQueryTool: ToolRegistrationFunction = (server: McpS
 			},
 		},
 
-		withReadOnlyCheck("elasticsearch_delete_by_query", deleteByQueryImpl, OperationType.DELETE),
+		deleteByQueryImpl,
 	);
 };

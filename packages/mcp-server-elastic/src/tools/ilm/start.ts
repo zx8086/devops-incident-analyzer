@@ -8,7 +8,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const startValidator = z.object({
@@ -140,6 +139,6 @@ Operation completed at: ${new Date().toISOString()}`,
 			inputSchema: startValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_ilm_start", startHandler, OperationType.WRITE),
+		startHandler,
 	);
 };

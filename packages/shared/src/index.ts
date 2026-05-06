@@ -109,6 +109,12 @@ export {
 	waitForOAuthCallback,
 } from "./oauth-callback.ts";
 export { redactPiiContent } from "./pii-redactor.ts";
+export {
+	installReadOnlyChokepoint,
+	type ReadOnlyCheck,
+	type ReadOnlyManagerLike,
+	type ReadOnlyMiddlewareConfig,
+} from "./read-only-chokepoint.ts";
 export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
 	buildTelemetryConfig,

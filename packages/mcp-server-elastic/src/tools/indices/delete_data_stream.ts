@@ -5,7 +5,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
 const deleteDataStreamValidator = z.object({
@@ -100,6 +99,6 @@ export const registerDeleteDataStreamTool: ToolRegistrationFunction = (server: M
 				"Delete a data stream and all its backing indices. This is the correct way to remove time-series data (logs, metrics, traces). Cannot use delete_index on data stream backing indices -- use this tool instead. DESTRUCTIVE OPERATION: deletes the data stream and ALL backing indices permanently.",
 			inputSchema: deleteDataStreamValidator.shape,
 		},
-		withReadOnlyCheck("elasticsearch_delete_data_stream", deleteDataStreamHandler, OperationType.DESTRUCTIVE),
+		deleteDataStreamHandler,
 	);
 };

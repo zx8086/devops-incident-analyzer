@@ -6,7 +6,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -158,12 +157,11 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 		}
 	};
 
-	// Implementation function without read-only checks for withReadOnlyCheck wrapper
+	// SIO-671: read-only enforcement is now handled by the shared chokepoint.
 	const putPolicyImpl = async (params: PutPolicyParams, _extra: Record<string, unknown>): Promise<SearchResult> => {
 		return putPolicyHandler(params);
 	};
 
-	// Tool registration - WRITE operation with read-only mode protection
 	// Tool registration using modern registerTool method
 
 	server.registerTool(
@@ -178,6 +176,6 @@ export const registerEnrichPutPolicyTool: ToolRegistrationFunction = (server: Mc
 			inputSchema: putPolicyValidator.shape,
 		},
 
-		withReadOnlyCheck("elasticsearch_enrich_put_policy", putPolicyImpl, OperationType.WRITE),
+		putPolicyImpl,
 	);
 };

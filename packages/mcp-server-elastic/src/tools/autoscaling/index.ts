@@ -3,8 +3,7 @@ import type { Client } from "@elastic/elasticsearch";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { OperationType, withReadOnlyCheck } from "../../utils/readOnlyMode.js";
-
+import { OperationType } from "../../utils/readOnlyMode.js";
 // Define autoscaling-specific error types
 export class AutoscalingError extends Error {
 	constructor(
@@ -230,7 +229,7 @@ export const putPolicy = {
 		"Create or update an autoscaling policy in Elasticsearch. Best for capacity management, resource automation, cluster scaling. Use when you need to define autoscaling policies for Elasticsearch Service, ECE, or ECK environments. NOTE: Designed for indirect use.",
 	inputSchema: putPolicySchema.shape,
 	operationType: OperationType.WRITE as const,
-	handler: withReadOnlyCheck("elasticsearch_autoscaling_put_policy", putPolicyImpl, OperationType.WRITE),
+	handler: putPolicyImpl,
 };
 
 const deletePolicySchema = z.object({
@@ -302,7 +301,7 @@ export const deletePolicy = {
 		"Delete an autoscaling policy in Elasticsearch. Best for policy cleanup, configuration management, resource optimization. Use when you need to remove autoscaling policies in Elasticsearch Service, ECE, or ECK environments. NOTE: Designed for indirect use.",
 	inputSchema: deletePolicySchema.shape,
 	operationType: OperationType.DESTRUCTIVE as const,
-	handler: withReadOnlyCheck("elasticsearch_autoscaling_delete_policy", deletePolicyImpl, OperationType.DESTRUCTIVE),
+	handler: deletePolicyImpl,
 };
 
 export const autoscalingTools = [getCapacity, getPolicy, putPolicy, deletePolicy] as const;
