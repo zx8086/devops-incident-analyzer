@@ -12,22 +12,26 @@ import { portalTools } from "./portal/tools.js";
 import { portalManagementTools } from "./portal-management/tools.js";
 
 // SIO-670 PR0: handler context shared by all per-tool closures.
-// Conservative shape for PR0 -- PR2 will introduce generics, PR3 will narrow args via z.infer.
+// SIO-670 PR3: ToolHandler is now generic; each tool narrows args via z.infer<typeof X>.
 export type ToolHandlerContext = {
 	api: KongApi;
 	elicitationOps: ElicitationOperations;
 	extra: RequestHandlerExtra<ServerRequest, ServerNotification>;
 };
 
-export type ToolHandler = (args: any, ctx: ToolHandlerContext) => Promise<unknown>;
+export type ToolHandler<TArgs = unknown> = (args: TArgs, ctx: ToolHandlerContext) => Promise<unknown>;
 
-export interface MCPTool {
+// MCPTool.handler uses method-shorthand syntax (not a function-typed property)
+// so per-tool args can narrow via z.infer<typeof X>. Method parameters are
+// bivariant under strictFunctionTypes, which lets a heterogeneous MCPTool[]
+// hold entries whose handlers each declare a different concrete TArgs.
+export interface MCPTool<TArgs = unknown> {
 	method: string;
 	name: string;
 	description: string;
 	parameters: z.ZodObject;
 	category: string;
-	handler: ToolHandler;
+	handler(args: TArgs, ctx: ToolHandlerContext): Promise<unknown>;
 }
 
 /**

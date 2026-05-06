@@ -1,26 +1,27 @@
-import type { z } from "zod";
-import type { ToolHandler } from "../registry.js";
+import type { MCPTool } from "../registry.js";
 import * as portalManagementOps from "./operations.js";
 import * as parameters from "./parameters.js";
+import type {
+	CreatePortalParameters,
+	DeletePortalParameters,
+	GetPortalParameters,
+	ListPortalProductsParameters,
+	ListPortalsParameters,
+	PublishPortalProductParameters,
+	UnpublishPortalProductParameters,
+	UpdatePortalParameters,
+} from "./parameters.js";
 import * as prompts from "./prompts.js";
 
-export type PortalManagementTool = {
-	method: string;
-	name: string;
-	description: string;
-	parameters: z.ZodObject;
-	category: string;
-	handler: ToolHandler;
-};
-
-export const portalManagementTools = (): PortalManagementTool[] => [
+export const portalManagementTools = (): MCPTool[] => [
 	{
 		method: "list_portals",
 		name: "List Developer Portals",
 		description: prompts.portalManagementPrompts["list-portals"],
 		parameters: parameters.listPortalsParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.listPortals(api, args.pageSize, args.pageNumber),
+		handler: async (args: ListPortalsParameters, { api }) =>
+			portalManagementOps.listPortals(api, args.pageSize, args.pageNumber),
 	},
 	{
 		method: "create_portal",
@@ -28,7 +29,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["create-portal"],
 		parameters: parameters.createPortalParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.createPortal(api, args),
+		handler: async (args: CreatePortalParameters, { api }) => portalManagementOps.createPortal(api, args),
 	},
 	{
 		method: "get_portal",
@@ -36,7 +37,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["get-portal"],
 		parameters: parameters.getPortalParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.getPortal(api, args.portalId),
+		handler: async (args: GetPortalParameters, { api }) => portalManagementOps.getPortal(api, args.portalId),
 	},
 	{
 		method: "update_portal",
@@ -44,7 +45,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["update-portal"],
 		parameters: parameters.updatePortalParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.updatePortal(api, args.portalId, args),
+		handler: async (args: UpdatePortalParameters, { api }) => portalManagementOps.updatePortal(api, args.portalId, args),
 	},
 	{
 		method: "delete_portal",
@@ -52,7 +53,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["delete-portal"],
 		parameters: parameters.deletePortalParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.deletePortal(api, args.portalId),
+		handler: async (args: DeletePortalParameters, { api }) => portalManagementOps.deletePortal(api, args.portalId),
 	},
 	{
 		method: "list_portal_products",
@@ -60,7 +61,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["list-portal-products"],
 		parameters: parameters.listPortalProductsParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) =>
+		handler: async (args: ListPortalProductsParameters, { api }) =>
 			portalManagementOps.listPortalProducts(api, args.portalId, args.pageSize, args.pageNumber),
 	},
 	{
@@ -69,7 +70,8 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["publish-portal-product"],
 		parameters: parameters.publishPortalProductParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.publishPortalProduct(api, args.portalId, args),
+		handler: async (args: PublishPortalProductParameters, { api }) =>
+			portalManagementOps.publishPortalProduct(api, args.portalId, args),
 	},
 	{
 		method: "unpublish_portal_product",
@@ -77,6 +79,7 @@ export const portalManagementTools = (): PortalManagementTool[] => [
 		description: prompts.portalManagementPrompts["unpublish-portal-product"],
 		parameters: parameters.unpublishPortalProductParametersSchema,
 		category: "portal-management",
-		handler: async (args, { api }) => portalManagementOps.unpublishPortalProduct(api, args.portalId, args.productId),
+		handler: async (args: UnpublishPortalProductParameters, { api }) =>
+			portalManagementOps.unpublishPortalProduct(api, args.portalId, args.productId),
 	},
 ];
