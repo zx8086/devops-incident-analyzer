@@ -7,7 +7,7 @@ import { elicitationManager, kongElicitationPatterns } from "../utils/elicitatio
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
 import { createContextLogger } from "../utils/logger.js";
 import { TagElicitationEngine } from "../utils/tag-elicitation.js";
-import type { ToolHandler } from "./registry.js";
+import type { MCPTool } from "./registry.js";
 
 const log = createContextLogger("elicitation");
 
@@ -19,45 +19,53 @@ const log = createContextLogger("elicitation");
  */
 
 // Parameter schemas
-export const analyzeContextParameters = () =>
-	z.object({
-		userMessage: z.string().optional().describe("User's original migration request"),
-		deckFiles: z.array(z.string()).optional().describe("Paths to Kong deck YAML files"),
-		deckConfigs: z.array(z.any()).optional().describe("Parsed deck configurations"),
-		gitContext: z
-			.object({
-				branch: z.string().optional(),
-				repoName: z.string().optional(),
-				teamMembers: z.array(z.string()).optional(),
-			})
-			.optional()
-			.describe("Git repository context"),
-	});
+// Several fields keep z.any() because the MCP elicitation flow accepts arbitrary
+// caller-supplied shapes (parsed deck configs, prior analysis results, free-form
+// user response payloads) that cannot be tightened without changing semantics.
+export const analyzeContextParameters = z.object({
+	userMessage: z.string().optional().describe("User's original migration request"),
+	deckFiles: z.array(z.string()).optional().describe("Paths to Kong deck YAML files"),
+	// biome-ignore lint/suspicious/noExplicitAny: parsed deck configs are arbitrary YAML-derived shapes
+	deckConfigs: z.array(z.any()).optional().describe("Parsed deck configurations"),
+	gitContext: z
+		.object({
+			branch: z.string().optional(),
+			repoName: z.string().optional(),
+			teamMembers: z.array(z.string()).optional(),
+		})
+		.optional()
+		.describe("Git repository context"),
+});
 
-export const createElicitationSessionParameters = () =>
-	z.object({
-		analysisResult: z.any().describe("Migration analysis result from analyze-context"),
-		context: z.any().describe("Original migration context"),
-	});
+export const createElicitationSessionParameters = z.object({
+	// biome-ignore lint/suspicious/noExplicitAny: analysis result forwarded verbatim from analyze-context
+	analysisResult: z.any().describe("Migration analysis result from analyze-context"),
+	// biome-ignore lint/suspicious/noExplicitAny: original migration context shape varies by caller
+	context: z.any().describe("Original migration context"),
+});
 
-export const processElicitationResponseParameters = () =>
-	z.object({
-		sessionId: z.string().describe("Elicitation session ID"),
-		requestId: z.string().describe("Elicitation request ID"),
-		response: z
-			.object({
-				data: z.any().optional(),
-				declined: z.boolean().optional(),
-				cancelled: z.boolean().optional(),
-				error: z.string().optional(),
-			})
-			.describe("User response to elicitation request"),
-	});
+export const processElicitationResponseParameters = z.object({
+	sessionId: z.string().describe("Elicitation session ID"),
+	requestId: z.string().describe("Elicitation request ID"),
+	response: z
+		.object({
+			// biome-ignore lint/suspicious/noExplicitAny: response payload shape is request-specific
+			data: z.any().optional(),
+			declined: z.boolean().optional(),
+			cancelled: z.boolean().optional(),
+			error: z.string().optional(),
+		})
+		.describe("User response to elicitation request"),
+});
 
-export const getSessionStatusParameters = () =>
-	z.object({
-		sessionId: z.string().describe("Elicitation session ID"),
-	});
+export const getSessionStatusParameters = z.object({
+	sessionId: z.string().describe("Elicitation session ID"),
+});
+
+export type AnalyzeContextArgs = z.infer<typeof analyzeContextParameters>;
+export type CreateElicitationSessionArgs = z.infer<typeof createElicitationSessionParameters>;
+export type ProcessElicitationResponseArgs = z.infer<typeof processElicitationResponseParameters>;
+export type GetSessionStatusArgs = z.infer<typeof getSessionStatusParameters>;
 
 // Tool implementations
 export class ElicitationOperations {
@@ -585,16 +593,7 @@ export class ElicitationOperations {
 
 // Tool definitions for registration
 
-type ElicitationToolEntry = {
-	method: string;
-	name: string;
-	description: string;
-	parameters: z.ZodObject;
-	category: string;
-	handler: ToolHandler;
-};
-
-export const elicitationTools: ElicitationToolEntry[] = [
+export const elicitationTools: MCPTool[] = [
 	{
 		method: "analyze_migration_context",
 		name: "Analyze Migration Context",
@@ -609,9 +608,9 @@ This tool performs intelligent analysis of:
 
 Returns confidence scores and identifies missing mandatory information (domain, environment, team).
 `,
-		parameters: analyzeContextParameters(),
+		parameters: analyzeContextParameters,
 		category: "elicitation",
-		handler: async (args, { elicitationOps }) =>
+		handler: async (args: AnalyzeContextArgs, { elicitationOps }) =>
 			elicitationOps.analyzeContext(args.userMessage, args.deckFiles, args.deckConfigs, args.gitContext),
 	},
 	{
@@ -628,9 +627,9 @@ Based on migration analysis, creates structured prompts for:
 
 Returns session ID and list of elicitation requests.
 `,
-		parameters: createElicitationSessionParameters(),
+		parameters: createElicitationSessionParameters,
 		category: "elicitation",
-		handler: async (args, { elicitationOps }) => {
+		handler: async (args: CreateElicitationSessionArgs, { elicitationOps }) => {
 			const sessionResult = await elicitationOps.createElicitationSession(args.analysisResult, args.context);
 			const enhancedResult = sessionResult as Record<string, unknown>;
 
@@ -666,9 +665,9 @@ Handles:
 
 Returns success status and next steps.
 `,
-		parameters: processElicitationResponseParameters(),
+		parameters: processElicitationResponseParameters,
 		category: "elicitation",
-		handler: async (args, { elicitationOps }) =>
+		handler: async (args: ProcessElicitationResponseArgs, { elicitationOps }) =>
 			elicitationOps.processElicitationResponse(args.sessionId, args.requestId, args.response),
 	},
 	{
@@ -683,8 +682,9 @@ Returns:
 - Pending requests
 - Recommendations for next steps
 `,
-		parameters: getSessionStatusParameters(),
+		parameters: getSessionStatusParameters,
 		category: "elicitation",
-		handler: async (args, { elicitationOps }) => elicitationOps.getSessionStatus(args.sessionId),
+		handler: async (args: GetSessionStatusArgs, { elicitationOps }) =>
+			elicitationOps.getSessionStatus(args.sessionId),
 	},
 ];
