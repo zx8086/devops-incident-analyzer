@@ -39,7 +39,11 @@ export class UnifiedElicitationBridge {
 	 * When a migration analysis creates an elicitation session,
 	 * register it for potential bridging to Kong operations
 	 */
-	registerMigrationSession(migrationSessionId: string, _analysisResult: any, _context: any): void {
+	registerMigrationSession(
+		migrationSessionId: string,
+		_analysisResult: Record<string, unknown>,
+		_context: Record<string, unknown>,
+	): void {
 		log.debug({ migrationSessionId }, "Bridge registering migration session");
 
 		this.sessionBridge.set(migrationSessionId, {
@@ -59,7 +63,7 @@ export class UnifiedElicitationBridge {
 	async processMigrationResponse(
 		migrationSessionId: string,
 		userResponse: {
-			data?: any;
+			data?: unknown;
 			declined?: boolean;
 			cancelled?: boolean;
 		},
@@ -88,20 +92,21 @@ export class UnifiedElicitationBridge {
 			log.info({ responseData: userResponse.data }, "Bridge capturing context from migration response");
 
 			// Handle different response formats
-			let extractedContext: any = {};
+			let extractedContext: Record<string, unknown> = {};
 
-			if (typeof userResponse.data === "object") {
-				extractedContext = userResponse.data;
+			if (userResponse.data && typeof userResponse.data === "object") {
+				extractedContext = userResponse.data as Record<string, unknown>;
 			} else if (typeof userResponse.data === "string") {
 				// Assume it's domain if single string
 				extractedContext = { domain: userResponse.data };
 			}
 
-			// Update bridge session with captured context
+			// Narrow each field to string before populating bridge userContext.
+			const asString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 			bridgeSession.userContext = {
-				domain: extractedContext.domain,
-				environment: extractedContext.environment,
-				team: extractedContext.team,
+				domain: asString(extractedContext.domain),
+				environment: asString(extractedContext.environment),
+				team: asString(extractedContext.team),
 			};
 
 			bridgeSession.isComplete = this.isContextComplete(bridgeSession.userContext);
@@ -176,18 +181,24 @@ export class UnifiedElicitationBridge {
 	 *
 	 * Use captured migration context to automatically unblock Kong operations
 	 */
-	private async autoUnblockOperation(blockingSessionId: string, userContext: any): Promise<boolean> {
+	private async autoUnblockOperation(
+		blockingSessionId: string,
+		userContext: Record<string, unknown>,
+	): Promise<boolean> {
 		try {
 			log.info({ blockingSessionId, userContext }, "Bridge auto-unblocking session");
 
-			// Use the elicitation orchestrator to process the bridged response
-			const response = {
+			// Coerce userContext to the orchestrator's expected string-map shape.
+			// userContext is a Record<string, unknown>; non-string values are dropped.
+			const responses: Record<string, string> = {};
+			for (const [k, v] of Object.entries(userContext)) {
+				if (typeof v === "string") responses[k] = v;
+			}
+			const result = await elicitationOrchestrator.processElicitationResponse({
 				sessionId: blockingSessionId,
-				responses: userContext,
+				responses,
 				declined: false,
-			};
-
-			const result = await elicitationOrchestrator.processElicitationResponse(response);
+			});
 
 			if (result.success) {
 				log.info({ blockingSessionId }, "Bridge auto-unblocked session successfully");
@@ -210,7 +221,7 @@ export class UnifiedElicitationBridge {
 	 */
 	async processBlockingResponse(
 		blockingSessionId: string,
-		userResponse: any,
+		userResponse: Record<string, unknown>,
 	): Promise<{
 		success: boolean;
 		bridgeUpdated: boolean;
@@ -218,11 +229,19 @@ export class UnifiedElicitationBridge {
 	}> {
 		log.debug({ blockingSessionId }, "Bridge processing direct blocking response");
 
-		// Process the response normally through the orchestrator
+		// userResponse may carry the structured ElicitationResponse shape (with
+		// `responses` and `declined`) or be a flat string-map. Coerce both into
+		// the orchestrator-expected shape.
+		const responsesValue =
+			userResponse.responses && typeof userResponse.responses === "object"
+				? (userResponse.responses as Record<string, string>)
+				: (userResponse as Record<string, string>);
+		const declinedValue = typeof userResponse.declined === "boolean" ? userResponse.declined : false;
+
 		const result = await elicitationOrchestrator.processElicitationResponse({
 			sessionId: blockingSessionId,
-			responses: userResponse.responses || userResponse,
-			declined: userResponse.declined || false,
+			responses: responsesValue,
+			declined: declinedValue,
 		});
 
 		// If bridged, update the migration session
@@ -232,7 +251,7 @@ export class UnifiedElicitationBridge {
 			if (bridgeSession) {
 				bridgeSession.userContext = {
 					...bridgeSession.userContext,
-					...(userResponse.responses || userResponse),
+					...responsesValue,
 				};
 				bridgeSession.isComplete = true;
 				log.info({ migrationSessionId }, "Bridge updated migration session from blocking response");
@@ -288,11 +307,11 @@ export class UnifiedElicitationBridge {
 	/**
 	 * Helper methods
 	 */
-	private isContextComplete(context: any): boolean {
+	private isContextComplete(context: Record<string, unknown>): boolean {
 		return !!(context.domain && context.environment && context.team);
 	}
 
-	private hasRequiredFields(context: any, requiredFields: string[]): boolean {
+	private hasRequiredFields(context: Record<string, unknown>, requiredFields: string[]): boolean {
 		return requiredFields.every((field) => !!context[field]);
 	}
 

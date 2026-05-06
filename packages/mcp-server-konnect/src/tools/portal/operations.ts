@@ -38,7 +38,7 @@ export async function listApis(
 			},
 		},
 		apis:
-			result.data?.map((api: any) => ({
+			result.data?.map((api) => ({
 				apiId: api.id,
 				name: api.name,
 				description: api.description,
@@ -195,7 +195,7 @@ export async function listApplications(
 			},
 		},
 		applications:
-			result.data?.map((app: any) => ({
+			result.data?.map((app) => ({
 				applicationId: app.id,
 				name: app.name,
 				description: app.description,
@@ -282,13 +282,13 @@ export async function getApplication(api: KongApi, applicationId: string) {
 				scopes: result.scopes,
 			},
 			registrations:
-				result.registrations?.map((reg: any) => ({
+				result.registrations?.map((reg) => ({
 					registrationId: reg.id,
 					apiName: reg.api_name,
 					status: reg.status,
 				})) || [],
 			credentials:
-				result.credentials?.map((cred: any) => ({
+				result.credentials?.map((cred) => ({
 					credentialId: cred.id,
 					type: cred.type,
 					status: cred.status,
@@ -324,7 +324,7 @@ export async function updateApplication(
 	},
 ) {
 	log.debug({ applicationId }, "Updating application");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (applicationData.name !== undefined) requestData.name = applicationData.name;
 	if (applicationData.description !== undefined) requestData.description = applicationData.description;
@@ -411,7 +411,7 @@ export async function listApplicationRegistrations(
 			},
 		},
 		registrations:
-			result.data?.map((reg: any) => ({
+			result.data?.map((reg) => ({
 				registrationId: reg.id,
 				apiId: reg.api_id,
 				apiName: reg.api_name,
@@ -552,7 +552,7 @@ export async function listCredentials(api: KongApi, applicationId: string, pageS
 			},
 		},
 		credentials:
-			result.data?.map((cred: any) => ({
+			result.data?.map((cred) => ({
 				credentialId: cred.id,
 				name: cred.name,
 				type: cred.type,
@@ -623,7 +623,7 @@ export async function updateCredential(
 	},
 ) {
 	log.debug({ applicationId, credentialId }, "Updating credential");
-	const requestData: any = {};
+	const requestData: Record<string, unknown> = {};
 
 	if (credentialData.name !== undefined) requestData.name = credentialData.name;
 	if (credentialData.scopes !== undefined) requestData.scopes = credentialData.scopes;

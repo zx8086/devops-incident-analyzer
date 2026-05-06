@@ -155,6 +155,7 @@ export class BypassPreventionTests {
 			try {
 				// Try to process incomplete elicitation
 				const sessionId = `incomplete-test-${index}`;
+				// biome-ignore lint/suspicious/noExplicitAny: this is a bypass-prevention test that intentionally feeds malformed input.
 				await this.gate.processElicitationResponse(sessionId, partialContext as any);
 				results.push({
 					index,

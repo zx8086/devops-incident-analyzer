@@ -189,24 +189,34 @@ class ElicitationBridge {
 			// Get responses in order they were created
 			const responseArray = Array.from(responses.values());
 
+			// Helpers to read a string field from a response payload of `unknown`.
+			const asString = (v: unknown): string | null => (typeof v === "string" ? v : null);
+			const fieldFromObject = (v: unknown, field: string): string | null => {
+				if (v && typeof v === "object") {
+					const value = (v as Record<string, unknown>)[field];
+					return typeof value === "string" ? value : null;
+				}
+				return null;
+			};
+
 			// Based on the elicitation pattern: domain, environment, team
-			if (responseArray[0]?.data) {
-				domain = typeof responseArray[0].data === "string" ? responseArray[0].data : responseArray[0].data.domain;
+			if (responseArray[0]?.data !== undefined) {
+				domain = asString(responseArray[0].data) ?? fieldFromObject(responseArray[0].data, "domain");
 			}
-			if (responseArray[1]?.data) {
-				environment =
-					typeof responseArray[1].data === "string" ? responseArray[1].data : responseArray[1].data.environment;
+			if (responseArray[1]?.data !== undefined) {
+				environment = asString(responseArray[1].data) ?? fieldFromObject(responseArray[1].data, "environment");
 			}
-			if (responseArray[2]?.data) {
-				team = typeof responseArray[2].data === "string" ? responseArray[2].data : responseArray[2].data.team;
+			if (responseArray[2]?.data !== undefined) {
+				team = asString(responseArray[2].data) ?? fieldFromObject(responseArray[2].data, "team");
 			}
 
 			// Also try to extract from object responses
 			for (const response of responseArray) {
 				if (response.data && typeof response.data === "object") {
-					if (response.data.domain && !domain) domain = response.data.domain;
-					if (response.data.environment && !environment) environment = response.data.environment;
-					if (response.data.team && !team) team = response.data.team;
+					const obj = response.data as Record<string, unknown>;
+					if (typeof obj.domain === "string" && !domain) domain = obj.domain;
+					if (typeof obj.environment === "string" && !environment) environment = obj.environment;
+					if (typeof obj.team === "string" && !team) team = obj.team;
 				}
 			}
 

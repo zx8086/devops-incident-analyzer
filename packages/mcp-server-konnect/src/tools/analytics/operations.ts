@@ -1,6 +1,6 @@
 // src/tools/analytics/operations.ts
 import type { KongApi } from "../../api/kong-api.js";
-import type { ApiRequestFilter } from "../../types.js";
+import type { ApiRequestFilter, ApiRequestResult } from "../../types.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { createContextLogger } from "../../utils/logger.js";
 
@@ -9,7 +9,7 @@ const log = createContextLogger("tools");
 /**
  * Standard response time formatter for consistent formatting
  */
-export function formatResponseTimes(data: any) {
+export function formatResponseTimes(data: ApiRequestResult) {
 	return {
 		latencyMs: {
 			total: data.latencies_response_ms,

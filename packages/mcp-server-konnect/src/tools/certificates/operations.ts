@@ -40,7 +40,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 				nextOffset: result.offset,
 				totalCount: result.total,
 			},
-			certificates: result.data.map((cert: any) => {
+			certificates: result.data.map((cert) => {
 				// Parse certificate to extract expiration date
 				const expirationDate = null;
 				const daysUntilExpiration = null;
@@ -79,7 +79,7 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 			}),
 			healthSummary: {
 				totalCertificates: result.data.length,
-				expiringSoon: result.data.filter((_cert: any) => {
+				expiringSoon: result.data.filter((_cert) => {
 					// This would be properly implemented with certificate parsing
 					return false; // Placeholder
 				}).length,
@@ -275,7 +275,7 @@ export async function updateCertificate(
 			}
 		}
 
-		const updateData: any = {};
+		const updateData: Record<string, unknown> = {};
 		if (cert !== undefined) updateData.cert = cert;
 		if (key !== undefined) updateData.key = key;
 		if (certAlt !== undefined) updateData.cert_alt = certAlt;

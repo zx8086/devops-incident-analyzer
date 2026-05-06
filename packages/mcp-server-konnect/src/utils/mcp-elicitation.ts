@@ -14,13 +14,29 @@ export interface KongDeploymentContext {
 	domain?: string;
 	environment?: string;
 	team?: string;
-	[key: string]: any;
+	[key: string]: unknown;
 }
+
+// JSON Schema shape used by MCP elicitation requests. The full schema is too
+// open to enumerate here; we accept any object and let the elicitation system
+// validate downstream.
+export type ElicitationJsonSchema = Record<string, unknown>;
 
 export interface ElicitationRequest {
 	message: string;
-	schema: any;
+	schema: ElicitationJsonSchema;
 	timeout?: number;
+}
+
+// Minimal shape we care about on the MCP request context: an `elicit` method
+// that returns an action+data pair. The real MCP context carries more, but
+// the elicitation manager only needs this narrow capability.
+export interface ElicitableMcpContext {
+	elicit: (request: ElicitationRequest) => Promise<{
+		action: "accept" | "decline" | "cancel";
+		data?: Record<string, unknown>;
+	}>;
+	[key: string]: unknown;
 }
 
 /**
@@ -30,7 +46,7 @@ export class MCPElicitationManager {
 	private contextCache = new Map<
 		string,
 		{
-			data: any;
+			data: Record<string, unknown>;
 			timestamp: number;
 			ttl: number;
 		}
@@ -44,7 +60,7 @@ export class MCPElicitationManager {
 	 */
 	async gatherKongContext(
 		provided: Partial<KongDeploymentContext>,
-		mcpContext: any,
+		mcpContext: ElicitableMcpContext,
 	): Promise<KongDeploymentContext | null> {
 		const missing = this.identifyMissingContext(provided);
 
@@ -91,7 +107,11 @@ export class MCPElicitationManager {
 	/**
 	 * Get cached context or elicit new information
 	 */
-	async getCachedOrElicit<T>(key: string, elicitFunc: () => Promise<T>, ttlSeconds: number = 3600): Promise<T | null> {
+	async getCachedOrElicit<T extends Record<string, unknown> | null>(
+		key: string,
+		elicitFunc: () => Promise<T>,
+		ttlSeconds: number = 3600,
+	): Promise<T | null> {
 		const cached = this.contextCache.get(key);
 
 		if (cached && Date.now() - cached.timestamp < cached.ttl * 1000) {
@@ -100,7 +120,9 @@ export class MCPElicitationManager {
 
 		try {
 			const data = await elicitFunc();
-			this.cacheContext(key, data, ttlSeconds);
+			if (data !== null) {
+				this.cacheContext(key, data, ttlSeconds);
+			}
 			return data;
 		} catch (error) {
 			log.error({ key, error }, "Elicitation failed for context key");
@@ -115,7 +137,7 @@ export class MCPElicitationManager {
 
 	private async elicitEssentialContext(
 		missingFields: string[],
-		mcpContext: any,
+		mcpContext: ElicitableMcpContext,
 	): Promise<Partial<KongDeploymentContext> | null> {
 		if (!mcpContext || !mcpContext.elicit) {
 			// Fallback for environments without MCP elicitation
@@ -138,7 +160,7 @@ Please provide this information to proceed with deployment.`,
 			});
 
 			if (result.action === "accept") {
-				return this.validateAndNormalizeContext(result.data);
+				return this.validateAndNormalizeContext(result.data ?? {});
 			} else if (result.action === "decline") {
 				log.warn("User declined to provide essential context");
 				return null;
@@ -154,7 +176,7 @@ Please provide this information to proceed with deployment.`,
 
 	private async elicitAdditionalContext(
 		baseContext: KongDeploymentContext,
-		mcpContext: any,
+		mcpContext: ElicitableMcpContext,
 	): Promise<Partial<KongDeploymentContext> | null> {
 		const additionalSchema = {
 			type: "object",
@@ -188,8 +210,8 @@ Would you like to provide additional context? (You can skip this step)`,
 				timeout: 20000, // 20 seconds
 			});
 
-			if (result.action === "accept") {
-				return result.data;
+			if (result.action === "accept" && result.data) {
+				return result.data as Partial<KongDeploymentContext>;
 			}
 		} catch (error) {
 			// Additional context is optional, so failures are not critical
@@ -202,8 +224,8 @@ Would you like to provide additional context? (You can skip this step)`,
 		return null;
 	}
 
-	private buildEssentialSchema(missingFields: string[]): any {
-		const properties: any = {};
+	private buildEssentialSchema(missingFields: string[]): ElicitationJsonSchema {
+		const properties: Record<string, Record<string, unknown>> = {};
 		const required: string[] = [];
 
 		missingFields.forEach((field) => {
@@ -253,18 +275,18 @@ Would you like to provide additional context? (You can skip this step)`,
 		return descriptions[field as keyof typeof descriptions] || field;
 	}
 
-	private validateAndNormalizeContext(data: any): Partial<KongDeploymentContext> {
+	private validateAndNormalizeContext(data: Record<string, unknown>): Partial<KongDeploymentContext> {
 		const normalized: Partial<KongDeploymentContext> = {};
 
-		if (data.domain) {
+		if (typeof data.domain === "string") {
 			normalized.domain = data.domain.toLowerCase().trim();
 		}
 
-		if (data.environment) {
+		if (typeof data.environment === "string") {
 			normalized.environment = data.environment.toLowerCase().trim();
 		}
 
-		if (data.team) {
+		if (typeof data.team === "string") {
 			normalized.team = data.team.toLowerCase().trim();
 		}
 
@@ -276,7 +298,7 @@ Would you like to provide additional context? (You can skip this step)`,
 		return context.environment === "production" || context.domain === "api";
 	}
 
-	private cacheContext(key: string, data: any, ttlSeconds: number): void {
+	private cacheContext(key: string, data: Record<string, unknown>, ttlSeconds: number): void {
 		this.contextCache.set(key, {
 			data,
 			timestamp: Date.now(),

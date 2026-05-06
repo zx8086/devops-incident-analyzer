@@ -123,8 +123,9 @@ export function createBlockedOperationHandler(
 	originalMethod: string,
 	userMessage: string = "",
 	files: string[] = [],
-	configs: any[] = [],
+	configs: Array<Record<string, unknown>> = [],
 ) {
+	// biome-ignore lint/suspicious/noExplicitAny: dispatcher across many tool schemas; per-method narrowing happens inside the switch (also covers RequestHandlerExtra generics).
 	return async (args: any, _extra: RequestHandlerExtra<any, any>) => {
 		const requestContext = {
 			userMessage,
@@ -398,6 +399,7 @@ const elicitationOps = new ElicitationOperations();
  * Handlers for ALL elicitation tools - both enforcement and migration analysis
  */
 export const ELICITATION_TOOL_HANDLERS = {
+	// biome-ignore lint/suspicious/noExplicitAny: dispatcher args / MCP RequestHandlerExtra generics passed through.
 	async analyze_migration_context(args: any, _extra: RequestHandlerExtra<any, any>) {
 		log.info("Analyzing migration context");
 
@@ -412,6 +414,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		return result;
 	},
 
+	// biome-ignore lint/suspicious/noExplicitAny: dispatcher args / MCP RequestHandlerExtra generics passed through.
 	async create_elicitation_session(args: any, _extra: RequestHandlerExtra<any, any>) {
 		log.info("Creating elicitation session");
 
@@ -459,6 +462,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		return result;
 	},
 
+	// biome-ignore lint/suspicious/noExplicitAny: dispatcher args / MCP RequestHandlerExtra generics passed through.
 	async process_elicitation_response(args: any, _extra: RequestHandlerExtra<any, any>) {
 		log.info({ sessionId: args.sessionId }, "Processing elicitation response");
 
@@ -514,6 +518,7 @@ export const ELICITATION_TOOL_HANDLERS = {
 		}
 	},
 
+	// biome-ignore lint/suspicious/noExplicitAny: dispatcher args / MCP RequestHandlerExtra generics passed through.
 	async get_session_status(args: any, _extra: RequestHandlerExtra<any, any>) {
 		// Try both the enforcement system and migration analysis system
 		try {

@@ -164,9 +164,9 @@ export class TagElicitationEngine {
 					response.requestId.includes(entityKey.replace(":", "_")),
 				);
 
-				if (entityResponse?.data) {
+				if (Array.isArray(entityResponse?.data)) {
 					// Add user-provided contextual tags
-					tags.push(...entityResponse.data);
+					tags.push(...(entityResponse.data as string[]));
 				} else {
 					// Fall back to highest confidence suggested tags
 					const fallbackTags = plan.suggestedContextualTags

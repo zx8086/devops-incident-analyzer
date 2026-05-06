@@ -19,16 +19,21 @@ export interface MigrationContext {
 	};
 }
 
+// Deck configurations originate from user-supplied YAML files, so each
+// entity array carries arbitrary plugin/route/service shapes.
+export type DeckEntity = Record<string, unknown>;
+
 export interface DeckConfiguration {
-	services?: any[];
-	routes?: any[];
-	consumers?: any[];
-	plugins?: any[];
-	upstreams?: any[];
-	certificates?: any[];
+	services?: DeckEntity[];
+	routes?: DeckEntity[];
+	consumers?: DeckEntity[];
+	plugins?: DeckEntity[];
+	upstreams?: DeckEntity[];
+	certificates?: DeckEntity[];
 	_konnect?: {
 		control_plane_name?: string;
 	};
+	[key: string]: unknown;
 }
 
 export interface ExtractedInfo {
@@ -509,7 +514,7 @@ export class MigrationAnalyzer {
 		const names: string[] = [];
 		deckConfigs.forEach((config) => {
 			config.services?.forEach((service) => {
-				if (service.name) names.push(service.name);
+				if (typeof service.name === "string") names.push(service.name);
 			});
 		});
 		return names;

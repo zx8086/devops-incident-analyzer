@@ -16,11 +16,11 @@ export interface MandatoryContext {
 
 export interface KongOperationContext {
 	operationName: string;
-	parameters: Record<string, any>;
+	parameters: Record<string, unknown>;
 	requestContext: {
 		userMessage: string;
 		files?: string[];
-		configs?: any[];
+		configs?: Array<Record<string, unknown>>;
 	};
 }
 
@@ -197,9 +197,9 @@ export class MandatoryElicitationGate {
 		// This handles the case where the elicitation session ID (elicit_*) differs from the
 		// gate's deterministic session ID (session-*)
 		const elicitationSessionData = this.elicitationManager.getSession(sessionId);
-		if (elicitationSessionData?.context?.originalKongContext) {
-			const originalContext = elicitationSessionData.context.originalKongContext;
-			const deterministicSessionId = this.generateSessionId(originalContext);
+		const originalContext = elicitationSessionData?.context?.originalKongContext;
+		if (originalContext && typeof originalContext === "object") {
+			const deterministicSessionId = this.generateSessionId(originalContext as KongOperationContext);
 			this.activeSessions.set(deterministicSessionId, validatedContext);
 			log.debug({ sessionId, deterministicSessionId }, "Enforcement gate context stored for both sessions");
 		}

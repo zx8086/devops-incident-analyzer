@@ -335,7 +335,7 @@ export class ElicitationFlowOrchestrator {
 	async getElicitationStatus(sessionId: string): Promise<{
 		exists: boolean;
 		completed?: boolean;
-		context?: any;
+		context?: unknown;
 	}> {
 		const activeSessions = this.gate.getActiveSessions();
 		const sessionContext = activeSessions.get(sessionId);
