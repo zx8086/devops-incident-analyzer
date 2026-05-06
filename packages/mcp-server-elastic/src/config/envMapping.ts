@@ -63,4 +63,12 @@ export const envVarMapping = {
 		maxConcurrentSessions: "MAX_CONCURRENT_SESSIONS",
 		conversationDetectionThresholdSeconds: "CONVERSATION_DETECTION_THRESHOLD_SECONDS",
 	},
+	// SIO-674: Elastic Cloud Deployment + Billing API. Only populated when EC_API_KEY is set.
+	cloud: {
+		apiKey: "EC_API_KEY",
+		endpoint: "EC_API_ENDPOINT",
+		defaultOrgId: "EC_DEFAULT_ORG_ID",
+		requestTimeout: "EC_REQUEST_TIMEOUT",
+		maxRetries: "EC_MAX_RETRIES",
+	},
 } as const;

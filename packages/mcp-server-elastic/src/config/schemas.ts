@@ -133,6 +133,19 @@ export const SessionTrackingConfigSchema = z.object({
 	conversationDetectionThresholdSeconds: z.number().min(10).max(300),
 });
 
+// SIO-674: Elastic Cloud organisation-scoped API config (https://api.elastic-cloud.com).
+// Distinct from cluster API auth -- needs its own ApiKey credential. Optional on the parent
+// schema so self-hosted ES users don't need EC_API_KEY to boot.
+export const ElasticCloudConfigSchema = z.object({
+	apiKey: z.string().min(1),
+	endpoint: z.string().url(),
+	defaultOrgId: z.string().optional(),
+	requestTimeout: z.number().min(1000).max(60000),
+	maxRetries: z.number().min(0).max(10),
+});
+
+export type ElasticCloudConfig = z.infer<typeof ElasticCloudConfigSchema>;
+
 export const ConfigSchema = z.object({
 	server: ServerConfigSchema,
 	elasticsearch: ElasticsearchConfigSchema,
@@ -140,6 +153,7 @@ export const ConfigSchema = z.object({
 	security: SecurityConfigSchema,
 	langsmith: LangSmithConfigSchema,
 	sessionTracking: SessionTrackingConfigSchema,
+	cloud: ElasticCloudConfigSchema.optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

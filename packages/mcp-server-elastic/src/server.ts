@@ -5,8 +5,16 @@ import { readFileSync } from "node:fs";
 import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { type CloudClient, initializeCloudClient } from "./clients/cloudClient.js";
 import { createClientProxy, registerClients } from "./clients/registry.js";
 import type { Config, DeploymentConfig } from "./config/index.js";
+import { registerBillingGetDeploymentCostsTool } from "./tools/billing/get_deployment_costs.js";
+import { registerBillingGetOrgChartsTool } from "./tools/billing/get_org_charts.js";
+import { registerBillingGetOrgCostsTool } from "./tools/billing/get_org_costs.js";
+import { registerCloudGetDeploymentTool } from "./tools/cloud/get_deployment.js";
+import { registerCloudGetPlanActivityTool } from "./tools/cloud/get_plan_activity.js";
+import { registerCloudGetPlanHistoryTool } from "./tools/cloud/get_plan_history.js";
+import { registerCloudListDeploymentsTool } from "./tools/cloud/list_deployments.js";
 import { registerAllTools } from "./tools/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeReadOnlyManager } from "./utils/readOnlyMode.js";
@@ -239,8 +247,27 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 	return createClientProxy();
 }
 
+// SIO-674: Conditionally register the org-scoped Elastic Cloud + Billing tools. Called only
+// when initializeCloudClient produced a non-null client (i.e. EC_API_KEY is set). The 7
+// tools all use the lazy-auth CloudClient -- failures surface on first invocation, never at
+// boot, so self-hosted ES users are unaffected.
+function registerCloudAndBillingTools(server: McpServer, cloudClient: CloudClient): void {
+	registerCloudListDeploymentsTool(server, cloudClient);
+	registerCloudGetDeploymentTool(server, cloudClient);
+	registerCloudGetPlanActivityTool(server, cloudClient);
+	registerCloudGetPlanHistoryTool(server, cloudClient);
+	registerBillingGetOrgCostsTool(server, cloudClient);
+	registerBillingGetDeploymentCostsTool(server, cloudClient);
+	registerBillingGetOrgChartsTool(server, cloudClient);
+	logger.info("Registered 7 Elastic Cloud Deployment + Billing tools");
+}
+
 // Sync -- called per-request by factory. Creates McpServer and registers tools.
-export function createMcpServerInstance(config: Config, esClient: Client): McpServer {
+export function createMcpServerInstance(
+	config: Config,
+	esClient: Client,
+	cloudClient: CloudClient | null = null,
+): McpServer {
 	const server = new McpServer(
 		{
 			name: config.server.name,
@@ -262,9 +289,14 @@ export function createMcpServerInstance(config: Config, esClient: Client): McpSe
 
 	const registeredTools = registerAllTools(server, esClient);
 
+	if (cloudClient) {
+		registerCloudAndBillingTools(server, cloudClient);
+	}
+
 	logger.info(
 		{
 			toolCount: registeredTools.length,
+			cloudToolsEnabled: !!cloudClient,
 		},
 		"All tools registered successfully",
 	);
@@ -276,7 +308,8 @@ export function createMcpServerInstance(config: Config, esClient: Client): McpSe
 export async function createElasticsearchMcpServer(config: Config): Promise<McpServer> {
 	try {
 		const esClient = await initializeElasticsearchClient(config);
-		return createMcpServerInstance(config, esClient);
+		const cloudClient = initializeCloudClient(config);
+		return createMcpServerInstance(config, esClient, cloudClient);
 	} catch (error: unknown) {
 		logger.error(
 			{

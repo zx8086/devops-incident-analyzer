@@ -2,6 +2,7 @@
 
 // src/index.ts
 import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import { initializeCloudClient } from "./clients/cloudClient.js";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
@@ -46,7 +47,13 @@ if (import.meta.main) {
 			return initializeElasticsearchClient(config);
 		},
 
-		createServerFactory: (esClient) => () => createMcpServerInstance(config, esClient),
+		// SIO-674: Build the Elastic Cloud client once per server (lazy auth -- no probe).
+		// initializeCloudClient returns null when EC_API_KEY is unset; createMcpServerInstance
+		// then registers cluster tools only and the cloud + billing tools never appear.
+		createServerFactory: (esClient) => {
+			const cloudClient = initializeCloudClient(config);
+			return () => createMcpServerInstance(config, esClient, cloudClient);
+		},
 
 		// SIO-671: hoisted from per-tool withReadOnlyCheck wrappers. The shared
 		// bootstrap installs a single dispatcher-level chokepoint per server.
