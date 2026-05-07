@@ -11,7 +11,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../../src/utils/logger.js";
 import { initializeReadOnlyManager } from "../../src/utils/readOnlyMode.js";
 import { wrapServerWithTracing } from "../../src/utils/universalToolWrapper.js";
-import { createElasticsearchClient, shouldSkipIntegrationTests } from "../utils/elasticsearch-client.js";
+import {
+	createElasticsearchClient,
+	getToolFromServer,
+	shouldSkipIntegrationTests,
+} from "../utils/elasticsearch-client.js";
 
 // Import the specific tool to test
 // import { registerYourTool } from "../../src/tools/category/your_tool.js";
@@ -97,7 +101,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 
 	describe("Read Operations", () => {
 		test("should [describe what it should do]", async () => {
-			const tool = (server as any).getTool("tool_name");
+			const tool = getToolFromServer(server, "tool_name");
 
 			const result = await tool.handler({
 				// Tool parameters
@@ -110,7 +114,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 		});
 
 		test("should handle empty results gracefully", async () => {
-			const tool = (server as any).getTool("tool_name");
+			const tool = getToolFromServer(server, "tool_name");
 
 			const result = await tool.handler({
 				// Parameters that would return no results
@@ -120,7 +124,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 		});
 
 		test("should handle errors correctly", async () => {
-			const tool = (server as any).getTool("tool_name");
+			const tool = getToolFromServer(server, "tool_name");
 
 			const result = await tool.handler({
 				// Invalid parameters
@@ -132,7 +136,7 @@ describe.skipIf(shouldSkipIntegrationTests())("Tool: [TOOL_NAME] - Real Integrat
 
 	describe("Write Operations", () => {
 		test("should create/update/delete correctly", async () => {
-			const tool = (server as any).getTool("tool_name");
+			const tool = getToolFromServer(server, "tool_name");
 
 			// Test write operation
 			const result = await tool.handler({

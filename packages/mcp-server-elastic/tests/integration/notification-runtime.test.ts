@@ -36,9 +36,9 @@ describe("Notification Runtime Integration", () => {
 	test("should validate notification manager integration", async () => {
 		const { notificationManager, withNotificationContext } = await import("../../src/utils/notifications.js");
 
-		const capturedNotifications: any[] = [];
+		const capturedNotifications: unknown[] = [];
 		const mockExtra = {
-			sendNotification: async (notification: any) => {
+			sendNotification: async (notification: unknown) => {
 				capturedNotifications.push(notification);
 			},
 			signal: new AbortController().signal,
@@ -46,7 +46,7 @@ describe("Notification Runtime Integration", () => {
 		};
 
 		// Test wrapper function
-		const testHandler = withNotificationContext(async (_args: any, _extra: any) => {
+		const testHandler = withNotificationContext(async (_args: unknown, _extra: unknown) => {
 			// sendInfo logs locally but doesn't call sendNotification (by design)
 			await notificationManager.sendInfo("Test notification from wrapped handler");
 			// sendProgress DOES call sendNotification

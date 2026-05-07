@@ -5,12 +5,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig } from "../../src/config/index.js";
 import { createElasticsearchMcpServer } from "../../src/server.js";
 import { notificationManager } from "../../src/utils/notifications.js";
 
 describe("Notification Integration Tests", () => {
-	let server: any;
+	let server: McpServer | undefined;
 	const config = getConfig();
 
 	beforeAll(async () => {

@@ -30,9 +30,10 @@ describeIf("SIO-659 document round-trip (integration, gl-testing)", () => {
 	const INDEX = `sio659-int-${Date.now()}`;
 	const BODY = { field_a: "value", nested: { n: 42, msg: "hello" }, arr: [1, 2, 3] };
 	let client: Client;
-	let indexHandler: (args: any) => Promise<any>;
-	let getHandler: (args: any) => Promise<any>;
-	let mgetHandler: (args: any) => Promise<any>;
+	type ToolHandler = (...args: unknown[]) => Promise<{ content: Array<{ text: string }> }>;
+	let indexHandler: ToolHandler;
+	let getHandler: ToolHandler;
+	let mgetHandler: ToolHandler;
 	let createdId: string;
 
 	beforeAll(async () => {
@@ -48,9 +49,9 @@ describeIf("SIO-659 document round-trip (integration, gl-testing)", () => {
 		registerIndexDocumentTool(server, client);
 		registerGetDocumentTool(server, client);
 		registerMultiGetTool(server, client);
-		indexHandler = getToolFromServer(server, "elasticsearch_index_document")?.handler as any;
-		getHandler = getToolFromServer(server, "elasticsearch_get_document")?.handler as any;
-		mgetHandler = getToolFromServer(server, "elasticsearch_multi_get")?.handler as any;
+		indexHandler = getToolFromServer(server, "elasticsearch_index_document")?.handler as ToolHandler;
+		getHandler = getToolFromServer(server, "elasticsearch_get_document")?.handler as ToolHandler;
+		mgetHandler = getToolFromServer(server, "elasticsearch_multi_get")?.handler as ToolHandler;
 
 		await client.indices.create({ index: INDEX });
 	});

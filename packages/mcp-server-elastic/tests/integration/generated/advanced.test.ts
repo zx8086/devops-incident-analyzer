@@ -125,7 +125,7 @@ describe.skipIf(shouldSkipIntegrationTests())("advanced Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_translate_sql_query");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -141,7 +141,7 @@ describe.skipIf(shouldSkipIntegrationTests())("advanced Tools - Real Integration
 		test("elasticsearch_translate_sql_query should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_translate_sql_query");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -166,7 +166,7 @@ describe.skipIf(shouldSkipIntegrationTests())("advanced Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_delete_by_query");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index

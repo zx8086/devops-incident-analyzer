@@ -131,7 +131,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_search_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -148,7 +148,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 		test("elasticsearch_search_template should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_search_template");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -172,7 +172,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_get_index_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -190,7 +190,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 		test("elasticsearch_get_index_template should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_index_template");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -213,7 +213,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_multi_search_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -230,7 +230,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 		test("elasticsearch_multi_search_template should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_multi_search_template");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -254,7 +254,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_get_index_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -272,7 +272,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 		test("elasticsearch_get_index_template should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_index_template");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -297,7 +297,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_put_index_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {
@@ -319,7 +319,7 @@ describe.skipIf(shouldSkipIntegrationTests())("template Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_delete_index_template");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {

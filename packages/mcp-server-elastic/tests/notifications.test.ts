@@ -18,7 +18,7 @@ describe("Notification System", () => {
 			sendNotification: mockSendNotification,
 			signal: new AbortController().signal,
 			requestId: "test-request",
-		} as any;
+		} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 	});
 
 	it("should create notification manager", () => {

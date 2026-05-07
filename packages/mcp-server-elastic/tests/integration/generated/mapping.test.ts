@@ -125,7 +125,7 @@ describe.skipIf(shouldSkipIntegrationTests())("mapping Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_clear_sql_cursor");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -142,7 +142,7 @@ describe.skipIf(shouldSkipIntegrationTests())("mapping Tools - Real Integration 
 		test("elasticsearch_clear_sql_cursor should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_clear_sql_cursor");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -165,7 +165,7 @@ describe.skipIf(shouldSkipIntegrationTests())("mapping Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_get_field_mapping");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -183,7 +183,7 @@ describe.skipIf(shouldSkipIntegrationTests())("mapping Tools - Real Integration 
 		test("elasticsearch_get_field_mapping should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_field_mapping");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {

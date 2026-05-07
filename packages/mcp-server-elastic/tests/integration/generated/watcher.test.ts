@@ -147,7 +147,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_get_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -163,7 +163,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_get_watch should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_get_watch");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -186,7 +186,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_deactivate_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -202,7 +202,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_deactivate_watch should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_deactivate_watch");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -225,7 +225,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_stats");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -243,7 +243,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_stats should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_stats");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -266,7 +266,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_activate_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -282,7 +282,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_activate_watch should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_activate_watch");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -305,7 +305,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_start");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -323,7 +323,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_start should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_start");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -346,7 +346,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_stop");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -364,7 +364,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_stop should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_stop");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -387,7 +387,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_query_watches");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -405,7 +405,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_query_watches should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_query_watches");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -428,7 +428,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_execute_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -444,7 +444,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_execute_watch should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_execute_watch");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -467,7 +467,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_get_settings");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -485,7 +485,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_get_settings should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_get_settings");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -508,7 +508,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_ack_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -524,7 +524,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 		test("elasticsearch_watcher_ack_watch should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_watcher_ack_watch");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -549,7 +549,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_delete_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {
@@ -571,7 +571,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_update_settings");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {
@@ -593,7 +593,7 @@ describe.skipIf(shouldSkipIntegrationTests())("watcher Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_watcher_put_watch");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index

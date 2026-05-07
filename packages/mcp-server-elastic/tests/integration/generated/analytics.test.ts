@@ -125,7 +125,7 @@ describe.skipIf(shouldSkipIntegrationTests())("analytics Tools - Real Integratio
 			const tool = getToolFromServer(server, "elasticsearch_get_term_vectors");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -142,7 +142,7 @@ describe.skipIf(shouldSkipIntegrationTests())("analytics Tools - Real Integratio
 		test("elasticsearch_get_term_vectors should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_term_vectors");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -166,7 +166,7 @@ describe.skipIf(shouldSkipIntegrationTests())("analytics Tools - Real Integratio
 			const tool = getToolFromServer(server, "elasticsearch_get_multi_term_vectors");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -183,7 +183,7 @@ describe.skipIf(shouldSkipIntegrationTests())("analytics Tools - Real Integratio
 		test("elasticsearch_get_multi_term_vectors should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_multi_term_vectors");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {

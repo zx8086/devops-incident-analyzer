@@ -129,7 +129,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_get_nodes_info");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -147,7 +147,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 		test("elasticsearch_get_nodes_info should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_nodes_info");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -170,7 +170,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_get_nodes_stats");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -188,7 +188,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 		test("elasticsearch_get_nodes_stats should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_nodes_stats");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -211,7 +211,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_get_cluster_stats");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -229,7 +229,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 		test("elasticsearch_get_cluster_stats should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_cluster_stats");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -252,7 +252,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 			const tool = getToolFromServer(server, "elasticsearch_get_cluster_health");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -271,7 +271,7 @@ describe.skipIf(shouldSkipIntegrationTests())("cluster Tools - Real Integration 
 		test("elasticsearch_get_cluster_health should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_cluster_health");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {

@@ -366,10 +366,15 @@ describe("Tool Parameter Validation Regression Tests", () => {
 describe("Tool Integration Tests", () => {
 	test("should simulate full MCP parameter extraction", () => {
 		// Mock MCP server tool registration
-		const registeredTools: any[] = [];
+		interface RegisteredTool {
+			name: string;
+			schema: unknown;
+			handler: (args: unknown) => unknown;
+		}
+		const registeredTools: RegisteredTool[] = [];
 
 		const mockMcpServer = {
-			tool: (name: string, _description: string, schema: any, handler: any) => {
+			tool: (name: string, _description: string, schema: unknown, handler: (args: unknown) => unknown) => {
 				registeredTools.push({ name, schema, handler });
 			},
 		};
@@ -380,7 +385,7 @@ describe("Tool Integration Tests", () => {
 			settings: z.object({}).passthrough().describe("Index settings to update"),
 		};
 
-		mockMcpServer.tool("test_tool", "Test tool", testSchema, async (args: any) => args);
+		mockMcpServer.tool("test_tool", "Test tool", testSchema, async (args: unknown) => args);
 
 		expect(registeredTools).toHaveLength(1);
 		expect(registeredTools[0].name).toBe("test_tool");

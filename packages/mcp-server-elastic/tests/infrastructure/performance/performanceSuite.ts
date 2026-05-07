@@ -91,7 +91,7 @@ class PerformanceTestSuite {
 
 	public async runPerformanceTest(
 		toolName: string,
-		args: any,
+		args: unknown,
 		iterations: number = 100,
 	): Promise<PerformanceBenchmark> {
 		console.log(`Running performance test for ${toolName} (${iterations} iterations)`);
@@ -149,7 +149,7 @@ class PerformanceTestSuite {
 		return benchmark;
 	}
 
-	private async executeTool(toolName: string, _args: any): Promise<any> {
+	private async executeTool(toolName: string, _args: unknown): Promise<unknown> {
 		// Mock tool execution - in real implementation, this would call the actual tool
 		return new Promise((resolve) => {
 			// Simulate tool execution time based on tool type

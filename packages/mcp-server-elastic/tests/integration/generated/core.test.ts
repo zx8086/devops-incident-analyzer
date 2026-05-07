@@ -132,7 +132,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_search");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -151,7 +151,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		test("elasticsearch_search should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_search");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -175,7 +175,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_list_indices");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -194,7 +194,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		test("elasticsearch_list_indices should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_list_indices");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -218,7 +218,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_get_mappings");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -237,7 +237,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		test("elasticsearch_get_mappings should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_mappings");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -261,7 +261,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_indices_summary");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -280,7 +280,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		test("elasticsearch_indices_summary should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_indices_summary");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -304,7 +304,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_get_shards");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -323,7 +323,7 @@ describe.skipIf(shouldSkipIntegrationTests())("core Tools - Real Integration Tes
 		test("elasticsearch_get_shards should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_shards");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {

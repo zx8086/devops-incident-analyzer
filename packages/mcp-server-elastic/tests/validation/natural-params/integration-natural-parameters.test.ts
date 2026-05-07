@@ -16,28 +16,29 @@ console.log("INTEGRATION TEST - NATURAL PARAMETER SCHEMA");
 console.log("===============================================");
 
 describe("Integration Test - Natural Parameter Schema", () => {
+	type SearchHandler = (...args: unknown[]) => Promise<unknown>;
 	let mockServer: McpServer;
 	let mockClient: Client;
-	let searchHandler: Function;
+	let searchHandler: SearchHandler;
 
 	beforeAll(async () => {
 		console.log("Setting up integration test environment...");
 
 		// Create mock MCP server
 		mockServer = {
-			tool: (name: string, _description: string, _schema: any, handler: Function) => {
+			tool: (name: string, _description: string, _schema: unknown, handler: SearchHandler) => {
 				console.log(`Registered tool: ${name}`);
 				searchHandler = handler;
 			},
-			registerTool: (name: string, _metadata: any, handler: Function) => {
+			registerTool: (name: string, _metadata: unknown, handler: SearchHandler) => {
 				console.log(`Registered tool: ${name}`);
 				searchHandler = handler;
 			},
-		} as any;
+		} as unknown as McpServer;
 
 		// Create mock Elasticsearch client
 		mockClient = {
-			search: async (searchRequest: any) => {
+			search: async (searchRequest: Record<string, unknown> & { size?: number; aggs?: unknown; query?: { range?: Record<string, unknown> } }) => {
 				console.log("\nMock Elasticsearch search called with:");
 				console.log(JSON.stringify(searchRequest, null, 2));
 				console.log(`size: ${searchRequest.size}, hasAggs: ${!!searchRequest.aggs}`);
@@ -123,7 +124,7 @@ describe("Integration Test - Natural Parameter Schema", () => {
 					},
 				}),
 			},
-		} as any;
+		} as unknown as Client;
 
 		// Register the search tool
 		registerSearchTool(mockServer, mockClient);

@@ -209,9 +209,10 @@ class LangSmithTracingTester {
 		await this.runTest("Server Tool Method Override Pattern", async () => {
 			try {
 				// Create a mock MCP server
+				type ToolHandlerFn = (args: unknown) => unknown | Promise<unknown>;
 				const mockServer = {
 					originalToolCalled: false,
-					tool: function (name: string, description: string, inputSchema: any, handler: any) {
+					tool: function (name: string, description: string, inputSchema: unknown, handler: ToolHandlerFn) {
 						this.originalToolCalled = true;
 						return { name, description, inputSchema, handler };
 					},
@@ -221,9 +222,14 @@ class LangSmithTracingTester {
 				const originalTool = mockServer.tool.bind(mockServer);
 				let tracingApplied = false;
 
-				mockServer.tool = (name: string, description: string, inputSchema: any, handler: any) => {
+				mockServer.tool = (
+					name: string,
+					description: string,
+					inputSchema: unknown,
+					handler: ToolHandlerFn,
+				) => {
 					// Simulate the tracing wrapper
-					const enhancedHandler = async (args: any) => {
+					const enhancedHandler = async (args: unknown) => {
 						tracingApplied = true;
 						return handler(args);
 					};
@@ -404,7 +410,7 @@ class LangSmithTracingTester {
 		console.log("");
 	}
 
-	private async runTest(name: string, testFn: () => any): Promise<void> {
+	private async runTest(name: string, testFn: () => unknown): Promise<void> {
 		const startTime = Date.now();
 
 		try {

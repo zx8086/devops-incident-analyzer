@@ -434,8 +434,9 @@ describe.skipIf(shouldSkipIntegrationTests())("Real Elasticsearch Integration Te
 					},
 				});
 				expect(true).toBe(false); // Should not reach here
-			} catch (error: any) {
-				expect(error.message || error.toString()).toMatch(/index/);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				expect(message).toMatch(/index/);
 			}
 		});
 
@@ -453,8 +454,9 @@ describe.skipIf(shouldSkipIntegrationTests())("Real Elasticsearch Integration Te
 					},
 				});
 				expect(true).toBe(false); // Should not reach here
-			} catch (error: any) {
-				expect(error.message || error.toString()).toMatch(/query|parsing/);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				expect(message).toMatch(/query|parsing/);
 			}
 		});
 	});

@@ -9,7 +9,7 @@ import type {
 import { notificationManager, withNotificationContext } from "../../src/utils/notifications.js";
 
 describe("Notification System Fix", () => {
-	let mockSendNotification: jest.MockedFunction<any>;
+	let mockSendNotification: jest.MockedFunction<(...args: unknown[]) => unknown>;
 	let mockExtra: RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 	beforeEach(() => {
@@ -21,7 +21,7 @@ describe("Notification System Fix", () => {
 			sendNotification: mockSendNotification,
 			signal: new AbortController().signal,
 			requestId: "test-request-123",
-		} as any;
+		} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 		// Clear any existing context
 		notificationManager.clearRequestContext();
