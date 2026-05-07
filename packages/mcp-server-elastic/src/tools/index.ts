@@ -244,6 +244,16 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 			"elasticsearch_exists_index_template",
 			"elasticsearch_exists_template",
 			"elasticsearch_explain_data_lifecycle",
+			// SIO-674: Elastic Cloud Deployment + Billing API. All read-only in V1; the write
+			// tool (cloud_update_deployment) is deferred. JSON-only request/response shapes
+			// would false-positive on the SQL-injection regex without this allowlist entry.
+			"elasticsearch_cloud_list_deployments",
+			"elasticsearch_cloud_get_deployment",
+			"elasticsearch_cloud_get_plan_activity",
+			"elasticsearch_cloud_get_plan_history",
+			"elasticsearch_billing_get_org_costs",
+			"elasticsearch_billing_get_deployment_costs",
+			"elasticsearch_billing_get_org_charts",
 		];
 		const shouldValidate = !readOnlyTools.includes(name);
 

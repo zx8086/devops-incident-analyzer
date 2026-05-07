@@ -2,6 +2,7 @@
 
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CloudClient } from "../clients/cloudClient.js";
 
 // Common Elasticsearch parameter types
 export type ExpandWildcards = "open" | "closed" | "hidden" | "none" | "all";
@@ -65,3 +66,8 @@ export type ToolFunction = (server: McpServer, esClient: Client) => void;
 
 // Tool registration function type
 export type ToolRegistrationFunction = (server: McpServer, esClient: Client) => void;
+
+// SIO-674: Parallel signature for tools that target the org-scoped Elastic Cloud API
+// (api.elastic-cloud.com). Kept separate from ToolRegistrationFunction so the existing ES
+// tools don't have to know about the cloud client.
+export type CloudToolRegistrationFunction = (server: McpServer, cloudClient: CloudClient) => void;

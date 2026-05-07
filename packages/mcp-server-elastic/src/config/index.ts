@@ -14,10 +14,11 @@ export { defaultConfig } from "./defaults.js";
 export { listDeploymentIds, loadDeploymentFromEnv } from "./deployments.js";
 export { envVarMapping } from "./envMapping.js";
 export { validateEnvironment } from "./loader.js";
-export type { Config, DeploymentConfig } from "./schemas.js";
+export type { Config, DeploymentConfig, ElasticCloudConfig } from "./schemas.js";
 export {
 	ConfigSchema,
 	DeploymentConfigSchema,
+	ElasticCloudConfigSchema,
 	ElasticsearchConfigSchema,
 	LangSmithConfigSchema,
 	LoggingConfigSchema,

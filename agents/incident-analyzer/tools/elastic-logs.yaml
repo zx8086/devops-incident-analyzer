@@ -8,7 +8,20 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics]
+      enum:
+        - search
+        - cluster_health
+        - node_info
+        - index_management
+        - shard_analysis
+        - ingest_pipeline
+        - template_management
+        - alias_management
+        - document_ops
+        - snapshot
+        - diagnostics
+        - cloud_deployment
+        - billing
       description: Type of Elasticsearch operation to perform
     service_name:
       type: string
@@ -151,3 +164,15 @@ tool_mapping:
       - elasticsearch_list_tasks
       - elasticsearch_tasks_get_task
       - elasticsearch_get_field_mapping
+    # SIO-674: Elastic Cloud Deployment API tools (api.elastic-cloud.com). Only register
+    # when EC_API_KEY is set; otherwise the agent should not select this action.
+    cloud_deployment:
+      - elasticsearch_cloud_list_deployments
+      - elasticsearch_cloud_get_deployment
+      - elasticsearch_cloud_get_plan_activity
+      - elasticsearch_cloud_get_plan_history
+    # SIO-674: Elastic Cloud Billing Costs Analysis API tools.
+    billing:
+      - elasticsearch_billing_get_org_costs
+      - elasticsearch_billing_get_deployment_costs
+      - elasticsearch_billing_get_org_charts

@@ -1,9 +1,9 @@
 // src/config/loader.ts
 
-import { defaultConfig } from "./defaults.js";
+import { cloudDefaults, defaultConfig } from "./defaults.js";
 import { listDeploymentIds, loadDeploymentFromEnv } from "./deployments.js";
 import { envVarMapping } from "./envMapping.js";
-import type { Config, DeploymentConfig } from "./schemas.js";
+import type { Config, DeploymentConfig, ElasticCloudConfig } from "./schemas.js";
 import { ConfigSchema } from "./schemas.js";
 
 function parseEnvVar(value: string | undefined, type: "string" | "number" | "boolean"): unknown {
@@ -159,6 +159,25 @@ function loadConfigFromEnv(): Partial<Config> {
 			defaultConfig.langsmith.project,
 	};
 
+	// SIO-674: Cloud / Billing config. Only populated when EC_API_KEY is set so self-hosted
+	// ES users see config.cloud === undefined and the cloud tools never register.
+	const cloudApiKey = parseEnvVar(Bun.env[envVarMapping.cloud.apiKey], "string") as string | undefined;
+	if (cloudApiKey) {
+		const cloud: ElasticCloudConfig = {
+			apiKey: cloudApiKey,
+			endpoint:
+				(parseEnvVar(Bun.env[envVarMapping.cloud.endpoint], "string") as string | undefined) ?? cloudDefaults.endpoint,
+			defaultOrgId: parseEnvVar(Bun.env[envVarMapping.cloud.defaultOrgId], "string") as string | undefined,
+			requestTimeout:
+				(parseEnvVar(Bun.env[envVarMapping.cloud.requestTimeout], "number") as number | undefined) ??
+				cloudDefaults.requestTimeout,
+			maxRetries:
+				(parseEnvVar(Bun.env[envVarMapping.cloud.maxRetries], "number") as number | undefined) ??
+				cloudDefaults.maxRetries,
+		};
+		config.cloud = cloud;
+	}
+
 	// Load Session Tracking config
 	config.sessionTracking = {
 		enabled:
@@ -248,6 +267,25 @@ export function validateEnvironment(): { valid: boolean; errors: string[]; warni
 		warnings.push("READ_ONLY_STRICT_MODE is enabled but READ_ONLY_MODE is disabled. STRICT_MODE will have no effect.");
 	}
 
+	// SIO-674: Cloud / Billing API surface. Optional -- absence is a warning, not an error,
+	// because self-hosted ES deployments don't need the Cloud API.
+	const cloudApiKey = Bun.env.EC_API_KEY;
+	const cloudEndpoint = Bun.env.EC_API_ENDPOINT;
+	if (!cloudApiKey) {
+		warnings.push(
+			"EC_API_KEY not set. Elastic Cloud Deployment + Billing tools (elasticsearch_cloud_*, elasticsearch_billing_*) will not register.",
+		);
+	} else if (cloudEndpoint) {
+		try {
+			const url = new URL(cloudEndpoint);
+			if (!url.protocol.startsWith("http")) {
+				errors.push("EC_API_ENDPOINT must use http or https protocol");
+			}
+		} catch (_e) {
+			errors.push("EC_API_ENDPOINT is not a valid URL format");
+		}
+	}
+
 	return {
 		valid: errors.length === 0,
 		errors,
@@ -285,6 +323,9 @@ export function loadConfig(): LoadConfigResult {
 		security: { ...defaultConfig.security, ...envConfig.security },
 		langsmith: { ...defaultConfig.langsmith, ...envConfig.langsmith },
 		sessionTracking: { ...defaultConfig.sessionTracking, ...envConfig.sessionTracking },
+		// SIO-674: Spread cloud only when EC_API_KEY produced a config -- keeps `cloud` undefined
+		// for self-hosted users so the cloud tools never register.
+		...(envConfig.cloud && { cloud: envConfig.cloud }),
 	};
 
 	// Validate merged configuration against schemas

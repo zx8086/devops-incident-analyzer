@@ -1,5 +1,5 @@
 // src/config/defaults.ts
-import type { Config } from "./schemas.js";
+import type { Config, ElasticCloudConfig } from "./schemas.js";
 
 export const defaultConfig: Config = {
 	server: {
@@ -54,4 +54,13 @@ export const defaultConfig: Config = {
 		maxConcurrentSessions: 100,
 		conversationDetectionThresholdSeconds: 30, // Detect new conversation after 30s gap
 	},
+};
+
+// SIO-674: Cloud defaults are kept separate from defaultConfig because config.cloud must
+// remain undefined when EC_API_KEY is unset -- the loader merges these in only when the key
+// is present so self-hosted ES users see no cloud surface.
+export const cloudDefaults: Omit<ElasticCloudConfig, "apiKey" | "defaultOrgId"> = {
+	endpoint: "https://api.elastic-cloud.com",
+	requestTimeout: 30000,
+	maxRetries: 3,
 };
