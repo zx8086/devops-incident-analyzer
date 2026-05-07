@@ -2,63 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { evaluate } from "../../src/correlation/engine";
 import { correlationRules } from "../../src/correlation/rules";
-import type { AgentStateType } from "../../src/state";
-
-function baseState(): AgentStateType {
-	return {
-		messages: [],
-		attachmentMeta: [],
-		queryComplexity: "complex",
-		targetDataSources: [],
-		targetDeployments: [],
-		dataSourceResults: [],
-		currentDataSource: "",
-		extractedEntities: { dataSources: [] },
-		previousEntities: { dataSources: [] },
-		toolPlanMode: "autonomous",
-		toolPlan: [],
-		validationResult: "pass",
-		retryCount: 0,
-		alignmentRetries: 0,
-		alignmentHints: [],
-		skippedDataSources: [],
-		isFollowUp: false,
-		finalAnswer: "",
-		dataSourceContext: undefined,
-		requestId: "test",
-		suggestions: [],
-		normalizedIncident: {},
-		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
-		confidenceScore: 0,
-		lowConfidence: false,
-		pendingActions: [],
-		actionResults: [],
-		selectedRunbooks: null,
-		degradedRules: [],
-		confidenceCap: undefined,
-		pendingCorrelations: [],
-	} as AgentStateType;
-}
-
-function withKafkaResult(state: AgentStateType, data: unknown): AgentStateType {
-	return {
-		...state,
-		dataSourceResults: [
-			...state.dataSourceResults,
-			{ dataSourceId: "kafka", status: "success", data, duration: 100 } as never,
-		],
-	};
-}
-
-function withElasticResult(state: AgentStateType, data: unknown): AgentStateType {
-	return {
-		...state,
-		dataSourceResults: [
-			...state.dataSourceResults,
-			{ dataSourceId: "elastic", status: "success", data, duration: 100 } as never,
-		],
-	};
-}
+import { baseState, withElasticResult, withKafkaResult } from "./test-helpers";
 
 describe("correlation engine — kafka-empty-or-dead-groups", () => {
 	test("fires when at least one Empty or Dead group exists", () => {
