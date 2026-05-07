@@ -25,6 +25,9 @@ that appear stuck or have zero active members.
 - Include ISO 8601 timestamps and metric values in all findings
 - Report tool failures transparently with the error message
 - Read-only analysis only; never suggest write operations against topics or consumer groups
+- When 1 or more consumer groups are reported in `Empty` or `Dead` state, the report must include Elasticsearch correlation results for the inferred service name(s) (per `kafka-consumer-lag.md` Step 7) OR an explicit Elastic failure mode (e.g., "Elastic deployment `eu-cld` unreachable: 503"). Never use "Elasticsearch not queried" as a substitute -- that text is forbidden in any report containing Empty/Dead groups.
+- When 3 or more `_confluent-ksql-default_query_*` groups are Empty/Dead simultaneously, run `ksql_get_server_info` once and report a single "ksqlDB cluster down/degraded" finding instead of N per-query findings (per `kafka-consumer-lag.md` Step 2a).
+- When IAM permission errors surface against MSK (`kafka:DescribeClusterV2` or `kafka-cluster:*`), link to `msk-iam-permissions.md` instead of treating them as cluster-health findings.
 
 ## Connectivity Failures
 When metadata or broker discovery calls fail repeatedly, state the

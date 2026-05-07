@@ -6,9 +6,84 @@ import {
 	ConfigResourceTypes,
 	type ListedOffsetsTopic,
 	ListOffsetTimestamps,
+	MultipleErrors,
 } from "@platformatic/kafka";
 import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
+
+// Kafka protocol error codes most likely to surface from a Fetch RPC
+// (KIP-580 / kafka-clients). Used to classify ResponseError children
+// instead of letting MCP return a generic -32603 with the raw library
+// string "API Fetch(v16) error".
+const KAFKA_ERROR_NAMES: Record<number, string> = {
+	1: "OFFSET_OUT_OF_RANGE",
+	3: "UNKNOWN_TOPIC_OR_PARTITION",
+	5: "LEADER_NOT_AVAILABLE",
+	6: "NOT_LEADER_OR_FOLLOWER",
+	7: "REQUEST_TIMED_OUT",
+	9: "REPLICA_NOT_AVAILABLE",
+	13: "NETWORK_EXCEPTION",
+	16: "NOT_COORDINATOR",
+	17: "INVALID_TOPIC_EXCEPTION",
+	29: "TOPIC_AUTHORIZATION_FAILED",
+	30: "GROUP_AUTHORIZATION_FAILED",
+	31: "CLUSTER_AUTHORIZATION_FAILED",
+	35: "UNSUPPORTED_VERSION",
+	74: "FENCED_LEADER_EPOCH",
+	75: "UNKNOWN_LEADER_EPOCH",
+	100: "UNKNOWN_TOPIC_ID",
+};
+
+interface ClassifiedKafkaError {
+	kafkaErrorCode: number | null;
+	kafkaErrorName: string | null;
+	message: string;
+}
+
+function classifyKafkaError(err: unknown): ClassifiedKafkaError {
+	const message = err instanceof Error ? err.message : String(err);
+	if (!(err instanceof MultipleErrors)) {
+		return { kafkaErrorCode: null, kafkaErrorName: null, message };
+	}
+	for (const child of err.errors) {
+		const code = (child as { errorCode?: number }).errorCode;
+		if (typeof code === "number" && code !== 0) {
+			return {
+				kafkaErrorCode: code,
+				kafkaErrorName: KAFKA_ERROR_NAMES[code] ?? null,
+				message,
+			};
+		}
+	}
+	return { kafkaErrorCode: null, kafkaErrorName: null, message };
+}
+
+async function getPartitionOffsetBounds(
+	admin: Admin,
+	topic: string,
+	partition: number,
+): Promise<{ earliest: bigint; latest: bigint } | null> {
+	const result = (await admin.listOffsets({
+		topics: [
+			{
+				name: topic,
+				partitions: [
+					{ partitionIndex: partition, timestamp: ListOffsetTimestamps.EARLIEST },
+					{ partitionIndex: partition, timestamp: ListOffsetTimestamps.LATEST },
+				],
+			},
+		],
+	})) as unknown as Array<{
+		name: string;
+		partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
+	}>;
+	const topicResult = result.find((t) => t.name === topic);
+	if (!topicResult) return null;
+	const earliestPart = topicResult.partitions.find((p) => p.timestamp === ListOffsetTimestamps.EARLIEST);
+	const latestPart = topicResult.partitions.find((p) => p.timestamp === ListOffsetTimestamps.LATEST);
+	if (!earliestPart || !latestPart) return null;
+	return { earliest: earliestPart.offset, latest: latestPart.offset };
+}
 
 // @platformatic/kafka doesn't support partitionIndex=-1 (all partitions) in listOffsets.
 async function getPartitionIndices(admin: Admin, topicName: string): Promise<number[]> {
@@ -79,6 +154,35 @@ export interface ResetOffsetsInput {
 	strategy: "earliest" | "latest" | "timestamp";
 	timestamp?: number;
 }
+
+export interface FormattedMessage {
+	topic: string;
+	partition: number;
+	offset: string;
+	key: string | null;
+	value: string | null;
+	timestamp: string;
+	headers: Record<string, string>;
+}
+
+export type GetMessageByOffsetResult =
+	| { status: "ok"; message: FormattedMessage }
+	| {
+			status: "out_of_range";
+			topic: string;
+			partition: number;
+			requestedOffset: string;
+			earliestOffset: string;
+			latestOffset: string;
+			message: string;
+	  }
+	| {
+			status: "error";
+			code: "PARTITION_NOT_FOUND" | "TIMEOUT" | "BROKER_ERROR";
+			kafkaErrorCode?: number | null;
+			kafkaErrorName?: string | null;
+			message: string;
+	  };
 
 export class KafkaService {
 	constructor(private readonly clientManager: KafkaClientManager) {}
@@ -441,27 +545,40 @@ export class KafkaService {
 		});
 	}
 
-	async getMessageByOffset(
-		topic: string,
-		partition: number,
-		offset: number,
-	): Promise<{
-		topic: string;
-		partition: number;
-		offset: string;
-		key: string | null;
-		value: string | null;
-		timestamp: string;
-		headers: Record<string, string>;
-	} | null> {
+	async getMessageByOffset(topic: string, partition: number, offset: number): Promise<GetMessageByOffsetResult> {
 		logger.debug({ topic, partition, offset }, "Getting message by offset");
+		const requestedOffset = BigInt(offset);
+
+		const bounds = await this.clientManager.withAdmin((admin) => getPartitionOffsetBounds(admin, topic, partition));
+		if (!bounds) {
+			return {
+				status: "error",
+				code: "PARTITION_NOT_FOUND",
+				message: `Partition ${partition} of topic '${topic}' not found in broker metadata.`,
+			};
+		}
+		if (requestedOffset < bounds.earliest || requestedOffset >= bounds.latest) {
+			return {
+				status: "out_of_range",
+				topic,
+				partition,
+				requestedOffset: requestedOffset.toString(),
+				earliestOffset: bounds.earliest.toString(),
+				latestOffset: bounds.latest.toString(),
+				message:
+					requestedOffset < bounds.earliest
+						? "Offset is older than the partition log start (likely deleted by retention)."
+						: "Offset is at or beyond the high watermark (no message has been produced at this offset yet).",
+			};
+		}
+
 		const groupId = `mcp-seek-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
 
 		try {
 			const stream = await consumer.consume({
 				topics: [topic],
-				offsets: [{ topic, partition, offset: BigInt(offset) }],
+				offsets: [{ topic, partition, offset: requestedOffset }],
 				mode: "manual",
 				autocommit: false,
 				maxFetches: 1,
@@ -471,17 +588,30 @@ export class KafkaService {
 
 			for await (const msg of stream as AsyncIterable<Message<Buffer, Buffer, Buffer, Buffer>>) {
 				const formatted = formatMessage(msg);
-				if (msg.partition === partition && msg.offset === BigInt(offset)) {
+				if (msg.partition === partition && msg.offset === requestedOffset) {
 					await stream.close();
-					return formatted;
+					return { status: "ok", message: formatted };
 				}
-				if (msg.offset > BigInt(offset) || Date.now() >= deadline) {
+				if (msg.offset > requestedOffset || Date.now() >= deadline) {
 					break;
 				}
 			}
 
 			await stream.close();
-			return null;
+			return {
+				status: "error",
+				code: "TIMEOUT",
+				message: `No message at offset ${offset} of ${topic}:${partition} within 15s deadline (consumer drained without finding the requested offset).`,
+			};
+		} catch (err) {
+			const classified = classifyKafkaError(err);
+			return {
+				status: "error",
+				code: "BROKER_ERROR",
+				kafkaErrorCode: classified.kafkaErrorCode,
+				kafkaErrorName: classified.kafkaErrorName,
+				message: classified.message,
+			};
 		} finally {
 			if (!consumer.closed) {
 				await consumer.close().catch(() => {});
@@ -665,15 +795,7 @@ export class KafkaService {
 	}
 }
 
-function formatMessage(msg: Message<Buffer, Buffer, Buffer, Buffer>): {
-	topic: string;
-	partition: number;
-	offset: string;
-	key: string | null;
-	value: string | null;
-	timestamp: string;
-	headers: Record<string, string>;
-} {
+function formatMessage(msg: Message<Buffer, Buffer, Buffer, Buffer>): FormattedMessage {
 	const headers: Record<string, string> = {};
 	if (msg.headers) {
 		for (const [k, v] of msg.headers) {
