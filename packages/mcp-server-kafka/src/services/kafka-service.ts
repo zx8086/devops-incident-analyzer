@@ -8,6 +8,7 @@ import {
 	ListOffsetTimestamps,
 	MultipleErrors,
 } from "@platformatic/kafka";
+import type { DlqTopic } from "../config/schemas.ts";
 import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
 
@@ -127,6 +128,16 @@ async function getClusterMetadata(admin: Admin): Promise<{
 	});
 }
 
+const DLQ_PATTERNS = [/-dlq$/, /^dlt-/, /-dead-letter$/, /^dead-letter-/, /\.DLQ$/];
+
+// Number of DLQ topics sampled concurrently per batch to avoid overloading brokers.
+const DLQ_PARALLEL_BATCH_SIZE = 20;
+
+export interface ListDlqTopicsOptions {
+	skipDelta?: boolean;
+	windowMs?: number;
+}
+
 export interface ConsumeMessagesOptions {
 	topic: string;
 	maxMessages: number;
@@ -184,6 +195,38 @@ export type GetMessageByOffsetResult =
 			message: string;
 	  };
 
+async function sampleOneDlqTopic(clientManager: KafkaClientManager, name: string): Promise<number> {
+	return clientManager.withAdmin(async (admin) => {
+		const partitions = await getPartitionIndices(admin, name);
+		let total = 0;
+		for (const partition of partitions) {
+			const bounds = await getPartitionOffsetBounds(admin, name, partition);
+			if (bounds) {
+				total += Number(bounds.latest - bounds.earliest);
+			}
+		}
+		return total;
+	});
+}
+
+async function sampleDlqOffsets(clientManager: KafkaClientManager, names: string[]): Promise<Map<string, number>> {
+	const result = new Map<string, number>();
+
+	for (let i = 0; i < names.length; i += DLQ_PARALLEL_BATCH_SIZE) {
+		const batch = names.slice(i, i + DLQ_PARALLEL_BATCH_SIZE);
+		const settled = await Promise.allSettled(batch.map((name) => sampleOneDlqTopic(clientManager, name)));
+		for (let j = 0; j < batch.length; j++) {
+			const outcome = settled[j];
+			if (outcome?.status === "fulfilled") {
+				result.set(batch[j] as string, outcome.value);
+			}
+			// Rejected outcomes are intentionally omitted so the caller can detect null delta.
+		}
+	}
+
+	return result;
+}
+
 export class KafkaService {
 	constructor(private readonly clientManager: KafkaClientManager) {}
 
@@ -200,6 +243,41 @@ export class KafkaService {
 
 			logger.debug({ count: filtered.length }, "Topics listed");
 			return filtered.map((name) => ({ name }));
+		});
+	}
+
+	async listDlqTopics(options?: ListDlqTopicsOptions): Promise<DlqTopic[]> {
+		logger.debug({ options: options ?? null }, "Listing DLQ topics");
+
+		const allTopics = await this.listTopics();
+		const dlqNames = allTopics.map((t) => t.name).filter((name) => DLQ_PATTERNS.some((p) => p.test(name)));
+
+		if (dlqNames.length === 0) {
+			return [];
+		}
+
+		const firstSample = await sampleDlqOffsets(this.clientManager, dlqNames);
+
+		if (options?.skipDelta === true) {
+			return dlqNames.map((name) => ({
+				name,
+				totalMessages: firstSample.get(name) ?? 0,
+				recentDelta: null,
+			}));
+		}
+
+		const windowMs = options?.windowMs ?? 30_000;
+		await new Promise<void>((resolve) => setTimeout(resolve, windowMs));
+
+		const secondSample = await sampleDlqOffsets(this.clientManager, dlqNames);
+
+		return dlqNames.map((name) => {
+			const first = firstSample.get(name);
+			const second = secondSample.get(name);
+			const totalMessages = first ?? 0;
+			// recentDelta is null only when the second sample entirely failed for this topic.
+			const recentDelta = second !== undefined ? second - (first ?? 0) : null;
+			return { name, totalMessages, recentDelta };
 		});
 	}
 
