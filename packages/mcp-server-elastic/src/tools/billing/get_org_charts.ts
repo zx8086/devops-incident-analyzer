@@ -8,11 +8,12 @@ import type { CloudToolRegistrationFunction, SearchResult, TextContent } from ".
 
 const TOOL_NAME = "elasticsearch_billing_get_org_charts";
 
+// SIO-678: v2 Billing API rejects "hourly" and requires from/to/bucketing_strategy.
 const validator = z.object({
 	org_id: z.string().min(1).optional(),
-	from: z.string().min(1).optional(),
-	to: z.string().min(1).optional(),
-	bucketing_strategy: z.enum(["hourly", "daily", "monthly"]).optional(),
+	from: z.string().min(1),
+	to: z.string().min(1),
+	bucketing_strategy: z.enum(["daily", "monthly"]),
 });
 
 type Params = z.infer<typeof validator>;
@@ -39,7 +40,8 @@ export const registerBillingGetOrgChartsTool: CloudToolRegistrationFunction = (s
 				},
 				`[${TOOL_NAME}] fetching org cost charts`,
 			);
-			const result = await cloudClient.get(`/api/v1/billing/costs/organizations/${encodeURIComponent(orgId)}/charts`, {
+			// SIO-678: v2 path -- charts live directly under /billing/organizations/{id}, not under /costs/.
+			const result = await cloudClient.get(`/api/v2/billing/organizations/${encodeURIComponent(orgId)}/charts`, {
 				query: {
 					from: params.from,
 					to: params.to,
@@ -70,7 +72,7 @@ export const registerBillingGetOrgChartsTool: CloudToolRegistrationFunction = (s
 		{
 			title: "Elastic Cloud Billing: org cost time-series",
 			description:
-				"Elastic Cloud Billing Costs Analysis API -- time-series cost data for charts and dashboards, bucketed hourly/daily/monthly. Use for quarterly trend analysis and value tracking against optimisation programmes. org_id falls back to EC_DEFAULT_ORG_ID. from/to are ISO 8601. READ operation.",
+				"Elastic Cloud Billing Charts API (v2) -- time-series cost data bucketed daily or monthly, broken down per deployment in each bucket via data[].values[] (each entry has id, name, type='deployment', value=ECU). Use for trend analysis and value tracking. org_id falls back to EC_DEFAULT_ORG_ID. from/to are required ISO 8601 timestamps; bucketing_strategy must be 'daily' or 'monthly' (the API rejects 'hourly'). READ operation.",
 			inputSchema: validator.shape,
 		},
 		handler,
