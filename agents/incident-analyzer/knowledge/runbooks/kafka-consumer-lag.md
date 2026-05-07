@@ -59,6 +59,15 @@ If the consumer writes to Couchbase, use `capella_get_completed_requests` and `c
 ## Known Configuration Gaps (don't re-flag as findings)
 - If `kafka_describe_cluster` returns incomplete broker metadata or any tool surfaces an `AccessDenied` / `kafka:DescribeClusterV2 not authorized` error against an MSK cluster, link to [`msk-iam-permissions.md`](./msk-iam-permissions.md) instead of treating it as a cluster-health finding. The fix is an IAM policy update on the MCP server's role, not a Kafka cluster issue.
 
+## Cluster Service Mapping
+When the runbook says "infer the service name and query Elastic / GitLab", use these per-cluster defaults to skip discovery:
+
+| Kafka cluster | Elastic deployment (`deployment` arg) | GitLab group (project paths) |
+|---------------|---------------------------------------|------------------------------|
+| `c72-shared-services-msk` (eu-central-1) | `eu-b2b` | `b2b-technologies` (use `b2b-technologies%2F<service>` as URL-encoded `project_id` if no numeric ID is known) |
+
+Other clusters not yet mapped here -- ask the operator before guessing.
+
 ## Recovery Actions (Require Human Approval)
 - Reset consumer offset to latest (data loss trade-off)
 - Scale consumer instances
