@@ -3,17 +3,46 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 
-export interface MockClient extends Partial<Client> {
-	indices: any;
-	search: any;
-	index: any;
-	get: any;
-	update: any;
-	delete: any;
-	bulk: any;
-	count: any;
-	cluster: any;
-	nodes: any;
+// Mock-shape sub-namespaces. Each method is a Bun mock returning a value
+// matching the SDK call signature loosely. The terminal `as unknown as Client`
+// cast lets test sites pass MockClient where the production code expects Client.
+type MockFn = ReturnType<typeof mock>;
+
+interface MockIndices {
+	exists?: MockFn;
+	create?: MockFn;
+	delete?: MockFn;
+	getMapping?: MockFn;
+	getSettings?: MockFn;
+	putMapping?: MockFn;
+	refresh?: MockFn;
+	flush?: MockFn;
+	[k: string]: MockFn | undefined;
+}
+
+interface MockCluster {
+	health?: MockFn;
+	stats?: MockFn;
+	[k: string]: MockFn | undefined;
+}
+
+interface MockNodes {
+	info?: MockFn;
+	stats?: MockFn;
+	[k: string]: MockFn | undefined;
+}
+
+export interface MockClient {
+	indices?: MockIndices;
+	search?: MockFn;
+	index?: MockFn;
+	get?: MockFn;
+	update?: MockFn;
+	delete?: MockFn;
+	bulk?: MockFn;
+	count?: MockFn;
+	cluster?: MockCluster;
+	nodes?: MockNodes;
 }
 
 export function createMockClient(overrides: Partial<MockClient> = {}): Client {
@@ -59,22 +88,53 @@ export function createMockClient(overrides: Partial<MockClient> = {}): Client {
 	return mockClient as unknown as Client;
 }
 
-export function createMockServer(): McpServer & { getTools: () => any[]; getTool: (name: string) => any } {
-	const tools: Map<string, any> = new Map();
-
-	return {
-		tool: mock((name: string, description: string, schema: any, handler: any) => {
-			tools.set(name, { name, description, schema, handler });
-		}),
-		registerTool: mock((name: string, metadata: any, handler: any) => {
-			tools.set(name, { name, description: metadata.description, schema: metadata.inputSchema, handler });
-		}),
-		getTools: () => Array.from(tools.values()),
-		getTool: (name: string) => tools.get(name),
-	} as unknown as McpServer & { getTools: () => any[]; getTool: (name: string) => any };
+// Shared shape for tools captured by the mock server's tool/registerTool calls.
+export interface CapturedTool {
+	name: string;
+	description: string;
+	schema: unknown;
+	handler: (...args: unknown[]) => unknown;
 }
 
-export function validateZodSchema(schema: z.ZodSchema<any>): void {
+export type MockServer = McpServer & {
+	getTools: () => CapturedTool[];
+	getTool: (name: string) => CapturedTool | undefined;
+};
+
+export function createMockServer(): MockServer {
+	const tools: Map<string, CapturedTool> = new Map();
+
+	return {
+		tool: mock(
+			(
+				name: string,
+				description: string,
+				schema: unknown,
+				handler: (...args: unknown[]) => unknown,
+			) => {
+				tools.set(name, { name, description, schema, handler });
+			},
+		),
+		registerTool: mock(
+			(
+				name: string,
+				metadata: { description?: string; inputSchema?: unknown },
+				handler: (...args: unknown[]) => unknown,
+			) => {
+				tools.set(name, {
+					name,
+					description: metadata.description ?? "",
+					schema: metadata.inputSchema,
+					handler,
+				});
+			},
+		),
+		getTools: () => Array.from(tools.values()),
+		getTool: (name: string) => tools.get(name),
+	} as unknown as MockServer;
+}
+
+export function validateZodSchema(schema: z.ZodTypeAny): void {
 	// Validate that the schema can parse valid data without throwing
 	expect(schema).toBeDefined();
 	expect(typeof schema.parse).toBe("function");
@@ -91,6 +151,7 @@ export function testToolRegistration(
 
 	const tool = mockServer.getTool(toolName);
 	expect(tool).toBeDefined();
+	if (!tool) return;
 	expect(tool.name).toBe(toolName);
 	expect(tool.description).toBeDefined();
 	expect(tool.schema).toBeDefined();
@@ -100,9 +161,9 @@ export function testToolRegistration(
 export async function testToolHandler(
 	toolName: string,
 	registerFunction: (server: McpServer, client: Client) => void,
-	args: any,
+	args: unknown,
 	clientOverrides: Partial<MockClient> = {},
-): Promise<any> {
+): Promise<unknown> {
 	const mockServer = createMockServer();
 	const mockClient = createMockClient(clientOverrides);
 
@@ -154,8 +215,21 @@ export function createTestMapping() {
 	};
 }
 
-export function createTestIndexList(numIndices = 3) {
-	const indices: any = {};
+interface CatIndicesEntry {
+	health: string;
+	status: string;
+	index: string;
+	uuid: string;
+	pri: string;
+	rep: string;
+	"docs.count": string;
+	"docs.deleted": string;
+	"store.size": string;
+	"pri.store.size": string;
+}
+
+export function createTestIndexList(numIndices = 3): Record<string, CatIndicesEntry> {
+	const indices: Record<string, CatIndicesEntry> = {};
 	for (let i = 0; i < numIndices; i++) {
 		indices[`index-${i + 1}`] = {
 			health: "green",

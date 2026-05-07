@@ -76,9 +76,9 @@ export function createElasticsearchClient(): Client {
 export async function safeCloseElasticsearchClient(client: Client): Promise<void> {
 	try {
 		await client.close();
-	} catch (error: any) {
+	} catch (error) {
 		// Only log unexpected errors - silently handle known pool.close issues
-		const errorMessage = error?.message || error?.toString() || "";
+		const errorMessage = error instanceof Error ? error.message : String(error);
 
 		// Silent handling for known @elastic/transport pool.close issues
 		if (errorMessage.includes("pool.close is not a function") || errorMessage.includes("this.pool.close")) {
@@ -120,8 +120,13 @@ export function shouldSkipIntegrationTests(): boolean {
  * Gets a registered tool from an McpServer by name.
  * Works with real McpServer instances (accesses internal _registeredTools).
  */
-export function getToolFromServer(server: any, toolName: string): { handler: Function } | undefined {
-	const tool = server._registeredTools?.[toolName];
+export function getToolFromServer(
+	server: unknown,
+	toolName: string,
+): { handler: (...args: unknown[]) => unknown } | undefined {
+	const internal = (server as { _registeredTools?: Record<string, { handler: (...args: unknown[]) => unknown }> })
+		._registeredTools;
+	const tool = internal?.[toolName];
 	if (!tool) return undefined;
 	return { handler: tool.handler };
 }
