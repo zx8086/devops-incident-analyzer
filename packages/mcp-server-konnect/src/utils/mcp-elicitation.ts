@@ -139,7 +139,7 @@ export class MCPElicitationManager {
 		missingFields: string[],
 		mcpContext: ElicitableMcpContext,
 	): Promise<Partial<KongDeploymentContext> | null> {
-		if (!mcpContext || !mcpContext.elicit) {
+		if (!mcpContext?.elicit) {
 			// Fallback for environments without MCP elicitation
 			log.warn("MCP elicitation not available, context required but cannot be gathered");
 			return null;

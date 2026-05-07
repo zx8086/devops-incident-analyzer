@@ -173,18 +173,20 @@ export class MandatoryElicitationGate {
 		}
 
 		// Validate responses contain all mandatory fields
-		const requiredFields = ["domain", "environment", "team"];
+		const requiredFields = ["domain", "environment", "team"] as const;
 		const missingFields = requiredFields.filter((field) => !responses[field]);
 
 		if (missingFields.length > 0) {
 			throw new Error(`ELICITATION INCOMPLETE: Missing responses for: ${missingFields.join(", ")}`);
 		}
 
-		// Create validated context from responses
+		// Create validated context from responses. The missingFields guard above
+		// asserts these three keys are non-empty strings, but TS can't propagate
+		// that narrowing across the index reads, so cast each to string.
 		const validatedContext: MandatoryContext = {
-			domain: responses.domain!,
-			environment: responses.environment!,
-			team: responses.team!,
+			domain: responses.domain as string,
+			environment: responses.environment as string,
+			team: responses.team as string,
 			sessionId,
 			elicitationComplete: true,
 			contextConfidence: 1.0, // Explicit user input = 100% confidence

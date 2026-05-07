@@ -93,7 +93,7 @@ async function testMcpParameterFlow() {
 
 	// Simulate the MCP tool registration and parameter flow
 	const _mockMcpServer = {
-		tool: (name: string, _description: string, schema: any, _handler: any) => {
+		tool: (name: string, _description: string, schema: unknown, _handler: (...args: unknown[]) => unknown) => {
 			console.log(`Testing MCP flow for ${name}`);
 
 			// This is what the MCP SDK does - it extracts parameters using the schema
@@ -106,7 +106,8 @@ async function testMcpParameterFlow() {
 				};
 
 				// The schema should properly extract these parameters
-				if (typeof schema === "object" && schema.index && schema.settings) {
+				const schemaShape = schema as { index?: unknown; settings?: unknown } | null;
+				if (typeof schema === "object" && schemaShape?.index && schemaShape?.settings) {
 					console.log(`  Schema has required fields for ${name}`);
 				} else {
 					console.log(`  Schema missing required fields for ${name}`);

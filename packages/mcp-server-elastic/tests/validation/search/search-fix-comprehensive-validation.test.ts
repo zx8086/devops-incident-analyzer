@@ -29,11 +29,11 @@ const SearchParams = z.object({
 	highlight: z.object({}).passthrough().optional(),
 });
 
-type SearchParamsType = z.infer<typeof SearchParams>;
+type _SearchParamsType = z.infer<typeof SearchParams>;
 
 // Mock security enhancer to test security bypass
-class MockSecurityEnhancer {
-	validateAndSanitizeInput(toolName: string, _input: any) {
+class _MockSecurityEnhancer {
+	validateAndSanitizeInput(toolName: string, _input: unknown) {
 		// Should not be called for search tools due to bypass
 		console.log(`Security validation called for ${toolName} - THIS SHOULD NOT HAPPEN!`);
 		throw new Error(`Security validation should be bypassed for ${toolName}`);

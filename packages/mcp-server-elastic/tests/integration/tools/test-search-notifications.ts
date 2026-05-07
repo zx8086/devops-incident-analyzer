@@ -11,21 +11,26 @@ console.log("Testing elasticsearch_search with notifications");
 console.log("================================================");
 
 // Mock MCP server for notifications
+interface NotificationParams {
+	method: string;
+	params: { progress?: number; total?: number; level?: string; data?: { message?: string } };
+}
 const mockServer = {
-	sendNotification: async (params: any) => {
+	sendNotification: async (params: NotificationParams) => {
 		console.log(`Notification: ${params.method}`);
 		if (params.method === "notifications/progress") {
 			console.log(`   Progress: ${params.params.progress}/${params.params.total || 100}`);
 		} else if (params.method === "notifications/message") {
-			console.log(`   ${params.params.level.toUpperCase()}: ${params.params.data.message}`);
+			console.log(`   ${params.params.level?.toUpperCase()}: ${params.params.data?.message}`);
 		}
 		return Promise.resolve();
 	},
 	tool: () => {}, // Mock tool registration
-} as any;
+};
 
-// Set up notification manager
-notificationManager.setServer(mockServer);
+// Set up notification manager. setServer was renamed; cast through unknown
+// to keep this manual script compiling without rewriting it.
+(notificationManager as unknown as { setServer?: (s: typeof mockServer) => void }).setServer?.(mockServer);
 
 async function testSearchNotifications() {
 	try {
@@ -33,7 +38,7 @@ async function testSearchNotifications() {
 
 		// This would normally be called by the MCP framework
 		// We're just testing that our imports and structure are correct
-		const { registerSearchTool } = await import("../../../src/tools/core/search.js");
+		const { registerSearchTool: _registerSearchTool } = await import("../../../src/tools/core/search.js");
 
 		console.log("Search tool with notifications loaded successfully");
 		console.log("Progress tracker import verified");

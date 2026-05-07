@@ -65,7 +65,7 @@ describe("Flight API Integration Tests", () => {
 
 			// Test each route configuration
 			flightRoutes.forEach((route, index) => {
-				const expectedRoute = TEST_CONFIG.routes[index]!;
+				const expectedRoute = TEST_CONFIG.routes[index] as (typeof TEST_CONFIG.routes)[number];
 				expect(route.name).toContain(expectedRoute.name);
 				expect(route.methods).toEqual(expectedRoute.methods);
 				expect(route.service.id).toBe(flightService.id);
@@ -613,14 +613,15 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 
 				// List tokens to verify creation
 				const tokens = await testUtils.listDataPlaneTokens();
-				const foundToken = tokens.tokens?.find((t: any) => t.name === tokenName);
+				const foundToken = tokens.tokens?.find((t: { name?: string }) => t.name === tokenName);
 				expect(foundToken).toBeDefined();
 
 				// Revoke token
 				await testUtils.revokeDataPlaneToken(token.tokenId);
 				console.log("SUCCESS: Revoked data plane token");
-			} catch (error: any) {
-				if (error.message.includes("404") || error.message.includes("not found")) {
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (message.includes("404") || message.includes("not found")) {
 					console.log("WARNING:  Data plane token operations not available - skipping test");
 					expect(true).toBe(true);
 				} else {
@@ -719,8 +720,9 @@ describe("Flight API Phase 1 Expansion Tests", () => {
 
 				// Clean up
 				await testUtils.deletePortal(portal.portalId);
-			} catch (error: any) {
-				if (error.message.includes("404") || error.message.includes("not found")) {
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (message.includes("404") || message.includes("not found")) {
 					console.log("WARNING:  Portal products endpoint not available - skipping test");
 					expect(true).toBe(true); // Pass test if endpoint doesn't exist
 				} else {

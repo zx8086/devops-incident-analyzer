@@ -15,19 +15,19 @@ import { NotificationManager } from "../../src/utils/notifications.js";
 describe("NotificationManager fixes", () => {
 	let mockExtra: RequestHandlerExtra<ServerRequest, ServerNotification>;
 	let notificationManager: NotificationManager;
-	let sentNotifications: any[] = [];
+	let sentNotifications: ServerNotification[] = [];
 
 	beforeEach(() => {
 		sentNotifications = [];
 
 		// Create a mock RequestHandlerExtra with sendNotification
 		mockExtra = {
-			sendNotification: async (notification: any) => {
+			sendNotification: async (notification: ServerNotification) => {
 				sentNotifications.push(notification);
 			},
 			signal: new AbortController().signal,
 			requestId: "test-request",
-		} as any;
+		} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 		notificationManager = new NotificationManager();
 		notificationManager.setRequestContext(mockExtra);
@@ -92,7 +92,7 @@ describe("NotificationManager fixes", () => {
 			},
 			signal: new AbortController().signal,
 			requestId: "test-request",
-		} as any;
+		} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 		const failingManager = new NotificationManager();
 		failingManager.setRequestContext(failingExtra);

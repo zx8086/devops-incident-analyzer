@@ -188,7 +188,8 @@ describe("list_indices SIO-655: sortOrder and sort correctness", () => {
 		const indices = JSON.parse(result.content[2].text) as Array<{ docsCount: string }>;
 		const counts = indices.map((r) => Number.parseInt(r.docsCount, 10));
 		for (let i = 1; i < counts.length; i++) {
-			expect(counts[i]).toBeLessThanOrEqual(counts[i - 1]!);
+			const prev = counts[i - 1] as number;
+			expect(counts[i]).toBeLessThanOrEqual(prev);
 		}
 		expect(parseSummary(result).sorted_by).toEqual({ key: "docs", order: "desc" });
 	});

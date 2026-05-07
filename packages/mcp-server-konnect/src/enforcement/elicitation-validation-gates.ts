@@ -38,6 +38,7 @@ export interface ElicitationResponse {
  * Converts blocked operation errors into user-friendly
  * elicitation requests with clear questions and guidance.
  */
+// biome-ignore lint/complexity/noStaticOnlyClass: namespacing for elicitation formatting; multiple call sites use the class.method pattern.
 export class ElicitationRequestFormatter {
 	/**
 	 * FORMAT BLOCKED OPERATION ERROR
@@ -167,6 +168,7 @@ export class ElicitationRequestFormatter {
  *
  * Validates user responses to elicitation requests
  */
+// biome-ignore lint/complexity/noStaticOnlyClass: namespacing for response validation; matches the formatter class style.
 export class ElicitationResponseValidator {
 	/**
 	 * VALIDATE ELICITATION RESPONSE

@@ -141,7 +141,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_get_index");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -160,7 +160,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 		test("elasticsearch_get_index should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_index");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -184,7 +184,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_get_index_settings");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -203,7 +203,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 		test("elasticsearch_get_index_settings should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_index_settings");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -229,7 +229,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_flush_index");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -251,7 +251,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_reindex_documents");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -274,7 +274,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_put_mapping");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -296,7 +296,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_index_exists");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -318,7 +318,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_refresh_index");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -340,7 +340,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_delete_index");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -362,7 +362,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_update_index_settings");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -385,7 +385,7 @@ describe.skipIf(shouldSkipIntegrationTests())("index_management Tools - Real Int
 			const tool = getToolFromServer(server, "elasticsearch_create_index");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index

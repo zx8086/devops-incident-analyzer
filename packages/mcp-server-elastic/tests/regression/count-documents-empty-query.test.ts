@@ -90,7 +90,7 @@ describe("elasticsearch_count_documents empty query regression", () => {
 		const finalQuery = isEmptyQuery ? undefined : params.query;
 
 		// Build the request that would be sent to Elasticsearch
-		const elasticsearchRequest: any = {
+		const elasticsearchRequest: { index: string; query?: unknown } = {
 			index: params.index,
 		};
 

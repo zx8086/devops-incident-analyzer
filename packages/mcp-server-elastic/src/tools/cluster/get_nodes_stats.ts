@@ -1,7 +1,7 @@
 /* src/tools/cluster/get_nodes_stats.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -24,13 +24,13 @@ const nodesStatsValidator = z.object({
 type NodesStatsParams = z.infer<typeof nodesStatsValidator>;
 
 // Helper function to format node stats summary
-function formatNodeStatsSummary(result: any): string {
+function formatNodeStatsSummary(result: estypes.NodesStatsResponse): string {
 	if (!result.nodes) return "No node statistics available";
 
 	const summary: string[] = ["## Node Statistics Summary\n"];
 
 	for (const [nodeId, node] of Object.entries(result.nodes)) {
-		const nodeStats = node as any;
+		const nodeStats = node as estypes.NodesStats;
 		summary.push(`### Node: ${nodeStats.name || nodeId}`);
 		summary.push(`- **ID**: ${nodeId}`);
 
@@ -158,7 +158,7 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 				const minimalResult = await esClient.nodes.stats(
 					{
 						node_id: nodeId,
-						metric: "os,jvm" as any, // Minimal useful metrics
+						metric: "os,jvm" as unknown as estypes.NodesStatsNodeStatsMetrics, // Minimal useful metrics
 						level: "node", // Node level stats
 						timeout: timeout,
 					},
@@ -196,8 +196,8 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 				const result = await esClient.nodes.stats(
 					{
 						node_id: nodeId,
-						metric: metric as any,
-						index_metric: "docs,store" as any, // Just document count and size
+						metric: metric as unknown as estypes.NodesStatsNodeStatsMetrics,
+						index_metric: "docs,store" as unknown as estypes.CommonStatsFlags, // Just document count and size
 						level: level,
 						timeout: timeout,
 					},
@@ -229,8 +229,8 @@ export const registerGetNodesStatsTool: ToolRegistrationFunction = (server: McpS
 			const result = await esClient.nodes.stats(
 				{
 					node_id: nodeId,
-					metric: metric as any,
-					index_metric: indexMetric as any,
+					metric: metric as unknown as estypes.NodesStatsNodeStatsMetrics,
+					index_metric: indexMetric as unknown as estypes.CommonStatsFlags,
 					level: level,
 					timeout: timeout,
 				},

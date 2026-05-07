@@ -3,7 +3,7 @@
 
 /* SIMPLIFIED VERSION: Direct JSON Schema + MCP Error Codes */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -61,11 +61,19 @@ export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, e
 					index: params.index,
 				});
 
+				// SDK's IlmExplainLifecycleLifecycleExplainManaged exposes failed_step
+				// at the top level; step_info / phase_execution shape isn't reflected
+				// in the type, so we narrow via a local extension.
+				type ExplainWithStep = estypes.IlmExplainLifecycleLifecycleExplainManaged & {
+					step_info?: { failed_step?: string; error?: unknown };
+					phase_execution?: { failed_step?: string };
+				};
+
 				// Check if any indices have failed steps
-				const hasFailedSteps = Object.values(explainResult.indices || {}).some(
-					(indexInfo: any) =>
-						indexInfo.step_info?.failed_step || indexInfo.phase_execution?.failed_step || indexInfo.step_info?.error,
-				);
+				const hasFailedSteps = Object.values(explainResult.indices || {}).some((indexInfo) => {
+					const ext = indexInfo as ExplainWithStep;
+					return ext.step_info?.failed_step || ext.phase_execution?.failed_step || ext.step_info?.error;
+				});
 
 				if (!hasFailedSteps) {
 					const indexNames = Object.keys(explainResult.indices || {});
@@ -78,7 +86,7 @@ export const registerRetryTool: ToolRegistrationFunction = (server: McpServer, e
 					{
 						index: params.index,
 						indicesWithErrors: Object.keys(explainResult.indices || {}).filter((name: string) => {
-							const indexInfo = explainResult.indices[name] as any;
+							const indexInfo = explainResult.indices[name] as ExplainWithStep;
 							return (
 								indexInfo.step_info?.failed_step || indexInfo.phase_execution?.failed_step || indexInfo.step_info?.error
 							);

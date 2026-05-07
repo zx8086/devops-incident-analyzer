@@ -12,9 +12,26 @@ const timestampAnalysisSchema = z.object({
 	sampleSize: z.number().min(1).max(1000).default(100),
 });
 
-type _TimestampAnalysisParams = z.infer<typeof timestampAnalysisSchema>;
+type TimestampAnalysisParams = z.infer<typeof timestampAnalysisSchema>;
 
-function formatTimestamp(ts: any): string {
+interface TimestampStats {
+	count?: number;
+	min?: number;
+	max?: number;
+	avg?: number;
+	sum?: number;
+}
+
+interface TopHitsAggregation {
+	hits?: {
+		hits?: Array<{
+			_id?: string;
+			_source?: Record<string, unknown>;
+		}>;
+	};
+}
+
+function formatTimestamp(ts: unknown): string {
 	if (typeof ts === "number") {
 		return new Date(ts).toISOString();
 	}
@@ -24,7 +41,7 @@ function formatTimestamp(ts: any): string {
 	return String(ts);
 }
 
-function analyzeTimestamp(ts: any): {
+function analyzeTimestamp(ts: unknown): {
 	formatted: string;
 	isValid: boolean;
 	isFuture: boolean;
@@ -66,7 +83,7 @@ function analyzeTimestamp(ts: any): {
 }
 
 export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, esClient: Client) => {
-	const handler = async (args: any): Promise<SearchResult> => {
+	const handler = async (args: TimestampAnalysisParams): Promise<SearchResult> => {
 		try {
 			const params = timestampAnalysisSchema.parse(args);
 			const { index, timestampField, sampleSize } = params;
@@ -108,9 +125,9 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 				_source: [timestampField, "service.name", "message"],
 			});
 
-			const stats = aggResult.aggregations?.timestamp_stats as any;
-			const earliest = (aggResult.aggregations?.earliest as any)?.hits?.hits?.[0];
-			const latest = (aggResult.aggregations?.latest as any)?.hits?.hits?.[0];
+			const stats = aggResult.aggregations?.timestamp_stats as TimestampStats | undefined;
+			const earliest = (aggResult.aggregations?.earliest as TopHitsAggregation | undefined)?.hits?.hits?.[0];
+			const latest = (aggResult.aggregations?.latest as TopHitsAggregation | undefined)?.hits?.hits?.[0];
 			const now = new Date();
 
 			let analysis = `# Timestamp Analysis for ${index}\n\n`;
@@ -137,12 +154,12 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 
 			// Analyze sample timestamps
 			const futureCount = sampleResult.hits.hits.filter((hit) => {
-				const ts = (hit._source as any)?.[timestampField];
+				const ts = (hit._source as Record<string, unknown> | undefined)?.[timestampField];
 				return analyzeTimestamp(ts).isFuture;
 			}).length;
 
 			const validCount = sampleResult.hits.hits.filter((hit) => {
-				const ts = (hit._source as any)?.[timestampField];
+				const ts = (hit._source as Record<string, unknown> | undefined)?.[timestampField];
 				return analyzeTimestamp(ts).isValid;
 			}).length;
 
@@ -158,10 +175,12 @@ export const registerTimestampAnalysisTool: ToolRegistrationFunction = (server, 
 
 			analysis += `## Recent Sample Documents\n`;
 			sampleResult.hits.hits.slice(0, 10).forEach((hit, i) => {
-				const ts = (hit._source as any)?.[timestampField];
+				const source = hit._source as Record<string, unknown> | undefined;
+				const ts = source?.[timestampField];
 				const tsAnalysis = analyzeTimestamp(ts);
-				const service = (hit._source as any)?.["service.name"] || "unknown";
-				const message = (hit._source as any)?.message || "no message";
+				const service = (source?.["service.name"] as string | undefined) || "unknown";
+				const rawMessage = source?.message;
+				const message = typeof rawMessage === "string" ? rawMessage : "no message";
 
 				analysis += `${i + 1}. **${hit._id}** (${service})\n`;
 				analysis += `   - Timestamp: ${tsAnalysis.formatted}\n`;

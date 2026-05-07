@@ -127,7 +127,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_list_tasks");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -145,7 +145,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 		test("elasticsearch_list_tasks should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_list_tasks");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -168,7 +168,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_tasks_get_task");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -184,7 +184,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 		test("elasticsearch_tasks_get_task should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_tasks_get_task");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -207,7 +207,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_tasks_cancel_task");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -225,7 +225,7 @@ describe.skipIf(shouldSkipIntegrationTests())("tasks Tools - Real Integration Te
 		test("elasticsearch_tasks_cancel_task should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_tasks_cancel_task");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);

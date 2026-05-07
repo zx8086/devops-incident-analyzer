@@ -1,6 +1,5 @@
 import type { MCPTool } from "../registry.js";
 import * as controlPlanesOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type {
 	CheckControlPlaneGroupMembershipArgs,
 	CreateControlPlaneArgs,
@@ -17,6 +16,7 @@ import type {
 	UpdateControlPlaneArgs,
 	UpdateControlPlaneConfigArgs,
 } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 export const controlPlanesTools = (): MCPTool[] => [

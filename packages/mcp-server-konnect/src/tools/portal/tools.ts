@@ -1,6 +1,5 @@
 import type { MCPTool } from "../registry.js";
 import * as portalOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type {
 	AuthenticateArgs,
 	CreateApplicationArgs,
@@ -25,6 +24,7 @@ import type {
 	UpdateApplicationArgs,
 	UpdateCredentialArgs,
 } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 export const portalTools = (): MCPTool[] => [

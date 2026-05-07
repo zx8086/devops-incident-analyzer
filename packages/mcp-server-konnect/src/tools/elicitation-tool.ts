@@ -8,7 +8,6 @@ import type { ElicitationRequest } from "../utils/elicitation.js";
 import { elicitationManager, kongElicitationPatterns } from "../utils/elicitation.js";
 import { elicitationBridge } from "../utils/elicitation-bridge.js";
 import { createContextLogger } from "../utils/logger.js";
-import { TagElicitationEngine } from "../utils/tag-elicitation.js";
 import type { MCPTool } from "./registry.js";
 
 const log = createContextLogger("elicitation");
@@ -68,11 +67,9 @@ export type GetSessionStatusArgs = z.infer<typeof getSessionStatusParameters>;
 // Tool implementations
 export class ElicitationOperations {
 	private migrationAnalyzer: MigrationAnalyzer;
-	private tagElicitationEngine: TagElicitationEngine;
 
 	constructor() {
 		this.migrationAnalyzer = new MigrationAnalyzer(elicitationManager, kongElicitationPatterns);
-		this.tagElicitationEngine = new TagElicitationEngine(elicitationManager);
 	}
 
 	/**
@@ -703,7 +700,6 @@ Returns:
 `,
 		parameters: getSessionStatusParameters,
 		category: "elicitation",
-		handler: async (args: GetSessionStatusArgs, { elicitationOps }) =>
-			elicitationOps.getSessionStatus(args.sessionId),
+		handler: async (args: GetSessionStatusArgs, { elicitationOps }) => elicitationOps.getSessionStatus(args.sessionId),
 	},
 ];

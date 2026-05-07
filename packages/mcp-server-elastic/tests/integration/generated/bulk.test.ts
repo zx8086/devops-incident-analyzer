@@ -125,7 +125,7 @@ describe.skipIf(shouldSkipIntegrationTests())("bulk Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_multi_get");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -142,7 +142,7 @@ describe.skipIf(shouldSkipIntegrationTests())("bulk Tools - Real Integration Tes
 		test("elasticsearch_multi_get should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_multi_get");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -166,7 +166,7 @@ describe.skipIf(shouldSkipIntegrationTests())("bulk Tools - Real Integration Tes
 			const tool = getToolFromServer(server, "elasticsearch_bulk_operations");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -183,7 +183,7 @@ describe.skipIf(shouldSkipIntegrationTests())("bulk Tools - Real Integration Tes
 		test("elasticsearch_bulk_operations should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_bulk_operations");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {

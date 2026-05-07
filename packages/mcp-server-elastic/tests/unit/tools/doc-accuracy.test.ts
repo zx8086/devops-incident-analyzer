@@ -2,9 +2,18 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
+interface DocTool {
+	name: string;
+	description: string;
+}
+interface GeneratedDocs {
+	paths?: Record<string, unknown>;
+	components?: { schemas?: Record<string, unknown> };
+}
+
 describe("Documentation Accuracy", () => {
-	let actualTools: any[] = [];
-	let generatedDocs: any = null;
+	let actualTools: DocTool[] = [];
+	let generatedDocs: GeneratedDocs | null = null;
 
 	beforeAll(async () => {
 		// Try to load actual tools from the system
@@ -72,7 +81,7 @@ describe("Documentation Accuracy", () => {
 	});
 
 	test("should have accurate parameter descriptions", () => {
-		if (!generatedDocs || !generatedDocs.components || !generatedDocs.components.schemas) {
+		if (!generatedDocs?.components?.schemas) {
 			console.log("No documentation schemas available, skipping parameter test");
 			return;
 		}
@@ -373,13 +382,13 @@ describe("Documentation Content Validation", () => {
 });
 
 // Helper functions
-async function discoverTools(): Promise<any[]> {
+async function discoverTools(): Promise<DocTool[]> {
 	// In a real implementation, this would discover tools from the actual codebase
 	// For now, return mock data that represents common tools
 	return createMockTools();
 }
 
-function createMockTools(): any[] {
+function createMockTools(): DocTool[] {
 	return [
 		{ name: "search", description: "Search documents" },
 		{ name: "list_indices", description: "List all indices" },

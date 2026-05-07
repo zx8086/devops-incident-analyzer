@@ -1,6 +1,5 @@
 import type { MCPTool } from "../registry.js";
 import * as portalManagementOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type {
 	CreatePortalParameters,
 	DeletePortalParameters,
@@ -11,6 +10,7 @@ import type {
 	UnpublishPortalProductParameters,
 	UpdatePortalParameters,
 } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 export const portalManagementTools = (): MCPTool[] => [
@@ -45,7 +45,8 @@ export const portalManagementTools = (): MCPTool[] => [
 		description: prompts.portalManagementPrompts["update-portal"],
 		parameters: parameters.updatePortalParametersSchema,
 		category: "portal-management",
-		handler: async (args: UpdatePortalParameters, { api }) => portalManagementOps.updatePortal(api, args.portalId, args),
+		handler: async (args: UpdatePortalParameters, { api }) =>
+			portalManagementOps.updatePortal(api, args.portalId, args),
 	},
 	{
 		method: "delete_portal",

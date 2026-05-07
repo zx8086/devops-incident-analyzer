@@ -1,6 +1,5 @@
 import type { MCPTool, ToolHandler } from "../registry.js";
 import * as configurationOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type {
 	CreateConsumerArgs,
 	CreatePluginArgs,
@@ -17,6 +16,7 @@ import type {
 	ListServicesArgs,
 	UpdateConsumerArgs,
 } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 // Mirrors the legacy server.ts switch default branch -- update/delete variants
@@ -99,7 +99,8 @@ export const configurationTools = (): MCPTool[] => [
 		description: prompts.getServicePrompt(),
 		parameters: parameters.getServiceParameters,
 		category: "configuration",
-		handler: async (args: GetServiceArgs, { api }) => configurationOps.getService(api, args.controlPlaneId, args.serviceId),
+		handler: async (args: GetServiceArgs, { api }) =>
+			configurationOps.getService(api, args.controlPlaneId, args.serviceId),
 	},
 	{
 		method: "update_service",
@@ -248,7 +249,8 @@ export const configurationTools = (): MCPTool[] => [
 		description: prompts.getPluginPrompt(),
 		parameters: parameters.getPluginParameters,
 		category: "configuration",
-		handler: async (args: GetPluginArgs, { api }) => configurationOps.getPlugin(api, args.controlPlaneId, args.pluginId),
+		handler: async (args: GetPluginArgs, { api }) =>
+			configurationOps.getPlugin(api, args.controlPlaneId, args.pluginId),
 	},
 	{
 		method: "update_plugin",

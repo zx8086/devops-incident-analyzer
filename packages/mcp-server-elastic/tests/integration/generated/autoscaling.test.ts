@@ -129,7 +129,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_get_policy");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -145,7 +145,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 		test("elasticsearch_autoscaling_get_policy should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_get_policy");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -168,7 +168,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_get_capacity");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			const result = await tool.handler(params);
 
@@ -186,7 +186,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 		test("elasticsearch_autoscaling_get_capacity should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_get_capacity");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			try {
 				const result = await tool.handler(params);
@@ -211,7 +211,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_put_policy");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {
@@ -233,7 +233,7 @@ describe.skipIf(shouldSkipIntegrationTests())("autoscaling Tools - Real Integrat
 			const tool = getToolFromServer(server, "elasticsearch_autoscaling_delete_policy");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {

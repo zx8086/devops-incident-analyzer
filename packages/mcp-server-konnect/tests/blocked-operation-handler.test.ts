@@ -6,7 +6,13 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createBlockedOperationHandler } from "../src/enforcement/mcp-server-integration.js";
+
+// Empty stub for the MCP RequestHandlerExtra parameter; this test does not
+// exercise the extra channel.
+const fakeExtra = {} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 describe("INFO: Blocked Operation Handler", () => {
 	it("should catch KongOperationBlockedError and return structured elicitation response", async () => {
@@ -25,7 +31,7 @@ describe("INFO: Blocked Operation Handler", () => {
 					name: "test-service",
 					host: "test-host",
 				},
-				{} as any,
+				fakeExtra,
 			)) as Record<string, unknown>;
 
 			console.log("INFO: Handler result:", JSON.stringify(result, null, 2));

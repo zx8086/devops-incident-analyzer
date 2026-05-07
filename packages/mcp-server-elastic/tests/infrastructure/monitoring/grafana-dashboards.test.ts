@@ -41,8 +41,8 @@ describe("Grafana Dashboard Validation", () => {
 			const dashboardContent = await readFile(dashboardPath, "utf-8");
 			const dashboard = JSON.parse(dashboardContent);
 
-			const panels = dashboard.dashboard.panels;
-			const panelTitles = panels.map((panel: any) => panel.title);
+			const panels = dashboard.dashboard.panels as Array<{ title: string }>;
+			const panelTitles = panels.map((panel) => panel.title);
 
 			// Expected panels based on our implementation
 			const expectedPanels = [

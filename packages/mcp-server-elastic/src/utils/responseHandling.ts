@@ -112,7 +112,7 @@ export function truncateResponse(
 	};
 }
 
-export function reduceObjectSize(obj: any, options: ResponseSizeOptions = {}): any {
+export function reduceObjectSize<T>(obj: T, options: ResponseSizeOptions = {}): T {
 	const { truncateFields = [], excludeFields = [] } = options;
 
 	if (typeof obj !== "object" || obj === null) {
@@ -120,12 +120,12 @@ export function reduceObjectSize(obj: any, options: ResponseSizeOptions = {}): a
 	}
 
 	if (Array.isArray(obj)) {
-		return obj.map((item) => reduceObjectSize(item, options));
+		return obj.map((item) => reduceObjectSize(item, options)) as unknown as T;
 	}
 
-	const result: any = {};
+	const result: Record<string, unknown> = {};
 
-	for (const [key, value] of Object.entries(obj)) {
+	for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
 		// Skip excluded fields
 		if (excludeFields.includes(key)) {
 			continue;
@@ -143,7 +143,7 @@ export function reduceObjectSize(obj: any, options: ResponseSizeOptions = {}): a
 		result[key] = reduceObjectSize(value, options);
 	}
 
-	return result;
+	return result as unknown as T;
 }
 
 export function createPaginationHeader(metadata: ResponseMetadata, entityName = "items"): string {
@@ -158,7 +158,7 @@ export function createPaginationHeader(metadata: ResponseMetadata, entityName = 
 	return `${lines.join("\n")}\n`;
 }
 
-export function formatAsMarkdown(obj: any, title?: string): string {
+export function formatAsMarkdown(obj: unknown, title?: string): string {
 	const lines: string[] = [];
 
 	if (title) {
@@ -166,7 +166,7 @@ export function formatAsMarkdown(obj: any, title?: string): string {
 	}
 
 	if (typeof obj === "object" && obj !== null) {
-		for (const [key, value] of Object.entries(obj)) {
+		for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
 			if (Array.isArray(value)) {
 				lines.push(`- **${key}**: ${value.length} items`);
 				if (value.length <= 5) {
@@ -193,11 +193,13 @@ export function formatAsMarkdown(obj: any, title?: string): string {
 }
 
 export const sortFunctions = {
-	byName: (a: any, b: any) => (a.name || "").localeCompare(b.name || ""),
-	byDate: (a: any, b: any) =>
-		new Date(b.date || b.modified_date || 0).getTime() - new Date(a.date || a.modified_date || 0).getTime(),
-	bySize: (a: any, b: any) => (b.size || 0) - (a.size || 0),
-	byCount: (a: any, b: any) => (b.count || 0) - (a.count || 0),
+	byName: (a: { name?: string }, b: { name?: string }) => (a.name || "").localeCompare(b.name || ""),
+	byDate: (
+		a: { date?: string | number; modified_date?: string | number },
+		b: { date?: string | number; modified_date?: string | number },
+	) => new Date(b.date || b.modified_date || 0).getTime() - new Date(a.date || a.modified_date || 0).getTime(),
+	bySize: (a: { size?: number }, b: { size?: number }) => (b.size || 0) - (a.size || 0),
+	byCount: (a: { count?: number }, b: { count?: number }) => (b.count || 0) - (a.count || 0),
 };
 
 export const responsePresets = {

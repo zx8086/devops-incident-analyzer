@@ -129,7 +129,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_get_aliases");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -148,7 +148,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 		test("elasticsearch_get_aliases should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_aliases");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -172,7 +172,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_get_aliases");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			const result = await tool.handler(params);
@@ -191,7 +191,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 		test("elasticsearch_get_aliases should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_aliases");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -217,7 +217,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_update_aliases");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 
 			// For safety, only test on our test index
 			if (params.index && !params.index.startsWith("test-")) {
@@ -239,7 +239,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_delete_alias");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index
@@ -262,7 +262,7 @@ describe.skipIf(shouldSkipIntegrationTests())("alias Tools - Real Integration Te
 			const tool = getToolFromServer(server, "elasticsearch_put_alias");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			// For safety, only test on our test index

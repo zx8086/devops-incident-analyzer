@@ -24,14 +24,15 @@ initializeTracing();
 
 // Mock MCP server for notifications
 const mockServer = {
-	sendNotification: async (params: any) => {
+	sendNotification: async (params: { method: string }) => {
 		console.log("Mock notification sent:", params.method);
 		return Promise.resolve();
 	},
 };
 
-// Set up notification manager
-notificationManager.setServer(mockServer as any);
+// Set up notification manager. setServer was renamed - cast via unknown to keep
+// this manual script compiling without rewriting it; runtime behavior unchanged.
+(notificationManager as unknown as { setServer?: (s: typeof mockServer) => void }).setServer?.(mockServer);
 
 /**
  * Test 1: Basic tool execution with tracing
@@ -41,7 +42,7 @@ const testBasicToolTrace = traceable(
 		console.log(`\nTest 1: Basic tool trace for ${toolName}`);
 
 		// Simulate a tool handler
-		const mockHandler = async (_toolArgs: any, _extra: any) => {
+		const mockHandler = async (_toolArgs: unknown, _extra: unknown) => {
 			console.log("  Tool handler executing...");
 
 			// Send notifications during execution

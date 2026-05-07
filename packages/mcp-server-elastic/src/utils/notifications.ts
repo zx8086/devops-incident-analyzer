@@ -21,7 +21,7 @@ export interface GeneralNotification {
 		timestamp?: string;
 		operation_id?: string;
 		type?: string;
-		[key: string]: any;
+		[key: string]: unknown;
 	};
 }
 
@@ -60,7 +60,7 @@ export class NotificationManager {
 		}
 
 		// CRITICAL: Safely get trace context without throwing errors
-		let currentTrace: any;
+		let currentTrace: ReturnType<typeof getCurrentRunTree> | null = null;
 		try {
 			currentTrace = getCurrentRunTree(true); // Allow absent run tree
 		} catch (_error) {
@@ -231,7 +231,7 @@ export class NotificationManager {
 		);
 	}
 
-	async completeOperation(operationId: string, result?: any, message?: string): Promise<void> {
+	async completeOperation(operationId: string, result?: unknown, message?: string): Promise<void> {
 		const operation = this.activeOperations.get(operationId);
 		if (!operation) {
 			logger.warn({ operationId }, "Attempted to complete unknown operation");
@@ -300,7 +300,7 @@ export class NotificationManager {
 		);
 	}
 
-	async sendWarning(message: string, data?: Record<string, any>): Promise<void> {
+	async sendWarning(message: string, data?: Record<string, unknown>): Promise<void> {
 		await this.sendMessage({
 			level: "warning",
 			data: {
@@ -311,7 +311,7 @@ export class NotificationManager {
 		});
 	}
 
-	async sendError(message: string, error?: Error | string, data?: Record<string, any>): Promise<void> {
+	async sendError(message: string, error?: Error | string, data?: Record<string, unknown>): Promise<void> {
 		await this.sendMessage({
 			level: "error",
 			data: {
@@ -323,7 +323,7 @@ export class NotificationManager {
 		});
 	}
 
-	async sendInfo(message: string, data?: Record<string, any>): Promise<void> {
+	async sendInfo(message: string, data?: Record<string, unknown>): Promise<void> {
 		await this.sendMessage({
 			level: "info",
 			data: {
@@ -371,7 +371,7 @@ export function withNotificationContext<TArgs, TResult>(
 	};
 }
 
-export function withNotifications<T extends any[], R>(
+export function withNotifications<T extends unknown[], R>(
 	toolName: string,
 	handler: (...args: T) => Promise<R>,
 ): (...args: T) => Promise<R> {
@@ -401,7 +401,7 @@ export interface ProgressTracker {
 	operationId: string;
 	progressToken: string;
 	updateProgress: (progress: number, message?: string) => Promise<void>;
-	complete: (result?: any, message?: string) => Promise<void>;
+	complete: (result?: unknown, message?: string) => Promise<void>;
 	fail: (error: Error | string, message?: string) => Promise<void>;
 }
 
@@ -420,7 +420,8 @@ export async function createProgressTracker(
 		progressToken,
 		updateProgress: (progress: number, message?: string) =>
 			notificationManager.updateProgress(operationId, progress, message),
-		complete: (result?: any, message?: string) => notificationManager.completeOperation(operationId, result, message),
+		complete: (result?: unknown, message?: string) =>
+			notificationManager.completeOperation(operationId, result, message),
 		fail: (error: Error | string, message?: string) => notificationManager.failOperation(operationId, error, message),
 	};
 }

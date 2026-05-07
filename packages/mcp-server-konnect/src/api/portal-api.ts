@@ -148,15 +148,8 @@ export class PortalApi {
 		return this.portalRequest<PortalApplication>(`/api/v3/applications/${applicationId}`);
 	}
 
-	async updateApplication(
-		applicationId: string,
-		applicationData: Record<string, unknown>,
-	): Promise<PortalApplication> {
-		return this.portalRequest<PortalApplication>(
-			`/api/v3/applications/${applicationId}`,
-			"PATCH",
-			applicationData,
-		);
+	async updateApplication(applicationId: string, applicationData: Record<string, unknown>): Promise<PortalApplication> {
+		return this.portalRequest<PortalApplication>(`/api/v3/applications/${applicationId}`, "PATCH", applicationData);
 	}
 
 	async deleteApplication(applicationId: string): Promise<void> {
@@ -200,10 +193,7 @@ export class PortalApi {
 	}
 
 	async deleteApplicationRegistration(applicationId: string, registrationId: string): Promise<void> {
-		return this.portalRequest<void>(
-			`/api/v3/applications/${applicationId}/registrations/${registrationId}`,
-			"DELETE",
-		);
+		return this.portalRequest<void>(`/api/v3/applications/${applicationId}/registrations/${registrationId}`, "DELETE");
 	}
 
 	async listCredentials(
@@ -218,10 +208,7 @@ export class PortalApi {
 		return this.portalRequest<KongListResponse<PortalCredential>>(endpoint);
 	}
 
-	async createCredential(
-		applicationId: string,
-		credentialData: Record<string, unknown>,
-	): Promise<PortalCredential> {
+	async createCredential(applicationId: string, credentialData: Record<string, unknown>): Promise<PortalCredential> {
 		return this.portalRequest<PortalCredential>(
 			`/api/v3/applications/${applicationId}/credentials`,
 			"POST",
@@ -242,10 +229,7 @@ export class PortalApi {
 	}
 
 	async deleteCredential(applicationId: string, credentialId: string): Promise<void> {
-		return this.portalRequest<void>(
-			`/api/v3/applications/${applicationId}/credentials/${credentialId}`,
-			"DELETE",
-		);
+		return this.portalRequest<void>(`/api/v3/applications/${applicationId}/credentials/${credentialId}`, "DELETE");
 	}
 
 	async regenerateApplicationSecret(applicationId: string): Promise<PortalApplicationSecret> {

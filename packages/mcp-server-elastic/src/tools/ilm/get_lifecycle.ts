@@ -1,7 +1,7 @@
 /* src/tools/ilm/get_lifecycle_simplified.ts */
 /* SIMPLIFIED VERSION: Direct JSON Schema + MCP Error Codes */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -30,6 +30,15 @@ const getLifecycleValidator = z.object({
 });
 
 type GetLifecycleParams = z.infer<typeof getLifecycleValidator>;
+
+// SDK's IlmGetLifecycleLifecycle doesn't include in_use_by, but ES 8.x+ returns it.
+interface IlmPolicyInUseBy {
+	indices?: string[];
+	data_streams?: string[];
+	composable_templates?: string[];
+}
+
+type IlmPolicyWithInUse = estypes.IlmGetLifecycleLifecycle & { in_use_by?: IlmPolicyInUseBy };
 
 function createIlmMcpError(
 	error: Error | string,
@@ -139,12 +148,12 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 					}
 				}
 
-				const policyAny = policy as any;
+				const policyExt = policy as IlmPolicyWithInUse;
 				return {
 					...policy,
 					retention_days: retentionDays,
-					indices_count: policyAny.in_use_by?.indices?.length || 0,
-					data_streams_count: policyAny.in_use_by?.data_streams?.length || 0,
+					indices_count: policyExt.in_use_by?.indices?.length || 0,
+					data_streams_count: policyExt.in_use_by?.data_streams?.length || 0,
 				};
 			});
 
@@ -199,6 +208,7 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 					responseContent.push("");
 				} else {
 					// Detailed mode - full policy details
+					const policyExt = policy as IlmPolicyWithInUse;
 					const detail = {
 						name: policy.name,
 						version: policy.version || 0,
@@ -207,11 +217,11 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 						retention_days: policy.retention_days,
 						policy_definition: policy.policy?.phases,
 						...(params.includeIndices &&
-							(policy as any).in_use_by && {
+							policyExt.in_use_by && {
 								in_use_by: {
-									indices: (policy as any).in_use_by.indices?.slice(0, 10), // Limit for readability
-									data_streams: (policy as any).in_use_by.data_streams?.slice(0, 10),
-									composable_templates: (policy as any).in_use_by.composable_templates,
+									indices: policyExt.in_use_by.indices?.slice(0, 10), // Limit for readability
+									data_streams: policyExt.in_use_by.data_streams?.slice(0, 10),
+									composable_templates: policyExt.in_use_by.composable_templates,
 								},
 							}),
 					};

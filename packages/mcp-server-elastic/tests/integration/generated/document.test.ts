@@ -131,7 +131,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_document_exists");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -149,7 +149,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 		test("elasticsearch_document_exists should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_document_exists");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -173,7 +173,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_get_document");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 
 			try {
@@ -191,7 +191,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 		test("elasticsearch_get_document should handle missing/invalid index gracefully", async () => {
 			const tool = getToolFromServer(server, "elasticsearch_get_document");
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = "non-existent-index-999";
 
 			try {
@@ -217,7 +217,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_delete_document");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 			params.document = {
 				title: "Test from elasticsearch_delete_document",
@@ -245,7 +245,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_update_document");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 			params.document = {
 				title: "Test from elasticsearch_update_document",
@@ -273,7 +273,7 @@ describe.skipIf(shouldSkipIntegrationTests())("document Tools - Real Integration
 			const tool = getToolFromServer(server, "elasticsearch_index_document");
 			expect(tool).toBeDefined();
 
-			const params: any = {};
+			const params: Record<string, unknown> = {};
 			params.index = TEST_INDEX;
 			params.document = {
 				title: "Test from elasticsearch_index_document",
