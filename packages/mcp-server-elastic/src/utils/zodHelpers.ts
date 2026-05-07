@@ -39,7 +39,7 @@ export const booleanField = (defaultValue?: boolean, description?: string) => {
 };
 
 export const numberField = (options: { min?: number; max?: number; default?: number; description?: string }) => {
-	let field: any = coerceNumber;
+	let field: z.ZodTypeAny = coerceNumber;
 
 	if (options.min !== undefined || options.max !== undefined) {
 		const constraints = z.number();
@@ -63,7 +63,7 @@ export const numberField = (options: { min?: number; max?: number; default?: num
 };
 
 export const integerField = (options: { min?: number; max?: number; default?: number; description?: string }) => {
-	let field: any = coerceInteger;
+	let field: z.ZodTypeAny = coerceInteger;
 
 	if (options.min !== undefined || options.max !== undefined) {
 		const constraints = z.number();
@@ -136,8 +136,8 @@ export const coerceJson = z.preprocess(
 	z.union([z.object({}).passthrough(), z.array(z.any())]),
 );
 
-export const jsonField = (defaultValue?: any, description?: string) => {
-	let field: any = coerceJson;
+export const jsonField = (defaultValue?: unknown, description?: string) => {
+	let field: z.ZodTypeAny = coerceJson;
 
 	if (defaultValue !== undefined) {
 		field = field.default(defaultValue);

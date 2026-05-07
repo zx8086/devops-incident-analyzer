@@ -1,6 +1,7 @@
 /* src/utils/securityEnhancer.ts */
 
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { ErrorCode, McpError, type ServerNotification, type ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { logger } from "./logger.js";
 
 interface SecurityConfig {
@@ -83,9 +84,9 @@ export class SecurityEnhancer {
 
 	validateAndSanitizeInput(
 		toolName: string,
-		input: any,
+		input: unknown,
 	): {
-		sanitized: any;
+		sanitized: unknown;
 		violations: SecurityViolation[];
 	} {
 		const violations: SecurityViolation[] = [];
@@ -175,7 +176,7 @@ export class SecurityEnhancer {
 		}
 	}
 
-	private processObject(obj: any, violations: SecurityViolation[], toolName: string, path = ""): void {
+	private processObject(obj: unknown, violations: SecurityViolation[], toolName: string, path = ""): void {
 		if (obj === null || obj === undefined) return;
 
 		if (Array.isArray(obj)) {
@@ -186,12 +187,13 @@ export class SecurityEnhancer {
 		}
 
 		if (typeof obj === "object") {
-			for (const [key, value] of Object.entries(obj)) {
+			const record = obj as Record<string, unknown>;
+			for (const [key, value] of Object.entries(record)) {
 				const currentPath = path ? `${path}.${key}` : key;
 
 				// Check for sensitive fields
 				if (this.isSensitiveField(key) && typeof value === "string") {
-					obj[key] = this.redactValue(value);
+					record[key] = this.redactValue(value);
 					continue;
 				}
 
@@ -347,12 +349,12 @@ export class SecurityEnhancer {
 		}
 	}
 
-	private calculateQueryComplexity(query: any): number {
+	private calculateQueryComplexity(query: unknown): number {
 		if (typeof query !== "object" || query === null) return 1;
 
 		let complexity = 0;
 
-		const traverse = (obj: any, depth = 0): void => {
+		const traverse = (obj: unknown, depth = 0): void => {
 			if (depth > 10) return; // Prevent infinite recursion
 
 			if (Array.isArray(obj)) {
@@ -360,9 +362,10 @@ export class SecurityEnhancer {
 				for (const item of obj) {
 					traverse(item, depth + 1);
 				}
-			} else if (typeof obj === "object") {
-				complexity += Object.keys(obj).length;
-				for (const value of Object.values(obj)) {
+			} else if (typeof obj === "object" && obj !== null) {
+				const record = obj as Record<string, unknown>;
+				complexity += Object.keys(record).length;
+				for (const value of Object.values(record)) {
 					traverse(value, depth + 1);
 				}
 			} else {
@@ -388,18 +391,19 @@ export class SecurityEnhancer {
 		return value.length > 100 ? `${value.substring(0, 100)}...` : value;
 	}
 
-	redactSensitiveData(obj: any): any {
+	redactSensitiveData<T>(obj: T): T {
 		if (obj === null || obj === undefined) return obj;
 
 		const redacted = this.deepClone(obj);
 
-		const traverse = (current: any): void => {
+		const traverse = (current: unknown): void => {
 			if (Array.isArray(current)) {
 				current.forEach(traverse);
-			} else if (typeof current === "object") {
-				for (const [key, value] of Object.entries(current)) {
+			} else if (typeof current === "object" && current !== null) {
+				const record = current as Record<string, unknown>;
+				for (const [key, value] of Object.entries(record)) {
 					if (this.isSensitiveField(key) && typeof value === "string") {
-						current[key] = this.redactValue(value);
+						record[key] = this.redactValue(value);
 					} else {
 						traverse(value);
 					}
@@ -438,31 +442,34 @@ export class SecurityEnhancer {
 		};
 	}
 
-	private deepClone(obj: any): any {
+	private deepClone<T>(obj: T): T {
 		if (obj === null || typeof obj !== "object") return obj;
-		if (obj instanceof Date) return new Date(obj);
-		if (Array.isArray(obj)) return obj.map(this.deepClone.bind(this));
+		if (obj instanceof Date) return new Date(obj) as unknown as T;
+		if (Array.isArray(obj)) return obj.map((item) => this.deepClone(item)) as unknown as T;
 
-		const cloned: any = {};
-		for (const [key, value] of Object.entries(obj)) {
+		const cloned: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
 			cloned[key] = this.deepClone(value);
 		}
-		return cloned;
+		return cloned as unknown as T;
 	}
 }
 
 // Create default security enhancer instance
 export const defaultSecurityEnhancer = new SecurityEnhancer();
 
-// Security wrapper for tool handlers
-export function withSecurityValidation<_T extends any[], R>(
+// Security wrapper for tool handlers. Generic over the handler's expected arg
+// shape because callers wire in either Zod-inferred shapes (typed) or unknown
+// (when used as a passthrough wrapper at registration time). At runtime the
+// sanitized payload is validated input, so the cast is safe.
+export function withSecurityValidation<TArgs, R>(
 	toolName: string,
-	toolFunction: (toolArgs: any, extra: any) => Promise<R>,
+	toolFunction: (toolArgs: TArgs, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => Promise<R>,
 	securityConfig?: Partial<SecurityConfig>,
 ) {
 	const enhancer = securityConfig ? new SecurityEnhancer(securityConfig) : defaultSecurityEnhancer;
 
-	return async (toolArgs: any, extra: any): Promise<R> => {
+	return async (toolArgs: TArgs, extra: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<R> => {
 		const { sanitized, violations } = enhancer.validateAndSanitizeInput(toolName, toolArgs);
 
 		// Log security metrics
@@ -475,6 +482,6 @@ export function withSecurityValidation<_T extends any[], R>(
 			"Security validation completed",
 		);
 
-		return toolFunction(sanitized, extra);
+		return toolFunction(sanitized as TArgs, extra);
 	};
 }

@@ -59,7 +59,15 @@ export function validateEnvironment(): ValidationResult {
 	};
 }
 
-export function validateConfig(config: any): ValidationResult {
+export interface ElasticsearchConfig {
+	url?: string;
+	apiKey?: string;
+	username?: string;
+	password?: string;
+	readOnlyMode?: boolean;
+}
+
+export function validateConfig(config: ElasticsearchConfig): ValidationResult {
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
