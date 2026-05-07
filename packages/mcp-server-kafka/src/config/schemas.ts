@@ -45,27 +45,63 @@ export const localSchema = z
 export const schemaRegistrySchema = z
 	.object({
 		enabled: z.boolean().describe("Whether Schema Registry integration is enabled"),
-		url: z.string().describe("Schema Registry URL"),
-		apiKey: z.string().describe("Schema Registry API key (for Confluent Cloud or basic auth)"),
-		apiSecret: z.string().describe("Schema Registry API secret (for Confluent Cloud or basic auth)"),
+		url: z
+			.string()
+			.describe(
+				"Schema Registry URL (e.g., http://schema-registry:8081 for self-hosted, or https://psrc-...confluent.cloud for Confluent Cloud)",
+			),
+		apiKey: z
+			.string()
+			.describe(
+				"Schema Registry API key for basic auth. Leave empty for self-hosted no-auth deployments (e.g., Confluent Platform behind an internal ALB). Set for Confluent Cloud.",
+			),
+		apiSecret: z
+			.string()
+			.describe(
+				"Schema Registry API secret for basic auth. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud.",
+			),
 	})
 	.strict();
 
 export const ksqlSchema = z
 	.object({
 		enabled: z.boolean().describe("Whether ksqlDB integration is enabled"),
-		endpoint: z.string().describe("ksqlDB REST API endpoint"),
-		apiKey: z.string().describe("ksqlDB API key (for Confluent Cloud or basic auth)"),
-		apiSecret: z.string().describe("ksqlDB API secret (for Confluent Cloud or basic auth)"),
+		endpoint: z
+			.string()
+			.describe(
+				"ksqlDB REST API endpoint (e.g., http://ksql-server:8088 for self-hosted, or https://pksqlc-...confluent.cloud for Confluent Cloud)",
+			),
+		apiKey: z
+			.string()
+			.describe(
+				"ksqlDB API key for basic auth. Leave empty for self-hosted no-auth deployments (e.g., Confluent Platform on ECS behind an internal ALB). Set for Confluent Cloud.",
+			),
+		apiSecret: z
+			.string()
+			.describe(
+				"ksqlDB API secret for basic auth. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud.",
+			),
 	})
 	.strict();
 
 export const connectSchema = z
 	.object({
 		enabled: z.boolean().describe("Whether Kafka Connect integration is enabled"),
-		url: z.string().describe("Kafka Connect REST API URL"),
-		apiKey: z.string().describe("Kafka Connect API key (for basic auth; empty for no-auth deployments)"),
-		apiSecret: z.string().describe("Kafka Connect API secret (for basic auth; empty for no-auth deployments)"),
+		url: z
+			.string()
+			.describe(
+				"Kafka Connect REST API URL (e.g., http://connect:8083 for self-hosted, or a Confluent Cloud Connect endpoint)",
+			),
+		apiKey: z
+			.string()
+			.describe(
+				"Kafka Connect API key for basic auth. Leave empty for self-hosted no-auth deployments (e.g., Confluent Platform on ECS behind an internal ALB). Set for Confluent Cloud.",
+			),
+		apiSecret: z
+			.string()
+			.describe(
+				"Kafka Connect API secret for basic auth. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud.",
+			),
 	})
 	.strict();
 
