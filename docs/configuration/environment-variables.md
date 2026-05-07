@@ -66,11 +66,12 @@ The Elasticsearch MCP server supports multi-deployment configuration, allowing a
 
 ### Multi-Deployment Configuration
 
-Deployments are defined by a comma-separated list of deployment IDs. Each deployment ID becomes a prefix for its connection variables:
+Deployments are defined by a comma-separated list of deployment IDs. Each deployment ID becomes a prefix for its connection variables. The env-key transform is: uppercase, hyphens replaced with underscores. So `eu-cld` becomes the prefix `ELASTIC_EU_CLD_`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ELASTIC_DEPLOYMENTS` | Yes | -- | Comma-separated deployment IDs (e.g., `production,staging`) |
+| `ELASTIC_DEPLOYMENTS` | Yes | -- | Comma-separated deployment IDs (e.g., `eu-cld,us-cld`) |
+| `ELASTIC_DEFAULT_DEPLOYMENT` | No | First ID in `ELASTIC_DEPLOYMENTS` | Deployment used when a tool call omits the `deployment` arg and no `x-elastic-deployment` HTTP header is present (SIO-675). Must match an ID in `ELASTIC_DEPLOYMENTS`. |
 
 For each deployment ID (referred to as `{ID}` below), provide one of two authentication methods:
 
@@ -82,23 +83,36 @@ For each deployment ID (referred to as `{ID}` below), provide one of two authent
 | `ELASTIC_{ID}_API_KEY` | Conditional | -- | API key authentication (preferred) |
 | `ELASTIC_{ID}_USERNAME` | Conditional | -- | Basic auth username (alternative to API key) |
 | `ELASTIC_{ID}_PASSWORD` | Conditional | -- | Basic auth password (paired with username) |
+| `ELASTIC_{ID}_CA_CERT` | No | -- | TLS CA cert (PEM string or file path) for clusters with a private CA |
 
 Each deployment requires either `ELASTIC_{ID}_API_KEY` or both `ELASTIC_{ID}_USERNAME` and `ELASTIC_{ID}_PASSWORD`. API key authentication is preferred for production deployments.
 
-Example for two deployments:
+Example using the canonical 10-deployment list from `.env.example`:
 
 ```bash
-ELASTIC_DEPLOYMENTS=production,staging
+ELASTIC_DEPLOYMENTS=eu-cld,us-cld,eu-b2b,ap-cld,gl-cld-reporting,eu-onboarding,eu-cld-monitor,ap-cld-monitor,gl-testing,us-cld-monitor
+ELASTIC_DEFAULT_DEPLOYMENT=eu-cld
 
-# Production: API key auth
-ELASTIC_PRODUCTION_URL=https://prod-es.example.com:9200
-ELASTIC_PRODUCTION_API_KEY=your-api-key-here
-
-# Staging: Basic auth
-ELASTIC_STAGING_URL=https://staging-es.example.com:9200
-ELASTIC_STAGING_USERNAME=elastic
-ELASTIC_STAGING_PASSWORD=your-password-here
+ELASTIC_EU_CLD_URL=https://eu-cld.es.example.com:9243
+ELASTIC_EU_CLD_API_KEY=your-eu-cld-api-key
+ELASTIC_US_CLD_URL=https://us-cld.es.example.com:9243
+ELASTIC_US_CLD_API_KEY=your-us-cld-api-key
+# ... one URL + API_KEY pair per deployment ID
 ```
+
+If `ELASTIC_DEPLOYMENTS` is unset, the server falls back to legacy single-deployment mode using `ES_URL`, `ES_API_KEY`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CA_CERT`.
+
+### Elastic Cloud Deployment + Billing API (SIO-674)
+
+These variables enable the 7 organization-scoped tools (`elasticsearch_cloud_*` and `elasticsearch_billing_*`) that talk to `https://api.elastic-cloud.com`. They are **independent** of the per-deployment cluster API keys above and use a separate Elastic Cloud organization API key. When `EC_API_KEY` is unset, those 7 tools simply do not register and the server boots normally for self-hosted users.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `EC_API_KEY` | No | -- | Org-scoped Elastic Cloud API key. Generated at Elastic Cloud console -> User profile -> API keys. Gates registration of cloud + billing tools. |
+| `EC_API_ENDPOINT` | No | `https://api.elastic-cloud.com` | Override only for non-public Elastic Cloud regions. |
+| `EC_DEFAULT_ORG_ID` | No | -- | Fallback `org_id` for billing tools when no `org_id` arg is passed. Without it, every billing tool call must include `org_id` explicitly. |
+| `EC_REQUEST_TIMEOUT` | No | `30000` | Request timeout in ms. |
+| `EC_MAX_RETRIES` | No | `3` | Retry count on 5xx responses with exponential backoff. |
 
 ---
 
