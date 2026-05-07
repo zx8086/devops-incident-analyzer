@@ -8,8 +8,14 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { MandatoryElicitationGate } from "../src/enforcement/mandatory-elicitation-gate.js";
 import { createBlockedOperationHandler, ELICITATION_TOOL_HANDLERS } from "../src/enforcement/mcp-server-integration.js";
+
+// Empty stub for the MCP RequestHandlerExtra parameter that handlers receive
+// from the SDK at runtime; tests don't exercise the extra channel here.
+const fakeExtra = {} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 describe("INFO: End-to-End Elicitation Workflow", () => {
 	it("should complete full elicitation workflow from blocked operation to successful operation", async () => {
@@ -25,7 +31,7 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 				name: "api-service",
 				host: "api.internal.com",
 			},
-			{} as any,
+			fakeExtra,
 		);
 
 		console.log("SUCCESS: Operation blocked as expected");
@@ -48,7 +54,7 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 					team: "platform-team",
 				},
 			},
-			{} as any,
+			fakeExtra,
 		);
 
 		console.log("SUCCESS: Elicitation response processed");
@@ -85,7 +91,7 @@ describe("INFO: End-to-End Elicitation Workflow", () => {
 					name: "api-service",
 					host: "api.internal.com",
 				},
-				{} as any,
+				fakeExtra,
 			);
 
 			// In a real integration, this would be the Kong service creation result
