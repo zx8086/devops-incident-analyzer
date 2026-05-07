@@ -22,9 +22,9 @@ describe("transport config", () => {
 		expect(config.transport.mode).toBe("stdio");
 	});
 
-	test("defaults to port 3000", () => {
+	test("defaults to port 9081", () => {
 		const config = getConfig();
-		expect(config.transport.port).toBe(3000);
+		expect(config.transport.port).toBe(9081);
 	});
 
 	test("defaults to localhost binding", () => {
