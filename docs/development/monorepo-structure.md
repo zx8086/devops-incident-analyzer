@@ -47,7 +47,7 @@ devops-incident-analyzer/
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
     agent/                       LangGraph supervisor and 12-node pipeline
-    mcp-server-elastic/          Elasticsearch MCP server (~78 tools)
+    mcp-server-elastic/          Elasticsearch MCP server (~84 tools: ~77 cluster + 7 conditional cloud/billing)
     mcp-server-kafka/            Kafka MCP server (15 base + 15 optional)
     mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
     mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
@@ -223,12 +223,12 @@ Source: `packages/agent/src/`
 
 ### @devops-agent/mcp-server-elastic
 
-Elasticsearch MCP server with ~78 tools for querying and managing Elasticsearch deployments.
+Elasticsearch MCP server with ~84 tools for querying and managing Elasticsearch deployments. The base set is ~77 cluster tools (search, index, ILM, watcher, etc.) and an additional 7 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (SIO-674).
 
 | Capability | Details |
 |------------|---------|
-| Tools | ~78 tools: index management, search, aggregations, cluster health, templates, ILM |
-| Multi-deployment | `ELASTIC_DEPLOYMENTS=prod,staging` with per-deployment URL and API key |
+| Tools | ~84 tools: ~77 cluster (index management, search, aggregations, cluster health, templates, ILM, watcher) + 7 conditional cloud/billing (`EC_API_KEY`) |
+| Multi-deployment | `ELASTIC_DEPLOYMENTS=eu-cld,us-cld` with per-deployment URL and API key; cluster tools accept a per-call `deployment` arg (SIO-675) |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9080 (default) |
 
@@ -359,7 +359,7 @@ agents/incident-analyzer/
   RULES.md               Behavioral constraints: no destructive actions, cite sources
   agents/
     elastic-agent/       Elasticsearch specialist
-      agent.yaml         Tools: ~78 ES tools via MCP port 9080
+      agent.yaml         Tools: ~84 ES tools via MCP port 9080 (~77 cluster + 7 conditional cloud/billing)
       SOUL.md            Persona: log and metric analysis expert
     kafka-agent/         Kafka specialist
       agent.yaml         Tools: 15 base + 15 optional Kafka tools via MCP port 9081

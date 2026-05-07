@@ -259,7 +259,7 @@ bun run lint          # Check only
 bun run lint:fix      # Auto-fix
 ```
 
-Biome rules enforce: import ordering, no unused variables, consistent formatting, and no `any` types.
+Biome rules enforce: import ordering, no unused variables, consistent formatting, and no `any` types. As of SIO-673, `noExplicitAny` is set to **error** (not warn) in `biome.json`, so `: any`, `as any`, `Record<string, any>`, etc. fail CI. The typed-alternatives table in `CLAUDE.md` (under "TypeScript strict mode, never use `any`") lists the canonical replacements (`z.infer`, `RequestHandlerExtra`, `unknown` with narrowing, `estypes.<Response>`, etc.); a `biome-ignore lint/suspicious/noExplicitAny` comment requires a one-line ticket reference.
 
 ---
 

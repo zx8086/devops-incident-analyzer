@@ -28,7 +28,7 @@ The agent connects to six MCP (Model Context Protocol) servers over Streamable H
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| ~78     | | 15+15 | | ~15    | | 15+prx  | | proxy+  | | proxy+   |
+| ~84     | | 15+15 | | ~15    | | 15+prx  | | proxy+  | | proxy+   |
 | tools   | | opt   | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
@@ -101,7 +101,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~78 |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~84 (~77 cluster + 7 conditional cloud/billing) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15 base + 15 optional |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
@@ -204,9 +204,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (~78 tools)
+### Elasticsearch MCP (~84 tools)
 
-**Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations.
+**Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology + billing).
+
+**Tool count:** ~77 cluster tools always; +7 cloud/billing tools registered conditionally on `EC_API_KEY`.
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation
@@ -215,8 +217,9 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Document operations: get, multi-get (read-only)
 - Snapshot: repository listing, snapshot status
 - Monitoring: node stats, hot threads, pending tasks
+- **Elastic Cloud + Billing (conditional, `EC_API_KEY`, SIO-674):** `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_org_charts`, `elasticsearch_billing_get_deployment_costs` -- all hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing after SIO-678) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys.
 
-**Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=prod,staging`. Per-deployment environment variables provide URL and API key (`ELASTIC_PROD_URL`, `ELASTIC_PROD_API_KEY`, etc.).
+**Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=eu-cld,us-cld`. Per-deployment environment variables provide URL and API key (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, etc.; hyphens become underscores). Cluster tools accept a per-call `deployment` arg (SIO-675) with fallback chain: explicit arg -> `x-elastic-deployment` HTTP header -> `ELASTIC_DEFAULT_DEPLOYMENT` -> first ID in `ELASTIC_DEPLOYMENTS`. See `packages/mcp-server-elastic/src/tools/index.ts:302-391`.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -345,3 +348,4 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-13 | Added GitLab MCP as 5th server (proxy + custom tools, OAuth, deferred retry) |
 | 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |
+| 2026-05-07 | Documented Elastic Cloud + Billing tool family (SIO-674) and per-call `deployment` arg fallback chain (SIO-675); updated tool count from ~78 to ~84 |

@@ -264,7 +264,9 @@ if (!topic) {
 
 ### Read-Only vs Write Operations
 
-Feature gates control which operations are available at runtime:
+Two separate mechanisms govern read-only behavior:
+
+**1. Per-server feature gates (Kafka).** Boolean env vars enable groups of write tools at runtime:
 
 | Gate | Environment Variable | Tools Controlled |
 |------|---------------------|------------------|
@@ -275,13 +277,21 @@ Feature gates control which operations are available at runtime:
 
 The `wrapHandler` function in `tools/wrap.ts` checks these gates before executing any handler. Tools in the gate sets are rejected with an informative error message when the gate is closed.
 
+**2. Shared bootstrap chokepoint (Elastic, Konnect — SIO-671).** Read-only enforcement lives at the MCP dispatcher level, not on individual tools. When a server calls `createMcpApplication({ readOnly })` from `@devops-agent/shared`, `installReadOnlyChokepoint()` (`packages/shared/src/read-only-chokepoint.ts:43-76`) intercepts the `tools/call` request and consults a `ReadOnlyManagerLike` adapter before invoking the underlying tool handler. The manager owns the classification (e.g., Elastic's `OperationType` set in `packages/mcp-server-elastic/src/utils/readOnlyMode.ts:12-19`); tools do not opt in individually. The legacy per-tool `withReadOnlyCheck()` wrapper was removed from every Elastic tool in commit `08d4cef` — do not add new wrappers in tool files.
+
+When adding a write tool to a server that uses the shared chokepoint, classify it in the server's `OperationType` map (DESTRUCTIVE, WRITE, or READ) and the chokepoint will enforce it automatically.
+
 ---
 
 ## Server-Specific Notes
 
 ### Elasticsearch
 
-Tools receive a `deployment` parameter for multi-deployment awareness. The environment variable `ELASTIC_DEPLOYMENTS=prod,staging` controls which deployments are available, with per-deployment URL and auth configured via uppercase suffixed vars (`ELASTIC_PROD_URL`, `ELASTIC_STAGING_URL`).
+Cluster tools accept a per-call `deployment` parameter (SIO-675). The fallback chain is: explicit `deployment` arg → `x-elastic-deployment` HTTP header → `ELASTIC_DEFAULT_DEPLOYMENT` env var → first ID in `ELASTIC_DEPLOYMENTS`. Routing is implemented in `packages/mcp-server-elastic/src/tools/index.ts:302-391` via `AsyncLocalStorage`.
+
+The `ELASTIC_DEPLOYMENTS=eu-cld,us-cld` env var controls which deployments are available, with per-deployment URL and auth configured via uppercase suffixed vars (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, `ELASTIC_US_CLD_URL`, ...). Hyphens in IDs become underscores in env keys.
+
+When `EC_API_KEY` is set, the server additionally registers 7 org-scoped tools that talk to `https://api.elastic-cloud.com` (4 cloud + 3 billing): `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_org_charts`, `elasticsearch_billing_get_deployment_costs`. These do not accept the `deployment` arg and use `EC_DEFAULT_ORG_ID` as the org-id fallback for billing tools. See [Environment Variables](../configuration/environment-variables.md#elastic-cloud-deployment--billing-api-sio-674).
 
 ```yaml
 # Tool YAML references deployment context
@@ -306,7 +316,29 @@ if (!config.kafka.allowWrites) {
 
 ### Konnect
 
-Kong Konnect tools may trigger elicitation gates for dangerous operations (plugin changes, route deletions). The `annotations.requires_confirmation` field in tool YAML marks tools that need user confirmation before execution.
+Kong Konnect tools use a different registration pattern than Elasticsearch (SIO-670). Instead of calling `server.registerTool()` directly, each tool is declared as an `MCPTool<TArgs>` entry in a per-category file (e.g., `packages/mcp-server-konnect/src/tools/control-planes/tools.ts`). Handler arg types are derived per-tool via `z.infer<typeof validator>`, eliminating runtime `any`. The registry in `packages/mcp-server-konnect/src/tools/registry.ts:28-63` aggregates entries from all categories via `getAllTools()`, and `server.ts:147-180` iterates that list to wrap each handler with tracing/perf metrics before binding it to the MCP server.
+
+```typescript
+// packages/mcp-server-konnect/src/tools/portal/tools.ts (illustrative)
+import type { ListApisArgs } from "./parameters.js"; // = z.infer<typeof ListApisSchema>
+
+export const portalTools: MCPTool<ListApisArgs>[] = [
+  {
+    method: "konnect_list_apis",
+    description: "List all APIs in a Konnect portal.",
+    parameters: ListApisSchema.shape,
+    handler: async (args, ctx) => {
+      // args is typed as ListApisArgs - no `any` casts
+      const apis = await ctx.api.listApis(args.portal_id);
+      return ResponseBuilder.success(apis);
+    },
+  },
+];
+```
+
+Kong's HTTP API client is split between `packages/mcp-server-konnect/src/api/kong-api.ts` (management API: control planes, services, routes, plugins) and `packages/mcp-server-konnect/src/api/portal-api.ts` (portal API, which uses a different host: `{portalId}.{region}.portal.konghq.com`). Handlers receive the appropriate client via `ToolHandlerContext`.
+
+Kong Konnect tools may also trigger elicitation gates for dangerous operations (plugin changes, route deletions). The `annotations.requires_confirmation` field in tool YAML marks tools that need user confirmation before execution.
 
 ---
 
@@ -325,3 +357,4 @@ Kong Konnect tools may trigger elicitation gates for dangerous operations (plugi
 |------|--------|
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Updated `server.tool()` references to `server.registerTool()` (MCP SDK v1.17.5+); added `gitlab_` and `atlassian_` to server-prefix list |
+| 2026-05-07 | Documented Konnect per-tool registry pattern (SIO-670), shared bootstrap read-only chokepoint (SIO-671), Elastic Cloud + Billing tool family (SIO-674), per-call `deployment` arg (SIO-675); swapped Elastic example IDs to canonical `eu-cld,us-cld` |

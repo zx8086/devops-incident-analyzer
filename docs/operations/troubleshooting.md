@@ -266,14 +266,14 @@ The Kafka MCP server schemas are strict (`z.object().strict()`), so extra/unknow
 Check the `ELASTIC_DEPLOYMENTS` format -- it must be comma-separated IDs that match the uppercase per-deployment variables:
 
 ```bash
-ELASTIC_DEPLOYMENTS=prod,staging
-ELASTIC_PROD_URL=https://prod.es.cloud.example.com
-ELASTIC_PROD_API_KEY=key-for-prod
-ELASTIC_STAGING_URL=https://staging.es.cloud.example.com
-ELASTIC_STAGING_API_KEY=key-for-staging
+ELASTIC_DEPLOYMENTS=eu-cld,us-cld
+ELASTIC_EU_CLD_URL=https://eu.es.cloud.example.com
+ELASTIC_EU_CLD_API_KEY=key-for-eu
+ELASTIC_US_CLD_URL=https://us.es.cloud.example.com
+ELASTIC_US_CLD_API_KEY=key-for-us
 ```
 
-The deployment ID in `ELASTIC_DEPLOYMENTS` is lowercased, but per-deployment vars use the uppercased form (`PROD`, `STAGING`).
+The deployment ID in `ELASTIC_DEPLOYMENTS` is lowercased and may contain hyphens; per-deployment vars use the uppercased form with hyphens converted to underscores (`eu-cld` -> `ELASTIC_EU_CLD_*`).
 
 ---
 
