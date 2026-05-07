@@ -13,6 +13,26 @@ import type {
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
+// SIO-681: Union of all specialist sub-agent identifiers
+export type AgentName = "elastic-agent" | "kafka-agent" | "capella-agent" | "konnect-agent" | "gitlab-agent";
+
+// SIO-681: A correlation rule that fired but could not be fully satisfied
+export interface DegradedRule {
+	ruleName: string;
+	requiredAgent: AgentName;
+	reason: string;
+	triggerContext: Record<string, unknown>;
+}
+
+// SIO-681: Transient routing entry while a re-fan-out correlation is in flight
+export interface PendingCorrelation {
+	ruleName: string;
+	requiredAgent: AgentName;
+	triggerContext: Record<string, unknown>;
+	attemptsRemaining: number;
+	timeoutMs: number;
+}
+
 export const AgentState = Annotation.Root({
 	...MessagesAnnotation.spec,
 
@@ -145,6 +165,24 @@ export const AgentState = Annotation.Root({
 	lowConfidence: Annotation<boolean>({
 		reducer: (_, next) => next,
 		default: () => false,
+	}),
+
+	// SIO-681: Rules that fired but were not fully satisfied; surfaced in the final report
+	degradedRules: Annotation<DegradedRule[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-681: Upper bound on confidenceScore when one or more correlation rules degraded
+	confidenceCap: Annotation<number | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-681: Transient routing payload during enforceCorrelations re-fan-out
+	pendingCorrelations: Annotation<PendingCorrelation[]>({
+		reducer: (_, next) => next,
+		default: () => [],
 	}),
 
 	// SIO-634, SIO-635: Action proposals from mitigation node, awaiting user confirmation

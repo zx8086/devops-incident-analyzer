@@ -48,6 +48,9 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		pendingActions: [],
 		actionResults: [],
 		selectedRunbooks: null,
+		degradedRules: [],
+		confidenceCap: undefined,
+		pendingCorrelations: [],
 		...overrides,
 	};
 }
