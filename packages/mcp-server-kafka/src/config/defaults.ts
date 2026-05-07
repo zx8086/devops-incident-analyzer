@@ -39,6 +39,12 @@ export const defaults = {
 		apiKey: "",
 		apiSecret: "",
 	},
+	connect: {
+		enabled: false,
+		url: "http://localhost:8083",
+		apiKey: "",
+		apiSecret: "",
+	},
 	logging: {
 		level: "info" as const,
 		backend: "pino" as const,

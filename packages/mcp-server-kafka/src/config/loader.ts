@@ -10,6 +10,7 @@ const booleanPaths = new Set([
 	"kafka.allowDestructive",
 	"schemaRegistry.enabled",
 	"ksql.enabled",
+	"connect.enabled",
 	"telemetry.enabled",
 ]);
 

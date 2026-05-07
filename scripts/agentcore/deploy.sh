@@ -308,6 +308,42 @@ case "${MCP_SERVER}" in
     if [ -n "${MSK_BOOTSTRAP_BROKERS:-}" ]; then
       ENV_VARS="${ENV_VARS},MSK_BOOTSTRAP_BROKERS=${MSK_BOOTSTRAP_BROKERS}"
     fi
+    if [ -n "${KSQL_ENABLED:-}" ]; then
+      ENV_VARS="${ENV_VARS},KSQL_ENABLED=${KSQL_ENABLED}"
+    fi
+    if [ -n "${KSQL_ENDPOINT:-}" ]; then
+      ENV_VARS="${ENV_VARS},KSQL_ENDPOINT=${KSQL_ENDPOINT}"
+    fi
+    if [ -n "${KSQL_API_KEY:-}" ]; then
+      ENV_VARS="${ENV_VARS},KSQL_API_KEY=${KSQL_API_KEY}"
+    fi
+    if [ -n "${KSQL_API_SECRET:-}" ]; then
+      ENV_VARS="${ENV_VARS},KSQL_API_SECRET=${KSQL_API_SECRET}"
+    fi
+    if [ -n "${SCHEMA_REGISTRY_ENABLED:-}" ]; then
+      ENV_VARS="${ENV_VARS},SCHEMA_REGISTRY_ENABLED=${SCHEMA_REGISTRY_ENABLED}"
+    fi
+    if [ -n "${SCHEMA_REGISTRY_URL:-}" ]; then
+      ENV_VARS="${ENV_VARS},SCHEMA_REGISTRY_URL=${SCHEMA_REGISTRY_URL}"
+    fi
+    if [ -n "${SCHEMA_REGISTRY_API_KEY:-}" ]; then
+      ENV_VARS="${ENV_VARS},SCHEMA_REGISTRY_API_KEY=${SCHEMA_REGISTRY_API_KEY}"
+    fi
+    if [ -n "${SCHEMA_REGISTRY_API_SECRET:-}" ]; then
+      ENV_VARS="${ENV_VARS},SCHEMA_REGISTRY_API_SECRET=${SCHEMA_REGISTRY_API_SECRET}"
+    fi
+    if [ -n "${CONNECT_ENABLED:-}" ]; then
+      ENV_VARS="${ENV_VARS},CONNECT_ENABLED=${CONNECT_ENABLED}"
+    fi
+    if [ -n "${CONNECT_URL:-}" ]; then
+      ENV_VARS="${ENV_VARS},CONNECT_URL=${CONNECT_URL}"
+    fi
+    if [ -n "${CONNECT_API_KEY:-}" ]; then
+      ENV_VARS="${ENV_VARS},CONNECT_API_KEY=${CONNECT_API_KEY}"
+    fi
+    if [ -n "${CONNECT_API_SECRET:-}" ]; then
+      ENV_VARS="${ENV_VARS},CONNECT_API_SECRET=${CONNECT_API_SECRET}"
+    fi
     ;;
   elastic)
     if [ -n "${ELASTICSEARCH_URL:-}" ]; then

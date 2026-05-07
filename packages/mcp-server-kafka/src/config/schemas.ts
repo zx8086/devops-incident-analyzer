@@ -60,6 +60,15 @@ export const ksqlSchema = z
 	})
 	.strict();
 
+export const connectSchema = z
+	.object({
+		enabled: z.boolean().describe("Whether Kafka Connect integration is enabled"),
+		url: z.string().describe("Kafka Connect REST API URL"),
+		apiKey: z.string().describe("Kafka Connect API key (for basic auth; empty for no-auth deployments)"),
+		apiSecret: z.string().describe("Kafka Connect API secret (for basic auth; empty for no-auth deployments)"),
+	})
+	.strict();
+
 export const loggingSchema = z
 	.object({
 		level: z.enum(["silent", "debug", "info", "warn", "error"]).describe("Log verbosity level"),
@@ -97,6 +106,7 @@ export const configSchema = z
 		local: localSchema,
 		schemaRegistry: schemaRegistrySchema,
 		ksql: ksqlSchema,
+		connect: connectSchema,
 		logging: loggingSchema,
 		telemetry: telemetrySchema,
 		transport: transportSchema,
@@ -154,6 +164,16 @@ export const configSchema = z
 					code: z.ZodIssueCode.custom,
 					path: ["ksql", "endpoint"],
 					message: "ksqlDB requires ksql.endpoint to be set when enabled",
+				});
+			}
+		}
+
+		if (config.connect.enabled) {
+			if (config.connect.url.length === 0) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["connect", "url"],
+					message: "Kafka Connect requires connect.url to be set when enabled",
 				});
 			}
 		}

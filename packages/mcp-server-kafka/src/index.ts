@@ -6,6 +6,7 @@ import pkg from "../package.json" with { type: "json" };
 import { getConfig } from "./config/index.ts";
 import { createProvider } from "./providers/factory.ts";
 import { KafkaClientManager } from "./services/client-manager.ts";
+import { ConnectService } from "./services/connect-service.ts";
 import { KafkaService } from "./services/kafka-service.ts";
 import { KsqlService } from "./services/ksql-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
@@ -93,6 +94,11 @@ if (import.meta.main) {
 					logger.info({ endpoint: config.ksql.endpoint }, "ksqlDB enabled");
 				}
 
+				if (config.connect.enabled) {
+					toolOptions.connectService = new ConnectService(config);
+					logger.info({ url: config.connect.url }, "Kafka Connect enabled");
+				}
+
 				return { kafkaService, clientManager, toolOptions };
 			},
 
@@ -110,7 +116,11 @@ if (import.meta.main) {
 			},
 
 			onStarted: () => {
-				const toolCount = 15 + (config.schemaRegistry.enabled ? 8 : 0) + (config.ksql.enabled ? 7 : 0);
+				const toolCount =
+					15 +
+					(config.schemaRegistry.enabled ? 8 : 0) +
+					(config.ksql.enabled ? 7 : 0) +
+					(config.connect.enabled ? 4 : 0);
 				logger.info(
 					{
 						provider: config.kafka.provider,
