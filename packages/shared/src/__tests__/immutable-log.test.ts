@@ -10,7 +10,7 @@ describe("createHashChainDestination", () => {
 		dest.write(JSON.stringify({ msg: "hello" }));
 		expect(output).toHaveLength(1);
 
-		const parsed = JSON.parse(output[0]!);
+		const parsed = JSON.parse(output[0] as string);
 		expect(parsed.msg).toBe("hello");
 		expect(parsed._prevHash).toBeString();
 		expect(parsed._lineHash).toBeString();
@@ -25,8 +25,8 @@ describe("createHashChainDestination", () => {
 		dest.write(JSON.stringify({ msg: "first" }));
 		dest.write(JSON.stringify({ msg: "second" }));
 
-		const first = JSON.parse(output[0]!);
-		const second = JSON.parse(output[1]!);
+		const first = JSON.parse(output[0] as string);
+		const second = JSON.parse(output[1] as string);
 
 		// Second entry's _prevHash should equal first entry's _lineHash
 		expect(second._prevHash).toBe(first._lineHash);
@@ -37,7 +37,7 @@ describe("createHashChainDestination", () => {
 		const dest = createHashChainDestination({ write: (d) => output.push(d) });
 
 		dest.write(JSON.stringify({ msg: "first" }));
-		const parsed = JSON.parse(output[0]!);
+		const parsed = JSON.parse(output[0] as string);
 		expect(parsed._prevHash).toBe("0".repeat(64));
 	});
 
@@ -46,7 +46,7 @@ describe("createHashChainDestination", () => {
 		const dest = createHashChainDestination({ write: (d) => output.push(d) });
 
 		dest.write("not json\n");
-		expect(output[0]!).toBe("not json\n");
+		expect(output[0] as string).toBe("not json\n");
 	});
 });
 
@@ -73,7 +73,7 @@ describe("verifyHashChain", () => {
 		dest.write(JSON.stringify({ msg: "three" }));
 
 		// Tamper with line 1's _prevHash to break the chain at line 1
-		const tampered = JSON.parse(output[1]!);
+		const tampered = JSON.parse(output[1] as string);
 		tampered._prevHash = "deadbeef".repeat(8);
 		output[1] = JSON.stringify(tampered);
 

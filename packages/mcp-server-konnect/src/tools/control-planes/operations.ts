@@ -412,13 +412,11 @@ export async function listDataPlaneNodes(
 			summary: {
 				totalNodes: result.page?.total_count || result.meta?.page?.total_count || 0,
 				connectedNodes:
-					(result.items || result.data)?.filter(
-						(n) => n.connection_state?.is_connected || n.status === "connected",
-					).length || 0,
+					(result.items || result.data)?.filter((n) => n.connection_state?.is_connected || n.status === "connected")
+						.length || 0,
 				disconnectedNodes:
-					(result.items || result.data)?.filter(
-						(n) => !n.connection_state?.is_connected && n.status !== "connected",
-					).length || 0,
+					(result.items || result.data)?.filter((n) => !n.connection_state?.is_connected && n.status !== "connected")
+						.length || 0,
 				overallHealth: result.summary?.health_status || "healthy",
 			},
 			relatedTools: [

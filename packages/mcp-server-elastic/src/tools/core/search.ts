@@ -207,9 +207,9 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				});
 			}
 
-			if (hasComplexAggregations) {
+			if (aggs && hasComplexAggregations) {
 				await notificationManager.sendInfo("Complex aggregations detected", {
-					aggregationCount: Object.keys(aggs!).length,
+					aggregationCount: Object.keys(aggs).length,
 					note: "This may increase query execution time",
 				});
 			}

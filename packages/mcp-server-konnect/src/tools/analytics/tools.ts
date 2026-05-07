@@ -1,7 +1,7 @@
 import type { MCPTool } from "../registry.js";
 import * as analyticsOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type { GetConsumerRequestsArgs, QueryApiRequestsArgs } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 export const analyticsTools = (): MCPTool[] => [

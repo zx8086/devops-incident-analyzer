@@ -65,7 +65,7 @@ describe("Flight API Integration Tests", () => {
 
 			// Test each route configuration
 			flightRoutes.forEach((route, index) => {
-				const expectedRoute = TEST_CONFIG.routes[index]!;
+				const expectedRoute = TEST_CONFIG.routes[index] as (typeof TEST_CONFIG.routes)[number];
 				expect(route.name).toContain(expectedRoute.name);
 				expect(route.methods).toEqual(expectedRoute.methods);
 				expect(route.service.id).toBe(flightService.id);

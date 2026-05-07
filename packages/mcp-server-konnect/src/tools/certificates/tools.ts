@@ -1,6 +1,5 @@
 import type { MCPTool } from "../registry.js";
 import * as certificatesOps from "./operations.js";
-import * as parameters from "./parameters.js";
 import type {
 	CreateCertificateArgs,
 	DeleteCertificateArgs,
@@ -8,6 +7,7 @@ import type {
 	ListCertificatesArgs,
 	UpdateCertificateArgs,
 } from "./parameters.js";
+import * as parameters from "./parameters.js";
 import * as prompts from "./prompts.js";
 
 export const certificatesTools = (): MCPTool[] => [

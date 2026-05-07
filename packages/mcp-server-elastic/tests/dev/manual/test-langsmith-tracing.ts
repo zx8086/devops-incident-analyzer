@@ -66,7 +66,7 @@ class LangSmithTracingTester {
 				throw new Error('LANGSMITH_TRACING must be set to "true"');
 			}
 
-			if (!apiKey || !apiKey.startsWith("lsv2_sk_")) {
+			if (!apiKey?.startsWith("lsv2_sk_")) {
 				throw new Error("LANGSMITH_API_KEY must be set with valid key format");
 			}
 
@@ -222,12 +222,7 @@ class LangSmithTracingTester {
 				const originalTool = mockServer.tool.bind(mockServer);
 				let tracingApplied = false;
 
-				mockServer.tool = (
-					name: string,
-					description: string,
-					inputSchema: unknown,
-					handler: ToolHandlerFn,
-				) => {
+				mockServer.tool = (name: string, description: string, inputSchema: unknown, handler: ToolHandlerFn) => {
 					// Simulate the tracing wrapper
 					const enhancedHandler = async (args: unknown) => {
 						tracingApplied = true;

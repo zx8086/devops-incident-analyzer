@@ -24,7 +24,7 @@ const SearchParams = z.object({
 	highlight: z.object({}).passthrough().optional(),
 });
 
-type SearchParamsType = z.infer<typeof SearchParams>;
+type _SearchParamsType = z.infer<typeof SearchParams>;
 
 describe("MCP Fix Validation", () => {
 	test("Should handle object parameters (FIXED format) correctly", () => {

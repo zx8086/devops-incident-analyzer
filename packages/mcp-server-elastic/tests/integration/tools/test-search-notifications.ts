@@ -38,7 +38,7 @@ async function testSearchNotifications() {
 
 		// This would normally be called by the MCP framework
 		// We're just testing that our imports and structure are correct
-		const { registerSearchTool } = await import("../../../src/tools/core/search.js");
+		const { registerSearchTool: _registerSearchTool } = await import("../../../src/tools/core/search.js");
 
 		console.log("Search tool with notifications loaded successfully");
 		console.log("Progress tracker import verified");

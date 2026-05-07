@@ -38,7 +38,13 @@ describe("Integration Test - Natural Parameter Schema", () => {
 
 		// Create mock Elasticsearch client
 		mockClient = {
-			search: async (searchRequest: Record<string, unknown> & { size?: number; aggs?: unknown; query?: { range?: Record<string, unknown> } }) => {
+			search: async (
+				searchRequest: Record<string, unknown> & {
+					size?: number;
+					aggs?: unknown;
+					query?: { range?: Record<string, unknown> };
+				},
+			) => {
 				console.log("\nMock Elasticsearch search called with:");
 				console.log(JSON.stringify(searchRequest, null, 2));
 				console.log(`size: ${searchRequest.size}, hasAggs: ${!!searchRequest.aggs}`);

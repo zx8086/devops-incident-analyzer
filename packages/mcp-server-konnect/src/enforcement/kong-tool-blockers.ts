@@ -325,11 +325,9 @@ export const BlockedPluginOperations = {
 				// pluginParams is validated upstream by the Zod tool schema, so
 				// the runtime always carries `name`. Cast to the expected shape
 				// rather than re-validating in the enforcement layer.
-				return await configOps.createPlugin(
-					api,
-					controlPlaneId,
-					{ ...pluginParams, tags } as Parameters<typeof configOps.createPlugin>[2],
-				);
+				return await configOps.createPlugin(api, controlPlaneId, { ...pluginParams, tags } as Parameters<
+					typeof configOps.createPlugin
+				>[2]);
 			},
 		);
 	},
@@ -443,7 +441,10 @@ export const BlockedControlPlaneOperations = {
 	/**
 	 * CREATE CONTROL PLANE - BLOCKED UNTIL ELICITATION
 	 */
-	async createControlPlane(params: Record<string, unknown>, requestContext: { userMessage: string; files?: string[]; configs?: Array<Record<string, unknown>> }) {
+	async createControlPlane(
+		params: Record<string, unknown>,
+		requestContext: { userMessage: string; files?: string[]; configs?: Array<Record<string, unknown>> },
+	) {
 		return await withMandatoryElicitation(
 			"create_control_plane",
 			{
@@ -470,10 +471,9 @@ export const BlockedControlPlaneOperations = {
 
 				// params is validated upstream by the Zod tool schema, so name is
 				// always present at runtime.
-				return await controlPlaneOps.createControlPlane(
-					api,
-					{ ...params, labels } as unknown as Parameters<typeof controlPlaneOps.createControlPlane>[1],
-				);
+				return await controlPlaneOps.createControlPlane(api, { ...params, labels } as unknown as Parameters<
+					typeof controlPlaneOps.createControlPlane
+				>[1]);
 			},
 		);
 	},

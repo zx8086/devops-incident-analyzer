@@ -13,21 +13,23 @@ async function testToolImports() {
 		console.log("\nTesting tool imports...");
 
 		// Test all the fixed tools can be imported without errors
-		const { registerUpdateIndexSettingsTool } = await import(
+		const { registerUpdateIndexSettingsTool: _registerUpdateIndexSettingsTool } = await import(
 			"../../../src/tools/index_management/update_index_settings.js"
 		);
 		console.log("  [PASS] elasticsearch_update_index_settings imported");
 
-		const { registerMoveToStepTool } = await import("../../../src/tools/ilm/move_to_step.js");
+		const { registerMoveToStepTool: _registerMoveToStepTool } = await import("../../../src/tools/ilm/move_to_step.js");
 		console.log("  [PASS] elasticsearch_ilm_move_to_step imported");
 
-		const { registerReindexDocumentsTool } = await import("../../../src/tools/index_management/reindex_documents.js");
+		const { registerReindexDocumentsTool: _registerReindexDocumentsTool } = await import(
+			"../../../src/tools/index_management/reindex_documents.js"
+		);
 		console.log("  [PASS] elasticsearch_reindex_documents imported");
 
-		const { registerRetryTool } = await import("../../../src/tools/ilm/retry.js");
+		const { registerRetryTool: _registerRetryTool } = await import("../../../src/tools/ilm/retry.js");
 		console.log("  [PASS] elasticsearch_ilm_retry imported");
 
-		const { registerSearchTool } = await import("../../../src/tools/core/search.js");
+		const { registerSearchTool: _registerSearchTool } = await import("../../../src/tools/core/search.js");
 		console.log("  [PASS] elasticsearch_search with notifications imported");
 
 		console.log("\nAll tool imports successful!");
@@ -42,7 +44,7 @@ async function testParameterValidation() {
 		console.log("\nTesting parameter validation improvements...");
 
 		// Test notification system for search
-		const { notificationManager } = await import("../../../src/utils/notifications.js");
+		const { notificationManager: _notificationManager } = await import("../../../src/utils/notifications.js");
 		console.log("  [PASS] Notification system available");
 
 		console.log("\nAll validation tests passed!");

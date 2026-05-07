@@ -35,7 +35,10 @@ export const createControlPlaneParameters = z.object({
 		.default("CLUSTER_TYPE_HYBRID")
 		.describe("Cluster type for the control plane"),
 	cloudGateway: z.boolean().default(false).describe("Enable cloud gateway for this control plane"),
-	authType: z.enum(["pki", "pinned_certs"]).default("pinned_certs").describe("Authentication type for data plane nodes"),
+	authType: z
+		.enum(["pki", "pinned_certs"])
+		.default("pinned_certs")
+		.describe("Authentication type for data plane nodes"),
 	proxyUrls: z.array(z.string()).optional().describe("Custom proxy URLs for the control plane"),
 	labels: z.record(z.string(), z.string()).optional().describe("Labels to associate with the control plane"),
 });

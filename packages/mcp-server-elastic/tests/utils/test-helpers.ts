@@ -105,16 +105,9 @@ export function createMockServer(): MockServer {
 	const tools: Map<string, CapturedTool> = new Map();
 
 	return {
-		tool: mock(
-			(
-				name: string,
-				description: string,
-				schema: unknown,
-				handler: (...args: unknown[]) => unknown,
-			) => {
-				tools.set(name, { name, description, schema, handler });
-			},
-		),
+		tool: mock((name: string, description: string, schema: unknown, handler: (...args: unknown[]) => unknown) => {
+			tools.set(name, { name, description, schema, handler });
+		}),
 		registerTool: mock(
 			(
 				name: string,

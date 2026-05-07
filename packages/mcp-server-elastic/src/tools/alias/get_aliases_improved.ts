@@ -115,17 +115,17 @@ export const registerGetAliasesTool: ToolRegistrationFunction = (server: McpServ
 				const aliases = indexData.aliases || {};
 
 				for (const [aliasName, aliasConfig] of Object.entries(aliases)) {
-					if (!aliasMap.has(aliasName)) {
-						aliasMap.set(aliasName, {
+					let aliasSummary = aliasMap.get(aliasName);
+					if (!aliasSummary) {
+						aliasSummary = {
 							alias: aliasName,
 							indices: [],
 							index_count: 0,
 							has_filter: false,
 							is_write_index: false,
-						});
+						};
+						aliasMap.set(aliasName, aliasSummary);
 					}
-
-					const aliasSummary = aliasMap.get(aliasName)!;
 					aliasSummary.indices.push(indexName);
 					aliasSummary.index_count++;
 

@@ -81,7 +81,7 @@ describe("Documentation Accuracy", () => {
 	});
 
 	test("should have accurate parameter descriptions", () => {
-		if (!generatedDocs || !generatedDocs.components || !generatedDocs.components.schemas) {
+		if (!generatedDocs?.components?.schemas) {
 			console.log("No documentation schemas available, skipping parameter test");
 			return;
 		}
