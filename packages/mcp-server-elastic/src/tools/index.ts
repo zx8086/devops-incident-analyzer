@@ -2,7 +2,10 @@
 
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { runWithDeployment } from "../clients/context.js";
+import { listRegisteredDeploymentIds } from "../clients/registry.js";
 import { logger } from "../utils/logger.js";
 import { withSecurityValidation } from "../utils/securityEnhancer.js";
 import { traceToolCall } from "../utils/tracing.js";
@@ -14,6 +17,22 @@ import { traceToolCall } from "../utils/tracing.js";
  */
 function wrapZodShape(shape: Record<string, any>): any {
 	return z.object(shape);
+}
+
+// SIO-675: Append an optional `deployment` field to a Zod shape so cluster tools
+// can route per-call (Claude Desktop / stdio has no x-elastic-deployment header).
+// Lists registered IDs in the description so the model can pick at tools/list time.
+function withDeploymentField(shape: Record<string, any>, deploymentIds: string[]): Record<string, any> {
+	const idList = deploymentIds.length > 0 ? deploymentIds.join(", ") : "<none registered>";
+	return {
+		...shape,
+		deployment: z
+			.string()
+			.optional()
+			.describe(
+				`Optional. Target Elasticsearch deployment ID. One of: ${idList}. Falls back to ELASTIC_DEFAULT_DEPLOYMENT (or the x-elastic-deployment header on HTTP transport) when omitted. Explicit value wins over the header.`,
+			),
+	};
 }
 
 // Core Tools (List Indices, Get Mappings, Search, Get Shards)
@@ -160,6 +179,86 @@ interface ToolInfo {
 	inputSchema: any;
 }
 
+// SIO-621: Read-only tools skip security-validation regex (avoid SQL-injection
+// false positives on legitimate read params).
+// SIO-674: Cloud / billing tools are read-only in V1 and listed alongside cluster tools.
+// SIO-675 derives CLUSTER_TOOL_NAMES from this set by excluding the cloud/billing names.
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+	"elasticsearch_search",
+	"elasticsearch_list_indices",
+	"elasticsearch_get_mappings",
+	"elasticsearch_get_shards",
+	"elasticsearch_indices_summary",
+	"elasticsearch_diagnostics",
+	"elasticsearch_get_ingest_pipeline",
+	"elasticsearch_simulate_ingest_pipeline",
+	"elasticsearch_processor_grok",
+	"elasticsearch_execute_sql_query",
+	"elasticsearch_translate_sql_query",
+	"elasticsearch_count_documents",
+	"elasticsearch_scroll_search",
+	"elasticsearch_multi_search",
+	"elasticsearch_clear_scroll",
+	"elasticsearch_get_cluster_health",
+	"elasticsearch_get_cluster_stats",
+	"elasticsearch_get_nodes_info",
+	"elasticsearch_get_nodes_stats",
+	"elasticsearch_get_aliases",
+	"elasticsearch_get_field_mapping",
+	"elasticsearch_clear_sql_cursor",
+	"elasticsearch_get_document",
+	"elasticsearch_document_exists",
+	"elasticsearch_multi_get",
+	"elasticsearch_search_template",
+	"elasticsearch_multi_search_template",
+	"elasticsearch_get_index_template",
+	"elasticsearch_get_index",
+	"elasticsearch_index_exists",
+	"elasticsearch_get_index_settings",
+	"elasticsearch_ilm_get_lifecycle",
+	"elasticsearch_ilm_explain_lifecycle",
+	"elasticsearch_ilm_get_status",
+	"elasticsearch_list_tasks",
+	"elasticsearch_tasks_get_task",
+	"elasticsearch_field_usage_stats",
+	"elasticsearch_disk_usage",
+	"elasticsearch_get_data_lifecycle_stats",
+	"elasticsearch_get_index_info",
+	"elasticsearch_get_index_settings_advanced",
+	"elasticsearch_exists_alias",
+	"elasticsearch_exists_index_template",
+	"elasticsearch_exists_template",
+	"elasticsearch_explain_data_lifecycle",
+	// SIO-674: Elastic Cloud Deployment + Billing API. Org-scoped, not cluster-scoped --
+	// excluded from CLUSTER_TOOL_NAMES below because they accept their own deployment_id/org_id.
+	"elasticsearch_cloud_list_deployments",
+	"elasticsearch_cloud_get_deployment",
+	"elasticsearch_cloud_get_plan_activity",
+	"elasticsearch_cloud_get_plan_history",
+	"elasticsearch_billing_get_org_costs",
+	"elasticsearch_billing_get_deployment_costs",
+	"elasticsearch_billing_get_org_charts",
+]);
+
+// SIO-674: Cloud / billing tools are org-scoped and already accept deployment_id / org_id
+// in their own schemas. They must NOT receive the cluster `deployment` field.
+const CLOUD_BILLING_TOOLS: ReadonlySet<string> = new Set([
+	"elasticsearch_cloud_list_deployments",
+	"elasticsearch_cloud_get_deployment",
+	"elasticsearch_cloud_get_plan_activity",
+	"elasticsearch_cloud_get_plan_history",
+	"elasticsearch_billing_get_org_costs",
+	"elasticsearch_billing_get_deployment_costs",
+	"elasticsearch_billing_get_org_charts",
+]);
+
+// SIO-675: Cluster tools (ES instance-scoped) accept the optional `deployment` field
+// for per-call routing. Includes read-only cluster tools AND every write tool
+// (everything not in the cloud/billing set).
+function isClusterTool(name: string): boolean {
+	return !CLOUD_BILLING_TOOLS.has(name);
+}
+
 export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[] {
 	// Wrap the server to automatically add tracing to ALL tools
 	// Direct server usage without wrapper
@@ -173,6 +272,23 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	// Override the registerTool method to capture tool information and add both tracing and security validation
 	const originalRegisterTool = server.registerTool.bind(server);
 	server.registerTool = (name: string, config: any, handler: any) => {
+		// SIO-675: Augment cluster-tool input schemas with an optional `deployment` field
+		// so Claude Desktop (stdio, no x-elastic-deployment header) can pick a deployment
+		// per call. Done before the z.object() wrapping below so withDeploymentField
+		// receives the raw shape. Cloud/billing tools are skipped (org-scoped already).
+		if (
+			isClusterTool(name) &&
+			config.inputSchema &&
+			typeof config.inputSchema === "object" &&
+			!config.inputSchema._def &&
+			!config.inputSchema._zod
+		) {
+			config = {
+				...config,
+				inputSchema: withDeploymentField(config.inputSchema, listRegisteredDeploymentIds()),
+			};
+		}
+
 		// Wrap raw Zod shapes in z.object() using Zod v4 classic to prevent the
 		// MCP SDK from wrapping them with zod/v4-mini (which is incompatible)
 		if (
@@ -195,67 +311,7 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 			inputSchema: config.inputSchema,
 		});
 
-		// SIO-621: Skip security validation for read-only tools. The SQL injection
-		// detection patterns (quotes, keywords like SELECT/WHERE) produce false
-		// positives on legitimate Elasticsearch SQL queries and read-only parameters.
-		const readOnlyTools = [
-			"elasticsearch_search",
-			"elasticsearch_list_indices",
-			"elasticsearch_get_mappings",
-			"elasticsearch_get_shards",
-			"elasticsearch_indices_summary",
-			"elasticsearch_diagnostics",
-			"elasticsearch_get_ingest_pipeline",
-			"elasticsearch_simulate_ingest_pipeline",
-			"elasticsearch_processor_grok",
-			"elasticsearch_execute_sql_query",
-			"elasticsearch_translate_sql_query",
-			"elasticsearch_count_documents",
-			"elasticsearch_scroll_search",
-			"elasticsearch_multi_search",
-			"elasticsearch_clear_scroll",
-			"elasticsearch_get_cluster_health",
-			"elasticsearch_get_cluster_stats",
-			"elasticsearch_get_nodes_info",
-			"elasticsearch_get_nodes_stats",
-			"elasticsearch_get_aliases",
-			"elasticsearch_get_field_mapping",
-			"elasticsearch_clear_sql_cursor",
-			"elasticsearch_get_document",
-			"elasticsearch_document_exists",
-			"elasticsearch_multi_get",
-			"elasticsearch_search_template",
-			"elasticsearch_multi_search_template",
-			"elasticsearch_get_index_template",
-			"elasticsearch_get_index",
-			"elasticsearch_index_exists",
-			"elasticsearch_get_index_settings",
-			"elasticsearch_ilm_get_lifecycle",
-			"elasticsearch_ilm_explain_lifecycle",
-			"elasticsearch_ilm_get_status",
-			"elasticsearch_list_tasks",
-			"elasticsearch_tasks_get_task",
-			"elasticsearch_field_usage_stats",
-			"elasticsearch_disk_usage",
-			"elasticsearch_get_data_lifecycle_stats",
-			"elasticsearch_get_index_info",
-			"elasticsearch_get_index_settings_advanced",
-			"elasticsearch_exists_alias",
-			"elasticsearch_exists_index_template",
-			"elasticsearch_exists_template",
-			"elasticsearch_explain_data_lifecycle",
-			// SIO-674: Elastic Cloud Deployment + Billing API. All read-only in V1; the write
-			// tool (cloud_update_deployment) is deferred. JSON-only request/response shapes
-			// would false-positive on the SQL-injection regex without this allowlist entry.
-			"elasticsearch_cloud_list_deployments",
-			"elasticsearch_cloud_get_deployment",
-			"elasticsearch_cloud_get_plan_activity",
-			"elasticsearch_cloud_get_plan_history",
-			"elasticsearch_billing_get_org_costs",
-			"elasticsearch_billing_get_deployment_costs",
-			"elasticsearch_billing_get_org_charts",
-		];
-		const shouldValidate = !readOnlyTools.includes(name);
+		const shouldValidate = !READ_ONLY_TOOLS.has(name);
 
 		// Create enhanced handler with both tracing and security validation
 		let enhancedHandler = handler;
@@ -268,6 +324,36 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 		// Add security validation wrapper for write operations
 		if (shouldValidate) {
 			enhancedHandler = withSecurityValidation(name, enhancedHandler);
+		}
+
+		// SIO-675: For cluster tools, peel off the optional `deployment` arg and route via
+		// runWithDeployment(). Sits at the OUTERMOST layer so:
+		//   1. The security validator never sees `deployment` (avoids regex false-positives).
+		//   2. Validation of the deployment ID happens before any handler work.
+		//   3. Inner runWithDeployment shadows any outer one (HTTP arg-over-header precedence).
+		if (isClusterTool(name)) {
+			const innerHandler = enhancedHandler;
+			enhancedHandler = async (toolArgs: any, extra: any) => {
+				if (!toolArgs || typeof toolArgs !== "object" || toolArgs.deployment === undefined) {
+					return innerHandler(toolArgs, extra);
+				}
+				const { deployment, ...rest } = toolArgs as Record<string, unknown>;
+				if (typeof deployment !== "string" || deployment.length === 0) {
+					const validIds = listRegisteredDeploymentIds();
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`Invalid 'deployment' argument: expected non-empty string. Valid deployment IDs: ${validIds.join(", ") || "<none registered>"}`,
+					);
+				}
+				const validIds = listRegisteredDeploymentIds();
+				if (!validIds.includes(deployment)) {
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`Unknown deployment '${deployment}'. Valid deployment IDs: ${validIds.join(", ") || "<none registered>"}`,
+					);
+				}
+				return runWithDeployment(deployment, () => innerHandler(rest, extra));
+			};
 		}
 
 		return originalRegisterTool(name, config, enhancedHandler);
