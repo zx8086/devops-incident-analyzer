@@ -1,7 +1,7 @@
 # MCP Server Configuration
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-05-07
 
 Deep dive into how each of the six MCP servers is configured. All servers follow the same 4-pillar configuration pattern, but each has distinct schema shapes, authentication models, and feature gates. This document covers the pattern itself, then walks through each server's specifics.
 
@@ -79,16 +79,16 @@ ElasticConfig
 
 ### Multi-Deployment Mode
 
-The `ELASTIC_DEPLOYMENTS` variable contains a comma-separated list of deployment IDs. The loader iterates over each ID and reads its `URL`, `API_KEY`, `USERNAME`, and `PASSWORD` variables dynamically:
+The `ELASTIC_DEPLOYMENTS` variable contains a comma-separated list of deployment IDs. The loader iterates over each ID and reads its `URL`, `API_KEY`, `USERNAME`, and `PASSWORD` variables dynamically. The env-key transform is uppercase + hyphens-to-underscores (`eu-cld` -> `ELASTIC_EU_CLD_*`):
 
 ```
-ELASTIC_DEPLOYMENTS=production,staging
-                       |          |
-                       v          v
-          ELASTIC_PRODUCTION_*   ELASTIC_STAGING_*
+ELASTIC_DEPLOYMENTS=eu-cld,us-cld
+                       |       |
+                       v       v
+            ELASTIC_EU_CLD_*  ELASTIC_US_CLD_*
 ```
 
-Each deployment is independently authenticated. Production might use API key auth while staging uses basic auth. The server validates that each deployment has at least one valid auth method.
+Each deployment is independently authenticated. One deployment might use API key auth while another uses basic auth. The server validates that each deployment has at least one valid auth method.
 
 ### Authentication Options
 
@@ -98,6 +98,79 @@ Each deployment is independently authenticated. Production might use API key aut
 | Basic Auth | `ELASTIC_{ID}_USERNAME` + `ELASTIC_{ID}_PASSWORD` | Development, staging, legacy clusters |
 
 API key authentication is preferred for production because it supports scoped permissions without exposing cluster credentials.
+
+### Per-Call Deployment Switching (SIO-675)
+
+Cluster-scoped tools (e.g. `elasticsearch_cluster_info`, `elasticsearch_search`) accept an optional `deployment` argument so a single MCP session can route individual calls to different clusters without restarting the server. The dispatcher resolves the target deployment in this order (`packages/mcp-server-elastic/src/tools/index.ts:361-393`):
+
+1. The explicit `deployment` arg in the tool call.
+2. The `x-elastic-deployment` HTTP header (HTTP transport only).
+3. The `ELASTIC_DEFAULT_DEPLOYMENT` env var.
+4. The first ID in `ELASTIC_DEPLOYMENTS`.
+
+An unknown deployment ID returns `McpError(InvalidParams)` listing the valid IDs. The schema for each cluster tool is augmented with the `deployment` field at registration time so MCP clients see the valid IDs as an enum.
+
+### Elastic Cloud Deployment + Billing Tools (SIO-674)
+
+When `EC_API_KEY` is set, the server registers 7 additional org-scoped tools that talk to `https://api.elastic-cloud.com`:
+
+- `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`
+- `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_deployment_costs`, `elasticsearch_billing_get_org_charts`
+
+These use the org-scoped `EC_API_KEY` credential, which is **distinct** from the per-deployment cluster API keys. When `EC_API_KEY` is unset, the tools do not register and the server boots normally — self-hosted ES users do not need an Elastic Cloud account. See [Environment Variables](environment-variables.md#elastic-cloud-deployment--billing-api-sio-674) for the full env-var list.
+
+### Claude Desktop Integration
+
+To wire the Elasticsearch MCP server into Claude Desktop, add the following to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). The `args[1]` path must be **absolute** because Claude Desktop spawns the process from its own working directory:
+
+```json
+{
+  "mcpServers": {
+    "elastic": {
+      "command": "bun",
+      "args": [
+        "run",
+        "/absolute/path/to/devops-incident-analyzer/packages/mcp-server-elastic/src/index.ts"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "ELASTIC_DEPLOYMENTS": "eu-cld,us-cld,eu-b2b,ap-cld,gl-cld-reporting,eu-onboarding,eu-cld-monitor,ap-cld-monitor,gl-testing,us-cld-monitor",
+        "ELASTIC_DEFAULT_DEPLOYMENT": "eu-cld",
+        "ELASTIC_EU_CLD_URL": "https://...",
+        "ELASTIC_EU_CLD_API_KEY": "...",
+        "ELASTIC_US_CLD_URL": "https://...",
+        "ELASTIC_US_CLD_API_KEY": "...",
+        "ELASTIC_EU_B2B_URL": "https://...",
+        "ELASTIC_EU_B2B_API_KEY": "...",
+        "ELASTIC_AP_CLD_URL": "https://...",
+        "ELASTIC_AP_CLD_API_KEY": "...",
+        "ELASTIC_GL_CLD_REPORTING_URL": "https://...",
+        "ELASTIC_GL_CLD_REPORTING_API_KEY": "...",
+        "ELASTIC_EU_ONBOARDING_URL": "https://...",
+        "ELASTIC_EU_ONBOARDING_API_KEY": "...",
+        "ELASTIC_EU_CLD_MONITOR_URL": "https://...",
+        "ELASTIC_EU_CLD_MONITOR_API_KEY": "...",
+        "ELASTIC_AP_CLD_MONITOR_URL": "https://...",
+        "ELASTIC_AP_CLD_MONITOR_API_KEY": "...",
+        "ELASTIC_GL_TESTING_URL": "https://...",
+        "ELASTIC_GL_TESTING_API_KEY": "...",
+        "ELASTIC_US_CLD_MONITOR_URL": "https://...",
+        "ELASTIC_US_CLD_MONITOR_API_KEY": "...",
+        "EC_API_KEY": "...",
+        "EC_DEFAULT_ORG_ID": "..."
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Trim the deployment list to whatever subset you actually have credentials for. Every ID in `ELASTIC_DEPLOYMENTS` must have a matching `ELASTIC_{ID}_URL` and either an `_API_KEY` or `_USERNAME`+`_PASSWORD` pair, or boot will fail.
+- Omit `ELASTIC_DEFAULT_DEPLOYMENT` to default to the first ID in the list.
+- Omit `EC_API_KEY` and `EC_DEFAULT_ORG_ID` if you do not need the Elastic Cloud + Billing tools — the server boots fine without them.
+- For local-dev or single-cluster use, leave `ELASTIC_DEPLOYMENTS` unset and use the legacy `ES_URL` + `ES_API_KEY` shape instead.
+- After saving, fully quit and relaunch Claude Desktop (not just close the window) so it re-spawns the MCP child process.
 
 ---
 
