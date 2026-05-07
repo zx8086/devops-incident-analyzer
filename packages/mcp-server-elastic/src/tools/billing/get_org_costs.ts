@@ -8,10 +8,11 @@ import type { CloudToolRegistrationFunction, SearchResult, TextContent } from ".
 
 const TOOL_NAME = "elasticsearch_billing_get_org_costs";
 
+// SIO-678: from/to are required by the v2 Billing API; missing them returns 400.
 const validator = z.object({
 	org_id: z.string().min(1).optional(),
-	from: z.string().min(1).optional(),
-	to: z.string().min(1).optional(),
+	from: z.string().min(1),
+	to: z.string().min(1),
 });
 
 type Params = z.infer<typeof validator>;
@@ -29,7 +30,8 @@ export const registerBillingGetOrgCostsTool: CloudToolRegistrationFunction = (se
 				);
 			}
 			logger.info({ requestId, orgId, from: params.from, to: params.to }, `[${TOOL_NAME}] fetching org costs`);
-			const result = await cloudClient.get(`/api/v1/billing/costs/organizations/${encodeURIComponent(orgId)}/items`, {
+			// SIO-678: corrected v2 path -- v1 namespace returns 404 for this org.
+			const result = await cloudClient.get(`/api/v2/billing/organizations/${encodeURIComponent(orgId)}/costs/items`, {
 				query: { from: params.from, to: params.to },
 			});
 			return {
@@ -56,7 +58,7 @@ export const registerBillingGetOrgCostsTool: CloudToolRegistrationFunction = (se
 		{
 			title: "Elastic Cloud Billing: itemised org costs",
 			description:
-				"Elastic Cloud Billing Costs Analysis API -- itemised costs for the configured organisation, broken down by billing dimension (capacity, data_in, data_internode, data_out, storage_api, storage_bytes). Each item includes hours, instance_count, period, kind, price, and price_per_hour in ECU. Use to confirm realised hourly rate after plan changes (e.g. cold tier downsize). org_id falls back to EC_DEFAULT_ORG_ID. from/to are ISO 8601. READ operation.",
+				"Elastic Cloud Billing Costs Analysis API (v2) -- itemised costs for the configured organisation across the requested time range. Returns total_ecu and a products[] array of product_line_items, each with name, sku, kind, quantity, rate, and total_ecu. Use to confirm realised hourly rate after plan changes (e.g. cold tier downsize). org_id falls back to EC_DEFAULT_ORG_ID. from/to are required ISO 8601 timestamps. READ operation.",
 			inputSchema: validator.shape,
 		},
 		handler,
