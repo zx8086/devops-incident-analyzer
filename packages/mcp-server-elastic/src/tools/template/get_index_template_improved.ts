@@ -1,7 +1,7 @@
 /* src/tools/template/get_index_template_improved.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -26,7 +26,7 @@ interface TemplateSummary {
 		mappings?: boolean;
 		aliases?: boolean;
 	};
-	_meta?: any;
+	_meta?: estypes.Metadata;
 }
 
 // Direct JSON Schema definition
@@ -101,10 +101,15 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 			);
 
 			// Transform templates into a more manageable format
-			const templates: TemplateSummary[] = result.index_templates.map((template: any) => {
+			const templates: TemplateSummary[] = result.index_templates.map((template) => {
+				const indexPatterns = template.index_template.index_patterns;
 				const summary: TemplateSummary = {
 					name: template.name,
-					index_patterns: template.index_template.index_patterns || [],
+					index_patterns: Array.isArray(indexPatterns)
+						? indexPatterns
+						: typeof indexPatterns === "string"
+							? [indexPatterns]
+							: [],
 					priority: template.index_template.priority || 0,
 				};
 
@@ -141,7 +146,7 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 				const filtered = templates.filter((t) => t.name === name);
 				if (filtered.length > 0) {
 					// Return just the specific template requested
-					const template = result.index_templates.find((t: any) => t.name === name);
+					const template = result.index_templates.find((t) => t.name === name);
 					return {
 						content: [
 							{
@@ -265,7 +270,7 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 				responseContent.push("```json");
 
 				const detailedResults = paginatedTemplates.map((template) => {
-					const fullTemplate = result.index_templates.find((t: any) => t.name === template.name);
+					const fullTemplate = result.index_templates.find((t) => t.name === template.name);
 					return fullTemplate;
 				});
 

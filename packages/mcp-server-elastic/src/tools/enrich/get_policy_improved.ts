@@ -1,7 +1,7 @@
 /* src/tools/enrich/get_policy_improved.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -50,6 +50,10 @@ interface PolicySummary {
 	created?: string;
 }
 
+// EnrichSummary in some ES versions includes a top-level `created` timestamp
+// not yet reflected in the SDK type. Augment locally for the read sites.
+type EnrichSummaryWithCreated = estypes.EnrichSummary & { created?: string };
+
 // MCP error handling
 function createGetPolicyMcpError(
 	error: Error | string,
@@ -90,15 +94,15 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			});
 
 			// Extract policies array
-			const policies: any[] = result.policies || [];
+			const policies: EnrichSummaryWithCreated[] = (result.policies || []) as EnrichSummaryWithCreated[];
 
 			// Transform policies into summary format
-			const policySummaries: PolicySummary[] = policies.map((policy: any) => {
+			const policySummaries: PolicySummary[] = policies.map((policy) => {
 				const config = policy.config;
 
 				// Determine policy type and extract config
 				let type = "unknown";
-				let policyConfig: any = {};
+				let policyConfig: Partial<estypes.EnrichPolicy> & { name?: string } = {};
 
 				if (config.match) {
 					type = "match";
@@ -111,14 +115,24 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 					policyConfig = config.range;
 				}
 
+				const rawIndices = policyConfig.indices;
+				const sourceIndices: string[] = Array.isArray(rawIndices)
+					? rawIndices.filter((s): s is string => typeof s === "string")
+					: typeof rawIndices === "string"
+						? [rawIndices]
+						: [];
+				const enrichFieldsRaw = policyConfig.enrich_fields;
+				const enrichFields: string[] = Array.isArray(enrichFieldsRaw)
+					? enrichFieldsRaw.filter((f): f is string => typeof f === "string")
+					: typeof enrichFieldsRaw === "string"
+						? [enrichFieldsRaw]
+						: [];
 				return {
 					name: policyConfig.name || "unnamed",
 					type: type,
-					source_indices: Array.isArray(policyConfig.indices)
-						? policyConfig.indices
-						: [policyConfig.indices].filter(Boolean),
-					match_field: policyConfig.match_field || "",
-					enrich_fields: policyConfig.enrich_fields || [],
+					source_indices: sourceIndices,
+					match_field: typeof policyConfig.match_field === "string" ? policyConfig.match_field : "",
+					enrich_fields: enrichFields,
 					query: !!policyConfig.query,
 					created: policy.created || undefined,
 				};
@@ -129,7 +143,7 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 				const filtered = policySummaries.filter((p) => p.name === name);
 				if (filtered.length === 1) {
 					// Return just the specific policy requested
-					const policy = policies.find((p: any) => {
+					const policy = policies.find((p) => {
 						const cfg = p.config.match || p.config.geo_match || p.config.range;
 						return cfg?.name === name;
 					});
@@ -247,7 +261,7 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 				responseContent.push("```json");
 
 				const detailedResults = paginatedPolicies.map((policySummary) => {
-					return policies.find((p: any) => {
+					return policies.find((p) => {
 						const cfg = p.config.match || p.config.geo_match || p.config.range;
 						return cfg?.name === policySummary.name;
 					});

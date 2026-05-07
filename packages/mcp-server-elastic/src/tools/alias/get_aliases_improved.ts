@@ -1,7 +1,7 @@
 /* src/tools/alias/get_aliases_improved.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -236,18 +236,23 @@ export const registerGetAliasesTool: ToolRegistrationFunction = (server: McpServ
 				// Detailed mode - full alias information
 				responseContent.push("\n## Alias Details\n");
 
-				const detailedResults: any[] = [];
+				interface AliasDetail {
+					name: string;
+					indices: Record<string, estypes.IndicesAliasDefinition>;
+				}
+				const detailedResults: AliasDetail[] = [];
 
 				for (const alias of paginatedAliases) {
 					// Get the full alias configuration from the original result
-					const aliasDetail: any = {
+					const aliasDetail: AliasDetail = {
 						name: alias.alias,
 						indices: {},
 					};
 
 					for (const indexName of alias.indices) {
-						if (result[indexName]?.aliases[alias.alias]) {
-							aliasDetail.indices[indexName] = result[indexName].aliases[alias.alias];
+						const aliasDef = result[indexName]?.aliases[alias.alias];
+						if (aliasDef) {
+							aliasDetail.indices[indexName] = aliasDef;
 						}
 					}
 

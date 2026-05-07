@@ -1,6 +1,6 @@
 // tools/ingest/get_pipeline.ts
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -19,13 +19,17 @@ const getPipelineValidator = z.object({
 
 type GetPipelineParams = z.infer<typeof getPipelineValidator>;
 
-function summarizePipelines(pipelines: Record<string, any>): string {
+function summarizePipelines(pipelines: Record<string, estypes.IngestPipeline>): string {
 	const lines: string[] = ["## Ingest Pipeline Summary\n"];
 
 	for (const [name, def] of Object.entries(pipelines)) {
-		const processors = def.processors ?? [];
+		// Treat each processor entry as a {[key]: value} record so single-key
+		// inspection works regardless of how the SDK declares the union shape.
+		const processors: Record<string, unknown>[] = (def.processors ?? []).filter(
+			(p): p is estypes.IngestProcessorContainer => p !== undefined && p !== null,
+		) as unknown as Record<string, unknown>[];
 		const onFailure = def.on_failure ?? [];
-		const processorTypes = processors.map((p: Record<string, unknown>) => Object.keys(p)[0]);
+		const processorTypes = processors.map((p) => Object.keys(p)[0]);
 
 		lines.push(`### ${name}`);
 		if (def.description) lines.push(`- **Description**: ${def.description}`);
@@ -35,18 +39,19 @@ function summarizePipelines(pipelines: Record<string, any>): string {
 		);
 
 		// Flag grok processors specifically since they are common failure sources
-		const grokProcessors = processors.filter((p: Record<string, unknown>) => "grok" in p);
+		const grokProcessors = processors.filter((p) => "grok" in p);
 		if (grokProcessors.length > 0) {
 			lines.push(`- **Grok processors**: ${grokProcessors.length}`);
 			for (const gp of grokProcessors) {
-				const field = gp.grok?.field ?? "unknown";
-				const patternCount = gp.grok?.patterns?.length ?? 0;
+				const grok = gp.grok as { field?: string; patterns?: string[] } | undefined;
+				const field = grok?.field ?? "unknown";
+				const patternCount = grok?.patterns?.length ?? 0;
 				lines.push(`  - field: \`${field}\`, patterns: ${patternCount}`);
 			}
 		}
 
 		// Flag rename processors
-		const renameProcessors = processors.filter((p: Record<string, unknown>) => "rename" in p);
+		const renameProcessors = processors.filter((p) => "rename" in p);
 		if (renameProcessors.length > 0) {
 			lines.push(`- **Rename processors**: ${renameProcessors.length}`);
 		}

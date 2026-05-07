@@ -83,8 +83,14 @@ export const registerWatcherQueryWatchesTool: ToolRegistrationFunction = (server
 				for (const watch of watches) {
 					responseContent.push(`### Watch: ${watch._id || "Unknown"}`);
 
-					if ((watch as any)._source) {
-						const source = (watch as any)._source;
+					const watchWithSource = watch as typeof watch & { _source?: Record<string, unknown> };
+					if (watchWithSource._source) {
+						const source = watchWithSource._source as Record<string, unknown> & {
+							trigger?: Record<string, unknown>;
+							condition?: Record<string, unknown>;
+							actions?: Record<string, unknown>;
+							metadata?: { description?: string };
+						};
 
 						// Show key watch information
 						if (source.trigger) {

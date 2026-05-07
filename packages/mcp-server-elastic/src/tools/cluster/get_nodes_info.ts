@@ -1,7 +1,7 @@
 /* src/tools/cluster/get_nodes_info.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -24,13 +24,13 @@ const nodesInfoValidator = z.object({
 type NodesInfoParams = z.infer<typeof nodesInfoValidator>;
 
 // Helper function to format node info summary
-function formatNodeInfoSummary(result: any): string {
+function formatNodeInfoSummary(result: estypes.NodesInfoResponse): string {
 	if (!result.nodes) return "No node information available";
 
 	const summary: string[] = ["## Node Information Summary\n"];
 
 	for (const [nodeId, node] of Object.entries(result.nodes)) {
-		const nodeInfo = node as any;
+		const nodeInfo = node as estypes.NodesInfoNodeInfo;
 		summary.push(`### Node: ${nodeInfo.name || nodeId}`);
 		summary.push(`- **ID**: ${nodeId}`);
 
@@ -59,9 +59,14 @@ function formatNodeInfoSummary(result: any): string {
 		}
 
 		if (nodeInfo.process) {
-			summary.push(`- **CPU Cores**: ${nodeInfo.process.cpu.total_cores || "Unknown"}`);
-			if (nodeInfo.process.mem) {
-				summary.push(`- **System Memory**: ${Math.round(nodeInfo.process.mem.total_in_bytes / 1024 / 1024 / 1024)}GB`);
+			// SDK's NodesInfoNodeProcessInfo lacks cpu/mem; ES returns them at runtime.
+			const proc = nodeInfo.process as estypes.NodesInfoNodeProcessInfo & {
+				cpu?: { total_cores?: number };
+				mem?: { total_in_bytes?: number };
+			};
+			summary.push(`- **CPU Cores**: ${proc.cpu?.total_cores ?? "Unknown"}`);
+			if (proc.mem?.total_in_bytes !== undefined) {
+				summary.push(`- **System Memory**: ${Math.round(proc.mem.total_in_bytes / 1024 / 1024 / 1024)}GB`);
 			}
 		}
 
@@ -114,7 +119,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 
 			logger.debug({ nodeId, metric, compact }, "Getting nodes info");
 
-			let result: any;
+			let result: estypes.NodesInfoResponse;
 
 			// Handle no parameters - return minimal info
 			if (!metric && !compact) {
@@ -124,7 +129,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 				result = await esClient.nodes.info(
 					{
 						node_id: nodeId,
-						metric: "name" as any, // Just node names
+						metric: "name" as unknown as estypes.NodesInfoNodesInfoMetrics, // Just node names
 						flat_settings: flatSettings,
 						timeout: timeout,
 					},
@@ -154,7 +159,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 				result = await esClient.nodes.info(
 					{
 						node_id: nodeId,
-						metric: "os,jvm,process,transport" as any, // Essential metrics only
+						metric: "os,jvm,process,transport" as unknown as estypes.NodesInfoNodesInfoMetrics, // Essential metrics only
 						flat_settings: flatSettings,
 						timeout: timeout,
 					},
@@ -186,7 +191,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 			result = await esClient.nodes.info(
 				{
 					node_id: nodeId,
-					metric: metric as any,
+					metric: metric as unknown as estypes.NodesInfoNodesInfoMetrics,
 					flat_settings: flatSettings,
 					timeout: timeout,
 				},

@@ -2,7 +2,14 @@
 
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import {
+	type CallToolResult,
+	ErrorCode,
+	McpError,
+	type ServerNotification,
+	type ServerRequest,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { runWithDeployment } from "../clients/context.js";
 import { listRegisteredDeploymentIds } from "../clients/registry.js";
@@ -10,19 +17,31 @@ import { logger } from "../utils/logger.js";
 import { withSecurityValidation } from "../utils/securityEnhancer.js";
 import { traceToolCall } from "../utils/tracing.js";
 
+type RegisterToolConfig = {
+	title?: string;
+	description?: string;
+	inputSchema?: z.ZodRawShape | z.ZodObject<z.ZodRawShape> | unknown;
+	[key: string]: unknown;
+};
+
+type RegisteredToolHandler = (
+	toolArgs: unknown,
+	extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) => Promise<CallToolResult>;
+
 /**
  * Wrap a Zod shape (Record<string, ZodType>) in z.object() using Zod v4 classic.
  * This prevents the MCP SDK from wrapping the shape with zod/v4-mini which is
  * incompatible with Zod v4 classic schema instances.
  */
-function wrapZodShape(shape: Record<string, any>): any {
+function wrapZodShape(shape: z.ZodRawShape): z.ZodObject<z.ZodRawShape> {
 	return z.object(shape);
 }
 
 // SIO-675: Append an optional `deployment` field to a Zod shape so cluster tools
 // can route per-call (Claude Desktop / stdio has no x-elastic-deployment header).
 // Lists registered IDs in the description so the model can pick at tools/list time.
-function withDeploymentField(shape: Record<string, any>, deploymentIds: string[]): Record<string, any> {
+function withDeploymentField(shape: z.ZodRawShape, deploymentIds: string[]): z.ZodRawShape {
 	const idList = deploymentIds.length > 0 ? deploymentIds.join(", ") : "<none registered>";
 	return {
 		...shape,
@@ -176,7 +195,7 @@ import { notificationTools } from "./notifications/index.js";
 interface ToolInfo {
 	name: string;
 	description: string;
-	inputSchema: any;
+	inputSchema: z.ZodRawShape | z.ZodObject<z.ZodRawShape> | unknown;
 }
 
 // SIO-621: Read-only tools skip security-validation regex (avoid SQL-injection
@@ -270,38 +289,51 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	// All tools now use server.registerTool() which has compatible wrapper below
 
 	// Override the registerTool method to capture tool information and add both tracing and security validation
-	const originalRegisterTool = server.registerTool.bind(server);
-	server.registerTool = (name: string, config: any, handler: any) => {
+	const originalRegisterTool = server.registerTool.bind(server) as unknown as (
+		name: string,
+		config: RegisterToolConfig,
+		handler: RegisteredToolHandler,
+	) => ReturnType<McpServer["registerTool"]>;
+	(server as { registerTool: unknown }).registerTool = (
+		name: string,
+		config: RegisterToolConfig,
+		handler: RegisteredToolHandler,
+	) => {
 		// SIO-675: Augment cluster-tool input schemas with an optional `deployment` field
 		// so Claude Desktop (stdio, no x-elastic-deployment header) can pick a deployment
 		// per call. Done before the z.object() wrapping below so withDeploymentField
 		// receives the raw shape. Cloud/billing tools are skipped (org-scoped already).
+		const inputSchema = config.inputSchema as
+			| (Record<string, unknown> & { _def?: unknown; _zod?: unknown })
+			| undefined;
 		if (
 			isClusterTool(name) &&
-			config.inputSchema &&
-			typeof config.inputSchema === "object" &&
-			!config.inputSchema._def &&
-			!config.inputSchema._zod
+			inputSchema &&
+			typeof inputSchema === "object" &&
+			!inputSchema._def &&
+			!inputSchema._zod
 		) {
 			config = {
 				...config,
-				inputSchema: withDeploymentField(config.inputSchema, listRegisteredDeploymentIds()),
+				inputSchema: withDeploymentField(inputSchema as z.ZodRawShape, listRegisteredDeploymentIds()),
 			};
 		}
 
 		// Wrap raw Zod shapes in z.object() using Zod v4 classic to prevent the
 		// MCP SDK from wrapping them with zod/v4-mini (which is incompatible)
-		if (
-			config.inputSchema &&
-			typeof config.inputSchema === "object" &&
-			!config.inputSchema._def &&
-			!config.inputSchema._zod
-		) {
-			const values = Object.values(config.inputSchema);
+		const currentSchema = config.inputSchema as
+			| (Record<string, unknown> & { _def?: unknown; _zod?: unknown })
+			| undefined;
+		if (currentSchema && typeof currentSchema === "object" && !currentSchema._def && !currentSchema._zod) {
+			const values = Object.values(currentSchema);
 			const isZodShape =
-				values.length > 0 && values.some((v: any) => v && typeof v === "object" && ("_def" in v || "_zod" in v));
+				values.length > 0 &&
+				values.some(
+					(v): v is z.ZodTypeAny =>
+						!!v && typeof v === "object" && ("_def" in (v as object) || "_zod" in (v as object)),
+				);
 			if (isZodShape) {
-				config = { ...config, inputSchema: wrapZodShape(config.inputSchema) };
+				config = { ...config, inputSchema: wrapZodShape(currentSchema as z.ZodRawShape) };
 			}
 		}
 
@@ -314,16 +346,16 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 		const shouldValidate = !READ_ONLY_TOOLS.has(name);
 
 		// Create enhanced handler with both tracing and security validation
-		let enhancedHandler = handler;
+		let enhancedHandler: RegisteredToolHandler = handler;
 
 		// Add tracing wrapper to ALL tools
-		enhancedHandler = async (toolArgs: any, extra: any) => {
+		enhancedHandler = async (toolArgs, extra) => {
 			return traceToolCall(name, () => handler(toolArgs, extra));
 		};
 
 		// Add security validation wrapper for write operations
 		if (shouldValidate) {
-			enhancedHandler = withSecurityValidation(name, enhancedHandler);
+			enhancedHandler = withSecurityValidation<unknown, CallToolResult>(name, enhancedHandler);
 		}
 
 		// SIO-675: For cluster tools, peel off the optional `deployment` arg and route via
@@ -333,8 +365,12 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 		//   3. Inner runWithDeployment shadows any outer one (HTTP arg-over-header precedence).
 		if (isClusterTool(name)) {
 			const innerHandler = enhancedHandler;
-			enhancedHandler = async (toolArgs: any, extra: any) => {
-				if (!toolArgs || typeof toolArgs !== "object" || toolArgs.deployment === undefined) {
+			enhancedHandler = async (toolArgs, extra) => {
+				if (
+					!toolArgs ||
+					typeof toolArgs !== "object" ||
+					(toolArgs as Record<string, unknown>).deployment === undefined
+				) {
 					return innerHandler(toolArgs, extra);
 				}
 				const { deployment, ...rest } = toolArgs as Record<string, unknown>;

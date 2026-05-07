@@ -3,7 +3,7 @@
 
 /* SIMPLIFIED VERSION: Direct JSON Schema + MCP Error Codes */
 
-import type { Client } from "@elastic/elasticsearch";
+import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -188,15 +188,17 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			}
 
 			// Warn about pagination if results are limited
-			const meta = metadata as any;
-			if (meta.hasMore) {
-				await notificationManager.sendWarning(`Large result set: showing ${meta.shown}/${metadata.total} indices`, {
-					operation_type: "ilm_explain_lifecycle",
-					result_pagination: true,
-					total_indices: metadata.total,
-					shown_indices: meta.shown,
-					recommendation: "Use 'limit' parameter to control result size or apply filters",
-				});
+			if (metadata.truncated) {
+				await notificationManager.sendWarning(
+					`Large result set: showing ${metadata.returned}/${metadata.total} indices`,
+					{
+						operation_type: "ilm_explain_lifecycle",
+						result_pagination: true,
+						total_indices: metadata.total,
+						shown_indices: metadata.returned,
+						recommendation: "Use 'limit' parameter to control result size or apply filters",
+					},
+				);
 			}
 
 			await tracker.updateProgress(85, "Building analysis report");
@@ -215,14 +217,16 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			const errorIndices: string[] = [];
 
 			for (const idx of displayedIndices) {
-				const idxAny = idx as any;
-				const phase = idxAny.phase || "unknown";
-				const action = idxAny.action || "";
+				const idxManaged = idx as estypes.IlmExplainLifecycleLifecycleExplainManaged & {
+					step_info?: { type?: string };
+				};
+				const phase = idxManaged.phase || "unknown";
+				const action = idxManaged.action || "";
 				const status = `${phase}${action ? `:${action}` : ""}`;
 
 				statusGroups[status] = (statusGroups[status] || 0) + 1;
 
-				if (idxAny.step_info?.type === "error" || idxAny.failed_step) {
+				if (idxManaged.step_info?.type === "error" || idxManaged.failed_step) {
 					errorIndices.push(idx.name);
 				}
 			}
@@ -255,21 +259,27 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			content.push("### Index Details");
 
 			for (const idx of displayedIndices) {
-				const idxAny = idx as any;
+				const idxManaged = idx as estypes.IlmExplainLifecycleLifecycleExplainManaged & {
+					step_info?: { type?: string };
+				};
 				if (params.includeDetails) {
 					// Detailed mode - full information
 					const detail = {
 						index: idx.name,
 						managed: idx.managed || false,
-						policy: idxAny.policy || "none",
-						phase: idxAny.phase || "unknown",
-						action: idxAny.action || "none",
-						step: idxAny.step || "none",
-						phase_time: idxAny.phase_time ? new Date(idxAny.phase_time).toISOString() : "unknown",
-						...(idxAny.step_info && { step_info: idxAny.step_info }),
-						...(idxAny.failed_step && { failed_step: idxAny.failed_step }),
-						...(idxAny.age && { age: idxAny.age }),
-						...(idxAny.lifecycle_date && { lifecycle_date: new Date(idxAny.lifecycle_date).toISOString() }),
+						policy: idxManaged.policy || "none",
+						phase: idxManaged.phase || "unknown",
+						action: idxManaged.action || "none",
+						step: idxManaged.step || "none",
+						phase_time: idxManaged.phase_time
+							? new Date(idxManaged.phase_time as string | number).toISOString()
+							: "unknown",
+						...(idxManaged.step_info && { step_info: idxManaged.step_info }),
+						...(idxManaged.failed_step && { failed_step: idxManaged.failed_step }),
+						...(idxManaged.age && { age: idxManaged.age }),
+						...(idxManaged.lifecycle_date && {
+							lifecycle_date: new Date(idxManaged.lifecycle_date as string | number).toISOString(),
+						}),
 					};
 
 					content.push(`#### ${idx.name}`);
@@ -279,10 +289,10 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 				} else {
 					// Compact mode - key information only
 					const managed = idx.managed ? "yes" : "no";
-					const policy = idxAny.policy || "none";
-					const phase = idxAny.phase || "unknown";
-					const action = idxAny.action ? `:${idxAny.action}` : "";
-					const error = idxAny.step_info?.type === "error" || idxAny.failed_step ? " ERROR" : "";
+					const policy = idxManaged.policy || "none";
+					const phase = idxManaged.phase || "unknown";
+					const action = idxManaged.action ? `:${idxManaged.action}` : "";
+					const error = idxManaged.step_info?.type === "error" || idxManaged.failed_step ? " ERROR" : "";
 
 					content.push(
 						`- **${idx.name}** | Managed: ${managed} | Policy: ${policy} | Phase: ${phase}${action}${error}`,

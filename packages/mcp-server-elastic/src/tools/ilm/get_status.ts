@@ -50,8 +50,9 @@ export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServe
 				logger.warn({ duration }, "Slow ILM operation: get_status");
 			}
 
-			// Enhanced response with status interpretation
-			const resultAny = result as any;
+			// SDK's IlmGetStatusResponse only exposes operation_mode; ES sometimes
+			// returns policy_count as well — narrow it locally without `any`.
+			const resultExt = result as typeof result & { policy_count?: number };
 			const status = result.operation_mode || "unknown";
 			const isEnabled = status === "RUNNING";
 
@@ -59,7 +60,7 @@ export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServe
 				ilm_status: status,
 				is_running: isEnabled,
 				operation_mode: result.operation_mode,
-				...(resultAny.policy_count !== undefined && { policy_count: resultAny.policy_count }),
+				...(resultExt.policy_count !== undefined && { policy_count: resultExt.policy_count }),
 				timestamp: new Date().toISOString(),
 			};
 
@@ -71,7 +72,7 @@ export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServe
 						text: `## ILM Status: ${isEnabled ? "RUNNING" : `${status}`}
 
 **Operation Mode**: ${result.operation_mode || "unknown"}
-${resultAny.policy_count !== undefined ? `**Policy Count**: ${resultAny.policy_count}` : ""}
+${resultExt.policy_count !== undefined ? `**Policy Count**: ${resultExt.policy_count}` : ""}
 
 Status checked at: ${new Date().toISOString()}`,
 					},
