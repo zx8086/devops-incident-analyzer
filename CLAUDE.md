@@ -107,7 +107,17 @@ SIO-537 -> SIO-540 -> SIO-546 -> SIO-547 -> SIO-555 -> SIO-559 -> SIO-569 -> SIO
 - Svelte 5 runes ($state, $derived, $effect, $props) for frontend
 - Named exports preferred
 - Zod for all runtime validation, no `.default()` in config schemas
-- TypeScript strict mode, never use `any`
+- **TypeScript strict mode, never use `any`** (biome enforces `noExplicitAny: "error"` since SIO-673)
+  - Forbidden: `: any`, `as any`, `Function`, `Record<string, any>`, `jest.MockedFunction<any>`, `z.ZodSchema<any>`
+  - Use instead:
+    - Tool handler args -> `z.infer<typeof validator>` or `unknown` with `typeof` guards
+    - MCP extra param -> `RequestHandlerExtra<ServerRequest, ServerNotification>` from `@modelcontextprotocol/sdk/shared/protocol.js`
+    - Opaque payload fields -> `unknown` (narrow at use site)
+    - Generic helpers -> `<T>(x: T): T` to preserve caller types end-to-end
+    - Builder-pattern Zod helpers -> `z.ZodTypeAny` for the local `let field` accumulator
+    - ES SDK responses -> `estypes.<Response>` from `@elastic/elasticsearch` (intersect with `& { extraField? }` if SDK lags runtime)
+    - Test mocks -> `Partial<Client>` with the terminal `as unknown as Client` cast, or `ReturnType<typeof mock>` for individual methods
+  - `biome-ignore lint/suspicious/noExplicitAny` requires a one-line ticket reference (e.g. `// biome-ignore: SIO-672 - bulk helper expects strict BulkAction`)
 
 ### Comments
 File headers: single-line relative path only: `// src/services/pricing.ts`
