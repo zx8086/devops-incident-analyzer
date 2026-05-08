@@ -11,7 +11,8 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
-		const actions = getAvailableActions(kafka!);
+		if (!kafka) return;
+		const actions = getAvailableActions(kafka);
 		expect(actions).toEqual([
 			"consumer_lag",
 			"topic_throughput",
@@ -31,14 +32,20 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 	test("covers all 55 unique MCP tool names across the action map", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const tools = getAllActionToolNames(kafka!);
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const tools = getAllActionToolNames(kafka);
 		expect(tools.length).toBe(55);
 	});
 
 	test("includes the SIO-680 Connect read tools under connect_status", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const map = kafka!.tool_mapping!.action_tool_map!;
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const map = kafka.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
 		expect(map.connect_status).toEqual([
 			"connect_get_cluster_info",
 			"connect_list_connectors",
@@ -50,7 +57,11 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 	test("includes the SIO-682 Connect writes/destructive under connect_management", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const map = kafka!.tool_mapping!.action_tool_map!;
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const map = kafka.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
 		expect(map.connect_management).toEqual([
 			"connect_pause_connector",
 			"connect_resume_connector",
@@ -63,7 +74,11 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 	test("includes the SIO-682 sr_* writes/destructive under schema_management", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const map = kafka!.tool_mapping!.action_tool_map!;
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const map = kafka.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
 		expect(map.schema_management).toEqual([
 			"sr_register_schema",
 			"sr_check_compatibility",
@@ -78,7 +93,11 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 	test("includes all 9 REST Proxy tools under restproxy", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const map = kafka!.tool_mapping!.action_tool_map!;
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const map = kafka.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
 		expect(map.restproxy).toEqual([
 			"restproxy_list_topics",
 			"restproxy_get_topic",
@@ -95,27 +114,32 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 	test("declares version 2.0.0 and honest annotations", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		expect(kafka!.version).toBe("2.0.0");
-		expect(kafka!.annotations?.read_only).toBe(false);
-		expect(kafka!.annotations?.requires_confirmation).toBe(true);
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		expect(kafka.version).toBe("2.0.0");
+		expect(kafka.annotations?.read_only).toBe(false);
+		expect(kafka.annotations?.requires_confirmation).toBe(true);
 	});
 
 	test("declares the new mcp_patterns covering sr_*, connect_*, restproxy_*", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		expect(kafka!.tool_mapping!.mcp_patterns).toEqual([
-			"kafka_*",
-			"ksql_*",
-			"sr_*",
-			"connect_*",
-			"restproxy_*",
-		]);
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const patterns = kafka.tool_mapping?.mcp_patterns;
+		expect(patterns).toBeDefined();
+		if (!patterns) return;
+		expect(patterns).toEqual(["kafka_*", "ksql_*", "sr_*", "connect_*", "restproxy_*"]);
 	});
 
 	test("preserves the existing action enum entries (no regression)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
-		const map = kafka!.tool_mapping!.action_tool_map!;
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const map = kafka.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
 		expect(map.consumer_lag).toContain("kafka_list_consumer_groups");
 		expect(map.topic_throughput).toContain("kafka_describe_topic");
 		expect(map.schema_registry).toContain("kafka_list_schemas");
