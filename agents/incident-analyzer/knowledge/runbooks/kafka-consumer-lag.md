@@ -64,7 +64,7 @@ When the runbook says "infer the service name and query Elastic / GitLab", use t
 
 | Kafka cluster | Elastic deployment (`deployment` arg) | GitLab group (project paths) |
 |---------------|---------------------------------------|------------------------------|
-| `c72-shared-services-msk` (eu-central-1) | `eu-b2b` | `b2b-technologies` (use `b2b-technologies%2F<service>` as URL-encoded `project_id` if no numeric ID is known) |
+| `c72-shared-services-msk` (eu-central-1) | `eu-b2b` | `b2b-technologies` (use `b2b-technologies%2F<service>` as URL-encoded *project_id* if no numeric ID is known) |
 
 Other clusters not yet mapped here -- ask the operator before guessing.
 
@@ -74,4 +74,4 @@ Other clusters not yet mapped here -- ask the operator before guessing.
 - Temporarily increase partition count
 
 ## All Tools Used Are Read-Only
-kafka_list_consumer_groups, kafka_get_consumer_group_lag, kafka_describe_consumer_group, kafka_describe_topic, kafka_get_topic_offsets, kafka_consume_messages, kafka_list_topics, ksql_get_server_info, ksql_list_queries, elasticsearch_search, elasticsearch_count_documents, capella_get_completed_requests, capella_get_fatal_requests
+kafka_list_consumer_groups, kafka_get_consumer_group_lag, kafka_describe_consumer_group, kafka_describe_topic, kafka_get_topic_offsets, kafka_consume_messages, kafka_list_topics, kafka_describe_cluster, ksql_get_server_info, ksql_list_queries, elasticsearch_search, elasticsearch_count_documents, capella_get_completed_requests, capella_get_fatal_requests
