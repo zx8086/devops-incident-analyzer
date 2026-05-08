@@ -105,3 +105,6 @@ After attaching the policy:
 - MSK uses the `kafka-cluster:` prefix only for IAM-auth (SASL/IAM) clusters. If the cluster uses SASL/SCRAM or mTLS auth, the data-plane permissions are enforced inside Kafka via ACLs instead — apply the equivalent ACLs (`Cluster:Describe`, `Topic:Describe`, `Topic:Read`, `Group:Describe`) via `kafka-acls.sh` rather than IAM.
 - `*` on `kafka:` (control-plane) actions is acceptable because those operate at AWS-account scope and cannot leak data. Resource-scope the `kafka-cluster:` actions to a single cluster ARN to limit blast radius.
 - This is a read-only policy. Any add of `kafka-cluster:WriteData`, `kafka-cluster:AlterCluster`, `kafka-cluster:CreateTopic`, or `kafka:Update*` requires explicit human approval and is out of scope for the kafka-agent.
+
+## All Tools Used Are Read-Only
+kafka_describe_cluster, kafka_describe_consumer_group, kafka_consume_messages
