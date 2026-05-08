@@ -94,6 +94,7 @@ export const ToolDefinitionSchema = z.object({
 			// Each value is a single sentence completing "pick this action when ...".
 			// Consumed by entity-extractor.buildActionCatalog() to steer action selection.
 			// Keys, when present, must be a subset of action_tool_map keys; enforced via superRefine below.
+			// (For another superRefine cross-field example, see packages/mcp-server-kafka/src/config/schemas.ts.)
 			action_descriptions: z
 				.record(z.string(), z.string())
 				.optional()
@@ -107,7 +108,7 @@ export const ToolDefinitionSchema = z.object({
 			for (const key of Object.keys(tm.action_descriptions)) {
 				if (!validKeys.has(key)) {
 					ctx.addIssue({
-						code: "custom",
+						code: z.ZodIssueCode.custom,
 						message: `action_descriptions key "${key}" is not in action_tool_map`,
 						path: ["action_descriptions", key],
 					});
