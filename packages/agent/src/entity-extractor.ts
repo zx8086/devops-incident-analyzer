@@ -1,5 +1,6 @@
 // agent/src/entity-extractor.ts
 
+import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, ExtractedEntities } from "@devops-agent/shared";
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
@@ -35,21 +36,44 @@ const ExtractionSchema = z.object({
 	toolActions: z.record(z.string(), z.array(z.string())).nullish(),
 });
 
-function buildActionCatalog(): string {
-	try {
-		const agent = getAgent();
-		const lines: string[] = [];
-		for (const tool of agent.tools) {
-			if (tool.tool_mapping?.action_tool_map) {
-				const actions = Object.keys(tool.tool_mapping.action_tool_map);
-				lines.push(`- ${tool.tool_mapping.mcp_server}: ${actions.join(", ")}`);
+// SIO-680/682: Pure formatter for the action catalog. Extracted from buildActionCatalog
+// so unit tests can supply synthetic ToolDefinition[] without mocking getAgent()
+// (see SIO-635: mocking ./prompt-context.ts causes cross-file test pollution).
+//
+// Per-tool format choice: emits indented multi-line ("- server:\n  - action — desc")
+// when at least one action has a description; falls back to the original
+// comma-separated single-line ("- server: a, b, c") otherwise. The decision is
+// per-tool, not global, so non-kafka YAMLs without descriptions are unaffected.
+export function formatActionCatalog(tools: ToolDefinition[]): string {
+	const lines: string[] = [];
+	for (const tool of tools) {
+		const map = tool.tool_mapping?.action_tool_map;
+		if (!map) continue;
+		const server = tool.tool_mapping?.mcp_server ?? "?";
+		const descriptions = tool.tool_mapping?.action_descriptions ?? {};
+		const actions = Object.keys(map);
+		const hasAnyDescription = actions.some((a) => descriptions[a]);
+		if (hasAnyDescription) {
+			lines.push(`- ${server}:`);
+			for (const a of actions) {
+				const desc = descriptions[a];
+				lines.push(desc ? `  - ${a} — ${desc}` : `  - ${a}`);
 			}
+		} else {
+			lines.push(`- ${server}: ${actions.join(", ")}`);
 		}
-		if (lines.length === 0) return "";
-		return `\nFor each datasource, also identify which tool actions are most relevant to the query.
+	}
+	if (lines.length === 0) return "";
+	return `\nFor each datasource, also identify which tool actions are most relevant to the query.
 Available actions per datasource:
 ${lines.join("\n")}
 Return toolActions as { "datasource_id": ["action1", "action2"] }.`;
+}
+
+function buildActionCatalog(): string {
+	try {
+		const agent = getAgent();
+		return formatActionCatalog(agent.tools);
 	} catch {
 		return "";
 	}
