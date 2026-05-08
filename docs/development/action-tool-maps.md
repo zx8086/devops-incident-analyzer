@@ -110,6 +110,28 @@ LOG_LEVEL=debug bun run packages/agent/src/index.ts
 # - my-datasource: health_check, query_analysis
 ```
 
+### `action_descriptions` (optional, SIO-680/682)
+
+Each `tool_mapping.action_descriptions` entry is a one-line, LLM-facing hint that completes the sentence "pick this action when ...". The entity extractor (`packages/agent/src/entity-extractor.ts`, `formatActionCatalog`) emits these descriptions in its action catalog so the LLM has explicit selection criteria instead of inferring from bare action names.
+
+| Constraint | Enforcement |
+|---|---|
+| Optional per action | Absent keys are silently allowed; LLM gets a bare name for those actions |
+| Optional per YAML | Whole field can be absent; the YAML's catalog block uses the legacy comma-separated format |
+| Keys must be a subset of `action_tool_map` keys | Zod `superRefine` cross-field check in `packages/gitagent-bridge/src/types.ts` |
+| Each value is a single non-empty string | Type `Record<string, string>` |
+
+Format change in the catalog when descriptions are present (per-tool decision):
+
+```
+- kafka:
+  - consumer_lag — when a consumer group shows rising or sustained message lag (...)
+  - topic_throughput — when investigating producer rate, consumer rate (...)
+- elastic: search_logs, count_documents, ...   (unchanged: no descriptions today)
+```
+
+Currently populated for `kafka-introspect.yaml` only. Adding descriptions to the 5 sibling YAMLs is a follow-up; each requires per-action wording.
+
 ---
 
 ## Modifying Existing Action Maps
