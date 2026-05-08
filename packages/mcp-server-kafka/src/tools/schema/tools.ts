@@ -9,7 +9,6 @@ import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
 export function registerSchemaTools(server: McpServer, service: SchemaRegistryService, config: AppConfig): void {
-
 	server.tool(
 		"kafka_list_schemas",
 		prompts.LIST_SCHEMAS_DESCRIPTION,

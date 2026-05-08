@@ -3,12 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { resetConfigCache } from "../../src/config/config.ts";
 import { loadConfig } from "../../src/config/loader.ts";
 
-const ENV_KEYS = [
-	"RESTPROXY_ENABLED",
-	"RESTPROXY_URL",
-	"RESTPROXY_API_KEY",
-	"RESTPROXY_API_SECRET",
-];
+const ENV_KEYS = ["RESTPROXY_ENABLED", "RESTPROXY_URL", "RESTPROXY_API_KEY", "RESTPROXY_API_SECRET"];
 
 function clearEnv() {
 	for (const key of ENV_KEYS) {

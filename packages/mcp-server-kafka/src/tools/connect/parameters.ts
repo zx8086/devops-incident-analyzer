@@ -24,10 +24,7 @@ export const ConnectResumeConnectorParams = z.object({
 
 export const ConnectRestartConnectorParams = z.object({
 	name: z.string().min(1).describe("Connector name to restart"),
-	includeTasks: z
-		.boolean()
-		.optional()
-		.describe("Whether to also restart the connector's tasks. Default: false."),
+	includeTasks: z.boolean().optional().describe("Whether to also restart the connector's tasks. Default: false."),
 	onlyFailed: z
 		.boolean()
 		.optional()

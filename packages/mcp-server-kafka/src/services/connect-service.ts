@@ -83,10 +83,7 @@ export class ConnectService {
 		await this.request<void>("PUT", `/connectors/${encodeURIComponent(name)}/resume`);
 	}
 
-	async restartConnector(
-		name: string,
-		options?: { includeTasks?: boolean; onlyFailed?: boolean },
-	): Promise<void> {
+	async restartConnector(name: string, options?: { includeTasks?: boolean; onlyFailed?: boolean }): Promise<void> {
 		const qs: string[] = [];
 		if (options?.includeTasks !== undefined) qs.push(`includeTasks=${options.includeTasks}`);
 		if (options?.onlyFailed !== undefined) qs.push(`onlyFailed=${options.onlyFailed}`);
@@ -95,10 +92,7 @@ export class ConnectService {
 	}
 
 	async restartConnectorTask(name: string, taskId: number): Promise<void> {
-		await this.request<void>(
-			"POST",
-			`/connectors/${encodeURIComponent(name)}/tasks/${taskId}/restart`,
-		);
+		await this.request<void>("POST", `/connectors/${encodeURIComponent(name)}/tasks/${taskId}/restart`);
 	}
 
 	async deleteConnector(name: string): Promise<void> {

@@ -91,14 +91,7 @@ export class SchemaRegistryService {
 
 	// SIO-682: write/destructive methods added below
 	async setCompatibility(
-		level:
-			| "BACKWARD"
-			| "BACKWARD_TRANSITIVE"
-			| "FORWARD"
-			| "FORWARD_TRANSITIVE"
-			| "FULL"
-			| "FULL_TRANSITIVE"
-			| "NONE",
+		level: "BACKWARD" | "BACKWARD_TRANSITIVE" | "FORWARD" | "FORWARD_TRANSITIVE" | "FULL" | "FULL_TRANSITIVE" | "NONE",
 		subject?: string,
 	): Promise<{ compatibility: string }> {
 		const path = subject ? `/config/${encodeURIComponent(subject)}` : "/config";

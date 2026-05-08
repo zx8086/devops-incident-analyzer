@@ -28,10 +28,7 @@ export const ProduceParams = z.object({
 		)
 		.min(1)
 		.describe("One or more records to produce in a single batch"),
-	format: z
-		.enum(["json", "binary"])
-		.optional()
-		.describe("Payload encoding format. Defaults to json when omitted"),
+	format: z.enum(["json", "binary"]).optional().describe("Payload encoding format. Defaults to json when omitted"),
 });
 
 export const CreateConsumerParams = z.object({

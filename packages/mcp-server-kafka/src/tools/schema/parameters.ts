@@ -80,9 +80,7 @@ export const SrSoftDeleteSubjectParams = z.object({
 
 export const SrSoftDeleteSubjectVersionParams = z.object({
 	subject: SubjectNameParam,
-	version: z
-		.union([z.number().int().positive(), z.string().min(1)])
-		.describe("Schema version (number or 'latest')"),
+	version: z.union([z.number().int().positive(), z.string().min(1)]).describe("Schema version (number or 'latest')"),
 });
 
 export const SrHardDeleteSubjectParams = z.object({
@@ -91,7 +89,5 @@ export const SrHardDeleteSubjectParams = z.object({
 
 export const SrHardDeleteSubjectVersionParams = z.object({
 	subject: SubjectNameParam,
-	version: z
-		.union([z.number().int().positive(), z.string().min(1)])
-		.describe("Schema version to permanently delete"),
+	version: z.union([z.number().int().positive(), z.string().min(1)]).describe("Schema version to permanently delete"),
 });
