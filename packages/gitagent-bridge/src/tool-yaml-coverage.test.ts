@@ -1,4 +1,4 @@
-// packages/gitagent-bridge/src/kafka-introspect-coverage.test.ts
+// packages/gitagent-bridge/src/tool-yaml-coverage.test.ts
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "./index.ts";
