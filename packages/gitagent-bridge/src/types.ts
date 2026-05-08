@@ -90,6 +90,29 @@ export const ToolDefinitionSchema = z.object({
 				.record(z.string(), z.array(z.string()))
 				.optional()
 				.describe("Maps action categories to specific MCP tool names"),
+			// SIO-680/682: Optional one-line LLM-facing hint per action key.
+			// Each value is a single sentence completing "pick this action when ...".
+			// Consumed by entity-extractor.buildActionCatalog() to steer action selection.
+			// Keys, when present, must be a subset of action_tool_map keys; enforced via superRefine below.
+			action_descriptions: z
+				.record(z.string(), z.string())
+				.optional()
+				.describe(
+					'Optional one-line LLM-facing hint per action key. Each value is a single sentence completing "pick this action when ...". Consumed by entity-extractor.buildActionCatalog() to steer action selection. Keys, when present, must be a subset of action_tool_map keys.',
+				),
+		})
+		.superRefine((tm, ctx) => {
+			if (!tm.action_descriptions || !tm.action_tool_map) return;
+			const validKeys = new Set(Object.keys(tm.action_tool_map));
+			for (const key of Object.keys(tm.action_descriptions)) {
+				if (!validKeys.has(key)) {
+					ctx.addIssue({
+						code: "custom",
+						message: `action_descriptions key "${key}" is not in action_tool_map`,
+						path: ["action_descriptions", key],
+					});
+				}
+			}
 		})
 		.optional(),
 });
