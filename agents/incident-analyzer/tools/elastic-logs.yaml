@@ -188,5 +188,5 @@ tool_mapping:
     document_ops: when reading specific documents by ID, counting matches, or running aggregations against a known index (read-only)
     snapshot: when listing snapshot repositories or snapshots, or checking snapshot/restore status
     diagnostics: when running cluster-wide diagnostic commands (allocation explain, hot threads, pending tasks) for deep troubleshooting
-    cloud_deployment: when listing or describing Elastic Cloud deployments via the v1 cloud API (read-only deployment metadata)
+    cloud_deployment: when listing or describing Elastic Cloud deployments via the v1 cloud API (metadata only -- region, plan, version, capacity; for cost or spend data use `billing` instead)
     billing: when checking Elastic Cloud organization or deployment billing/cost data via the v2 billing API (read-only cost reporting)
