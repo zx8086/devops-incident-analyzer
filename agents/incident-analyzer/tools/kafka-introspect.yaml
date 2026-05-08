@@ -1,15 +1,30 @@
 name: kafka-introspect
 description: >
-  Inspect Kafka cluster state including consumer group lag, topic throughput,
-  and dead-letter queue contents for incident diagnosis.
-version: 1.0.0
+  Inspect and (when enabled) manage Kafka cluster state including consumer
+  group lag, topic throughput, dead-letter queue contents, schema registry,
+  ksqlDB, Kafka Connect, and REST Proxy. Write and destructive tools are
+  gated at the MCP server by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE
+  and at the kafka-agent by SOUL.md / RULES.md.
+version: 2.0.0
 input_schema:
   type: object
   properties:
     action:
       type: string
-      enum: [consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops]
-      description: Type of Kafka inspection to perform
+      enum:
+        - consumer_lag
+        - topic_throughput
+        - dlq_messages
+        - cluster_info
+        - describe_topic
+        - schema_registry
+        - schema_management
+        - ksql
+        - connect_status
+        - connect_management
+        - restproxy
+        - write_ops
+      description: Type of Kafka inspection or management operation
     consumer_group:
       type: string
       description: Consumer group ID (required for consumer_lag)
@@ -28,8 +43,8 @@ output_schema:
     data: { type: object }
     timestamp: { type: string }
 annotations:
-  requires_confirmation: false
-  read_only: true
+  requires_confirmation: true
+  read_only: false
   cost: low
 
 prompt_template: >
@@ -41,12 +56,16 @@ related_tools:
   - "Use elastic-search-logs to check if consumer lag correlates with application error spikes"
   - "Use couchbase-cluster-health to check if database slowness is causing Kafka backpressure"
   - "Use konnect-api-requests to check if upstream API errors are generating DLQ messages"
+  - "Use gitlab-pipeline-jobs to correlate Connect connector restarts and REST Proxy producer changes with recent deploys"
 
 tool_mapping:
   mcp_server: kafka
   mcp_patterns:
     - "kafka_*"
     - "ksql_*"
+    - "sr_*"
+    - "connect_*"
+    - "restproxy_*"
   action_tool_map:
     consumer_lag:
       - kafka_list_consumer_groups
@@ -75,6 +94,14 @@ tool_mapping:
       - kafka_register_schema
       - kafka_set_schema_config
       - kafka_delete_schema_subject
+    schema_management:
+      - sr_register_schema
+      - sr_check_compatibility
+      - sr_set_compatibility
+      - sr_soft_delete_subject
+      - sr_soft_delete_subject_version
+      - sr_hard_delete_subject
+      - sr_hard_delete_subject_version
     ksql:
       - ksql_get_server_info
       - ksql_list_streams
@@ -83,6 +110,27 @@ tool_mapping:
       - ksql_describe
       - ksql_run_query
       - ksql_execute_statement
+    connect_status:
+      - connect_get_cluster_info
+      - connect_list_connectors
+      - connect_get_connector_status
+      - connect_get_connector_task_status
+    connect_management:
+      - connect_pause_connector
+      - connect_resume_connector
+      - connect_restart_connector
+      - connect_restart_connector_task
+      - connect_delete_connector
+    restproxy:
+      - restproxy_list_topics
+      - restproxy_get_topic
+      - restproxy_get_partitions
+      - restproxy_produce
+      - restproxy_create_consumer
+      - restproxy_subscribe
+      - restproxy_consume
+      - restproxy_commit_offsets
+      - restproxy_delete_consumer
     write_ops:
       - kafka_produce_message
       - kafka_create_topic
