@@ -79,6 +79,19 @@ RESTPROXY_ENABLED=true
 
 For SIO-682 write/destructive tools (5 Connect + 7 SR + 6 REST Proxy writes that need it), the per-server `*_ENABLED` flag is necessary but not sufficient — the gates `KAFKA_ALLOW_WRITES=true` and (for destructive operations) `KAFKA_ALLOW_DESTRUCTIVE=true` must also be set, or those tools are silently omitted from `tools/list`.
 
+### Kafka MCP Optional Service Reachability (SIO-684)
+
+When `SCHEMA_REGISTRY_ENABLED`, `KSQL_ENABLED`, `CONNECT_ENABLED`, or `RESTPROXY_ENABLED` is true, the Kafka MCP server probes each enabled endpoint at startup with a 5s timeout (`GET /subjects`, `GET /info`, `GET /`, `GET /topics` respectively). The server boots regardless of probe outcome — tools stay registered so partial reachability is supported — but each probe emits one log line:
+
+```
+info: schema-registry reachable          { component, url }
+error: ksqldb unreachable - tools registered but calls will fail   { component, url, error }
+```
+
+If the probe is missing for an `*_ENABLED=true` service, the server is older than SIO-684. If you see the `error` line, the underlying tool calls (e.g. `ksql_get_server_info`) will fail with the same error string in their MCP response, and each failed call now emits a `Tool call error` log line in addition to returning `isError: true` to the agent. This is the loud signal — quiet `info "Tool call completed"` lines no longer mask connectivity failures.
+
+A common cause on AgentCore deployments is a missing cross-account network path between the AgentCore VPC and the Confluent (or self-hosted) endpoints. Probe failures are the first place to look in CloudWatch.
+
 ### Health Check Fails
 
 **Symptoms:** `/health` returns non-200, `/ping` does not respond.

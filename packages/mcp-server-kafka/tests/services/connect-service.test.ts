@@ -140,4 +140,34 @@ describe("ConnectService", () => {
 		const service = new ConnectService(mockConfig);
 		expect(service.getConnectorStatus("missing")).rejects.toThrow("Kafka Connect error 404");
 	});
+
+	describe("probeReachability", () => {
+		test("resolves on 200", async () => {
+			mockFetch(200, { version: "7.5.0" });
+			const service = new ConnectService(mockConfig);
+			await expect(service.probeReachability()).resolves.toBeUndefined();
+		});
+
+		test("throws on 503", async () => {
+			mockFetch(503, "unavailable");
+			const service = new ConnectService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("HTTP 503");
+		});
+
+		test("hits GET / with timeout signal", async () => {
+			mockFetch(200, {});
+			const service = new ConnectService(mockConfig);
+			await service.probeReachability(2222);
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			expect(call[0]).toBe("http://localhost:8083/");
+			expect((call[1] as RequestInit).method).toBe("GET");
+			expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+		});
+
+		test("propagates fetch network error", async () => {
+			globalThis.fetch = mock(() => Promise.reject(new Error("ENOTFOUND"))) as unknown as typeof globalThis.fetch;
+			const service = new ConnectService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("ENOTFOUND");
+		});
+	});
 });

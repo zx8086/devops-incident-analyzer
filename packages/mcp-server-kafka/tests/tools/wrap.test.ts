@@ -1,7 +1,8 @@
 // tests/tools/wrap.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../src/config/schemas.ts";
 import { wrapHandler } from "../../src/tools/wrap.ts";
+import { logger } from "../../src/utils/logger.ts";
 
 function makeConfig(
 	overrides: Partial<{
@@ -181,6 +182,48 @@ describe("wrapHandler", () => {
 			const handler = wrapHandler(tool, makeConfig({}), successHandler);
 			const result = await handler({});
 			expect(result.isError).toBeUndefined();
+		});
+	});
+
+	describe("error logging on handler throw", () => {
+		let originalError: typeof logger.error;
+		let errorSpy: ReturnType<typeof mock>;
+
+		beforeEach(() => {
+			originalError = logger.error.bind(logger);
+			errorSpy = mock(() => {});
+			(logger as unknown as { error: typeof errorSpy }).error = errorSpy;
+		});
+
+		afterEach(() => {
+			(logger as unknown as { error: typeof originalError }).error = originalError;
+		});
+
+		test("logs error and returns isError response when handler throws", async () => {
+			const failingHandler = async () => {
+				throw new Error("upstream fetch failed");
+			};
+			const handler = wrapHandler("kafka_list_topics", makeConfig({}), failingHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("upstream fetch failed");
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+			const [logArgs, logMsg] = (errorSpy as unknown as { mock: { calls: unknown[][] } }).mock.calls[0] as [
+				{ tool: string; error: string },
+				string,
+			];
+			expect(logArgs.tool).toBe("kafka_list_topics");
+			expect(logArgs.error).toContain("upstream fetch failed");
+			expect(logMsg).toBe("Tool call error");
+		});
+
+		test("does not log error when handler succeeds", async () => {
+			const handler = wrapHandler("kafka_list_topics", makeConfig({}), successHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBeUndefined();
+			expect(errorSpy).not.toHaveBeenCalled();
 		});
 	});
 });

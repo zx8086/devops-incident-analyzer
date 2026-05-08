@@ -4,6 +4,7 @@ import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } fr
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { getConfig } from "./config/index.ts";
+import type { AppConfig } from "./config/schemas.ts";
 import { createProvider } from "./providers/factory.ts";
 import { KafkaClientManager } from "./services/client-manager.ts";
 import { ConnectService } from "./services/connect-service.ts";
@@ -15,6 +16,55 @@ import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts
 import { createTransport } from "./transport/factory.ts";
 import { logger } from "./utils/logger.ts";
 import { initializeTracing } from "./utils/tracing.ts";
+
+async function probeOptionalServices(opts: ToolRegistrationOptions, config: AppConfig): Promise<void> {
+	const probes: Array<{ name: string; url: string; promise: Promise<void> }> = [];
+
+	if (opts.schemaRegistryService) {
+		probes.push({
+			name: "schema-registry",
+			url: config.schemaRegistry.url,
+			promise: opts.schemaRegistryService.probeReachability(),
+		});
+	}
+	if (opts.ksqlService) {
+		probes.push({
+			name: "ksqldb",
+			url: config.ksql.endpoint,
+			promise: opts.ksqlService.probeReachability(),
+		});
+	}
+	if (opts.connectService) {
+		probes.push({
+			name: "kafka-connect",
+			url: config.connect.url,
+			promise: opts.connectService.probeReachability(),
+		});
+	}
+	if (opts.restProxyService) {
+		probes.push({
+			name: "rest-proxy",
+			url: config.restproxy.url,
+			promise: opts.restProxyService.probeReachability(),
+		});
+	}
+
+	const results = await Promise.allSettled(probes.map((p) => p.promise));
+	for (const [i, result] of results.entries()) {
+		const probe = probes[i];
+		if (!probe) continue;
+		const { name, url } = probe;
+		if (result.status === "fulfilled") {
+			logger.info({ component: name, url }, `${name} reachable`);
+		} else {
+			const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+			logger.error(
+				{ component: name, url, error: reason },
+				`${name} unreachable - tools registered but calls will fail`,
+			);
+		}
+	}
+}
 
 interface KafkaDatasource {
 	kafkaService: KafkaService;
@@ -104,6 +154,8 @@ if (import.meta.main) {
 					toolOptions.restProxyService = new RestProxyService(config);
 					logger.info({ url: config.restproxy.url }, "REST Proxy enabled");
 				}
+
+				await probeOptionalServices(toolOptions, config);
 
 				return { kafkaService, clientManager, toolOptions };
 			},

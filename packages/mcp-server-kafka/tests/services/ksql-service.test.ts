@@ -169,4 +169,34 @@ describe("KsqlService", () => {
 		const result = await service.listQueries();
 		expect(result).toEqual([]);
 	});
+
+	describe("probeReachability", () => {
+		test("resolves on 200", async () => {
+			mockFetch(200, { KsqlServerInfo: { version: "0.29.0" } });
+			const service = new KsqlService(mockConfig);
+			await expect(service.probeReachability()).resolves.toBeUndefined();
+		});
+
+		test("throws on 500", async () => {
+			mockFetch(500, "boom");
+			const service = new KsqlService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("HTTP 500");
+		});
+
+		test("hits GET /info with timeout signal", async () => {
+			mockFetch(200, {});
+			const service = new KsqlService(mockConfig);
+			await service.probeReachability(1234);
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			expect(call[0]).toBe("http://localhost:8088/info");
+			expect((call[1] as RequestInit).method).toBe("GET");
+			expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+		});
+
+		test("propagates fetch network error", async () => {
+			globalThis.fetch = mock(() => Promise.reject(new Error("ECONNREFUSED"))) as unknown as typeof globalThis.fetch;
+			const service = new KsqlService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("ECONNREFUSED");
+		});
+	});
 });

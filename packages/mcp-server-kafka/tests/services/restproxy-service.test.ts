@@ -125,4 +125,34 @@ describe("RestProxyService", () => {
 		const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
 		expect(new Headers((call[1] as RequestInit).headers).get("Authorization")).toBe(`Basic ${btoa("k:s")}`);
 	});
+
+	describe("probeReachability", () => {
+		test("resolves on 200", async () => {
+			mockFetch(200, []);
+			const svc = new RestProxyService(baseConfig);
+			await expect(svc.probeReachability()).resolves.toBeUndefined();
+		});
+
+		test("throws on 502", async () => {
+			mockFetch(502, "bad gateway");
+			const svc = new RestProxyService(baseConfig);
+			await expect(svc.probeReachability()).rejects.toThrow("HTTP 502");
+		});
+
+		test("hits GET /topics with timeout signal", async () => {
+			mockFetch(200, []);
+			const svc = new RestProxyService(baseConfig);
+			await svc.probeReachability(4444);
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			expect(call[0]).toBe("http://rest:8082/topics");
+			expect((call[1] as RequestInit).method).toBe("GET");
+			expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+		});
+
+		test("propagates fetch network error", async () => {
+			globalThis.fetch = mock(() => Promise.reject(new Error("ECONNRESET"))) as unknown as typeof globalThis.fetch;
+			const svc = new RestProxyService(baseConfig);
+			await expect(svc.probeReachability()).rejects.toThrow("ECONNRESET");
+		});
+	});
 });

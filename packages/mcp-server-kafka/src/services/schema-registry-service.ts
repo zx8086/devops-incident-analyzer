@@ -31,6 +31,17 @@ export class SchemaRegistryService {
 		}
 	}
 
+	async probeReachability(timeoutMs = 5000): Promise<void> {
+		const response = await fetch(`${this.baseUrl}/subjects`, {
+			method: "GET",
+			headers: this.headers,
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}`);
+		}
+	}
+
 	async listSubjects(): Promise<string[]> {
 		const response = await this.request<string[]>("GET", "/subjects");
 		return response;
