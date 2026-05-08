@@ -37,7 +37,7 @@ export function registerAllTools(
 
 	if (options?.schemaRegistryService) {
 		logger.debug("Registering schema registry tools");
-		registerSchemaTools(server, options.schemaRegistryService);
+		registerSchemaTools(server, options.schemaRegistryService, config);
 	}
 
 	if (options?.ksqlService) {
@@ -52,12 +52,16 @@ export function registerAllTools(
 
 	const connectWrites = options?.connectService && config.kafka.allowWrites ? 3 : 0;
 	const connectDestructive = options?.connectService && config.kafka.allowDestructive ? 2 : 0;
+	const srWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 3 : 0;
+	const srDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 4 : 0;
 	const toolCount =
 		15 +
 		(options?.schemaRegistryService ? 8 : 0) +
 		(options?.ksqlService ? 7 : 0) +
 		(options?.connectService ? 4 : 0) +
 		connectWrites +
-		connectDestructive;
+		connectDestructive +
+		srWrites +
+		srDestructive;
 	logger.info({ toolCount }, "All tools registered successfully");
 }

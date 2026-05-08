@@ -79,3 +79,67 @@ export async function deleteSchemaSubject(
 		permanent: params.permanent ?? false,
 	};
 }
+
+// SIO-682: gated sr_* operation wrappers
+export async function srRegisterSchema(
+	service: SchemaRegistryService,
+	params: { subject: string; schema: string; schemaType?: "AVRO" | "JSON" | "PROTOBUF" },
+) {
+	const result = await service.registerSchema(params.subject, params.schema, params.schemaType ?? "AVRO");
+	return { subject: params.subject, ...result };
+}
+
+export async function srCheckCompatibility(
+	service: SchemaRegistryService,
+	params: {
+		subject: string;
+		schema: string;
+		schemaType?: "AVRO" | "JSON" | "PROTOBUF";
+		version?: number | "latest";
+	},
+) {
+	const result = await service.checkCompatibility(
+		params.subject,
+		params.schema,
+		params.schemaType ?? "AVRO",
+		params.version ?? "latest",
+	);
+	return { subject: params.subject, ...result };
+}
+
+export async function srSetCompatibility(
+	service: SchemaRegistryService,
+	params: {
+		level: "BACKWARD" | "BACKWARD_TRANSITIVE" | "FORWARD" | "FORWARD_TRANSITIVE" | "FULL" | "FULL_TRANSITIVE" | "NONE";
+		subject?: string;
+	},
+) {
+	const result = await service.setCompatibility(params.level, params.subject);
+	return { scope: params.subject ?? "global", ...result };
+}
+
+export async function srSoftDeleteSubject(service: SchemaRegistryService, params: { subject: string }) {
+	const deletedVersions = await service.softDeleteSubject(params.subject);
+	return { subject: params.subject, deletedVersions, permanent: false };
+}
+
+export async function srSoftDeleteSubjectVersion(
+	service: SchemaRegistryService,
+	params: { subject: string; version: number | string },
+) {
+	const deletedVersion = await service.softDeleteSubjectVersion(params.subject, params.version);
+	return { subject: params.subject, version: deletedVersion, permanent: false };
+}
+
+export async function srHardDeleteSubject(service: SchemaRegistryService, params: { subject: string }) {
+	const deletedVersions = await service.hardDeleteSubject(params.subject);
+	return { subject: params.subject, deletedVersions, permanent: true };
+}
+
+export async function srHardDeleteSubjectVersion(
+	service: SchemaRegistryService,
+	params: { subject: string; version: number | string },
+) {
+	const deletedVersion = await service.hardDeleteSubjectVersion(params.subject, params.version);
+	return { subject: params.subject, version: deletedVersion, permanent: true };
+}

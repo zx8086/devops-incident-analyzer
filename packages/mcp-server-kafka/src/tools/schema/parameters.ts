@@ -54,3 +54,44 @@ export const DeleteSchemaSubjectParams = z.object({
 	subject: SubjectNameParam,
 	permanent: z.boolean().optional().describe("Permanently delete (hard delete). Default: false (soft delete)."),
 });
+
+// SIO-682: gated write/destructive params for sr_* tools
+export const SrRegisterSchemaParams = z.object({
+	subject: SubjectNameParam,
+	schema: z.string().min(1).describe("Schema definition as a JSON string"),
+	schemaType: SchemaTypeParam,
+});
+
+export const SrCheckCompatibilityParams = z.object({
+	subject: SubjectNameParam,
+	schema: z.string().min(1).describe("Schema definition to test compatibility against"),
+	schemaType: SchemaTypeParam,
+	version: VersionParam,
+});
+
+export const SrSetCompatibilityParams = z.object({
+	level: CompatibilityLevelParam,
+	subject: z.string().min(1).optional().describe("Subject name. Omit to set global config."),
+});
+
+export const SrSoftDeleteSubjectParams = z.object({
+	subject: SubjectNameParam,
+});
+
+export const SrSoftDeleteSubjectVersionParams = z.object({
+	subject: SubjectNameParam,
+	version: z
+		.union([z.number().int().positive(), z.string().min(1)])
+		.describe("Schema version (number or 'latest')"),
+});
+
+export const SrHardDeleteSubjectParams = z.object({
+	subject: SubjectNameParam,
+});
+
+export const SrHardDeleteSubjectVersionParams = z.object({
+	subject: SubjectNameParam,
+	version: z
+		.union([z.number().int().positive(), z.string().min(1)])
+		.describe("Schema version to permanently delete"),
+});

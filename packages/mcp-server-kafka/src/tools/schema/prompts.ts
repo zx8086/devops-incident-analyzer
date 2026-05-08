@@ -15,3 +15,18 @@ export const GET_SCHEMA_CONFIG_DESCRIPTION = `Get the compatibility configuratio
 export const SET_SCHEMA_CONFIG_DESCRIPTION = `Set the compatibility configuration for a specific subject or the global default. Controls how new schema versions are validated against previous versions. WRITE OPERATION: Requires KAFKA_ALLOW_WRITES=true and SCHEMA_REGISTRY_ENABLED=true.`;
 
 export const DELETE_SCHEMA_SUBJECT_DESCRIPTION = `Delete a schema subject and all its versions. Soft-deletes by default; use permanent=true for hard delete. DESTRUCTIVE OPERATION: Requires KAFKA_ALLOW_DESTRUCTIVE=true and SCHEMA_REGISTRY_ENABLED=true.`;
+
+// SIO-682: gated write/destructive prompts for sr_* tools
+export const SR_REGISTER_SCHEMA_DESCRIPTION = `Register a new schema version for a subject in Schema Registry. Schema must pass compatibility checks for the subject's configured level. Returns the globally unique schema ID. WRITE OPERATION: Requires KAFKA_ALLOW_WRITES=true.`;
+
+export const SR_CHECK_COMPATIBILITY_DESCRIPTION = `Test whether a schema is compatible with existing versions for a subject. Returns compatibility status and error messages if any. Run before sr_register_schema to verify the schema won't break consumers. WRITE OPERATION: Requires KAFKA_ALLOW_WRITES=true.`;
+
+export const SR_SET_COMPATIBILITY_DESCRIPTION = `Set the compatibility level for a subject or global default. Controls validation of future schema versions. WRITE OPERATION: Requires KAFKA_ALLOW_WRITES=true.`;
+
+export const SR_SOFT_DELETE_SUBJECT_DESCRIPTION = `Soft-delete a subject and all its versions from Schema Registry. The subject can be recovered or hard-deleted later via sr_hard_delete_subject. Must soft-delete before hard-delete. DESTRUCTIVE OPERATION: Requires KAFKA_ALLOW_DESTRUCTIVE=true.`;
+
+export const SR_SOFT_DELETE_SUBJECT_VERSION_DESCRIPTION = `Soft-delete a specific version of a subject. The version can be recovered or permanently removed via sr_hard_delete_subject_version. Must soft-delete before hard-delete. DESTRUCTIVE OPERATION: Requires KAFKA_ALLOW_DESTRUCTIVE=true.`;
+
+export const SR_HARD_DELETE_SUBJECT_DESCRIPTION = `Permanently delete a subject from Schema Registry. Requires prior soft-delete via sr_soft_delete_subject; this tool will not auto-sequence. Returns 404 if not first soft-deleted. Irreversible. DESTRUCTIVE OPERATION: Requires KAFKA_ALLOW_DESTRUCTIVE=true.`;
+
+export const SR_HARD_DELETE_SUBJECT_VERSION_DESCRIPTION = `Permanently delete a specific version of a subject. Requires prior soft-delete via sr_soft_delete_subject_version; this tool will not auto-sequence. Returns 404 if not first soft-deleted. Irreversible. DESTRUCTIVE OPERATION: Requires KAFKA_ALLOW_DESTRUCTIVE=true.`;
