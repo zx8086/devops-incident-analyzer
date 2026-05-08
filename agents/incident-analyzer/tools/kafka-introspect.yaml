@@ -137,3 +137,16 @@ tool_mapping:
       - kafka_alter_topic_config
       - kafka_delete_topic
       - kafka_reset_consumer_group_offsets
+  action_descriptions:
+    consumer_lag: when a consumer group shows rising or sustained message lag (e.g. >10k messages, processing latency growing, or stalled partitions)
+    topic_throughput: when investigating producer rate, consumer rate, or partition offsets on a specific topic
+    dlq_messages: when inspecting dead-letter queue contents (topics suffixed with -dlq, .DLQ, dead-letter-, or similar)
+    cluster_info: when checking cluster-wide health (broker count, controller, version) -- not topic- or group-specific
+    describe_topic: when needing partition count, replication factor, retention config, or per-partition offsets for a known topic
+    schema_registry: when reading Avro/Protobuf/JSON schemas, subject versions, or compatibility config (read-only)
+    schema_management: when registering, evolving, or deleting schemas in the Schema Registry (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
+    ksql: when querying ksqlDB streams, tables, persistent queries, or running ad-hoc KSQL statements
+    connect_status: when Kafka Connect connectors or tasks are failing, paused, or in unknown state -- read-only inspection
+    connect_management: when pausing, resuming, restarting, or deleting Kafka Connect connectors (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
+    restproxy: when producing to or consuming from Kafka via the Confluent REST Proxy v2 API (writes gated by KAFKA_ALLOW_WRITES)
+    write_ops: when producing test messages, creating/altering topics, deleting topics, or resetting consumer group offsets (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)

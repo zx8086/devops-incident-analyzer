@@ -146,4 +146,20 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		expect(map.ksql).toContain("ksql_run_query");
 		expect(map.write_ops).toContain("kafka_delete_topic");
 	});
+
+	test("declares action_descriptions for all 12 actions, each non-empty", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
+		expect(kafka).toBeDefined();
+		if (!kafka) return;
+		const descriptions = kafka.tool_mapping?.action_descriptions;
+		expect(descriptions).toBeDefined();
+		if (!descriptions) return;
+		const actionKeys = Object.keys(kafka.tool_mapping?.action_tool_map ?? {});
+		for (const action of actionKeys) {
+			expect(descriptions[action]).toBeDefined();
+			expect((descriptions[action] ?? "").length).toBeGreaterThan(20);
+		}
+		expect(Object.keys(descriptions).length).toBe(12);
+	});
 });
