@@ -69,3 +69,8 @@ tool_mapping:
     confluence_query:
       - atlassian_searchConfluencePages
       - atlassian_getConfluencePage
+  action_descriptions:
+    incident_correlation: when looking for Jira incident tickets correlated with a service over a time window (composes JQL filtered by ATLASSIAN_INCIDENT_PROJECTS)
+    runbook_lookup: when searching Confluence pages for service-specific runbooks or operational documentation
+    jira_query: when running an explicit JQL query against Jira (direct, not the smart incident-correlation composer)
+    confluence_query: when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup composer)

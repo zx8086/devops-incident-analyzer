@@ -115,3 +115,13 @@ tool_mapping:
       - fetch_portal_api
       - list_portal_applications
       - get_portal_application
+  action_descriptions:
+    api_requests: when querying request analytics (request rates, latency percentiles, status code distribution) for a service or route over a time window
+    service_config: when inspecting a Kong service definition (host, port, protocol, retries, timeouts) -- the upstream target
+    route_config: when inspecting a Kong route definition (path, methods, hosts) -- the request matching layer that points at a service
+    plugin_chain: when listing or inspecting plugins applied to a service, route, consumer, or globally (auth, rate-limit, transform, etc.)
+    data_plane_health: when checking data plane node health, version, and connection status to the control plane
+    certificate_status: when reading TLS certificates, SNIs, or certificate expiry/validity
+    control_plane_management: when listing or inspecting control planes and group membership (Konnect orgs and CP groupings)
+    consumer_management: when listing or inspecting Kong consumers, their credentials, or group memberships (read-only)
+    portal_management: when reading developer portal configuration, published APIs, or developer registrations

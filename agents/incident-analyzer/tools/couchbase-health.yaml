@@ -81,3 +81,12 @@ tool_mapping:
       - capella_get_prepared_statements
       - capella_get_detailed_prepared_statements
       - capella_suggest_query_optimizations
+  action_descriptions:
+    system_vitals: when checking cluster-wide CPU, memory, disk, and replication health (the primary cluster-state path)
+    fatal_requests: when investigating queries that hit fatal errors (timeouts, OOM, malformed responses) -- not slow queries, true failures
+    slow_queries: when investigating queries above the slow-query threshold by elapsed time (latency outliers, not failures)
+    expensive_queries: when investigating queries with high resource cost (memory, CPU, scan size) -- can be fast OR slow
+    index_analysis: when reading GSI/secondary index definitions, advisor recommendations, or index stats
+    node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
+    document_ops: when reading specific documents by key from a known bucket/scope/collection (read-only K/V access)
+    query_execution: when running an N1QL SELECT query (read-only; the compliance layer rejects mutations)

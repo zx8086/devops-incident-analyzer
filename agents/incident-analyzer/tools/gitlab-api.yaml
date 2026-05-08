@@ -80,3 +80,9 @@ tool_mapping:
       - gitlab_get_commit_diff
       - gitlab_list_commits
       - gitlab_get_repository_tree
+  action_descriptions:
+    issues: when querying GitLab issues, comments, labels, or saved views in a project
+    merge_requests: when querying merge requests, their commits/diffs/pipelines/conflicts, or MR notes (the primary code-change correlation path)
+    pipelines: when checking CI/CD pipeline status, jobs, or recent pipeline failures for a project
+    search: when running global text or semantic search across GitLab projects (issues, MRs, commits, blobs)
+    code_analysis: when reading file content, blame, commit diffs, commit listings, or repository tree (custom REST tools, not the proxied search)
