@@ -1,7 +1,7 @@
 # AWS Bedrock AgentCore Deployment
 
 > **Targets:** Bun 1.3.9+ | AWS Bedrock AgentCore | Docker
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-05-08
 
 Guide for deploying MCP servers to AWS Bedrock AgentCore Runtime. Covers the container contract, parameterized Dockerfile, IAM policies, deployment steps, and local testing. Each MCP server is deployed as an independent AgentCore Runtime behind a shared AgentCore Gateway that the agent discovers tools through.
 
@@ -398,6 +398,12 @@ The `MCP_SERVER` env var selects which server to deploy. The script is idempoten
 | `MSK_AUTH_MODE` | No | `none` | `none`, `tls`, or `iam`. Default `none` (unauthenticated PLAINTEXT) -- `kafka-cluster:*` IAM grants are skipped. Set `iam` explicitly for IAM-authenticated MSK. |
 | `MSK_CLUSTER_ARN` | No | -- | Forwarded to the runtime for broker discovery and `kafka_get_cluster_info`. |
 | `MSK_BOOTSTRAP_BROKERS` | No | -- | Forwarded to the runtime. When set, the runtime skips `GetBootstrapBrokers`. |
+| `KSQL_ENABLED` / `KSQL_ENDPOINT` / `KSQL_API_KEY` / `KSQL_API_SECRET` | No | -- | Forwarded if set. Enables 7 ksqlDB tools when reachable. |
+| `SCHEMA_REGISTRY_ENABLED` / `SCHEMA_REGISTRY_URL` / `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` | No | -- | Forwarded if set. Enables 8 SR read tools when reachable; the 7 SIO-682 SR write/destructive tools also require `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`. |
+| `CONNECT_ENABLED` / `CONNECT_URL` / `CONNECT_API_KEY` / `CONNECT_API_SECRET` | No | -- | Forwarded if set. Enables 4 Connect read tools; the 5 SIO-682 Connect write/destructive tools also require the gates. |
+| `RESTPROXY_ENABLED` / `RESTPROXY_URL` / `RESTPROXY_API_KEY` / `RESTPROXY_API_SECRET` | No | -- | SIO-682. Forwarded if set. Enables 3 REST Proxy reads + 6 writes (writes gated by `KAFKA_ALLOW_WRITES`). REST Proxy lives on a separate ALB from SR/Connect/ksqlDB; reachability does NOT depend on cross-VPC connectivity. |
+
+**Important — `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE`:** as of SIO-682, `deploy.sh` does NOT forward these flags. To enable the 21 write/destructive tools (5 Connect + 7 SR + 9 REST Proxy of which 6 require writes) on an existing AgentCore runtime, set them as runtime environment variables directly via the AWS console or `aws bedrock-agentcore-control update-agent-runtime --environment-variables ...`. Note: `update-agent-runtime --environment-variables` REPLACES the full env set, so include all existing vars when adding the gates manually.
 
 ### test-local.sh
 

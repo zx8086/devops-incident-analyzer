@@ -68,12 +68,16 @@ error: Failed to register schema tools: Schema Registry is not configured
 info: All tools registered successfully
 ```
 
-If tools depend on optional services (Schema Registry, ksqlDB), verify the feature flag:
+If tools depend on optional services (Schema Registry, ksqlDB, Connect, REST Proxy), verify the feature flag:
 
 ```bash
 SCHEMA_REGISTRY_ENABLED=true
 KSQL_ENABLED=true
+CONNECT_ENABLED=true
+RESTPROXY_ENABLED=true
 ```
+
+For SIO-682 write/destructive tools (5 Connect + 7 SR + 6 REST Proxy writes that need it), the per-server `*_ENABLED` flag is necessary but not sufficient — the gates `KAFKA_ALLOW_WRITES=true` and (for destructive operations) `KAFKA_ALLOW_DESTRUCTIVE=true` must also be set, or those tools are silently omitted from `tools/list`.
 
 ### Health Check Fails
 
@@ -167,6 +171,21 @@ The classify node determines query complexity. If it always returns "simple":
 - Check that the classify node prompt correctly identifies multi-datasource queries
 - Verify the entity extractor is detecting datasource signals (service names, topic names, cluster references)
 - Test with an explicitly complex query: "Compare Kafka consumer lag with Elasticsearch error rates for the order-service in the last hour"
+
+### Confidence Capped at 0.6 with `degradedRules` Populated (SIO-681)
+
+**Symptoms:** Final report ships with `confidenceScore <= 0.6` and the agent state includes a non-empty `degradedRules` array. The report's gap analysis may say "elastic-agent unreachable" or "no findings cover service X".
+
+This is the `enforceCorrelations` aggregator's intentional graceful-degradation path — a required cross-agent correlation could not complete. The cap distinguishes "we tried, infra failed" (acceptable, surfaced) from "we didn't try" (forbidden by the rule engine).
+
+The degradation can mean any of:
+- The required sub-agent (typically elastic-agent) was unreachable during the re-fan-out.
+- The sub-agent ran but produced no findings covering the triggered service.
+- A correlation rule's predicate threw and was logged as fail-open (rule auto-satisfied; check logs for `predicate error`).
+
+Each `degradedRules` entry has `{ ruleId, agent, services, reason }`. To recover: ensure the targeted sub-agent's MCP server is reachable, then retry the query. The rule engine's idempotency makes the next pass a clean no-op if the first pass succeeded.
+
+See `docs/architecture/agent-pipeline.md` "enforceCorrelations" section for the rule list and routing diagram.
 
 ### Sub-Agent Skipped
 

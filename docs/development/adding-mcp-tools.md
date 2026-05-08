@@ -266,14 +266,18 @@ if (!topic) {
 
 Two separate mechanisms govern read-only behavior:
 
-**1. Per-server feature gates (Kafka).** Boolean env vars enable groups of write tools at runtime:
+**1. Per-server feature gates (Kafka).** Boolean env vars enable groups of write tools at runtime. After SIO-682, `KAFKA_ALLOW_WRITES` and `KAFKA_ALLOW_DESTRUCTIVE` apply across kafka-core, Connect, Schema Registry, and REST Proxy in a unified way.
 
 | Gate | Environment Variable | Tools Controlled |
 |------|---------------------|------------------|
-| Write | `KAFKA_ALLOW_WRITES=true` | `kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config` |
-| Destructive | `KAFKA_ALLOW_DESTRUCTIVE=true` | `kafka_delete_topic`, `kafka_reset_consumer_group_offsets` |
-| Schema Registry | `SCHEMA_REGISTRY_ENABLED=true` | All `kafka_*_schema*` tools |
+| Write | `KAFKA_ALLOW_WRITES=true` | kafka-core: `kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config`; Connect: `connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`; SR: `sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`; REST Proxy: `restproxy_produce`, `restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer` |
+| Destructive | `KAFKA_ALLOW_DESTRUCTIVE=true` | kafka-core: `kafka_delete_topic`, `kafka_reset_consumer_group_offsets`; Connect: `connect_restart_connector_task`, `connect_delete_connector`; SR: `sr_soft_delete_subject`, `sr_soft_delete_subject_version`, `sr_hard_delete_subject`, `sr_hard_delete_subject_version` |
+| Schema Registry | `SCHEMA_REGISTRY_ENABLED=true` | 8 `kafka_*_schema*` reads (writes / destructives above also need `KAFKA_ALLOW_*`) |
 | ksqlDB | `KSQL_ENABLED=true` | All `ksql_*` tools |
+| Connect | `CONNECT_ENABLED=true` | 4 `connect_*` reads (writes / destructives above also need `KAFKA_ALLOW_*`) |
+| REST Proxy | `RESTPROXY_ENABLED=true` | 3 `restproxy_*` metadata reads (writes above need `KAFKA_ALLOW_WRITES`) |
+
+For new tools, follow the per-component layout established by Connect/SR/REST Proxy: `packages/mcp-server-kafka/src/tools/<component>/{parameters,prompts,operations,tools}.ts`. The `register<Component>Tools` function takes `(server, service, config)` and uses `if (config.kafka.allowWrites)` / `if (config.kafka.allowDestructive)` blocks to gate registration. Update the `toolCount` expression in `tools/index.ts` to add the per-component delta — see the formula asserted by `tests/tools/full-stack-tools.test.ts`.
 
 The `wrapHandler` function in `tools/wrap.ts` checks these gates before executing any handler. Tools in the gate sets are rejected with an informative error message when the gate is closed.
 

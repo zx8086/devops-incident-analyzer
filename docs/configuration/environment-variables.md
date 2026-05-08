@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-05-08
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -160,16 +160,59 @@ Either `MSK_BOOTSTRAP_BROKERS` or `MSK_CLUSTER_ARN` must be set when `KAFKA_PROV
 
 ### Feature Gates
 
-Feature gates control which tool categories are available. All default to `false` for safety.
+Feature gates control which tool categories are available. All default to `false` for safety. After SIO-682, `KAFKA_ALLOW_WRITES` and `KAFKA_ALLOW_DESTRUCTIVE` gate not just core Kafka writes but also Confluent Connect, Schema Registry, and REST Proxy write/destructive tools registered through the same MCP server.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KAFKA_ALLOW_WRITES` | No | `false` | Enable topic produce and consumer group management tools |
-| `KAFKA_ALLOW_DESTRUCTIVE` | No | `false` | Enable topic deletion and partition reassignment tools |
-| `SCHEMA_REGISTRY_ENABLED` | No | `false` | Enable Confluent Schema Registry tools |
+| `KAFKA_ALLOW_WRITES` | No | `false` | Enable write tools across kafka core (produce, create topic, alter config), Connect (pause/resume/restart), Schema Registry (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`), and REST Proxy (produce, consumer lifecycle) |
+| `KAFKA_ALLOW_DESTRUCTIVE` | No | `false` | Enable destructive tools across kafka core (delete topic, reset offsets), Connect (restart task, delete connector), and Schema Registry (soft/hard delete subject + version) |
+| `SCHEMA_REGISTRY_ENABLED` | No | `false` | Register Schema Registry tools (8 read tools by default; `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE` add the 7 new `sr_*` write/destructive tools) |
 | `KSQL_ENABLED` | No | `false` | Enable ksqlDB query tools |
+| `CONNECT_ENABLED` | No | `false` | Register Kafka Connect tools (4 read tools by default; gates above add 5 write/destructive tools) |
 
 Setting `KAFKA_ALLOW_DESTRUCTIVE=true` requires `KAFKA_ALLOW_WRITES=true` as well. The config loader enforces this constraint during validation.
+
+Tool count grows with the gating and which Confluent components are enabled. Bare `KAFKA_PROVIDER=msk` registers 15 tools; full Confluent stack (`SCHEMA_REGISTRY_ENABLED + KSQL_ENABLED + CONNECT_ENABLED + RESTPROXY_ENABLED + KAFKA_ALLOW_WRITES + KAFKA_ALLOW_DESTRUCTIVE`) registers 55. See `packages/mcp-server-kafka/tests/tools/full-stack-tools.test.ts` for the asserted-correct formula.
+
+### Confluent Connect
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CONNECT_ENABLED` | No | `false` | Register the 4 Connect read tools (cluster info, list connectors, get connector status, get task status) |
+| `CONNECT_URL` | Conditional | -- | Required when `CONNECT_ENABLED=true`. Connect REST API URL (e.g., `http://internal-confluent-prd-internal-alb-...:8083` for self-hosted). |
+| `CONNECT_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth Connect deployments. Set for Confluent Cloud. |
+| `CONNECT_API_SECRET` | No | -- | Basic auth secret paired with `CONNECT_API_KEY`. |
+
+### Confluent REST Proxy (SIO-682)
+
+REST Proxy v2 integration provides HTTP-fronted produce/consume in addition to the broker-level kafka tools. Useful when AgentCore can reach an HTTP endpoint but not the broker port directly. PVH's REST Proxy lives on a public ALB (separate from the internal ALB used by ksqlDB / Schema Registry / Connect).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `RESTPROXY_ENABLED` | No | `false` | Register REST Proxy tools (3 metadata reads always-on; 6 writes additionally gated by `KAFKA_ALLOW_WRITES`) |
+| `RESTPROXY_URL` | Conditional | `http://localhost:8082` | Required when `RESTPROXY_ENABLED=true`. REST Proxy v2 base URL. |
+| `RESTPROXY_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud. |
+| `RESTPROXY_API_SECRET` | No | -- | Basic auth secret paired with `RESTPROXY_API_KEY`. |
+
+The 3 metadata reads (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy_get_partitions`) register whenever `RESTPROXY_ENABLED=true`. The 6 writes (`restproxy_produce`, `restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer`) require `KAFKA_ALLOW_WRITES=true` in addition.
+
+### Schema Registry
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SCHEMA_REGISTRY_ENABLED` | No | `false` | Register Schema Registry tools (8 reads always-on; 7 SIO-682 writes/destructives additionally gated below) |
+| `SCHEMA_REGISTRY_URL` | Conditional | `http://localhost:8081` | Required when `SCHEMA_REGISTRY_ENABLED=true`. SR base URL. |
+| `SCHEMA_REGISTRY_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth deployments. |
+| `SCHEMA_REGISTRY_API_SECRET` | No | -- | Basic auth secret paired with `SCHEMA_REGISTRY_API_KEY`. |
+
+### ksqlDB
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `KSQL_ENABLED` | No | `false` | Register ksqlDB tools (7 tools) |
+| `KSQL_ENDPOINT` | Conditional | `http://localhost:8088` | Required when `KSQL_ENABLED=true`. ksqlDB REST endpoint. |
+| `KSQL_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth deployments. |
+| `KSQL_API_SECRET` | No | -- | Basic auth secret paired with `KSQL_API_KEY`. |
 
 ---
 
@@ -308,3 +351,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-04-09 | Fixed MCP server URL port defaults to match standardized ports (9080-9083) |
 | 2026-04-13 | Added GitLab MCP server env vars (SIO-647), added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |
 | 2026-04-23 | Added Atlassian MCP server env vars (ATLASSIAN_SITE_NAME, ATLASSIAN_MCP_URL upstream, ATLASSIAN_MCP_URL_LOCAL, ATLASSIAN_OAUTH_CALLBACK_PORT, ATLASSIAN_READ_ONLY, ATLASSIAN_INCIDENT_PROJECTS, ATLASSIAN_TIMEOUT, ATLASSIAN_MCP_PORT, ATLASSIAN_LANGSMITH_PROJECT) |
+| 2026-05-08 | SIO-682: added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |

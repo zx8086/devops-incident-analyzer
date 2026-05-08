@@ -223,17 +223,22 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Kafka MCP (15 base tools + 15 optional)
+### Kafka MCP (15-55 tools depending on gating)
 
-**Purpose:** Read-only access to Kafka clusters for topic listing, consumer group lag monitoring, message consumption, and broker health checks.
+**Purpose:** Multi-component access to Kafka clusters and the surrounding Confluent stack. 15 core read tools always register; up to 40 additional tools register conditionally based on which Confluent components are enabled and whether write/destructive flags are set.
 
 **Tool categories:**
-- Cluster: broker list, cluster info, controller status
-- Topics: list, describe, partition details, configuration
-- Consumer groups: list, describe, lag analysis, offset positions
-- Messages: consume from topic/partition (read-only)
+- Kafka core (15, always): broker list, cluster info, topics list/describe, partition details, consumer groups list/describe/lag, message consume, plus write/destructive (`kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config`, `kafka_delete_topic`, `kafka_reset_consumer_group_offsets`) gated by `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`.
+- Schema Registry (`SCHEMA_REGISTRY_ENABLED=true`): 8 reads (list/get subjects, schemas, versions, configs). With write gates: 3 writes (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`) and 4 destructives (soft/hard delete subject + version) — SIO-682.
+- ksqlDB (`KSQL_ENABLED=true`): 7 tools (list streams/tables/queries, execute statement, server info, etc.).
+- Connect (`CONNECT_ENABLED=true`): 4 reads (cluster info, list connectors, get connector status, get task status). With write gates: 3 writes (`connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`) and 2 destructives (`connect_restart_connector_task`, `connect_delete_connector`) — SIO-682.
+- REST Proxy (`RESTPROXY_ENABLED=true`): 3 metadata reads (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy_get_partitions`). With `KAFKA_ALLOW_WRITES`: 6 writes (`restproxy_produce`, `restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer`) — SIO-682.
 
-**Configuration:** Provider-based selection via `KAFKA_PROVIDER=local|msk|confluent`. Feature gates control write operations (`KAFKA_ENABLE_WRITE_OPERATIONS=false` by default, enforced for the incident analyzer).
+**Services:** `KafkaService` (kafka-core), `SchemaRegistryService`, `KsqlService`, `ConnectService`, and `RestProxyService` (the latter introduced in SIO-682). Each service's tools register only when its own `*_ENABLED` flag is set.
+
+**Configuration:** Provider-based selection via `KAFKA_PROVIDER=local|msk|confluent`. Feature gates `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` control write operations across kafka-core, Connect, SR, and REST Proxy in a unified way.
+
+**Tool count formula:** see `tests/tools/full-stack-tools.test.ts` — the formula is asserted directly. Maximum (full Confluent stack with both write flags on) is 55.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 

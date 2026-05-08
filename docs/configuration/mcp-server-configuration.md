@@ -178,7 +178,7 @@ Notes:
 
 **Package:** `packages/mcp-server-kafka`
 **Config directory:** `packages/mcp-server-kafka/src/config/`
-**Tool count:** 15 base + 15 optional (schema registry + ksqlDB)
+**Tool count:** 15 base + up to 40 gated (8 SR reads + 7 ksqlDB + 4 Connect reads + 5 Connect writes/destructive + 7 SR writes/destructive + 9 REST Proxy). Maximum with full Confluent stack and `KAFKA_ALLOW_WRITES`+`KAFKA_ALLOW_DESTRUCTIVE` enabled is 55 tools. Asserted by `tests/tools/full-stack-tools.test.ts`.
 
 ### Configuration Schema
 
@@ -187,10 +187,28 @@ KafkaConfig
   provider: "local" | "msk" | "confluent"
   brokers: string[]
   featureGates:
-    allowWrites: boolean
-    allowDestructive: boolean
-    schemaRegistry: boolean
-    ksql: boolean
+    allowWrites: boolean        # gates kafka-core, Connect, SR, REST Proxy writes
+    allowDestructive: boolean   # gates kafka-core, Connect, SR destructive ops
+  schemaRegistry:
+    enabled: boolean
+    url: string
+    apiKey: string
+    apiSecret: string
+  ksql:
+    enabled: boolean
+    endpoint: string
+    apiKey: string
+    apiSecret: string
+  connect:
+    enabled: boolean
+    url: string
+    apiKey: string
+    apiSecret: string
+  restproxy:                    # added by SIO-682
+    enabled: boolean
+    url: string
+    apiKey: string
+    apiSecret: string
   transport:
     mode: "stdio" | "http" | "sse" | "both" | "agentcore"
     port: number
@@ -224,24 +242,36 @@ The default is `none`. IAM-authenticated MSK requires `MSK_AUTH_MODE=iam` set ex
 
 ### Feature Gates
 
-Feature gates restrict which tool categories the server exposes. This is a safety mechanism to prevent accidental writes in read-only environments.
+Feature gates restrict which tool categories the server exposes. This is a safety mechanism to prevent accidental writes in read-only environments. After SIO-682, the two `kafka.allow*` gates apply across kafka-core, Connect, Schema Registry, and REST Proxy in a unified way.
 
 | Gate | Controls | Default |
 |------|----------|---------|
-| `allowWrites` | Topic produce, consumer group reset | `false` |
-| `allowDestructive` | Topic deletion, partition reassignment | `false` |
-| `schemaRegistry` | Schema CRUD, compatibility checks | `false` |
-| `ksql` | ksqlDB query execution | `false` |
+| `allowWrites` | kafka-core (produce, create topic, alter config), Connect (pause/resume/restart), Schema Registry (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`), REST Proxy (produce + consumer lifecycle) | `false` |
+| `allowDestructive` | kafka-core (delete topic, reset offsets), Connect (restart task, delete connector), Schema Registry (soft/hard delete subject + version) | `false` |
+| `schemaRegistry.enabled` | Register the 8 Schema Registry read tools (additional 7 write/destructive added by `allowWrites`/`allowDestructive`) | `false` |
+| `ksql.enabled` | Register the 7 ksqlDB tools | `false` |
+| `connect.enabled` | Register the 4 Connect read tools (additional 5 write/destructive added by `allowWrites`/`allowDestructive`) | `false` |
+| `restproxy.enabled` | Register the 3 REST Proxy metadata reads (additional 6 writes added by `allowWrites`) | `false` |
 
 The `allowDestructive` gate requires `allowWrites` to also be `true`. The config loader validates this constraint and fails with a clear error if `allowDestructive=true` but `allowWrites=false`.
 
 ### Schema Registry
 
-When `SCHEMA_REGISTRY_ENABLED=true`, the server registers additional tools for managing Avro, JSON Schema, and Protobuf schemas. Schema Registry connection details are derived from the provider configuration.
+When `schemaRegistry.enabled=true`, the server registers 8 read tools (list/get subjects, schemas, versions, configs). With `kafka.allowWrites=true`, the 3 write tools (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`) register. With `kafka.allowDestructive=true`, the 4 destructive tools (`sr_soft_delete_subject`, `sr_soft_delete_subject_version`, `sr_hard_delete_subject`, `sr_hard_delete_subject_version`) register. Hard deletes return 404 if the subject was not first soft-deleted; the tools do not auto-sequence.
 
 ### ksqlDB
 
-When `KSQL_ENABLED=true`, the server exposes tools for executing ksqlDB queries. This is only applicable to Confluent provider deployments.
+When `ksql.enabled=true`, the server exposes 7 tools for executing ksqlDB queries. Applicable to any provider that has a ksqlDB endpoint reachable.
+
+### Kafka Connect
+
+When `connect.enabled=true`, the server registers 4 read tools (cluster info, list/describe connectors, get task status). With `kafka.allowWrites=true`, the 3 write tools (`connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`) register. With `kafka.allowDestructive=true`, the 2 destructive tools (`connect_restart_connector_task`, `connect_delete_connector`) register.
+
+### REST Proxy (SIO-682)
+
+When `restproxy.enabled=true`, the server registers 3 metadata read tools (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy_get_partitions`) regardless of write flags. With `kafka.allowWrites=true`, 6 additional tools register: produce (`restproxy_produce`) and consumer lifecycle (`restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer`).
+
+REST Proxy is a separate Confluent component from Connect / SR / ksqlDB. The `RestProxyService` (`packages/mcp-server-kafka/src/services/restproxy-service.ts`) talks to the REST Proxy v2 API directly via HTTP — content-type `application/vnd.kafka.json.v2+json`. Stateful consumer instances rely on REST Proxy's own ~5-minute idle timeout as a safety net; the LLM is responsible for explicit `restproxy_delete_consumer` calls to release resources promptly.
 
 ---
 

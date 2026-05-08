@@ -22,7 +22,7 @@ packages/
   gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
   agent/                   LangGraph supervisor + 12-node pipeline
   mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 69 tools)
-  mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 30 tools)
+  mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
   mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
   mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
   mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
