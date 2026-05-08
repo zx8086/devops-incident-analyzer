@@ -118,7 +118,7 @@ describe("manifest-loader", () => {
 
 ### agent
 
-The LangGraph agent package tests cover the 12-node pipeline. Because tests should not require running MCP servers, MCP dependencies are mocked.
+The LangGraph agent package tests cover the 13-node pipeline (incl. SIO-681 correlation enforcement). Because tests should not require running MCP servers, MCP dependencies are mocked.
 
 - **Graph compilation** -- StateGraph builds and compiles without error
 - **Node functions** -- classify, entityExtractor, supervise, align, aggregate, validate

@@ -30,7 +30,7 @@ User Query
 Incident Report
 ```
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 12-node StateGraph including retry loops and conditional edges.
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 13-node StateGraph including retry loops, conditional edges, and the SIO-681 cross-agent correlation enforcement detour.
 
 ## Quick Start
 
@@ -64,7 +64,7 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 12-node pipeline
+  agent/                         LangGraph 13-node pipeline
   shared/                        Cross-package types and Zod schemas
   checkpointer/                  State persistence (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
@@ -84,7 +84,7 @@ apps/
 | Server | Port | Tools | Config |
 |--------|------|-------|--------|
 | Elasticsearch | 9080 | ~78 | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
-| Kafka | 9081 | 15 base + 15 optional (schema/ksql) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
+| Kafka | 9081 | 15-55 (15 base + up to 40 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
 | Couchbase Capella | 9082 | ~15 | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 15 enhanced + proxy | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |
 | GitLab | 9084 | proxy + 5-8 custom | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |

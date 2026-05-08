@@ -35,7 +35,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Document | Description |
 |----------|-------------|
 | [System Overview](architecture/system-overview.md) | High-level architecture, data flow, and component relationships |
-| [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 12-node StateGraph: classify, normalize, selectRunbooks, extract, query, align, aggregate, validate, proposeMitigation, followUp |
+| [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 13-node StateGraph: classify, normalize, selectRunbooks, extract, query, align, aggregate, enforceCorrelations (SIO-681), validate, proposeMitigation, followUp |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
 | [MCP Integration](architecture/mcp-integration.md) | 6 MCP server connections, tool scoping, health monitoring, trace propagation |
 

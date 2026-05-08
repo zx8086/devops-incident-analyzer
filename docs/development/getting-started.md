@@ -215,7 +215,7 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 ## Where to Go Next
 
 - [Monorepo Structure](monorepo-structure.md) -- understand the package layout and dependency graph
-- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 12-node LangGraph pipeline processes incidents
+- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 13-node LangGraph pipeline processes incidents
 - [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the six MCP servers
 - [Local Development](../deployment/local-development.md) -- Docker Compose configuration and hot reload setup
 

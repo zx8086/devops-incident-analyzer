@@ -28,8 +28,8 @@ The agent connects to six MCP (Model Context Protocol) servers over Streamable H
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| ~84     | | 15+15 | | ~15    | | 15+prx  | | proxy+  | | proxy+   |
-| tools   | | opt   | | tools  | | tools   | | custom  | | custom   |
+| ~84     | | 15-55 | | ~15    | | 15+prx  | | proxy+  | | proxy+   |
+| tools   | | gated | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
 +---------+ +-------+ +--------+ +---------+ +---------+ +----------+
@@ -102,7 +102,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
 | `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~84 (~77 cluster + 7 conditional cloud/billing) |
-| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15 base + 15 optional |
+| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
 | `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
@@ -255,6 +255,8 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Configuration:** Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`. The incident analyzer restricts N1QL to SELECT queries via the compliance layer.
 
+**Tool response shape (SIO-664):** the 10 `queryAnalysis` tools return `effectiveLimit` (the LIMIT actually applied after server-side capping) and `actualCount` (rows returned) so the agent can detect truncation. SIO-667 + SIO-668 parameterized all SQL++ in these tools to prevent injection — user-supplied bucket/scope/collection identifiers are now bound parameters rather than string-interpolated.
+
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
 ### Kong Konnect MCP (15 enhanced tools + proxy surface)
@@ -273,6 +275,8 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Analytics: request metrics, latency data
 
 **Configuration:** Token-based authentication via `KONNECT_ACCESS_TOKEN` with region selection via `KONNECT_REGION=us|eu|au|me|in`.
+
+**Tool response shape (SIO-663):** the 15 list tools return observed pagination metadata (`offset`, `nextOffset`, `totalCount`) extracted from the Konnect API response so the agent can decide whether to paginate without an extra HEAD-style call. `nextOffset` is `null` when the page is the last one. Per-tool handlers are now typed via `z.infer<typeof validator>` (SIO-670) and the read-only check is applied once at the bootstrap chokepoint (SIO-671) rather than per tool.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 

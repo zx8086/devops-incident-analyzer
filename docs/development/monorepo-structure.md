@@ -46,9 +46,9 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 12-node pipeline
+    agent/                       LangGraph supervisor and 13-node pipeline (SIO-681 correlation enforcement)
     mcp-server-elastic/          Elasticsearch MCP server (~84 tools: ~77 cluster + 7 conditional cloud/billing)
-    mcp-server-kafka/            Kafka MCP server (15 base + 15 optional)
+    mcp-server-kafka/            Kafka MCP server (15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
     mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
     mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
     mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
@@ -189,7 +189,7 @@ Source: `packages/gitagent-bridge/src/`
 
 ### @devops-agent/agent
 
-LangGraph supervisor with a 12-node StateGraph pipeline. This is the core orchestration package that processes incident queries.
+LangGraph supervisor with a 13-node StateGraph pipeline. This is the core orchestration package that processes incident queries.
 
 | Node | Responsibility |
 |------|----------------|
@@ -201,6 +201,8 @@ LangGraph supervisor with a 12-node StateGraph pipeline. This is the core orches
 | `queryDataSource` | Fan-out: dispatches queries to selected MCP server sub-agents in parallel |
 | `align` | Aligns timelines and correlates events across data sources |
 | `aggregate` | Merges sub-agent responses into a unified incident narrative |
+| `correlationFetch` (SIO-681) | Re-fans-out to a sub-agent when a correlation rule fires but its required sibling data is missing |
+| `enforceCorrelationsAggregate` (SIO-681) | Re-evaluates rules; on still-degraded rules, populates `degradedRules` and caps `confidenceCap` at 0.6 |
 | `checkConfidence` | HITL gate: escalates to human when confidence < 0.6 or errors detected |
 | `validate` | Checks response completeness, flags gaps, suggests follow-ups |
 | `proposeMitigation` | Generates actionable remediation steps from validated report |
@@ -212,6 +214,8 @@ Pipeline flow:
 START -> classify -> [simple: responder -> followUp -> END]
                   -> [complex: normalize -> [selectRunbooks] -> entityExtractor
                      -> supervisor -> queryDataSource -> align -> aggregate
+                     -> {enforceCorrelationsRouter}
+                     -> [correlationFetch ->] enforceCorrelationsAggregate
                      -> checkConfidence -> validate -> proposeMitigation -> followUp -> END]
 ```
 
@@ -362,7 +366,7 @@ agents/incident-analyzer/
       agent.yaml         Tools: ~84 ES tools via MCP port 9080 (~77 cluster + 7 conditional cloud/billing)
       SOUL.md            Persona: log and metric analysis expert
     kafka-agent/         Kafka specialist
-      agent.yaml         Tools: 15 base + 15 optional Kafka tools via MCP port 9081
+      agent.yaml         Tools: 15-55 Kafka tools via MCP port 9081 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy)
       SOUL.md            Persona: event streaming and consumer group analyst
     capella-agent/       Couchbase Capella specialist
       agent.yaml         Tools: ~15 Capella tools via MCP port 9082

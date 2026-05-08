@@ -117,7 +117,7 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 12-node LangGraph StateGraph: classify, normalize, selectRunbooks, extract, fan-out, align, aggregate, checkConfidence, validate, proposeMitigation, followUp |
+| Agent Orchestrator | `packages/agent` | 13-node LangGraph StateGraph: classify, normalize, selectRunbooks, extract, fan-out, align, aggregate, enforceCorrelations (SIO-681: correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, proposeMitigation, followUp |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
