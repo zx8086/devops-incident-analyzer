@@ -45,6 +45,12 @@ export const defaults = {
 		apiKey: "",
 		apiSecret: "",
 	},
+	restproxy: {
+		enabled: false,
+		url: "http://localhost:8082",
+		apiKey: "",
+		apiSecret: "",
+	},
 	logging: {
 		level: "info" as const,
 		backend: "pino" as const,

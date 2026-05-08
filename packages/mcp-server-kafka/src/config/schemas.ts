@@ -105,6 +105,23 @@ export const connectSchema = z
 	})
 	.strict();
 
+export const restproxySchema = z
+	.object({
+		enabled: z.boolean().describe("Whether REST Proxy integration is enabled"),
+		url: z.string().describe("REST Proxy URL (e.g., http://kafka-rest:8082 for self-hosted)"),
+		apiKey: z
+			.string()
+			.describe(
+				"REST Proxy API key for basic auth. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud.",
+			),
+		apiSecret: z
+			.string()
+			.describe(
+				"REST Proxy API secret for basic auth. Leave empty for self-hosted no-auth deployments. Set for Confluent Cloud.",
+			),
+	})
+	.strict();
+
 export const loggingSchema = z
 	.object({
 		level: z.enum(["silent", "debug", "info", "warn", "error"]).describe("Log verbosity level"),
@@ -143,6 +160,7 @@ export const configSchema = z
 		schemaRegistry: schemaRegistrySchema,
 		ksql: ksqlSchema,
 		connect: connectSchema,
+		restproxy: restproxySchema,
 		logging: loggingSchema,
 		telemetry: telemetrySchema,
 		transport: transportSchema,
@@ -210,6 +228,16 @@ export const configSchema = z
 					code: z.ZodIssueCode.custom,
 					path: ["connect", "url"],
 					message: "Kafka Connect requires connect.url to be set when enabled",
+				});
+			}
+		}
+
+		if (config.restproxy.enabled) {
+			if (config.restproxy.url.length === 0) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["restproxy", "url"],
+					message: "REST Proxy requires restproxy.url to be set when enabled",
 				});
 			}
 		}
