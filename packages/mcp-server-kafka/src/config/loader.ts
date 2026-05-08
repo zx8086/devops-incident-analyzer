@@ -11,6 +11,7 @@ const booleanPaths = new Set([
 	"schemaRegistry.enabled",
 	"ksql.enabled",
 	"connect.enabled",
+	"restproxy.enabled",
 	"telemetry.enabled",
 ]);
 

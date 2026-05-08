@@ -344,6 +344,18 @@ case "${MCP_SERVER}" in
     if [ -n "${CONNECT_API_SECRET:-}" ]; then
       ENV_VARS="${ENV_VARS},CONNECT_API_SECRET=${CONNECT_API_SECRET}"
     fi
+    if [ -n "${RESTPROXY_ENABLED:-}" ]; then
+      ENV_VARS="${ENV_VARS},RESTPROXY_ENABLED=${RESTPROXY_ENABLED}"
+    fi
+    if [ -n "${RESTPROXY_URL:-}" ]; then
+      ENV_VARS="${ENV_VARS},RESTPROXY_URL=${RESTPROXY_URL}"
+    fi
+    if [ -n "${RESTPROXY_API_KEY:-}" ]; then
+      ENV_VARS="${ENV_VARS},RESTPROXY_API_KEY=${RESTPROXY_API_KEY}"
+    fi
+    if [ -n "${RESTPROXY_API_SECRET:-}" ]; then
+      ENV_VARS="${ENV_VARS},RESTPROXY_API_SECRET=${RESTPROXY_API_SECRET}"
+    fi
     ;;
   elastic)
     if [ -n "${ELASTICSEARCH_URL:-}" ]; then

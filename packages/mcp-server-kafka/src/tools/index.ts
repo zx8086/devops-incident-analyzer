@@ -4,6 +4,7 @@ import type { AppConfig } from "../config/schemas.ts";
 import type { ConnectService } from "../services/connect-service.ts";
 import type { KafkaService } from "../services/kafka-service.ts";
 import type { KsqlService } from "../services/ksql-service.ts";
+import type { RestProxyService } from "../services/restproxy-service.ts";
 import type { SchemaRegistryService } from "../services/schema-registry-service.ts";
 import { logger } from "../utils/logger.ts";
 import { registerConnectTools } from "./connect/tools.ts";
@@ -11,6 +12,7 @@ import { registerDestructiveTools } from "./destructive/tools.ts";
 import { registerKsqlTools } from "./ksql/tools.ts";
 import { registerReadTools } from "./read/tools.ts";
 import { registerExtendedReadTools } from "./read/tools-extended.ts";
+import { registerRestProxyTools } from "./restproxy/tools.ts";
 import { registerSchemaTools } from "./schema/tools.ts";
 import { registerWriteTools } from "./write/tools.ts";
 
@@ -18,6 +20,7 @@ export interface ToolRegistrationOptions {
 	schemaRegistryService?: SchemaRegistryService;
 	ksqlService?: KsqlService;
 	connectService?: ConnectService;
+	restProxyService?: RestProxyService;
 }
 
 export function registerAllTools(
@@ -37,7 +40,7 @@ export function registerAllTools(
 
 	if (options?.schemaRegistryService) {
 		logger.debug("Registering schema registry tools");
-		registerSchemaTools(server, options.schemaRegistryService);
+		registerSchemaTools(server, options.schemaRegistryService, config);
 	}
 
 	if (options?.ksqlService) {
@@ -47,10 +50,30 @@ export function registerAllTools(
 
 	if (options?.connectService) {
 		logger.debug("Registering Kafka Connect tools");
-		registerConnectTools(server, options.connectService);
+		registerConnectTools(server, options.connectService, config);
 	}
 
+	if (options?.restProxyService) {
+		logger.debug("Registering REST Proxy tools");
+		registerRestProxyTools(server, options.restProxyService, config);
+	}
+
+	const connectWrites = options?.connectService && config.kafka.allowWrites ? 3 : 0;
+	const connectDestructive = options?.connectService && config.kafka.allowDestructive ? 2 : 0;
+	const srWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 3 : 0;
+	const srDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 4 : 0;
+	const restProxyReads = options?.restProxyService ? 3 : 0;
+	const restProxyWrites = options?.restProxyService && config.kafka.allowWrites ? 6 : 0;
 	const toolCount =
-		15 + (options?.schemaRegistryService ? 8 : 0) + (options?.ksqlService ? 7 : 0) + (options?.connectService ? 4 : 0);
+		15 +
+		(options?.schemaRegistryService ? 8 : 0) +
+		(options?.ksqlService ? 7 : 0) +
+		(options?.connectService ? 4 : 0) +
+		connectWrites +
+		connectDestructive +
+		srWrites +
+		srDestructive +
+		restProxyReads +
+		restProxyWrites;
 	logger.info({ toolCount }, "All tools registered successfully");
 }

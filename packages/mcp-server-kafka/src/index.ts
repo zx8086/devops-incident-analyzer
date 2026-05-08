@@ -9,6 +9,7 @@ import { KafkaClientManager } from "./services/client-manager.ts";
 import { ConnectService } from "./services/connect-service.ts";
 import { KafkaService } from "./services/kafka-service.ts";
 import { KsqlService } from "./services/ksql-service.ts";
+import { RestProxyService } from "./services/restproxy-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
 import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
@@ -99,6 +100,11 @@ if (import.meta.main) {
 					logger.info({ url: config.connect.url }, "Kafka Connect enabled");
 				}
 
+				if (config.restproxy.enabled) {
+					toolOptions.restProxyService = new RestProxyService(config);
+					logger.info({ url: config.restproxy.url }, "REST Proxy enabled");
+				}
+
 				return { kafkaService, clientManager, toolOptions };
 			},
 
@@ -116,11 +122,23 @@ if (import.meta.main) {
 			},
 
 			onStarted: () => {
+				const connectWrites = config.connect.enabled && config.kafka.allowWrites ? 3 : 0;
+				const connectDestructive = config.connect.enabled && config.kafka.allowDestructive ? 2 : 0;
+				const srWrites = config.schemaRegistry.enabled && config.kafka.allowWrites ? 3 : 0;
+				const srDestructive = config.schemaRegistry.enabled && config.kafka.allowDestructive ? 4 : 0;
+				const restProxyReads = config.restproxy.enabled ? 3 : 0;
+				const restProxyWrites = config.restproxy.enabled && config.kafka.allowWrites ? 6 : 0;
 				const toolCount =
 					15 +
 					(config.schemaRegistry.enabled ? 8 : 0) +
 					(config.ksql.enabled ? 7 : 0) +
-					(config.connect.enabled ? 4 : 0);
+					(config.connect.enabled ? 4 : 0) +
+					connectWrites +
+					connectDestructive +
+					srWrites +
+					srDestructive +
+					restProxyReads +
+					restProxyWrites;
 				logger.info(
 					{
 						provider: config.kafka.provider,

@@ -1,6 +1,6 @@
 // src/tools/schema/tools.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../config/index.ts";
+import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { SchemaRegistryService } from "../../services/schema-registry-service.ts";
 import { wrapHandler } from "../wrap.ts";
@@ -8,9 +8,7 @@ import * as ops from "./operations.ts";
 import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
-export function registerSchemaTools(server: McpServer, service: SchemaRegistryService): void {
-	const config = getConfig();
-
+export function registerSchemaTools(server: McpServer, service: SchemaRegistryService, config: AppConfig): void {
 	server.tool(
 		"kafka_list_schemas",
 		prompts.LIST_SCHEMAS_DESCRIPTION,
@@ -90,4 +88,80 @@ export function registerSchemaTools(server: McpServer, service: SchemaRegistrySe
 			return ResponseBuilder.success(result);
 		}),
 	);
+
+	// SIO-682: gated write tools
+	if (config.kafka.allowWrites) {
+		server.tool(
+			"sr_register_schema",
+			prompts.SR_REGISTER_SCHEMA_DESCRIPTION,
+			params.SrRegisterSchemaParams.shape,
+			wrapHandler("sr_register_schema", config, async (args) => {
+				const result = await ops.srRegisterSchema(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+
+		server.tool(
+			"sr_check_compatibility",
+			prompts.SR_CHECK_COMPATIBILITY_DESCRIPTION,
+			params.SrCheckCompatibilityParams.shape,
+			wrapHandler("sr_check_compatibility", config, async (args) => {
+				const result = await ops.srCheckCompatibility(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+
+		server.tool(
+			"sr_set_compatibility",
+			prompts.SR_SET_COMPATIBILITY_DESCRIPTION,
+			params.SrSetCompatibilityParams.shape,
+			wrapHandler("sr_set_compatibility", config, async (args) => {
+				const result = await ops.srSetCompatibility(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+	}
+
+	// SIO-682: gated destructive tools
+	if (config.kafka.allowDestructive) {
+		server.tool(
+			"sr_soft_delete_subject",
+			prompts.SR_SOFT_DELETE_SUBJECT_DESCRIPTION,
+			params.SrSoftDeleteSubjectParams.shape,
+			wrapHandler("sr_soft_delete_subject", config, async (args) => {
+				const result = await ops.srSoftDeleteSubject(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+
+		server.tool(
+			"sr_soft_delete_subject_version",
+			prompts.SR_SOFT_DELETE_SUBJECT_VERSION_DESCRIPTION,
+			params.SrSoftDeleteSubjectVersionParams.shape,
+			wrapHandler("sr_soft_delete_subject_version", config, async (args) => {
+				const result = await ops.srSoftDeleteSubjectVersion(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+
+		server.tool(
+			"sr_hard_delete_subject",
+			prompts.SR_HARD_DELETE_SUBJECT_DESCRIPTION,
+			params.SrHardDeleteSubjectParams.shape,
+			wrapHandler("sr_hard_delete_subject", config, async (args) => {
+				const result = await ops.srHardDeleteSubject(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+
+		server.tool(
+			"sr_hard_delete_subject_version",
+			prompts.SR_HARD_DELETE_SUBJECT_VERSION_DESCRIPTION,
+			params.SrHardDeleteSubjectVersionParams.shape,
+			wrapHandler("sr_hard_delete_subject_version", config, async (args) => {
+				const result = await ops.srHardDeleteSubjectVersion(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+	}
 }

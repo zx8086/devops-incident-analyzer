@@ -89,6 +89,37 @@ export class SchemaRegistryService {
 		return this.request<number[]>("DELETE", `/subjects/${encodeURIComponent(subject)}${query}`);
 	}
 
+	// SIO-682: write/destructive methods added below
+	async setCompatibility(
+		level: "BACKWARD" | "BACKWARD_TRANSITIVE" | "FORWARD" | "FORWARD_TRANSITIVE" | "FULL" | "FULL_TRANSITIVE" | "NONE",
+		subject?: string,
+	): Promise<{ compatibility: string }> {
+		const path = subject ? `/config/${encodeURIComponent(subject)}` : "/config";
+		return this.request<{ compatibility: string }>("PUT", path, { compatibility: level });
+	}
+
+	async softDeleteSubject(subject: string): Promise<number[]> {
+		return this.deleteSubject(subject, false);
+	}
+
+	async softDeleteSubjectVersion(subject: string, version: string | number): Promise<number> {
+		return this.request<number>(
+			"DELETE",
+			`/subjects/${encodeURIComponent(subject)}/versions/${encodeURIComponent(String(version))}`,
+		);
+	}
+
+	async hardDeleteSubject(subject: string): Promise<number[]> {
+		return this.deleteSubject(subject, true);
+	}
+
+	async hardDeleteSubjectVersion(subject: string, version: string | number): Promise<number> {
+		return this.request<number>(
+			"DELETE",
+			`/subjects/${encodeURIComponent(subject)}/versions/${encodeURIComponent(String(version))}?permanent=true`,
+		);
+	}
+
 	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const url = `${this.baseUrl}${path}`;
 		const options: RequestInit = {
