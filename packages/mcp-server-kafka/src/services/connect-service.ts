@@ -75,6 +75,36 @@ export class ConnectService {
 		);
 	}
 
+	async pauseConnector(name: string): Promise<void> {
+		await this.request<void>("PUT", `/connectors/${encodeURIComponent(name)}/pause`);
+	}
+
+	async resumeConnector(name: string): Promise<void> {
+		await this.request<void>("PUT", `/connectors/${encodeURIComponent(name)}/resume`);
+	}
+
+	async restartConnector(
+		name: string,
+		options?: { includeTasks?: boolean; onlyFailed?: boolean },
+	): Promise<void> {
+		const qs: string[] = [];
+		if (options?.includeTasks !== undefined) qs.push(`includeTasks=${options.includeTasks}`);
+		if (options?.onlyFailed !== undefined) qs.push(`onlyFailed=${options.onlyFailed}`);
+		const path = `/connectors/${encodeURIComponent(name)}/restart${qs.length ? `?${qs.join("&")}` : ""}`;
+		await this.request<void>("POST", path);
+	}
+
+	async restartConnectorTask(name: string, taskId: number): Promise<void> {
+		await this.request<void>(
+			"POST",
+			`/connectors/${encodeURIComponent(name)}/tasks/${taskId}/restart`,
+		);
+	}
+
+	async deleteConnector(name: string): Promise<void> {
+		await this.request<void>("DELETE", `/connectors/${encodeURIComponent(name)}`);
+	}
+
 	private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
 		const init: RequestInit = { method, headers: this.headers };
 		if (body !== undefined) init.body = JSON.stringify(body);
@@ -86,8 +116,8 @@ export class ConnectService {
 			throw new Error(`Kafka Connect error ${response.status}: ${errorBody}`);
 		}
 
-		// Some Connect endpoints (e.g., DELETE) return 204 No Content
-		if (response.status === 204) return undefined as T;
+		// Connect returns 204 (DELETE) and 202 (pause/resume) with no body
+		if (response.status === 204 || response.status === 202) return undefined as T;
 
 		return (await response.json()) as T;
 	}
