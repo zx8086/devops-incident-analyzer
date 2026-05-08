@@ -139,4 +139,34 @@ describe("SchemaRegistryService", () => {
 		const fetchCall = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
 		expect((fetchCall?.[0] as string).includes("//subjects")).toBe(false);
 	});
+
+	describe("probeReachability", () => {
+		test("resolves on 200", async () => {
+			mockFetch(200, []);
+			const service = new SchemaRegistryService(mockConfig);
+			await expect(service.probeReachability()).resolves.toBeUndefined();
+		});
+
+		test("throws on 500", async () => {
+			mockFetch(500, "boom");
+			const service = new SchemaRegistryService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("HTTP 500");
+		});
+
+		test("hits GET /subjects with timeout signal", async () => {
+			mockFetch(200, []);
+			const service = new SchemaRegistryService(mockConfig);
+			await service.probeReachability(3333);
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			expect((call[0] as string).endsWith("/subjects")).toBe(true);
+			expect((call[1] as RequestInit).method).toBe("GET");
+			expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+		});
+
+		test("propagates fetch network error", async () => {
+			globalThis.fetch = mock(() => Promise.reject(new Error("ETIMEDOUT"))) as unknown as typeof globalThis.fetch;
+			const service = new SchemaRegistryService(mockConfig);
+			await expect(service.probeReachability()).rejects.toThrow("ETIMEDOUT");
+		});
+	});
 });

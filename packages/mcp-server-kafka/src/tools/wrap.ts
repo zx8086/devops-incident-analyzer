@@ -2,6 +2,7 @@
 import type { AppConfig } from "../config/schemas.ts";
 import { normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
+import { logger } from "../utils/logger.ts";
 import { traceToolCall } from "../utils/tracing.ts";
 
 type ToolResponse = {
@@ -73,6 +74,7 @@ export function wrapHandler<T>(
 				return await handler(args);
 			} catch (error) {
 				const mcpError = normalizeError(error);
+				logger.error({ tool: toolName, error: mcpError.message }, "Tool call error");
 				return ResponseBuilder.error(mcpError.message);
 			}
 		});

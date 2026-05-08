@@ -18,6 +18,17 @@ export class RestProxyService {
 		}
 	}
 
+	async probeReachability(timeoutMs = 5000): Promise<void> {
+		const response = await fetch(`${this.baseUrl}/topics`, {
+			method: "GET",
+			headers: this.headers,
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}`);
+		}
+	}
+
 	async listTopics(): Promise<string[]> {
 		return this.request<string[]>("GET", "/topics");
 	}
