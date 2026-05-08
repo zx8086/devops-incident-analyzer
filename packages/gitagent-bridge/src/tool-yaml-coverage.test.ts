@@ -163,3 +163,33 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		expect(Object.keys(descriptions).length).toBe(12);
 	});
 });
+
+describe("sibling tool YAMLs action_descriptions coverage (SIO-680/682 follow-up)", () => {
+	const SIBLING_FACADES = [
+		"elastic-search-logs",
+		"couchbase-cluster-health",
+		"konnect-api-gateway",
+		"gitlab-api",
+		"atlassian-api",
+	] as const;
+
+	for (const facadeName of SIBLING_FACADES) {
+		test(`${facadeName} declares action_descriptions for every action_tool_map key`, () => {
+			const agent = loadAgent(AGENTS_DIR);
+			const tool = agent.tools.find((t) => t.name === facadeName);
+			expect(tool).toBeDefined();
+			if (!tool) return;
+			const map = tool.tool_mapping?.action_tool_map;
+			const descriptions = tool.tool_mapping?.action_descriptions;
+			expect(map).toBeDefined();
+			expect(descriptions).toBeDefined();
+			if (!map || !descriptions) return;
+			const actionKeys = Object.keys(map);
+			for (const action of actionKeys) {
+				expect(descriptions[action]).toBeDefined();
+				expect((descriptions[action] ?? "").length).toBeGreaterThan(20);
+			}
+			expect(Object.keys(descriptions).length).toBe(actionKeys.length);
+		});
+	}
+});
