@@ -215,5 +215,21 @@ export const configSchema = z
 		}
 	});
 
+export const dlqTopicSchema = z
+	.object({
+		name: z.string().describe("DLQ topic name"),
+		totalMessages: z.number().int().nonnegative().describe("Total messages across all partitions at sample time"),
+		recentDelta: z
+			.number()
+			.int()
+			.nullable()
+			.describe(
+				"Messages added between the two samples (~30s apart). Null if the second sample failed (e.g., topic deleted between samples). Zero means no live ingestion during the window.",
+			),
+	})
+	.strict();
+
+export type DlqTopic = z.infer<typeof dlqTopicSchema>;
+
 export type AppConfig = z.infer<typeof configSchema>;
 export type TransportConfig = z.infer<typeof transportSchema>;

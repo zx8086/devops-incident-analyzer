@@ -8,6 +8,11 @@ import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { checkConfidence } from "./confidence-gate.ts";
+import {
+	correlationFetch,
+	enforceCorrelationsAggregate,
+	enforceCorrelationsRouter,
+} from "./correlation/enforce-node.ts";
 import { extractEntities } from "./entity-extractor.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";
@@ -69,6 +74,8 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("queryDataSource", traceNode("queryDataSource", queryDataSource))
 		.addNode("align", traceNode("align", checkAlignment))
 		.addNode("aggregate", traceNode("aggregate", aggregate))
+		.addNode("correlationFetch", traceNode("correlationFetch", correlationFetch))
+		.addNode("enforceCorrelationsAggregate", traceNode("enforceCorrelationsAggregate", enforceCorrelationsAggregate))
 		.addNode("checkConfidence", traceNode("checkConfidence", checkConfidence))
 		.addNode("validate", traceNode("validate", validate))
 		.addNode("proposeMitigation", traceNode("proposeMitigation", proposeMitigation))
@@ -100,8 +107,11 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// Alignment -> Send[] retries or aggregate
 		.addConditionalEdges("align", routeAfterAlignment, ["queryDataSource", "aggregate"])
 
-		// SIO-632: Aggregate -> checkConfidence (HITL gate) -> validate
-		.addEdge("aggregate", "checkConfidence")
+		// SIO-681: Aggregate -> enforceCorrelations router (re-fan-out via correlationFetch when rules fire,
+		// otherwise straight to enforceCorrelationsAggregate which is a no-op pass-through)
+		.addConditionalEdges("aggregate", enforceCorrelationsRouter, ["correlationFetch", "enforceCorrelationsAggregate"])
+		.addEdge("correlationFetch", "enforceCorrelationsAggregate")
+		.addEdge("enforceCorrelationsAggregate", "checkConfidence")
 		.addEdge("checkConfidence", "validate")
 
 		// SIO-631: Validate -> retry aggregate or proposeMitigation -> followUp -> END

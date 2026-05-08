@@ -8,6 +8,7 @@ import {
 	ListOffsetTimestamps,
 	MultipleErrors,
 } from "@platformatic/kafka";
+import type { DlqTopic } from "../config/schemas.ts";
 import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
 
@@ -127,6 +128,19 @@ async function getClusterMetadata(admin: Admin): Promise<{
 	});
 }
 
+const DLQ_PATTERNS = [/-dlq$/, /^dlt-/, /-dead-letter$/, /^dead-letter-/, /\.DLQ$/];
+
+// Number of DLQ topics sampled concurrently per batch to avoid overloading brokers.
+const DLQ_PARALLEL_BATCH_SIZE = 20;
+
+// Duration of the sampling window used to compute recentDelta.
+const DEFAULT_DLQ_DELTA_WINDOW_MS = 30_000;
+
+export interface ListDlqTopicsOptions {
+	skipDelta?: boolean;
+	windowMs?: number;
+}
+
 export interface ConsumeMessagesOptions {
 	topic: string;
 	maxMessages: number;
@@ -184,6 +198,66 @@ export type GetMessageByOffsetResult =
 			message: string;
 	  };
 
+async function sampleOneDlqTopic(clientManager: KafkaClientManager, name: string): Promise<number> {
+	return clientManager.withAdmin(async (admin) => {
+		const partitionIndices = await getPartitionIndices(admin, name);
+		if (partitionIndices.length === 0) return 0;
+
+		// Single listOffsets call for all partitions (both EARLIEST and LATEST timestamps).
+		// Avoids N round-trips per topic when a DLQ has many partitions.
+		const result = (await admin.listOffsets({
+			topics: [
+				{
+					name,
+					partitions: partitionIndices.flatMap((i) => [
+						{ partitionIndex: i, timestamp: ListOffsetTimestamps.EARLIEST },
+						{ partitionIndex: i, timestamp: ListOffsetTimestamps.LATEST },
+					]),
+				},
+			],
+		})) as unknown as Array<{
+			name: string;
+			partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
+		}>;
+
+		const topicResult = result.find((t) => t.name === name);
+		if (!topicResult) return 0;
+
+		// Accumulate in BigInt to match getConsumerGroupLag pattern; convert at return.
+		let total = 0n;
+		for (const i of partitionIndices) {
+			const earliest = topicResult.partitions.find(
+				(p) => p.partitionIndex === i && p.timestamp === ListOffsetTimestamps.EARLIEST,
+			);
+			const latest = topicResult.partitions.find(
+				(p) => p.partitionIndex === i && p.timestamp === ListOffsetTimestamps.LATEST,
+			);
+			if (earliest && latest) {
+				total += latest.offset - earliest.offset;
+			}
+		}
+		return Number(total);
+	});
+}
+
+async function sampleDlqOffsets(clientManager: KafkaClientManager, names: string[]): Promise<Map<string, number>> {
+	const result = new Map<string, number>();
+
+	for (let i = 0; i < names.length; i += DLQ_PARALLEL_BATCH_SIZE) {
+		const batch = names.slice(i, i + DLQ_PARALLEL_BATCH_SIZE);
+		const settled = await Promise.allSettled(batch.map((name) => sampleOneDlqTopic(clientManager, name)));
+		for (let j = 0; j < batch.length; j++) {
+			const outcome = settled[j];
+			if (outcome?.status === "fulfilled") {
+				result.set(batch[j] as string, outcome.value);
+			}
+			// Rejected outcomes are intentionally omitted so the caller can detect null delta.
+		}
+	}
+
+	return result;
+}
+
 export class KafkaService {
 	constructor(private readonly clientManager: KafkaClientManager) {}
 
@@ -201,6 +275,47 @@ export class KafkaService {
 			logger.debug({ count: filtered.length }, "Topics listed");
 			return filtered.map((name) => ({ name }));
 		});
+	}
+
+	async listDlqTopics(options?: ListDlqTopicsOptions): Promise<DlqTopic[]> {
+		logger.debug({ options: options ?? null }, "Listing DLQ topics");
+
+		const allTopics = await this.listTopics();
+		const dlqNames = allTopics.map((t) => t.name).filter((name) => DLQ_PATTERNS.some((p) => p.test(name)));
+
+		if (dlqNames.length === 0) {
+			return [];
+		}
+
+		const firstSample = await sampleDlqOffsets(this.clientManager, dlqNames);
+
+		if (options?.skipDelta === true) {
+			// Only emit topics that succeeded in the first sample; omit phantom entries.
+			return dlqNames
+				.filter((name) => firstSample.has(name))
+				.map((name) => ({
+					name,
+					totalMessages: firstSample.get(name) as number,
+					recentDelta: null,
+				}));
+		}
+
+		const windowMs = options?.windowMs ?? DEFAULT_DLQ_DELTA_WINDOW_MS;
+		await new Promise<void>((resolve) => setTimeout(resolve, windowMs));
+
+		const secondSample = await sampleDlqOffsets(this.clientManager, dlqNames);
+
+		// Only iterate topics that succeeded in the first sample. If first failed, we
+		// have no baseline so the delta would be fabricated (SIO-681 critical fix).
+		return dlqNames
+			.filter((name) => firstSample.has(name))
+			.map((name) => {
+				const first = firstSample.get(name) as number;
+				const second = secondSample.get(name);
+				// recentDelta is null only when the second sample failed for this topic.
+				const recentDelta = second !== undefined ? second - first : null;
+				return { name, totalMessages: first, recentDelta };
+			});
 	}
 
 	async describeTopic(topicName: string): Promise<{
