@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolErrorCategory } from "@devops-agent/shared";
 import { Send } from "@langchain/langgraph";
 import type { AgentStateType } from "./state.ts";
+import { classifyToolError } from "./sub-agent.ts";
 
 const logger = getLogger("agent:alignment");
 const MAX_ALIGNMENT_RETRIES = 2;
@@ -21,6 +22,53 @@ export function getDataSourceErrorCategories(results: DataSourceResult[]): Map<s
 		categories.set(result.dataSourceId, set);
 	}
 	return categories;
+}
+
+export interface FirstAttemptSummary {
+	dataSourceId: string;
+	firstStatus: "success" | "error";
+	firstCategory?: ToolErrorCategory;
+	firstDurationMs: number;
+	recovered: boolean;
+}
+
+// SIO-691: derive per-datasource first-attempt outcome from accumulated results.
+// The supervisor's alignment-retry path silently re-runs failed sub-agents on a fresh
+// invocation; the first failure's evidence is invisible to user-facing metrics because
+// the retry's success masks it in the aggregate. This helper distinguishes first attempts
+// from retries via the existing `isAlignmentRetry` discriminator -- no schema change.
+// For elastic deployment fan-out, prefer a failing first-attempt result over a successful
+// sibling so the summary surfaces the failure that triggered retry.
+export function summarizeFirstAttempts(results: DataSourceResult[]): FirstAttemptSummary[] {
+	const firstByIdMap = new Map<string, DataSourceResult>();
+	const hasLaterSuccess = new Map<string, boolean>();
+
+	for (const r of results) {
+		if (!r.isAlignmentRetry) {
+			const existing = firstByIdMap.get(r.dataSourceId);
+			if (!existing || (existing.status === "success" && r.status === "error")) {
+				firstByIdMap.set(r.dataSourceId, r);
+			}
+		} else if (r.status === "success") {
+			hasLaterSuccess.set(r.dataSourceId, true);
+		}
+	}
+
+	const out: FirstAttemptSummary[] = [];
+	for (const [dataSourceId, first] of firstByIdMap) {
+		const summary: FirstAttemptSummary = {
+			dataSourceId,
+			firstStatus: first.status === "success" ? "success" : "error",
+			firstDurationMs: first.duration ?? 0,
+			recovered: first.status === "error" && hasLaterSuccess.get(dataSourceId) === true,
+		};
+		if (first.status === "error") {
+			const fromTool = first.toolErrors?.[0]?.category;
+			summary.firstCategory = fromTool ?? classifyToolError(first.error ?? "").category;
+		}
+		out.push(summary);
+	}
+	return out;
 }
 
 // Uses ToolError.retryable (set by classifyToolError in sub-agent.ts) as the
