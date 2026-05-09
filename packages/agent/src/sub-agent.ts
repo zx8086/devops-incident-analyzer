@@ -21,6 +21,25 @@ const logger = getLogger("agent:sub-agent");
 // (tool selection, invocation, result parsing) which routinely exceed 60s.
 const SUB_AGENT_TIMEOUT_MS = 300_000;
 
+// SIO-689: Trace evidence on the failing pass-4 query showed 13 LLM iterations + 12 tools-node
+// executions = 25 graph steps, the LangGraph default. The 33 underlying elasticsearch_* calls were
+// legitimate progressive refinement (cross-deployment 5xx triage), not looping. Lift to 40 for
+// elastic only (~20 LLM iterations × ~2.75 parallel tools = ~55 tool-call budget). The 5-minute
+// SUB_AGENT_TIMEOUT_MS still bounds wall-clock damage on a true loop.
+const ELASTIC_RECURSION_LIMIT_DEFAULT = 40;
+
+export function getSubAgentRecursionLimit(
+	dataSourceId: string,
+	env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+	if (dataSourceId !== "elastic") return undefined;
+	const raw = env.SUBAGENT_ELASTIC_RECURSION_LIMIT;
+	if (raw == null || raw === "") return ELASTIC_RECURSION_LIMIT_DEFAULT;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) return ELASTIC_RECURSION_LIMIT_DEFAULT;
+	return Math.floor(parsed);
+}
+
 const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
 	kafka: "kafka-agent",
@@ -211,7 +230,8 @@ async function runSubAgent(
 
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
-		log.info({ deploymentId }, "Invoking sub-agent");
+		const recursionLimit = getSubAgentRecursionLimit(dataSourceId);
+		log.info({ deploymentId, recursionLimit }, "Invoking sub-agent");
 		const response = await agent.invoke(
 			{ messages },
 			{
@@ -230,6 +250,7 @@ async function runSubAgent(
 					`datasource:${dataSourceId}`,
 					...(deploymentId ? [`deployment:${deploymentId}`] : []),
 				],
+				...(recursionLimit !== undefined && { recursionLimit }),
 			},
 		);
 		const lastResponse = response.messages.at(-1);
