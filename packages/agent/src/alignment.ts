@@ -5,7 +5,26 @@ import { Send } from "@langchain/langgraph";
 import type { AgentStateType } from "./state.ts";
 import { classifyToolError } from "./sub-agent.ts";
 
-const logger = getLogger("agent:alignment");
+interface AlignmentLogSink {
+	info: (...args: unknown[]) => unknown;
+	warn: (...args: unknown[]) => unknown;
+	error: (...args: unknown[]) => unknown;
+}
+
+const defaultLogger: AlignmentLogSink = getLogger("agent:alignment") as unknown as AlignmentLogSink;
+let currentLogger: AlignmentLogSink = defaultLogger;
+const logger: AlignmentLogSink = {
+	info: (...args) => currentLogger.info(...args),
+	warn: (...args) => currentLogger.warn(...args),
+	error: (...args) => currentLogger.error(...args),
+};
+
+// SIO-691: test seam for capturing log emissions during unit tests. Pass null to
+// reset to the production logger. Mirrors the hasSeededTokensFn pattern from SIO-693.
+export function _setAlignmentLoggerForTesting(sink: AlignmentLogSink | null): void {
+	currentLogger = sink ?? defaultLogger;
+}
+
 const MAX_ALIGNMENT_RETRIES = 2;
 // Defense-in-depth: hard cap on total retry results regardless of counter state.
 // 4 datasources x 4 retry attempts = 16 results before we stop retrying.
@@ -206,9 +225,19 @@ export function routeAfterAlignment(state: AgentStateType): Send[] | "aggregate"
 		return "aggregate";
 	}
 
-	logger.info(
-		{ retryTargets, skipped: nonRetryable, retryAttempt: state.alignmentRetries },
-		"Dispatching alignment retries",
+	// SIO-691: surface per-source first-attempt outcome so the eval log tail
+	// shows what the silent retry is covering for. Promoted from INFO -> WARN
+	// because masked failures are operationally significant for cost + regression
+	// detection (see ticket "Why this matters" section).
+	const firstAttempts = summarizeFirstAttempts(results);
+	logger.warn(
+		{
+			retryTargets,
+			skipped: nonRetryable,
+			retryAttempt: state.alignmentRetries,
+			firstAttempts,
+		},
+		"Dispatching alignment retries -- first-attempt failures masked by retry",
 	);
 
 	// Fan out: create a Send for each datasource that needs retrying

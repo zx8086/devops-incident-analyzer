@@ -1,8 +1,9 @@
 // packages/agent/src/alignment.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
-import { summarizeFirstAttempts } from "./alignment.ts";
+import { _setAlignmentLoggerForTesting, routeAfterAlignment, summarizeFirstAttempts } from "./alignment.ts";
+import type { AgentStateType } from "./state.ts";
 
 describe("summarizeFirstAttempts", () => {
 	test("flags first-failed retry-succeeded as recovered", () => {
@@ -155,5 +156,127 @@ describe("summarizeFirstAttempts", () => {
 		expect(summary[0]?.dataSourceId).toBe("elastic");
 		expect(summary[0]?.firstStatus).toBe("error");
 		expect(summary[0]?.recovered).toBe(true);
+	});
+});
+
+interface CapturedLog {
+	level: "info" | "warn" | "error";
+	meta: Record<string, unknown> | undefined;
+	msg: string;
+}
+
+function makeCaptureLogger(captured: CapturedLog[]): Parameters<typeof _setAlignmentLoggerForTesting>[0] {
+	const record =
+		(level: CapturedLog["level"]) =>
+		(...args: unknown[]) => {
+			const [first, second] = args;
+			if (typeof first === "string") {
+				captured.push({ level, meta: undefined, msg: first });
+			} else {
+				captured.push({
+					level,
+					meta: first as Record<string, unknown> | undefined,
+					msg: typeof second === "string" ? second : "",
+				});
+			}
+		};
+	return {
+		info: record("info"),
+		warn: record("warn"),
+		error: record("error"),
+	};
+}
+
+function makeRetryState(overrides: Partial<AgentStateType> = {}): AgentStateType {
+	return {
+		messages: [],
+		queryComplexity: "complex",
+		targetDataSources: ["elastic"],
+		targetDeployments: [],
+		dataSourceResults: [
+			{
+				dataSourceId: "elastic",
+				data: null,
+				status: "error",
+				duration: 202609,
+				isAlignmentRetry: false,
+				error: "ECONNRESET while talking to elasticsearch",
+			},
+		],
+		currentDataSource: "",
+		extractedEntities: { dataSources: [] },
+		previousEntities: { dataSources: [] },
+		toolPlanMode: "autonomous",
+		toolPlan: [],
+		validationResult: "pass",
+		retryCount: 0,
+		alignmentRetries: 1,
+		alignmentHints: [],
+		skippedDataSources: [],
+		isFollowUp: false,
+		finalAnswer: "",
+		dataSourceContext: undefined,
+		requestId: "test",
+		attachmentMeta: [],
+		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		confidenceScore: 0,
+		lowConfidence: false,
+		pendingActions: [],
+		actionResults: [],
+		selectedRunbooks: null,
+		...overrides,
+	} as AgentStateType;
+}
+
+describe("routeAfterAlignment retry-dispatch logging", () => {
+	afterEach(() => {
+		_setAlignmentLoggerForTesting(null);
+	});
+
+	test("emits a WARN with per-source firstAttempts when retries fire", () => {
+		const captured: CapturedLog[] = [];
+		_setAlignmentLoggerForTesting(makeCaptureLogger(captured));
+
+		const decision = routeAfterAlignment(makeRetryState());
+
+		expect(Array.isArray(decision)).toBe(true);
+		const dispatchWarn = captured.find((c) => c.level === "warn" && Array.isArray(c.meta?.firstAttempts));
+		expect(dispatchWarn).toBeDefined();
+		const meta = dispatchWarn?.meta as {
+			firstAttempts: Array<{ dataSourceId: string; firstStatus: string; firstCategory?: string }>;
+			retryTargets: string[];
+			retryAttempt: number;
+		};
+		expect(meta.firstAttempts[0]).toMatchObject({
+			dataSourceId: "elastic",
+			firstStatus: "error",
+			firstCategory: "transient",
+		});
+		expect(meta.retryTargets).toEqual(["elastic"]);
+		expect(meta.retryAttempt).toBe(1);
+	});
+
+	test("does NOT emit the firstAttempts WARN when no retries fire (clean state)", () => {
+		const captured: CapturedLog[] = [];
+		_setAlignmentLoggerForTesting(makeCaptureLogger(captured));
+
+		const cleanState = makeRetryState({
+			dataSourceResults: [
+				{
+					dataSourceId: "elastic",
+					data: "ok",
+					status: "success",
+					duration: 4200,
+					isAlignmentRetry: false,
+				},
+			],
+		});
+		const decision = routeAfterAlignment(cleanState);
+
+		expect(decision).toBe("aggregate");
+		const dispatchWarn = captured.find((c) => c.level === "warn" && Array.isArray(c.meta?.firstAttempts));
+		expect(dispatchWarn).toBeUndefined();
 	});
 });
