@@ -4,6 +4,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -35,7 +36,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 
 			let clusterInfo: ClusterInfoResponse;
 			try {
-				clusterInfo = await esClient.info();
+				clusterInfo = await esClient.info(undefined, getDiscoveryRequestOptions());
 			} catch (error) {
 				throw new McpError(
 					ErrorCode.InternalError,
@@ -58,7 +59,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 			// Basic health check
 			let healthStatus = "healthy";
 			try {
-				const health = await esClient.cluster.health();
+				const health = await esClient.cluster.health(undefined, getDiscoveryRequestOptions());
 				healthStatus = health.status;
 
 				output += "## Cluster Health\n\n";
@@ -82,7 +83,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 			if (params.includeMetrics) {
 				// Basic node stats
 				try {
-					const stats = await esClient.cluster.stats();
+					const stats = await esClient.cluster.stats(undefined, getDiscoveryRequestOptions());
 
 					output += "## Cluster Statistics\n\n";
 					output += `- **Total Indices:** ${stats.indices?.count || "N/A"}\n`;
@@ -118,7 +119,10 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 
 				try {
 					const startTime = Date.now();
-					await esClient.cat.indices({ format: "json", h: "index,docs.count,store.size" });
+					await esClient.cat.indices(
+						{ format: "json", h: "index,docs.count,store.size" },
+						getDiscoveryRequestOptions(),
+					);
 					const duration = Date.now() - startTime;
 					output += `Index listing: ${duration}ms\n`;
 				} catch (error) {
@@ -127,7 +131,7 @@ export const registerElasticsearchDiagnostics: ToolRegistrationFunction = (serve
 
 				try {
 					const startTime = Date.now();
-					await esClient.cluster.health();
+					await esClient.cluster.health(undefined, getDiscoveryRequestOptions());
 					const duration = Date.now() - startTime;
 					output += `Health check: ${duration}ms\n`;
 				} catch (error) {

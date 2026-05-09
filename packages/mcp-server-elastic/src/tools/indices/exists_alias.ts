@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -75,6 +76,7 @@ export const registerExistsAliasTool: ToolRegistrationFunction = (server: McpSer
 					master_timeout: params.masterTimeout,
 				},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_exists_alias",
 				},
 			);

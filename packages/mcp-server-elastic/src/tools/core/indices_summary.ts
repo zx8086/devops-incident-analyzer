@@ -5,6 +5,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -51,11 +52,14 @@ export const registerIndicesSummaryTool: ToolRegistrationFunction = (server: Mcp
 
 			logger.debug({ pattern: indexPattern, groupBy }, "Getting indices summary");
 
-			const response = await esClient.cat.indices({
-				index: indexPattern,
-				format: "json",
-				h: "index,health,status,docs.count,store.size",
-			});
+			const response = await esClient.cat.indices(
+				{
+					index: indexPattern,
+					format: "json",
+					h: "index,health,status,docs.count,store.size",
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			const duration = performance.now() - perfStart;
 			logger.debug(

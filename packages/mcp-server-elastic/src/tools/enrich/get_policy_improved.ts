@@ -5,6 +5,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import {
 	createPaginationHeader,
@@ -88,10 +89,13 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			logger.debug({ name, masterTimeout, limit, summary, sortBy }, "Getting enrich policies");
 
 			// Fetch policies from Elasticsearch
-			const result = await esClient.enrich.getPolicy({
-				name,
-				master_timeout: masterTimeout,
-			});
+			const result = await esClient.enrich.getPolicy(
+				{
+					name,
+					master_timeout: masterTimeout,
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			// Extract policies array
 			const policies: EnrichSummaryWithCreated[] = (result.policies || []) as EnrichSummaryWithCreated[];

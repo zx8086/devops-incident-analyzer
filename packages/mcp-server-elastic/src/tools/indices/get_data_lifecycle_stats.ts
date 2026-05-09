@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -50,6 +51,7 @@ export const registerGetDataLifecycleStatsTool: ToolRegistrationFunction = (serv
 			const result = await esClient.indices.getDataLifecycleStats(
 				{},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_get_data_lifecycle_stats",
 				},
 			);

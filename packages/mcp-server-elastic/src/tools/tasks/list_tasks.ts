@@ -3,6 +3,7 @@
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -38,15 +39,18 @@ export const registerListTasksTool: ToolRegistrationFunction = (server: McpServe
 
 		async (params: ListTasksParamsType): Promise<SearchResult> => {
 			try {
-				const result = await esClient.tasks.list({
-					actions: params.actions,
-					detailed: params.detailed,
-					group_by: params.groupBy,
-					nodes: params.nodes,
-					parent_task_id: params.parentTaskId,
-					timeout: params.timeout,
-					wait_for_completion: params.waitForCompletion,
-				});
+				const result = await esClient.tasks.list(
+					{
+						actions: params.actions,
+						detailed: params.detailed,
+						group_by: params.groupBy,
+						nodes: params.nodes,
+						parent_task_id: params.parentTaskId,
+						timeout: params.timeout,
+						wait_for_completion: params.waitForCompletion,
+					},
+					getDiscoveryRequestOptions(),
+				);
 				return {
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				};

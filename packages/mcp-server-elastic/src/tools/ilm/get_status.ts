@@ -7,6 +7,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -41,6 +42,7 @@ export const registerGetStatusTool: ToolRegistrationFunction = (server: McpServe
 			const result = await esClient.ilm.getStatus(
 				{},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_ilm_get_status",
 				},
 			);

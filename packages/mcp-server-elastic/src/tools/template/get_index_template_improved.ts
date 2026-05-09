@@ -5,6 +5,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import {
 	createPaginationHeader,
@@ -96,6 +97,7 @@ export const registerGetIndexTemplateTool: ToolRegistrationFunction = (server: M
 					local,
 				},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_get_index_template",
 				},
 			);

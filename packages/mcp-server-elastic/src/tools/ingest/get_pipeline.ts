@@ -4,6 +4,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -74,7 +75,7 @@ export const registerGetIngestPipelineTool: ToolRegistrationFunction = (server: 
 
 			const result = await esClient.ingest.getPipeline(
 				{ id: params.id },
-				{ opaqueId: "elasticsearch_get_ingest_pipeline" },
+				{ ...getDiscoveryRequestOptions(), opaqueId: "elasticsearch_get_ingest_pipeline" },
 			);
 
 			const pipelineCount = Object.keys(result).length;

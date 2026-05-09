@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -48,9 +49,12 @@ export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpSer
 
 			logger.debug({ masterTimeout }, "Getting enrich stats");
 
-			const result = await esClient.enrich.stats({
-				master_timeout: masterTimeout,
-			});
+			const result = await esClient.enrich.stats(
+				{
+					master_timeout: masterTimeout,
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {

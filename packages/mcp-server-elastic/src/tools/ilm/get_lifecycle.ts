@@ -7,6 +7,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { createPaginationHeader, paginateResults, responsePresets } from "../../utils/responseHandling.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -96,11 +97,14 @@ export const registerGetLifecycleTool: ToolRegistrationFunction = (server: McpSe
 			);
 
 			// Fetch policies from Elasticsearch
-			const result = await esClient.ilm.getLifecycle({
-				name: params.policy,
-				master_timeout: params.masterTimeout,
-				timeout: params.timeout,
-			});
+			const result = await esClient.ilm.getLifecycle(
+				{
+					name: params.policy,
+					master_timeout: params.masterTimeout,
+					timeout: params.timeout,
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			// Convert response to array of policies
 			let policies = Object.entries(result).map(([name, policy]) => ({
