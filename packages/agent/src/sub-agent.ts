@@ -12,6 +12,7 @@ import { getToolsForDataSource, withElasticDeployment } from "./mcp-bridge.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { instrumentTools } from "./sub-agent-instrumentation.ts";
+import { getSubAgentToolCapBytes } from "./sub-agent-truncate-tool-output.ts";
 
 const logger = getLogger("agent:sub-agent");
 
@@ -196,8 +197,11 @@ async function runSubAgent(
 			"Creating ReAct agent with tools",
 		);
 
-		// SIO-686: per-tool-result observability so we can size the cap from real traces
-		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log });
+		// SIO-686: per-tool-result observability so we can size the cap from real traces.
+		// When SUBAGENT_TOOL_RESULT_CAP_BYTES is set, oversized ToolMessage.content is
+		// JSON-aware truncated before re-entering the ReAct loop.
+		const capBytes = getSubAgentToolCapBytes();
+		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log, capBytes });
 
 		const agent = createReactAgent({
 			llm,

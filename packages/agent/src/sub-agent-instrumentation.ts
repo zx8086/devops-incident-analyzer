@@ -1,8 +1,9 @@
 // packages/agent/src/sub-agent-instrumentation.ts
 
-import type { ToolMessage } from "@langchain/core/messages";
+import { ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
+import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 interface InstrumentLogger {
 	info: (...args: unknown[]) => unknown;
@@ -13,6 +14,9 @@ export interface InstrumentContext {
 	dataSourceId: string;
 	deploymentId?: string;
 	log: InstrumentLogger;
+	// SIO-686: when set, ToolMessage content exceeding capBytes is JSON-aware truncated
+	// before re-entering the ReAct loop. Disabled when null/undefined (current default).
+	capBytes?: number | null;
 }
 
 // Wraps each tool so we can observe what flows back from MCP into the ReAct loop.
@@ -39,8 +43,7 @@ function instrumentTool(
 						arg as Parameters<StructuredToolInterface["invoke"]>[0],
 						configArg as Parameters<StructuredToolInterface["invoke"]>[1],
 					);
-					recordResult(result, tool.name, iteration, ctx);
-					return result;
+					return processResult(result, tool.name, iteration, ctx);
 				};
 			}
 			const value = Reflect.get(target, prop, receiver);
@@ -50,7 +53,7 @@ function instrumentTool(
 	return new Proxy(tool, handler);
 }
 
-function recordResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): void {
+function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {
 	const content = extractContent(result);
 	const { bytes, shape } = describeToolResult(content);
 	ctx.log.info(
@@ -66,6 +69,30 @@ function recordResult(result: unknown, toolName: string, iteration: number, ctx:
 		},
 		"Tool result observed",
 	);
+
+	if (ctx.capBytes == null || ctx.capBytes <= 0) return result;
+
+	const text = stringifyContent(content);
+	if (Buffer.byteLength(text, "utf8") <= ctx.capBytes) return result;
+
+	const truncated = truncateToolOutput(text, ctx.capBytes);
+	if (truncated.strategy === "none") return result;
+
+	ctx.log.info(
+		{
+			event: "subagent.tool_result_truncated",
+			dataSourceId: ctx.dataSourceId,
+			deploymentId: ctx.deploymentId,
+			toolName,
+			iteration,
+			originalBytes: truncated.originalBytes,
+			finalBytes: truncated.finalBytes,
+			strategy: truncated.strategy,
+		},
+		"Tool result truncated",
+	);
+
+	return rebuildResult(result, truncated.content);
 }
 
 function extractContent(result: unknown): unknown {
@@ -73,4 +100,32 @@ function extractContent(result: unknown): unknown {
 		return (result as ToolMessage).content;
 	}
 	return result;
+}
+
+function stringifyContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (content == null) return "";
+	try {
+		return JSON.stringify(content) ?? "";
+	} catch {
+		return String(content);
+	}
+}
+
+function rebuildResult(original: unknown, newContent: string): unknown {
+	if (original instanceof ToolMessage) {
+		return new ToolMessage({
+			content: newContent,
+			tool_call_id: original.tool_call_id,
+			name: original.name,
+			status: original.status,
+			artifact: original.artifact,
+		});
+	}
+	if (original && typeof original === "object" && "content" in original) {
+		// Plain ToolMessage-shaped object (e.g. from a fake tool); copy all fields
+		// and overwrite content.
+		return { ...(original as Record<string, unknown>), content: newContent };
+	}
+	return newContent;
 }
