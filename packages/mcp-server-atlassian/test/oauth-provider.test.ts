@@ -6,9 +6,13 @@ import { join } from "node:path";
 import { AtlassianOAuthProvider, OAUTH_CALLBACK_PATH } from "../src/atlassian-client/oauth-provider.js";
 
 const STORAGE_DIR = join(homedir(), ".mcp-auth", "atlassian");
+// Use a synthetic test endpoint so cleanup never touches the real
+// `https___mcp.atlassian.com_v1_mcp.json` a developer might have on disk.
+const TEST_ENDPOINT = "https://mcp.atlassian.test.invalid/v1/mcp";
+const TEST_FILE = join(STORAGE_DIR, "https___mcp.atlassian.test.invalid_v1_mcp.json");
 
 function cleanup() {
-	if (existsSync(STORAGE_DIR)) rmSync(STORAGE_DIR, { recursive: true, force: true });
+	if (existsSync(TEST_FILE)) rmSync(TEST_FILE);
 }
 
 describe("AtlassianOAuthProvider", () => {
@@ -16,7 +20,7 @@ describe("AtlassianOAuthProvider", () => {
 
 	test("redirectUrl uses configured callback port", () => {
 		const provider = new AtlassianOAuthProvider({
-			mcpEndpoint: "https://mcp.atlassian.com/v1/mcp",
+			mcpEndpoint: TEST_ENDPOINT,
 			callbackPort: 9185,
 			onRedirect: () => {},
 		});
@@ -25,7 +29,7 @@ describe("AtlassianOAuthProvider", () => {
 
 	test("clientMetadata includes Atlassian-specific client_name", () => {
 		const provider = new AtlassianOAuthProvider({
-			mcpEndpoint: "https://mcp.atlassian.com/v1/mcp",
+			mcpEndpoint: TEST_ENDPOINT,
 			callbackPort: 9185,
 			onRedirect: () => {},
 		});
@@ -38,21 +42,19 @@ describe("AtlassianOAuthProvider", () => {
 
 	test("saveTokens persists to sanitized file path", () => {
 		const provider = new AtlassianOAuthProvider({
-			mcpEndpoint: "https://mcp.atlassian.com/v1/mcp",
+			mcpEndpoint: TEST_ENDPOINT,
 			callbackPort: 9185,
 			onRedirect: () => {},
 		});
 		provider.saveTokens({ access_token: "tkn", token_type: "bearer" });
-		const sanitized = "https://mcp.atlassian.com/v1/mcp".replace(/[^a-zA-Z0-9.-]/g, "_");
-		const path = join(STORAGE_DIR, `${sanitized}.json`);
-		expect(existsSync(path)).toBe(true);
-		const parsed = JSON.parse(readFileSync(path, "utf-8"));
+		expect(existsSync(TEST_FILE)).toBe(true);
+		const parsed = JSON.parse(readFileSync(TEST_FILE, "utf-8"));
 		expect(parsed.tokens.access_token).toBe("tkn");
 	});
 
 	test("invalidateCredentials('tokens') clears tokens only", () => {
 		const provider = new AtlassianOAuthProvider({
-			mcpEndpoint: "https://mcp.atlassian.com/v1/mcp",
+			mcpEndpoint: TEST_ENDPOINT,
 			callbackPort: 9185,
 			onRedirect: () => {},
 		});
