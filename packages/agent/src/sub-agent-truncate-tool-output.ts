@@ -6,6 +6,10 @@ const ARRAY_KEEP_DEFAULT = 20;
 const ARRAY_KEEP_LARGE_ITEM = 3;
 const LARGE_ITEM_BYTES = 8_192;
 const ROWS_KEEP = 20;
+const BYTE_BUDGET_DIVISOR = 4;
+const ARRAY_INLINE_SAMPLE = 5;
+const MARKER_BYTE_RESERVE = 256;
+const DEFAULT_CAP_BYTES = 65_536;
 
 export type TruncationStrategy =
 	| "json-hits"
@@ -24,11 +28,14 @@ export interface TruncationResult {
 	strategy: TruncationStrategy;
 }
 
+// SIO-688: cap defaults to 65,536 when env unset/invalid; explicit "0" disables.
 export function getSubAgentToolCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
 	const raw = env.SUBAGENT_TOOL_RESULT_CAP_BYTES;
-	if (raw == null || raw === "") return null;
+	if (raw == null || raw === "") return DEFAULT_CAP_BYTES;
 	const parsed = Number(raw);
-	if (!Number.isFinite(parsed) || parsed <= 0) return null;
+	if (!Number.isFinite(parsed)) return DEFAULT_CAP_BYTES;
+	if (parsed === 0) return null;
+	if (parsed < 0) return DEFAULT_CAP_BYTES;
 	return Math.floor(parsed);
 }
 
@@ -42,7 +49,8 @@ export function truncateToolOutput(content: string, capBytes: number): Truncatio
 
 	// Markdown-wrapped JSON (e.g. couchbase queryAnalysis tools): reduce inside the fence,
 	// keep the surrounding markdown frame so the model sees the title + execution metadata.
-	if (/^#\s|```json/m.test(trimmed)) {
+	// SIO-688: detect ```json fences anywhere; some couchbase tools omit the leading heading.
+	if (/```json/.test(trimmed)) {
 		const md = reduceMarkdownJson(content, capBytes);
 		if (md && Buffer.byteLength(md, "utf8") <= capBytes) {
 			return { content: md, originalBytes, finalBytes: Buffer.byteLength(md, "utf8"), strategy: "markdown-json" };
@@ -128,8 +136,11 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 
 	// Fallback: find the largest array field and trim it. Catches unknown shapes that
 	// happen to have one bloat-causing array (e.g. `results`, `items`, `data`, etc.)
+	// SIO-688: also reduce when bytes exceed budget even if length <= threshold
+	// (Atlassian {issues, isLast} returns ~12 issues but each is several KB).
 	const largest = findLargestArrayField(obj);
-	if (largest && largest.array.length > ARRAY_KEEP_DEFAULT) {
+	const budget = capBytes / BYTE_BUDGET_DIVISOR;
+	if (largest && (largest.array.length > ARRAY_KEEP_DEFAULT || largest.size > budget)) {
 		const reducedArray = reduceArrayInline(largest.array, capBytes);
 		return {
 			value: { ...obj, [largest.key]: reducedArray, _truncated: true, _truncatedField: largest.key },
@@ -141,8 +152,10 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 	return { value, changed: false, strategy: "none" };
 }
 
+// SIO-688: short arrays of huge items (e.g. elasticsearch_search 6 hits at 95KB)
+// previously skipped reduction; now also reduce when total bytes exceed budget.
 function reduceArray(value: unknown[], capBytes: number): ReducedJson {
-	if (value.length <= ARRAY_KEEP_DEFAULT) {
+	if (value.length <= ARRAY_KEEP_DEFAULT && serializedBytes(value) <= capBytes / BYTE_BUDGET_DIVISOR) {
 		return { value, changed: false, strategy: "none" };
 	}
 	const reduced = reduceArrayInline(value, capBytes);
@@ -150,28 +163,47 @@ function reduceArray(value: unknown[], capBytes: number): ReducedJson {
 }
 
 // Decides keep-count from item size: small items can keep 20, large items only 3.
-// Appends a {_truncated, _totalCount} marker entry.
+// Appends a {_truncated, _totalCount, _keptCount} marker entry.
+// SIO-688: samples up to 5 items and uses MAX (not avg) so inhomogeneous arrays
+// (small head, huge tail) don't underestimate `keep` from a tiny first item;
+// then verifies actual sliced bytes and shrinks further if needed.
 function reduceArrayInline(value: unknown[], capBytes: number): unknown[] {
-	const sample = value[0];
-	const sampleBytes = sample == null ? 0 : Buffer.byteLength(JSON.stringify(sample), "utf8");
-	const keep = sampleBytes > LARGE_ITEM_BYTES ? ARRAY_KEEP_LARGE_ITEM : ARRAY_KEEP_DEFAULT;
-	// If even the keep-count would exceed cap, drop further; minimum 1.
-	const projected = sampleBytes * keep;
-	const finalKeep = projected > capBytes ? Math.max(1, Math.floor(capBytes / Math.max(1, sampleBytes))) : keep;
+	if (value.length === 0) return value;
+	const sampleCount = Math.min(value.length, ARRAY_INLINE_SAMPLE);
+	let maxSampleBytes = 0;
+	for (let i = 0; i < sampleCount; i++) {
+		const bytes = serializedBytes(value[i]);
+		if (bytes > maxSampleBytes) maxSampleBytes = bytes;
+	}
+	const baseKeep = maxSampleBytes > LARGE_ITEM_BYTES ? ARRAY_KEEP_LARGE_ITEM : ARRAY_KEEP_DEFAULT;
+	const budget = capBytes - MARKER_BYTE_RESERVE;
+	const byteBoundedKeep = Math.max(1, Math.floor(budget / Math.max(1, maxSampleBytes)));
+	let finalKeep = Math.min(baseKeep, byteBoundedKeep, value.length);
+	// Verify the actual sliced bytes against the cap; shrink if a later item turns
+	// out heavier than any sampled item.
+	while (finalKeep > 1 && serializedBytes(value.slice(0, finalKeep)) > budget) {
+		finalKeep--;
+	}
 	return [...value.slice(0, finalKeep), { _truncated: true, _totalCount: value.length, _keptCount: finalKeep }];
 }
 
-function findLargestArrayField(obj: Record<string, unknown>): { key: string; array: unknown[] } | null {
+// SIO-688: returns size so callers can apply a byte-budget check in addition to length.
+function findLargestArrayField(obj: Record<string, unknown>): { key: string; array: unknown[]; size: number } | null {
 	let best: { key: string; array: unknown[]; size: number } | null = null;
 	for (const [key, val] of Object.entries(obj)) {
 		if (Array.isArray(val) && val.length > 0) {
-			const size = Buffer.byteLength(JSON.stringify(val), "utf8");
+			const size = serializedBytes(val);
 			if (!best || size > best.size) {
 				best = { key, array: val, size };
 			}
 		}
 	}
-	return best ? { key: best.key, array: best.array } : null;
+	return best;
+}
+
+function serializedBytes(value: unknown): number {
+	const json = JSON.stringify(value);
+	return json == null ? 0 : Buffer.byteLength(json, "utf8");
 }
 
 // Find ```json...``` fences in markdown content. Reduce the first one whose JSON
