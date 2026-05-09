@@ -8,7 +8,8 @@
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit",
 		"eval:precheck": "bun run src/eval/precheck.ts",
-		"eval:upload-dataset": "bun run src/eval/build-dataset.ts"
+		"eval:upload-dataset": "bun run src/eval/build-dataset.ts",
+		"eval:run": "bun run src/eval/run-eval.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",

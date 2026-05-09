@@ -48,6 +48,7 @@
 		"biome:check": "bunx biome check .",
 		"biome:check:write": "bunx biome check --write .",
 		"yaml:check": "yamllint -c .yamllint.yml agents/",
+		"eval:agent": "bun run --filter @devops-agent/agent eval:run",
 		"fallow:check": "npx -y fallow",
 		"fallow:audit": "npx -y fallow audit",
 		"fallow:dead": "npx -y fallow dead-code",
