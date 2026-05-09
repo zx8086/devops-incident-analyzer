@@ -94,7 +94,7 @@ describe("truncateToolOutput", () => {
 
 		const parsed = JSON.parse(result.content) as Array<Record<string, unknown>>;
 		expect(parsed.length).toBe(21); // 20 items + 1 marker entry
-		expect(parsed.at(-1)).toEqual({ _truncated: true, _totalCount: 500 });
+		expect(parsed.at(-1)).toEqual({ _truncated: true, _totalCount: 500, _keptCount: 20 });
 	});
 
 	test("reduces nodes object to first 5 with nodeCount marker", () => {
@@ -138,5 +138,99 @@ describe("truncateToolOutput", () => {
 
 		expect(result.strategy).toBe("text");
 		expect(result.finalBytes).toBeLessThanOrEqual(CAP + 64);
+	});
+
+	test("reduces markdown-wrapped JSON (couchbase queryAnalysis shape)", () => {
+		const rows = Array.from({ length: 100 }, (_, i) => ({
+			statement: `SELECT * FROM bucket WHERE id=${i}`,
+			elapsedTime: `${i * 1000}us`,
+			payload: "p".repeat(2048),
+		}));
+		const content = `# Most Expensive Queries (100 results)\n\n\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\`\n\n## Query Execution Details\n\n- Status: success\n- Result Count: 100\n`;
+
+		const result = truncateToolOutput(content, CAP);
+
+		expect(result.strategy).toBe("markdown-json");
+		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
+		expect(result.content).toContain("# Most Expensive Queries (100 results)"); // frame preserved
+		expect(result.content).toContain("## Query Execution Details"); // exec details preserved
+		expect(result.content).toContain("_truncated"); // marker present in inner JSON
+		expect(result.content).toContain("_totalCount");
+	});
+
+	test("reduces array of huge items to first 3 (not 20) so cap is met", () => {
+		// 50 items of ~12KB each = 600KB total, way over cap.
+		// New reducer should pick keep=3 (LARGE_ITEM_BYTES threshold).
+		const items = Array.from({ length: 50 }, (_, i) => ({
+			id: i,
+			huge: "h".repeat(12_000),
+		}));
+		const content = JSON.stringify(items);
+		const result = truncateToolOutput(content, CAP);
+
+		expect(["json-array", "text"]).toContain(result.strategy);
+		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
+		if (result.strategy === "json-array") {
+			const parsed = JSON.parse(result.content) as Array<Record<string, unknown>>;
+			expect(parsed.length).toBeLessThanOrEqual(4); // 3 items + 1 marker
+			const marker = parsed.at(-1) as Record<string, unknown>;
+			expect(marker._truncated).toBe(true);
+			expect(marker._totalCount).toBe(50);
+		}
+	});
+
+	test("reduces {columns, rows} shape (elasticsearch_execute_sql_query)", () => {
+		const rows = Array.from({ length: 200 }, (_, i) => [`val-${i}`, i, `payload-${"x".repeat(500)}`]);
+		const content = JSON.stringify({
+			columns: [
+				{ name: "label", type: "keyword" },
+				{ name: "count", type: "long" },
+				{ name: "data", type: "text" },
+			],
+			rows,
+			cursor: "abc123",
+		});
+		const result = truncateToolOutput(content, CAP);
+
+		expect(result.strategy).toBe("json-rows");
+		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
+
+		const parsed = JSON.parse(result.content) as {
+			columns: unknown[];
+			rows: unknown[];
+			cursor: string;
+			_truncated: boolean;
+			_totalRows: number;
+		};
+		expect(parsed.columns.length).toBe(3); // columns preserved
+		expect(parsed.rows.length).toBe(20); // rows reduced to ROWS_KEEP
+		expect(parsed.cursor).toBe("abc123"); // other fields preserved
+		expect(parsed._truncated).toBe(true);
+		expect(parsed._totalRows).toBe(200);
+	});
+
+	test("reduces unknown shape via largest-array fallback", () => {
+		const items = Array.from({ length: 100 }, (_, i) => ({ id: i, payload: "z".repeat(2048) }));
+		const content = JSON.stringify({
+			meta: { runId: "abc", elapsed: 1234 },
+			results: items,
+			summary: "ok",
+		});
+		const result = truncateToolOutput(content, CAP);
+
+		expect(result.strategy).toBe("json-largest-array");
+		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
+
+		const parsed = JSON.parse(result.content) as {
+			meta: unknown;
+			results: unknown[];
+			summary: string;
+			_truncated: boolean;
+			_truncatedField: string;
+		};
+		expect(parsed.meta).toEqual({ runId: "abc", elapsed: 1234 }); // meta preserved
+		expect(parsed.summary).toBe("ok"); // summary preserved
+		expect(parsed._truncatedField).toBe("results");
+		expect(parsed.results.length).toBeLessThanOrEqual(21); // 20 items + 1 marker (small items)
 	});
 });
