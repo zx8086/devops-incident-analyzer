@@ -39,7 +39,6 @@ let serverUrls: Map<string, string> = new Map();
 let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
 const HEALTH_POLL_INTERVAL_MS = 30_000;
-// biome-ignore lint/correctness/noUnusedVariables: SIO-682 - used in Task 2 wiring (reconnectServer, createMcpClient)
 const MCP_CONNECT_TIMEOUT_MS = 10_000;
 
 // SIO-680/682: Generic timeout wrapper. Races the input promise against
@@ -130,7 +129,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 					} as never,
 				},
 			});
-			const tools = await client.getTools();
+			const tools = await withTimeout(client.getTools(), MCP_CONNECT_TIMEOUT_MS, `MCP connect to '${name}' (${url})`);
 			return { name, tools };
 		}),
 	);
@@ -218,7 +217,11 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 				} as never,
 			},
 		});
-		const tools = await client.getTools();
+		const tools = await withTimeout(
+			client.getTools(),
+			MCP_CONNECT_TIMEOUT_MS,
+			`MCP reconnect to '${name}' (${mcpUrl})`,
+		);
 
 		for (const tool of tools) {
 			if (!tool.description) {
