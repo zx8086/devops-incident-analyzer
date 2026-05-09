@@ -237,6 +237,14 @@ Each MCP server traces to its own LangSmith project for isolation:
 | Konnect | `KONNECT_LANGSMITH_PROJECT` | `konnect-mcp-server` |
 | Agent | `LANGSMITH_PROJECT` | `devops-agent` |
 
+### Agent Eval Experiments
+
+The on-demand `bun run eval:agent` pipeline (`packages/agent/src/eval/`) runs the full 13-node graph against the `devops-incident-eval` LangSmith dataset and writes its results as a LangSmith experiment named `agent-eval-<git-sha>`. Each query produces three evaluator scores -- `datasources_covered` and `confidence_threshold` (deterministic) plus `response_quality` (gpt-4o-mini judge) -- visible in the dataset's "Experiments" tab.
+
+The git-sha-tagged experiment prefix lets you compare runs across commits: filter the experiment list by prefix pattern to see whether a description tweak or graph change moved any score. Per-example breakdowns include the full agent trace, so node-level drift is debuggable from the same UI.
+
+See [docs/development/testing.md](../development/testing.md#agent-eval-langsmith-final_response) for the run procedure and `packages/agent/src/eval/README.md` for the canonical reference.
+
 ### Compliance Metadata
 
 The `traceToolCall` function tags every tool invocation with structured metadata:

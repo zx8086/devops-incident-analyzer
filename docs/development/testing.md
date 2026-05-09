@@ -285,11 +285,33 @@ test("loads all 6 tool definitions", () => {
 
 ---
 
+## Agent Eval (LangSmith final_response)
+
+End-to-end regression for the full 13-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
+
+```bash
+# 1. Sanity-check infra (free, fast). Probes :9080-:9085.
+bun run --filter @devops-agent/agent eval:precheck
+
+# 2. Upload (or update) the dataset to LangSmith (free, fast, one-shot per dataset change).
+bun run --filter @devops-agent/agent eval:upload-dataset
+
+# 3. Run the eval (~$0.50-1.50 Bedrock + ~$0.025 OpenAI judge, ~5-10min wall-clock).
+bun run eval:agent
+```
+
+Each evaluator returns 1 (pass) or 0 (fail) per query, visible in LangSmith under the experiment prefix `agent-eval-<git-sha>` against the `devops-incident-eval` dataset. To add a query, edit `packages/agent/src/eval/dataset.ts` and re-run `eval:upload-dataset`.
+
+Prerequisites: AWS Bedrock creds, `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`, the `langsmith` CLI on PATH (`eval:upload-dataset` only), and all 6 MCP servers reachable. The eval is on-demand; not in CI.
+
+---
+
 ## Cross-References
 
 - [Getting Started](./getting-started.md) -- initial setup and first run
 - [Monorepo Structure](./monorepo-structure.md) -- package layout and workspace config
 - [Adding MCP Tools](./adding-mcp-tools.md) -- tool-specific testing guidance
+- [Observability](../operations/observability.md) -- where eval traces land in LangSmith
 
 ---
 
@@ -298,3 +320,4 @@ test("loads all 6 tool definitions", () => {
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial version |
+| 2026-05-09 | Added Agent Eval section (SIO-680/682) |

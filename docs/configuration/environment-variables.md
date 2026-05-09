@@ -55,6 +55,7 @@ LangSmith provides tracing, feedback collection, and evaluation for the agent pi
 | `KONNECT_LANGSMITH_PROJECT` | No | `konnect-mcp-server` | LangSmith project for Kong Konnect MCP server traces |
 | `GITLAB_LANGSMITH_PROJECT` | No | `gitlab-mcp-server` | LangSmith project for GitLab MCP server traces |
 | `ATLASSIAN_LANGSMITH_PROJECT` | No | `atlassian-mcp-server` | LangSmith project for Atlassian MCP server traces |
+| `OPENAI_API_KEY` | Yes (for `eval:agent` only) | -- | gpt-4o-mini API key used by the `response_quality` LLM judge in the LangSmith eval pipeline (`packages/agent/src/eval/`). Not required for normal agent operation; only needed when running `bun run eval:agent`. SIO-680/682. |
 
 Each MCP server writes traces to its own LangSmith project. This allows per-server dashboards while the main agent project captures the orchestration layer. Set `LANGSMITH_TRACING=false` to disable all tracing (useful for local development without a LangSmith account).
 
