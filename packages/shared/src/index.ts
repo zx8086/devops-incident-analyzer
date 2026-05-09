@@ -106,6 +106,7 @@ export {
 	type AuthorizationHandler,
 	BaseOAuthClientProvider,
 	type BaseOAuthProviderOptions,
+	hasSeededTokens,
 	isHeadless,
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
@@ -113,6 +114,8 @@ export {
 	type PersistedOAuthState,
 	type SeedOAuthOptions,
 	seedOAuth,
+	type WarnIfOAuthNotSeededOptions,
+	warnIfOAuthNotSeeded,
 } from "./oauth/index.ts";
 export {
 	type OAuthCallbackOptions,

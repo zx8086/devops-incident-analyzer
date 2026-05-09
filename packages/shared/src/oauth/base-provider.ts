@@ -46,16 +46,22 @@ function sanitizeKey(key: string): string {
 	return key.replace(/[^a-zA-Z0-9.-]/g, "_");
 }
 
-function getStorageDir(namespace: string): string {
+// Exported for read-only consumers (e.g. boot-time presence checks) that must
+// not mkdir. Writers go through getStoragePath which ensures the directory.
+export function getOAuthStoragePath(namespace: string, key: string): string {
+	return join(homedir(), ".mcp-auth", namespace, `${sanitizeKey(key)}.json`);
+}
+
+function ensureStorageDir(namespace: string): void {
 	const dir = join(homedir(), ".mcp-auth", namespace);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 	}
-	return dir;
 }
 
 function getStoragePath(namespace: string, key: string): string {
-	return join(getStorageDir(namespace), `${sanitizeKey(key)}.json`);
+	ensureStorageDir(namespace);
+	return getOAuthStoragePath(namespace, key);
 }
 
 function loadState(namespace: string, key: string, logger: OAuthProviderLogger): PersistedOAuthState {
