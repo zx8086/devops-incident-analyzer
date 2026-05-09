@@ -38,6 +38,7 @@ if (import.meta.main) {
 				instanceUrl: config.gitlab.instanceUrl,
 				personalAccessToken: config.gitlab.personalAccessToken,
 				timeout: config.gitlab.timeout,
+				oauthCallbackPort: config.gitlab.oauthCallbackPort,
 			});
 
 			try {

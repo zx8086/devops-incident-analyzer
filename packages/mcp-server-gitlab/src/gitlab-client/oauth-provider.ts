@@ -11,17 +11,15 @@ import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("oauth");
 
-const OAUTH_CALLBACK_PORT = 9184;
-
 export type { AuthorizationHandler };
-export { OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_PORT };
+export { OAUTH_CALLBACK_PATH };
 
 export class GitLabOAuthProvider extends BaseOAuthClientProvider {
-	constructor(instanceUrl: string, onRedirect: AuthorizationHandler) {
+	constructor(instanceUrl: string, callbackPort: number, onRedirect: AuthorizationHandler) {
 		super({
 			storageNamespace: "gitlab",
 			storageKey: instanceUrl,
-			callbackPort: OAUTH_CALLBACK_PORT,
+			callbackPort,
 			onRedirect,
 			logger: log as unknown as OAuthProviderLogger,
 		});
@@ -33,7 +31,13 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 			redirect_uris: [this.redirectUrl],
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],
-			token_endpoint_auth_method: "client_secret_post",
+			// GitLab's /api/v4/mcp DCR registers public clients per RFC 8252; using
+			// "client_secret_post" causes silent token-exchange failure (SIO-685)
+			// because no secret is issued. PKCE alone proves possession.
+			token_endpoint_auth_method: "none",
+			// GitLab MR !208967 made `mcp` the default DCR scope; pinning it is
+			// belt-and-braces and gives us visibility if defaults change again.
+			scope: "mcp",
 		};
 	}
 }
