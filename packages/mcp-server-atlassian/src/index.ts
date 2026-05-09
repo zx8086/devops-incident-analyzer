@@ -1,5 +1,10 @@
 // src/index.ts
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	createBootstrapAdapter,
+	createMcpApplication,
+	warnIfOAuthNotSeeded,
+} from "@devops-agent/shared";
 import { AtlassianMcpProxy } from "./atlassian-client/index.js";
 import { loadConfiguration } from "./config/index.js";
 import { type AtlassianDatasource, createAtlassianServer, discoverRemoteTools } from "./server.js";
@@ -27,6 +32,14 @@ if (import.meta.main) {
 				{ runtime: runtimeInfo.runtime, version: runtimeInfo.version, envSource: runtimeInfo.envSource },
 				"Starting Atlassian MCP Server",
 			);
+
+			warnIfOAuthNotSeeded({
+				namespace: "atlassian",
+				key: config.atlassian.mcpEndpoint,
+				endpointLabel: "mcpEndpoint",
+				seedCommand: "bun run oauth:seed:atlassian",
+				logger: serverLog,
+			});
 
 			const proxy = new AtlassianMcpProxy({
 				mcpEndpoint: config.atlassian.mcpEndpoint,

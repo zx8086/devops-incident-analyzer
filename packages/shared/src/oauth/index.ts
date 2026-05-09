@@ -8,6 +8,8 @@ export {
 	type OAuthProviderLogger,
 	type PersistedOAuthState,
 } from "./base-provider.ts";
+export { type WarnIfOAuthNotSeededOptions, warnIfOAuthNotSeeded } from "./boot-warn.ts";
 export { OAuthRequiresInteractiveAuthError } from "./errors.ts";
 export { isHeadless } from "./headless.ts";
 export { type SeedOAuthOptions, seedOAuth } from "./seed.ts";
+export { hasSeededTokens } from "./seeded-tokens.ts";

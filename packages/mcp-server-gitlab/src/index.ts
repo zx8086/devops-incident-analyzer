@@ -1,5 +1,10 @@
 // src/index.ts
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	createBootstrapAdapter,
+	createMcpApplication,
+	warnIfOAuthNotSeeded,
+} from "@devops-agent/shared";
 import { loadConfiguration } from "./config/index.js";
 import { GitLabRestClient } from "./gitlab-client/index.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
@@ -33,6 +38,14 @@ if (import.meta.main) {
 				},
 				"Starting GitLab MCP Server",
 			);
+
+			warnIfOAuthNotSeeded({
+				namespace: "gitlab",
+				key: config.gitlab.instanceUrl,
+				endpointLabel: "instanceUrl",
+				seedCommand: "bun run oauth:seed:gitlab",
+				logger: serverLog,
+			});
 
 			const proxy = new GitLabMcpProxy({
 				instanceUrl: config.gitlab.instanceUrl,
