@@ -28,6 +28,24 @@ export function confidenceThreshold(run: Run, example: Example) {
 	};
 }
 
+// SIO-692: judge sees `run.outputs.output.response` only -- not tool-call trajectory.
+// Rubrics in dataset.ts must grade response content, not trajectory facts the judge can't observe.
+//
+// The system prompt below was hardened after SIO-692 verification showed gpt-4o-mini
+// at temperature 0 was systematically reading rubric clauses literally and missing
+// semantically equivalent content (e.g. judging "does not reference recent GitLab
+// deploys" against a response that cites specific GitLab commit SHAs and merge dates).
+// The "semantic equivalence" + "concrete evidence counts" framing keeps strictness
+// against truly absent content while accepting reworded coverage of present content.
+const JUDGE_SYSTEM_PROMPT = [
+	"You grade an incident-response message against a rubric. Each rubric clause is a separate requirement.",
+	"A clause is met when the response demonstrates its substance, not when it uses identical wording.",
+	"Concrete evidence counts: specific commit SHAs, service names, timestamps, indices, or upstream URLs satisfy clauses that ask for 'references' or 'cites' of those things, even if the rubric phrases the requirement abstractly.",
+	"Mark meets_rubric=true if every clause is substantively addressed, false if any clause is genuinely absent.",
+	"In reasoning, list each clause and one short sentence on whether the response addresses it.",
+	'Respond with JSON: {"meets_rubric": boolean, "reasoning": string}',
+].join(" ");
+
 export async function responseQualityJudge(run: Run, example: Example) {
 	const rubric = example.outputs?.qualityRubric as string | undefined;
 	const response = (run.outputs as { output?: { response?: string } } | undefined)?.output?.response;
@@ -40,10 +58,10 @@ export async function responseQualityJudge(run: Run, example: Example) {
 		temperature: 0,
 		response_format: { type: "json_object" },
 		messages: [
-			{ role: "system", content: 'Respond with JSON: {"meets_rubric": boolean, "reasoning": string}' },
+			{ role: "system", content: JUDGE_SYSTEM_PROMPT },
 			{
 				role: "user",
-				content: `Rubric: ${rubric}\n\nResponse to grade:\n${response}\n\nDoes the response meet the rubric?`,
+				content: `Rubric: ${rubric}\n\nResponse to grade:\n${response}\n\nDoes the response meet every rubric clause?`,
 			},
 		],
 	});

@@ -1,4 +1,8 @@
 // packages/agent/src/eval/dataset.ts
+// SIO-692: rubrics grade the final response string only. The judge in
+// evaluators.ts cannot see tool-call trajectory -- it sees run.outputs.output.response.
+// Phrase rubrics as response-content checks ("response should mention X"), not
+// trajectory checks ("should call tool.foo" / "should query Y for Z").
 
 export interface EvalExample {
 	inputs: { query: string };
@@ -19,7 +23,7 @@ export const DATASET: EvalExample[] = [
 			expectedDatasources: ["kafka", "elastic", "couchbase"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Should identify the lag root cause (consumer crash / slow processing / DLQ growth), correlate with Elasticsearch error logs from notifications-service in eu-b2b deployment, and check if downstream Couchbase writes are failing. Mitigation must include scaling consumers OR resetting offsets WITH explicit human-approval flag.",
+				"Response should name a probable lag root cause (consumer crash, slow processing, DLQ growth, or stuck listener). Response should reference Elasticsearch findings for the notifications-service application, and discuss whether downstream Couchbase writes are at risk or healthy. Mitigation should mention scaling consumers OR resetting offsets, gated on human approval.",
 		},
 	},
 	{
@@ -31,7 +35,7 @@ export const DATASET: EvalExample[] = [
 			expectedDatasources: ["konnect", "elastic", "gitlab"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Should query Konnect for the route's plugin chain and recent service config changes, search Elasticsearch for upstream service errors aligned with 14:00 UTC, and check GitLab for recent deploys to the upstream service. Should distinguish plugin-misconfiguration from upstream-failure.",
+				"Response should name Kong/Konnect plugin chain or upstream service changes as candidate causes. Response should cite Elasticsearch upstream-service errors observed near 14:00 UTC, and reference recent GitLab deploys (or note their absence). Response should distinguish plugin-misconfiguration from upstream-failure as separate hypotheses.",
 		},
 	},
 	{
@@ -42,7 +46,7 @@ export const DATASET: EvalExample[] = [
 			expectedDatasources: ["couchbase", "elastic"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Should distinguish slow_queries (latency outliers above threshold) from fatal_requests (true timeouts/OOM). Should check Elasticsearch for the application's database client errors. Mitigation should reference index_analysis if scan-heavy queries are implicated.",
+				"Response should distinguish slow queries (latency outliers) from fatal request errors (true timeouts / OOM) as separate categories. Response should cite Elasticsearch findings for the application's database client errors. If scan-heavy queries are implicated, response should recommend index analysis.",
 		},
 	},
 	{
@@ -53,7 +57,7 @@ export const DATASET: EvalExample[] = [
 			expectedDatasources: ["elastic"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Should pick the billing action (NOT cloud_deployment alone) and break down cost by deployment via the v2 billing API. Should NOT propose mitigation -- this is a cost-reporting query, not an incident.",
+				"Response should report cost broken down by deployment. Response should treat the question as cost reporting, NOT as an incident. Response should NOT propose mitigation or remediation steps.",
 		},
 	},
 	{
@@ -65,7 +69,7 @@ export const DATASET: EvalExample[] = [
 			expectedDatasources: ["atlassian", "gitlab"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Should call atlassian.runbook_lookup AND incident_correlation. GitLab for related deploys around the 03:00 UTC window. Response is informational (post-mortem), no remediation steps.",
+				"Response should report runbook lookup results from Atlassian (whether a runbook was found or not), and any related Jira incident tickets. Response should reference GitLab deploys around the 03:00 UTC window (or explicitly note none were found). Response should be informational / post-mortem in tone -- no remediation or mitigation steps.",
 		},
 	},
 ];
