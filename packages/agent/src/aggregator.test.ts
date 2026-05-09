@@ -31,7 +31,7 @@ mock.module("@devops-agent/shared", () => ({
 	redactPiiContent: (s: string) => s,
 }));
 
-import { aggregate } from "./aggregator.ts";
+import { _setAggregatorLoggerForTesting, aggregate } from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
 function getSystemPromptText(): string {
@@ -132,6 +132,106 @@ describe.skipIf(!hasRunbooks)("aggregator: selectedRunbooks integration", () => 
 		for (const runbook of availableRunbooks) {
 			if (runbook === firstRunbook) continue;
 			expect(runbookHasHeading(prompt, runbook)).toBe(false);
+		}
+	});
+});
+
+interface CapturedAggregatorLog {
+	level: "info" | "warn" | "error";
+	meta: Record<string, unknown> | undefined;
+	msg: string;
+}
+
+function makeAggregatorCaptureLogger(
+	captured: CapturedAggregatorLog[],
+): Parameters<typeof _setAggregatorLoggerForTesting>[0] {
+	const record =
+		(level: CapturedAggregatorLog["level"]) =>
+		(...args: unknown[]) => {
+			const [first, second] = args;
+			if (typeof first === "string") {
+				captured.push({ level, meta: undefined, msg: first });
+			} else {
+				captured.push({
+					level,
+					meta: first as Record<string, unknown> | undefined,
+					msg: typeof second === "string" ? second : "",
+				});
+			}
+		};
+	return {
+		info: record("info"),
+		warn: record("warn"),
+		error: record("error"),
+	};
+}
+
+describe.skipIf(!hasRunbooks)("aggregate retry-coverage summary log", () => {
+	test("emits info with firstAttempts when at least one datasource had a first-attempt failure", async () => {
+		const captured: CapturedAggregatorLog[] = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		try {
+			lastInvokeMessages = null;
+			await aggregate(
+				makeState({
+					targetDataSources: ["elastic", "kafka"],
+					alignmentRetries: 1,
+					dataSourceResults: [
+						{
+							dataSourceId: "elastic",
+							data: null,
+							status: "error",
+							duration: 202609,
+							isAlignmentRetry: false,
+							error: "ECONNRESET while talking to elasticsearch",
+						},
+						{
+							dataSourceId: "elastic",
+							data: "ok",
+							status: "success",
+							duration: 139900,
+							isAlignmentRetry: true,
+						},
+						{
+							dataSourceId: "kafka",
+							data: "ok",
+							status: "success",
+							duration: 5000,
+							isAlignmentRetry: false,
+						},
+					],
+				}),
+			);
+
+			const summaryCall = captured.find(
+				(c) => c.level === "info" && Array.isArray(c.meta?.firstAttempts) && c.meta?.firstAttemptFailureCount === 1,
+			);
+			expect(summaryCall).toBeDefined();
+			const meta = summaryCall?.meta as {
+				firstAttemptFailureCount: number;
+				recoveredCount: number;
+				firstAttempts: Array<{ dataSourceId: string; firstStatus: string; recovered: boolean }>;
+			};
+			expect(meta.firstAttemptFailureCount).toBe(1);
+			expect(meta.recoveredCount).toBe(1);
+			expect(meta.firstAttempts).toHaveLength(2);
+		} finally {
+			_setAggregatorLoggerForTesting(null);
+		}
+	});
+
+	test("does NOT emit the firstAttempts info when all datasources succeeded first-try", async () => {
+		const captured: CapturedAggregatorLog[] = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		try {
+			lastInvokeMessages = null;
+			await aggregate(makeState({}));
+			const summaryCall = captured.find(
+				(c) => c.level === "info" && typeof c.meta?.firstAttemptFailureCount === "number",
+			);
+			expect(summaryCall).toBeUndefined();
+		} finally {
+			_setAggregatorLoggerForTesting(null);
 		}
 	});
 });

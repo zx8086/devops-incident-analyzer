@@ -4,12 +4,30 @@ import { redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { summarizeFirstAttempts } from "./alignment.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildOrchestratorPrompt } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
-const logger = getLogger("agent:aggregator");
+interface AggregatorLogSink {
+	info: (...args: unknown[]) => unknown;
+	warn: (...args: unknown[]) => unknown;
+	error: (...args: unknown[]) => unknown;
+}
+
+const defaultLogger: AggregatorLogSink = getLogger("agent:aggregator") as unknown as AggregatorLogSink;
+let currentLogger: AggregatorLogSink = defaultLogger;
+const logger: AggregatorLogSink = {
+	info: (...args) => currentLogger.info(...args),
+	warn: (...args) => currentLogger.warn(...args),
+	error: (...args) => currentLogger.error(...args),
+};
+
+// SIO-691: test seam mirroring _setAlignmentLoggerForTesting. Pass null to reset.
+export function _setAggregatorLoggerForTesting(sink: AggregatorLogSink | null): void {
+	currentLogger = sink ?? defaultLogger;
+}
 
 function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): BaseMessage[] {
 	// SIO-640: Tri-state selectedRunbooks field drives the runbook filter.
@@ -133,6 +151,20 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		dataLength: r.status === "success" ? String(r.data).length : 0,
 	}));
 	logger.info({ resultCount: results.length, results: summary }, "Aggregating datasource results");
+
+	// SIO-691: surface first-attempt failures masked by silent retries. The conditional
+	// keeps clean runs quiet -- the line only appears when at least one datasource had
+	// a first-attempt error, so a tail of the eval log distinguishes "succeeded first
+	// try" from "failed first try, retry recovered" without scanning the whole run.
+	const firstAttempts = summarizeFirstAttempts(results);
+	const firstAttemptFailureCount = firstAttempts.filter((f) => f.firstStatus === "error").length;
+	const recoveredCount = firstAttempts.filter((f) => f.recovered).length;
+	if (firstAttemptFailureCount > 0) {
+		logger.info(
+			{ firstAttemptFailureCount, recoveredCount, firstAttempts },
+			"First-attempt sub-agent failures masked by retry",
+		);
+	}
 
 	const resultsBlock = results
 		.map((r) => {
