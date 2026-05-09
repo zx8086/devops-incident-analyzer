@@ -1,5 +1,6 @@
 // packages/agent/src/eval/run-function.ts
 import { HumanMessage } from "@langchain/core/messages";
+import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
 
@@ -26,7 +27,12 @@ function ensureMcpConnected(): Promise<void> {
 }
 
 export async function runAgent(inputs: { query: string }): Promise<{
-	output: { response: string; targetDataSources: string[]; confidenceCap?: number };
+	output: {
+		response: string;
+		targetDataSources: string[];
+		confidenceCap?: number;
+		firstAttempts: FirstAttemptSummary[];
+	};
 }> {
 	await ensureMcpConnected();
 	if (!cachedGraph) {
@@ -39,11 +45,16 @@ export async function runAgent(inputs: { query: string }): Promise<{
 	const lastMessage = finalState.messages.at(-1);
 	const responseText =
 		typeof lastMessage?.content === "string" ? lastMessage.content : JSON.stringify(lastMessage?.content ?? "");
+	// SIO-691: attach per-source first-attempt summary so LangSmith traces distinguish
+	// retry-recovered runs from clean first-try runs without log inspection. Field name
+	// matches the alignment + aggregator log keys for cross-referencing.
+	const firstAttempts = summarizeFirstAttempts(finalState.dataSourceResults ?? []);
 	return {
 		output: {
 			response: responseText,
 			targetDataSources: finalState.targetDataSources ?? [],
 			confidenceCap: finalState.confidenceCap,
+			firstAttempts,
 		},
 	};
 }
