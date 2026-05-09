@@ -293,7 +293,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Search: global search, labels, semantic code search with deferred retry for embedding readiness (via proxy)
 - Code analysis: file content, blame, commit diff, commit listing, repository tree (custom REST tools)
 
-**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping.
+**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope) for the custom code-analysis tools. The proxy connection to `/api/v4/mcp` uses OAuth 2.0 Dynamic Client Registration as a public client (RFC 8252, `token_endpoint_auth_method: "none"`) with PKCE; this is what GitLab DCR actually issues for unverified MCP clients (SIO-685). Scope is pinned to `mcp` (GitLab MR !208967 default). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Callback port on `GITLAB_OAUTH_CALLBACK_PORT` (default 9184). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping. See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -308,9 +308,19 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Confluence: page search, page content, space listing
 - Incident-project filtering: `ATLASSIAN_INCIDENT_PROJECTS` restricts visibility to an allowlist of projects
 
-**Configuration:** OAuth 2.0 with `ATLASSIAN_SITE_NAME` identifying the Cloud site. Callback port on `ATLASSIAN_OAUTH_CALLBACK_PORT` (default 9185). MCP server port on `ATLASSIAN_MCP_PORT` (default 9085). Read-only enforced by `ATLASSIAN_READ_ONLY=true` (default). Optional `ATLASSIAN_INCIDENT_PROJECTS` and `ATLASSIAN_TIMEOUT`.
+**Configuration:** OAuth 2.0 (DCR returns a `client_secret`, so `token_endpoint_auth_method: "client_secret_post"` is used) with `ATLASSIAN_SITE_NAME` identifying the Cloud site. Callback port on `ATLASSIAN_OAUTH_CALLBACK_PORT` (default 9185). MCP server port on `ATLASSIAN_MCP_PORT` (default 9085). Read-only enforced by `ATLASSIAN_READ_ONLY=true` (default). Optional `ATLASSIAN_INCIDENT_PROJECTS` and `ATLASSIAN_TIMEOUT`. See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
 
 **Transport:** Streamable HTTP (`/mcp`), stdio, and AWS Bedrock AgentCore.
+
+### OAuth credential persistence
+
+GitLab and Atlassian MCP both use OAuth 2.0 Dynamic Client Registration through the `BaseOAuthClientProvider` in `@devops-agent/shared`. The two share storage layout, persistence semantics, file-mode hardening, and headless-mode behavior; they differ only in `clientMetadata` (auth method, scope, client name) per the table above.
+
+**On-disk state:** `~/.mcp-auth/<namespace>/<sanitized-mcp-url>.json` (mode 0o600, dir 0o700). Each file holds `clientInformation` (the DCR registration), `tokens` (access + refresh), and a transient `codeVerifier` cleared after the token exchange completes. Filenames are byte-stable across releases (regression-tested in `packages/shared/src/__tests__/oauth/base-provider.test.ts`).
+
+**Stale-registration migration:** if a persisted `clientInformation` was saved with a different `token_endpoint_auth_method` than the current code expects (e.g. legacy GitLab registrations stored as `client_secret_post` before SIO-685), the base provider auto-discards the registration and re-registers via DCR. No manual `rm` required.
+
+**Headless mode:** set `MCP_OAUTH_HEADLESS=true` in non-interactive contexts (eval pipeline, AgentCore deployments, CI). The provider throws a typed `OAuthRequiresInteractiveAuthError` instead of opening a browser, which the agent's alignment node classifies as a non-retryable auth error. Headless is also auto-detected when `process.stdout.isTTY === false`. To seed tokens once interactively, run `bun run oauth:seed:gitlab` or `bun run oauth:seed:atlassian` -- the seed CLI explicitly unsets `MCP_OAUTH_HEADLESS` so it always opens the browser. See `docs/operations/oauth-seeding.md` for the full procedure.
 
 ---
 
@@ -358,3 +368,4 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | 2026-04-13 | Added GitLab MCP as 5th server (proxy + custom tools, OAuth, deferred retry) |
 | 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |
 | 2026-05-07 | Documented Elastic Cloud + Billing tool family (SIO-674) and per-call `deployment` arg fallback chain (SIO-675); updated tool count from ~78 to ~84 |
+| 2026-05-09 | Extracted shared OAuth provider base (SIO-685); GitLab MCP switched to public-client + PKCE (`auth_method: "none"`, `scope: "mcp"`); added `MCP_OAUTH_HEADLESS` env, `bun run oauth:seed:<service>` CLIs, stale-registration auto-discard, file-mode 0o600 enforcement |

@@ -111,6 +111,8 @@ export {
 	type OAuthProviderLogger,
 	OAuthRequiresInteractiveAuthError,
 	type PersistedOAuthState,
+	type SeedOAuthOptions,
+	seedOAuth,
 } from "./oauth/index.ts";
 export {
 	type OAuthCallbackOptions,
