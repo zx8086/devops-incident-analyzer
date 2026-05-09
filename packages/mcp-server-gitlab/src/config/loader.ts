@@ -33,6 +33,10 @@ export class ConfigurationManager {
 				timeout: parseInt(getEnvVarWithDefault("GITLAB_TIMEOUT", configDefaults.gitlab.timeout), 10),
 				retryAttempts: parseInt(getEnvVarWithDefault("GITLAB_RETRY_ATTEMPTS", configDefaults.gitlab.retryAttempts), 10),
 				retryDelay: parseInt(getEnvVarWithDefault("GITLAB_RETRY_DELAY", configDefaults.gitlab.retryDelay), 10),
+				oauthCallbackPort: parseInt(
+					getEnvVarWithDefault("GITLAB_OAUTH_CALLBACK_PORT", configDefaults.gitlab.oauthCallbackPort),
+					10,
+				),
 			},
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", configDefaults.tracing.enabled) === "true",

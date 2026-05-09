@@ -1,6 +1,6 @@
 // src/atlassian-client/proxy.ts
 
-import { waitForOAuthCallback } from "@devops-agent/shared";
+import { OAuthRequiresInteractiveAuthError, waitForOAuthCallback } from "@devops-agent/shared";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -89,6 +89,9 @@ export class AtlassianMcpProxy {
 			this.connected = true;
 			log.info("Connected to Atlassian MCP server (authenticated)");
 		} catch (error) {
+			if (error instanceof OAuthRequiresInteractiveAuthError) {
+				throw error;
+			}
 			if (error instanceof UnauthorizedError) {
 				log.info("OAuth authorization required -- waiting for browser callback...");
 

@@ -20,6 +20,12 @@ export const ConfigSchema = z.object({
 			timeout: z.number().min(1000).max(60000).describe("API request timeout in milliseconds"),
 			retryAttempts: z.number().min(0).max(5).describe("Number of retry attempts for failed requests"),
 			retryDelay: z.number().min(100).max(5000).describe("Delay between retry attempts in milliseconds"),
+			oauthCallbackPort: z
+				.number()
+				.int()
+				.min(1024)
+				.max(65535)
+				.describe("Local port for OAuth redirect listener during interactive authorization"),
 		})
 		.describe("GitLab API configuration"),
 

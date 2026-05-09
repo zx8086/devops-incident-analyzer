@@ -12,6 +12,7 @@ export const configDefaults = {
 		timeout: "30000",
 		retryAttempts: "3",
 		retryDelay: "1000",
+		oauthCallbackPort: "9184",
 	},
 	tracing: {
 		enabled: "false",

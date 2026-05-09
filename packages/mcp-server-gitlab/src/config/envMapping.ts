@@ -22,6 +22,11 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "gitlab.timeout", envVar: "GITLAB_TIMEOUT", default: configDefaults.gitlab.timeout },
 	{ configPath: "gitlab.retryAttempts", envVar: "GITLAB_RETRY_ATTEMPTS", default: configDefaults.gitlab.retryAttempts },
 	{ configPath: "gitlab.retryDelay", envVar: "GITLAB_RETRY_DELAY", default: configDefaults.gitlab.retryDelay },
+	{
+		configPath: "gitlab.oauthCallbackPort",
+		envVar: "GITLAB_OAUTH_CALLBACK_PORT",
+		default: configDefaults.gitlab.oauthCallbackPort,
+	},
 
 	// tracing
 	{ configPath: "tracing.enabled", envVar: "LANGSMITH_TRACING", default: configDefaults.tracing.enabled },

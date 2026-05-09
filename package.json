@@ -49,6 +49,8 @@
 		"biome:check:write": "bunx biome check --write .",
 		"yaml:check": "yamllint -c .yamllint.yml agents/",
 		"eval:agent": "bun run --filter @devops-agent/agent eval:run",
+		"oauth:seed:gitlab": "bun run --filter @devops-agent/mcp-server-gitlab oauth:seed",
+		"oauth:seed:atlassian": "bun run --filter @devops-agent/mcp-server-atlassian oauth:seed",
 		"fallow:check": "npx -y fallow",
 		"fallow:audit": "npx -y fallow audit",
 		"fallow:dead": "npx -y fallow dead-code",

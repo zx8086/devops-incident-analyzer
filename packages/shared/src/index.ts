@@ -103,6 +103,18 @@ export {
 	measureOperation,
 } from "./logger.ts";
 export {
+	type AuthorizationHandler,
+	BaseOAuthClientProvider,
+	type BaseOAuthProviderOptions,
+	isHeadless,
+	OAUTH_CALLBACK_PATH,
+	type OAuthProviderLogger,
+	OAuthRequiresInteractiveAuthError,
+	type PersistedOAuthState,
+	type SeedOAuthOptions,
+	seedOAuth,
+} from "./oauth/index.ts";
+export {
 	type OAuthCallbackOptions,
 	type OAuthCallbackResult,
 	OAuthCallbackTimeoutError,
