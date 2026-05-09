@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -67,6 +68,7 @@ export const registerGetClusterStatsTool: ToolRegistrationFunction = (server: Mc
 					timeout: params.timeout,
 				},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_get_cluster_stats",
 				},
 			);

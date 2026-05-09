@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { coerceBoolean } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -60,16 +61,19 @@ export const registerGetIndexTool: ToolRegistrationFunction = (server: McpServer
 			// Validate parameters
 			const params = getIndexValidator.parse(args);
 
-			const result = await esClient.indices.get({
-				index: params.index,
-				ignore_unavailable: params.ignoreUnavailable,
-				allow_no_indices: params.allowNoIndices,
-				expand_wildcards: params.expandWildcards,
-				flat_settings: params.flatSettings,
-				include_defaults: params.includeDefaults,
-				local: params.local,
-				master_timeout: params.masterTimeout,
-			});
+			const result = await esClient.indices.get(
+				{
+					index: params.index,
+					ignore_unavailable: params.ignoreUnavailable,
+					allow_no_indices: params.allowNoIndices,
+					expand_wildcards: params.expandWildcards,
+					flat_settings: params.flatSettings,
+					include_defaults: params.includeDefaults,
+					local: params.local,
+					master_timeout: params.masterTimeout,
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {

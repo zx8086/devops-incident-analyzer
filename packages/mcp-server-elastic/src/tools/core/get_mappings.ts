@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
@@ -22,7 +23,7 @@ type GetMappingsParams = z.infer<typeof getMappingsValidator>;
 function createGetMappingsMcpError(
 	error: Error | string,
 	context: {
-		type: "validation" | "execution" | "index_not_found";
+		type: "validation" | "execution" | "index_not_found" | "timeout";
 		details?: unknown;
 	},
 ): McpError {
@@ -32,6 +33,7 @@ function createGetMappingsMcpError(
 		validation: ErrorCode.InvalidParams,
 		execution: ErrorCode.InternalError,
 		index_not_found: ErrorCode.InvalidParams,
+		timeout: ErrorCode.RequestTimeout,
 	};
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_get_mappings] ${message}`, context.details);
@@ -49,7 +51,7 @@ export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpSer
 
 			logger.debug({ index }, "Getting mappings");
 
-			const response = await esClient.indices.getMapping({ index });
+			const response = await esClient.indices.getMapping({ index }, getDiscoveryRequestOptions());
 
 			const duration = performance.now() - perfStart;
 			if (duration > 5000) {
@@ -79,6 +81,19 @@ export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpSer
 						type: "index_not_found",
 						details: { originalError: error.message },
 					});
+				}
+
+				// SIO-690: discovery-call timeouts surface as `RequestTimeout` so the LLM agent can
+				// route around the failed call instead of treating it as a generic internal error.
+				if (/timeout/i.test(error.message)) {
+					const { requestTimeout } = getDiscoveryRequestOptions();
+					throw createGetMappingsMcpError(
+						`elasticsearch_get_mappings timed out after ${requestTimeout}ms on index '${args?.index ?? "*"}' -- narrow the index pattern to a single backing index, or skip this tool and infer fields from a sampled search.`,
+						{
+							type: "timeout",
+							details: { originalError: error.message, requestTimeout, args },
+						},
+					);
 				}
 			}
 

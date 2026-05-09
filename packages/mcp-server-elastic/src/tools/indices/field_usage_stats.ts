@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -73,6 +74,7 @@ export const registerFieldUsageStatsTool: ToolRegistrationFunction = (server: Mc
 					fields: params.fields,
 				},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_field_usage_stats",
 				},
 			);

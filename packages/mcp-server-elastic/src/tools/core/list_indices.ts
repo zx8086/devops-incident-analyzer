@@ -4,6 +4,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import {
 	createPaginationHeader,
@@ -156,7 +157,7 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 				...(showSizeColumn && { bytes: "b" as const }),
 			};
 
-			const response = await esClient.cat.indices(catParams);
+			const response = await esClient.cat.indices(catParams, getDiscoveryRequestOptions());
 
 			// Apply filtering
 			const filteredIndices: estypes.CatIndicesIndicesRecord[] = response.filter((index) => {

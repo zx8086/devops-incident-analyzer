@@ -7,6 +7,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, type ProgressTracker } from "../../utils/notifications.js";
 import {
@@ -114,12 +115,15 @@ export const registerExplainLifecycleTool: ToolRegistrationFunction = (server: M
 			await tracker.updateProgress(20, "Fetching ILM lifecycle status from Elasticsearch");
 
 			// Call Elasticsearch ILM explain API
-			const result = await esClient.ilm.explainLifecycle({
-				index: index,
-				only_errors: params.onlyErrors,
-				only_managed: params.onlyManaged,
-				master_timeout: params.masterTimeout,
-			});
+			const result = await esClient.ilm.explainLifecycle(
+				{
+					index: index,
+					only_errors: params.onlyErrors,
+					only_managed: params.onlyManaged,
+					master_timeout: params.masterTimeout,
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			await tracker.updateProgress(50, "Processing ILM lifecycle information");
 

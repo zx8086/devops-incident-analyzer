@@ -5,6 +5,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -134,6 +135,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 						timeout: timeout,
 					},
 					{
+						...getDiscoveryRequestOptions(),
 						opaqueId: "elasticsearch_get_nodes_info",
 					},
 				);
@@ -164,6 +166,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 						timeout: timeout,
 					},
 					{
+						...getDiscoveryRequestOptions(),
 						opaqueId: "elasticsearch_get_nodes_info",
 					},
 				);

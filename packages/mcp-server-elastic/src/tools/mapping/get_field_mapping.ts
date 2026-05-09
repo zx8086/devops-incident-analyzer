@@ -3,6 +3,7 @@
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
@@ -44,14 +45,17 @@ export const registerGetFieldMappingTool: ToolRegistrationFunction = (server: Mc
 
 		async (params: GetFieldMappingParamsType): Promise<SearchResult> => {
 			try {
-				const result = await esClient.indices.getFieldMapping({
-					index: params.index,
-					fields: params.field,
-					include_defaults: params.includeDefaults,
-					ignore_unavailable: params.ignoreUnavailable,
-					allow_no_indices: params.allowNoIndices,
-					expand_wildcards: params.expandWildcards,
-				});
+				const result = await esClient.indices.getFieldMapping(
+					{
+						index: params.index,
+						fields: params.field,
+						include_defaults: params.includeDefaults,
+						ignore_unavailable: params.ignoreUnavailable,
+						allow_no_indices: params.allowNoIndices,
+						expand_wildcards: params.expandWildcards,
+					},
+					getDiscoveryRequestOptions(),
+				);
 				return {
 					content: [{ type: "text", text: JSON.stringify(result, null, 2) } as TextContent],
 				};

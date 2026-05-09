@@ -4,6 +4,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import {
 	createPaginationHeader,
@@ -79,12 +80,15 @@ export const registerGetShardsTool: ToolRegistrationFunction = (server: McpServe
 			// comparator previously stripped non-digits and sorted lexicographically
 			// (997kb > 12gb). With `bytes: "b"` the column becomes a raw integer, so
 			// the comparator can parse it directly. Humanised back in the response.
-			const response = await esClient.cat.shards({
-				...(index && { index }),
-				format: "json",
-				h: "index,shard,prirep,state,docs,store,ip,node",
-				...(sortBy === "size" && { bytes: "b" as const }),
-			});
+			const response = await esClient.cat.shards(
+				{
+					...(index && { index }),
+					format: "json",
+					h: "index,shard,prirep,state,docs,store,ip,node",
+					...(sortBy === "size" && { bytes: "b" as const }),
+				},
+				getDiscoveryRequestOptions(),
+			);
 
 			const totalShards = response.length;
 			const duration = performance.now() - perfStart;

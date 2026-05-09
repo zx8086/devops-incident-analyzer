@@ -5,6 +5,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
@@ -72,6 +73,7 @@ export const registerDiskUsageTool: ToolRegistrationFunction = (server: McpServe
 					run_expensive_tasks: params.runExpensiveTasks,
 				},
 				{
+					...getDiscoveryRequestOptions(),
 					opaqueId: "elasticsearch_disk_usage",
 				},
 			);
