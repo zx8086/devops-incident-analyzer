@@ -11,6 +11,7 @@ import { createLlm } from "./llm.ts";
 import { getToolsForDataSource, withElasticDeployment } from "./mcp-bridge.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { instrumentTools } from "./sub-agent-instrumentation.ts";
 
 const logger = getLogger("agent:sub-agent");
 
@@ -195,9 +196,12 @@ async function runSubAgent(
 			"Creating ReAct agent with tools",
 		);
 
+		// SIO-686: per-tool-result observability so we can size the cap from real traces
+		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log });
+
 		const agent = createReactAgent({
 			llm,
-			tools,
+			tools: instrumentedTools,
 			messageModifier: systemPrompt,
 		});
 
