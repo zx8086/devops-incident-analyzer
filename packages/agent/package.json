@@ -6,7 +6,8 @@
 	"types": "src/index.ts",
 	"scripts": {
 		"test": "bun test",
-		"typecheck": "bunx tsc --noEmit"
+		"typecheck": "bunx tsc --noEmit",
+		"eval:precheck": "bun run src/eval/precheck.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",
