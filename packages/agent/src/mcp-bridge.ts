@@ -39,6 +39,30 @@ let serverUrls: Map<string, string> = new Map();
 let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
 const HEALTH_POLL_INTERVAL_MS = 30_000;
+// biome-ignore lint/correctness/noUnusedVariables: SIO-682 - used in Task 2 wiring (reconnectServer, createMcpClient)
+const MCP_CONNECT_TIMEOUT_MS = 10_000;
+
+// SIO-680/682: Generic timeout wrapper. Races the input promise against
+// AbortSignal.timeout(ms); rejects with a descriptive error if the promise
+// hasn't settled by deadline.
+//
+// KNOWN LIMITATION: when the timeout fires, the underlying operation is NOT
+// cancelled -- the in-flight HTTP request inside MultiServerMCPClient.getTools()
+// keeps running until it resolves on its own (the SDK in @langchain/mcp-adapters
+// v1.1.3 doesn't accept an AbortSignal parameter). The leaked promise is reclaimed
+// when the agent process exits. In production the next health-poll cycle attempts
+// a fresh connect via reconnectServer, so the leak is bounded by the poll interval.
+//
+// Re-exported as _withTimeoutForTest at the bottom of the file for unit testing.
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		const signal = AbortSignal.timeout(ms);
+		signal.addEventListener("abort", () => {
+			reject(new Error(`${label} timed out after ${ms}ms`));
+		});
+	});
+	return Promise.race([promise, timeoutPromise]);
+}
 
 function injectTraceHeaders(): { headers: Record<string, string> } | undefined {
 	const headers: Record<string, string> = {};
@@ -272,3 +296,6 @@ export function stopHealthPolling(): void {
 		logger.info("MCP health polling stopped");
 	}
 }
+
+// SIO-680/682: exported for testing only. Do not import from production code.
+export { withTimeout as _withTimeoutForTest };
