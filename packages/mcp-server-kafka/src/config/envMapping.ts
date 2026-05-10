@@ -7,6 +7,7 @@ export const envMapping: Record<string, string> = {
 	KAFKA_ALLOW_DESTRUCTIVE: "kafka.allowDestructive",
 	KAFKA_CONSUME_MAX_MESSAGES: "kafka.consumeMaxMessages",
 	KAFKA_CONSUME_TIMEOUT_MS: "kafka.consumeTimeoutMs",
+	KAFKA_TOOL_TIMEOUT_MS: "kafka.toolTimeoutMs",
 	MSK_BOOTSTRAP_BROKERS: "msk.bootstrapBrokers",
 	MSK_CLUSTER_ARN: "msk.clusterArn",
 	AWS_REGION: "msk.region",

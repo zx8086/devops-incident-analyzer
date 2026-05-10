@@ -131,7 +131,7 @@ if (import.meta.main) {
 				const provider = createProvider(config);
 				logger.info(`Provider created: ${provider.name}`);
 
-				const clientManager = new KafkaClientManager(provider);
+				const clientManager = new KafkaClientManager(provider, config.kafka.toolTimeoutMs);
 				const kafkaService = new KafkaService(clientManager);
 				const toolOptions: ToolRegistrationOptions = {};
 

@@ -10,6 +10,13 @@ export const kafkaSchema = z
 		allowDestructive: z.boolean().describe("Whether destructive operations (delete topic) are permitted"),
 		consumeMaxMessages: z.number().int().positive().describe("Maximum number of messages to consume per request"),
 		consumeTimeoutMs: z.number().int().positive().describe("Consume timeout in milliseconds"),
+		toolTimeoutMs: z
+			.number()
+			.int()
+			.positive()
+			.describe(
+				"Per-tool admin RPC timeout in milliseconds, mapped to @platformatic/kafka 'timeout' option (library default 5000)",
+			),
 	})
 	.strict();
 

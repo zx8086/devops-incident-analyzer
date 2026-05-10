@@ -53,7 +53,7 @@ export class MskKafkaProvider implements KafkaProvider {
 			tls: { rejectUnauthorized: true },
 			// MSK Serverless has cold-start latency; increase from @platformatic/kafka defaults
 			connectTimeout: 60_000,
-			requestTimeout: 60_000,
+			timeout: 60_000,
 			retries: 5,
 			retryDelay: 2_000,
 		};
