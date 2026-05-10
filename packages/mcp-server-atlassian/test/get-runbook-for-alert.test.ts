@@ -57,6 +57,87 @@ describe("getRunbookForAlert.scorePage", () => {
 	});
 });
 
+// SIO-704: regression tests for the upstream-shape divergence and auth-required signal
+// that previously caused "Failed to parse" to silently empty the matches array.
+describe("getRunbookForAlert SIO-704 regressions", () => {
+	test("tolerates {results, isLast, nextPageToken} pagination envelope", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							results: [
+								{
+									id: "p1",
+									title: "Runbook",
+									spaceKey: "OPS",
+									labels: ["runbook"],
+									lastUpdated: new Date().toISOString(),
+									excerpt: "",
+								},
+							],
+							isLast: false,
+							nextPageToken: "abc123",
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const out = await getRunbookForAlert(fakeProxy, {
+			service: "svc",
+			errorKeywords: [],
+			spaceKey: undefined,
+			limit: 5,
+		});
+		expect(out.matches).toHaveLength(1);
+	});
+
+	test("walks past a non-JSON preamble block to find the JSON body", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{ type: "text", text: "Found 1 page:" },
+					{
+						type: "text",
+						text: JSON.stringify({
+							results: [
+								{
+									id: "p1",
+									title: "Runbook",
+									spaceKey: "OPS",
+									labels: ["runbook"],
+									lastUpdated: new Date().toISOString(),
+									excerpt: "",
+								},
+							],
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const out = await getRunbookForAlert(fakeProxy, {
+			service: "svc",
+			errorKeywords: [],
+			spaceKey: undefined,
+			limit: 5,
+		});
+		expect(out.matches).toHaveLength(1);
+	});
+
+	test("propagates AtlassianAuthRequiredError instead of silently emptying matches", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				isError: true,
+				content: [{ type: "text", text: "ATLASSIAN_AUTH_REQUIRED: Atlassian authorization expired." }],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		await expect(
+			getRunbookForAlert(fakeProxy, { service: "svc", errorKeywords: [], spaceKey: undefined, limit: 5 }),
+		).rejects.toThrow("ATLASSIAN_AUTH_REQUIRED");
+	});
+});
+
 describe("getRunbookForAlert (end-to-end)", () => {
 	test("orders results by relevance score desc and respects limit", async () => {
 		const fakeProxy = {

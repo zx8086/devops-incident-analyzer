@@ -42,6 +42,50 @@ describe("getIncidentHistory.aggregate", () => {
 	});
 });
 
+// SIO-704: regression tests for the upstream-shape divergence and auth-required signal.
+describe("getIncidentHistory SIO-704 regressions", () => {
+	test("tolerates {issues, isLast, nextPageToken} pagination envelope", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [{ fields: { created: "2026-04-13T10:00:00Z", resolutiondate: "2026-04-13T11:00:00Z" } }],
+							isLast: true,
+							nextPageToken: "xyz",
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const out = await getIncidentHistory(fakeProxy, {
+			service: "svc",
+			windowDays: 30,
+			groupBy: "week",
+			incidentProjects: ["INC"],
+		});
+		expect(out.totals.incidentCount).toBe(1);
+	});
+
+	test("propagates AtlassianAuthRequiredError instead of silently emptying buckets", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				isError: true,
+				content: [{ type: "text", text: "ATLASSIAN_AUTH_REQUIRED: Atlassian authorization expired." }],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		await expect(
+			getIncidentHistory(fakeProxy, {
+				service: "svc",
+				windowDays: 30,
+				groupBy: "week",
+				incidentProjects: ["INC"],
+			}),
+		).rejects.toThrow("ATLASSIAN_AUTH_REQUIRED");
+	});
+});
+
 describe("getIncidentHistory (end-to-end)", () => {
 	test("end-to-end via mock proxy", async () => {
 		const fakeProxy = {

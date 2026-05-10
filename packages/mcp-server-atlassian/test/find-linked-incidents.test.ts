@@ -66,6 +66,55 @@ describe("findLinkedIncidents.shapeIssue", () => {
 	});
 });
 
+// SIO-704: regression tests for the shared parser. findLinkedIncidents already worked in
+// production; pin its behavior so future divergence between the three wrappers is caught.
+describe("findLinkedIncidents SIO-704 regressions", () => {
+	test("tolerates {issues, isLast, nextPageToken} pagination envelope", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [
+								{
+									key: "INC-1",
+									fields: {
+										summary: "test",
+										status: { name: "Open" },
+										created: "2026-04-10T10:00:00Z",
+									},
+								},
+							],
+							isLast: false,
+							nextPageToken: "next",
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const result = await findLinkedIncidents(fakeProxy, {
+			service: "api",
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: ["INC"],
+		});
+		expect(result.count).toBe(1);
+	});
+
+	test("propagates AtlassianAuthRequiredError instead of silently emptying issues", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				isError: true,
+				content: [{ type: "text", text: "ATLASSIAN_AUTH_REQUIRED: Atlassian authorization expired." }],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		await expect(
+			findLinkedIncidents(fakeProxy, { service: "svc", withinDays: 30, limit: 10, incidentProjects: ["INC"] }),
+		).rejects.toThrow("ATLASSIAN_AUTH_REQUIRED");
+	});
+});
+
 describe("findLinkedIncidents (end-to-end with mock proxy)", () => {
 	test("returns shaped issues via proxy.callTool", async () => {
 		const fakeProxy = {

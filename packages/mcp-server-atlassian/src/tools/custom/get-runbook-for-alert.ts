@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
 const log = createContextLogger("get-runbook-for-alert");
 
@@ -94,17 +95,10 @@ export function scorePage(
 	return score;
 }
 
+// SIO-704: tolerate the {issues, isLast, nextPageToken} pagination envelope and any
+// future top-level fields the upstream may add. Extra keys are ignored at runtime.
 interface ConfluenceSearchResponse {
 	results?: ConfluencePage[];
-}
-
-interface McpToolContent {
-	type: string;
-	text: string;
-}
-
-interface McpToolResult {
-	content?: McpToolContent[];
 }
 
 export async function getRunbookForAlert(
@@ -119,18 +113,14 @@ export async function getRunbookForAlert(
 
 	log.info({ service: ctx.service, cql }, "Searching for runbooks");
 
-	const result = (await proxy.callTool("searchConfluencePages", { cql })) as McpToolResult;
+	const result = await proxy.callTool("searchConfluencePages", { cql });
 
-	const textContent = (result.content ?? []).find((c) => c.type === "text");
-	if (!textContent) {
-		return { service: ctx.service, cql, matches: [] };
-	}
-
-	let parsed: ConfluenceSearchResponse;
-	try {
-		parsed = JSON.parse(textContent.text) as ConfluenceSearchResponse;
-	} catch {
-		log.warn({ cql }, "Failed to parse searchConfluencePages response");
+	const parsed = parseAtlassianTextContent<ConfluenceSearchResponse>(result as { content?: unknown }, {
+		upstreamTool: "searchConfluencePages",
+		context: { cql },
+		log,
+	});
+	if (!parsed) {
 		return { service: ctx.service, cql, matches: [] };
 	}
 
