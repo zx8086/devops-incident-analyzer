@@ -7,6 +7,8 @@ export {
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
 	type PersistedOAuthState,
+	STALE_INVALIDATION_WINDOW_MS,
+	TOKEN_EXPIRY_SKEW_MS,
 } from "./base-provider.ts";
 export { type WarnIfOAuthNotSeededOptions, warnIfOAuthNotSeeded } from "./boot-warn.ts";
 export { OAuthRefreshChainExpiredError, OAuthRequiresInteractiveAuthError } from "./errors.ts";

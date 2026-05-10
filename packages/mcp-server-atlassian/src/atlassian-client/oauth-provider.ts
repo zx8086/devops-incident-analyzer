@@ -18,16 +18,21 @@ export interface AtlassianOAuthProviderOptions {
 	mcpEndpoint: string;
 	callbackPort: number;
 	onRedirect: AuthorizationHandler;
+	// SIO-702: forwarded to BaseOAuthClientProvider so tests can advance time
+	// across the stale-wipe-guard window without sleeping. Production callers
+	// omit it and inherit the default Date.now.
+	clock?: () => number;
 }
 
 export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
-	constructor({ mcpEndpoint, callbackPort, onRedirect }: AtlassianOAuthProviderOptions) {
+	constructor({ mcpEndpoint, callbackPort, onRedirect, clock }: AtlassianOAuthProviderOptions) {
 		super({
 			storageNamespace: "atlassian",
 			storageKey: mcpEndpoint,
 			callbackPort,
 			onRedirect,
 			logger: log as unknown as OAuthProviderLogger,
+			clock,
 		});
 	}
 

@@ -295,3 +295,145 @@ describe("GitLabMcpProxy.callTool refresh path", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
+
+// SIO-702: the canonical regression for the rotation-race wipe. The bug being
+// reproduced: N parallel SDK auth() flows each fire their own refreshAuthorization,
+// the first wins, the rest get 400 invalid_grant after GitLab rotates the
+// refresh_token, and the SDK calls invalidateCredentials('tokens') -- wiping
+// the freshly-saved tokens. The fix routes every read through ensureFreshTokens()
+// in the base provider, which guarantees a single in-flight POST.
+describe("tokens() refresh-on-read race (SIO-702)", () => {
+	function seedExpired(): void {
+		// tokenObtainedAt at epoch 0 + small expires_in -> isExpired() returns true
+		// for every realistic clock value.
+		seedTokenFile({
+			tokens: {
+				access_token: "expired",
+				refresh_token: "good",
+				token_type: "Bearer",
+				expires_in: 1,
+			},
+			tokenObtainedAt: 0,
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+	}
+
+	test("10 concurrent tokens() reads on an expired token trigger exactly one /oauth/token POST", async () => {
+		seedExpired();
+		let fetchInFlight = 0;
+		let maxObserved = 0;
+		const fetchMock = mock(async () => {
+			fetchInFlight++;
+			maxObserved = Math.max(maxObserved, fetchInFlight);
+			await new Promise((r) => setTimeout(r, 30));
+			fetchInFlight--;
+			return new Response(
+				JSON.stringify({
+					access_token: "fresh",
+					refresh_token: "rotated",
+					token_type: "Bearer",
+					expires_in: 7200,
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		});
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const provider = new GitLabOAuthProvider(INSTANCE_URL, 9184, async () => {
+			throw new Error("popup should not fire");
+		});
+		const results = await Promise.all(Array.from({ length: 10 }, () => provider.tokens()));
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(maxObserved).toBe(1);
+		for (const r of results) expect(r?.access_token).toBe("fresh");
+	});
+
+	test("10 concurrent tokens() reads with invalid_grant fail once and never wipe credentials", async () => {
+		seedExpired();
+		const fetchMock = mock(
+			async () =>
+				new Response(JSON.stringify({ error: "invalid_grant" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const provider = new GitLabOAuthProvider(INSTANCE_URL, 9184, async () => {
+			throw new Error("popup should not fire");
+		});
+		const settled = await Promise.allSettled(Array.from({ length: 10 }, () => provider.tokens()));
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const rejections = settled.filter((s) => s.status === "rejected");
+		expect(rejections).toHaveLength(10);
+		for (const s of rejections) {
+			if (s.status === "rejected") {
+				expect(s.reason).toBeInstanceOf(OAuthRefreshChainExpiredError);
+			}
+		}
+		// File on disk should retain the old tokens -- no wipe under invalid_grant
+		// from the single POST. (The SDK is what calls invalidateCredentials; here
+		// we test the provider in isolation, so the absence of any wipe is purely
+		// from refreshTokens() not touching invalidateCredentials.)
+		const onDisk = JSON.parse(readFileSync(TOKEN_FILE, "utf-8")) as {
+			tokens: { access_token: string };
+		};
+		expect(onDisk.tokens.access_token).toBe("expired");
+	});
+
+	test("stale-wipe regression: invalidateCredentials('tokens') after a fresh save is ignored", async () => {
+		seedExpired();
+		globalThis.fetch = mock(
+			async () =>
+				new Response(
+					JSON.stringify({ access_token: "fresh", refresh_token: "rotated", token_type: "Bearer", expires_in: 7200 }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		) as unknown as typeof fetch;
+
+		const provider = new GitLabOAuthProvider(INSTANCE_URL, 9184, async () => {
+			throw new Error("popup should not fire");
+		});
+		// Trigger a refresh through the public read path.
+		const fresh = await provider.tokens();
+		expect(fresh?.access_token).toBe("fresh");
+
+		// Simulate the SDK's reaction to a losing-racer's late 400 invalid_grant:
+		// it calls invalidateCredentials('tokens') *after* we already saved fresh
+		// tokens. The base-class stale-wipe guard must skip the wipe.
+		provider.invalidateCredentials("tokens");
+
+		const onDisk = JSON.parse(readFileSync(TOKEN_FILE, "utf-8")) as {
+			tokens?: { access_token?: string };
+		};
+		expect(onDisk.tokens?.access_token).toBe("fresh");
+	});
+
+	test("returns persisted tokens unchanged when within skew (no /oauth/token POST)", async () => {
+		// Save with an obtainedAt close to now so isExpired() returns false.
+		seedTokenFile({
+			tokens: {
+				access_token: "still-valid",
+				refresh_token: "good",
+				token_type: "Bearer",
+				expires_in: 7200,
+			},
+			tokenObtainedAt: Date.now(),
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+		const fetchMock = mock(async () => {
+			throw new Error("fetch must not be called when token is fresh");
+		});
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const provider = new GitLabOAuthProvider(INSTANCE_URL, 9184, async () => {
+			throw new Error("popup should not fire");
+		});
+		const t = await provider.tokens();
+
+		expect(t?.access_token).toBe("still-valid");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
