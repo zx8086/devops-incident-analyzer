@@ -44,6 +44,9 @@ export class GitLabMcpProxy {
 	private transport: StreamableHTTPClientTransport | null = null;
 	private connected = false;
 	private readonly config: GitLabProxyConfig;
+	// SIO-698: kept as a field (not a connect-local) so callTool can ask it
+	// to refresh tokens when the SDK throws UnauthorizedError mid-flight.
+	private oauthProvider: GitLabOAuthProvider | null = null;
 
 	constructor(optionsOrConfig: GitLabMcpProxyOptions | GitLabProxyConfig) {
 		// Backwards-compatible: accept either the new options bag or the legacy config.
@@ -65,15 +68,11 @@ export class GitLabMcpProxy {
 	}
 
 	async connect(): Promise<void> {
-		if (this.injectedClient) {
-			this.connected = true;
-			return;
-		}
-
-		const mcpUrl = new URL("/api/v4/mcp", this.config.instanceUrl);
-		log.info({ url: mcpUrl.toString() }, "Connecting to GitLab MCP endpoint");
-
-		const oauthProvider = new GitLabOAuthProvider(
+		// SIO-698: build the OAuth provider unconditionally so callTool can ask
+		// it to refresh tokens on 401 even when tests inject an McpClientLike
+		// (the injected-client path does not exercise the SDK transport, but
+		// the provider's refresh flow still needs reachability from callTool).
+		this.oauthProvider = new GitLabOAuthProvider(
 			this.config.instanceUrl,
 			this.config.oauthCallbackPort,
 			async (authUrl) => {
@@ -89,8 +88,16 @@ export class GitLabMcpProxy {
 			},
 		);
 
+		if (this.injectedClient) {
+			this.connected = true;
+			return;
+		}
+
+		const mcpUrl = new URL("/api/v4/mcp", this.config.instanceUrl);
+		log.info({ url: mcpUrl.toString() }, "Connecting to GitLab MCP endpoint");
+
 		this.sdkClient = new Client({ name: "gitlab-mcp-proxy", version: "0.1.0" }, { capabilities: {} });
-		this.transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: oauthProvider });
+		this.transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: this.oauthProvider });
 
 		try {
 			await this.sdkClient.connect(this.transport);
@@ -113,7 +120,7 @@ export class GitLabMcpProxy {
 
 				// Reconnect with the authorized transport
 				this.sdkClient = new Client({ name: "gitlab-mcp-proxy", version: "0.1.0" }, { capabilities: {} });
-				this.transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: oauthProvider });
+				this.transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: this.oauthProvider });
 				await this.sdkClient.connect(this.transport);
 				this.connected = true;
 				log.info("Connected to GitLab MCP server after OAuth authorization");
@@ -145,7 +152,26 @@ export class GitLabMcpProxy {
 		}
 
 		log.debug({ tool: toolName }, "Forwarding tool call to GitLab MCP");
-		return this.client.callTool({ name: toolName, arguments: args }, undefined, options);
+		try {
+			return await this.client.callTool({ name: toolName, arguments: args }, undefined, options);
+		} catch (error) {
+			// SIO-698: defense-in-depth refresh on 401. The SDK transport already
+			// runs an internal refresh-on-401 via auth(); we re-run it here for
+			// (a) observability via the log line below, and (b) to convert refresh
+			// failure into our typed OAuthRefreshChainExpiredError, which the
+			// agent's auth-error classifier maps to non-retryable with a re-seed
+			// hint. The retry is single-shot: a second 401 means the new token is
+			// also rejected and another refresh would not help.
+			if (!(error instanceof UnauthorizedError) || !this.oauthProvider) {
+				throw error;
+			}
+			log.info(
+				{ tool: toolName, instanceUrl: this.config.instanceUrl },
+				"Tool call returned 401; attempting silent token refresh",
+			);
+			await this.oauthProvider.refreshTokens();
+			return this.client.callTool({ name: toolName, arguments: args }, undefined, options);
+		}
 	}
 
 	async disconnect(): Promise<void> {
