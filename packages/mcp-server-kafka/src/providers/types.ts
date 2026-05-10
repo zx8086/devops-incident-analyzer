@@ -9,7 +9,7 @@ export interface KafkaConnectionConfig {
 	sasl?: SASLOptions;
 	tls?: ConnectionOptions["tls"];
 	connectTimeout?: number;
-	requestTimeout?: number;
+	timeout?: number;
 	retries?: number | boolean;
 	retryDelay?: number;
 }

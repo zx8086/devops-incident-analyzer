@@ -35,7 +35,7 @@ describe("MskKafkaProvider.getConnectionConfig", () => {
 		// SASL OAUTHBEARER uses a token callback, not username/password
 		expect(typeof (config.sasl as { token?: () => Promise<string> }).token).toBe("function");
 		expect(config.connectTimeout).toBe(60_000);
-		expect(config.requestTimeout).toBe(60_000);
+		expect(config.timeout).toBe(60_000);
 		expect(config.retries).toBe(5);
 	});
 

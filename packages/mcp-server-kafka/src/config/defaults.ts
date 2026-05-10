@@ -8,6 +8,7 @@ export const defaults = {
 		allowDestructive: false,
 		consumeMaxMessages: 50,
 		consumeTimeoutMs: 30000,
+		toolTimeoutMs: 30000,
 	},
 	msk: {
 		bootstrapBrokers: "",
