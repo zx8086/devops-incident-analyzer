@@ -113,10 +113,10 @@ export async function getRunbookForAlert(
 
 	log.info({ service: ctx.service, cql }, "Searching for runbooks");
 
-	const result = await proxy.callTool("searchConfluencePages", { cql });
+	const result = await proxy.callTool("searchConfluenceUsingCql", { cql });
 
 	const parsed = parseAtlassianTextContent<ConfluenceSearchResponse>(result as { content?: unknown }, {
-		upstreamTool: "searchConfluencePages",
+		upstreamTool: "searchConfluenceUsingCql",
 		context: { cql },
 		log,
 	});

@@ -147,7 +147,8 @@ describe("getJiraIssue SIO-706 field projection", () => {
 
 		expect(captured).toHaveLength(1);
 		expect(captured[0]?.tool).toBe("getJiraIssue");
-		expect(captured[0]?.args.fields).toBe("summary,status");
+		// SIO-713: upstream getJiraIssue requires fields as string[] (not CSV string).
+		expect(captured[0]?.args.fields).toEqual(["summary", "status"]);
 	});
 
 	test("returns a stub with _projection.error when upstream content is unparseable", async () => {

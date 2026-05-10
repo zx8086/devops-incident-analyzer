@@ -160,7 +160,7 @@ export async function getIncidentHistory(
 
 	const result = await proxy.callTool("searchJiraIssuesUsingJql", {
 		jql,
-		maxResults: 1000,
+		maxResults: 100,
 	});
 
 	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
