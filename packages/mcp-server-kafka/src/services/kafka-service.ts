@@ -417,17 +417,27 @@ export class KafkaService {
 				maxFetches: 1,
 			});
 
-			const deadline = Date.now() + options.timeoutMs;
+			// SIO-699: external timer terminates the for-await when no messages arrive.
+			// The previous Date.now() deadline check only fired AFTER pushing a message,
+			// so empty topics (or "latest" mode with no production) hung indefinitely
+			// and AgentCore tore the runtime down with -32010.
+			let timedOut = false;
+			const timer = setTimeout(() => {
+				timedOut = true;
+				void stream.close().catch(() => {});
+			}, options.timeoutMs);
 
-			for await (const msg of stream as AsyncIterable<Message<Buffer, Buffer, Buffer, Buffer>>) {
-				messages.push(formatMessage(msg));
-
-				if (messages.length >= options.maxMessages || Date.now() >= deadline) {
-					break;
+			try {
+				for await (const msg of stream as AsyncIterable<Message<Buffer, Buffer, Buffer, Buffer>>) {
+					messages.push(formatMessage(msg));
+					if (messages.length >= options.maxMessages) break;
+				}
+			} finally {
+				clearTimeout(timer);
+				if (!timedOut && !stream.closed) {
+					await stream.close().catch(() => {});
 				}
 			}
-
-			await stream.close();
 		} finally {
 			if (!consumer.closed) {
 				await consumer.close().catch(() => {});
@@ -704,33 +714,38 @@ export class KafkaService {
 		const groupId = `mcp-seek-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
 
+		// SIO-699: external timer terminates the for-await even when no messages arrive.
+		// The previous Date.now() deadline check only fired AFTER receiving a message,
+		// so a quiet partition would hang past the AgentCore health-check window.
+		const TIMEOUT_MS = 15_000;
+		let stream: { closed: boolean; close: () => Promise<unknown> } | null = null;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+
 		try {
-			const stream = await consumer.consume({
+			stream = (await consumer.consume({
 				topics: [topic],
 				offsets: [{ topic, partition, offset: requestedOffset }],
 				mode: "manual",
 				autocommit: false,
 				maxFetches: 1,
-			});
+			})) as unknown as { closed: boolean; close: () => Promise<unknown> };
 
-			const deadline = Date.now() + 15_000;
+			timer = setTimeout(() => {
+				void stream?.close().catch(() => {});
+			}, TIMEOUT_MS);
 
-			for await (const msg of stream as AsyncIterable<Message<Buffer, Buffer, Buffer, Buffer>>) {
+			for await (const msg of stream as unknown as AsyncIterable<Message<Buffer, Buffer, Buffer, Buffer>>) {
 				const formatted = formatMessage(msg);
 				if (msg.partition === partition && msg.offset === requestedOffset) {
-					await stream.close();
 					return { status: "ok", message: formatted };
 				}
-				if (msg.offset > requestedOffset || Date.now() >= deadline) {
-					break;
-				}
+				if (msg.offset > requestedOffset) break;
 			}
 
-			await stream.close();
 			return {
 				status: "error",
 				code: "TIMEOUT",
-				message: `No message at offset ${offset} of ${topic}:${partition} within 15s deadline (consumer drained without finding the requested offset).`,
+				message: `No message at offset ${offset} of ${topic}:${partition} within ${TIMEOUT_MS / 1000}s deadline (consumer drained without finding the requested offset).`,
 			};
 		} catch (err) {
 			const classified = classifyKafkaError(err);
@@ -742,6 +757,10 @@ export class KafkaService {
 				message: classified.message,
 			};
 		} finally {
+			if (timer) clearTimeout(timer);
+			if (stream && !stream.closed) {
+				await stream.close().catch(() => {});
+			}
 			if (!consumer.closed) {
 				await consumer.close().catch(() => {});
 			}
