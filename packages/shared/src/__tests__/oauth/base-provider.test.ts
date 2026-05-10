@@ -1,11 +1,15 @@
 // src/__tests__/oauth/base-provider.test.ts
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { OAuthClientMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { BaseOAuthClientProvider } from "../../oauth/base-provider.ts";
+import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import {
+	BaseOAuthClientProvider,
+	STALE_INVALIDATION_WINDOW_MS,
+	TOKEN_EXPIRY_SKEW_MS,
+} from "../../oauth/base-provider.ts";
 import { OAuthRequiresInteractiveAuthError } from "../../oauth/errors.ts";
 
 const TEST_NAMESPACE = "__base-provider-test__";
@@ -16,6 +20,12 @@ function cleanup() {
 }
 
 class TestProvider extends BaseOAuthClientProvider {
+	// SIO-702: stub for ensureFreshTokens()'s required protected doRefresh().
+	// Tests inject the desired behaviour by reassigning this field.
+	refreshImpl: () => Promise<OAuthTokens> = async () => {
+		throw new Error("refreshImpl not configured for this test");
+	};
+
 	override get clientMetadata(): OAuthClientMetadata {
 		return {
 			client_name: "test",
@@ -25,15 +35,46 @@ class TestProvider extends BaseOAuthClientProvider {
 			token_endpoint_auth_method: "none",
 		};
 	}
+
+	protected override async doRefresh(): Promise<OAuthTokens> {
+		const tokens = await this.refreshImpl();
+		this.saveTokens(tokens);
+		return tokens;
+	}
+
+	// Test seam to drive ensureFreshTokens() like a subclass would.
+	publicEnsureFreshTokens(): Promise<OAuthTokens | undefined> {
+		return this.ensureFreshTokens();
+	}
 }
 
-function makeProvider(overrides: Partial<{ key: string; port: number; onRedirect: (u: URL) => void }> = {}) {
+function makeProvider(
+	overrides: Partial<{
+		key: string;
+		port: number;
+		onRedirect: (u: URL) => void;
+		clock: () => number;
+	}> = {},
+): TestProvider {
 	return new TestProvider({
 		storageNamespace: TEST_NAMESPACE,
 		storageKey: overrides.key ?? "test-key",
 		callbackPort: overrides.port ?? 9999,
 		onRedirect: overrides.onRedirect ?? (() => {}),
+		clock: overrides.clock,
 	});
+}
+
+// SIO-702: simple monotonic clock that advances on each call. Tests use this
+// when they need to cross the STALE_INVALIDATION_WINDOW_MS boundary between
+// saveTokens() (records lastSaveAt) and invalidateCredentials() (reads it).
+function makeAdvancingClock(stepMs: number, start = 1_000_000): () => number {
+	let t = start;
+	return () => {
+		const v = t;
+		t += stepMs;
+		return v;
+	};
 }
 
 describe("BaseOAuthClientProvider", () => {
@@ -77,33 +118,41 @@ describe("BaseOAuthClientProvider", () => {
 		expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 
-	test("persistence round-trip: tokens survive across instances keyed by storageKey", () => {
+	test("persistence round-trip: tokens survive across instances keyed by storageKey", async () => {
 		const a = makeProvider({ key: "round-trip" });
 		a.saveTokens({ access_token: "first", token_type: "bearer" });
 
 		const b = makeProvider({ key: "round-trip" });
-		expect(b.tokens()?.access_token).toBe("first");
+		expect((await b.tokens())?.access_token).toBe("first");
 	});
 
-	test("invalidateCredentials matrix", () => {
-		const provider = makeProvider();
+	test("invalidateCredentials matrix", async () => {
+		const provider = makeProvider({ clock: () => 1_000_000 });
 		provider.saveClientInformation({ client_id: "c1" });
 		provider.saveTokens({ access_token: "tkn", token_type: "bearer" });
 		provider.saveCodeVerifier("verifier-1");
 
-		provider.invalidateCredentials("tokens");
-		expect(provider.tokens()).toBeUndefined();
-		expect(provider.clientInformation()?.client_id).toBe("c1");
+		// SIO-702: stale-wipe guard suppresses 'tokens' invalidation within
+		// STALE_INVALIDATION_WINDOW_MS of saveTokens. Use a clock ahead of the
+		// window to exercise the canonical wipe path.
+		const lateProvider = makeProvider({ clock: makeAdvancingClock(STALE_INVALIDATION_WINDOW_MS + 1_000) });
+		lateProvider.saveClientInformation({ client_id: "c1" });
+		lateProvider.saveTokens({ access_token: "tkn", token_type: "bearer" });
+		lateProvider.saveCodeVerifier("verifier-1");
 
-		provider.invalidateCredentials("verifier");
-		expect(() => provider.codeVerifier()).toThrow();
+		lateProvider.invalidateCredentials("tokens");
+		expect(await lateProvider.tokens()).toBeUndefined();
+		expect(lateProvider.clientInformation()?.client_id).toBe("c1");
 
-		provider.invalidateCredentials("client");
-		expect(provider.clientInformation()).toBeUndefined();
+		lateProvider.invalidateCredentials("verifier");
+		expect(() => lateProvider.codeVerifier()).toThrow();
 
-		provider.saveTokens({ access_token: "x", token_type: "bearer" });
+		lateProvider.invalidateCredentials("client");
+		expect(lateProvider.clientInformation()).toBeUndefined();
+
+		// 'all' bypasses the guard intentionally.
 		provider.invalidateCredentials("all");
-		expect(provider.tokens()).toBeUndefined();
+		expect(await provider.tokens()).toBeUndefined();
 	});
 
 	test("redirectToAuthorization invokes onRedirect when not headless", async () => {
@@ -176,5 +225,182 @@ describe("BaseOAuthClientProvider", () => {
 
 		const expectedPath = join(STORAGE_DIR, "https___mcp.atlassian.com_v1_mcp.json");
 		expect(existsSync(expectedPath)).toBe(true);
+	});
+
+	// SIO-702: refresh-on-read + stale-wipe guard
+	describe("ensureFreshTokens (SIO-702)", () => {
+		test("saveTokens stamps tokenObtainedAt on disk", () => {
+			const provider = makeProvider({ clock: () => 12_345_678 });
+			provider.saveTokens({ access_token: "a", token_type: "bearer", expires_in: 7200 });
+
+			const path = join(STORAGE_DIR, "test-key.json");
+			const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+				tokens?: { access_token?: string };
+				tokenObtainedAt?: number;
+			};
+			expect(parsed.tokenObtainedAt).toBe(12_345_678);
+		});
+
+		test("returns persisted as-is when within skew (no refresh)", async () => {
+			let now = 1_000_000;
+			const provider = makeProvider({ clock: () => now });
+			provider.saveTokens({ access_token: "still-fresh", token_type: "bearer", expires_in: 7200 });
+
+			const refreshSpy = mock(async () => {
+				throw new Error("refresh must not be called");
+			});
+			provider.refreshImpl = refreshSpy;
+
+			now += 1_000; // 1s later, well within 7200s - 60s skew
+			const result = await provider.publicEnsureFreshTokens();
+			expect(result?.access_token).toBe("still-fresh");
+			expect(refreshSpy).not.toHaveBeenCalled();
+		});
+
+		test("treats legacy file without tokenObtainedAt as expired (self-heal)", async () => {
+			// Simulate a pre-SIO-702 file by writing raw JSON without tokenObtainedAt.
+			const path = join(STORAGE_DIR, "test-key.json");
+			require("node:fs").mkdirSync(STORAGE_DIR, { recursive: true, mode: 0o700 });
+			writeFileSync(
+				path,
+				JSON.stringify({ tokens: { access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 7200 } }),
+				"utf-8",
+			);
+
+			let refreshCount = 0;
+			const provider = makeProvider({ clock: () => 1_000_000 });
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				return { access_token: "new", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+
+			const result = await provider.publicEnsureFreshTokens();
+			expect(result?.access_token).toBe("new");
+			expect(refreshCount).toBe(1);
+		});
+
+		test("single-flight: 10 concurrent ensureFreshTokens calls trigger one doRefresh", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			// Pre-persist an "expired" token (tokenObtainedAt at epoch 0 + small expires_in).
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			// Reset lastSaveAt so the stale-wipe guard does not interfere later.
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let inFlight = 0;
+			let maxObserved = 0;
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				inFlight++;
+				maxObserved = Math.max(maxObserved, inFlight);
+				refreshCount++;
+				await new Promise((r) => setTimeout(r, 30));
+				inFlight--;
+				return { access_token: "fresh", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+
+			const results = await Promise.all(Array.from({ length: 10 }, () => provider.publicEnsureFreshTokens()));
+
+			expect(refreshCount).toBe(1);
+			expect(maxObserved).toBe(1);
+			for (const r of results) expect(r?.access_token).toBe("fresh");
+		});
+
+		test("returns undefined when nothing is persisted", async () => {
+			const provider = makeProvider();
+			const result = await provider.publicEnsureFreshTokens();
+			expect(result).toBeUndefined();
+		});
+
+		test("propagates doRefresh errors to all concurrent waiters", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			provider.refreshImpl = async () => {
+				await new Promise((r) => setTimeout(r, 10));
+				throw new Error("refresh chain expired");
+			};
+
+			const settled = await Promise.allSettled(Array.from({ length: 5 }, () => provider.publicEnsureFreshTokens()));
+			expect(settled.every((s) => s.status === "rejected")).toBe(true);
+			for (const s of settled) {
+				expect(s.status === "rejected" && (s.reason as Error).message).toBe("refresh chain expired");
+			}
+		});
+	});
+
+	// SIO-702: stale-wipe guard
+	describe("invalidateCredentials stale-wipe guard (SIO-702)", () => {
+		test("ignores invalidate('tokens') within STALE_INVALIDATION_WINDOW_MS of saveTokens", async () => {
+			const warnLogs: Array<{ obj: Record<string, unknown>; msg: string }> = [];
+			const captureLogger = {
+				info: () => {},
+				warn: (obj: Record<string, unknown>, msg: string) => {
+					warnLogs.push({ obj, msg });
+				},
+				error: () => {},
+			};
+			const provider = new TestProvider({
+				storageNamespace: TEST_NAMESPACE,
+				storageKey: "test-key",
+				callbackPort: 9999,
+				onRedirect: () => {},
+				logger: captureLogger,
+				clock: makeAdvancingClock(100),
+			});
+
+			provider.saveTokens({ access_token: "fresh", token_type: "bearer", expires_in: 7200 });
+			provider.invalidateCredentials("tokens");
+
+			const onDisk = JSON.parse(readFileSync(join(STORAGE_DIR, "test-key.json"), "utf-8")) as {
+				tokens?: { access_token?: string };
+			};
+			expect(onDisk.tokens?.access_token).toBe("fresh");
+			expect(warnLogs).toHaveLength(1);
+			expect(warnLogs[0]?.msg).toContain("stale-wipe guard");
+		});
+
+		test("honours invalidate('tokens') after the window elapses", async () => {
+			const provider = makeProvider({ clock: makeAdvancingClock(STALE_INVALIDATION_WINDOW_MS + 100) });
+			provider.saveTokens({ access_token: "fresh", token_type: "bearer", expires_in: 7200 });
+			provider.invalidateCredentials("tokens");
+
+			const onDisk = JSON.parse(readFileSync(join(STORAGE_DIR, "test-key.json"), "utf-8")) as {
+				tokens?: unknown;
+				tokenObtainedAt?: number;
+			};
+			expect(onDisk.tokens).toBeUndefined();
+			expect(onDisk.tokenObtainedAt).toBeUndefined();
+		});
+
+		test("invalidate('all') bypasses the guard", async () => {
+			const provider = makeProvider({ clock: makeAdvancingClock(100) });
+			provider.saveClientInformation({ client_id: "c1" });
+			provider.saveTokens({ access_token: "fresh", token_type: "bearer", expires_in: 7200 });
+			provider.invalidateCredentials("all");
+
+			expect(await provider.tokens()).toBeUndefined();
+			expect(provider.clientInformation()).toBeUndefined();
+		});
+
+		test("invalidate('client') and 'verifier' are unaffected by the token-save timestamp", () => {
+			const provider = makeProvider({ clock: makeAdvancingClock(100) });
+			provider.saveClientInformation({ client_id: "c1" });
+			provider.saveCodeVerifier("v");
+			provider.saveTokens({ access_token: "fresh", token_type: "bearer" });
+
+			provider.invalidateCredentials("client");
+			expect(provider.clientInformation()).toBeUndefined();
+
+			provider.invalidateCredentials("verifier");
+			expect(() => provider.codeVerifier()).toThrow();
+		});
+
+		test("guard window is exclusive: skew constants exposed for downstream tuning", () => {
+			expect(STALE_INVALIDATION_WINDOW_MS).toBeGreaterThan(0);
+			expect(TOKEN_EXPIRY_SKEW_MS).toBeGreaterThan(0);
+		});
 	});
 });

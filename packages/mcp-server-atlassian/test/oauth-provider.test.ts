@@ -52,16 +52,24 @@ describe("AtlassianOAuthProvider", () => {
 		expect(parsed.tokens.access_token).toBe("tkn");
 	});
 
-	test("invalidateCredentials('tokens') clears tokens only", () => {
+	test("invalidateCredentials('tokens') clears tokens only", async () => {
+		// SIO-702: stale-wipe guard ignores invalidate('tokens') within ~5s of a
+		// saveTokens() to defeat the GitLab rotation race. Inject an advancing
+		// clock so the second tick (used by invalidateCredentials) is past the
+		// guard window relative to the first tick (saveTokens recorded it).
+		const start = 1_000_000;
+		let now = start;
 		const provider = new AtlassianOAuthProvider({
 			mcpEndpoint: TEST_ENDPOINT,
 			callbackPort: 9185,
 			onRedirect: () => {},
+			clock: () => now,
 		});
 		provider.saveClientInformation({ client_id: "c1" });
 		provider.saveTokens({ access_token: "tkn", token_type: "bearer" });
+		now += 10_000; // past STALE_INVALIDATION_WINDOW_MS
 		provider.invalidateCredentials("tokens");
-		expect(provider.tokens()).toBeUndefined();
+		expect(await provider.tokens()).toBeUndefined();
 		expect(provider.clientInformation()?.client_id).toBe("c1");
 	});
 });

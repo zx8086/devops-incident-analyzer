@@ -17,9 +17,6 @@ export { OAUTH_CALLBACK_PATH };
 
 export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 	private readonly instanceUrl: string;
-	// SIO-698: shared in-flight promise so 5 parallel sub-agent tool calls
-	// hitting an expired token only fire one /oauth/token request.
-	private refreshInFlight: Promise<OAuthTokens> | null = null;
 
 	constructor(instanceUrl: string, callbackPort: number, onRedirect: AuthorizationHandler) {
 		super({
@@ -48,9 +45,21 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		};
 	}
 
-	// SIO-698: exchange the persisted refresh_token for a fresh access_token.
-	// Concurrent callers share one in-flight fetch via refreshInFlight so we
-	// never fire parallel /oauth/token requests for the same provider instance.
+	// SIO-702: refresh-on-read in tokens(). The MCP SDK transport awaits this
+	// (auth.js:272 / streamableHttp.js:61), so an async override is wire-compatible.
+	// Routing every read through ensureFreshTokens() means the SDK's own auth()
+	// path is not entered in steady state -- which structurally avoids the
+	// rotation-race wipe described in SIO-702. The base class's single-flight
+	// dedupe guarantees only one /oauth/token POST fires per refresh window.
+	override tokens(): Promise<OAuthTokens | undefined> {
+		return this.ensureFreshTokens();
+	}
+
+	// SIO-702: kept as a public method so proxy.callTool's defense-in-depth retry
+	// (proxy.ts:172) can force a refresh after an UnauthorizedError -- which
+	// implies the persisted access_token does not actually work, regardless of
+	// what our isExpired() heuristic says. Joins any in-flight refresh started
+	// by tokens() via the base-class lock so we never fire two POSTs in parallel.
 	async refreshTokens(): Promise<OAuthTokens> {
 		if (this.refreshInFlight) return this.refreshInFlight;
 
@@ -60,7 +69,11 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		return this.refreshInFlight;
 	}
 
-	private async doRefresh(): Promise<OAuthTokens> {
+	// SIO-702: hook called by ensureFreshTokens() when the access_token is past
+	// its expiry skew window. Performs the actual /oauth/token POST. This used to
+	// live in a private doRefresh() owned by GitLab; lifting the single-flight
+	// lock into the base class meant moving the body here as the override.
+	protected override async doRefresh(): Promise<OAuthTokens> {
 		const refreshToken = this.persisted.tokens?.refresh_token;
 		if (!refreshToken) {
 			throw new OAuthRefreshChainExpiredError(

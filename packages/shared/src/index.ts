@@ -114,7 +114,9 @@ export {
 	OAuthRequiresInteractiveAuthError,
 	type PersistedOAuthState,
 	type SeedOAuthOptions,
+	STALE_INVALIDATION_WINDOW_MS,
 	seedOAuth,
+	TOKEN_EXPIRY_SKEW_MS,
 	type WarnIfOAuthNotSeededOptions,
 	warnIfOAuthNotSeeded,
 } from "./oauth/index.ts";
