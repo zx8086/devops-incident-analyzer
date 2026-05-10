@@ -125,7 +125,7 @@ export async function getJiraIssue(proxy: AtlassianMcpProxy, input: GetJiraIssue
 	// Only include fields when narrowing -- "*" means "let the upstream decide"
 	// (default behaviour, safest for compatibility with Rovo's schema).
 	if (fields !== "*") {
-		upstreamArgs.fields = fields.join(",");
+		upstreamArgs.fields = fields;
 	}
 
 	log.info(
