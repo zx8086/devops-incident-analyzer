@@ -29,6 +29,35 @@ export interface McpClientConfig {
 	atlassianUrl?: string;
 }
 
+// SIO-705: pino's default JSON serializer drops non-enumerable fields on Error
+// instances (`message`, `stack`), so logging `{error: errorInstance}` produced
+// the empty `error:{}` payload that hid the actual failure cause when an MCP
+// server failed to connect at boot. The shared shape mirrors the pattern used
+// by reconnectServer and the sub-agent runner.
+export function serializeMcpConnectError(
+	reason: unknown,
+	url: string,
+): { url: string; error: string; errorName?: string; cause?: string } {
+	if (reason instanceof Error) {
+		const out: { url: string; error: string; errorName?: string; cause?: string } = {
+			url,
+			error: reason.message || reason.name || "unknown error",
+			errorName: reason.name,
+		};
+		// Surface AggregateError children (Node fetch wraps DNS/socket failures) and
+		// chained `cause` so transport-layer details aren't lost a level deep.
+		const candidates: unknown[] = [];
+		if ("cause" in reason && reason.cause !== undefined) candidates.push(reason.cause);
+		if (reason instanceof AggregateError) candidates.push(...reason.errors);
+		const causeMessages = candidates
+			.map((c) => (c instanceof Error ? c.message : typeof c === "string" ? c : ""))
+			.filter(Boolean);
+		if (causeMessages.length > 0) out.cause = causeMessages.join("; ");
+		return out;
+	}
+	return { url, error: typeof reason === "string" ? reason : JSON.stringify(reason) };
+}
+
 // SIO-595: All MCP servers use Streamable HTTP transport at /mcp
 let allTools: StructuredToolInterface[] = [];
 let connectedServers: Set<string> = new Set();
@@ -153,7 +182,13 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 			toolsByServer.set(result.value.name, result.value.tools);
 			logger.info({ serverName: entry.name, toolCount: result.value.tools.length }, "MCP server connected");
 		} else {
-			logger.warn({ serverName: entry.name, error: result.reason }, "Failed to connect to MCP server, skipping");
+			// SIO-705: pino's default JSON serializer drops non-enumerable Error fields,
+			// so passing the raw rejection logged as `error:{}` and hid the actual
+			// failure cause. Use the shared serializer below.
+			logger.warn(
+				{ serverName: entry.name, ...serializeMcpConnectError(result.reason, entry.url) },
+				"Failed to connect to MCP server, skipping",
+			);
 		}
 	}
 
@@ -238,10 +273,9 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		connectedServers.add(name);
 		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
 	} catch (error) {
-		logger.warn(
-			{ serverName: name, error: error instanceof Error ? error.message : String(error) },
-			"Failed to reconnect MCP server",
-		);
+		// SIO-705: same serializer as the boot path so reconnect failures expose
+		// AggregateError causes (DNS/socket) instead of an opaque ECONNREFUSED.
+		logger.warn({ serverName: name, ...serializeMcpConnectError(error, mcpUrl) }, "Failed to reconnect MCP server");
 	}
 }
 
