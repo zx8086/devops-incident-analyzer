@@ -177,7 +177,14 @@ tool_mapping:
       - elasticsearch_billing_get_deployment_costs
       - elasticsearch_billing_get_org_charts
   action_descriptions:
-    search: when querying logs by service, time window, and search terms (the primary log-search path; covers structured queries, aggregations, and free-text)
+    search: >-
+      when querying logs by service, time window, and search terms (the primary log-search
+      path; covers structured queries, aggregations, and free-text). For billion-doc indices
+      (traces-apm*, logs-apm*), narrow the index pattern (date suffix or specific index name
+      beats `traces-apm*`), use the shortest viable time window (prefer `now-24h` over
+      `now-7d`), project only needed fields via `_source` or `fields`, and avoid fanning out
+      multiple heavy aggregations in parallel -- run them sequentially so each gets the full
+      per-call timeout budget
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern
