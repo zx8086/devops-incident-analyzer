@@ -242,13 +242,25 @@ export function routeAfterAlignment(state: AgentStateType): Send[] | "aggregate"
 
 	// Fan out: create a Send for each datasource that needs retrying
 	// alignmentRetries was already incremented by checkAlignment node
-	return retryTargets.map(
-		(dataSourceId) =>
-			new Send("queryDataSource", {
-				...state,
-				currentDataSource: dataSourceId,
-				dataSourceResults: [],
-				alignmentHints: [`Retry query for ${dataSourceId}`],
-			}),
-	);
+	// SIO-697: scope elastic retries to the deployments that actually failed so the
+	// retry doesn't re-run a sibling deployment that already succeeded.
+	return retryTargets.map((dataSourceId) => {
+		const failedDeployments =
+			dataSourceId === "elastic"
+				? [
+						...new Set(
+							results
+								.filter((r) => r.dataSourceId === "elastic" && r.status === "error" && r.deploymentId)
+								.map((r) => r.deploymentId as string),
+						),
+					]
+				: [];
+		return new Send("queryDataSource", {
+			...state,
+			currentDataSource: dataSourceId,
+			dataSourceResults: [],
+			alignmentHints: [`Retry query for ${dataSourceId}`],
+			retryDeployments: failedDeployments,
+		});
+	});
 }

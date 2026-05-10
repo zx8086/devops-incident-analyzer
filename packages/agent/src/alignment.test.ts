@@ -193,6 +193,7 @@ function makeRetryState(overrides: Partial<AgentStateType> = {}): AgentStateType
 		queryComplexity: "complex",
 		targetDataSources: ["elastic"],
 		targetDeployments: [],
+		retryDeployments: [],
 		dataSourceResults: [
 			{
 				dataSourceId: "elastic",
@@ -278,5 +279,68 @@ describe("routeAfterAlignment retry-dispatch logging", () => {
 		expect(decision).toBe("aggregate");
 		const dispatchWarn = captured.find((c) => c.level === "warn" && Array.isArray(c.meta?.firstAttempts));
 		expect(dispatchWarn).toBeUndefined();
+	});
+});
+
+// SIO-697: alignment retry must scope elastic re-runs to only the deployments
+// that failed on the first attempt. Previously the retry re-ran every elastic
+// deployment in targetDeployments, wasting budget on siblings that already
+// succeeded.
+describe("routeAfterAlignment retryDeployments selection", () => {
+	test("only the failed elastic deployment is in retryDeployments", () => {
+		const state = makeRetryState({
+			targetDeployments: ["eu-b2b", "us-cld-monitor"],
+			dataSourceResults: [
+				{
+					dataSourceId: "elastic",
+					deploymentId: "eu-b2b",
+					data: "ok",
+					status: "success",
+					duration: 150_000,
+					isAlignmentRetry: false,
+				},
+				{
+					dataSourceId: "elastic",
+					deploymentId: "us-cld-monitor",
+					data: null,
+					status: "error",
+					duration: 218_000,
+					isAlignmentRetry: false,
+					error: "Recursion limit reached",
+				},
+			],
+		});
+
+		const decision = routeAfterAlignment(state);
+		expect(Array.isArray(decision)).toBe(true);
+		const sends = decision as Array<{ args: Record<string, unknown> }>;
+		expect(sends).toHaveLength(1);
+		const payload = sends[0]?.args as { currentDataSource: string; retryDeployments: string[] };
+		expect(payload.currentDataSource).toBe("elastic");
+		expect(payload.retryDeployments).toEqual(["us-cld-monitor"]);
+	});
+
+	test("non-elastic retry payloads carry empty retryDeployments", () => {
+		const state = makeRetryState({
+			targetDataSources: ["kafka"],
+			targetDeployments: [],
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					data: null,
+					status: "error",
+					duration: 9000,
+					isAlignmentRetry: false,
+					error: "ECONNRESET",
+				},
+			],
+		});
+
+		const decision = routeAfterAlignment(state);
+		const sends = decision as Array<{ args: Record<string, unknown> }>;
+		expect(sends).toHaveLength(1);
+		const payload = sends[0]?.args as { currentDataSource: string; retryDeployments: string[] };
+		expect(payload.currentDataSource).toBe("kafka");
+		expect(payload.retryDeployments).toEqual([]);
 	});
 });

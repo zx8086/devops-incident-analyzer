@@ -47,6 +47,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		queryComplexity: "complex",
 		targetDataSources: ["elastic"],
 		targetDeployments: [],
+		retryDeployments: [],
 		dataSourceResults: [
 			{
 				dataSourceId: "elastic",

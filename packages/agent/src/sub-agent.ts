@@ -17,9 +17,18 @@ import { getSubAgentToolCapBytes } from "./sub-agent-truncate-tool-output.ts";
 const logger = getLogger("agent:sub-agent");
 
 // SIO-626: Prevent hung MCP servers from stalling the pipeline indefinitely.
-// 5 minutes: sub-agents with 70+ MCP tools need multiple LLM round-trips
-// (tool selection, invocation, result parsing) which routinely exceed 60s.
-const SUB_AGENT_TIMEOUT_MS = 300_000;
+// SIO-697: Default lifted to 6 min (was 5) so deep elastic fan-outs can finish
+// within the graph budget without forcing alignment retries to start with no
+// runway. Tunable via SUB_AGENT_TIMEOUT_MS env var.
+const SUB_AGENT_TIMEOUT_MS_DEFAULT = 360_000;
+
+export function getSubAgentTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = env.SUB_AGENT_TIMEOUT_MS;
+	if (raw == null || raw === "") return SUB_AGENT_TIMEOUT_MS_DEFAULT;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) return SUB_AGENT_TIMEOUT_MS_DEFAULT;
+	return Math.floor(parsed);
+}
 
 // SIO-689: Trace evidence on the failing pass-4 query showed 13 LLM iterations + 12 tools-node
 // executions = 25 graph steps, the LangGraph default. The 33 underlying elasticsearch_* calls were
@@ -236,7 +245,7 @@ async function runSubAgent(
 			{ messages },
 			{
 				...config,
-				signal: AbortSignal.timeout(SUB_AGENT_TIMEOUT_MS),
+				signal: AbortSignal.timeout(getSubAgentTimeoutMs()),
 				runName: deploymentId ? `${agentName}[${deploymentId}]` : agentName,
 				metadata: {
 					...config?.metadata,
@@ -315,21 +324,30 @@ export async function queryDataSource(
 	// SIO-649: Fan out across selected deployments for elastic only. Other sub-agents ignore
 	// targetDeployments entirely -- empty/unset falls through to the non-fan-out path, which
 	// is the pre-SIO-649 behavior.
-	const deployments = dataSourceId === "elastic" ? state.targetDeployments : [];
+	// SIO-697: an alignment retry uses retryDeployments (only the deployments that failed on
+	// the first attempt), so we don't re-run siblings that already succeeded.
+	const deployments =
+		dataSourceId === "elastic"
+			? isRetry && state.retryDeployments.length > 0
+				? state.retryDeployments
+				: state.targetDeployments
+			: [];
 
 	if (deployments.length === 0) {
 		const result = await runSubAgent(state, dataSourceId, agentName, isRetry, log, config);
 		return { dataSourceResults: [result] };
 	}
 
-	log.info({ deployments }, "Elastic sub-agent fanning out across deployments");
-	const results: DataSourceResult[] = [];
-	// Sequential: simpler, respects MCP server rate limits, and keeps per-deployment traces ordered.
-	for (const deploymentId of deployments) {
-		const result = await withElasticDeployment(deploymentId, () =>
-			runSubAgent(state, dataSourceId, agentName, isRetry, log, config, { deploymentId }),
-		);
-		results.push(result);
-	}
+	log.info({ deployments, isRetry }, "Elastic sub-agent fanning out across deployments");
+	// SIO-697: parallel fan-out. withElasticDeployment is backed by AsyncLocalStorage
+	// (see mcp-bridge.ts), so each branch gets its own deployment context. runSubAgent
+	// catches its own errors and returns a result object, so Promise.all never rejects.
+	const results = await Promise.all(
+		deployments.map((deploymentId) =>
+			withElasticDeployment(deploymentId, () =>
+				runSubAgent(state, dataSourceId, agentName, isRetry, log, config, { deploymentId }),
+			),
+		),
+	);
 	return { dataSourceResults: results };
 }

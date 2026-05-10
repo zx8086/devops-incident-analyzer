@@ -26,6 +26,14 @@ Triage priority:
 3. Error-level log spikes in the requested time window
 4. Slow queries and indexing bottlenecks
 
+## Stop on Empty Results
+If the same tool returns an empty array, zero hits, or the same trivially-sized
+placeholder twice in a row with similar arguments, do NOT call it a third time.
+Either change strategy (different index pattern, wider time window, different
+field, different deployment) or stop and report what you found. Repeated
+no-op calls burn the recursion budget without progressing the investigation
+and prevent the agent from reaching the synthesis step.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
 - Include ISO 8601 timestamps and metric values in all findings
