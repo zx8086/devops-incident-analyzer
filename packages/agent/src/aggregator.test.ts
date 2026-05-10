@@ -257,7 +257,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 	});
 
-	test("caps confidence at 0.6 when toolErrorCount/messageCount > 15% (7/40 = 17.5%)", async () => {
+	test("caps confidence at 0.59 when toolErrorCount/messageCount > 15% (7/40 = 17.5%)", async () => {
 		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
 		const result = await aggregate(
 			makeState({
@@ -279,8 +279,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 			}),
 		);
 
-		expect(result.confidenceScore).toBe(0.6);
-		expect(result.confidenceCap).toBe(0.6);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
 		const warnCall = captured.find(
 			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
 		);
@@ -307,8 +307,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 				],
 			}),
 		);
-		expect(result.confidenceScore).toBe(0.6);
-		expect(result.confidenceCap).toBe(0.6);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
 	});
 
 	test("does NOT cap when ratio is at or below 15% (6/40 = 15.0% boundary)", async () => {
@@ -357,11 +357,11 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 		);
 		expect(result.confidenceScore).toBe(0.4);
 		// confidenceCap is set whenever the cap rule triggers (rate > 15%), even if
-		// the LLM score (0.4) was already below the cap value (0.6). This matches
+		// the LLM score (0.4) was already below the cap value (0.59). This matches
 		// the existing SIO-707/SIO-681 semantic: `confidenceCap` signals "a cap rule
 		// fired", not "the score was reduced". Renaming this for clarity is out of
 		// scope for SIO-709.
-		expect(result.confidenceCap).toBe(0.6);
+		expect(result.confidenceCap).toBe(0.59);
 	});
 
 	test("zero messageCount does not divide-by-zero", async () => {
@@ -418,7 +418,7 @@ describe("extractGapsBulletCount", () => {
 	});
 });
 
-// SIO-709 AC #2: Gaps-section parser must trigger the same 0.6 cap when the
+// SIO-709 AC #2: Gaps-section parser must trigger the same 0.59 cap when the
 // LLM lists >= 2 gap bullets, regardless of tool-error rate. The styles-v3
 // transcript had 5 gap bullets and was the original failure mode.
 describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", () => {
@@ -432,11 +432,11 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", (
 		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 	});
 
-	test("caps confidence at 0.6 when finalAnswer has Gaps section with >= 2 bullets", async () => {
+	test("caps confidence at 0.59 when finalAnswer has Gaps section with >= 2 bullets", async () => {
 		mockLlmContent = `# Incident report\n\n## Findings\n- something\n\n## Gaps\n- live APM cardinality could not be re-run\n- 7.5x duplication ratio is from pre-timeout analysis\n- ksql_get_server_info not available\n\nConfidence: 0.71`;
 		const result = await aggregate(makeState({}));
-		expect(result.confidenceScore).toBe(0.6);
-		expect(result.confidenceCap).toBe(0.6);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
 	});
 
 	test("does NOT cap when Gaps section has only 1 bullet", async () => {

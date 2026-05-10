@@ -7,7 +7,7 @@ import {
 	enforceCorrelationsAggregate,
 	enforceCorrelationsRouter,
 } from "../../src/correlation/enforce-node";
-import type { PendingCorrelation } from "../../src/state";
+import type { AgentStateType, PendingCorrelation } from "../../src/state";
 import { baseState, withElasticResult, withKafkaResult } from "./test-helpers";
 
 // ---------------------------------------------------------------------------
@@ -121,8 +121,8 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 		const result = await enforceCorrelationsAggregate(state);
 		expect(result.degradedRules).toHaveLength(1);
 		expect(result.degradedRules?.[0]?.ruleName).toBe("kafka-empty-or-dead-groups");
-		expect(result.confidenceCap).toBe(0.6);
-		expect(result.confidenceScore).toBe(0.6);
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.confidenceScore).toBe(0.59);
 		expect(result.pendingCorrelations).toEqual([]);
 	});
 
@@ -145,8 +145,8 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 		};
 
 		const result = await enforceCorrelationsAggregate(state);
-		expect(result.confidenceCap).toBe(0.6);
-		// score is already below cap — Math.min(0.4, 0.6) = 0.4
+		expect(result.confidenceCap).toBe(0.59);
+		// score is already below cap — Math.min(0.4, 0.59) = 0.4
 		expect(result.confidenceScore).toBe(0.4);
 	});
 });
@@ -171,5 +171,147 @@ describe("correlationFetch — delegates to queryDataSource", () => {
 		await result.catch(() => {
 			// expected: MCP bridge not initialised
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SIO-712: skipCoverageCheck routing — direct dispatch to aggregate
+// ---------------------------------------------------------------------------
+
+describe("enforceCorrelationsRouter skip-coverage routing", () => {
+	test("routes skipCoverageCheck rules directly to enforceCorrelationsAggregate without a fetch", () => {
+		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [
+							{
+								id: 153,
+								title: "Replace OFFSET scan",
+								description: "fix slow OFFSET 13000+ queries",
+								merged_at: merged,
+							},
+						],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [
+							{
+								statement: "SELECT ... OFFSET 13000 LIMIT 100",
+								lastExecutionTime: observed,
+								serviceTime: 9900,
+							},
+						],
+					},
+					duration: 200,
+				},
+			],
+		} as AgentStateType;
+		const result = enforceCorrelationsRouter(state);
+		expect(Array.isArray(result)).toBe(true);
+		const sends = result as Send[];
+		expect(sends).toHaveLength(1);
+		const send = sends[0] as Send<string, { pendingCorrelations: PendingCorrelation[] }>;
+		expect(send.node).toBe("enforceCorrelationsAggregate");
+		expect(send.args.pendingCorrelations).toHaveLength(1);
+		expect(send.args.pendingCorrelations[0]?.ruleName).toBe("gitlab-deploy-vs-datastore-runtime");
+	});
+});
+
+describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () => {
+	test("prepends WARNING banner to finalAnswer when a skipCoverageCheck rule degrades", async () => {
+		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			finalAnswer: "# Incident report\n\n## Findings\n- something\n\nConfidence: 0.71",
+			confidenceScore: 0.71,
+			pendingCorrelations: [
+				{
+					ruleName: "gitlab-deploy-vs-datastore-runtime",
+					requiredAgent: "gitlab-agent" as const,
+					triggerContext: {
+						gitlabRef: 153,
+						gitlabMergedAt: merged,
+						datastoreSource: "couchbase",
+						datastoreObservedAt: observed,
+						statementSignature: "OFFSET 13000",
+					},
+					attemptsRemaining: 1,
+					timeoutMs: 30_000,
+				},
+			],
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [
+							{
+								id: 153,
+								title: "Replace OFFSET scan",
+								description: "fix slow OFFSET 13000+ queries",
+								merged_at: merged,
+							},
+						],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [
+							{ statement: "SELECT ... OFFSET 13000 LIMIT 100", lastExecutionTime: observed, serviceTime: 9900 },
+						],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(typeof result.finalAnswer).toBe("string");
+		expect(result.finalAnswer).toContain("WARNING: unresolved cross-source contradiction");
+		expect(result.finalAnswer?.startsWith("WARNING: unresolved cross-source contradiction")).toBe(true);
+		expect(result.finalAnswer).toContain("# Incident report");
+	});
+
+	test("does NOT prepend banner when only non-skipCoverageCheck rules degrade", async () => {
+		const state = {
+			...baseState(),
+			finalAnswer: "# Report\n\nConfidence: 0.8",
+			confidenceScore: 0.8,
+			pendingCorrelations: [
+				{
+					ruleName: "kafka-significant-lag",
+					requiredAgent: "elastic-agent" as const,
+					triggerContext: { groupIds: ["group-x"], lags: [50000] },
+					attemptsRemaining: 0,
+					timeoutMs: 30_000,
+				},
+			],
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					status: "success" as const,
+					data: { consumerGroups: [{ id: "group-x", state: "Stable", totalLag: 50000 }] },
+					duration: 100,
+				},
+			],
+		};
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.finalAnswer).toBeUndefined();
 	});
 });

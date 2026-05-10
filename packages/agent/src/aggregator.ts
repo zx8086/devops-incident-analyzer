@@ -143,7 +143,7 @@ export function extractConfidenceScore(answer: string): number {
 	return 0;
 }
 
-// SIO-709: Count top-level bullet items under a "Gaps" heading. Triggers the 0.6
+// SIO-709: Count top-level bullet items under a "Gaps" heading. Triggers the 0.59
 // cap when the LLM lists >= 2 missing-data items in its own report. Indented
 // sub-bullets (>= 2 leading spaces) are excluded so a structurally rich gap with
 // sub-points doesn't inflate the count beyond the user's mental model.
@@ -242,10 +242,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// exceeds 15%. The styles-v3 transcript had kafka at 9/40 (22.5%) and elastic at
 	// 4/27 (14.8%) -- the 25% threshold from SIO-707 missed both. The LLM may produce
 	// a high score even when a sub-agent had material tool failures because the prose
-	// still reads coherently; this is a deterministic guardrail. Reuses the 0.6 cap
-	// value from correlation/enforce-node.ts for consistency.
+	// still reads coherently; this is a deterministic guardrail. Reuses the cap value
+	// from correlation/enforce-node.ts for consistency.
 	const TOOL_ERROR_RATE_THRESHOLD = 0.15;
-	const TOOL_ERROR_CONFIDENCE_CAP = 0.6;
+	// SIO-709 AC #4: cap must be strictly below the HITL threshold (0.6 from
+	// confidence-gate.ts) so a capped run does not pass the gate. 0.59 keeps
+	// the cap visually close to the threshold without bleeding the HITL value.
+	const TOOL_ERROR_CONFIDENCE_CAP = 0.59;
 	const degradedSubAgents = results
 		.map((r) => {
 			const errorCount = r.toolErrors?.length ?? 0;
@@ -263,7 +266,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		})
 		.filter((d): d is NonNullable<typeof d> => d !== null);
 
-	// SIO-709 AC #2: Gaps section with >= 2 bullets triggers the same 0.6 cap.
+	// SIO-709 AC #2: Gaps section with >= 2 bullets triggers the same 0.59 cap.
 	const GAPS_BULLET_THRESHOLD = 2;
 	const gapsBulletCount = extractGapsBulletCount(answer);
 	const gapsCapTriggered = gapsBulletCount >= GAPS_BULLET_THRESHOLD;
