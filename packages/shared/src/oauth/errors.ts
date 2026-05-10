@@ -14,3 +14,15 @@ export class OAuthRequiresInteractiveAuthError extends Error {
 		this.authorizationUrl = authorizationUrl;
 	}
 }
+
+export class OAuthRefreshChainExpiredError extends Error {
+	readonly namespace: string;
+	readonly hint: string;
+
+	constructor(namespace: string, hint: string) {
+		super(`OAuth refresh chain expired for ${namespace}: ${hint}`);
+		this.name = "OAuthRefreshChainExpiredError";
+		this.namespace = namespace;
+		this.hint = hint;
+	}
+}
