@@ -6,6 +6,7 @@ import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { buildJql } from "./find-linked-incidents.js";
+import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
 const log = createContextLogger("get-incident-history");
 
@@ -138,17 +139,10 @@ export function aggregate(
 	return { service, windowDays, groupBy, totals, buckets };
 }
 
+// SIO-704: tolerate the {issues, isLast, nextPageToken} pagination envelope and any
+// future top-level fields the upstream may add. Extra keys are ignored at runtime.
 interface JiraSearchResponse {
 	issues?: RawIssueForHistory[];
-}
-
-interface McpToolContent {
-	type: string;
-	text: string;
-}
-
-interface McpToolResult {
-	content?: McpToolContent[];
 }
 
 export async function getIncidentHistory(
@@ -164,21 +158,17 @@ export async function getIncidentHistory(
 
 	log.info({ service: ctx.service, jql, groupBy: ctx.groupBy }, "Fetching incident history");
 
-	const result = (await proxy.callTool("searchJiraIssuesUsingJql", {
+	const result = await proxy.callTool("searchJiraIssuesUsingJql", {
 		jql,
 		maxResults: 1000,
-	})) as McpToolResult;
+	});
 
-	const textContent = (result.content ?? []).find((c) => c.type === "text");
-	if (!textContent) {
-		return aggregate([], ctx.windowDays, ctx.groupBy, ctx.service);
-	}
-
-	let parsed: JiraSearchResponse;
-	try {
-		parsed = JSON.parse(textContent.text) as JiraSearchResponse;
-	} catch {
-		log.warn({ jql }, "Failed to parse searchJiraIssuesUsingJql response");
+	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
+		upstreamTool: "searchJiraIssuesUsingJql",
+		context: { jql },
+		log,
+	});
+	if (!parsed) {
 		return aggregate([], ctx.windowDays, ctx.groupBy, ctx.service);
 	}
 
