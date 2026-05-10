@@ -70,6 +70,8 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 			/invalid api key/i,
 			/authentication/i,
 			/access denied/i,
+			/oauth refresh chain expired/i,
+			/oauth interactive authorization required/i,
 		],
 	},
 	{
