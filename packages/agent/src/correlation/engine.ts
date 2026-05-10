@@ -28,7 +28,7 @@ function evaluateOne(state: AgentStateType, rule: CorrelationRule): CorrelationD
 	if (match === null) {
 		return { rule, status: "satisfied", match: null, reason: "trigger conditions absent" };
 	}
-	if (alreadyCovered(state, rule, match)) {
+	if (!rule.skipCoverageCheck && alreadyCovered(state, rule, match)) {
 		return { rule, status: "satisfied", match, reason: "already covered by prior agent findings" };
 	}
 	return { rule, status: "needs-invocation", match, reason: "trigger fired; specialist required" };

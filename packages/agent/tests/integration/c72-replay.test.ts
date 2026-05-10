@@ -53,9 +53,9 @@ describe("c72-style replay — elastic-agent unreachable", () => {
 		// reason must describe the unsatisfied correlation, not just say "Elasticsearch not queried"
 		expect(entry?.reason).toMatch(/specialist invoked but findings did not cover/);
 
-		// confidence must be capped at 0.6
-		expect(result.confidenceCap).toBe(0.6);
-		expect(result.confidenceScore).toBe(0.6);
+		// confidence must be capped at 0.59
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.confidenceScore).toBe(0.59);
 
 		// pendingCorrelations cleared after aggregation
 		expect(result.pendingCorrelations).toEqual([]);

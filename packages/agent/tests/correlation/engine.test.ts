@@ -117,3 +117,200 @@ describe("correlation engine — predicate errors are caught", () => {
 		expect(decisions[0].reason).toContain("predicate error");
 	});
 });
+
+// SIO-712: deployment-vs-runtime contradiction. The styles-v3 case: GitLab MR !153
+// merged 2026-04-22 mentioning "OFFSET", Couchbase finding 2026-05-07 with
+// lastExecutionTime > merged_at on a query containing "OFFSET". Three-conjunction
+// filter: timestamp window + post-merge runtime + shared distinctive token.
+// NOTE: These tests are time-bound. The 'fires' cases assume now() is within ~30 days
+// of 2026-04-22. Tests will need date updates if they're still maintained in mid-2026.
+describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
+	const foundRule = correlationRules.find((r) => r.name === "gitlab-deploy-vs-datastore-runtime");
+	if (!foundRule) {
+		throw new Error("gitlab-deploy-vs-datastore-runtime rule not registered");
+	}
+	const rule = foundRule;
+
+	test("rule is registered", () => {
+		expect(rule).toBeDefined();
+		expect(rule.requiredAgent).toBe("gitlab-agent");
+	});
+
+	test("fires when GitLab MR merged_at + post-merge datastore observation + shared token", () => {
+		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [
+							{
+								id: 153,
+								title: "Replace OFFSET scan with key-first subquery",
+								description: "Fixes slow OFFSET 13000+ queries on styles-v3",
+								merged_at: merged,
+							},
+						],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [
+							{
+								statement: "SELECT ... FROM styles ORDER BY ts OFFSET 13000 LIMIT 100",
+								lastExecutionTime: observed,
+								serviceTime: 9900,
+							},
+						],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("needs-invocation");
+		expect(decisions[0]?.match?.context).toMatchObject({
+			gitlabRef: 153,
+			datastoreSource: "couchbase",
+		});
+	});
+
+	test("does NOT fire when datastore observation predates the merge", () => {
+		const merged = new Date("2026-05-08T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [{ id: 153, title: "Replace OFFSET scan", description: "fix", merged_at: merged }],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [{ statement: "SELECT ... OFFSET 13000", lastExecutionTime: observed, serviceTime: 9900 }],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("satisfied");
+	});
+
+	test("does NOT fire when no distinctive token is shared", () => {
+		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [{ id: 99, title: "Update README", description: "typo fix", merged_at: merged }],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [{ statement: "SELECT id FROM users", lastExecutionTime: observed, serviceTime: 9900 }],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("satisfied");
+	});
+
+	test("does NOT fire when MR merged > 30 days ago", () => {
+		const merged = new Date("2026-01-01T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [{ id: 99, title: "Replace OFFSET scan", description: "old fix", merged_at: merged }],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [{ statement: "OFFSET 13000", lastExecutionTime: observed, serviceTime: 9900 }],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("satisfied");
+	});
+
+	test("does NOT fire when GitLab data source is missing", () => {
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [{ statement: "OFFSET 13000", lastExecutionTime: observed, serviceTime: 9900 }],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("satisfied");
+	});
+
+	test("ignores stopwords when computing distinctive-token overlap", () => {
+		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
+		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const state = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: {
+						mergedRequests: [
+							{ id: 99, title: "Update with the from", description: "stopwords only", merged_at: merged },
+						],
+					},
+					duration: 100,
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: {
+						slowQueries: [{ statement: "SELECT with the from", lastExecutionTime: observed, serviceTime: 9900 }],
+					},
+					duration: 200,
+				},
+			],
+		};
+		const decisions = evaluate(state, [rule]);
+		expect(decisions[0]?.status).toBe("satisfied");
+	});
+});

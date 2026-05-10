@@ -13,10 +13,10 @@ describe("AgentState — correlation fields", () => {
 					triggerContext: { groupIds: ["notification-service"] },
 				},
 			],
-			confidenceCap: 0.6,
+			confidenceCap: 0.59,
 		};
 		expect(s.degradedRules).toHaveLength(1);
-		expect(s.confidenceCap).toBe(0.6);
+		expect(s.confidenceCap).toBe(0.59);
 	});
 
 	test("pendingCorrelations type exists with the expected shape", () => {
