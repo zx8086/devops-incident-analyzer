@@ -1,6 +1,26 @@
 // packages/agent/src/sub-agent.test.ts
 import { describe, expect, test } from "bun:test";
-import { classifyToolError, getSubAgentRecursionLimit, getSubAgentTimeoutMs } from "./sub-agent.ts";
+import { classifyToolError, extractToolErrors, getSubAgentRecursionLimit, getSubAgentTimeoutMs } from "./sub-agent.ts";
+
+interface FakeToolMessage {
+	_getType(): string;
+	content: unknown;
+	name?: string;
+	status?: string;
+}
+
+function toolMsg(
+	content: string,
+	name = "kafka_consume_messages",
+	status: "error" | "success" = "error",
+): FakeToolMessage {
+	return {
+		_getType: () => "tool",
+		content,
+		name,
+		status,
+	};
+}
 
 describe("getSubAgentRecursionLimit", () => {
 	test("returns 40 for elastic when env unset", () => {
@@ -84,5 +104,47 @@ describe("classifyToolError oauth typed errors", () => {
 		const msg = "tool 'oauth_login_check' returned data: {ok:true}";
 		const result = classifyToolError(msg);
 		expect(result.category).toBe("unknown");
+	});
+});
+
+// SIO-707: extractToolErrors must redact PII before the message ever reaches a log
+// payload or DataSourceResult.toolErrors. The redactor is reused from
+// @devops-agent/shared/pii-redactor and already covers email, IPv4, SSN, credit
+// card, and phone patterns.
+describe("extractToolErrors SIO-707 PII redaction", () => {
+	test("redacts email addresses from tool error messages", () => {
+		const errors = extractToolErrors([
+			toolMsg("Failed to authenticate user simon.owusu@example.com against MSK cluster: 401 Unauthorized"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).not.toContain("simon.owusu@example.com");
+		expect(errors[0]?.toolName).toBe("kafka_consume_messages");
+		expect(errors[0]?.category).toBe("auth");
+	});
+
+	test("redacts IPv4 addresses from tool error messages", () => {
+		const errors = extractToolErrors([toolMsg("ECONNREFUSED to broker 10.0.42.7:9092 after 30s timeout")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).not.toContain("10.0.42.7");
+		expect(errors[0]?.category).toBe("transient");
+	});
+
+	test("ignores non-tool messages and tool messages without status='error'", () => {
+		const errors = extractToolErrors([
+			toolMsg("not an error", "kafka_list_topics", "success"),
+			{ _getType: () => "human", content: "user said something" },
+		]);
+		expect(errors).toHaveLength(0);
+	});
+
+	test("preserves toolName, category, retryable while redacting message", () => {
+		const errors = extractToolErrors([
+			toolMsg("ECONNRESET while polling broker 10.0.1.5:9092", "kafka_get_consumer_group_lag"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.toolName).toBe("kafka_get_consumer_group_lag");
+		expect(errors[0]?.category).toBe("transient");
+		expect(errors[0]?.retryable).toBe(true);
+		expect(errors[0]?.message).not.toContain("10.0.1.5");
 	});
 });
