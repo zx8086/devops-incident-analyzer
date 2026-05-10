@@ -53,3 +53,6 @@ kafka-mcp-agentcore.tar.gz
 
 # Claude Code per-session state (plans, task outputs, transcripts) — local only
 .claude/
+
+# SIO-687 investigation: local-only eval entrypoint (DO NOT COMMIT)
+packages/agent/src/eval/run-eval-no-precheck.ts
