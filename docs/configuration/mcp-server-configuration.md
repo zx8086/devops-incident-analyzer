@@ -110,6 +110,10 @@ Cluster-scoped tools (e.g. `elasticsearch_cluster_info`, `elasticsearch_search`)
 
 An unknown deployment ID returns `McpError(InvalidParams)` listing the valid IDs. The schema for each cluster tool is augmented with the `deployment` field at registration time so MCP clients see the valid IDs as an enum.
 
+### Per-Call Search Timeout (SIO-708)
+
+`elasticsearch_search` wires its own per-call `TransportRequestOptions` instead of inheriting the shared client `requestTimeout`. The helper `searchRequestOptions.ts` mirrors the SIO-690 `discoveryRequestOptions.ts` shape: defaults are 60 000 ms timeout and 0 retries, overridable per environment via `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` and `ELASTIC_SEARCH_MAX_RETRIES`. The shared client `requestTimeout` schema cap also moved from 60 000 to 120 000 ms in the same change, so a single very-heavy aggregation can scale to 2 minutes if necessary. See [Environment Variables > Per-Call Search Timeout](environment-variables.md#per-call-search-timeout-sio-708) for the failure mode the per-call cap addresses (parallel aggregation contention against multi-billion-doc indices).
+
 ### Elastic Cloud Deployment + Billing Tools (SIO-674)
 
 When `EC_API_KEY` is set, the server registers 7 additional org-scoped tools that talk to `https://api.elastic-cloud.com`:
@@ -254,6 +258,12 @@ Feature gates restrict which tool categories the server exposes. This is a safet
 | `restproxy.enabled` | Register the 3 REST Proxy metadata reads (additional 6 writes added by `allowWrites`) | `false` |
 
 The `allowDestructive` gate requires `allowWrites` to also be `true`. The config loader validates this constraint and fails with a clear error if `allowDestructive=true` but `allowWrites=false`.
+
+### Admin Client Lifecycle (SIO-710)
+
+`@platformatic/kafka`'s `Admin` owns its own `ConnectionPool` (`Base.kConnections`). Before SIO-710, every tool call constructed a fresh `Admin`, thrashing broker connections under steady-state ReAct iteration and triggering wave-of-timeouts on MSK. The client manager now caches a single `Admin` per process, mirrors the closed-then-rebuild pattern from the Producer, and guards concurrent constructor calls with `adminInitPromise` to prevent thundering-herd ctor races.
+
+Operational consequence: broker-connection metrics will be flatter than before — the agent process holds one long-lived admin connection per cluster instead of churning per-call connections. Per-tool RPC timeouts are governed by `KAFKA_TOOL_TIMEOUT_MS` (see [Environment Variables > Tool Timeouts](environment-variables.md#tool-timeouts-sio-710)).
 
 ### Schema Registry
 
@@ -542,3 +552,4 @@ All six MCP servers share the same transport abstraction. The transport mode is 
 | 2026-04-04 | Initial MCP server configuration reference created (Phase 3: Configuration + Deployment) |
 | 2026-04-13 | Added GitLab MCP server configuration (SIO-647): hybrid proxy + custom tools, token auth, deferred retry |
 | 2026-04-23 | Added Atlassian MCP server configuration: OAuth 2.0, read-only mode, incident-project allowlist, hybrid proxy + custom |
+| 2026-05-10 | SIO-708 / SIO-710: documented `elasticsearch_search` per-call `TransportRequestOptions` (helper `searchRequestOptions.ts`, shared `requestTimeout` cap raised to 120 000 ms) and Kafka `Admin` singleton lifecycle (one cached `Admin` per process, `KAFKA_TOOL_TIMEOUT_MS` replacing the dead `requestTimeout` knob). |
