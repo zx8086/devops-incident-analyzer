@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
+import { getSearchRequestOptions } from "../../utils/searchRequestOptions.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 interface MappingResponse {
@@ -271,8 +272,15 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				note: "This may take several seconds for large datasets",
 			});
 
+			// SIO-708: Per-call timeout + retry override. The shared client uses 30s + 3 retries,
+			// which traps aggregation-heavy fan-outs against billion-doc indices at the 30s ceiling
+			// (4 parallel `now-7d` aggs in the styles-v3 run all hit 30,295-30,301ms exactly).
+			// Default 60s / 0 retries; tunable via ELASTIC_SEARCH_REQUEST_TIMEOUT_MS / ELASTIC_SEARCH_MAX_RETRIES.
+			const { requestTimeout: searchRequestTimeout, maxRetries: searchMaxRetries } = getSearchRequestOptions();
 			const result = await esClient.search(searchRequest, {
 				opaqueId: "elasticsearch_search",
+				requestTimeout: searchRequestTimeout,
+				maxRetries: searchMaxRetries,
 			});
 
 			await progressTracker.updateProgress(85, `Search completed in ${result.took}ms, processing results`);
@@ -480,7 +488,7 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 		{
 			title: "Search Elasticsearch",
 			description:
-				"Search Elasticsearch with natural Query DSL parameters. Supports both document search and analytics. Parameters: query (filter), size (document count), from (pagination), sort, aggs (analytics), _source (fields), highlight. Use size=0 for pure analytics, size=10+ for documents. Both documents and aggregations can be returned together. Example: {index: 'logs-*', query: {range: {'@timestamp': {gte: 'now-24h'}}}, size: 50, aggs: {hourly: {date_histogram: {field: '@timestamp', fixed_interval: '1h'}}}}",
+				"Search Elasticsearch with natural Query DSL parameters. Supports both document search and analytics. Parameters: query (filter), size (document count), from (pagination), sort, aggs (analytics), _source (fields), highlight. Use size=0 for pure analytics, size=10+ for documents. Both documents and aggregations can be returned together. Performance: narrow the index pattern as much as possible (`traces-apm-7.17.0-default-000123` or a date suffix like `traces-apm-*-2026.05.10` is far cheaper than `traces-apm*` on multi-billion-doc clusters); prefer the smallest time window that answers your question (`now-24h` over `now-7d` when possible); project only the fields you need via `_source` (array of field names) or `fields` to avoid loading multi-KB documents per hit; for high-cardinality aggregations (cardinality, percentiles, terms with many buckets), use a single agg per call rather than fanning out parallel calls. Example: {index: 'logs-*', query: {range: {'@timestamp': {gte: 'now-24h'}}}, size: 50, aggs: {hourly: {date_histogram: {field: '@timestamp', fixed_interval: '1h'}}}}",
 			inputSchema: SearchParams.shape,
 		},
 		withNotificationContext(searchHandler),

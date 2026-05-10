@@ -58,7 +58,7 @@ export const ElasticsearchConfigSchema = z
 		password: z.string().optional(),
 		caCert: z.string().optional(),
 		maxRetries: z.number().min(0).max(10),
-		requestTimeout: z.number().min(1000).max(60000),
+		requestTimeout: z.number().min(1000).max(120000),
 		compression: z.boolean(),
 		enableMetaHeader: z.boolean(),
 		disablePrototypePoisoningProtection: z.boolean(),
