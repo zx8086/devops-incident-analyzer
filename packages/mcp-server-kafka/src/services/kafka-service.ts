@@ -64,24 +64,24 @@ async function getPartitionOffsetBounds(
 	topic: string,
 	partition: number,
 ): Promise<{ earliest: bigint; latest: bigint } | null> {
-	const result = (await admin.listOffsets({
-		topics: [
-			{
-				name: topic,
-				partitions: [
-					{ partitionIndex: partition, timestamp: ListOffsetTimestamps.EARLIEST },
-					{ partitionIndex: partition, timestamp: ListOffsetTimestamps.LATEST },
-				],
-			},
-		],
-	})) as unknown as Array<{
-		name: string;
-		partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
-	}>;
-	const topicResult = result.find((t) => t.name === topic);
-	if (!topicResult) return null;
-	const earliestPart = topicResult.partitions.find((p) => p.timestamp === ListOffsetTimestamps.EARLIEST);
-	const latestPart = topicResult.partitions.find((p) => p.timestamp === ListOffsetTimestamps.LATEST);
+	// SIO-700: @platformatic/kafka's listOffsets throws "Listing offsets failed."
+	// when given two partition entries with the same partitionIndex (one EARLIEST + one LATEST).
+	// Issue two single-timestamp calls instead, mirroring the working getTopicOffsets shape.
+	const fetchAt = async (timestamp: bigint) => {
+		const result = (await admin.listOffsets({
+			topics: [{ name: topic, partitions: [{ partitionIndex: partition, timestamp }] }],
+		})) as unknown as Array<{
+			name: string;
+			partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
+		}>;
+		const topicResult = result.find((t) => t.name === topic);
+		return topicResult?.partitions.find((p) => p.partitionIndex === partition) ?? null;
+	};
+
+	const [earliestPart, latestPart] = await Promise.all([
+		fetchAt(ListOffsetTimestamps.EARLIEST),
+		fetchAt(ListOffsetTimestamps.LATEST),
+	]);
 	if (!earliestPart || !latestPart) return null;
 	return { earliest: earliestPart.offset, latest: latestPart.offset };
 }
@@ -664,7 +664,21 @@ export class KafkaService {
 		logger.debug({ topic, partition, offset }, "Getting message by offset");
 		const requestedOffset = BigInt(offset);
 
-		const bounds = await this.clientManager.withAdmin((admin) => getPartitionOffsetBounds(admin, topic, partition));
+		// SIO-700: classify bounds failures so they surface as structured BROKER_ERROR
+		// rather than leaking the raw upstream "Listing offsets failed." string as -32603.
+		let bounds: { earliest: bigint; latest: bigint } | null;
+		try {
+			bounds = await this.clientManager.withAdmin((admin) => getPartitionOffsetBounds(admin, topic, partition));
+		} catch (err) {
+			const classified = classifyKafkaError(err);
+			return {
+				status: "error",
+				code: "BROKER_ERROR",
+				kafkaErrorCode: classified.kafkaErrorCode,
+				kafkaErrorName: classified.kafkaErrorName,
+				message: classified.message,
+			};
+		}
 		if (!bounds) {
 			return {
 				status: "error",
