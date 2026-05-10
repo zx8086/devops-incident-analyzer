@@ -5,7 +5,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { OAuthRefreshChainExpiredError } from "@devops-agent/shared";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { GitLabOAuthProvider } from "../src/gitlab-client/oauth-provider.js";
+import { GitLabMcpProxy, type McpClientLike } from "../src/gitlab-client/proxy.js";
 
 // Use a synthetic instance URL so the on-disk token file lives at a path that
 // will never collide with a developer's real seeded gitlab.com tokens.
@@ -161,5 +163,135 @@ describe("GitLabOAuthProvider.refreshTokens", () => {
 		const provider = makeProvider();
 		await expect(provider.refreshTokens()).rejects.toThrow(/ECONNRESET/);
 		await expect(provider.refreshTokens()).rejects.not.toBeInstanceOf(OAuthRefreshChainExpiredError);
+	});
+});
+
+describe("GitLabMcpProxy.callTool refresh path", () => {
+	const baseConfig = {
+		instanceUrl: INSTANCE_URL,
+		personalAccessToken: "pat",
+		timeout: 30000,
+		oauthCallbackPort: 9184,
+	};
+
+	function makeRefreshingClient(opts: { failures: number; onCall?: () => void }): McpClientLike {
+		let remaining = opts.failures;
+		return {
+			listTools: async () => ({ tools: [] }),
+			callTool: async () => {
+				opts.onCall?.();
+				if (remaining > 0) {
+					remaining--;
+					throw new UnauthorizedError("token expired");
+				}
+				return { ok: true };
+			},
+		};
+	}
+
+	test("refreshes once and retries on UnauthorizedError, then succeeds", async () => {
+		seedTokenFile({
+			tokens: { access_token: "old", refresh_token: "good", token_type: "Bearer" },
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+		const fetchMock = mock(
+			async () =>
+				new Response(
+					JSON.stringify({ access_token: "fresh", refresh_token: "good", token_type: "Bearer", expires_in: 7200 }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const calls: number[] = [];
+		const client = makeRefreshingClient({ failures: 1, onCall: () => calls.push(Date.now()) });
+		const proxy = new GitLabMcpProxy({ config: baseConfig, client });
+		await proxy.connect();
+
+		const result = await proxy.callTool("gitlab_search", { q: "test" });
+
+		expect(result).toEqual({ ok: true });
+		expect(calls).toHaveLength(2);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const onDisk = JSON.parse(readFileSync(TOKEN_FILE, "utf-8")) as {
+			tokens: { access_token: string };
+		};
+		expect(onDisk.tokens.access_token).toBe("fresh");
+	});
+
+	test("propagates OAuthRefreshChainExpiredError when refresh fails (headless mode)", async () => {
+		seedTokenFile({
+			tokens: { access_token: "old", refresh_token: "dead", token_type: "Bearer" },
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+		globalThis.fetch = mock(
+			async () =>
+				new Response(JSON.stringify({ error: "invalid_grant" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				}),
+		) as unknown as typeof fetch;
+
+		const prev = process.env.MCP_OAUTH_HEADLESS;
+		process.env.MCP_OAUTH_HEADLESS = "true";
+		try {
+			const client = makeRefreshingClient({ failures: 1 });
+			const proxy = new GitLabMcpProxy({ config: baseConfig, client });
+			await proxy.connect();
+
+			await expect(proxy.callTool("gitlab_search", { q: "test" })).rejects.toBeInstanceOf(
+				OAuthRefreshChainExpiredError,
+			);
+
+			const onDisk = JSON.parse(readFileSync(TOKEN_FILE, "utf-8")) as {
+				tokens: { access_token: string };
+			};
+			expect(onDisk.tokens.access_token).toBe("old");
+		} finally {
+			process.env.MCP_OAUTH_HEADLESS = prev;
+		}
+	});
+
+	test("does not retry a second 401 (refresh succeeded but token still rejected)", async () => {
+		seedTokenFile({
+			tokens: { access_token: "old", refresh_token: "good", token_type: "Bearer" },
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+		globalThis.fetch = mock(
+			async () =>
+				new Response(
+					JSON.stringify({ access_token: "fresh", refresh_token: "good", token_type: "Bearer", expires_in: 7200 }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		) as unknown as typeof fetch;
+
+		const client = makeRefreshingClient({ failures: 2 });
+		const proxy = new GitLabMcpProxy({ config: baseConfig, client });
+		await proxy.connect();
+
+		await expect(proxy.callTool("gitlab_search", { q: "test" })).rejects.toBeInstanceOf(UnauthorizedError);
+	});
+
+	test("happy path: no UnauthorizedError, no refresh fired", async () => {
+		seedTokenFile({
+			tokens: { access_token: "fresh", refresh_token: "good", token_type: "Bearer" },
+			clientInformation: { client_id: "abc123", token_endpoint_auth_method: "none" },
+		});
+		const fetchMock = mock(async () => {
+			throw new Error("fetch should not be called when token is valid");
+		});
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const client: McpClientLike = {
+			listTools: async () => ({ tools: [] }),
+			callTool: async () => ({ ok: true }),
+		};
+		const proxy = new GitLabMcpProxy({ config: baseConfig, client });
+		await proxy.connect();
+
+		const result = await proxy.callTool("gitlab_search", { q: "test" });
+		expect(result).toEqual({ ok: true });
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
