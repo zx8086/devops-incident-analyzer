@@ -58,6 +58,15 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-697: Deployment IDs that an alignment retry should re-run. Set by the
+	// alignment node when an elastic retry dispatches; consumed by queryDataSource
+	// to skip deployments that already succeeded on the first attempt. Replaced
+	// (not appended) every retry so it doesn't accumulate across retries.
+	retryDeployments: Annotation<string[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+
 	// SIO-559: append reducer -- appends new results, empty array resets
 	dataSourceResults: Annotation<DataSourceResult[]>({
 		reducer: (prev, next) => {

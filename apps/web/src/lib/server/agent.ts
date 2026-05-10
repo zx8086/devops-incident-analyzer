@@ -13,9 +13,16 @@ function getGraphRecursionLimit(): number {
 }
 
 // SIO-621: Derive graph-level timeout from gitagent runtime.timeout (seconds).
-// Prevents runaway pipelines (e.g. 4 datasources with retries) from running indefinitely.
-const DEFAULT_GRAPH_TIMEOUT_S = 300;
+// SIO-697: GRAPH_TIMEOUT_MS env override takes precedence over manifest; default
+// raised to 12 min so a 5-source dispatch with one alignment retry has runway
+// to finish instead of aborting the in-flight retry sub-agent.
+const DEFAULT_GRAPH_TIMEOUT_S = 720;
 function getGraphTimeoutMs(): number {
+	const envRaw = process.env.GRAPH_TIMEOUT_MS;
+	if (envRaw != null && envRaw !== "") {
+		const parsed = Number(envRaw);
+		if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+	}
 	const agent = getAgent();
 	const timeoutS = agent.manifest.runtime?.timeout ?? DEFAULT_GRAPH_TIMEOUT_S;
 	return timeoutS * 1000;
