@@ -185,20 +185,37 @@ The classify node determines query complexity. If it always returns "simple":
 - Verify the entity extractor is detecting datasource signals (service names, topic names, cluster references)
 - Test with an explicitly complex query: "Compare Kafka consumer lag with Elasticsearch error rates for the order-service in the last hour"
 
-### Confidence Capped at 0.6 with `degradedRules` Populated (SIO-681)
+### Confidence Capped at 0.59 (SIO-681 / SIO-707 / SIO-709 / SIO-712)
 
-**Symptoms:** Final report ships with `confidenceScore <= 0.6` and the agent state includes a non-empty `degradedRules` array. The report's gap analysis may say "elastic-agent unreachable" or "no findings cover service X".
+**Symptoms:** Final report ships with `confidenceScore <= 0.59`. One or more of: a non-empty `degradedRules` array, a `## Gaps` section with several bullets, a `WARNING: unresolved cross-source contradiction` banner at the top of the report.
 
-This is the `enforceCorrelations` aggregator's intentional graceful-degradation path — a required cross-agent correlation could not complete. The cap distinguishes "we tried, infra failed" (acceptable, surfaced) from "we didn't try" (forbidden by the rule engine).
+The cap value is `0.59` (was `0.6` before SIO-712) so a capped run is strictly below the 0.6 HITL gate (`checkConfidence` uses `<`). Any of the inputs below independently caps confidence — `degradedRules` may be empty even when the cap fires.
 
 The degradation can mean any of:
-- The required sub-agent (typically elastic-agent) was unreachable during the re-fan-out.
-- The sub-agent ran but produced no findings covering the triggered service.
-- A correlation rule's predicate threw and was logged as fail-open (rule auto-satisfied; check logs for `predicate error`).
+- **Degraded correlation rule.** The required sub-agent (typically elastic-agent) was unreachable during the re-fan-out, or it ran but produced no findings covering the triggered service. Each `degradedRules` entry has `{ ruleId, agent, services, reason }`.
+- **Tool-error rate >= 15%** (SIO-707, tightened by SIO-709). Aggregated sub-agent tool-call failures crossed the 15% threshold (was 25% before SIO-709). Check sub-agent transcripts for serialized MCP-tool errors.
+- **`## Gaps` section with >= 2 bullets** (SIO-709). The aggregator's own self-reported gap list crossed the threshold. This is independent of `degradedRules` and fires even when every sub-agent succeeded.
+- **`skipCoverageCheck` rule degraded** (SIO-712). A signal-as-trigger rule like `gitlab-deploy-vs-datastore-runtime` fired and the contradiction wasn't resolvable from already-collected data. The report carries a `WARNING: unresolved cross-source contradiction` banner. There is no sub-agent to retry — the cap *is* the action.
+- **Predicate fail-open.** A correlation rule's trigger predicate threw and was logged as fail-open (rule auto-satisfied; check logs for `predicate error`). One bad rule cannot break the pipeline.
 
-Each `degradedRules` entry has `{ ruleId, agent, services, reason }`. To recover: ensure the targeted sub-agent's MCP server is reachable, then retry the query. The rule engine's idempotency makes the next pass a clean no-op if the first pass succeeded.
+To recover: ensure the targeted sub-agent's MCP server is reachable, then retry the query. The rule engine's idempotency makes the next pass a clean no-op if the first pass succeeded. For tool-error or Gaps-section caps, retrying does not help by itself — investigate the underlying tool failures or gap reasons surfaced in the report.
 
-See `docs/architecture/agent-pipeline.md` "enforceCorrelations" section for the rule list and routing diagram.
+See `docs/architecture/agent-pipeline.md` "enforceCorrelations" section for the rule list, the `skipCoverageCheck` routing, and the confidence-cap inputs.
+
+### Elasticsearch Search Times Out at ~30 Seconds (SIO-708)
+
+**Symptoms:** `elasticsearch_search` returns a transport timeout after ~30 s. Multiple parallel aggregation-heavy searches against the same index pattern all hit the ceiling within a few ms of each other. Sequential reruns of the same query shape complete in 5–7 s.
+
+This is contention at the Elasticsearch SDK or server layer, not query infeasibility. SIO-708 added a per-call timeout (`searchRequestOptions.ts`) for `elasticsearch_search`, defaulting to 60 s with 0 retries, and lifted the shared client's `requestTimeout` schema cap from 60 s to 120 s.
+
+To raise the per-call ceiling for heavy aggregations:
+
+```bash
+ELASTIC_SEARCH_REQUEST_TIMEOUT_MS=120000   # cap is 120000
+ELASTIC_SEARCH_MAX_RETRIES=0               # leave at 0 to avoid silent retry stacking
+```
+
+The MCP tool description and the `elastic-logs` action YAML carry LLM-side narrowing guidance (narrow the index pattern, shorten the window, project specific fields, avoid parallel fan-outs of heavy aggregations). If the LLM keeps fanning out heavy aggregations in parallel, that is the failure mode the per-call cap is designed to surface, not mask — raising the timeout is a workaround, not the fix.
 
 ### Sub-Agent Skipped
 

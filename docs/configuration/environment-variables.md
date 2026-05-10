@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-05-08
+> **Last updated:** 2026-05-10
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -103,6 +103,15 @@ ELASTIC_US_CLD_API_KEY=your-us-cld-api-key
 
 If `ELASTIC_DEPLOYMENTS` is unset, the server falls back to legacy single-deployment mode using `ES_URL`, `ES_API_KEY`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CA_CERT`.
 
+### Per-Call Search Timeout (SIO-708)
+
+The `elasticsearch_search` tool uses a separate per-call timeout from the shared client `requestTimeout`. Defaults are conservative for heavy aggregations on multi-billion-doc indices. See [Troubleshooting > Elasticsearch Search Times Out at ~30 Seconds](../operations/troubleshooting.md#elasticsearch-search-times-out-at-30-seconds-sio-708) for the failure mode this addresses.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` | No | `60000` | Per-call transport timeout for `elasticsearch_search`, in ms. Independent of the shared client `requestTimeout` (also raised — schema cap is now 120 000 ms, was 60 000 before SIO-708). |
+| `ELASTIC_SEARCH_MAX_RETRIES` | No | `0` | Per-call retry count for `elasticsearch_search`. Default `0` so transient transport errors fail fast rather than stacking 30 s timeouts. |
+
 ### Elastic Cloud Deployment + Billing API (SIO-674)
 
 These variables enable the 7 organization-scoped tools (`elasticsearch_cloud_*` and `elasticsearch_billing_*`) that talk to `https://api.elastic-cloud.com`. They are **independent** of the per-deployment cluster API keys above and use a separate Elastic Cloud organization API key. When `EC_API_KEY` is unset, those 7 tools simply do not register and the server boots normally for self-hosted users.
@@ -174,6 +183,12 @@ Feature gates control which tool categories are available. All default to `false
 Setting `KAFKA_ALLOW_DESTRUCTIVE=true` requires `KAFKA_ALLOW_WRITES=true` as well. The config loader enforces this constraint during validation.
 
 Tool count grows with the gating and which Confluent components are enabled. Bare `KAFKA_PROVIDER=msk` registers 15 tools; full Confluent stack (`SCHEMA_REGISTRY_ENABLED + KSQL_ENABLED + CONNECT_ENABLED + RESTPROXY_ENABLED + KAFKA_ALLOW_WRITES + KAFKA_ALLOW_DESTRUCTIVE`) registers 55. See `packages/mcp-server-kafka/tests/tools/full-stack-tools.test.ts` for the asserted-correct formula.
+
+### Tool Timeouts (SIO-710)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `KAFKA_TOOL_TIMEOUT_MS` | No | `30000` | Per-tool admin RPC timeout in ms, mapped to the `@platformatic/kafka` library option `timeout` (the library's own default is 5 000 ms, which trips on first-call MSK warmup). Provider-supplied timeouts still win — for example, the MSK provider's 60 s override is preserved on top of this value. The pre-SIO-710 config option `requestTimeout` was a no-op (the underlying schema is `additionalProperties: false`); it has been renamed to `timeout` to match the library and is now correctly threaded through. |
 
 ### Confluent Connect
 
@@ -299,6 +314,8 @@ Settings for the LangGraph supervisor agent, including model selection and state
 | `AGENT_LLM_HAIKU_MODEL` | No | `claude-haiku-4-5` | Fast model for classifier and entity extractor nodes |
 | `AGENT_LLM_REGION` | No | `eu-west-1` | AWS region for Bedrock model inference |
 | `AGENT_CHECKPOINTER_TYPE` | No | `memory` | State persistence backend: `memory` or `sqlite` |
+| `GRAPH_TIMEOUT_MS` | No | `720000` | Graph-level abort signal in ms (SIO-697). Overrides the `runtime.timeout` value in `agents/incident-analyzer/agent.yaml` when set. Default `720000` (12 min) gives a 5-source dispatch plus one alignment retry full runway instead of aborting the in-flight retry sub-agent. |
+| `SUB_AGENT_TIMEOUT_MS` | No | `360000` | Per-sub-agent `AbortSignal.timeout` in ms (SIO-697). Replaces the previously hardcoded 300 000. Caps any single sub-agent ReAct loop. Tightening this is useful when you want the alignment retry to start sooner; loosening it helps deep-discovery agents that legitimately need more than 6 minutes. |
 
 The agent uses two model tiers. The primary model handles complex reasoning tasks (supervision, aggregation, validation). The fast model handles classification and entity extraction where latency matters more than depth. Both models are accessed through AWS Bedrock.
 
@@ -353,3 +370,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-04-13 | Added GitLab MCP server env vars (SIO-647), added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |
 | 2026-04-23 | Added Atlassian MCP server env vars (ATLASSIAN_SITE_NAME, ATLASSIAN_MCP_URL upstream, ATLASSIAN_MCP_URL_LOCAL, ATLASSIAN_OAUTH_CALLBACK_PORT, ATLASSIAN_READ_ONLY, ATLASSIAN_INCIDENT_PROJECTS, ATLASSIAN_TIMEOUT, ATLASSIAN_MCP_PORT, ATLASSIAN_LANGSMITH_PROJECT) |
 | 2026-05-08 | SIO-682: added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
+| 2026-05-10 | SIO-708 / SIO-710 / SIO-697 post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
