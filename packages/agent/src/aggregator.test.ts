@@ -1,5 +1,5 @@
 // packages/agent/src/aggregator.test.ts
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AgentStateType } from "./state.ts";
 
@@ -34,7 +34,7 @@ mock.module("@devops-agent/shared", () => ({
 	redactPiiContent: (s: string) => s,
 }));
 
-import { _setAggregatorLoggerForTesting, aggregate } from "./aggregator.ts";
+import { _setAggregatorLoggerForTesting, aggregate, extractGapsBulletCount } from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
 function getSystemPromptText(): string {
@@ -240,132 +240,262 @@ describe.skipIf(!hasRunbooks)("aggregate retry-coverage summary log", () => {
 	});
 });
 
-// SIO-707: tool-error-rate confidence cap. When a sub-agent's toolErrors / messageCount
-// ratio exceeds 25%, the aggregator deterministically caps the confidence at 0.6 even
-// if the LLM returned a higher score. This is a guardrail against the LLM producing
-// coherent prose despite material tool failures.
-describe.skipIf(!hasRunbooks)("aggregate SIO-707 tool-error-rate confidence cap", () => {
-	test("caps confidence at 0.6 when toolErrorCount/messageCount > 25% (10/40 = 25.0% boundary)", async () => {
-		const captured: CapturedAggregatorLog[] = [];
-		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
-		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
-		try {
-			lastInvokeMessages = null;
-			const result = await aggregate(
-				makeState({
-					dataSourceResults: [
-						{
-							dataSourceId: "kafka",
-							status: "success",
-							data: "result",
-							duration: 128036,
-							messageCount: 39,
-							toolErrors: Array.from({ length: 10 }, (_, i) => ({
-								toolName: `kafka_tool_${i}`,
-								category: "transient",
-								message: "ECONNRESET",
-								retryable: true,
-							})),
-						},
-					],
-				}),
-			);
+// SIO-709 (extends SIO-707): tool-error-rate confidence cap. The threshold was
+// lowered from 25% to 15% because the styles-v3 transcript had a 22.5% kafka rate
+// (9/40) and a 14.8% elastic rate (4/27) that previously did not cap.
+describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap", () => {
+	let captured: CapturedAggregatorLog[] = [];
 
-			expect(result.confidenceScore).toBe(0.6);
-			expect(result.confidenceCap).toBe(0.6);
-			const warnCall = captured.find(
-				(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
-			);
-			expect(warnCall).toBeDefined();
-		} finally {
-			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
-			_setAggregatorLoggerForTesting(null);
-		}
+	beforeEach(() => {
+		captured = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		lastInvokeMessages = null;
 	});
 
-	test("does NOT cap when ratio is at or below 25% (9/40 = 22.5% from styles-v3 transcript)", async () => {
-		const captured: CapturedAggregatorLog[] = [];
-		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
-		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
-		try {
-			lastInvokeMessages = null;
-			const result = await aggregate(
-				makeState({
-					dataSourceResults: [
-						{
-							dataSourceId: "kafka",
-							status: "success",
-							data: "result",
-							duration: 128036,
-							messageCount: 40,
-							toolErrors: Array.from({ length: 9 }, (_, i) => ({
-								toolName: `kafka_tool_${i}`,
-								category: "transient",
-								message: "timeout",
-								retryable: true,
-							})),
-						},
-					],
-				}),
-			);
-
-			expect(result.confidenceScore).toBe(0.9);
-			expect(result.confidenceCap).toBeUndefined();
-			const warnCall = captured.find(
-				(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
-			);
-			expect(warnCall).toBeUndefined();
-		} finally {
-			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
-			_setAggregatorLoggerForTesting(null);
-		}
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 	});
 
-	test("does not raise score: when LLM score is below cap, cap is not applied even if rate > 25%", async () => {
+	test("caps confidence at 0.6 when toolErrorCount/messageCount > 15% (7/40 = 17.5%)", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "kafka",
+						status: "success",
+						data: "result",
+						duration: 128036,
+						messageCount: 40,
+						toolErrors: Array.from({ length: 7 }, (_, i) => ({
+							toolName: `kafka_tool_${i}`,
+							category: "transient",
+							message: "ECONNRESET",
+							retryable: true,
+						})),
+					},
+				],
+			}),
+		);
+
+		expect(result.confidenceScore).toBe(0.6);
+		expect(result.confidenceCap).toBe(0.6);
+		const warnCall = captured.find(
+			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
+		);
+		expect(warnCall).toBeDefined();
+	});
+
+	test("caps at the styles-v3 boundary (9/40 = 22.5% kafka rate)", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.71";
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "kafka",
+						status: "success",
+						data: "result",
+						messageCount: 40,
+						toolErrors: Array.from({ length: 9 }, (_, i) => ({
+							toolName: `kafka_tool_${i}`,
+							category: "transient",
+							message: "timeout",
+							retryable: true,
+						})),
+					},
+				],
+			}),
+		);
+		expect(result.confidenceScore).toBe(0.6);
+		expect(result.confidenceCap).toBe(0.6);
+	});
+
+	test("does NOT cap when ratio is at or below 15% (6/40 = 15.0% boundary)", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "kafka",
+						status: "success",
+						data: "result",
+						messageCount: 40,
+						toolErrors: Array.from({ length: 6 }, (_, i) => ({
+							toolName: `kafka_tool_${i}`,
+							category: "transient",
+							message: "timeout",
+							retryable: true,
+						})),
+					},
+				],
+			}),
+		);
+		expect(result.confidenceScore).toBe(0.9);
+		expect(result.confidenceCap).toBeUndefined();
+	});
+
+	test("does not raise score: when LLM score is below cap, cap is not applied even if rate > 15%", async () => {
 		mockLlmContent = "Mock aggregator output. Confidence: 0.4";
-		try {
-			const result = await aggregate(
-				makeState({
-					dataSourceResults: [
-						{
-							dataSourceId: "kafka",
-							status: "success",
-							data: "result",
-							messageCount: 10,
-							toolErrors: Array.from({ length: 5 }, () => ({
-								toolName: "kafka_tool",
-								category: "transient" as const,
-								message: "timeout",
-								retryable: true,
-							})),
-						},
-					],
-				}),
-			);
-
-			// Cap is set (because ratio > 25%) but score remains below the cap, so Math.min preserves it.
-			expect(result.confidenceScore).toBe(0.4);
-			expect(result.confidenceCap).toBe(0.6);
-		} finally {
-			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
-		}
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "kafka",
+						status: "success",
+						data: "result",
+						messageCount: 10,
+						toolErrors: Array.from({ length: 3 }, () => ({
+							toolName: "kafka_tool",
+							category: "transient" as const,
+							message: "timeout",
+							retryable: true,
+						})),
+					},
+				],
+			}),
+		);
+		expect(result.confidenceScore).toBe(0.4);
+		// confidenceCap is set whenever the cap rule triggers (rate > 15%), even if
+		// the LLM score (0.4) was already below the cap value (0.6). This matches
+		// the existing SIO-707/SIO-681 semantic: `confidenceCap` signals "a cap rule
+		// fired", not "the score was reduced". Renaming this for clarity is out of
+		// scope for SIO-709.
+		expect(result.confidenceCap).toBe(0.6);
 	});
 
-	test("ignores results with messageCount=0 (no division by zero) or no toolErrors", async () => {
+	test("zero messageCount does not divide-by-zero", async () => {
 		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
-		try {
-			const result = await aggregate(
-				makeState({
-					dataSourceResults: [
-						{ dataSourceId: "elastic", status: "success", data: "ok", messageCount: 0, toolErrors: [] },
-						{ dataSourceId: "kafka", status: "success", data: "ok", messageCount: 20, toolErrors: [] },
-					],
-				}),
-			);
-			expect(result.confidenceScore).toBe(0.9);
-			expect(result.confidenceCap).toBeUndefined();
-		} finally {
-			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
-		}
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "kafka",
+						status: "success",
+						data: "result",
+						messageCount: 0,
+						toolErrors: [{ toolName: "kafka_tool", category: "transient", message: "timeout", retryable: true }],
+					},
+				],
+			}),
+		);
+		expect(result.confidenceScore).toBe(0.9);
+		expect(result.confidenceCap).toBeUndefined();
+	});
+});
+
+describe("extractGapsBulletCount", () => {
+	test("counts bullets under a top-level Gaps heading", () => {
+		const report = `# Report\n\n## Findings\n- finding A\n\n## Gaps\n- gap 1\n- gap 2\n- gap 3\n\nConfidence: 0.7`;
+		expect(extractGapsBulletCount(report)).toBe(3);
+	});
+
+	test("counts bullets under a level-3 Gaps heading", () => {
+		const report = `### Gaps\n\n* gap one\n* gap two\n\n## Next section`;
+		expect(extractGapsBulletCount(report)).toBe(2);
+	});
+
+	test("stops counting at the next heading", () => {
+		const report = `## Gaps\n- one\n- two\n## Mitigation\n- not a gap\n- also not a gap`;
+		expect(extractGapsBulletCount(report)).toBe(2);
+	});
+
+	test("returns 0 when no Gaps section exists", () => {
+		expect(extractGapsBulletCount("## Findings\n- a\n- b")).toBe(0);
+	});
+
+	test("returns 0 for an empty Gaps section", () => {
+		expect(extractGapsBulletCount("## Gaps\n\n## Confidence")).toBe(0);
+	});
+
+	test("matches Gaps heading case-insensitively", () => {
+		expect(extractGapsBulletCount("## gaps\n- one\n- two")).toBe(2);
+	});
+
+	test("ignores indented sub-bullets (only top-level bullets count)", () => {
+		const report = `## Gaps\n- main 1\n  - sub a\n  - sub b\n- main 2\n- main 3`;
+		expect(extractGapsBulletCount(report)).toBe(3);
+	});
+});
+
+// SIO-709 AC #2: Gaps-section parser must trigger the same 0.6 cap when the
+// LLM lists >= 2 gap bullets, regardless of tool-error rate. The styles-v3
+// transcript had 5 gap bullets and was the original failure mode.
+describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("caps confidence at 0.6 when finalAnswer has Gaps section with >= 2 bullets", async () => {
+		mockLlmContent = `# Incident report\n\n## Findings\n- something\n\n## Gaps\n- live APM cardinality could not be re-run\n- 7.5x duplication ratio is from pre-timeout analysis\n- ksql_get_server_info not available\n\nConfidence: 0.71`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.6);
+		expect(result.confidenceCap).toBe(0.6);
+	});
+
+	test("does NOT cap when Gaps section has only 1 bullet", async () => {
+		mockLlmContent = `# Report\n\n## Gaps\n- one minor item\n\nConfidence: 0.9`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.9);
+		expect(result.confidenceCap).toBeUndefined();
+	});
+
+	test("does NOT cap when no Gaps section exists", async () => {
+		mockLlmContent = `# Report\n\n## Findings\n- a\n\nConfidence: 0.9`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.9);
+		expect(result.confidenceCap).toBeUndefined();
+	});
+});
+
+function getUserPromptText(): string {
+	if (!lastInvokeMessages || lastInvokeMessages.length === 0) return "";
+	const humanMsgs = lastInvokeMessages.filter((m) => m._getType() === "human");
+	return humanMsgs.map((m) => String(m.content)).join("\n");
+}
+
+// SIO-711: aggregator must not emit defensive phrases like "not fabricated"
+// or "I am not hallucinating". The styles-v3 transcript volunteered this kind
+// of reassurance; the prompt now forbids it explicitly and requires structured
+// "[partial: <field>]" markers instead.
+describe.skipIf(!hasRunbooks)("aggregate SIO-711 self-defensive prose forbidden", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("aggregator user prompt contains the DEFENSIVE PROSE FORBIDDEN rule with all banned phrases", async () => {
+		await aggregate(makeState({}));
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("DEFENSIVE PROSE FORBIDDEN");
+		expect(prompt).toContain("[partial:");
+		// SIO-711: lock in the four phrases the styles-v3 regression motivated.
+		// The original aggregator volunteered "not fabricated" -- a future prompt
+		// edit that drops this phrase from the forbidden list would re-open the bug.
+		expect(prompt).toContain('"not fabricated"');
+		expect(prompt).toContain('"I am not hallucinating"');
+		expect(prompt).toContain('"this is reliable"');
+		expect(prompt).toContain('"based on real data"');
+	});
+
+	test("aggregator user prompt instructs the LLM to use a plain '## Gaps' heading", async () => {
+		await aggregate(makeState({}));
+		const prompt = getUserPromptText();
+		// The Gaps parser in extractGapsBulletCount only matches plain '## Gaps' style
+		// headings; bolded or compound headings (e.g. '## **Gaps**', '## Gaps and Limitations')
+		// would silently bypass the cap. The prompt rule must steer the LLM toward the
+		// matching form.
+		expect(prompt).toContain("## Gaps");
 	});
 });

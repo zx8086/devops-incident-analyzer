@@ -103,9 +103,18 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// may surface it as low-confidence to the user, which is worse than a real score.
 	const confidenceFormatRule = `\n\nCONFIDENCE LINE REQUIREMENT: End the report with a line in this EXACT format on its own line: "Confidence: 0.XX" where 0.XX is a decimal between 0.0 and 1.0 (e.g. "Confidence: 0.82"). This line MUST be present. Do not use percentages, ranges, or qualitative words like "high"/"medium"/"low" -- a parseable decimal is required for downstream routing.`;
 
+	// SIO-711: The styles-v3 aggregator volunteered "not fabricated" -- a meta-signal
+	// that the LLM perceived a non-trivial risk a reader would suspect fabrication.
+	// Forbid the self-defensive register; require structured "[partial: <field>]"
+	// markers instead, which lower confidence mechanically (the markers correlate
+	// with the Gaps cap from SIO-709 AC #2). Also pin the Gaps heading to a plain
+	// "## Gaps" so the deterministic SIO-709 parser reliably matches the LLM's
+	// output rather than silently missing bold/compound headings.
+	const defensiveProseRule = `\n\nDEFENSIVE PROSE FORBIDDEN: Do not editorialise about whether your output is fabricated, hallucinated, or trustworthy. Phrases like "not fabricated", "I am not hallucinating", "this is reliable", or "based on real data" are banned. If a value or finding is uncertain, do one of: (a) emit a "[partial: <field-name>]" marker inline where the value would go, (b) list the missing data in the Gaps section, or (c) lower your confidence score. Never reassure the reader in prose -- structured markers and the Gaps section are the only acceptable channels for uncertainty. When listing gaps, use exactly the heading "## Gaps" (no bold, no extra words, no colon) so downstream tooling can parse the section reliably.`;
+
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${confidenceFormatRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${confidenceFormatRule}${defensiveProseRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${priorAnswer ? "\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report." : ""}`,
 		),
 	);
 
@@ -132,6 +141,31 @@ export function extractConfidenceScore(answer: string): number {
 		if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
 	}
 	return 0;
+}
+
+// SIO-709: Count top-level bullet items under a "Gaps" heading. Triggers the 0.6
+// cap when the LLM lists >= 2 missing-data items in its own report. Indented
+// sub-bullets (>= 2 leading spaces) are excluded so a structurally rich gap with
+// sub-points doesn't inflate the count beyond the user's mental model.
+const GAPS_HEADING_RE = /^#{1,6}\s+gaps\s*$/im;
+const TOP_LEVEL_BULLET_RE = /^\s{0,1}[-*]\s+\S/;
+const ANY_HEADING_RE = /^#{1,6}\s+\S/;
+
+export function extractGapsBulletCount(answer: string): number {
+	const lines = answer.split("\n");
+	let inGapsSection = false;
+	let count = 0;
+	for (const line of lines) {
+		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
+		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
+			inGapsSection = true;
+			continue;
+		}
+		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line)) {
+			count += 1;
+		}
+	}
+	return count;
 }
 
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
@@ -204,11 +238,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// outside [0, 1] so in-prose mentions like "confident in version 9.3.3" can't bleed in.
 	const confidenceScore = extractConfidenceScore(answer);
 
-	// SIO-707: cap confidence when any sub-agent's tool-error rate exceeds 25%.
-	// The LLM may produce a high score even when a sub-agent had material tool failures,
-	// because the prose still reads coherently. This is a deterministic guardrail.
-	// Reuses the 0.6 cap value from correlation/enforce-node.ts for consistency.
-	const TOOL_ERROR_RATE_THRESHOLD = 0.25;
+	// SIO-709 (extends SIO-707): cap confidence when any sub-agent's tool-error rate
+	// exceeds 15%. The styles-v3 transcript had kafka at 9/40 (22.5%) and elastic at
+	// 4/27 (14.8%) -- the 25% threshold from SIO-707 missed both. The LLM may produce
+	// a high score even when a sub-agent had material tool failures because the prose
+	// still reads coherently; this is a deterministic guardrail. Reuses the 0.6 cap
+	// value from correlation/enforce-node.ts for consistency.
+	const TOOL_ERROR_RATE_THRESHOLD = 0.15;
 	const TOOL_ERROR_CONFIDENCE_CAP = 0.6;
 	const degradedSubAgents = results
 		.map((r) => {
@@ -227,8 +263,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		})
 		.filter((d): d is NonNullable<typeof d> => d !== null);
 
-	const cappedScore =
-		degradedSubAgents.length > 0 ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
+	// SIO-709 AC #2: Gaps section with >= 2 bullets triggers the same 0.6 cap.
+	const GAPS_BULLET_THRESHOLD = 2;
+	const gapsBulletCount = extractGapsBulletCount(answer);
+	const gapsCapTriggered = gapsBulletCount >= GAPS_BULLET_THRESHOLD;
+
+	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered;
+	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
 		logger.warn(
@@ -243,6 +284,19 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	if (gapsCapTriggered) {
+		logger.warn(
+			{
+				gapsBulletCount,
+				threshold: GAPS_BULLET_THRESHOLD,
+				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Aggregator Gaps section listed missing-data items; capping confidence",
+		);
+	}
+
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore: cappedScore },
 		"Aggregation complete",
@@ -251,6 +305,6 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		messages: [new AIMessage({ content: answer })],
 		finalAnswer: answer,
 		confidenceScore: cappedScore,
-		...(degradedSubAgents.length > 0 && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
+		...(anyCapTriggered && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
 	};
 }
