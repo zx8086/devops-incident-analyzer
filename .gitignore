@@ -42,6 +42,9 @@ current/
 # Local git worktrees (kept outside the indexed tree)
 .worktrees/
 
+# Per-session handoff docs and ad-hoc runbooks (local context, never committed)
+experiments/
+
 # Local-only build artifacts that exceed GitHub's per-file size limit
 kafka-mcp-agentcore.tar.gz
 
