@@ -71,8 +71,24 @@ describe("Flight API Unit Tests", () => {
 			getPlugin: mock(() => Promise.resolve({ id: "test-plugin-123" })),
 			listPlugins: mock(() => Promise.resolve({ data: [] })),
 
-			queryApiRequests: mock(() => Promise.resolve({ data: [] })),
-			getConsumerRequests: mock(() => Promise.resolve({ data: [] })),
+			queryApiRequests: mock(() =>
+				Promise.resolve({
+					meta: {
+						size: 0,
+						time_range: { start: "2026-05-11T00:00:00Z", end: "2026-05-11T01:00:00Z" },
+					},
+					results: [],
+				}),
+			),
+			getConsumerRequests: mock(() =>
+				Promise.resolve({
+					meta: {
+						size: 0,
+						time_range: { start: "2026-05-11T00:00:00Z", end: "2026-05-11T01:00:00Z" },
+					},
+					results: [],
+				}),
+			),
 
 			listControlPlanes: mock(() => Promise.resolve({ data: [], meta: {} })),
 			getControlPlane: mock(() => Promise.resolve({ id: TEST_CONFIG.controlPlaneId })),
@@ -87,11 +103,16 @@ describe("Flight API Unit Tests", () => {
 			deletePortalApplication: mock(() => Promise.resolve({})),
 
 			listCertificates: mock(() => Promise.resolve({ data: [] })),
-			createCertificate: mock(() => Promise.resolve({ id: "test-cert-123" })),
+			createCertificate: mock(() => Promise.resolve({ data: { id: "test-cert-123", tags: [] } })),
 		};
 
 		console.log("INFO: Mock Kong API initialized");
 	});
+
+	// Deployment-context tags satisfy the elicitation enforcement layer in
+	// src/tools/configuration/operations.ts (extractDeploymentContext requires
+	// domain-*, env-*, team-* prefixes); the rest are descriptive labels.
+	const deploymentTags = ["domain-flight-api", "env-test", "team-platform"];
 
 	describe("Service Operations", () => {
 		test("should create service with correct parameters", async () => {
@@ -104,7 +125,7 @@ describe("Flight API Unit Tests", () => {
 				connectTimeout: 60000,
 				writeTimeout: 60000,
 				readTimeout: 60000,
-				tags: ["test", "flight-api"],
+				tags: [...deploymentTags, "test", "flight-api"],
 				enabled: true,
 			};
 
@@ -172,7 +193,7 @@ describe("Flight API Unit Tests", () => {
 				stripPath: false,
 				preserveHost: false,
 				regexPriority: 0,
-				tags: ["test", "flight-api"],
+				tags: [...deploymentTags, "test", "flight-api"],
 				enabled: true,
 			};
 
@@ -191,6 +212,7 @@ describe("Flight API Unit Tests", () => {
 				methods: ["POST"],
 				paths: ["/flights"],
 				serviceId: "test-service-123",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createRoute(mockKongApi, TEST_CONFIG.controlPlaneId, postRouteData);
@@ -198,8 +220,9 @@ describe("Flight API Unit Tests", () => {
 			expect(result).toBeDefined();
 			expect(result.success).toBe(true);
 
-			// Verify the API was called with POST method
-			const [, , routeConfig] = mockKongApi.createRoute.mock.calls[mockKongApi.createRoute.mock.calls.length - 1];
+			// Verify the API was called with POST method (api.createRoute is invoked
+			// with (controlPlaneId, requestData) -- 2 args, see operations.ts:490).
+			const [, routeConfig] = mockKongApi.createRoute.mock.calls[mockKongApi.createRoute.mock.calls.length - 1];
 			expect(routeConfig.methods).toEqual(["POST"]);
 		});
 
@@ -209,6 +232,7 @@ describe("Flight API Unit Tests", () => {
 				methods: ["GET"],
 				paths: ["/flights/(?<id>\\d+)"],
 				serviceId: "test-service-123",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createRoute(mockKongApi, TEST_CONFIG.controlPlaneId, regexRouteData);
@@ -216,8 +240,8 @@ describe("Flight API Unit Tests", () => {
 			expect(result).toBeDefined();
 			expect(result.success).toBe(true);
 
-			// Verify regex pattern was passed correctly
-			const [, , routeConfig] = mockKongApi.createRoute.mock.calls[mockKongApi.createRoute.mock.calls.length - 1];
+			// Verify regex pattern was passed correctly (2-arg call signature; see above).
+			const [, routeConfig] = mockKongApi.createRoute.mock.calls[mockKongApi.createRoute.mock.calls.length - 1];
 			expect(routeConfig.paths).toContain("/flights/(?<id>\\d+)");
 		});
 	});
@@ -227,7 +251,7 @@ describe("Flight API Unit Tests", () => {
 			const consumerData = {
 				username: "flight-api-client-test",
 				customId: "client-test-001",
-				tags: ["test", "flight-api"],
+				tags: [...deploymentTags, "test", "flight-api"],
 				enabled: true,
 			};
 
@@ -257,6 +281,7 @@ describe("Flight API Unit Tests", () => {
 			const consumerData = {
 				username: "flight-api-client-custom",
 				customId: "FLIGHT-CLIENT-12345",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createConsumer(mockKongApi, TEST_CONFIG.controlPlaneId, consumerData);
@@ -264,8 +289,8 @@ describe("Flight API Unit Tests", () => {
 			expect(result).toBeDefined();
 			expect(result.success).toBe(true);
 
-			// Verify custom ID was included in the API call
-			const [, , consumerConfig] =
+			// Verify custom ID was included in the API call (2-arg signature; see operations.ts:777).
+			const [, consumerConfig] =
 				mockKongApi.createConsumer.mock.calls[mockKongApi.createConsumer.mock.calls.length - 1];
 			expect(consumerConfig.custom_id).toBe("FLIGHT-CLIENT-12345");
 		});
@@ -278,7 +303,7 @@ describe("Flight API Unit Tests", () => {
 				config: { key_names: ["X-API-Key"], key_in_body: false },
 				protocols: ["https"],
 				serviceId: "test-service-123",
-				tags: ["test", "auth"],
+				tags: [...deploymentTags, "test", "auth"],
 				enabled: true,
 			};
 
@@ -300,6 +325,7 @@ describe("Flight API Unit Tests", () => {
 					fault_tolerant: true,
 				},
 				serviceId: "test-service-123",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createPlugin(mockKongApi, TEST_CONFIG.controlPlaneId, rateLimitingData);
@@ -308,7 +334,7 @@ describe("Flight API Unit Tests", () => {
 			expect(result.success).toBe(true);
 
 			// Verify rate limiting configuration
-			const [, , pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
+			const [, pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
 			expect(pluginConfig.config.minute).toBe(100);
 			expect(pluginConfig.config.hour).toBe(1000);
 		});
@@ -325,6 +351,7 @@ describe("Flight API Unit Tests", () => {
 					max_age: 3600,
 				},
 				serviceId: "test-service-123",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createPlugin(mockKongApi, TEST_CONFIG.controlPlaneId, corsData);
@@ -333,7 +360,7 @@ describe("Flight API Unit Tests", () => {
 			expect(result.success).toBe(true);
 
 			// Verify CORS configuration
-			const [, , pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
+			const [, pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
 			expect(pluginConfig.config.origins).toContain("https://flights.example.com");
 			expect(pluginConfig.config.methods).toContain("GET");
 			expect(pluginConfig.config.credentials).toBe(true);
@@ -344,6 +371,7 @@ describe("Flight API Unit Tests", () => {
 				name: "key-auth",
 				config: { key_names: ["X-API-Key"] },
 				consumerId: "test-consumer-123",
+				tags: [...deploymentTags],
 			};
 
 			const result = await configurationOps.createPlugin(mockKongApi, TEST_CONFIG.controlPlaneId, consumerPluginData);
@@ -352,12 +380,18 @@ describe("Flight API Unit Tests", () => {
 			expect(result.success).toBe(true);
 
 			// Verify consumer association
-			const [, , pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
+			const [, pluginConfig] = mockKongApi.createPlugin.mock.calls[mockKongApi.createPlugin.mock.calls.length - 1];
 			expect(pluginConfig.consumer).toEqual({ id: "test-consumer-123" });
 		});
 	});
 
 	describe("Analytics Operations", () => {
+		// Both queryApiRequests and getConsumerRequests in the ops layer delegate to
+		// api.queryApiRequests(timeRange, filters[], maxResults) and translate the
+		// user-facing args into a filter array (see src/tools/analytics/operations.ts:97
+		// and :241). Assertions below check the constructed filters rather than the
+		// flat positional args the old API used to take.
+
 		test("should query API requests with time range", async () => {
 			const result = await analyticsOps.queryApiRequests(
 				mockKongApi,
@@ -372,21 +406,30 @@ describe("Flight API Unit Tests", () => {
 			expect(result).toBeDefined();
 			expect(mockKongApi.queryApiRequests).toHaveBeenCalledTimes(1);
 
-			// Verify parameters were passed correctly
-			const callArgs = mockKongApi.queryApiRequests.mock.calls[0];
-			expect(callArgs[0]).toBe("1H"); // timeRange
-			expect(callArgs[1]).toEqual([200, 201]); // statusCodes
-			expect(callArgs[2]).toEqual([500, 502]); // excludeStatusCodes
+			const [timeRangeArg, filters] = mockKongApi.queryApiRequests.mock.calls[0];
+			expect(timeRangeArg).toBe("1H");
+			expect(filters).toContainEqual({ field: "status_code", operator: "in", value: [200, 201] });
+			expect(filters).toContainEqual({ field: "status_code", operator: "not_in", value: [500, 502] });
+			expect(filters).toContainEqual({ field: "http_method", operator: "in", value: ["GET", "POST"] });
 		});
 
 		test("should get consumer-specific requests", async () => {
 			const result = await analyticsOps.getConsumerRequests(mockKongApi, "test-consumer-123", "6H", false, false, 100);
 
 			expect(result).toBeDefined();
-			expect(mockKongApi.getConsumerRequests).toHaveBeenCalledWith("test-consumer-123", "6H", false, false, 100);
+			// getConsumerRequests internally calls api.queryApiRequests with a
+			// pre-populated consumer filter; it does not call api.getConsumerRequests.
+			expect(mockKongApi.queryApiRequests).toHaveBeenCalled();
+			const [timeRangeArg, filters, maxResults] =
+				mockKongApi.queryApiRequests.mock.calls[mockKongApi.queryApiRequests.mock.calls.length - 1];
+			expect(timeRangeArg).toBe("6H");
+			expect(maxResults).toBe(100);
+			expect(filters).toContainEqual({ field: "consumer", operator: "in", value: ["test-consumer-123"] });
 		});
 
 		test("should filter requests by success/failure", async () => {
+			const callsBefore = mockKongApi.queryApiRequests.mock.calls.length;
+
 			// Test success only
 			await analyticsOps.getConsumerRequests(
 				mockKongApi,
@@ -405,16 +448,19 @@ describe("Flight API Unit Tests", () => {
 				true, // failureOnly
 			);
 
-			expect(mockKongApi.getConsumerRequests).toHaveBeenCalledTimes(2);
+			const calls = mockKongApi.queryApiRequests.mock.calls.slice(callsBefore);
+			expect(calls.length).toBe(2);
 
-			// Verify filter parameters
-			const successCall = mockKongApi.getConsumerRequests.mock.calls[0];
-			expect(successCall[2]).toBe(true); // successOnly
-			expect(successCall[3]).toBe(false); // failureOnly
+			// Verify status-code-grouped filter present per call
+			const [, successFilters] = calls[0];
+			expect(successFilters).toContainEqual({ field: "status_code_grouped", operator: "in", value: ["2XX"] });
 
-			const failureCall = mockKongApi.getConsumerRequests.mock.calls[1];
-			expect(failureCall[2]).toBe(false); // successOnly
-			expect(failureCall[3]).toBe(true); // failureOnly
+			const [, failureFilters] = calls[1];
+			expect(failureFilters).toContainEqual({
+				field: "status_code_grouped",
+				operator: "in",
+				value: ["4XX", "5XX"],
+			});
 		});
 	});
 
@@ -522,10 +568,14 @@ describe("Flight API Unit Tests", () => {
 		});
 
 		test("should create certificate with proper format", async () => {
+			// Bodies padded past the 100-char minimum enforced by validateCertificate /
+			// validatePrivateKey in src/utils/validation.ts.
+			const certBody = "MIIBkTCB1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEF";
+			const keyBody = "MIIEvQIBA1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEF";
 			const certData = {
-				cert: "-----BEGIN CERTIFICATE-----\nMIIBkTCB...\n-----END CERTIFICATE-----",
-				key: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBA...\n-----END PRIVATE KEY-----",
-				tags: ["test", "flight-api"],
+				cert: `-----BEGIN CERTIFICATE-----\n${certBody}\n-----END CERTIFICATE-----`,
+				key: `-----BEGIN PRIVATE KEY-----\n${keyBody}\n-----END PRIVATE KEY-----`,
+				tags: [...deploymentTags, "test", "flight-api"],
 			};
 
 			const result = await certificatesOps.createCertificate(
@@ -550,8 +600,9 @@ describe("Flight API Unit Tests", () => {
 
 		test("should validate certificate expiration", () => {
 			const currentTime = Date.now();
-			const validUntil = new Date("2025-12-31").getTime();
-			const expired = new Date("2024-01-01").getTime();
+			const oneYear = 365 * 24 * 60 * 60 * 1000;
+			const validUntil = currentTime + oneYear;
+			const expired = currentTime - oneYear;
 
 			expect(validUntil).toBeGreaterThan(currentTime);
 			expect(expired).toBeLessThan(currentTime);
@@ -569,6 +620,7 @@ describe("Flight API Unit Tests", () => {
 				await configurationOps.createService(errorMockApi, TEST_CONFIG.controlPlaneId, {
 					name: "test-service",
 					host: "test.example.com",
+					tags: [...deploymentTags],
 				});
 				// Should not reach this point
 				expect(true).toBe(false);
