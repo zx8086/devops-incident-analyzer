@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy, ProxyToolInfo } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS } from "../custom/index.js";
 import { isWriteTool } from "./write-tools.js";
 
 const log = createContextLogger("proxy-tools");
@@ -61,6 +62,11 @@ export function registerProxyTools(
 	for (const tool of remoteTools) {
 		if (opts.readOnly && isWriteTool(tool.name)) {
 			filtered++;
+			continue;
+		}
+		// SIO-706: tools with a hand-written wrapper in custom/ override the generic proxy.
+		// Registering both would throw at server.tool(name, ...) on the second call.
+		if (CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS.has(tool.name)) {
 			continue;
 		}
 		const prefixedName = tool.name.startsWith(TOOL_PREFIX) ? tool.name : `${TOOL_PREFIX}${tool.name}`;
