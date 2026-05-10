@@ -110,6 +110,7 @@ export {
 	isHeadless,
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
+	OAuthRefreshChainExpiredError,
 	OAuthRequiresInteractiveAuthError,
 	type PersistedOAuthState,
 	type SeedOAuthOptions,
