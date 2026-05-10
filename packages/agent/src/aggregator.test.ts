@@ -11,6 +11,9 @@ import type { AgentStateType } from "./state.ts";
 // at agents/incident-analyzer provides the runbooks.
 
 let lastInvokeMessages: BaseMessage[] | null = null;
+// SIO-707: per-test override for the LLM response so cap-from-tool-error-rate tests
+// can return a high (>0.6) confidence and verify the deterministic cap kicks in.
+let mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 
 mock.module("@langchain/aws", () => ({
 	ChatBedrockConverse: class {
@@ -22,7 +25,7 @@ mock.module("@langchain/aws", () => ({
 		}
 		async invoke(messages: BaseMessage[]) {
 			lastInvokeMessages = messages;
-			return { content: "Mock aggregator output. Confidence: 0.5" };
+			return { content: mockLlmContent };
 		}
 	},
 }));
@@ -233,6 +236,136 @@ describe.skipIf(!hasRunbooks)("aggregate retry-coverage summary log", () => {
 			expect(summaryCall).toBeUndefined();
 		} finally {
 			_setAggregatorLoggerForTesting(null);
+		}
+	});
+});
+
+// SIO-707: tool-error-rate confidence cap. When a sub-agent's toolErrors / messageCount
+// ratio exceeds 25%, the aggregator deterministically caps the confidence at 0.6 even
+// if the LLM returned a higher score. This is a guardrail against the LLM producing
+// coherent prose despite material tool failures.
+describe.skipIf(!hasRunbooks)("aggregate SIO-707 tool-error-rate confidence cap", () => {
+	test("caps confidence at 0.6 when toolErrorCount/messageCount > 25% (10/40 = 25.0% boundary)", async () => {
+		const captured: CapturedAggregatorLog[] = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		try {
+			lastInvokeMessages = null;
+			const result = await aggregate(
+				makeState({
+					dataSourceResults: [
+						{
+							dataSourceId: "kafka",
+							status: "success",
+							data: "result",
+							duration: 128036,
+							messageCount: 39,
+							toolErrors: Array.from({ length: 10 }, (_, i) => ({
+								toolName: `kafka_tool_${i}`,
+								category: "transient",
+								message: "ECONNRESET",
+								retryable: true,
+							})),
+						},
+					],
+				}),
+			);
+
+			expect(result.confidenceScore).toBe(0.6);
+			expect(result.confidenceCap).toBe(0.6);
+			const warnCall = captured.find(
+				(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
+			);
+			expect(warnCall).toBeDefined();
+		} finally {
+			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+			_setAggregatorLoggerForTesting(null);
+		}
+	});
+
+	test("does NOT cap when ratio is at or below 25% (9/40 = 22.5% from styles-v3 transcript)", async () => {
+		const captured: CapturedAggregatorLog[] = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		try {
+			lastInvokeMessages = null;
+			const result = await aggregate(
+				makeState({
+					dataSourceResults: [
+						{
+							dataSourceId: "kafka",
+							status: "success",
+							data: "result",
+							duration: 128036,
+							messageCount: 40,
+							toolErrors: Array.from({ length: 9 }, (_, i) => ({
+								toolName: `kafka_tool_${i}`,
+								category: "transient",
+								message: "timeout",
+								retryable: true,
+							})),
+						},
+					],
+				}),
+			);
+
+			expect(result.confidenceScore).toBe(0.9);
+			expect(result.confidenceCap).toBeUndefined();
+			const warnCall = captured.find(
+				(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
+			);
+			expect(warnCall).toBeUndefined();
+		} finally {
+			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+			_setAggregatorLoggerForTesting(null);
+		}
+	});
+
+	test("does not raise score: when LLM score is below cap, cap is not applied even if rate > 25%", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.4";
+		try {
+			const result = await aggregate(
+				makeState({
+					dataSourceResults: [
+						{
+							dataSourceId: "kafka",
+							status: "success",
+							data: "result",
+							messageCount: 10,
+							toolErrors: Array.from({ length: 5 }, () => ({
+								toolName: "kafka_tool",
+								category: "transient" as const,
+								message: "timeout",
+								retryable: true,
+							})),
+						},
+					],
+				}),
+			);
+
+			// Cap is set (because ratio > 25%) but score remains below the cap, so Math.min preserves it.
+			expect(result.confidenceScore).toBe(0.4);
+			expect(result.confidenceCap).toBe(0.6);
+		} finally {
+			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		}
+	});
+
+	test("ignores results with messageCount=0 (no division by zero) or no toolErrors", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		try {
+			const result = await aggregate(
+				makeState({
+					dataSourceResults: [
+						{ dataSourceId: "elastic", status: "success", data: "ok", messageCount: 0, toolErrors: [] },
+						{ dataSourceId: "kafka", status: "success", data: "ok", messageCount: 20, toolErrors: [] },
+					],
+				}),
+			);
+			expect(result.confidenceScore).toBe(0.9);
+			expect(result.confidenceCap).toBeUndefined();
+		} finally {
+			mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 		}
 	});
 });

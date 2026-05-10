@@ -30,6 +30,10 @@ export const DataSourceResultSchema = z.object({
 	isAlignmentRetry: z.boolean().optional(),
 	error: z.string().optional(),
 	toolErrors: z.array(ToolErrorSchema).optional(),
+	// SIO-707: total LangGraph messages produced by the sub-agent run. Used by the aggregator
+	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
+	// the run completed but had a high per-iteration failure ratio.
+	messageCount: z.number().optional(),
 });
 export type DataSourceResult = z.infer<typeof DataSourceResultSchema>;
 

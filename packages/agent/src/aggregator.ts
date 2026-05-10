@@ -204,13 +204,53 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// outside [0, 1] so in-prose mentions like "confident in version 9.3.3" can't bleed in.
 	const confidenceScore = extractConfidenceScore(answer);
 
+	// SIO-707: cap confidence when any sub-agent's tool-error rate exceeds 25%.
+	// The LLM may produce a high score even when a sub-agent had material tool failures,
+	// because the prose still reads coherently. This is a deterministic guardrail.
+	// Reuses the 0.6 cap value from correlation/enforce-node.ts for consistency.
+	const TOOL_ERROR_RATE_THRESHOLD = 0.25;
+	const TOOL_ERROR_CONFIDENCE_CAP = 0.6;
+	const degradedSubAgents = results
+		.map((r) => {
+			const errorCount = r.toolErrors?.length ?? 0;
+			const messageCount = r.messageCount ?? 0;
+			if (messageCount === 0 || errorCount === 0) return null;
+			const rate = errorCount / messageCount;
+			if (rate <= TOOL_ERROR_RATE_THRESHOLD) return null;
+			return {
+				dataSourceId: r.dataSourceId,
+				deploymentId: r.deploymentId,
+				toolErrorCount: errorCount,
+				messageCount,
+				rate: Number(rate.toFixed(3)),
+			};
+		})
+		.filter((d): d is NonNullable<typeof d> => d !== null);
+
+	const cappedScore =
+		degradedSubAgents.length > 0 ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
+
+	if (degradedSubAgents.length > 0) {
+		logger.warn(
+			{
+				degradedSubAgents,
+				threshold: TOOL_ERROR_RATE_THRESHOLD,
+				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Sub-agent tool-error rate exceeded threshold; capping confidence",
+		);
+	}
+
 	logger.info(
-		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore },
+		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore: cappedScore },
 		"Aggregation complete",
 	);
 	return {
 		messages: [new AIMessage({ content: answer })],
 		finalAnswer: answer,
-		confidenceScore,
+		confidenceScore: cappedScore,
+		...(degradedSubAgents.length > 0 && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
 	};
 }

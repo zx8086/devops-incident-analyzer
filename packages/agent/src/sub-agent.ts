@@ -4,6 +4,7 @@ import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { getAllActionToolNames, resolveActionTools } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
+import { redactPiiContent } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -107,7 +108,8 @@ export function classifyToolError(message: string): { category: ToolErrorCategor
 	return { category: "unknown", retryable: true };
 }
 
-function extractToolErrors(
+// SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
+export function extractToolErrors(
 	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
 ): ToolError[] {
 	const errors: ToolError[] = [];
@@ -120,10 +122,11 @@ function extractToolErrors(
 
 		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 		const { category, retryable } = classifyToolError(content);
+		// SIO-707: redact PII before the message ever lands in logs or DataSourceResult.
 		errors.push({
 			toolName: msg.name ?? "unknown",
 			category,
-			message: content.slice(0, 500),
+			message: redactPiiContent(content.slice(0, 500)),
 			retryable,
 		});
 	}
@@ -271,6 +274,9 @@ async function runSubAgent(
 		const toolMessages = response.messages.filter((m: { _getType(): string }) => m._getType() === "tool");
 		const allToolsFailed = toolMessages.length > 0 && toolErrors.length === toolMessages.length;
 
+		// SIO-707: emit per-failure visibility ({toolName, category, message}) alongside the count.
+		// toolErrorCount is preserved for backward compatibility with existing log parsers.
+		// Messages are already PII-redacted in extractToolErrors above.
 		log.info(
 			{
 				duration,
@@ -279,6 +285,13 @@ async function runSubAgent(
 				responseLength: String(lastResponse?.content ?? "").length,
 				toolErrorCount: toolErrors.length,
 				allToolsFailed,
+				...(toolErrors.length > 0 && {
+					toolErrors: toolErrors.map((e) => ({
+						toolName: e.toolName,
+						category: e.category,
+						message: e.message,
+					})),
+				}),
 			},
 			"Sub-agent completed",
 		);
@@ -290,6 +303,7 @@ async function runSubAgent(
 			duration,
 			toolOutputs: [],
 			isAlignmentRetry: isRetry,
+			messageCount: response.messages.length,
 			...(deploymentId && { deploymentId }),
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(allToolsFailed && { error: `All ${toolErrors.length} tool calls failed` }),
