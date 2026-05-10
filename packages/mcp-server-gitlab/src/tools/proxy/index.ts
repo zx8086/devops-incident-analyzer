@@ -11,6 +11,17 @@ const log = createContextLogger("proxy-tools");
 
 const TOOL_PREFIX = "gitlab_";
 
+// SIO-703: log once per process, not once per request. See server.ts for context.
+let proxyToolsRegisteredLogged = false;
+
+export function _resetProxyToolsRegisteredLoggedForTest(): void {
+	proxyToolsRegisteredLogged = false;
+}
+
+export function _isProxyToolsRegisteredLoggedForTest(): boolean {
+	return proxyToolsRegisteredLogged;
+}
+
 // GitLab returns this when a project's code embeddings haven't been built yet.
 // First-time indexing takes 10-20 minutes per project (rate-limited to 450 embeddings/min).
 const EMBEDDINGS_NOT_READY_PATTERN =
@@ -214,6 +225,9 @@ export function registerProxyTools(
 		registered.push(prefixedName);
 	}
 
-	log.info({ count: registered.length, tools: registered }, "Proxy tools registered");
+	if (!proxyToolsRegisteredLogged) {
+		log.info({ count: registered.length, tools: registered }, "Proxy tools registered");
+		proxyToolsRegisteredLogged = true;
+	}
 	return registered.length;
 }

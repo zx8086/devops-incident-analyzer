@@ -8,6 +8,13 @@ import { createContextLogger } from "./utils/logger.js";
 
 const log = createContextLogger("server");
 
+// SIO-703: in HTTP stateless mode, createServerFactory fires per request, so the
+// "MCP server created" log fired N times per tool call and polluted the trace
+// timeline. The factory's output is identical across requests (discoveredTools
+// is captured once at startup), so logging once on the first invocation gives
+// operators the same visibility without the per-request noise.
+let serverCreatedLogged = false;
+
 export interface AtlassianDatasource {
 	proxy: AtlassianMcpProxy;
 	config: Config;
@@ -44,9 +51,23 @@ export function createAtlassianServer(ds: AtlassianDatasource): McpServer {
 		siteUrl,
 	});
 
-	log.info(
-		{ proxyRegistered: registered, proxyFiltered: filtered, customCount, total: registered + customCount },
-		"Atlassian MCP server created",
-	);
+	if (!serverCreatedLogged) {
+		log.info(
+			{ proxyRegistered: registered, proxyFiltered: filtered, customCount, total: registered + customCount },
+			"Atlassian MCP server created",
+		);
+		serverCreatedLogged = true;
+	}
 	return server;
+}
+
+// SIO-703: test seam. Tests can reset the once-flag between cases without
+// reaching for module-cache invalidation, and inspect the flag state to
+// confirm logging suppression occurred.
+export function _resetServerCreatedLoggedForTest(): void {
+	serverCreatedLogged = false;
+}
+
+export function _isServerCreatedLoggedForTest(): boolean {
+	return serverCreatedLogged;
 }

@@ -9,6 +9,21 @@ import { createContextLogger } from "./utils/logger.js";
 
 const log = createContextLogger("server");
 
+// SIO-703: in HTTP stateless mode, createServerFactory fires per request, so the
+// "MCP server created" log fired N times per tool call and polluted the trace
+// timeline. The factory's output is identical across requests (discoveredTools
+// is captured once at startup), so logging once on the first invocation gives
+// operators the same visibility without the per-request noise.
+let serverCreatedLogged = false;
+
+export function _resetServerCreatedLoggedForTest(): void {
+	serverCreatedLogged = false;
+}
+
+export function _isServerCreatedLoggedForTest(): boolean {
+	return serverCreatedLogged;
+}
+
 export interface GitLabDatasource {
 	proxy: GitLabMcpProxy;
 	restClient: GitLabRestClient;
@@ -49,10 +64,13 @@ export function createGitLabServer(datasource: GitLabDatasource): McpServer {
 	// Register code analysis tools via REST API
 	const codeAnalysisCount = registerCodeAnalysisTools(server, restClient);
 
-	log.info(
-		{ proxyTools: proxyCount, codeAnalysisTools: codeAnalysisCount, total: proxyCount + codeAnalysisCount },
-		"GitLab MCP server created",
-	);
+	if (!serverCreatedLogged) {
+		log.info(
+			{ proxyTools: proxyCount, codeAnalysisTools: codeAnalysisCount, total: proxyCount + codeAnalysisCount },
+			"GitLab MCP server created",
+		);
+		serverCreatedLogged = true;
+	}
 
 	return server;
 }
