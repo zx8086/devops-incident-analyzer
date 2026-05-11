@@ -1,4 +1,5 @@
 // packages/agent/tests/correlation/test-helpers.ts
+import type { ToolError } from "@devops-agent/shared";
 import type { AgentStateType } from "../../src/state";
 
 export function baseState(): AgentStateType {
@@ -45,6 +46,37 @@ export function withKafkaResult(state: AgentStateType, data: unknown): AgentStat
 			{ dataSourceId: "kafka", status: "success", data, duration: 100 } as never,
 		],
 	};
+}
+
+// SIO-717: production sub-agents emit `data` as a prose string (LLM output) and
+// populate result-level `toolErrors`. These helpers build that real shape so
+// the SIO-717 rules can be tested against it.
+export function withKafkaProseResult(
+	state: AgentStateType,
+	prose: string,
+	toolErrors: ToolError[] = [],
+): AgentStateType {
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "kafka",
+				status: "success",
+				data: prose,
+				duration: 100,
+				...(toolErrors.length > 0 && { toolErrors }),
+			} as never,
+		],
+	};
+}
+
+export function withElasticSyntheticUp(state: AgentStateType, hostname: string, when: string): AgentStateType {
+	return withElasticResult(state, {
+		syntheticMonitors: [
+			{ url: `https://${hostname}/healthcheck`, status: "up", timestamp: when, monitorName: `test-${hostname}` },
+		],
+	});
 }
 
 export function withElasticResult(state: AgentStateType, data: unknown): AgentStateType {

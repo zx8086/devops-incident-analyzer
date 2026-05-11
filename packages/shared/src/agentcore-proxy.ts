@@ -152,6 +152,78 @@ function signRequest(method: string, url: URL, body: string, creds: AwsCreds, re
 	return headers;
 }
 
+// SIO-718: classify a proxied JSON-RPC response body so the dev log can show
+// inner tool status alongside the outer HTTP envelope. The outer HTTP status
+// is always 200 when AgentCore is reachable, even if the MCP tool inside
+// returned isError: true with an upstream 5xx -- without this, a healthy
+// AgentCore masking a sick upstream looks identical to a fully working call.
+export function classifyInnerStatus(rawBody: string): string {
+	// SSE responses arrive as "event: message\ndata: <json>\n\n" -- strip framing
+	// before JSON-parsing. The MCP streamable-HTTP transport emits at most one
+	// data frame per tool result; we look at the last data: line to cover any
+	// future multi-frame case.
+	const dataLines = rawBody.split("\n").filter((l) => l.startsWith("data: "));
+	const jsonText = dataLines.length > 0 ? dataLines[dataLines.length - 1]?.slice(6) : rawBody.trim();
+	if (!jsonText) {
+		return "unparseable";
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(jsonText);
+	} catch {
+		return "unparseable";
+	}
+
+	if (typeof parsed !== "object" || parsed === null) {
+		return "unparseable";
+	}
+
+	const obj = parsed as Record<string, unknown>;
+	// Transport-level JSON-RPC error (distinct from a tool returning isError)
+	if (obj.error && typeof obj.error === "object") {
+		return "jsonrpc-error";
+	}
+
+	const result = obj.result;
+	if (typeof result !== "object" || result === null) {
+		return "unparseable";
+	}
+	const resultObj = result as Record<string, unknown>;
+	if (!resultObj.isError) {
+		return "ok";
+	}
+
+	// isError: true -- extract a short class label from the first text content
+	const content = resultObj.content;
+	if (!Array.isArray(content) || content.length === 0) {
+		return "error (unclassified)";
+	}
+	const first = content[0] as Record<string, unknown> | undefined;
+	const text = typeof first?.text === "string" ? first.text : "";
+	if (!text) {
+		return "error (no-text)";
+	}
+
+	// Match "MCP error -32603: ksqlDB error 503:" pattern produced by our
+	// service wrappers (ksql-service, connect-service, schema-registry-service,
+	// restproxy-service). Captures "ksqlDB 503", "Kafka Connect 503", etc.
+	const serviceCodeMatch = text.match(/MCP error -?\d+:\s+([\w\s]+?)\s+error\s+(\d+):/);
+	if (serviceCodeMatch) {
+		return `error (${serviceCodeMatch[1]?.trim()} ${serviceCodeMatch[2]})`;
+	}
+
+	// Generic "MCP error -32603: ..." fallback -- take the first line of the
+	// message, capped at 60 chars to keep the log line skimmable.
+	const genericMatch = text.match(/MCP error -?\d+:\s+([^\n]+)/);
+	if (genericMatch) {
+		const snippet = genericMatch[1]?.trim().slice(0, 60) ?? "";
+		return `error (${snippet})`;
+	}
+
+	return "error (unparsed)";
+}
+
 // Proxy handle returned to bootstrap for lifecycle management
 export interface AgentCoreProxyHandle {
 	port: number;
@@ -211,10 +283,24 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 							respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
 							if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
 
+							// SIO-718: read the cloned body so we can log inner JSON-RPC
+							// status alongside the outer HTTP envelope. Clone leaves
+							// response.body intact for streaming back to the caller.
+							let innerStatus: string | undefined;
 							if (toolName) {
+								try {
+									const clonedBody = await response.clone().text();
+									innerStatus = classifyInnerStatus(clonedBody);
+								} catch (err) {
+									innerStatus = "unparseable";
+									logger.debug(
+										{ tool: toolName, err: err instanceof Error ? err.message : String(err) },
+										"Failed to read cloned response body for inner-status logging",
+									);
+								}
 								logger.info(
-									{ tool: toolName, status: response.status },
-									`Tool call proxied: ${toolName} -> ${response.status}`,
+									{ tool: toolName, outer: response.status, inner: innerStatus },
+									`Tool call proxied: ${toolName} -> outer=${response.status} inner=${innerStatus}`,
 								);
 							}
 
