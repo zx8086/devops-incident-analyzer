@@ -346,12 +346,17 @@ Connection spans are named with the client and transport: `mcp.connection.Claude
 
 ### Health Checks
 
-Each MCP server exposes HTTP health endpoints:
+Each MCP server in HTTP transport mode exposes health endpoints. AgentCore mode has its own framework health surface (see `packages/shared/src/transport/agentcore.ts`) and does not need these.
 
-| Endpoint | Response | Purpose |
-|----------|----------|---------|
-| `/health` | `{ status: "ok", server: "...", timestamp: "..." }` | Full health check |
-| `/ping` | `pong` | Lightweight liveness probe |
+| Endpoint | Response | Purpose | k8s probe |
+|----------|----------|---------|-----------|
+| `/health` | `{ status: "ok" }` | Process is alive | `livenessProbe` |
+| `/ready` | `{ ready, components, errors?, cachedAt }` (200 or 503) | Enabled upstreams are reachable | `readinessProbe` |
+| `/ping` | `pong` | Lightweight liveness probe (AgentCore transport only) | n/a |
+
+`/ready` (SIO-726, kafka MCP) probes the kafka broker via `clientManager.withAdmin(a => a.metadata({}))` plus any enabled HTTP-backed Confluent services (REST Proxy, Schema Registry, Kafka Connect, ksqlDB) via each service's `probeReachability()`. Results are cached for 30 seconds with a thundering-herd guard, so k8s/AgentCore liveness loops don't fan out to upstreams on every request. Components configured but disabled (e.g. `KSQL_ENABLED=false`) appear as `"disabled"` in the response and do not fail the probe.
+
+When any enabled component is unreachable, `/ready` returns HTTP 503 with the component map and a per-component error message; otherwise it returns 200. `/ready` returns HTTP 404 when no readiness probe is wired (stdio mode).
 
 ### MCP Server Health Polling
 

@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createContextLogger } from "../utils/logger.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
+import type { ReadinessSnapshot } from "./readiness.ts";
 
 const log = createContextLogger("transport");
 
@@ -16,6 +17,10 @@ interface HttpTransportConfig {
 	idleTimeout: number;
 	apiKey?: string;
 	allowedOrigins?: string[];
+	// SIO-726: optional readiness probe. When provided, /ready returns
+	// 503 + snapshot when snapshot.ready is false, 200 + snapshot otherwise.
+	// When omitted, /ready is not registered (stdio/AgentCore modes never set it).
+	readinessProbe?: () => Promise<ReadinessSnapshot>;
 }
 
 type ServerFactory = () => McpServer;
@@ -176,6 +181,36 @@ export async function startHttpTransport(
 	const securedGet = withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey);
 	const securedDelete = withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey);
 
+	// SIO-726: /ready handler -- only registered when a probe is supplied.
+	// Errors inside the probe (cache miss + network failure during probe code
+	// itself) are caught and rendered as 503 so the endpoint never 500s; an
+	// internal exception in the probe is itself a readiness failure.
+	const readinessHandler = config.readinessProbe
+		? async (): Promise<Response> => {
+				try {
+					const probe = config.readinessProbe;
+					if (!probe) {
+						return Response.json({ error: "readiness probe not configured" }, { status: 503 });
+					}
+					const snapshot = await probe();
+					return Response.json(snapshot, { status: snapshot.ready ? 200 : 503 });
+				} catch (err) {
+					log.error({ error: err instanceof Error ? err.message : String(err) }, "Readiness probe threw");
+					return Response.json(
+						{ ready: false, error: err instanceof Error ? err.message : String(err) },
+						{ status: 503 },
+					);
+				}
+			}
+		: null;
+
+	// SIO-726: register routes inline. /ready is registered via a method object
+	// that returns 404 when the probe is not configured, so the route shape is
+	// uniform regardless of mode. Bun's RoutesWithUpgrade type rejects
+	// conditional spreads, and keeping a single shape here is simpler than
+	// branching the routes record.
+	const readyHandler = readinessHandler ?? (() => Response.json({ error: "Not found" }, { status: 404 }));
+
 	const httpServer = Bun.serve({
 		port: config.port,
 		hostname: config.host,
@@ -189,6 +224,9 @@ export async function startHttpTransport(
 			},
 			"/health": {
 				GET: () => Response.json({ status: "ok" }),
+			},
+			"/ready": {
+				GET: readyHandler,
 			},
 		},
 
