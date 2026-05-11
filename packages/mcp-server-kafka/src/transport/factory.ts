@@ -6,6 +6,7 @@ import type { TransportConfig } from "../config/schemas.ts";
 import { createContextLogger, logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
+import type { ReadinessSnapshot } from "./readiness.ts";
 import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
 
@@ -34,6 +35,10 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 export async function createTransport(
 	config: TransportConfig,
 	serverFactory: () => McpServer,
+	// SIO-726: optional readiness probe wired into HTTP transport's /ready route.
+	// Stdio and AgentCore transports ignore this argument (no HTTP surface to
+	// register the route on; AgentCore's framework health is authoritative).
+	readinessProbe?: () => Promise<ReadinessSnapshot>,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
 	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
@@ -64,6 +69,7 @@ export async function createTransport(
 			idleTimeout: config.idleTimeout,
 			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
+			readinessProbe,
 		});
 	}
 

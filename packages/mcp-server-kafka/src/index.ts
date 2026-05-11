@@ -14,6 +14,7 @@ import { RestProxyService } from "./services/restproxy-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
 import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
+import { createReadinessProbe } from "./transport/readiness.ts";
 import { logger } from "./utils/logger.ts";
 import { initializeTracing } from "./utils/tracing.ts";
 
@@ -166,7 +167,20 @@ if (import.meta.main) {
 				return server;
 			},
 
-			createTransport: (serverFactory) => createTransport(config.transport, serverFactory),
+			// SIO-726: build the /ready probe from the same services tools were
+			// registered with, then thread it into the HTTP transport. Stdio and
+			// AgentCore transport modes ignore it -- AgentCore's framework health
+			// surface is authoritative there.
+			createTransport: (serverFactory, ds) =>
+				createTransport(
+					config.transport,
+					serverFactory,
+					createReadinessProbe({
+						clientManager: ds.clientManager,
+						toolOptions: ds.toolOptions,
+						config,
+					}),
+				),
 
 			cleanupDatasource: async (ds) => {
 				await ds.clientManager.close();
