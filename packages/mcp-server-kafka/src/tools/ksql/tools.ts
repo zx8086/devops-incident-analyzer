@@ -1,6 +1,6 @@
 // src/tools/ksql/tools.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../config/index.ts";
+import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KsqlService } from "../../services/ksql-service.ts";
 import { wrapHandler } from "../wrap.ts";
@@ -8,9 +8,10 @@ import * as ops from "./operations.ts";
 import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
-export function registerKsqlTools(server: McpServer, service: KsqlService): void {
-	const config = getConfig();
-
+// SIO-732: take `config` as a parameter (previously called getConfig() internally)
+// so the gate around ksql_execute_statement honours the same config used elsewhere
+// in registerAllTools — required for tests that drive registration with a fixture.
+export function registerKsqlTools(server: McpServer, service: KsqlService, config: AppConfig): void {
 	server.tool(
 		"ksql_get_server_info",
 		prompts.KSQL_GET_SERVER_INFO_DESCRIPTION,
@@ -71,13 +72,17 @@ export function registerKsqlTools(server: McpServer, service: KsqlService): void
 		}),
 	);
 
-	server.tool(
-		"ksql_execute_statement",
-		prompts.KSQL_EXECUTE_STATEMENT_DESCRIPTION,
-		params.KsqlExecuteStatementParams.shape,
-		wrapHandler("ksql_execute_statement", config, async (args) => {
-			const result = await ops.executeStatement(service, args);
-			return ResponseBuilder.success(result);
-		}),
-	);
+	// SIO-732: gate ksql_execute_statement at registration time (writes).
+	// The wrap-layer check in tools/wrap.ts remains as belt-and-braces.
+	if (config.kafka.allowWrites) {
+		server.tool(
+			"ksql_execute_statement",
+			prompts.KSQL_EXECUTE_STATEMENT_DESCRIPTION,
+			params.KsqlExecuteStatementParams.shape,
+			wrapHandler("ksql_execute_statement", config, async (args) => {
+				const result = await ops.executeStatement(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+	}
 }

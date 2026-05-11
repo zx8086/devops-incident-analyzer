@@ -51,10 +51,13 @@ describe("Schema Registry write/destructive tool registration gating", () => {
 		registerAllTools(server, fakeKafka, config, { schemaRegistryService });
 		const tools = listToolNames(server);
 
-		// existing kafka_* schema tools must still be present
+		// SIO-732: read-only kafka_* schema tools remain registered; the write/
+		// destructive kafka_* (register, set_config, delete_subject) are now gated
+		// at registration time just like the sr_* equivalents below.
 		expect(tools).toContain("kafka_list_schemas");
-		expect(tools).toContain("kafka_register_schema");
-		expect(tools).toContain("kafka_delete_schema_subject");
+		expect(tools).not.toContain("kafka_register_schema");
+		expect(tools).not.toContain("kafka_set_schema_config");
+		expect(tools).not.toContain("kafka_delete_schema_subject");
 
 		// none of the new gated sr_* tools
 		expect(tools).not.toContain("sr_register_schema");

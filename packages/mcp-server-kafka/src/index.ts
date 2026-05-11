@@ -188,6 +188,18 @@ if (import.meta.main) {
 			},
 
 			onStarted: () => {
+				// SIO-732: core writes/destructive and one ksql + 3 schema kafka_*
+				// tools are gated at registration; reflect that in the reported count
+				// so observability matches what's actually visible in tools/list.
+				const coreReads = 10;
+				const coreWrites = config.kafka.allowWrites ? 3 : 0;
+				const coreDestructive = config.kafka.allowDestructive ? 2 : 0;
+				const schemaReads = config.schemaRegistry.enabled ? 5 : 0;
+				const schemaKafkaWrites = config.schemaRegistry.enabled && config.kafka.allowWrites ? 2 : 0;
+				const schemaKafkaDestructive = config.schemaRegistry.enabled && config.kafka.allowDestructive ? 1 : 0;
+				const ksqlReads = config.ksql.enabled ? 6 : 0;
+				const ksqlWrites = config.ksql.enabled && config.kafka.allowWrites ? 1 : 0;
+				const connectReads = config.connect.enabled ? 4 : 0;
 				const connectWrites = config.connect.enabled && config.kafka.allowWrites ? 3 : 0;
 				const connectDestructive = config.connect.enabled && config.kafka.allowDestructive ? 2 : 0;
 				const srWrites = config.schemaRegistry.enabled && config.kafka.allowWrites ? 3 : 0;
@@ -195,10 +207,15 @@ if (import.meta.main) {
 				const restProxyReads = config.restproxy.enabled ? 3 : 0;
 				const restProxyWrites = config.restproxy.enabled && config.kafka.allowWrites ? 6 : 0;
 				const toolCount =
-					15 +
-					(config.schemaRegistry.enabled ? 8 : 0) +
-					(config.ksql.enabled ? 7 : 0) +
-					(config.connect.enabled ? 4 : 0) +
+					coreReads +
+					coreWrites +
+					coreDestructive +
+					schemaReads +
+					schemaKafkaWrites +
+					schemaKafkaDestructive +
+					ksqlReads +
+					ksqlWrites +
+					connectReads +
 					connectWrites +
 					connectDestructive +
 					srWrites +

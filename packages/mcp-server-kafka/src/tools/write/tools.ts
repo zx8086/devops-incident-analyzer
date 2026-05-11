@@ -1,6 +1,6 @@
 // src/tools/write/tools.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getConfig } from "../../config/index.ts";
+import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
 import { wrapHandler } from "../wrap.ts";
@@ -8,8 +8,13 @@ import * as ops from "./operations.ts";
 import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
-export function registerWriteTools(server: McpServer, service: KafkaService): void {
-	const config = getConfig();
+export function registerWriteTools(server: McpServer, service: KafkaService, config: AppConfig): void {
+	// SIO-732: gate write tools at registration so they don't appear in tools/list
+	// when writes are disabled. The wrap-layer check in tools/wrap.ts stays as
+	// belt-and-braces against a config-mismatch race. Take `config` as a parameter
+	// (previously called getConfig() internally) so tests can drive registration
+	// with their own fixture.
+	if (!config.kafka.allowWrites) return;
 
 	server.tool(
 		"kafka_produce_message",

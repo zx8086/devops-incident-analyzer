@@ -59,35 +59,43 @@ export function registerSchemaTools(server: McpServer, service: SchemaRegistrySe
 		}),
 	);
 
-	server.tool(
-		"kafka_register_schema",
-		prompts.REGISTER_SCHEMA_DESCRIPTION,
-		params.RegisterSchemaParams.shape,
-		wrapHandler("kafka_register_schema", config, async (args) => {
-			const result = await ops.registerSchema(service, args);
-			return ResponseBuilder.success(result);
-		}),
-	);
+	// SIO-732: gate kafka_register_schema and kafka_set_schema_config at
+	// registration time (writes) and kafka_delete_schema_subject (destructive),
+	// matching the sr_* gating block below. The wrap-layer checks in tools/wrap.ts
+	// remain as belt-and-braces.
+	if (config.kafka.allowWrites) {
+		server.tool(
+			"kafka_register_schema",
+			prompts.REGISTER_SCHEMA_DESCRIPTION,
+			params.RegisterSchemaParams.shape,
+			wrapHandler("kafka_register_schema", config, async (args) => {
+				const result = await ops.registerSchema(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
 
-	server.tool(
-		"kafka_set_schema_config",
-		prompts.SET_SCHEMA_CONFIG_DESCRIPTION,
-		params.SetSchemaConfigParams.shape,
-		wrapHandler("kafka_set_schema_config", config, async (args) => {
-			const result = await ops.setSchemaConfig(service, args);
-			return ResponseBuilder.success(result);
-		}),
-	);
+		server.tool(
+			"kafka_set_schema_config",
+			prompts.SET_SCHEMA_CONFIG_DESCRIPTION,
+			params.SetSchemaConfigParams.shape,
+			wrapHandler("kafka_set_schema_config", config, async (args) => {
+				const result = await ops.setSchemaConfig(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+	}
 
-	server.tool(
-		"kafka_delete_schema_subject",
-		prompts.DELETE_SCHEMA_SUBJECT_DESCRIPTION,
-		params.DeleteSchemaSubjectParams.shape,
-		wrapHandler("kafka_delete_schema_subject", config, async (args) => {
-			const result = await ops.deleteSchemaSubject(service, args);
-			return ResponseBuilder.success(result);
-		}),
-	);
+	if (config.kafka.allowDestructive) {
+		server.tool(
+			"kafka_delete_schema_subject",
+			prompts.DELETE_SCHEMA_SUBJECT_DESCRIPTION,
+			params.DeleteSchemaSubjectParams.shape,
+			wrapHandler("kafka_delete_schema_subject", config, async (args) => {
+				const result = await ops.deleteSchemaSubject(service, args);
+				return ResponseBuilder.success(result);
+			}),
+		);
+	}
 
 	// SIO-682: gated write tools
 	if (config.kafka.allowWrites) {
