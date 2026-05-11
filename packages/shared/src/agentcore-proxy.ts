@@ -224,6 +224,15 @@ export function classifyInnerStatus(rawBody: string): string {
 	return "error (unparsed)";
 }
 
+// SIO-718: pick the log severity for a proxied tool call based on its inner
+// JSON-RPC status. Successful calls stay at info so the bulk of normal traffic
+// is unobtrusive; everything else (real upstream errors, parse failures,
+// transport-level JSON-RPC errors) escalates to warn so failures are visually
+// distinguishable in a wall of info lines.
+export function severityForInnerStatus(inner: string): "info" | "warn" {
+	return inner === "ok" ? "info" : "warn";
+}
+
 // Proxy handle returned to bootstrap for lifecycle management
 export interface AgentCoreProxyHandle {
 	port: number;
@@ -298,7 +307,15 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 										"Failed to read cloned response body for inner-status logging",
 									);
 								}
-								logger.info(
+								// Emit at warn when the tool call failed (any non-ok inner
+								// status), info when it succeeded. Without this, real upstream
+								// failures sit in the same column as the dozens of successful
+								// calls in a typical agent run and get visually missed -- the
+								// merged version of SIO-718 made the failures *visible* in the
+								// log line but did not make them *distinguishable* at a glance.
+								const severity = severityForInnerStatus(innerStatus ?? "unparseable");
+								const logFn = severity === "info" ? logger.info.bind(logger) : logger.warn.bind(logger);
+								logFn(
 									{ tool: toolName, outer: response.status, inner: innerStatus },
 									`Tool call proxied: ${toolName} -> outer=${response.status} inner=${innerStatus}`,
 								);

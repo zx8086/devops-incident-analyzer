@@ -4,7 +4,7 @@
 // proxy's dev log can show inner status alongside the outer HTTP envelope.
 
 import { describe, expect, test } from "bun:test";
-import { classifyInnerStatus } from "../agentcore-proxy.ts";
+import { classifyInnerStatus, severityForInnerStatus } from "../agentcore-proxy.ts";
 
 const sse = (json: string) => `event: message\ndata: ${json}\n\n`;
 
@@ -189,5 +189,30 @@ describe("classifyInnerStatus", () => {
 			}),
 		);
 		expect(classifyInnerStatus(body)).toBe("error (no-text)");
+	});
+});
+
+describe("severityForInnerStatus", () => {
+	test("ok maps to info", () => {
+		expect(severityForInnerStatus("ok")).toBe("info");
+	});
+
+	test("any specific service error maps to warn", () => {
+		expect(severityForInnerStatus("error (ksqlDB 503)")).toBe("warn");
+		expect(severityForInnerStatus("error (Kafka Connect 503)")).toBe("warn");
+		expect(severityForInnerStatus("error (Schema Registry 503)")).toBe("warn");
+		expect(severityForInnerStatus("error (REST Proxy 502)")).toBe("warn");
+	});
+
+	test("generic and unparsed error variants map to warn", () => {
+		expect(severityForInnerStatus("error (Invalid params: missing field)")).toBe("warn");
+		expect(severityForInnerStatus("error (unclassified)")).toBe("warn");
+		expect(severityForInnerStatus("error (no-text)")).toBe("warn");
+		expect(severityForInnerStatus("error (unparsed)")).toBe("warn");
+	});
+
+	test("transport-level errors and unparseable map to warn", () => {
+		expect(severityForInnerStatus("jsonrpc-error")).toBe("warn");
+		expect(severityForInnerStatus("unparseable")).toBe("warn");
 	});
 });
