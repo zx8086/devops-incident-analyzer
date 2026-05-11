@@ -20,6 +20,7 @@ const numberPaths = new Set([
 	"kafka.consumeTimeoutMs",
 	"transport.port",
 	"transport.idleTimeout",
+	"transport.drainTimeoutMs",
 ]);
 
 function setNested(obj: Record<string, Record<string, unknown>>, dotPath: string, value: unknown): void {

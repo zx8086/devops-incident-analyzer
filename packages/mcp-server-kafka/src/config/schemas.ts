@@ -155,6 +155,10 @@ export const transportSchema = z
 		apiKey: z.string().describe("Optional API key for Bearer token auth"),
 		allowedOrigins: z.string().describe("Comma-separated allowed origins"),
 		idleTimeout: z.number().int().min(10).max(255).describe("Bun.serve() idle timeout in seconds"),
+		// SIO-727: max ms to wait for in-flight requests to finish on SIGTERM
+		// before force-closing. 0 = immediate force-close (pre-SIO-727 parity).
+		// Default 25_000 leaves 5s headroom under typical 30s grace periods.
+		drainTimeoutMs: z.number().int().min(0).describe("Graceful drain deadline in ms; 0 = immediate force-close"),
 	})
 	.strict();
 

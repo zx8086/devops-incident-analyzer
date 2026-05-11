@@ -155,6 +155,23 @@ CMD ["bun", "run", "${ENTRYPOINT_PATH}"]
 
 This ensures graceful shutdown when the container orchestrator sends `SIGTERM` during scaling, updates, or termination.
 
+#### Drain behavior on SIGTERM (SIO-727)
+
+On `SIGTERM`, the kafka MCP server:
+
+1. Flips an internal `shuttingDown` flag. New `/mcp` requests get a JSON-RPC `503 Service Unavailable` envelope (`{ jsonrpc: "2.0", error: { code: -32000, message: "Server is shutting down" }, id: null }`) with a `Retry-After: 30` header. `/health` and `/ping` remain `200` so the orchestrator continues to see the container as alive during drain.
+2. Calls `Bun.serve().stop()` (no-arg drain mode), which waits for active connections to finish before closing the listener. In-flight tool calls (e.g. a 28-second `kafka_describe_cluster` round-trip, or a slow `kafka_consume_messages` poll) complete cleanly.
+3. Force-closes after `SHUTDOWN_DRAIN_TIMEOUT_MS` (default `25000` ms) if drain has not completed. The 25s default leaves 5s headroom under the typical 30s `terminationGracePeriodSeconds` for the kafka client close + telemetry flush before SIGKILL.
+4. Closes the kafka client and flushes telemetry.
+
+Tunables:
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Max ms to wait for in-flight requests on SIGTERM. `0` short-circuits to immediate force-close (pre-SIO-727 parity). |
+
+Operators with shorter grace periods can lower this; operators running long-poll tools (e.g. heavy `kafka_consume_messages` workloads) can raise it.
+
 ### Health Checks
 
 The Dockerfile includes a `HEALTHCHECK` instruction for container orchestrators that support it:

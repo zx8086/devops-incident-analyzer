@@ -1,6 +1,6 @@
 // src/transport/http.ts
 
-import { withTraceContextMiddleware } from "@devops-agent/shared";
+import { createBootstrapAdapter, drainBunServer, withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createContextLogger } from "../utils/logger.ts";
@@ -8,6 +8,11 @@ import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
 import type { ReadinessSnapshot } from "./readiness.ts";
 
 const log = createContextLogger("transport");
+
+// SIO-727: default drain deadline. 25s leaves 5s headroom under k8s/AgentCore's
+// typical 30s terminationGracePeriodSeconds for the remaining shutdown steps
+// (datasource close + telemetry flush) before SIGKILL.
+const DEFAULT_DRAIN_TIMEOUT_MS = 25_000;
 
 interface HttpTransportConfig {
 	port: number;
@@ -21,6 +26,10 @@ interface HttpTransportConfig {
 	// 503 + snapshot when snapshot.ready is false, 200 + snapshot otherwise.
 	// When omitted, /ready is not registered (stdio/AgentCore modes never set it).
 	readinessProbe?: () => Promise<ReadinessSnapshot>;
+	// SIO-727: max time to wait for in-flight requests to finish on SIGTERM
+	// before force-closing. 0 = immediate force-close (parity with pre-SIO-727).
+	// Tunable via SHUTDOWN_DRAIN_TIMEOUT_MS env var; default 25s.
+	drainTimeoutMs?: number;
 }
 
 type ServerFactory = () => McpServer;
@@ -157,6 +166,12 @@ export async function startHttpTransport(
 ): Promise<HttpTransportResult> {
 	const isStateful = config.sessionMode === "stateful";
 
+	// SIO-727: shared shuttingDown flag. close() flips it before starting the
+	// drain so any request that races in during the brief window between SIGTERM
+	// and Bun.serve().stop() refusing new connections gets a clean JSON-RPC 503
+	// envelope instead of an ECONNRESET. The LLM transcript stays interpretable.
+	let shuttingDown = false;
+
 	let postHandler: (req: Request) => Promise<Response>;
 	let getHandler: (req: Request) => Promise<Response> | Response;
 	let deleteHandler: (req: Request) => Promise<Response> | Response;
@@ -174,12 +189,33 @@ export async function startHttpTransport(
 		deleteHandler = methodNotAllowed;
 	}
 
-	// Apply security middleware
-	const securedPost = withTraceContextMiddleware(
-		withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey),
+	// SIO-727: wrap each MCP-path handler so post-SIGTERM requests get a clean
+	// JSON-RPC 503 envelope. Health and ready endpoints are NOT wrapped --
+	// k8s/AgentCore liveness loops should still see /health 200 during drain.
+	function withShuttingDownGate<T extends (req: Request) => Promise<Response> | Response>(handler: T): T {
+		return (async (req: Request) => {
+			if (shuttingDown) {
+				return Response.json(
+					{ jsonrpc: "2.0", error: { code: -32000, message: "Server is shutting down" }, id: null },
+					{ status: 503, headers: { "Retry-After": "30" } },
+				);
+			}
+			return handler(req);
+		}) as unknown as T;
+	}
+
+	// Apply security middleware, then the shutting-down gate. Order matters --
+	// gate runs LAST so it sees the result of auth/origin checks too, but more
+	// importantly the gate must be the outermost layer that touches the request.
+	const securedPost = withShuttingDownGate(
+		withTraceContextMiddleware(withApiKeyAuth(withOriginValidation(postHandler, config.allowedOrigins), config.apiKey)),
 	);
-	const securedGet = withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey);
-	const securedDelete = withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey);
+	const securedGet = withShuttingDownGate(
+		withApiKeyAuth(withOriginValidation(getHandler, config.allowedOrigins), config.apiKey),
+	);
+	const securedDelete = withShuttingDownGate(
+		withApiKeyAuth(withOriginValidation(deleteHandler, config.allowedOrigins), config.apiKey),
+	);
 
 	// SIO-726: /ready handler -- only registered when a probe is supplied.
 	// Errors inside the probe (cache miss + network failure during probe code
@@ -256,13 +292,20 @@ export async function startHttpTransport(
 		`MCP server started (HTTP ${config.sessionMode} mode)`,
 	);
 
+	const drainTimeoutMs = config.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+
 	return {
 		server: httpServer,
 		async close() {
+			// SIO-727: flip the gate BEFORE draining so requests that race in get
+			// the clean 503 envelope. Then close stateful sessions (no in-flight
+			// drain at this layer; SDK handles it). Then await drainBunServer to
+			// wait for active connections to finish, with a bounded deadline.
+			shuttingDown = true;
 			if (closeAllSessions) {
 				await closeAllSessions();
 			}
-			httpServer.stop(true);
+			await drainBunServer(httpServer, drainTimeoutMs, createBootstrapAdapter(log));
 			log.info("HTTP transport closed");
 		},
 	};

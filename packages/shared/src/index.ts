@@ -171,3 +171,4 @@ export {
 	type AgentCoreTransportResult,
 	startAgentCoreTransport,
 } from "./transport/agentcore.ts";
+export { drainBunServer } from "./transport/drain-helper.ts";
