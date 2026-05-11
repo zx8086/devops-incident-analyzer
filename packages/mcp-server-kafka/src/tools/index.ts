@@ -34,9 +34,9 @@ export function registerAllTools(
 	logger.debug("Registering extended read tools");
 	registerExtendedReadTools(server, service, config);
 	logger.debug("Registering write tools");
-	registerWriteTools(server, service);
+	registerWriteTools(server, service, config);
 	logger.debug("Registering destructive tools");
-	registerDestructiveTools(server, service);
+	registerDestructiveTools(server, service, config);
 
 	if (options?.schemaRegistryService) {
 		logger.debug("Registering schema registry tools");
@@ -45,7 +45,7 @@ export function registerAllTools(
 
 	if (options?.ksqlService) {
 		logger.debug("Registering ksqlDB tools");
-		registerKsqlTools(server, options.ksqlService);
+		registerKsqlTools(server, options.ksqlService, config);
 	}
 
 	if (options?.connectService) {
@@ -58,6 +58,18 @@ export function registerAllTools(
 		registerRestProxyTools(server, options.restProxyService, config);
 	}
 
+	// SIO-732: core writes/destructive + 1 ksql + 3 kafka_* schema tools are gated
+	// at registration; mirror that in the reported count so the log line matches
+	// what's actually visible in tools/list.
+	const coreReads = 10;
+	const coreWrites = config.kafka.allowWrites ? 3 : 0;
+	const coreDestructive = config.kafka.allowDestructive ? 2 : 0;
+	const schemaReads = options?.schemaRegistryService ? 5 : 0;
+	const schemaKafkaWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 2 : 0;
+	const schemaKafkaDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 1 : 0;
+	const ksqlReads = options?.ksqlService ? 6 : 0;
+	const ksqlWrites = options?.ksqlService && config.kafka.allowWrites ? 1 : 0;
+	const connectReads = options?.connectService ? 4 : 0;
 	const connectWrites = options?.connectService && config.kafka.allowWrites ? 3 : 0;
 	const connectDestructive = options?.connectService && config.kafka.allowDestructive ? 2 : 0;
 	const srWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 3 : 0;
@@ -65,10 +77,15 @@ export function registerAllTools(
 	const restProxyReads = options?.restProxyService ? 3 : 0;
 	const restProxyWrites = options?.restProxyService && config.kafka.allowWrites ? 6 : 0;
 	const toolCount =
-		15 +
-		(options?.schemaRegistryService ? 8 : 0) +
-		(options?.ksqlService ? 7 : 0) +
-		(options?.connectService ? 4 : 0) +
+		coreReads +
+		coreWrites +
+		coreDestructive +
+		schemaReads +
+		schemaKafkaWrites +
+		schemaKafkaDestructive +
+		ksqlReads +
+		ksqlWrites +
+		connectReads +
 		connectWrites +
 		connectDestructive +
 		srWrites +
