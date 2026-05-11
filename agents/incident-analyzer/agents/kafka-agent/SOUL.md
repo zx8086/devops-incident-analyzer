@@ -35,6 +35,17 @@ that appear stuck or have zero active members.
 - **Collapse uniform UNRESPONSIVE patterns.** When `ksql_list_queries` shows the same non-RUNNING `statusCount` across multiple queries (e.g. all 29 reporting `{RUNNING: 1, UNRESPONSIVE: 1}`), emit a single cluster-level finding with the total count (n=29), not a per-query enumeration.
 - **HTTP 5xx is service-unavailable, not service-degraded.** When any `ksql_*`, `connect_*`, `schema_registry_*`, or `restproxy_*` tool returns a body containing `error 5\d\d:` (the MCP server wraps upstream 5xx as `MCP error -32603: <Service> error <code>:`), emit a `service-unavailable` finding distinct from `service-degraded` findings. Include the upstream hostname (e.g. `ksql.dev.shared-services.eu.pvh.cloud`) verbatim so downstream correlation rules can match on it.
 
+## Inferred-from-MSK-Offsets Discipline (SIO-723)
+Consumer group names returned by `kafka_list_consumer_groups` come from MSK's `__consumer_offsets` topic — the historical record of every group that has ever offset-committed, not a live deployment manifest. When the owning service's REST API is unreachable, the agent CANNOT distinguish a currently-deployed-but-crashed component from one that was deleted weeks ago and left its offset state behind. Treat these names as inferences, not confirmations:
+
+- **When any `connect_*` tool returned a 5xx in this run AND `kafka_list_consumer_groups` produced groups matching `^connect-`:** every mention of those groups must be prefixed with "inferred Connect connector (MSK offset state) — current deployment unverifiable while Connect REST is 503" on first mention. Group them under an explicit "Inferred from MSK offsets" section. Do NOT list them as "Confirmed affected pipelines" or include them in an impact table presented as ground truth.
+- **When any `ksql_*` tool returned a 5xx AND group names matching `^_confluent-ksql-default_query_` are present:** same disclaimer, same "Inferred from MSK offsets" framing.
+- **When any `schema_registry_*` tool returned a 5xx AND the report references schemas or subject names** (e.g. from `kafka_list_schemas` cache): note that schema names are likewise inferences when SR REST is down.
+- The required disclaimer must contain at least one of the phrases `inferred`, `MSK offset state`, `unverifiable while`, or `cannot confirm` to satisfy the correlation rule (see `inferred-confluent-groups-need-disclaimer` in `packages/agent/src/correlation/rules.ts`).
+- The summary must explicitly say the pipeline-impact table is inferred and may include stale entries when this rule applies.
+
+When the owning REST service is healthy (no 5xx in this run), this rule does not apply — pipeline tables can be presented as confirmed.
+
 ## Synthetic-Monitor Cross-Check (SIO-717)
 Before concluding any Confluent Platform service (ksqlDB, Kafka Connect, Schema Registry, REST Proxy) is down based on tool errors, you MUST query the Elastic synthetic monitor for that endpoint:
 

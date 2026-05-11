@@ -1,14 +1,15 @@
-// shared/src/__tests__/agentcore-proxy-inner-status.test.ts
+// shared/src/__tests__/agentcore-proxy-tool-status.test.ts
 //
-// SIO-718: classifyInnerStatus classifies the JSON-RPC tool result body so the
-// proxy's dev log can show inner status alongside the outer HTTP envelope.
+// SIO-718: classifyToolStatus classifies the JSON-RPC tool result body so the
+// proxy's dev log can show the actual tool outcome on each line, without
+// needing to interpret the AgentCore HTTP envelope separately.
 
 import { describe, expect, test } from "bun:test";
-import { classifyInnerStatus, severityForInnerStatus } from "../agentcore-proxy.ts";
+import { classifyToolStatus, severityForToolStatus } from "../agentcore-proxy.ts";
 
 const sse = (json: string) => `event: message\ndata: ${json}\n\n`;
 
-describe("classifyInnerStatus", () => {
+describe("classifyToolStatus", () => {
 	test("returns ok for a successful tool result", () => {
 		const body = sse(
 			JSON.stringify({
@@ -19,7 +20,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("ok");
+		expect(classifyToolStatus(body)).toBe("ok");
 	});
 
 	test("classifies ksqlDB 503 from a typical isError body", () => {
@@ -38,7 +39,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (ksqlDB 503)");
+		expect(classifyToolStatus(body)).toBe("error (ksqlDB 503)");
 	});
 
 	test("classifies Kafka Connect 503", () => {
@@ -57,7 +58,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (Kafka Connect 503)");
+		expect(classifyToolStatus(body)).toBe("error (Kafka Connect 503)");
 	});
 
 	test("classifies Schema Registry 503", () => {
@@ -76,7 +77,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (Schema Registry 503)");
+		expect(classifyToolStatus(body)).toBe("error (Schema Registry 503)");
 	});
 
 	test("falls back to generic message for non-matching isError", () => {
@@ -95,7 +96,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (Invalid params: missing required field 'topic')");
+		expect(classifyToolStatus(body)).toBe("error (Invalid params: missing required field 'topic')");
 	});
 
 	test("truncates long generic error messages to 60 chars", () => {
@@ -110,7 +111,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		const result = classifyInnerStatus(body);
+		const result = classifyToolStatus(body);
 		// "error (" + 60 chars + ")"
 		expect(result).toBe(`error (${"A".repeat(60)})`);
 	});
@@ -123,20 +124,20 @@ describe("classifyInnerStatus", () => {
 				error: { code: -32600, message: "Invalid Request" },
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("jsonrpc-error");
+		expect(classifyToolStatus(body)).toBe("jsonrpc-error");
 	});
 
 	test("returns unparseable for malformed JSON", () => {
 		const body = sse("not-valid-json");
-		expect(classifyInnerStatus(body)).toBe("unparseable");
+		expect(classifyToolStatus(body)).toBe("unparseable");
 	});
 
 	test("returns unparseable when there is no data: frame and no JSON either", () => {
-		expect(classifyInnerStatus("garbage with no data prefix")).toBe("unparseable");
+		expect(classifyToolStatus("garbage with no data prefix")).toBe("unparseable");
 	});
 
 	test("returns unparseable for an empty body", () => {
-		expect(classifyInnerStatus("")).toBe("unparseable");
+		expect(classifyToolStatus("")).toBe("unparseable");
 	});
 
 	test("handles raw JSON (no SSE framing) for application/json responses", () => {
@@ -145,7 +146,7 @@ describe("classifyInnerStatus", () => {
 			id: 7,
 			result: { content: [{ type: "text", text: "ok" }] },
 		});
-		expect(classifyInnerStatus(body)).toBe("ok");
+		expect(classifyToolStatus(body)).toBe("ok");
 	});
 
 	test("uses the LAST data: frame in a multi-frame SSE stream", () => {
@@ -166,7 +167,7 @@ describe("classifyInnerStatus", () => {
 				},
 			}),
 		);
-		expect(classifyInnerStatus(okFrame + errFrame)).toBe("error (ksqlDB 503)");
+		expect(classifyToolStatus(okFrame + errFrame)).toBe("error (ksqlDB 503)");
 	});
 
 	test("returns error (unclassified) when isError is true but content is missing", () => {
@@ -177,7 +178,7 @@ describe("classifyInnerStatus", () => {
 				result: { isError: true, content: [] },
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (unclassified)");
+		expect(classifyToolStatus(body)).toBe("error (unclassified)");
 	});
 
 	test("returns error (no-text) when isError is true but first content has no text", () => {
@@ -188,31 +189,31 @@ describe("classifyInnerStatus", () => {
 				result: { isError: true, content: [{ type: "image", data: "..." }] },
 			}),
 		);
-		expect(classifyInnerStatus(body)).toBe("error (no-text)");
+		expect(classifyToolStatus(body)).toBe("error (no-text)");
 	});
 });
 
-describe("severityForInnerStatus", () => {
+describe("severityForToolStatus", () => {
 	test("ok maps to info", () => {
-		expect(severityForInnerStatus("ok")).toBe("info");
+		expect(severityForToolStatus("ok")).toBe("info");
 	});
 
 	test("any specific service error maps to warn", () => {
-		expect(severityForInnerStatus("error (ksqlDB 503)")).toBe("warn");
-		expect(severityForInnerStatus("error (Kafka Connect 503)")).toBe("warn");
-		expect(severityForInnerStatus("error (Schema Registry 503)")).toBe("warn");
-		expect(severityForInnerStatus("error (REST Proxy 502)")).toBe("warn");
+		expect(severityForToolStatus("error (ksqlDB 503)")).toBe("warn");
+		expect(severityForToolStatus("error (Kafka Connect 503)")).toBe("warn");
+		expect(severityForToolStatus("error (Schema Registry 503)")).toBe("warn");
+		expect(severityForToolStatus("error (REST Proxy 502)")).toBe("warn");
 	});
 
 	test("generic and unparsed error variants map to warn", () => {
-		expect(severityForInnerStatus("error (Invalid params: missing field)")).toBe("warn");
-		expect(severityForInnerStatus("error (unclassified)")).toBe("warn");
-		expect(severityForInnerStatus("error (no-text)")).toBe("warn");
-		expect(severityForInnerStatus("error (unparsed)")).toBe("warn");
+		expect(severityForToolStatus("error (Invalid params: missing field)")).toBe("warn");
+		expect(severityForToolStatus("error (unclassified)")).toBe("warn");
+		expect(severityForToolStatus("error (no-text)")).toBe("warn");
+		expect(severityForToolStatus("error (unparsed)")).toBe("warn");
 	});
 
 	test("transport-level errors and unparseable map to warn", () => {
-		expect(severityForInnerStatus("jsonrpc-error")).toBe("warn");
-		expect(severityForInnerStatus("unparseable")).toBe("warn");
+		expect(severityForToolStatus("jsonrpc-error")).toBe("warn");
+		expect(severityForToolStatus("unparseable")).toBe("warn");
 	});
 });
