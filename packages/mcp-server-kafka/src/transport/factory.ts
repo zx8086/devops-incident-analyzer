@@ -56,6 +56,7 @@ export async function createTransport(
 			port: config.port,
 			host: config.host,
 			path: config.path,
+			drainTimeoutMs: config.drainTimeoutMs,
 		});
 	}
 
@@ -70,6 +71,7 @@ export async function createTransport(
 			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
 			readinessProbe,
+			drainTimeoutMs: config.drainTimeoutMs,
 		});
 	}
 

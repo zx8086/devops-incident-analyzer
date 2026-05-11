@@ -71,5 +71,8 @@ export const defaults = {
 		apiKey: "",
 		allowedOrigins: "",
 		idleTimeout: 120,
+		// SIO-727: 25s drain deadline leaves 5s for kafka client close + telemetry
+		// flush under typical 30s terminationGracePeriodSeconds.
+		drainTimeoutMs: 25_000,
 	},
 } as const satisfies Record<string, Record<string, unknown>>;

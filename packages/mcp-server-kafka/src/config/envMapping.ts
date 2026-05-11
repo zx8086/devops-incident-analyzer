@@ -48,4 +48,6 @@ export const envMapping: Record<string, string> = {
 	MCP_API_KEY: "transport.apiKey",
 	MCP_ALLOWED_ORIGINS: "transport.allowedOrigins",
 	MCP_IDLE_TIMEOUT: "transport.idleTimeout",
+	// SIO-727: graceful drain deadline (ms) on SIGTERM. 0 = immediate force-close.
+	SHUTDOWN_DRAIN_TIMEOUT_MS: "transport.drainTimeoutMs",
 };
