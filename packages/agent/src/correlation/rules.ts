@@ -1,4 +1,5 @@
 // agent/src/correlation/rules.ts
+import type { ToolError } from "@devops-agent/shared";
 import type { AgentName, AgentStateType } from "../state";
 
 export interface CorrelationRule {
@@ -29,6 +30,51 @@ function getKafkaData(state: AgentStateType): {
 		return {};
 	}
 	return result.data as never;
+}
+
+// SIO-717: read the result-level toolErrors (populated by sub-agent.ts) and
+// the LLM's prose summary (result.data when string). This is the production
+// signal -- unlike getKafkaData which expects structured fields that today's
+// sub-agents do not emit (see comment on line ~154).
+function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
+	if (!result || result.status !== "success") return { toolErrors: [], prose: "" };
+	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
+	const prose = typeof result.data === "string" ? result.data : "";
+	return { toolErrors, prose };
+}
+
+// SIO-717: extract the upstream hostname from a Confluent Platform tool error
+// message. The Kafka MCP server (ksql-service.ts, connect-service.ts, etc.)
+// wraps upstream 5xx errors as "<Service> error <code>: <body>". Our env vars
+// are *.shared-services.eu.pvh.cloud, so any tool error containing a hostname
+// of that pattern indicates the agent is hitting that endpoint.
+function extractConfluentHostname(message: string): string | null {
+	// Match either "ksql.dev.shared-services.eu.pvh.cloud" or any of the four
+	// service prefixes (ksql, connect, schemaregistry, restproxy). The full
+	// hostname must appear in the error body for nginx 503 pages -- which all
+	// of our env-configured endpoints do for upstream-empty responses.
+	const match = message.match(/(ksql|connect|schemaregistry|restproxy)\.(dev|prd)\.shared-services\.eu\.pvh\.cloud/);
+	return match ? match[0] : null;
+}
+
+// SIO-717: did the kafka sub-agent see a 5xx from any Confluent service tool?
+// toolErrors[].message contains the redacted, truncated tool-error content
+// (see extractToolErrors in sub-agent.ts). For a 503 body it contains a string
+// like "MCP error -32603: ksqlDB error 503: <html>...". The category is set to
+// "transient" by classifyToolError because it matched the /\b503\b/ pattern.
+function findConfluent5xxToolErrors(toolErrors: ToolError[]): Array<{ tool: string; hostname: string | null }> {
+	const out: Array<{ tool: string; hostname: string | null }> = [];
+	for (const err of toolErrors) {
+		// Match the Kafka MCP error-wrapping format. Service names come from
+		// ksql-service.ts ("ksqlDB"), connect-service.ts ("Kafka Connect"),
+		// schema-registry-service.ts ("Schema Registry"), restproxy-service.ts
+		// ("REST Proxy"). 5xx range matches any upstream server error.
+		const m = err.message.match(/(ksqlDB|Kafka Connect|Schema Registry|REST Proxy)\s+error\s+5\d\d:/);
+		if (!m) continue;
+		out.push({ tool: err.toolName, hostname: extractConfluentHostname(err.message) });
+	}
+	return out;
 }
 
 export const correlationRules: CorrelationRule[] = [
@@ -86,6 +132,67 @@ export const correlationRules: CorrelationRule[] = [
 		},
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 3, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-717: ksqlDB queries reporting UNRESPONSIVE statusCount mean at least
+		// one cluster host is not heartbeating. Per the kafka-consumer-lag runbook
+		// Step 2a, this requires an Elastic ksqldb-server log lookup to determine
+		// whether the host crashed, OOM'd, or hit a network partition.
+		name: "ksqldb-unresponsive-task",
+		description:
+			"ksqlDB persistent query reports UNRESPONSIVE task status; correlate with ksqldb-server logs to identify the degraded host.",
+		trigger: (state) => {
+			const { prose } = getKafkaResultSignals(state);
+			// Match UNRESPONSIVE and statusCount in the same prose blob -- both
+			// must appear before the rule fires, to avoid matching e.g. the word
+			// "UNRESPONSIVE" used incidentally elsewhere.
+			if (!prose.includes("UNRESPONSIVE") || !prose.includes("statusCount")) return null;
+			return { context: { signal: "ksqldb-unresponsive" } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-717: HTTP 5xx from a connect_* tool indicates Kafka Connect is
+		// unavailable from the agent's network path. Distinct from the broader
+		// kafka-tool-failures rule which fires on getKafkaData().toolErrors
+		// (dormant in production). This one reads result.toolErrors (real).
+		name: "connect-service-unavailable",
+		description:
+			"Kafka Connect tool returned a 5xx; correlate with kafka-connect logs in Elastic to confirm cluster-side vs network failure.",
+		trigger: (state) => {
+			const { toolErrors } = getKafkaResultSignals(state);
+			const connectErrors = findConfluent5xxToolErrors(toolErrors).filter((e) => e.tool.startsWith("connect_"));
+			return connectErrors.length === 0
+				? null
+				: { context: { tools: connectErrors.map((e) => e.tool), hostname: connectErrors[0]?.hostname ?? null } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-717: shared-substrate cross-check. ANY Confluent service 5xx from
+		// the kafka sub-agent triggers a synthetic-monitor lookup in Elastic.
+		// If the synthetic reports the service UP, the agent's 5xx is a path-side
+		// problem (env mismatch, network policy, cross-VPC) and the finding
+		// should be demoted to env-mismatch-suspected. If the synthetic agrees
+		// (DOWN or missing), the original service-unavailable finding stands and
+		// confidenceCap=0.59 caps the report below the 0.6 HITL threshold.
+		// Without skipCoverageCheck, this rule respects the engine's idempotency
+		// check (covered if elastic findings already address the hostname).
+		name: "infra-service-degraded-needs-synthetic-cross-check",
+		description:
+			"Confluent Platform tool returned a 5xx; cross-check the corresponding Elastic synthetic monitor to distinguish a real outage from agent-side misrouting.",
+		trigger: (state) => {
+			const { toolErrors } = getKafkaResultSignals(state);
+			const hits = findConfluent5xxToolErrors(toolErrors).filter((e) => e.hostname !== null);
+			if (hits.length === 0) return null;
+			// Collect unique hostnames so the cross-check covers all failing endpoints
+			const hostnames = [...new Set(hits.map((h) => h.hostname).filter((h): h is string => h !== null))];
+			return { context: { hostnames, signal: "confluent-5xx-needs-synthetic-crosscheck" } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
 	},
 ];
 
