@@ -97,6 +97,70 @@ describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
 		expect(elapsed).toBeLessThan(2000);
 	});
 
+	// SIO-734: ephemeral mcp-consume-<uuid> groups must be closed on every exit
+	// path, not just the happy path / timer path. Without these tests, a regression
+	// to the SIO-699 try/finally structure could leak consumer groups into MSK
+	// where they accumulate as dead groups visible in list_consumer_groups.
+	test("SIO-734: consumer.close() fires when consume() rejects", async () => {
+		let consumerClosed = false;
+		const manager = buildClientManager(() => ({
+			closed: false,
+			consume: async () => {
+				throw new Error("broker rejected the subscribe request");
+			},
+			close: async () => {
+				consumerClosed = true;
+			},
+		}));
+		const service = new KafkaService(manager);
+
+		await expect(
+			service.consumeMessages({
+				topic: "topic-a",
+				maxMessages: 10,
+				timeoutMs: 5_000,
+				fromBeginning: false,
+			}),
+		).rejects.toThrow("broker rejected the subscribe request");
+
+		expect(consumerClosed).toBe(true);
+	});
+
+	test("SIO-734: consumer.close() fires when the iterator throws mid-stream", async () => {
+		const throwingStream: FakeStream = {
+			closed: false,
+			close: async () => {
+				throwingStream.closed = true;
+			},
+			[Symbol.asyncIterator]: () => ({
+				next: async () => {
+					throw new Error("connection lost mid-fetch");
+				},
+			}),
+		};
+		let consumerClosed = false;
+		const manager = buildClientManager(() => ({
+			closed: false,
+			consume: async () => throwingStream,
+			close: async () => {
+				consumerClosed = true;
+			},
+		}));
+		const service = new KafkaService(manager);
+
+		await expect(
+			service.consumeMessages({
+				topic: "topic-a",
+				maxMessages: 10,
+				timeoutMs: 5_000,
+				fromBeginning: false,
+			}),
+		).rejects.toThrow("connection lost mid-fetch");
+
+		expect(throwingStream.closed).toBe(true);
+		expect(consumerClosed).toBe(true);
+	});
+
 	test("returns messages when maxMessages reached without firing the timer", async () => {
 		const fakeMessages = [
 			{
