@@ -126,6 +126,120 @@ describe("RestProxyService", () => {
 		expect(new Headers((call[1] as RequestInit).headers).get("Authorization")).toBe(`Basic ${btoa("k:s")}`);
 	});
 
+	// SIO-714 -- per-operation Content-Type / Accept. Confluent REST Proxy v2 uses
+	// application/vnd.kafka.v2+json by default; application/vnd.kafka.json.v2+json is
+	// reserved for the request body of produce calls that embed JSON records.
+	describe("SIO-714 content-type per operation", () => {
+		test("listTopics uses application/vnd.kafka.v2+json for both Content-Type and Accept", async () => {
+			mockFetch(200, ["a"]);
+			const svc = new RestProxyService(baseConfig);
+			await svc.listTopics();
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("getTopic uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(200, { name: "orders", configs: {}, partitions: [] });
+			const svc = new RestProxyService(baseConfig);
+			await svc.getTopic("orders");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("getPartitions uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(200, []);
+			const svc = new RestProxyService(baseConfig);
+			await svc.getPartitions("orders");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("createConsumer uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(200, { instance_id: "i1", base_uri: "" });
+			const svc = new RestProxyService(baseConfig);
+			await svc.createConsumer("g1");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("subscribe uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(204);
+			const svc = new RestProxyService(baseConfig);
+			await svc.subscribe("g1", "i1", ["t"]);
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("consumeRecords uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(200, []);
+			const svc = new RestProxyService(baseConfig);
+			await svc.consumeRecords("g1", "i1");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("commitOffsets uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(200);
+			const svc = new RestProxyService(baseConfig);
+			await svc.commitOffsets("g1", "i1");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("deleteConsumer uses application/vnd.kafka.v2+json for both headers", async () => {
+			mockFetch(204);
+			const svc = new RestProxyService(baseConfig);
+			await svc.deleteConsumer("g1", "i1");
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("produceMessages keeps application/vnd.kafka.json.v2+json on Content-Type but uses .v2+json on Accept", async () => {
+			mockFetch(200, { offsets: [] });
+			const svc = new RestProxyService(baseConfig);
+			await svc.produceMessages("orders", [{ value: { id: 1 } }]);
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Content-Type")).toBe("application/vnd.kafka.json.v2+json");
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+
+		test("probeReachability uses application/vnd.kafka.v2+json for Accept", async () => {
+			mockFetch(200, []);
+			const svc = new RestProxyService(baseConfig);
+			await svc.probeReachability();
+			const headers = new Headers(
+				((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0][1] as RequestInit).headers,
+			);
+			expect(headers.get("Accept")).toBe("application/vnd.kafka.v2+json");
+		});
+	});
+
 	describe("probeReachability", () => {
 		test("resolves on 200", async () => {
 			mockFetch(200, []);
