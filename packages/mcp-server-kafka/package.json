@@ -12,10 +12,10 @@
 	},
 	"dependencies": {
 		"@devops-agent/shared": "workspace:*",
-		"@aws-sdk/client-kafka": "^3.1033.0",
+		"@aws-sdk/client-kafka": "^3.1045.0",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.0",
-		"@platformatic/kafka": "^1.33.0",
+		"@platformatic/kafka": "^2.0.1",
 		"aws-msk-iam-sasl-signer-js": "^1.0.3",
 		"pino": "catalog:",
 		"zod": "catalog:"
