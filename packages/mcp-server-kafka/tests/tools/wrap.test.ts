@@ -1,6 +1,7 @@
 // tests/tools/wrap.test.ts
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../src/config/schemas.ts";
+import { upstreamError } from "../../src/lib/errors.ts";
 import { wrapHandler } from "../../src/tools/wrap.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -224,6 +225,62 @@ describe("wrapHandler", () => {
 
 			expect(result.isError).toBeUndefined();
 			expect(errorSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	// SIO-716 regression (end-to-end): an upstream nginx HTML 503 from a Confluent
+	// service flows through every layer of the new wire path:
+	//   fetchUpstream (synthetic) -> upstreamError -> handler throws ->
+	//   wrapHandler catches -> ResponseBuilder.error with structured arg ->
+	//   sentinel + JSON appended to response text.
+	// The agent's extractToolErrors then lifts the JSON back into a ToolError
+	// (covered by sub-agent.test.ts), and findConfluent5xxToolErrors fires the
+	// correlation rule on the structured fields (covered by sio-717-rules.test.ts).
+	// This test owns the producer side of that chain.
+	describe("SIO-716 e2e regression: upstream error -> sentinel wire payload", () => {
+		test("ksql_list_queries handler throws upstreamError -> response carries sentinel + JSON", async () => {
+			// Simulate what fetchUpstream throws when the upstream is misrouted and
+			// returns nginx text/html 503 (the SIO-716 incident shape).
+			const failingHandler = async () => {
+				throw upstreamError("ksqlDB (ksql.dev.shared-services.eu.pvh.cloud) returned text/html error 503", {
+					hostname: "ksql.dev.shared-services.eu.pvh.cloud",
+					upstreamContentType: "text/html",
+					statusCode: 503,
+					upstreamBodyPreview: "<html>503 Service Temporarily Unavailable</html>",
+				});
+			};
+			const handler = wrapHandler("ksql_list_queries", makeConfig({ ksqlEnabled: true }), failingHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBe(true);
+			const text = result.content[0]?.text ?? "";
+
+			// Human-readable part: must mention service and hostname for log/transcript
+			// readability (SIO-725).
+			expect(text).toContain("ksqlDB");
+			expect(text).toContain("ksql.dev.shared-services.eu.pvh.cloud");
+			expect(text).toContain("503");
+
+			// Sentinel + parseable JSON: the wire contract with the agent (SIO-728).
+			expect(text).toContain("---STRUCTURED---");
+			const jsonPart = text.split("\n---STRUCTURED---\n")[1] ?? "";
+			const parsed = JSON.parse(jsonPart) as Record<string, unknown>;
+			expect(parsed.hostname).toBe("ksql.dev.shared-services.eu.pvh.cloud");
+			expect(parsed.upstreamContentType).toBe("text/html");
+			expect(parsed.statusCode).toBe(503);
+		});
+
+		test("non-upstream errors do NOT get the sentinel (e.g. validation errors stay clean)", async () => {
+			// internalError / invalidParams / invalidRequest don't carry upstream
+			// metadata; the sentinel must not appear.
+			const failingHandler = async () => {
+				throw new Error("validation: missing required field 'topic'");
+			};
+			const handler = wrapHandler("kafka_list_topics", makeConfig({}), failingHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).not.toContain("---STRUCTURED---");
 		});
 	});
 });

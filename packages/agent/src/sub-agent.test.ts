@@ -148,3 +148,94 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 		expect(errors[0]?.message).not.toContain("10.0.1.5");
 	});
 });
+
+// SIO-728: the kafka MCP's ResponseBuilder.error appends a ---STRUCTURED--- sentinel
+// followed by a JSON payload when upstream metadata (hostname, content-type, real
+// HTTP status) is available. extractToolErrors must split it off, parse the trailing
+// JSON, and merge hostname/upstreamContentType/statusCode into the ToolError --
+// without leaking the JSON into the human message field. Backward-compat: no
+// sentinel = byte-identical to the SIO-707 behaviour above.
+describe("extractToolErrors SIO-728 structured sentinel", () => {
+	const sentinel = "\n---STRUCTURED---\n";
+
+	test("no sentinel produces identical ToolError to today (backward-compat)", () => {
+		const errors = extractToolErrors([toolMsg("ksqlDB error 503: <html>503</html>", "ksql_get_server_info")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.hostname).toBeUndefined();
+		expect(errors[0]?.upstreamContentType).toBeUndefined();
+		expect(errors[0]?.statusCode).toBeUndefined();
+		expect(errors[0]?.message).toContain("ksqlDB error 503");
+	});
+
+	test("sentinel + JSON populates hostname/upstreamContentType/statusCode", () => {
+		const content = `Kafka Connect upstream returned text/html 503${sentinel}{"hostname":"connect.prd.shared-services.eu.pvh.cloud","upstreamContentType":"text/html","statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "connect_list_connectors")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.hostname).toBe("connect.prd.shared-services.eu.pvh.cloud");
+		expect(errors[0]?.upstreamContentType).toBe("text/html");
+		expect(errors[0]?.statusCode).toBe(503);
+	});
+
+	test("structured JSON does NOT leak into the human message field", () => {
+		const content = `Kafka Connect upstream returned text/html 503${sentinel}{"hostname":"connect.prd.shared-services.eu.pvh.cloud","statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "connect_list_connectors")]);
+		expect(errors[0]?.message).not.toContain("---STRUCTURED---");
+		expect(errors[0]?.message).not.toContain("statusCode");
+		expect(errors[0]?.message).not.toContain("{");
+	});
+
+	test("hostname survives PII redaction (only the human part is redacted)", () => {
+		// connect.prd.shared-services.eu.pvh.cloud must NOT be scrubbed -- it's the
+		// critical signal the correlation rule relies on. The redactor runs on the
+		// human prefix only, never the structured JSON.
+		const content = `Kafka Connect error 503${sentinel}{"hostname":"connect.prd.shared-services.eu.pvh.cloud","statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "connect_list_connectors")]);
+		expect(errors[0]?.hostname).toBe("connect.prd.shared-services.eu.pvh.cloud");
+	});
+
+	test("malformed JSON after sentinel does not throw; falls through with humanPart only", () => {
+		const content = `ksqlDB error 503${sentinel}{not valid json`;
+		const errors = extractToolErrors([toolMsg(content, "ksql_get_server_info")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain("ksqlDB error 503");
+		expect(errors[0]?.hostname).toBeUndefined();
+		expect(errors[0]?.statusCode).toBeUndefined();
+	});
+
+	test("unknown fields in structured JSON are dropped (whitelist enforcement)", () => {
+		const content = `error${sentinel}{"hostname":"foo.com","statusCode":500,"injected":"<script>","extra":{"a":1}}`;
+		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
+		expect(errors[0]?.hostname).toBe("foo.com");
+		expect(errors[0]?.statusCode).toBe(500);
+		expect((errors[0] as unknown as Record<string, unknown>).injected).toBeUndefined();
+		expect((errors[0] as unknown as Record<string, unknown>).extra).toBeUndefined();
+	});
+
+	test("non-string hostname is dropped", () => {
+		const content = `error${sentinel}{"hostname":123,"statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
+		expect(errors[0]?.hostname).toBeUndefined();
+		expect(errors[0]?.statusCode).toBe(503);
+	});
+
+	test("non-integer statusCode is dropped", () => {
+		const content = `error${sentinel}{"hostname":"a","statusCode":503.5}`;
+		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
+		expect(errors[0]?.hostname).toBe("a");
+		expect(errors[0]?.statusCode).toBeUndefined();
+	});
+
+	test("category classification runs on humanPart only, not the JSON", () => {
+		// humanPart says "auth failed" -> auth category. If the JSON had been included
+		// the regex would also match -- but we must only see auth here.
+		const content = `auth failed${sentinel}{"hostname":"a","statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
+		expect(errors[0]?.category).toBe("unknown"); // "auth failed" doesn't match any pattern; this proves the JSON's 503 didn't bleed in
+	});
+
+	test("category sees 503 in humanPart when present there", () => {
+		const content = `ksqlDB error 503${sentinel}{"hostname":"a","statusCode":503}`;
+		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
+		expect(errors[0]?.category).toBe("transient");
+	});
+});

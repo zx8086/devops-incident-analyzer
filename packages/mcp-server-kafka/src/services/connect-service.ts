@@ -1,6 +1,7 @@
 // src/services/connect-service.ts
 
 import type { AppConfig } from "../config/schemas.ts";
+import { fetchUpstream } from "../lib/upstream-fetch.ts";
 
 export interface ConnectClusterInfo {
 	version: string;
@@ -49,14 +50,12 @@ export class ConnectService {
 	}
 
 	async probeReachability(timeoutMs = 5000): Promise<void> {
-		const response = await fetch(`${this.baseUrl}/`, {
-			method: "GET",
-			headers: this.headers,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}`);
-		}
+		// SIO-725/729: see restproxy-service.probeReachability comment.
+		await fetchUpstream(
+			`${this.baseUrl}/`,
+			{ method: "GET", headers: this.headers, signal: AbortSignal.timeout(timeoutMs) },
+			{ serviceLabel: "Kafka Connect", baseUrl: this.baseUrl },
+		);
 	}
 
 	async getClusterInfo(): Promise<ConnectClusterInfo> {
@@ -114,12 +113,12 @@ export class ConnectService {
 		const init: RequestInit = { method, headers: this.headers };
 		if (body !== undefined) init.body = JSON.stringify(body);
 
-		const response = await fetch(`${this.baseUrl}${path}`, init);
-
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`Kafka Connect error ${response.status}: ${errorBody}`);
-		}
+		// SIO-725/729: error / non-JSON paths surface via upstreamError() carrying
+		// hostname, content-type, status, body preview.
+		const response = await fetchUpstream(`${this.baseUrl}${path}`, init, {
+			serviceLabel: "Kafka Connect",
+			baseUrl: this.baseUrl,
+		});
 
 		// Connect returns 204 (DELETE) and 202 (pause/resume) with no body
 		if (response.status === 204 || response.status === 202) return undefined as T;

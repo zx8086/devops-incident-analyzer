@@ -148,10 +148,18 @@ describe("KsqlService", () => {
 		expect(body.ksql).toBe("LIST STREAMS;");
 	});
 
-	test("throws on non-OK response", async () => {
+	test("throws on non-OK response with SIO-725 structured fields", async () => {
 		mockFetch(400, "Bad request");
 		const service = new KsqlService(mockConfig);
-		expect(service.getServerInfo()).rejects.toThrow("ksqlDB error 400");
+		let captured: unknown;
+		await service.getServerInfo().catch((err) => {
+			captured = err;
+		});
+		const e = captured as { hostname?: string; statusCode?: number; message: string };
+		expect(e.statusCode).toBe(400);
+		expect(e.hostname).toBeDefined();
+		expect(e.message).toContain("ksqlDB");
+		expect(e.message).toContain("400");
 	});
 
 	test("includes auth header when credentials provided", async () => {
@@ -177,10 +185,16 @@ describe("KsqlService", () => {
 			await expect(service.probeReachability()).resolves.toBeUndefined();
 		});
 
-		test("throws on 500", async () => {
+		test("throws on 500 with SIO-725 structured fields", async () => {
 			mockFetch(500, "boom");
 			const service = new KsqlService(mockConfig);
-			await expect(service.probeReachability()).rejects.toThrow("HTTP 500");
+			let captured: unknown;
+			await service.probeReachability().catch((err) => {
+				captured = err;
+			});
+			const e = captured as { statusCode?: number; message: string };
+			expect(e.statusCode).toBe(500);
+			expect(e.message).toContain("ksqlDB");
 		});
 
 		test("hits GET /info with timeout signal", async () => {

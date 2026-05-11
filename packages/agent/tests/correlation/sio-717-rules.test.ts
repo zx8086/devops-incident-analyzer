@@ -52,6 +52,20 @@ const transientNon5xxError = (toolName: string): ToolError => ({
 	message: "MCP error -32603: socket hang up",
 });
 
+// SIO-716 regression: structured-only ToolError, mirrors what the MCP server
+// now emits via the ---STRUCTURED--- sentinel after SIO-725/728/729. Critically
+// the message contains NO target=hostname substring and NO *.shared-services
+// hostname -- so the rule can only fire via the structured fields path.
+const structuredConnect503 = (toolName: string, hostname = "connect.prd.shared-services.eu.pvh.cloud"): ToolError => ({
+	toolName,
+	category: "transient",
+	retryable: true,
+	message: "MCP error -32603: Kafka Connect upstream returned text/html 503",
+	hostname,
+	upstreamContentType: "text/html",
+	statusCode: 503,
+});
+
 // ---------------------------------------------------------------------------
 // Rule 1: ksqldb-unresponsive-task
 // ---------------------------------------------------------------------------
@@ -123,6 +137,20 @@ describe("connect-service-unavailable", () => {
 	test("requires elastic-agent for the correlation", () => {
 		expect(rule.requiredAgent).toBe("elastic-agent");
 	});
+
+	// SIO-716 regression: fires via structured fields only -- no Confluent
+	// service substring in message, no target=hostname crutch. Proves the
+	// SIO-725/728 wire path replaces the brittle regex extraction.
+	test("fires on structured-only Connect 503 (no message substring, no target=)", () => {
+		const state = withKafkaProseResult(baseState(), "connect down", [
+			structuredConnect503("connect_list_connectors", "connect.prd.shared-services.eu.pvh.cloud"),
+		]);
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const ctx = match?.context as { tools: string[]; hostname: string | null };
+		expect(ctx.tools).toEqual(["connect_list_connectors"]);
+		expect(ctx.hostname).toBe("connect.prd.shared-services.eu.pvh.cloud");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -192,6 +220,20 @@ describe("infra-service-degraded-needs-synthetic-cross-check", () => {
 
 	test("requires elastic-agent so the synthetic cross-check can run", () => {
 		expect(rule.requiredAgent).toBe("elastic-agent");
+	});
+
+	// SIO-716 regression: the c72 scenario where misroute leaks an nginx
+	// text/html 503. The structured fields populated by the MCP server's
+	// upstream-fetch helper must be enough on their own to fire the rule.
+	test("fires on structured-only 503 with text/html (the SIO-716 misroute shape)", () => {
+		const state = withKafkaProseResult(baseState(), "connect 503 nginx", [
+			structuredConnect503("connect_list_connectors", "connect.prd.shared-services.eu.pvh.cloud"),
+		]);
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const ctx = match?.context as { hostnames: string[]; signal: string };
+		expect(ctx.hostnames).toEqual(["connect.prd.shared-services.eu.pvh.cloud"]);
+		expect(ctx.signal).toBe("confluent-5xx-needs-synthetic-crosscheck");
 	});
 });
 

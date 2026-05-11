@@ -247,10 +247,20 @@ describe("RestProxyService", () => {
 			await expect(svc.probeReachability()).resolves.toBeUndefined();
 		});
 
-		test("throws on 502", async () => {
+		test("throws on 502 with SIO-725 structured fields (hostname + statusCode + content-type)", async () => {
 			mockFetch(502, "bad gateway");
 			const svc = new RestProxyService(baseConfig);
-			await expect(svc.probeReachability()).rejects.toThrow("HTTP 502");
+			let captured: unknown;
+			await svc.probeReachability().catch((err) => {
+				captured = err;
+			});
+			expect(captured).toBeDefined();
+			const e = captured as { hostname?: string; statusCode?: number; upstreamContentType?: string; message: string };
+			expect(e.hostname).toBe("rest");
+			expect(e.statusCode).toBe(502);
+			expect(e.upstreamContentType).toBe("application/vnd.kafka.v2+json");
+			expect(e.message).toContain("REST Proxy");
+			expect(e.message).toContain("502");
 		});
 
 		test("hits GET /topics with timeout signal", async () => {

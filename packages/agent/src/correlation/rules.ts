@@ -89,20 +89,28 @@ function findInferredConfluentGroupMentions(prose: string): { connect: boolean; 
 }
 
 // SIO-717: did the kafka sub-agent see a 5xx from any Confluent service tool?
-// toolErrors[].message contains the redacted, truncated tool-error content
-// (see extractToolErrors in sub-agent.ts). For a 503 body it contains a string
-// like "MCP error -32603: ksqlDB error 503: <html>...". The category is set to
-// "transient" by classifyToolError because it matched the /\b503\b/ pattern.
+// SIO-725/728: prefer the structured statusCode + hostname fields populated by
+// the MCP server's fetchUpstream helper (via the ---STRUCTURED--- sentinel in
+// ResponseBuilder.error). Fall back to regex on err.message for older tool
+// errors that pre-date the sentinel (other MCP servers, archived fixtures).
 function findConfluent5xxToolErrors(toolErrors: ToolError[]): Array<{ tool: string; hostname: string | null }> {
 	const out: Array<{ tool: string; hostname: string | null }> = [];
 	for (const err of toolErrors) {
-		// Match the Kafka MCP error-wrapping format. Service names come from
-		// ksql-service.ts ("ksqlDB"), connect-service.ts ("Kafka Connect"),
-		// schema-registry-service.ts ("Schema Registry"), restproxy-service.ts
-		// ("REST Proxy"). 5xx range matches any upstream server error.
+		// Structured path: SIO-725 plumbs the upstream hostname into err.hostname
+		// and SIO-728 plumbs the real HTTP status into err.statusCode. Use them
+		// when present -- no string-shape dependency.
+		if (typeof err.statusCode === "number" && err.statusCode >= 500 && err.statusCode < 600) {
+			out.push({ tool: err.toolName, hostname: err.hostname ?? null });
+			continue;
+		}
+		// Regex fallback for tool errors without structured fields. Service names
+		// come from ksql-service.ts ("ksqlDB"), connect-service.ts
+		// ("Kafka Connect"), schema-registry-service.ts ("Schema Registry"),
+		// restproxy-service.ts ("REST Proxy"). 5xx range matches any upstream
+		// server error.
 		const m = err.message.match(/(ksqlDB|Kafka Connect|Schema Registry|REST Proxy)\s+error\s+5\d\d:/);
 		if (!m) continue;
-		out.push({ tool: err.toolName, hostname: extractConfluentHostname(err.message) });
+		out.push({ tool: err.toolName, hostname: err.hostname ?? extractConfluentHostname(err.message) });
 	}
 	return out;
 }

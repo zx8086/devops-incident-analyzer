@@ -1,5 +1,6 @@
 // src/services/restproxy-service.ts
 import type { AppConfig } from "../config/schemas";
+import { fetchUpstream } from "../lib/upstream-fetch.ts";
 
 // SIO-714: Confluent REST Proxy v2 reserves application/vnd.kafka.json.v2+json for the
 // request body of produce calls embedding JSON records. Everything else (metadata reads,
@@ -29,14 +30,14 @@ export class RestProxyService {
 	}
 
 	async probeReachability(timeoutMs = 5000): Promise<void> {
-		const response = await fetch(`${this.baseUrl}/topics`, {
-			method: "GET",
-			headers: this.buildHeaders(),
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}`);
-		}
+		// SIO-725/729: probe goes through fetchUpstream so a misconfigured baseUrl
+		// or nginx HTML 503 surfaces with hostname + content-type metadata, not a
+		// bare "HTTP 502" string.
+		await fetchUpstream(
+			`${this.baseUrl}/topics`,
+			{ method: "GET", headers: this.buildHeaders(), signal: AbortSignal.timeout(timeoutMs) },
+			{ serviceLabel: "REST Proxy", baseUrl: this.baseUrl },
+		);
 	}
 
 	async listTopics(): Promise<string[]> {
@@ -135,11 +136,14 @@ export class RestProxyService {
 	): Promise<T> {
 		const init: RequestInit = { method, headers: this.buildHeaders(contentType) };
 		if (body !== undefined) init.body = JSON.stringify(body);
-		const response = await fetch(`${this.baseUrl}${path}`, init);
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`REST Proxy error ${response.status}: ${errorBody}`);
-		}
+		// SIO-725/729: fetchUpstream throws an upstreamError() carrying hostname,
+		// content-type, status, and body preview on any error or non-JSON response.
+		// Success path returns the Response; we own the JSON / 204 / empty-body
+		// parse below.
+		const response = await fetchUpstream(`${this.baseUrl}${path}`, init, {
+			serviceLabel: "REST Proxy",
+			baseUrl: this.baseUrl,
+		});
 		if (response.status === 204) return undefined as T;
 		const text = await response.text();
 		if (text.length === 0) return undefined as T;

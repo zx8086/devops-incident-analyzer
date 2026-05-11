@@ -1,6 +1,7 @@
 // src/services/ksql-service.ts
 
 import type { AppConfig } from "../config/schemas.ts";
+import { fetchUpstream } from "../lib/upstream-fetch.ts";
 
 export interface KsqlServerInfo {
 	KsqlServerInfo: {
@@ -43,27 +44,16 @@ export class KsqlService {
 	}
 
 	async probeReachability(timeoutMs = 5000): Promise<void> {
-		const response = await fetch(`${this.baseUrl}/info`, {
-			method: "GET",
-			headers: this.headers,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}`);
-		}
+		// SIO-725/729: see restproxy-service.probeReachability comment.
+		await fetchUpstream(
+			`${this.baseUrl}/info`,
+			{ method: "GET", headers: this.headers, signal: AbortSignal.timeout(timeoutMs) },
+			{ serviceLabel: "ksqlDB", baseUrl: this.baseUrl },
+		);
 	}
 
 	async getServerInfo(): Promise<KsqlServerInfo> {
-		const response = await fetch(`${this.baseUrl}/info`, {
-			method: "GET",
-			headers: this.headers,
-		});
-
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`ksqlDB error ${response.status}: ${errorBody}`);
-		}
-
+		const response = await this.request("/info", { method: "GET" });
 		return (await response.json()) as KsqlServerInfo;
 	}
 
@@ -110,18 +100,7 @@ export class KsqlService {
 			ksql: ksql.trim().endsWith(";") ? ksql : `${ksql};`,
 			streamsProperties: properties ?? {},
 		};
-
-		const response = await fetch(`${this.baseUrl}/query`, {
-			method: "POST",
-			headers: this.headers,
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`ksqlDB query error ${response.status}: ${errorBody}`);
-		}
-
+		const response = await this.request("/query", { method: "POST", body: JSON.stringify(body) });
 		return (await response.json()) as unknown[];
 	}
 
@@ -130,19 +109,19 @@ export class KsqlService {
 			ksql: ksql.trim().endsWith(";") ? ksql : `${ksql};`,
 			streamsProperties: properties ?? {},
 		};
-
-		const response = await fetch(`${this.baseUrl}/ksql`, {
-			method: "POST",
-			headers: this.headers,
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`ksqlDB statement error ${response.status}: ${errorBody}`);
-		}
-
+		const response = await this.request("/ksql", { method: "POST", body: JSON.stringify(body) });
 		return (await response.json()) as Array<Record<string, unknown>>;
+	}
+
+	// SIO-725/729: single fetch path for ksqlDB. All three former inline-fetch
+	// sites (info, query, ksql) now route through fetchUpstream which captures
+	// hostname / content-type / status on error and rejects non-JSON responses.
+	private async request(path: string, init: RequestInit): Promise<Response> {
+		return fetchUpstream(
+			`${this.baseUrl}${path}`,
+			{ ...init, headers: this.headers },
+			{ serviceLabel: "ksqlDB", baseUrl: this.baseUrl },
+		);
 	}
 
 	private extractSourceList(result: Array<Record<string, unknown>>, key: string): KsqlStreamOrTable[] {

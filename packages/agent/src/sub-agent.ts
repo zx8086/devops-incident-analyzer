@@ -108,7 +108,33 @@ export function classifyToolError(message: string): { category: ToolErrorCategor
 	return { category: "unknown", retryable: true };
 }
 
+// SIO-728: sentinel that the kafka MCP's ResponseBuilder.error appends to the
+// human error text when structured upstream fields (hostname, content-type,
+// status) are available. extractToolErrors splits on this and parses the
+// trailing JSON. Absent sentinel = unchanged behaviour.
+const STRUCTURED_SENTINEL = "\n---STRUCTURED---\n";
+
+// SIO-728: pick only the known structured fields off the parsed JSON. Anything
+// else (forward-compat additions, junk) is ignored. The structured payload
+// must never widen the ToolError shape by accident.
+function pickStructuredFields(raw: unknown): {
+	hostname?: string;
+	upstreamContentType?: string;
+	statusCode?: number;
+} {
+	if (raw == null || typeof raw !== "object") return {};
+	const obj = raw as Record<string, unknown>;
+	const out: { hostname?: string; upstreamContentType?: string; statusCode?: number } = {};
+	if (typeof obj.hostname === "string") out.hostname = obj.hostname;
+	if (typeof obj.upstreamContentType === "string") out.upstreamContentType = obj.upstreamContentType;
+	if (typeof obj.statusCode === "number" && Number.isInteger(obj.statusCode)) out.statusCode = obj.statusCode;
+	return out;
+}
+
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
+// SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
+// when the MCP server emitted them. Redaction runs on the human part only -- hostnames in the
+// structured JSON would otherwise be scrubbed.
 export function extractToolErrors(
 	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
 ): ToolError[] {
@@ -121,13 +147,30 @@ export function extractToolErrors(
 		if (msg.status !== "error") continue;
 
 		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-		const { category, retryable } = classifyToolError(content);
+
+		// SIO-728: split off the structured payload before classifying or redacting.
+		// Categorization runs on the human-readable prefix (matches today's behaviour).
+		const sentinelIdx = content.indexOf(STRUCTURED_SENTINEL);
+		const humanPart = sentinelIdx === -1 ? content : content.slice(0, sentinelIdx);
+		let extra: { hostname?: string; upstreamContentType?: string; statusCode?: number } = {};
+		if (sentinelIdx !== -1) {
+			const jsonPart = content.slice(sentinelIdx + STRUCTURED_SENTINEL.length);
+			try {
+				extra = pickStructuredFields(JSON.parse(jsonPart));
+			} catch {
+				// Malformed sentinel payload -- ignore, keep going with humanPart only.
+				// Don't fail the whole error-extraction path because one tool emitted bad JSON.
+			}
+		}
+
+		const { category, retryable } = classifyToolError(humanPart);
 		// SIO-707: redact PII before the message ever lands in logs or DataSourceResult.
 		errors.push({
 			toolName: msg.name ?? "unknown",
 			category,
-			message: redactPiiContent(content.slice(0, 500)),
+			message: redactPiiContent(humanPart.slice(0, 500)),
 			retryable,
+			...extra,
 		});
 	}
 	return errors;
