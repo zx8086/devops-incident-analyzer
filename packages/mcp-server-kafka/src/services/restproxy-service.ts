@@ -1,27 +1,37 @@
 // src/services/restproxy-service.ts
 import type { AppConfig } from "../config/schemas";
 
-const REST_PROXY_V2_CONTENT_TYPE = "application/vnd.kafka.json.v2+json";
+// SIO-714: Confluent REST Proxy v2 reserves application/vnd.kafka.json.v2+json for the
+// request body of produce calls embedding JSON records. Everything else (metadata reads,
+// consumer lifecycle, produce response) uses application/vnd.kafka.v2+json. Sending the
+// wrong type on Accept results in HTTP 406/415.
+const REST_PROXY_V2_DEFAULT = "application/vnd.kafka.v2+json";
+const REST_PROXY_V2_JSON_RECORDS = "application/vnd.kafka.json.v2+json";
 
 export class RestProxyService {
 	private readonly baseUrl: string;
-	private readonly headers: Record<string, string>;
+	private readonly authHeader?: string;
 
 	constructor(config: AppConfig) {
 		this.baseUrl = config.restproxy.url.replace(/\/$/, "");
-		this.headers = {
-			"Content-Type": REST_PROXY_V2_CONTENT_TYPE,
-			Accept: REST_PROXY_V2_CONTENT_TYPE,
-		};
 		if (config.restproxy.apiKey && config.restproxy.apiSecret) {
-			this.headers.Authorization = `Basic ${btoa(`${config.restproxy.apiKey}:${config.restproxy.apiSecret}`)}`;
+			this.authHeader = `Basic ${btoa(`${config.restproxy.apiKey}:${config.restproxy.apiSecret}`)}`;
 		}
+	}
+
+	private buildHeaders(contentType: string = REST_PROXY_V2_DEFAULT): Record<string, string> {
+		const headers: Record<string, string> = {
+			"Content-Type": contentType,
+			Accept: REST_PROXY_V2_DEFAULT,
+		};
+		if (this.authHeader) headers.Authorization = this.authHeader;
+		return headers;
 	}
 
 	async probeReachability(timeoutMs = 5000): Promise<void> {
 		const response = await fetch(`${this.baseUrl}/topics`, {
 			method: "GET",
-			headers: this.headers,
+			headers: this.buildHeaders(),
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (!response.ok) {
@@ -58,7 +68,7 @@ export class RestProxyService {
 		value_schema_id?: number;
 		offsets: Array<{ partition: number; offset: number; error_code?: number; error?: string }>;
 	}> {
-		return this.request("POST", `/topics/${encodeURIComponent(topic)}`, { records });
+		return this.request("POST", `/topics/${encodeURIComponent(topic)}`, { records }, REST_PROXY_V2_JSON_RECORDS);
 	}
 
 	async createConsumer(
@@ -117,8 +127,13 @@ export class RestProxyService {
 		);
 	}
 
-	private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
-		const init: RequestInit = { method, headers: this.headers };
+	private async request<T>(
+		method: "GET" | "POST" | "PUT" | "DELETE",
+		path: string,
+		body?: unknown,
+		contentType?: string,
+	): Promise<T> {
+		const init: RequestInit = { method, headers: this.buildHeaders(contentType) };
 		if (body !== undefined) init.body = JSON.stringify(body);
 		const response = await fetch(`${this.baseUrl}${path}`, init);
 		if (!response.ok) {
