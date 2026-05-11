@@ -135,10 +135,18 @@ describe("ConnectService", () => {
 		expect(headers.Authorization).toBeUndefined();
 	});
 
-	test("throws on non-OK response with status code in message", async () => {
+	test("throws on non-OK response with SIO-725 structured fields", async () => {
 		mockFetch(404, "Connector not found");
 		const service = new ConnectService(mockConfig);
-		expect(service.getConnectorStatus("missing")).rejects.toThrow("Kafka Connect error 404");
+		let captured: unknown;
+		await service.getConnectorStatus("missing").catch((err) => {
+			captured = err;
+		});
+		const e = captured as { hostname?: string; statusCode?: number; message: string };
+		expect(e.statusCode).toBe(404);
+		expect(e.hostname).toBeDefined();
+		expect(e.message).toContain("Kafka Connect");
+		expect(e.message).toContain("404");
 	});
 
 	describe("probeReachability", () => {
@@ -148,10 +156,16 @@ describe("ConnectService", () => {
 			await expect(service.probeReachability()).resolves.toBeUndefined();
 		});
 
-		test("throws on 503", async () => {
+		test("throws on 503 with SIO-725 structured fields", async () => {
 			mockFetch(503, "unavailable");
 			const service = new ConnectService(mockConfig);
-			await expect(service.probeReachability()).rejects.toThrow("HTTP 503");
+			let captured: unknown;
+			await service.probeReachability().catch((err) => {
+				captured = err;
+			});
+			const e = captured as { statusCode?: number; message: string };
+			expect(e.statusCode).toBe(503);
+			expect(e.message).toContain("Kafka Connect");
 		});
 
 		test("hits GET / with timeout signal", async () => {

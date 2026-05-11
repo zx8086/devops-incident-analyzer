@@ -89,9 +89,15 @@ describe("ConnectService — write methods", () => {
 		expect(call[0]).toBe("http://connect:8083/connectors/my%20connector%2Fwith%20slash/pause");
 	});
 
-	test("throws on non-OK with status in message", async () => {
+	test("throws on non-OK with SIO-725 structured fields", async () => {
 		mockFetch(500, "boom");
 		const svc = new ConnectService(baseConfig);
-		await expect(svc.pauseConnector("x")).rejects.toThrow(/Kafka Connect error 500/);
+		let captured: unknown;
+		await svc.pauseConnector("x").catch((err) => {
+			captured = err;
+		});
+		const e = captured as { statusCode?: number; message: string };
+		expect(e.statusCode).toBe(500);
+		expect(e.message).toMatch(/Kafka Connect/);
 	});
 });

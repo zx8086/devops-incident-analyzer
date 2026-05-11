@@ -114,10 +114,18 @@ describe("SchemaRegistryService", () => {
 		expect(result).toEqual([1, 2, 3]);
 	});
 
-	test("throws on non-OK response", async () => {
+	test("throws on non-OK response with SIO-725 structured fields", async () => {
 		mockFetch(404, "Subject not found");
 		const service = new SchemaRegistryService(mockConfig);
-		expect(service.listSubjects()).rejects.toThrow("Schema Registry error 404");
+		let captured: unknown;
+		await service.listSubjects().catch((err) => {
+			captured = err;
+		});
+		const e = captured as { hostname?: string; statusCode?: number; message: string };
+		expect(e.statusCode).toBe(404);
+		expect(e.hostname).toBeDefined();
+		expect(e.message).toContain("Schema Registry");
+		expect(e.message).toContain("404");
 	});
 
 	test("includes auth header when API credentials provided", async () => {
@@ -147,10 +155,16 @@ describe("SchemaRegistryService", () => {
 			await expect(service.probeReachability()).resolves.toBeUndefined();
 		});
 
-		test("throws on 500", async () => {
+		test("throws on 500 with SIO-725 structured fields", async () => {
 			mockFetch(500, "boom");
 			const service = new SchemaRegistryService(mockConfig);
-			await expect(service.probeReachability()).rejects.toThrow("HTTP 500");
+			let captured: unknown;
+			await service.probeReachability().catch((err) => {
+				captured = err;
+			});
+			const e = captured as { hostname?: string; statusCode?: number; message: string };
+			expect(e.statusCode).toBe(500);
+			expect(e.message).toContain("Schema Registry");
 		});
 
 		test("hits GET /subjects with timeout signal", async () => {

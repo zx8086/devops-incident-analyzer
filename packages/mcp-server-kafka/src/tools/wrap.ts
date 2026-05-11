@@ -1,6 +1,6 @@
 // src/tools/wrap.ts
 import type { AppConfig } from "../config/schemas.ts";
-import { normalizeError } from "../lib/errors.ts";
+import { KafkaToolError, normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
 import { logger } from "../utils/logger.ts";
 import { traceToolCall } from "../utils/tracing.ts";
@@ -74,9 +74,25 @@ export function wrapHandler<T>(
 				return await handler(args);
 			} catch (error) {
 				const mcpError = normalizeError(error);
-				logger.error({ tool: toolName, error: mcpError.message }, "Tool call error");
-				return ResponseBuilder.error(mcpError.message);
+				// SIO-728: when the original error is a KafkaToolError carrying upstream
+				// metadata (populated by fetchUpstream in SIO-725/729), forward it through
+				// the ---STRUCTURED--- sentinel so the agent can lift it into a ToolError.
+				const structured = error instanceof KafkaToolError ? extractStructuredFields(error) : undefined;
+				logger.error({ tool: toolName, error: mcpError.message, ...structured }, "Tool call error");
+				return ResponseBuilder.error(mcpError.message, structured);
 			}
 		});
 	};
+}
+
+// SIO-728: lift the upstream-metadata fields off a KafkaToolError into the
+// JSON-serialisable shape the sentinel carries. Returns undefined when no
+// upstream metadata is present (preserves byte-identical ResponseBuilder output
+// for validation / config errors that have no hostname).
+function extractStructuredFields(err: KafkaToolError): Record<string, unknown> | undefined {
+	const out: Record<string, unknown> = {};
+	if (err.hostname !== undefined) out.hostname = err.hostname;
+	if (err.upstreamContentType !== undefined) out.upstreamContentType = err.upstreamContentType;
+	if (err.statusCode !== undefined) out.statusCode = err.statusCode;
+	return Object.keys(out).length === 0 ? undefined : out;
 }

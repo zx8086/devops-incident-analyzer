@@ -80,9 +80,15 @@ describe("SchemaRegistryService — writes (additions)", () => {
 		expect(call[0]).toBe("http://sr:8081/subjects/orders-value/versions/3?permanent=true");
 	});
 
-	test("hardDelete on not-yet-soft-deleted surfaces 404", async () => {
+	test("hardDelete on not-yet-soft-deleted surfaces 404 with SIO-725 structured fields", async () => {
 		mockFetch(404, "Subject not soft-deleted");
 		const svc = new SchemaRegistryService(baseConfig);
-		await expect(svc.hardDeleteSubject("orders-value")).rejects.toThrow(/Schema Registry error 404/);
+		let captured: unknown;
+		await svc.hardDeleteSubject("orders-value").catch((err) => {
+			captured = err;
+		});
+		const e = captured as { statusCode?: number; message: string };
+		expect(e.statusCode).toBe(404);
+		expect(e.message).toMatch(/Schema Registry/);
 	});
 });

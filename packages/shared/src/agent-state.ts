@@ -16,6 +16,14 @@ export const ToolErrorSchema = z.object({
 	category: ToolErrorCategorySchema,
 	message: z.string(),
 	retryable: z.boolean(),
+	// SIO-725: upstream host that produced the error, sourced from MCP-side new URL(baseUrl).hostname.
+	// SIO-728: populated end-to-end via the ---STRUCTURED--- sentinel in ResponseBuilder.error.
+	hostname: z.string().nullish(),
+	// SIO-729: content-type the upstream actually returned (e.g. "text/html" for nginx 503 pages).
+	// Lets correlation rules distinguish service-degraded from malformed-JSON.
+	upstreamContentType: z.string().nullish(),
+	// SIO-728: real HTTP status from the upstream, so rules don't have to regex 5\d\d out of message.
+	statusCode: z.number().int().nullish(),
 });
 export type ToolError = z.infer<typeof ToolErrorSchema>;
 

@@ -1,6 +1,7 @@
 // src/services/schema-registry-service.ts
 
 import type { AppConfig } from "../config/schemas.ts";
+import { fetchUpstream } from "../lib/upstream-fetch.ts";
 
 export interface SchemaInfo {
 	subject: string;
@@ -32,14 +33,12 @@ export class SchemaRegistryService {
 	}
 
 	async probeReachability(timeoutMs = 5000): Promise<void> {
-		const response = await fetch(`${this.baseUrl}/subjects`, {
-			method: "GET",
-			headers: this.headers,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}`);
-		}
+		// SIO-725/729: see restproxy-service.probeReachability comment.
+		await fetchUpstream(
+			`${this.baseUrl}/subjects`,
+			{ method: "GET", headers: this.headers, signal: AbortSignal.timeout(timeoutMs) },
+			{ serviceLabel: "Schema Registry", baseUrl: this.baseUrl },
+		);
 	}
 
 	async listSubjects(): Promise<string[]> {
@@ -142,12 +141,12 @@ export class SchemaRegistryService {
 			options.body = JSON.stringify(body);
 		}
 
-		const response = await fetch(url, options);
-
-		if (!response.ok) {
-			const errorBody = await response.text().catch(() => "Unknown error");
-			throw new Error(`Schema Registry error ${response.status}: ${errorBody}`);
-		}
+		// SIO-725/729: fetchUpstream throws an upstreamError with hostname,
+		// content-type, status, and body preview on error / non-JSON paths.
+		const response = await fetchUpstream(url, options, {
+			serviceLabel: "Schema Registry",
+			baseUrl: this.baseUrl,
+		});
 
 		return (await response.json()) as T;
 	}
