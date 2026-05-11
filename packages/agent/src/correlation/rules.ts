@@ -58,6 +58,36 @@ function extractConfluentHostname(message: string): string | null {
 	return match ? match[0] : null;
 }
 
+// SIO-723: keywords that signal the kafka sub-agent has correctly framed
+// MSK-offset-derived group names as inferences, not confirmations. At least
+// one must appear in the prose when Connect/ksqlDB REST is 5xx-ing AND the
+// prose names connect-* / _confluent-ksql-default_query_* groups, otherwise
+// the report is implicitly presenting historical offsets as live deployment
+// state. Keep this list short and require an exact substring match (cheap,
+// auditable) -- the SOUL.md prompt explicitly tells the agent to use one
+// of these phrases.
+const SIO723_DISCLAIMER_KEYWORDS = ["inferred", "MSK offset state", "unverifiable while", "cannot confirm"];
+
+function hasInferredOffsetDisclaimer(prose: string): boolean {
+	for (const kw of SIO723_DISCLAIMER_KEYWORDS) {
+		if (prose.includes(kw)) return true;
+	}
+	return false;
+}
+
+// SIO-723: did the kafka sub-agent's prose name connect-* groups or
+// _confluent-ksql-default_query_* groups? These names are the ones that come
+// from kafka_list_consumer_groups (MSK admin API), which returns historical
+// offset state regardless of whether the owning Connect/ksqlDB deployment
+// still exists. Used together with findConfluent5xxToolErrors to detect when
+// the agent is presenting inferred names without the required disclaimer.
+function findInferredConfluentGroupMentions(prose: string): { connect: boolean; ksql: boolean } {
+	return {
+		connect: /\bconnect-[A-Za-z0-9_-]+/.test(prose),
+		ksql: prose.includes("_confluent-ksql-default_query_"),
+	};
+}
+
 // SIO-717: did the kafka sub-agent see a 5xx from any Confluent service tool?
 // toolErrors[].message contains the redacted, truncated tool-error content
 // (see extractToolErrors in sub-agent.ts). For a 503 body it contains a string
@@ -193,6 +223,45 @@ export const correlationRules: CorrelationRule[] = [
 		},
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-723: kafka_list_consumer_groups returns groups from MSK's
+		// __consumer_offsets topic -- the historical record of every group that
+		// ever offset-committed, NOT a live deployment manifest. When Connect or
+		// ksqlDB REST is 5xx-ing, the agent has no way to verify whether a
+		// connect-* / _confluent-ksql-default_query_* group still corresponds to a
+		// deployed component. Reports must frame those names as inferences. This
+		// rule fires when the prose names such groups WHILE the owning service is
+		// 5xx-ing AND no disclaimer keyword is present, capping confidence so the
+		// HITL gate forces the operator to read it with the right framing. Like
+		// gitlab-deploy-vs-datastore-runtime (SIO-712), the trigger is the signal:
+		// no other agent can resolve it, the cap is the entire purpose.
+		name: "inferred-confluent-groups-need-disclaimer",
+		description:
+			"Kafka sub-agent named connect-*/ksqlDB groups (inferred from MSK offsets) while the owning REST service was 5xx-ing, without a disclaimer that those names cannot be confirmed as live deployments.",
+		trigger: (state) => {
+			const { toolErrors, prose } = getKafkaResultSignals(state);
+			if (!prose) return null;
+			const errs = findConfluent5xxToolErrors(toolErrors);
+			const connect5xx = errs.some((e) => e.tool.startsWith("connect_"));
+			const ksql5xx = errs.some((e) => e.tool.startsWith("ksql_"));
+			if (!connect5xx && !ksql5xx) return null;
+			const mentions = findInferredConfluentGroupMentions(prose);
+			const violatingConnect = connect5xx && mentions.connect;
+			const violatingKsql = ksql5xx && mentions.ksql;
+			if (!violatingConnect && !violatingKsql) return null;
+			if (hasInferredOffsetDisclaimer(prose)) return null;
+			return {
+				context: {
+					signal: "inferred-groups-without-disclaimer",
+					connect: violatingConnect,
+					ksql: violatingKsql,
+				},
+			};
+		},
+		requiredAgent: "kafka-agent",
+		retry: { attempts: 1, timeoutMs: 30_000 },
+		skipCoverageCheck: true,
 	},
 ];
 

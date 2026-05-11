@@ -153,11 +153,11 @@ function signRequest(method: string, url: URL, body: string, creds: AwsCreds, re
 }
 
 // SIO-718: classify a proxied JSON-RPC response body so the dev log can show
-// inner tool status alongside the outer HTTP envelope. The outer HTTP status
-// is always 200 when AgentCore is reachable, even if the MCP tool inside
-// returned isError: true with an upstream 5xx -- without this, a healthy
-// AgentCore masking a sick upstream looks identical to a fully working call.
-export function classifyInnerStatus(rawBody: string): string {
+// the actual tool outcome on each line. The AgentCore HTTP envelope is always
+// 200 when AgentCore is reachable, even if the MCP tool inside returned
+// isError: true with an upstream 5xx -- without this, a healthy AgentCore
+// masking a sick upstream looks identical to a fully working call.
+export function classifyToolStatus(rawBody: string): string {
 	// SSE responses arrive as "event: message\ndata: <json>\n\n" -- strip framing
 	// before JSON-parsing. The MCP streamable-HTTP transport emits at most one
 	// data frame per tool result; we look at the last data: line to cover any
@@ -224,13 +224,13 @@ export function classifyInnerStatus(rawBody: string): string {
 	return "error (unparsed)";
 }
 
-// SIO-718: pick the log severity for a proxied tool call based on its inner
-// JSON-RPC status. Successful calls stay at info so the bulk of normal traffic
-// is unobtrusive; everything else (real upstream errors, parse failures,
+// SIO-718: pick the log severity for a proxied tool call based on its tool
+// status. Successful calls stay at info so the bulk of normal traffic is
+// unobtrusive; everything else (real upstream errors, parse failures,
 // transport-level JSON-RPC errors) escalates to warn so failures are visually
 // distinguishable in a wall of info lines.
-export function severityForInnerStatus(inner: string): "info" | "warn" {
-	return inner === "ok" ? "info" : "warn";
+export function severityForToolStatus(status: string): "info" | "warn" {
+	return status === "ok" ? "info" : "warn";
 }
 
 // Proxy handle returned to bootstrap for lifecycle management
@@ -292,33 +292,35 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 							respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
 							if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
 
-							// SIO-718: read the cloned body so we can log inner JSON-RPC
-							// status alongside the outer HTTP envelope. Clone leaves
-							// response.body intact for streaming back to the caller.
-							let innerStatus: string | undefined;
+							// SIO-718: read the cloned body so we can log the actual tool
+							// outcome on each line. Clone leaves response.body intact for
+							// streaming back to the caller. The HTTP envelope status is
+							// only surfaced when non-2xx -- on the happy path it is always
+							// 200 even when the wrapped tool failed, so logging it on every
+							// line is pure noise that obscures the tool result.
+							let toolStatus: string | undefined;
 							if (toolName) {
 								try {
 									const clonedBody = await response.clone().text();
-									innerStatus = classifyInnerStatus(clonedBody);
+									toolStatus = classifyToolStatus(clonedBody);
 								} catch (err) {
-									innerStatus = "unparseable";
+									toolStatus = "unparseable";
 									logger.debug(
 										{ tool: toolName, err: err instanceof Error ? err.message : String(err) },
-										"Failed to read cloned response body for inner-status logging",
+										"Failed to read cloned response body for tool-status logging",
 									);
 								}
-								// Emit at warn when the tool call failed (any non-ok inner
-								// status), info when it succeeded. Without this, real upstream
-								// failures sit in the same column as the dozens of successful
-								// calls in a typical agent run and get visually missed -- the
-								// merged version of SIO-718 made the failures *visible* in the
-								// log line but did not make them *distinguishable* at a glance.
-								const severity = severityForInnerStatus(innerStatus ?? "unparseable");
+								// Emit at warn when the tool call failed (any non-ok status),
+								// info when it succeeded. Without this, real upstream failures
+								// sit in the same column as the dozens of successful calls in
+								// a typical agent run and get visually missed.
+								const severity = severityForToolStatus(toolStatus ?? "unparseable");
 								const logFn = severity === "info" ? logger.info.bind(logger) : logger.warn.bind(logger);
-								logFn(
-									{ tool: toolName, outer: response.status, inner: innerStatus },
-									`Tool call proxied: ${toolName} -> outer=${response.status} inner=${innerStatus}`,
-								);
+								const httpAbnormal = response.status >= 300;
+								const logFields: Record<string, unknown> = { tool: toolName, status: toolStatus };
+								if (httpAbnormal) logFields.httpStatus = response.status;
+								const msgSuffix = httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus;
+								logFn(logFields, `Tool call proxied: ${toolName} -> ${msgSuffix}`);
 							}
 
 							return new Response(response.body, {

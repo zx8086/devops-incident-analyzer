@@ -196,6 +196,99 @@ describe("infra-service-degraded-needs-synthetic-cross-check", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rule 4 (SIO-723): inferred-confluent-groups-need-disclaimer
+// ---------------------------------------------------------------------------
+
+describe("inferred-confluent-groups-need-disclaimer", () => {
+	const rule = findRule("inferred-confluent-groups-need-disclaimer");
+
+	const connectGroupProse =
+		"21 Kafka Connect connectors are halted: connect-C_SINK_COUCHBASE_PRICES_DOCUMENTS, connect-C_SINK_COUCHBASE_PRODUCTS_V3, connect-C_SINK_COUCHBASE_VARIANTS_V3";
+	const ksqlGroupProse =
+		"22 ksqlDB queries halted: _confluent-ksql-default_query_CSAS_S_PRIVATE_SINK_PIM_ARTICLES_V3_36751 (EMPTY)";
+	const disclaimerProse =
+		" These names are inferred from MSK offset state and current deployment cannot be confirmed while Connect REST is 503.";
+
+	test("fires when connect_* 5xx AND connect-* group is named in prose without a disclaimer", () => {
+		const state = withKafkaProseResult(baseState(), connectGroupProse, [connect503Error("connect_list_connectors")]);
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const ctx = match?.context as { signal: string; connect: boolean; ksql: boolean };
+		expect(ctx.signal).toBe("inferred-groups-without-disclaimer");
+		expect(ctx.connect).toBe(true);
+		expect(ctx.ksql).toBe(false);
+	});
+
+	test("does NOT fire when connect_* 5xx AND connect-* in prose BUT disclaimer is present", () => {
+		const state = withKafkaProseResult(baseState(), connectGroupProse + disclaimerProse, [
+			connect503Error("connect_list_connectors"),
+		]);
+		expect(rule.trigger(state)).toBeNull();
+	});
+
+	test("does NOT fire when no connect_* 5xx, even if connect-* group is named (no inference being made)", () => {
+		const state = withKafkaProseResult(baseState(), connectGroupProse);
+		expect(rule.trigger(state)).toBeNull();
+	});
+
+	test("fires when ksql_* 5xx AND _confluent-ksql-default_query_* is named in prose without a disclaimer", () => {
+		const state = withKafkaProseResult(baseState(), ksqlGroupProse, [ksqlDB503Error("ksql_list_queries")]);
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const ctx = match?.context as { ksql: boolean; connect: boolean };
+		expect(ctx.ksql).toBe(true);
+		expect(ctx.connect).toBe(false);
+	});
+
+	test("does NOT fire when ksql_* 5xx AND _confluent-ksql-default_query_* in prose BUT disclaimer is present", () => {
+		const state = withKafkaProseResult(baseState(), ksqlGroupProse + disclaimerProse, [
+			ksqlDB503Error("ksql_list_queries"),
+		]);
+		expect(rule.trigger(state)).toBeNull();
+	});
+
+	test("does NOT fire when ksql_* 5xx but prose names no inferred groups", () => {
+		const state = withKafkaProseResult(baseState(), "ksqlDB cluster unreachable; will retry on recovery.", [
+			ksqlDB503Error("ksql_get_server_info"),
+		]);
+		expect(rule.trigger(state)).toBeNull();
+	});
+
+	test("fires once for the c72 scenario where BOTH connect and ksql are 5xx and both group families appear", () => {
+		const state = withKafkaProseResult(baseState(), `${connectGroupProse} ${ksqlGroupProse}`, [
+			connect503Error("connect_list_connectors"),
+			ksqlDB503Error("ksql_list_queries"),
+		]);
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const ctx = match?.context as { connect: boolean; ksql: boolean };
+		expect(ctx.connect).toBe(true);
+		expect(ctx.ksql).toBe(true);
+	});
+
+	test("any disclaimer keyword satisfies the rule (cannot confirm)", () => {
+		const state = withKafkaProseResult(
+			baseState(),
+			`${connectGroupProse} We cannot confirm these are live deployments.`,
+			[connect503Error("connect_list_connectors")],
+		);
+		expect(rule.trigger(state)).toBeNull();
+	});
+
+	test("requires kafka-agent (no other agent can resolve this; the cap is the purpose)", () => {
+		expect(rule.requiredAgent).toBe("kafka-agent");
+	});
+
+	test("uses skipCoverageCheck: true (mirrors gitlab-deploy-vs-datastore-runtime)", () => {
+		expect(rule.skipCoverageCheck).toBe(true);
+	});
+
+	test("does not fire when there is no kafka result at all", () => {
+		expect(rule.trigger(baseState())).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Integration: rule loadout verifies registration count
 // ---------------------------------------------------------------------------
 
@@ -216,5 +309,9 @@ describe("rule registration", () => {
 			const rule = findRule(name);
 			expect(rule.skipCoverageCheck).toBeFalsy();
 		}
+	});
+
+	test("the SIO-723 rule is registered", () => {
+		expect(correlationRules.map((r) => r.name)).toContain("inferred-confluent-groups-need-disclaimer");
 	});
 });
