@@ -172,4 +172,64 @@ describe("KafkaService.getMessageByOffset", () => {
 			expect(req.topics[0]?.partitions).toHaveLength(1);
 		}
 	});
+
+	// SIO-734: ephemeral mcp-seek-<uuid> groups must be closed on every exit path,
+	// not just the timer path. The existing BROKER_ERROR tests above check the
+	// classified result but don't observe consumer.close(); these tests fill that gap.
+	test("SIO-734: consumer.close() fires when consume() rejects (BROKER_ERROR path)", async () => {
+		let consumerClosed = false;
+		const env = buildClientManager({
+			listOffsets: bounds({ name: "topic-a", partitionIndex: 0, earliest: 0n, latest: 1000n }),
+			createConsumer: () => {
+				const child = Object.assign(new Error("UNSUPPORTED_VERSION"), { errorCode: 35 });
+				const aggregate = new MultipleErrors("Received response with error while executing API Fetch(v16)", [child]);
+				return {
+					closed: false,
+					consume: () => Promise.reject(aggregate),
+					close: async () => {
+						consumerClosed = true;
+					},
+				};
+			},
+		});
+		const service = new KafkaService(env.manager);
+
+		const result = await service.getMessageByOffset("topic-a", 0, 100);
+		expect(result.status).toBe("error");
+		expect(consumerClosed).toBe(true);
+	});
+
+	test("SIO-734: consumer.close() fires when the iterator throws mid-stream", async () => {
+		let consumerClosed = false;
+		let streamClosed = false;
+		const env = buildClientManager({
+			listOffsets: bounds({ name: "topic-a", partitionIndex: 0, earliest: 0n, latest: 1000n }),
+			createConsumer: () => ({
+				closed: false,
+				consume: async () => ({
+					closed: false,
+					close: async () => {
+						streamClosed = true;
+					},
+					[Symbol.asyncIterator]: () => ({
+						next: async () => {
+							throw new Error("connection lost mid-fetch");
+						},
+					}),
+				}),
+				close: async () => {
+					consumerClosed = true;
+				},
+			}),
+		});
+		const service = new KafkaService(env.manager);
+
+		const result = await service.getMessageByOffset("topic-a", 0, 100);
+		// The iterator throw is caught by the BROKER_ERROR catch in getMessageByOffset,
+		// classified, and surfaced as a structured error. consumer.close() must still
+		// fire from the finally block on the way out.
+		expect(result.status).toBe("error");
+		expect(streamClosed).toBe(true);
+		expect(consumerClosed).toBe(true);
+	});
 });
