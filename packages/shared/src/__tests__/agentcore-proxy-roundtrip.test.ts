@@ -63,7 +63,6 @@ function sseOk(id: number, result: unknown, extra: HeadersInit = {}): Response {
 	return new Response(sseFrame({ jsonrpc: "2.0", id, result }), { status: 200, headers: { ...SSE_HEADERS, ...extra } });
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: SIO-733 - used by Tasks 5-6 (error-path tests)
 function sseInnerError(id: number, text: string, extra: HeadersInit = {}): Response {
 	return new Response(
 		sseFrame({
@@ -75,7 +74,6 @@ function sseInnerError(id: number, text: string, extra: HeadersInit = {}): Respo
 	);
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: SIO-733 - used by Tasks 5-6 (error-path tests)
 function jsonRpcErrorResponse(id: number, code: number, message: string): Response {
 	return new Response(sseFrame({ jsonrpc: "2.0", id, error: { code, message } }), {
 		status: 200,
@@ -210,5 +208,47 @@ describe("agentcore-proxy round trip — happy paths", () => {
 		} finally {
 			if (savedToken) process.env.AGENTCORE_AWS_SESSION_TOKEN = savedToken;
 		}
+	});
+});
+
+describe("agentcore-proxy round trip — inner-error paths", () => {
+	test("inner isError ksqlDB 503 still returns HTTP 200 to the client", async () => {
+		seedResponses(
+			sseInnerError(
+				6,
+				"MCP error -32603: ksqlDB error 503: <html><body>503 Service Temporarily Unavailable</body></html>",
+			),
+		);
+
+		const { response, body } = await callProxy(toolCall(6, "ksql_list_streams"));
+
+		expect(response.status).toBe(200);
+		expect(body).toContain('"isError":true');
+		expect(body).toContain("ksqlDB error 503");
+		expect(fetchCalls).toHaveLength(1);
+	});
+
+	test("jsonrpc-error envelope (top-level error, no result) passes through with 200", async () => {
+		seedResponses(jsonRpcErrorResponse(7, -32600, "Invalid Request"));
+
+		const { response, body } = await callProxy(toolCall(7, "kafka_bad_call"));
+
+		expect(response.status).toBe(200);
+		const dataLine = body.split("\n").find((l) => l.startsWith("data: "));
+		expect(dataLine).toBeDefined();
+		// biome-ignore lint/style/noNonNullAssertion: SIO-733 - guarded by expect(dataLine).toBeDefined()
+		const parsed = JSON.parse(dataLine!.slice(6));
+		expect(parsed.error).toEqual({ code: -32600, message: "Invalid Request" });
+		expect(parsed.result).toBeUndefined();
+	});
+
+	test("unparseable response body passes through verbatim", async () => {
+		seedResponses(new Response("totally not json", { status: 200, headers: SSE_HEADERS }));
+
+		const { response, body } = await callProxy(toolCall(8, "weird_tool"));
+
+		expect(response.status).toBe(200);
+		expect(body).toBe("totally not json");
+		expect(fetchCalls).toHaveLength(1);
 	});
 });
