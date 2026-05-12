@@ -2,8 +2,7 @@
 //
 // SIO-739: per-role deadline lookup + invokeWithDeadline helper.
 
-import { describe, expect, test } from "bun:test";
-// biome-ignore lint/correctness/noUnusedImports: SIO-739 Task 2 will add invokeWithDeadline + DeadlineExceededError usage
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DeadlineExceededError, getRoleDeadlineMs, invokeWithDeadline, ROLE_DEADLINES_MS } from "./llm.ts";
 
 describe("ROLE_DEADLINES_MS defaults", () => {
@@ -57,5 +56,121 @@ describe("getRoleDeadlineMs", () => {
 
 	test("falls through to map default for camelCase role when no env key present", () => {
 		expect(getRoleDeadlineMs("followUp", {})).toBe(60_000);
+	});
+});
+
+describe("invokeWithDeadline", () => {
+	type FakeLlm = {
+		invoke: (
+			messages: unknown,
+			config?: { signal?: AbortSignal },
+		) => Promise<{ content: string }>;
+	};
+
+	const ORIG_ENV = { ...process.env };
+
+	beforeEach(() => {
+		process.env = { ...ORIG_ENV };
+	});
+
+	afterEach(() => {
+		process.env = { ...ORIG_ENV };
+	});
+
+	test("resolves before deadline → returns response", async () => {
+		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "200";
+		const llm: FakeLlm = {
+			invoke: async () => {
+				await Bun.sleep(10);
+				return { content: "ok" };
+			},
+		};
+		const result = await invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []);
+		expect(result.content).toBe("ok");
+	});
+
+	test("rejects with non-abort error → rethrows unchanged, NOT DeadlineExceededError", async () => {
+		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "200";
+		const llm: FakeLlm = {
+			invoke: async () => {
+				throw new Error("boom");
+			},
+		};
+		await expect(
+			invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []),
+		).rejects.toThrow("boom");
+	});
+
+	test("hangs past deadline → throws DeadlineExceededError with role + deadlineMs", async () => {
+		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "50";
+		const llm: FakeLlm = {
+			invoke: async (_messages, config) => {
+				return await new Promise((_resolve, reject) => {
+					config?.signal?.addEventListener("abort", () => {
+						const err = new Error("Aborted");
+						err.name = "AbortError";
+						reject(err);
+					});
+				});
+			},
+		};
+		let caught: unknown;
+		try {
+			await invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []);
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toBeInstanceOf(DeadlineExceededError);
+		expect((caught as DeadlineExceededError).role).toBe("mitigation");
+		expect((caught as DeadlineExceededError).deadlineMs).toBe(50);
+	});
+
+	test("external signal aborts first → rethrows AbortError, NOT DeadlineExceededError", async () => {
+		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "1000";
+		const external = new AbortController();
+		setTimeout(() => external.abort(), 20);
+		const llm: FakeLlm = {
+			invoke: async (_messages, config) => {
+				return await new Promise((_resolve, reject) => {
+					config?.signal?.addEventListener("abort", () => {
+						const err = new Error("Aborted by external signal");
+						err.name = "AbortError";
+						reject(err);
+					});
+				});
+			},
+		};
+		let caught: unknown;
+		try {
+			await invokeWithDeadline(
+				llm as unknown as Parameters<typeof invokeWithDeadline>[0],
+				"mitigation",
+				[],
+				{ signal: external.signal },
+			);
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toBeInstanceOf(Error);
+		expect(caught).not.toBeInstanceOf(DeadlineExceededError);
+		expect((caught as Error).name).toBe("AbortError");
+	});
+
+	test("deadline = 0 → no local timer, llm.invoke runs without per-call abort", async () => {
+		process.env.AGENT_LLM_TIMEOUT_CLASSIFIER_MS = "0";
+		const llm: FakeLlm = {
+			invoke: async (_messages, config) => {
+				// If a local timer fired, signal would be aborted; assert it stays open
+				await Bun.sleep(80);
+				expect(config?.signal?.aborted ?? false).toBe(false);
+				return { content: "ok" };
+			},
+		};
+		const result = await invokeWithDeadline(
+			llm as unknown as Parameters<typeof invokeWithDeadline>[0],
+			"classifier",
+			[],
+		);
+		expect(result.content).toBe("ok");
 	});
 });

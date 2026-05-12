@@ -134,3 +134,51 @@ export function createLlm(role: LlmRole): ChatBedrockConverse {
 	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
 }
+
+// SIO-739: Wrap llm.invoke with a per-role wall-clock deadline merged into
+// the LangGraph RunnableConfig signal. The local AbortController is private,
+// so we can distinguish a local-deadline trip from an external graph abort
+// and only convert the former into DeadlineExceededError.
+type InvokableLlm = {
+	invoke: (
+		messages: unknown,
+		config?: { signal?: AbortSignal; [key: string]: unknown },
+	) => Promise<{ content: unknown }>;
+};
+
+export async function invokeWithDeadline<TLlm extends InvokableLlm>(
+	llm: TLlm,
+	role: LlmRole,
+	messages: Parameters<TLlm["invoke"]>[0],
+	config?: { signal?: AbortSignal; [key: string]: unknown },
+): Promise<Awaited<ReturnType<TLlm["invoke"]>>> {
+	const deadlineMs = getRoleDeadlineMs(role);
+
+	// deadline === 0 → no per-call timer; just pass through.
+	if (deadlineMs === 0) {
+		return (await llm.invoke(messages, config)) as Awaited<ReturnType<TLlm["invoke"]>>;
+	}
+
+	const localController = new AbortController();
+	const timer = setTimeout(() => localController.abort(), deadlineMs);
+	const externalSignal = config?.signal;
+	const merged = externalSignal
+		? AbortSignal.any([externalSignal, localController.signal])
+		: localController.signal;
+
+	try {
+		const response = await llm.invoke(messages, { ...config, signal: merged });
+		return response as Awaited<ReturnType<TLlm["invoke"]>>;
+	} catch (err) {
+		if (
+			localController.signal.aborted &&
+			err instanceof Error &&
+			err.name === "AbortError"
+		) {
+			throw new DeadlineExceededError(role, deadlineMs);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timer);
+	}
+}
