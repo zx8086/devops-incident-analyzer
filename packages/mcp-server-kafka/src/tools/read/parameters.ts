@@ -11,6 +11,24 @@ import {
 
 export const ListTopicsParams = z.object({
 	filter: TopicFilterParam,
+	prefix: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Case-sensitive prefix filter applied before the regex filter (cheap startsWith). Example: 'DLQ_'."),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(500)
+		.optional()
+		.describe("Maximum number of topics to return (1-500). Default 100."),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe("Number of topics to skip from the start of the sorted result set (for pagination). Default 0."),
 });
 
 export const DescribeTopicParams = z.object({

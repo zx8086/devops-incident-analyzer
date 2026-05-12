@@ -1,6 +1,6 @@
 // src/tools/read/prompts.ts
 
-export const LIST_TOPICS_DESCRIPTION = `[READ] List Kafka topics in the cluster. Optionally filter by a regex pattern. Returns topic names. Use this to discover available topics before performing other operations.`;
+export const LIST_TOPICS_DESCRIPTION = `[READ] List Kafka topics in the cluster with pagination. Use 'prefix' to narrow by case-sensitive name prefix (e.g. "DLQ_"), 'filter' for regex matching, 'limit' (default 100, max 500), and 'offset' for paging. Returns { topics, total, truncated, hint? }. When 'truncated' is true, narrow with 'prefix' or page with 'offset'.`;
 
 export const DESCRIBE_TOPIC_DESCRIPTION = `[READ] Get detailed information about a specific Kafka topic including partition details, replica configuration, and topic-level settings. Use this to understand topic structure and configuration.`;
 
