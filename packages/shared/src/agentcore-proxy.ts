@@ -270,11 +270,16 @@ export function classifyToolStatus(rawBody: string): string {
 	return "error (unparsed)";
 }
 
-// SIO-737: parse out the JSON-RPC error.code from a response body so the
-// POST handler can decide whether to retry. Returns undefined for a
-// success body, malformed body, or an error object without a numeric
-// code. Shares SSE-frame stripping with classifyToolStatus.
-export function extractJsonRpcErrorCode(rawBody: string): number | undefined {
+export interface JsonRpcErrorInfo {
+	code: number;
+	message?: string;
+}
+
+// SIO-740: parse error.code AND error.message so logs can surface what the
+// upstream actually said, not just the numeric class. message is only set
+// when present and non-empty after trimming, so callers can spread the
+// field conditionally without emitting jsonRpcMessage: "".
+export function extractJsonRpcError(rawBody: string): JsonRpcErrorInfo | undefined {
 	const dataLines = rawBody.split("\n").filter((l) => l.startsWith("data: "));
 	const jsonText = dataLines.length > 0 ? dataLines[dataLines.length - 1]?.slice(6) : rawBody.trim();
 	if (!jsonText) return undefined;
@@ -287,11 +292,21 @@ export function extractJsonRpcErrorCode(rawBody: string): number | undefined {
 	}
 
 	if (typeof parsed !== "object" || parsed === null) return undefined;
-	const obj = parsed as Record<string, unknown>;
-	const err = obj.error;
+	const err = (parsed as Record<string, unknown>).error;
 	if (typeof err !== "object" || err === null) return undefined;
-	const code = (err as Record<string, unknown>).code;
-	return typeof code === "number" ? code : undefined;
+	const errObj = err as Record<string, unknown>;
+	if (typeof errObj.code !== "number") return undefined;
+	const info: JsonRpcErrorInfo = { code: errObj.code };
+	if (typeof errObj.message === "string" && errObj.message.trim() !== "") {
+		info.message = errObj.message;
+	}
+	return info;
+}
+
+// SIO-737: kept for callers that only need the numeric code. Delegates to
+// extractJsonRpcError so the two helpers stay in lockstep.
+export function extractJsonRpcErrorCode(rawBody: string): number | undefined {
+	return extractJsonRpcError(rawBody)?.code;
 }
 
 // SIO-718: pick the log severity for a proxied tool call based on its tool
@@ -424,7 +439,11 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 						// SIO-737: when the inner TCP loop built a 502 envelope itself,
 						// the -32000 inside it is ours -- not AgentCore's. Don't retry on
 						// our own failure envelope; surface it to the caller untouched.
-						const jsonRpcCode = terminalFailure ? undefined : extractJsonRpcErrorCode(clonedBody);
+						// SIO-740: pull message alongside code so logs surface what the
+						// upstream actually said.
+						const jsonRpcInfo = terminalFailure ? undefined : extractJsonRpcError(clonedBody);
+						const jsonRpcCode = jsonRpcInfo?.code;
+						const jsonRpcMessage = jsonRpcInfo?.message;
 						const retryable = isRetryableJsonRpcCode(jsonRpcCode);
 						const isFinalAttempt = jsonRpcAttempt >= JSONRPC_RETRY_MAX_ATTEMPTS;
 
@@ -438,6 +457,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 								const logFields: Record<string, unknown> = { tool: toolName, status: toolStatus };
 								if (httpAbnormal) logFields.httpStatus = response.status;
 								if (jsonRpcCode !== undefined) logFields.jsonRpcCode = jsonRpcCode;
+								if (jsonRpcMessage !== undefined) logFields.jsonRpcMessage = jsonRpcMessage;
 								if (jsonRpcAttempt > 1) {
 									logFields.attempt = jsonRpcAttempt;
 									logFields.maxAttempts = JSONRPC_RETRY_MAX_ATTEMPTS;
@@ -460,39 +480,36 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 						const retryAfterMs = computeJitteredBackoff(base);
 						if (Date.now() + retryAfterMs >= deadline) {
 							if (toolName) {
-								logger.warn(
-									{
-										tool: toolName,
-										status: classifyToolStatus(clonedBody),
-										jsonRpcCode,
-										attempt: jsonRpcAttempt,
-										maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
-										gaveUpDueToDeadline: true,
-										totalMs: Date.now() - requestStart,
-									},
-									`Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`,
-								);
-							}
-							break;
-						}
-
-						if (toolName) {
-							logger.warn(
-								{
+								const deadlineFields: Record<string, unknown> = {
 									tool: toolName,
 									status: classifyToolStatus(clonedBody),
 									jsonRpcCode,
 									attempt: jsonRpcAttempt,
 									maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
-									retryAfterMs,
-								},
-								`Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`,
-							);
+									gaveUpDueToDeadline: true,
+									totalMs: Date.now() - requestStart,
+								};
+								if (jsonRpcMessage !== undefined) deadlineFields.jsonRpcMessage = jsonRpcMessage;
+								logger.warn(deadlineFields, `Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`);
+							}
+							break;
+						}
+
+						if (toolName) {
+							const retryFields: Record<string, unknown> = {
+								tool: toolName,
+								status: classifyToolStatus(clonedBody),
+								jsonRpcCode,
+								attempt: jsonRpcAttempt,
+								maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
+								retryAfterMs,
+							};
+							if (jsonRpcMessage !== undefined) retryFields.jsonRpcMessage = jsonRpcMessage;
+							logger.warn(retryFields, `Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`);
 						} else {
-							logger.warn(
-								{ jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs },
-								"AgentCore -320xx response, retrying",
-							);
+							const anonFields: Record<string, unknown> = { jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs };
+							if (jsonRpcMessage !== undefined) anonFields.jsonRpcMessage = jsonRpcMessage;
+							logger.warn(anonFields, "AgentCore -320xx response, retrying");
 						}
 
 						try {
