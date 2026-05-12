@@ -191,3 +191,172 @@ describe("POST /api/agent/stream — error path", () => {
 		expect(errorEvent?.message).toContain("agent exploded");
 	});
 });
+
+describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
+	test("emits partial_failure for proposeMitigation timeout", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "proposeMitigation",
+					data: {
+						output: {
+							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(1);
+		expect(failureEvents[0]).toMatchObject({
+			type: "partial_failure",
+			node: "proposeMitigation",
+			reason: "timeout",
+		});
+	});
+
+	test("emits two partial_failure events when both Step 1 and Step 2 timed out (different node keys)", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "proposeMitigation",
+					data: {
+						output: {
+							partialFailures: [
+								{ node: "proposeMitigation", reason: "timeout" },
+								{ node: "proposeMitigation.actionProposal", reason: "timeout" },
+							],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(2);
+		expect(failureEvents.map((e) => e.node)).toEqual(["proposeMitigation", "proposeMitigation.actionProposal"]);
+	});
+
+	test("emits partial_failure for followUp timeout", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "followUp",
+					data: {
+						output: {
+							partialFailures: [{ node: "followUp", reason: "timeout" }],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(1);
+		expect(failureEvents[0]).toMatchObject({
+			type: "partial_failure",
+			node: "followUp",
+			reason: "timeout",
+		});
+	});
+
+	test("de-dups partial_failure events with identical node+reason key across nodes", async () => {
+		// Same key reported by both proposeMitigation and followUp on_chain_end events
+		// must emit only one SSE event.
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "proposeMitigation",
+					data: {
+						output: {
+							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+						},
+					},
+				};
+				yield {
+					event: "on_chain_end",
+					name: "followUp",
+					data: {
+						output: {
+							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(1);
+	});
+
+	test("ignores non-array partialFailures payload", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "proposeMitigation",
+					data: {
+						output: {
+							partialFailures: "not-an-array",
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(0);
+	});
+
+	test("skips malformed failure entries lacking node or reason strings", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chain_end",
+					name: "proposeMitigation",
+					data: {
+						output: {
+							partialFailures: [
+								{ node: 42, reason: "timeout" },
+								{ node: "proposeMitigation", reason: null },
+								null,
+								{ node: "proposeMitigation", reason: "timeout" },
+							],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const events = await collectSse(response);
+
+		const failureEvents = events.filter((e) => e.type === "partial_failure");
+		expect(failureEvents).toHaveLength(1);
+		expect(failureEvents[0]).toMatchObject({
+			type: "partial_failure",
+			node: "proposeMitigation",
+			reason: "timeout",
+		});
+	});
+});

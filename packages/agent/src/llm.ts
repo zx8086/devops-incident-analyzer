@@ -52,6 +52,50 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 };
 
+// SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
+// value of 0 disables the per-call timer for that role (the graph-level signal
+// is still in force). Defaults cover the post-validate non-streaming hang
+// surface; other roles opt in when they need it.
+export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
+	orchestrator: 0,
+	classifier: 0,
+	subAgent: 0,
+	aggregator: 0,
+	responder: 0,
+	entityExtractor: 0,
+	followUp: 60_000,
+	normalizer: 0,
+	mitigation: 120_000,
+	actionProposal: 60_000,
+	runbookSelector: 0,
+};
+
+// SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
+// followUp -> FOLLOW_UP; actionProposal -> ACTION_PROPOSAL; runbookSelector -> RUNBOOK_SELECTOR.
+function roleToEnvSegment(role: LlmRole): string {
+	return role.replace(/([A-Z])/g, "_$1").toUpperCase();
+}
+
+export function getRoleDeadlineMs(role: LlmRole, env: NodeJS.ProcessEnv = process.env): number {
+	const envKey = `AGENT_LLM_TIMEOUT_${roleToEnvSegment(role)}_MS`;
+	const raw = env[envKey];
+	if (raw != null && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+	}
+	return ROLE_DEADLINES_MS[role];
+}
+
+export class DeadlineExceededError extends Error {
+	constructor(
+		public readonly role: LlmRole,
+		public readonly deadlineMs: number,
+	) {
+		super(`LLM call for role '${role}' exceeded deadline of ${deadlineMs}ms`);
+		this.name = "DeadlineExceededError";
+	}
+}
+
 function buildChatModel(
 	bedrockConfig: BedrockModelConfig,
 	overrides: Partial<BedrockModelConfig>,
@@ -89,4 +133,46 @@ export function createLlm(role: LlmRole): ChatBedrockConverse {
 	const fallback = buildChatModel(fallbackConfig, overrides);
 	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
+}
+
+// SIO-739: Wrap llm.invoke with a per-role wall-clock deadline merged into
+// the LangGraph RunnableConfig signal. The local AbortController is private,
+// so we can distinguish a local-deadline trip from an external graph abort
+// and only convert the former into DeadlineExceededError.
+export type InvokableLlm = {
+	invoke: (
+		messages: unknown,
+		config?: { signal?: AbortSignal; [key: string]: unknown },
+	) => Promise<{ content: unknown }>;
+};
+
+export async function invokeWithDeadline<TLlm extends InvokableLlm>(
+	llm: TLlm,
+	role: LlmRole,
+	messages: Parameters<TLlm["invoke"]>[0],
+	config?: { signal?: AbortSignal; [key: string]: unknown },
+): Promise<Awaited<ReturnType<TLlm["invoke"]>>> {
+	const deadlineMs = getRoleDeadlineMs(role);
+
+	// deadline === 0 → no per-call timer; just pass through.
+	if (deadlineMs === 0) {
+		return (await llm.invoke(messages, config)) as Awaited<ReturnType<TLlm["invoke"]>>;
+	}
+
+	const localController = new AbortController();
+	const timer = setTimeout(() => localController.abort(), deadlineMs);
+	const externalSignal = config?.signal;
+	const merged = externalSignal ? AbortSignal.any([externalSignal, localController.signal]) : localController.signal;
+
+	try {
+		const response = await llm.invoke(messages, { ...config, signal: merged });
+		return response as Awaited<ReturnType<TLlm["invoke"]>>;
+	} catch (err) {
+		if (localController.signal.aborted && err instanceof Error && err.name === "AbortError") {
+			throw new DeadlineExceededError(role, deadlineMs);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timer);
+	}
 }

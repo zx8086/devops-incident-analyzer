@@ -214,6 +214,15 @@ export const AgentState = Annotation.Root({
 		reducer: (_, next) => next,
 		default: () => null,
 	}),
+
+	// SIO-739: Append-only list of nodes that soft-failed (e.g. per-call LLM
+	// deadline exceeded). The SSE handler emits a partial_failure event for
+	// each new entry; the graph still reaches END so the validated answer
+	// can still be delivered.
+	partialFailures: Annotation<Array<{ node: string; reason: string }>>({
+		reducer: (prev, next) => [...prev, ...next],
+		default: () => [],
+	}),
 });
 
 export type AgentStateType = typeof AgentState.State;

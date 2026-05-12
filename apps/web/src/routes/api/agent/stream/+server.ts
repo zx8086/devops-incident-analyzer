@@ -96,6 +96,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								"followUp",
 							]);
 							const nodeStartTimes = new Map<string, number>();
+							const emittedFailures = new Set<string>();
 							let _responseContent = "";
 							const toolsUsed = new Set<string>();
 
@@ -143,6 +144,31 @@ export const POST: RequestHandler = async ({ request }) => {
 										const pendingActions = event.data?.output?.pendingActions;
 										if (Array.isArray(pendingActions) && pendingActions.length > 0) {
 											send({ type: "pending_actions", actions: pendingActions });
+										}
+									}
+
+									// SIO-739: Emit partial_failure for any new entries added by this node.
+									if (event.name === "proposeMitigation" || event.name === "followUp") {
+										const partialFailures = event.data?.output?.partialFailures;
+										if (Array.isArray(partialFailures)) {
+											for (const failure of partialFailures) {
+												if (
+													typeof failure === "object" &&
+													failure !== null &&
+													typeof failure.node === "string" &&
+													typeof failure.reason === "string"
+												) {
+													const key = `${failure.node}:${failure.reason}`;
+													if (!emittedFailures.has(key)) {
+														emittedFailures.add(key);
+														send({
+															type: "partial_failure",
+															node: failure.node,
+															reason: failure.reason,
+														});
+													}
+												}
+											}
 										}
 									}
 								}

@@ -2,7 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { createLlm } from "./llm.ts";
+import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:follow-up-generator");
@@ -88,7 +88,12 @@ export async function generateSuggestions(
 	try {
 		const llm = createLlm("followUp");
 		const truncated = responseText.slice(0, 1000);
-		const result = await llm.invoke([new SystemMessage(FOLLOW_UP_PROMPT), new HumanMessage(truncated)], config);
+		const result = await invokeWithDeadline(
+			llm as InvokableLlm,
+			"followUp",
+			[new SystemMessage(FOLLOW_UP_PROMPT), new HumanMessage(truncated)],
+			config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
+		);
 
 		const content = typeof result.content === "string" ? result.content : "";
 		const suggestions = parseSuggestions(content);
@@ -100,6 +105,16 @@ export async function generateSuggestions(
 		logger.warn("LLM suggestions did not pass validation, using fallbacks");
 		return { suggestions: generateFallbackSuggestions(toolsUsed) };
 	} catch (error) {
+		if (error instanceof DeadlineExceededError) {
+			logger.warn(
+				{ role: error.role, deadlineMs: error.deadlineMs },
+				"Follow-up suggestion generation exceeded deadline; soft-failing",
+			);
+			return {
+				suggestions: generateFallbackSuggestions(toolsUsed),
+				partialFailures: [{ node: "followUp", reason: "timeout" }],
+			};
+		}
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"LLM suggestion generation failed, using fallbacks",

@@ -52,6 +52,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		degradedRules: [],
 		confidenceCap: undefined,
 		pendingCorrelations: [],
+		partialFailures: [],
 		...overrides,
 	};
 }
