@@ -252,3 +252,56 @@ describe("agentcore-proxy round trip — inner-error paths", () => {
 		expect(fetchCalls).toHaveLength(1);
 	});
 });
+
+describe("agentcore-proxy round trip — transport-error paths", () => {
+	test("retryable ECONNRESET on attempt 1, success on attempt 2", async () => {
+		seedResponses(
+			new TypeError("fetch failed: ECONNRESET reading from upstream"),
+			sseOk(9, { content: [{ type: "text", text: "recovered" }] }),
+		);
+
+		const { response, body } = await callProxy(toolCall(9, "kafka_list_topics"));
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("recovered");
+		expect(fetchCalls).toHaveLength(2);
+	});
+
+	test("retryable error twice -- 502 with JSON-RPC error envelope", async () => {
+		seedResponses(new TypeError("fetch failed: ECONNRESET"), new TypeError("fetch failed: ECONNRESET"));
+
+		const { response, body } = await callProxy(toolCall(10, "kafka_list_topics"));
+
+		expect(response.status).toBe(502);
+		const parsed = JSON.parse(body);
+		expect(parsed.jsonrpc).toBe("2.0");
+		expect(parsed.error.code).toBe(-32000);
+		expect(parsed.error.message).toMatch(/ECONNRESET/);
+		expect(parsed.id).toBeNull();
+		expect(fetchCalls).toHaveLength(2);
+	});
+
+	test("TimeoutError (AbortSignal.timeout shape) is treated as retryable", async () => {
+		const timeoutErr = Object.assign(new Error("The operation was aborted"), {
+			name: "TimeoutError",
+		});
+		seedResponses(timeoutErr, sseOk(11, { content: [{ type: "text", text: "ok" }] }));
+
+		const { response, body } = await callProxy(toolCall(11, "kafka_describe_topic"));
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("ok");
+		expect(fetchCalls).toHaveLength(2);
+	});
+
+	test("non-retryable fetch failure -- 502 after a single attempt", async () => {
+		seedResponses(new TypeError("DNS lookup failed for bedrock-agentcore"));
+
+		const { response, body } = await callProxy(toolCall(12, "kafka_describe_topic"));
+
+		expect(response.status).toBe(502);
+		const parsed = JSON.parse(body);
+		expect(parsed.error.message).toContain("DNS lookup failed");
+		expect(fetchCalls).toHaveLength(1);
+	});
+});
