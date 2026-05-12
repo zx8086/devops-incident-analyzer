@@ -9,6 +9,7 @@ import {
 	type AgentCoreProxyHandle,
 	clearCredentialCache,
 	computeJitteredBackoff,
+	extractJsonRpcError,
 	extractJsonRpcErrorCode,
 	sleepWithAbort,
 	startAgentCoreProxy,
@@ -59,6 +60,66 @@ describe("extractJsonRpcErrorCode", () => {
 	test("returns undefined for unparseable body", () => {
 		expect(extractJsonRpcErrorCode("not json")).toBeUndefined();
 		expect(extractJsonRpcErrorCode("")).toBeUndefined();
+	});
+});
+
+describe("extractJsonRpcError", () => {
+	test("returns code and message together from inline JSON", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Runtime health check failed"}}`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010, message: "Runtime health check failed" });
+	});
+
+	test("returns code and message from SSE-framed body", () => {
+		const body = `event: message\ndata: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Throttled"}}\n\n`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010, message: "Throttled" });
+	});
+
+	test("returns code only when message is absent", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"code":-32010}}`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010 });
+	});
+
+	test("returns code only when message is empty string", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":""}}`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010 });
+	});
+
+	test("returns code only when message is whitespace", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"   "}}`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010 });
+	});
+
+	test("returns code only when message is not a string", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":42}}`;
+		expect(extractJsonRpcError(body)).toEqual({ code: -32010 });
+	});
+
+	test("returns undefined when error object lacks numeric code", () => {
+		const body = `{"jsonrpc":"2.0","id":1,"error":{"message":"broken"}}`;
+		expect(extractJsonRpcError(body)).toBeUndefined();
+	});
+
+	test("returns undefined for successful response", () => {
+		const body = `event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[]}}\n\n`;
+		expect(extractJsonRpcError(body)).toBeUndefined();
+	});
+
+	test("returns undefined for unparseable body", () => {
+		expect(extractJsonRpcError("not json")).toBeUndefined();
+		expect(extractJsonRpcError("")).toBeUndefined();
+	});
+
+	test("stays in lockstep with extractJsonRpcErrorCode", () => {
+		const samples = [
+			`{"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"x"}}`,
+			`{"jsonrpc":"2.0","id":1,"error":{"code":-32603}}`,
+			`{"jsonrpc":"2.0","id":1,"result":{}}`,
+			`{"jsonrpc":"2.0","id":1,"error":{"message":"no code"}}`,
+			`not json`,
+		];
+		for (const body of samples) {
+			expect(extractJsonRpcErrorCode(body)).toBe(extractJsonRpcError(body)?.code);
+		}
 	});
 });
 
