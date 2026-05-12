@@ -81,9 +81,14 @@ const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
     runbookSelector: 0,
 };
 
-function getRoleDeadlineMs(role: LlmRole): number {
-    const envKey = `AGENT_LLM_TIMEOUT_${role.toUpperCase()}_MS`;
-    const raw = process.env[envKey];
+// SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
+function roleToEnvSegment(role: LlmRole): string {
+    return role.replace(/([A-Z])/g, "_$1").toUpperCase();
+}
+
+function getRoleDeadlineMs(role: LlmRole, env: NodeJS.ProcessEnv = process.env): number {
+    const envKey = `AGENT_LLM_TIMEOUT_${roleToEnvSegment(role)}_MS`;
+    const raw = env[envKey];
     if (raw != null && raw !== "") {
         const parsed = Number(raw);
         if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);

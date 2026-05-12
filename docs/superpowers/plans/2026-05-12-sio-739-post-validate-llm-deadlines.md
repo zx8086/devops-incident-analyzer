@@ -29,18 +29,8 @@ Create `packages/agent/src/llm.invoke-with-deadline.test.ts`:
 //
 // SIO-739: per-role deadline lookup + invokeWithDeadline helper.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { DeadlineExceededError, ROLE_DEADLINES_MS, getRoleDeadlineMs, invokeWithDeadline } from "./llm.ts";
-
-const ORIG_ENV = { ...process.env };
-
-beforeEach(() => {
-	process.env = { ...ORIG_ENV };
-});
-
-afterEach(() => {
-	process.env = { ...ORIG_ENV };
-});
 
 describe("ROLE_DEADLINES_MS defaults", () => {
 	test("mitigation default is 120000", () => {
@@ -61,29 +51,38 @@ describe("ROLE_DEADLINES_MS defaults", () => {
 });
 
 describe("getRoleDeadlineMs", () => {
-	test("returns map default when no env var set", () => {
-		delete process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS;
-		expect(getRoleDeadlineMs("mitigation")).toBe(120_000);
+	test("returns map default when env has no relevant key", () => {
+		expect(getRoleDeadlineMs("mitigation", {})).toBe(120_000);
 	});
 
 	test("env override takes precedence", () => {
-		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "5000";
-		expect(getRoleDeadlineMs("mitigation")).toBe(5000);
+		expect(getRoleDeadlineMs("mitigation", { AGENT_LLM_TIMEOUT_MITIGATION_MS: "5000" })).toBe(5000);
 	});
 
 	test("env override of 0 is honoured (disables per-call timer)", () => {
-		process.env.AGENT_LLM_TIMEOUT_FOLLOWUP_MS = "0";
-		expect(getRoleDeadlineMs("followUp")).toBe(0);
+		expect(getRoleDeadlineMs("followUp", { AGENT_LLM_TIMEOUT_FOLLOW_UP_MS: "0" })).toBe(0);
 	});
 
 	test("non-numeric env value falls through to map default", () => {
-		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "nope";
-		expect(getRoleDeadlineMs("mitigation")).toBe(120_000);
+		expect(getRoleDeadlineMs("mitigation", { AGENT_LLM_TIMEOUT_MITIGATION_MS: "nope" })).toBe(120_000);
 	});
 
 	test("negative env value falls through to map default", () => {
-		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "-1";
-		expect(getRoleDeadlineMs("mitigation")).toBe(120_000);
+		expect(getRoleDeadlineMs("mitigation", { AGENT_LLM_TIMEOUT_MITIGATION_MS: "-1" })).toBe(120_000);
+	});
+
+	test("empty string env value falls through to map default", () => {
+		expect(getRoleDeadlineMs("mitigation", { AGENT_LLM_TIMEOUT_MITIGATION_MS: "" })).toBe(120_000);
+	});
+
+	test("camelCase role names use SCREAMING_SNAKE env keys", () => {
+		expect(getRoleDeadlineMs("followUp", { AGENT_LLM_TIMEOUT_FOLLOW_UP_MS: "1234" })).toBe(1234);
+		expect(getRoleDeadlineMs("actionProposal", { AGENT_LLM_TIMEOUT_ACTION_PROPOSAL_MS: "2345" })).toBe(2345);
+		expect(getRoleDeadlineMs("runbookSelector", { AGENT_LLM_TIMEOUT_RUNBOOK_SELECTOR_MS: "3456" })).toBe(3456);
+	});
+
+	test("falls through to map default for camelCase role when no env key present", () => {
+		expect(getRoleDeadlineMs("followUp", {})).toBe(60_000);
 	});
 });
 ```
@@ -116,9 +115,14 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	runbookSelector: 0,
 };
 
-export function getRoleDeadlineMs(role: LlmRole): number {
-	const envKey = `AGENT_LLM_TIMEOUT_${role.toUpperCase()}_MS`;
-	const raw = process.env[envKey];
+// SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
+function roleToEnvSegment(role: LlmRole): string {
+	return role.replace(/([A-Z])/g, "_$1").toUpperCase();
+}
+
+export function getRoleDeadlineMs(role: LlmRole, env: NodeJS.ProcessEnv = process.env): number {
+	const envKey = `AGENT_LLM_TIMEOUT_${roleToEnvSegment(role)}_MS`;
+	const raw = env[envKey];
 	if (raw != null && raw !== "") {
 		const parsed = Number(raw);
 		if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
@@ -513,7 +517,7 @@ import type { AgentStateType } from "./state.ts";
 beforeEach(() => {
 	process.env = { ...ORIG_ENV };
 	process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "50";
-	process.env.AGENT_LLM_TIMEOUT_ACTIONPROPOSAL_MS = "50";
+	process.env.AGENT_LLM_TIMEOUT_ACTION_PROPOSAL_MS = "50";
 	callCounter = 0;
 	hangForever.mockClear();
 	succeed.mockClear();
@@ -826,7 +830,7 @@ import type { AgentStateType } from "./state.ts";
 
 beforeEach(() => {
 	process.env = { ...ORIG_ENV };
-	process.env.AGENT_LLM_TIMEOUT_FOLLOWUP_MS = "50";
+	process.env.AGENT_LLM_TIMEOUT_FOLLOW_UP_MS = "50";
 	hangForever.mockClear();
 });
 
@@ -1222,7 +1226,7 @@ gh pr create --title "SIO-739: per-call LLM deadlines for post-validate nodes" -
 - Adds `invokeWithDeadline` helper in `packages/agent/src/llm.ts` that merges the LangGraph `RunnableConfig.signal` with a per-role `AbortSignal.timeout`, converting only local-deadline trips into `DeadlineExceededError` (external graph aborts pass through unchanged).
 - Wires the helper into `proposeMitigation` (both Step 1 and Step 2) and `generateSuggestions`. On timeout the node soft-fails: empty mitigation/empty actions or fallback follow-up suggestions, and appends a `{node, reason}` entry to a new `partialFailures` annotation on `AgentState`.
 - SSE handler emits a new additive `{type: "partial_failure", node, reason}` event from `on_chain_end` for `proposeMitigation` and `followUp` with de-dup on `${node}:${reason}`. Frontend ignores unknown event types — no UI change required.
-- Per-role defaults: mitigation 120s, actionProposal 60s, followUp 60s. Overridable via `AGENT_LLM_TIMEOUT_<ROLE>_MS`. All other roles get `0` (no per-call timer) and continue to rely on the graph-level 720s signal.
+- Per-role defaults: mitigation 120s, actionProposal 60s, followUp 60s. Overridable via `AGENT_LLM_TIMEOUT_<SCREAMING_SNAKE_ROLE>_MS` (e.g. `AGENT_LLM_TIMEOUT_ACTION_PROPOSAL_MS`, `AGENT_LLM_TIMEOUT_FOLLOW_UP_MS`). All other roles get `0` (no per-call timer) and continue to rely on the graph-level 720s signal.
 
 Spec: `docs/superpowers/specs/2026-05-12-sio-739-post-validate-llm-deadlines-design.md`
 Plan: `docs/superpowers/plans/2026-05-12-sio-739-post-validate-llm-deadlines.md`
@@ -1265,4 +1269,4 @@ Report the PR URL back to the user and wait for review. After merge, smoke-verif
 
 **Placeholder scan:** No "TBD", "TODO", "similar to Task N", or "add appropriate error handling" — every step shows the exact code or command.
 
-**Type consistency:** `invokeWithDeadline`, `DeadlineExceededError`, `ROLE_DEADLINES_MS`, `getRoleDeadlineMs`, `partialFailures` named identically across spec, plan, code, and tests. `partialFailures` entry shape `{node: string, reason: string}` is consistent everywhere. Env var pattern `AGENT_LLM_TIMEOUT_<ROLE>_MS` matches in code and verification commands.
+**Type consistency:** `invokeWithDeadline`, `DeadlineExceededError`, `ROLE_DEADLINES_MS`, `getRoleDeadlineMs`, `partialFailures` named identically across spec, plan, code, and tests. `partialFailures` entry shape `{node: string, reason: string}` is consistent everywhere. Env var pattern `AGENT_LLM_TIMEOUT_<SCREAMING_SNAKE_ROLE>_MS` (camelCase roles converted via `roleToEnvSegment`) matches in code and verification commands.
