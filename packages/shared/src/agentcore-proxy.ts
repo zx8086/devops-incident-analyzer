@@ -40,6 +40,14 @@ interface AwsCreds {
 let cachedCreds: AwsCreds | null = null;
 let credsExpiresAt = 0;
 
+// SIO-733: test seam. Lets the round-trip suite reset the cache between
+// proxy restarts when credential env vars change mid-suite. Not used by
+// production code.
+export function clearCredentialCache(): void {
+	cachedCreds = null;
+	credsExpiresAt = 0;
+}
+
 async function getCredentials(): Promise<AwsCreds> {
 	// Return cached if still valid (5min buffer)
 	if (cachedCreds && Date.now() < credsExpiresAt - 300_000) {
