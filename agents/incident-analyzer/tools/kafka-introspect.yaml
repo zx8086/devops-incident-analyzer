@@ -150,3 +150,34 @@ tool_mapping:
     connect_management: when pausing, resuming, restarting, or deleting Kafka Connect connectors (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
     restproxy: when producing to or consuming from Kafka via the Confluent REST Proxy v2 API (writes gated by KAFKA_ALLOW_WRITES)
     write_ops: when producing test messages, creating/altering topics, deleting topics, or resetting consumer group offsets (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
+  action_keywords:
+    connect_status:
+      - kafka connect
+      - connector
+      - connectors
+      - connect rest
+    connect_management:
+      - pause connector
+      - resume connector
+      - restart connector
+      - delete connector
+    restproxy:
+      - rest proxy
+      - restproxy
+      - confluent rest
+    ksql:
+      - ksql
+      - ksqldb
+      - ksql query
+    schema_registry:
+      - schema registry
+      - avro schema
+      - subject version
+    schema_management:
+      - register schema
+      - schema compatibility
+      - evolve schema
+    dlq_messages:
+      - dead letter
+      - dead-letter
+      - dlq
