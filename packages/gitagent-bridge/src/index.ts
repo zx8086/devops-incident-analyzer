@@ -17,6 +17,7 @@ export {
 	getAllActionToolNames,
 	getAvailableActions,
 	getUncoveredTools,
+	matchActionsByKeywords,
 	matchesPattern,
 	type ResolvedMapping,
 	resolveActionTools,

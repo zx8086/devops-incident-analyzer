@@ -104,3 +104,25 @@ export function getAvailableActions(toolDef: ToolDefinition): string[] {
 export function getActionKeywords(toolDef: ToolDefinition): Record<string, string[]> {
 	return toolDef.tool_mapping?.action_keywords ?? {};
 }
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function matchActionsByKeywords(query: string, toolDef: ToolDefinition): string[] {
+	const keywords = getActionKeywords(toolDef);
+	if (Object.keys(keywords).length === 0 || query.length === 0) return [];
+	const q = query.toLowerCase();
+	const matched = new Set<string>();
+	for (const [action, kws] of Object.entries(keywords)) {
+		for (const kw of kws) {
+			if (kw.length === 0) continue;
+			const pattern = new RegExp(`\\b${escapeRegex(kw.toLowerCase())}\\b`);
+			if (pattern.test(q)) {
+				matched.add(action);
+				break;
+			}
+		}
+	}
+	return [...matched];
+}
