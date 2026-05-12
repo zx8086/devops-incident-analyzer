@@ -100,3 +100,7 @@ export function getAvailableActions(toolDef: ToolDefinition): string[] {
 	if (!actionMap) return [];
 	return Object.keys(actionMap);
 }
+
+export function getActionKeywords(toolDef: ToolDefinition): Record<string, string[]> {
+	return toolDef.tool_mapping?.action_keywords ?? {};
+}

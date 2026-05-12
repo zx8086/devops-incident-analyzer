@@ -101,17 +101,36 @@ export const ToolDefinitionSchema = z.object({
 				.describe(
 					'Optional one-line LLM-facing hint per action key. Each value is a single sentence completing "pick this action when ...". Consumed by entity-extractor.buildActionCatalog() to steer action selection. Keys, when present, must be a subset of action_tool_map keys.',
 				),
+			action_keywords: z
+				.record(z.string(), z.array(z.string()))
+				.optional()
+				.describe(
+					"Optional case-insensitive keyword catalog per action key. When the user's query contains any keyword (word-boundary match), the corresponding action is force-included in the sub-agent's tool filter. Augments LLM-driven action selection with deterministic fallback. Keys, when present, must be a subset of action_tool_map keys.",
+				),
 		})
 		.superRefine((tm, ctx) => {
-			if (!tm.action_descriptions || !tm.action_tool_map) return;
+			if (!tm.action_tool_map) return;
 			const validKeys = new Set(Object.keys(tm.action_tool_map));
-			for (const key of Object.keys(tm.action_descriptions)) {
-				if (!validKeys.has(key)) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						message: `action_descriptions key "${key}" is not in action_tool_map`,
-						path: ["action_descriptions", key],
-					});
+			if (tm.action_descriptions) {
+				for (const key of Object.keys(tm.action_descriptions)) {
+					if (!validKeys.has(key)) {
+						ctx.addIssue({
+							code: z.ZodIssueCode.custom,
+							message: `action_descriptions key "${key}" is not in action_tool_map`,
+							path: ["action_descriptions", key],
+						});
+					}
+				}
+			}
+			if (tm.action_keywords) {
+				for (const key of Object.keys(tm.action_keywords)) {
+					if (!validKeys.has(key)) {
+						ctx.addIssue({
+							code: z.ZodIssueCode.custom,
+							message: `action_keywords key "${key}" is not in action_tool_map`,
+							path: ["action_keywords", key],
+						});
+					}
 				}
 			}
 		})

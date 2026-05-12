@@ -13,6 +13,7 @@ export { buildSystemPrompt } from "./skill-loader.ts";
 export {
 	buildFacadeMap,
 	type FacadeMap,
+	getActionKeywords,
 	getAllActionToolNames,
 	getAvailableActions,
 	getUncoveredTools,
