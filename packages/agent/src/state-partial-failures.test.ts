@@ -34,6 +34,15 @@ describe("AgentState.partialFailures", () => {
 		]);
 	});
 
+	test("empty next does not reset accumulated entries (monotonic, unlike dataSourceResults)", () => {
+		const spec = AgentState.spec as Record<string, ChannelSpec>;
+		const reducer = spec.partialFailures?.operator;
+		expect(reducer).toBeDefined();
+		const existing = [{ node: "proposeMitigation", reason: "timeout" }];
+		const result = reducer?.(existing, []);
+		expect(result).toEqual(existing);
+	});
+
 	test("AgentStateType compiles with partialFailures field", () => {
 		// Type-level assertion: this assignment must compile under strict mode.
 		const sample: Pick<AgentStateType, "partialFailures"> = {
