@@ -1,7 +1,7 @@
 // agent/src/sub-agent.ts
 
 import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
-import { getAllActionToolNames, resolveActionTools } from "@devops-agent/gitagent-bridge";
+import { getAllActionToolNames, matchActionsByKeywords, resolveActionTools } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
 import { redactPiiContent } from "@devops-agent/shared";
@@ -10,6 +10,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource, withElasticDeployment } from "./mcp-bridge.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { instrumentTools } from "./sub-agent-instrumentation.ts";
@@ -179,7 +180,15 @@ export function extractToolErrors(
 const MAX_TOOLS_PER_AGENT = 25;
 const MIN_FILTERED_TOOLS = 5;
 
-function selectToolsByAction(
+// SIO-738: Shared merge step so the augmentation test exercises the same
+// dedup logic the production runSubAgent path uses. Returns baseActions
+// reference unchanged when keywordActions is empty (no extra allocation).
+export function mergeKeywordActions(baseActions: string[], keywordActions: string[]): string[] {
+	if (keywordActions.length === 0) return baseActions;
+	return [...new Set([...baseActions, ...keywordActions])];
+}
+
+export function selectToolsByAction(
 	allTools: StructuredToolInterface[],
 	dataSourceId: string,
 	toolActions: Record<string, string[]> | undefined,
@@ -262,12 +271,29 @@ async function runSubAgent(
 
 		const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 		const toolDef = getToolDefinitionForDataSource(dataSourceId);
-		const { tools, filtered } = selectToolsByAction(
-			allTools,
-			dataSourceId,
-			state.extractedEntities.toolActions,
-			toolDef,
-		);
+
+		// SIO-738: Deterministic keyword pass augments LLM-extracted actions when the
+		// entity extractor omits an action despite a clear keyword in the prompt (e.g.
+		// the user names "REST Proxy" or "Connect" but the LLM picks only consumer_lag
+		// + cluster_info). The base toolActions still drives selection; keyword
+		// matches are union-merged so non-matching prompts behave exactly as before.
+		const query = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
+		const baseActions = state.extractedEntities.toolActions?.[dataSourceId] ?? [];
+		const keywordActions = toolDef ? matchActionsByKeywords(query, toolDef) : [];
+		const mergedActions = mergeKeywordActions(baseActions, keywordActions);
+		const augmentedToolActions =
+			keywordActions.length > 0
+				? { ...state.extractedEntities.toolActions, [dataSourceId]: mergedActions }
+				: state.extractedEntities.toolActions;
+
+		if (keywordActions.length > 0) {
+			log.info(
+				{ dataSourceId, baseActions, keywordActions, mergedActions, deploymentId },
+				"Augmented toolActions via keyword match",
+			);
+		}
+
+		const { tools, filtered } = selectToolsByAction(allTools, dataSourceId, augmentedToolActions, toolDef);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
 			"Creating ReAct agent with tools",
