@@ -1,7 +1,7 @@
 // src/tools/restproxy/prompts.ts
 
 export const RESTPROXY_LIST_TOPICS_DESCRIPTION =
-	"[READ] List all topics visible via REST Proxy. Useful for verifying produce/consume targets before writing or subscribing.";
+	"[READ] List topics visible via REST Proxy with pagination. Use 'prefix' to narrow by case-sensitive name prefix (e.g. 'DLQ_'), 'limit' (default 100, max 500), and 'offset' for paging. Returns { topics, total, truncated, hint? }. When 'truncated' is true, narrow with 'prefix' or page with 'offset'.";
 
 export const RESTPROXY_GET_TOPIC_DESCRIPTION =
 	"[READ] Get full topic metadata (configs, partitions, replicas) via REST Proxy. Use after restproxy_list_topics to drill into a specific topic.";

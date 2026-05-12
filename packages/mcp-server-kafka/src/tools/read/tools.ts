@@ -73,8 +73,8 @@ export function registerReadTools(server: McpServer, service: KafkaService, conf
 		"kafka_get_cluster_info",
 		prompts.GET_CLUSTER_INFO_DESCRIPTION,
 		params.GetClusterInfoParams.shape,
-		wrapHandler("kafka_get_cluster_info", config, async () => {
-			const result = await ops.getClusterInfo(service);
+		wrapHandler("kafka_get_cluster_info", config, async (args) => {
+			const result = await ops.getClusterInfo(service, args);
 			return ResponseBuilder.success(result);
 		}),
 	);

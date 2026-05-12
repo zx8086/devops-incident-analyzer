@@ -11,6 +11,7 @@ import {
 import type { DlqTopic } from "../config/schemas.ts";
 import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
+import { sliceTopics } from "./topic-pagination.ts";
 
 // Kafka protocol error codes most likely to surface from a Fetch RPC
 // (KIP-580 / kafka-clients). Used to classify ResponseError children
@@ -278,7 +279,7 @@ export class KafkaService {
 	}
 
 	// SIO-731: paged variant. Kept separate from listTopics() because listDlqTopics
-	// above relies on the unbounded shape.
+	// above relies on the unbounded shape. SIO-735: slicing extracted to sliceTopics.
 	async listTopicsPaged(options: { filter?: string; prefix?: string; limit: number; offset: number }): Promise<{
 		topics: { name: string }[];
 		total: number;
@@ -290,33 +291,16 @@ export class KafkaService {
 
 		return this.clientManager.withAdmin(async (admin) => {
 			const raw = await admin.listTopics();
-			// Kafka admin returns no order guarantee; sort once so offset is stable across calls.
-			const sorted = [...raw].sort();
-
-			let matching = sorted;
-			if (prefix) matching = matching.filter((t) => t.startsWith(prefix));
-			if (filter) {
-				const regex = new RegExp(filter);
-				matching = matching.filter((t) => regex.test(t));
-			}
-
-			const total = matching.length;
-			const page = matching.slice(offset, offset + limit);
-			const truncated = offset + page.length < total;
-
-			let hint: string | undefined;
-			if (offset >= total && total > 0) {
-				hint = `Offset is past the end of the result set (total: ${total}). Reduce 'offset' or remove it.`;
-			} else if (truncated) {
-				hint = "More topics match. Use a more specific 'prefix' or page with 'offset' (max 'limit' is 500).";
-			}
-
-			logger.debug({ total, returned: page.length, truncated }, "Topics listed (paged)");
+			const sliced = sliceTopics(raw, { filter, prefix, limit, offset });
+			logger.debug(
+				{ total: sliced.total, returned: sliced.topics.length, truncated: sliced.truncated },
+				"Topics listed (paged)",
+			);
 			return {
-				topics: page.map((name) => ({ name })),
-				total,
-				truncated,
-				...(hint ? { hint } : {}),
+				topics: sliced.topics.map((name) => ({ name })),
+				total: sliced.total,
+				truncated: sliced.truncated,
+				...(sliced.hint ? { hint: sliced.hint } : {}),
 			};
 		});
 	}
@@ -577,8 +561,14 @@ export class KafkaService {
 		});
 	}
 
-	async getClusterInfo(): Promise<Record<string, unknown>> {
-		logger.debug("Getting cluster info");
+	// SIO-735: cluster info now paginates its embedded topic listing. topicCount
+	// stays as the unfiltered aggregate (useful even when topics is empty/sliced);
+	// the topics array follows the SIO-731 paged shape.
+	async getClusterInfo(options: { prefix?: string; limit: number; offset: number }): Promise<Record<string, unknown>> {
+		logger.debug(
+			{ prefix: options.prefix ?? null, limit: options.limit, offset: options.offset },
+			"Getting cluster info",
+		);
 		const provider = this.clientManager.getProvider();
 
 		const [topics, providerMetadata] = await Promise.all([
@@ -586,11 +576,16 @@ export class KafkaService {
 			provider.getClusterMetadata?.().catch(() => ({})) ?? Promise.resolve({}),
 		]);
 
+		const sliced = sliceTopics(topics, { prefix: options.prefix, limit: options.limit, offset: options.offset });
+
 		return {
 			provider: provider.type,
 			providerName: provider.name,
 			topicCount: topics.length,
-			topics,
+			topics: sliced.topics.map((name) => ({ name })),
+			total: sliced.total,
+			truncated: sliced.truncated,
+			...(sliced.hint ? { hint: sliced.hint } : {}),
 			...providerMetadata,
 		};
 	}

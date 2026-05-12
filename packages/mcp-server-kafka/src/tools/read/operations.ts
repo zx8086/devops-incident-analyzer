@@ -49,6 +49,13 @@ export async function describeConsumerGroup(service: KafkaService, params: { gro
 	return service.describeConsumerGroup(params.groupId);
 }
 
-export async function getClusterInfo(service: KafkaService) {
-	return service.getClusterInfo();
+export async function getClusterInfo(
+	service: KafkaService,
+	params: { prefix?: string; limit?: number; offset?: number },
+) {
+	return service.getClusterInfo({
+		prefix: params.prefix,
+		limit: params.limit ?? 100,
+		offset: params.offset ?? 0,
+	});
 }

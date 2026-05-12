@@ -1,6 +1,7 @@
 // src/services/restproxy-service.ts
 import type { AppConfig } from "../config/schemas";
 import { fetchUpstream } from "../lib/upstream-fetch.ts";
+import { sliceTopics } from "./topic-pagination.ts";
 
 // SIO-714: Confluent REST Proxy v2 reserves application/vnd.kafka.json.v2+json for the
 // request body of produce calls embedding JSON records. Everything else (metadata reads,
@@ -42,6 +43,24 @@ export class RestProxyService {
 
 	async listTopics(): Promise<string[]> {
 		return this.request<string[]>("GET", "/topics");
+	}
+
+	// SIO-736: paged variant. REST Proxy v2 /topics has no upstream pagination,
+	// so fetch all once and slice client-side via the SIO-735 shared helper.
+	async listTopicsPaged(options: { prefix?: string; limit: number; offset: number }): Promise<{
+		topics: { name: string }[];
+		total: number;
+		truncated: boolean;
+		hint?: string;
+	}> {
+		const raw = await this.request<string[]>("GET", "/topics");
+		const sliced = sliceTopics(raw, { prefix: options.prefix, limit: options.limit, offset: options.offset });
+		return {
+			topics: sliced.topics.map((name) => ({ name })),
+			total: sliced.total,
+			truncated: sliced.truncated,
+			...(sliced.hint ? { hint: sliced.hint } : {}),
+		};
 	}
 
 	async getTopic(name: string): Promise<{
