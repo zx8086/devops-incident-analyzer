@@ -63,6 +63,7 @@ function sseOk(id: number, result: unknown, extra: HeadersInit = {}): Response {
 	return new Response(sseFrame({ jsonrpc: "2.0", id, result }), { status: 200, headers: { ...SSE_HEADERS, ...extra } });
 }
 
+// biome-ignore lint/correctness/noUnusedVariables: SIO-733 - used by Tasks 5-6 (error-path tests)
 function sseInnerError(id: number, text: string, extra: HeadersInit = {}): Response {
 	return new Response(
 		sseFrame({
@@ -74,6 +75,7 @@ function sseInnerError(id: number, text: string, extra: HeadersInit = {}): Respo
 	);
 }
 
+// biome-ignore lint/correctness/noUnusedVariables: SIO-733 - used by Tasks 5-6 (error-path tests)
 function jsonRpcErrorResponse(id: number, code: number, message: string): Response {
 	return new Response(sseFrame({ jsonrpc: "2.0", id, error: { code, message } }), {
 		status: 200,
@@ -136,9 +138,77 @@ function assertSigV4(call: { url: string; init: RequestInit }) {
 	expect(headers.host).toBe(`bedrock-agentcore.${TEST_REGION}.amazonaws.com`);
 }
 
-describe("agentcore-proxy round trip — scaffold", () => {
-	test("proxy starts on an ephemeral port", () => {
-		expect(proxy.port).toBeGreaterThan(0);
-		expect(proxy.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+describe("agentcore-proxy round trip — happy paths", () => {
+	test("200 + SSE-framed result passes through with SigV4 well-formed", async () => {
+		seedResponses(sseOk(1, { content: [{ type: "text", text: "version=7.2.1" }] }));
+
+		const { response, body } = await callProxy(toolCall(1, "kafka_get_cluster_info"));
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("version=7.2.1");
+		expect(fetchCalls).toHaveLength(1);
+		// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
+		assertSigV4(fetchCalls[0]!);
+	});
+
+	test("200 + raw JSON (no SSE framing) preserves content-type", async () => {
+		const rawBody = JSON.stringify({
+			jsonrpc: "2.0",
+			id: 2,
+			result: { content: [{ type: "text", text: "ok" }] },
+		});
+		seedResponses(new Response(rawBody, { status: 200, headers: JSON_HEADERS }));
+
+		const { response, body } = await callProxy(toolCall(2, "noop"));
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toBe("application/json");
+		expect(body).toBe(rawBody);
+		expect(fetchCalls).toHaveLength(1);
+	});
+
+	test("mcp-session-id is captured from upstream and replayed on subsequent calls", async () => {
+		seedResponses(
+			sseOk(3, { content: [{ type: "text", text: "first" }] }, { "mcp-session-id": "sess-abc-123" }),
+			sseOk(4, { content: [{ type: "text", text: "second" }] }),
+		);
+
+		const r1 = await callProxy(toolCall(3, "step1"));
+		const r2 = await callProxy(toolCall(4, "step2"));
+
+		expect(r1.response.status).toBe(200);
+		expect(r2.response.status).toBe(200);
+		expect(fetchCalls).toHaveLength(2);
+
+		// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
+		const call1Headers = fetchCalls[0]!.init.headers as Record<string, string>;
+		// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
+		const call2Headers = fetchCalls[1]!.init.headers as Record<string, string>;
+
+		expect(call1Headers["mcp-session-id"]).toBeUndefined();
+		expect(call2Headers["mcp-session-id"]).toBe("sess-abc-123");
+	});
+
+	test("omits x-amz-security-token when sessionToken is unset", async () => {
+		const savedToken = process.env.AGENTCORE_AWS_SESSION_TOKEN;
+		await proxy.close();
+		try {
+			delete process.env.AGENTCORE_AWS_SESSION_TOKEN;
+			clearCredentialCache();
+			proxy = await startAgentCoreProxy();
+
+			seedResponses(sseOk(5, { content: [{ type: "text", text: "ok" }] }));
+			await callProxy(toolCall(5, "noop"));
+
+			expect(fetchCalls).toHaveLength(1);
+			// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
+			const headers = fetchCalls[0]!.init.headers as Record<string, string>;
+			expect(headers["x-amz-security-token"]).toBeUndefined();
+
+			const signedHeaders = headers.authorization?.match(SIGV4_AUTH_RE)?.[1]?.split(";") ?? [];
+			expect(signedHeaders).not.toContain("x-amz-security-token");
+		} finally {
+			if (savedToken) process.env.AGENTCORE_AWS_SESSION_TOKEN = savedToken;
+		}
 	});
 });
