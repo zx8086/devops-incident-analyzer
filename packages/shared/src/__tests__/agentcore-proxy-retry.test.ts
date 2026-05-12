@@ -132,22 +132,144 @@ describe("session-scoped abort controller", () => {
 				status: 200,
 				headers: { "content-type": "text/event-stream", "mcp-session-id": "session-1" },
 			});
-		await fetch(`${proxy.url}/mcp`, {
+		await ORIG_FETCH(`${proxy.url}/mcp`, {
 			method: "POST",
 			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
 			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
 		});
 
-		const delRes = await fetch(`${proxy.url}/mcp`, { method: "DELETE" });
+		const delRes = await ORIG_FETCH(`${proxy.url}/mcp`, { method: "DELETE" });
 		expect(delRes.status).toBe(200);
 
 		fetchCalls = [];
-		await fetch(`${proxy.url}/mcp`, {
+		await ORIG_FETCH(`${proxy.url}/mcp`, {
 			method: "POST",
 			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
 			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize" }),
 		});
 		const sentHeaders = fetchCalls[0]?.init.headers as Record<string, string>;
 		expect(sentHeaders["mcp-session-id"]).toBeUndefined();
+	});
+});
+
+describe("JSON-RPC -320xx retry", () => {
+	let proxy: AgentCoreProxyHandle;
+	let fetchCalls: { url: string; init: RequestInit }[];
+	let scriptedResponses: Array<Response | (() => Response | Promise<Response>)>;
+
+	beforeEach(async () => {
+		fetchCalls = [];
+		scriptedResponses = [];
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const idx = fetchCalls.length;
+			fetchCalls.push({ url: String(input), init: init ?? {} });
+			const entry = scriptedResponses[idx];
+			if (!entry) return new Response("scripted-exhausted", { status: 500 });
+			return typeof entry === "function" ? entry() : entry.clone();
+		}) as typeof fetch;
+		clearCredentialCache();
+		proxy = await startAgentCoreProxy();
+	});
+
+	afterEach(async () => {
+		await proxy.close();
+	});
+
+	function jsonRpcError(code: number, id = 1): Response {
+		return new Response(
+			`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: `code ${code}` } })}\n\n`,
+			{ status: 200, headers: { "content-type": "text/event-stream", "mcp-session-id": "session-x" } },
+		);
+	}
+
+	function jsonRpcOk(id = 1): Response {
+		return new Response(
+			`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "ok" }] } })}\n\n`,
+			{ status: 200, headers: { "content-type": "text/event-stream", "mcp-session-id": "session-x" } },
+		);
+	}
+
+	async function callTool(name = "kafka_get_cluster_info", id = 1): Promise<Response> {
+		return ORIG_FETCH(`${proxy.url}/mcp`, {
+			method: "POST",
+			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+			body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } }),
+		});
+	}
+
+	test("retries -32010 and recovers on attempt 3", async () => {
+		scriptedResponses = [jsonRpcError(-32010), jsonRpcError(-32010), jsonRpcOk()];
+		const res = await callTool();
+		const body = await res.text();
+		expect(res.status).toBe(200);
+		expect(body).toContain('"result"');
+		expect(fetchCalls.length).toBe(3);
+	});
+
+	test("retries -32011 and recovers", async () => {
+		scriptedResponses = [jsonRpcError(-32011), jsonRpcOk()];
+		const res = await callTool();
+		expect(res.status).toBe(200);
+		expect(fetchCalls.length).toBe(2);
+	});
+
+	test("retries -32099 (lower band edge) and recovers", async () => {
+		scriptedResponses = [jsonRpcError(-32099), jsonRpcOk()];
+		const res = await callTool();
+		expect(res.status).toBe(200);
+		expect(fetchCalls.length).toBe(2);
+	});
+
+	test("does NOT retry -32603 (tool error)", async () => {
+		scriptedResponses = [jsonRpcError(-32603), jsonRpcOk()];
+		const res = await callTool();
+		const body = await res.text();
+		expect(body).toContain('"code":-32603');
+		expect(fetchCalls.length).toBe(1);
+	});
+
+	test("does NOT retry -32602 (invalid params)", async () => {
+		scriptedResponses = [jsonRpcError(-32602), jsonRpcOk()];
+		const res = await callTool();
+		const body = await res.text();
+		expect(body).toContain('"code":-32602');
+		expect(fetchCalls.length).toBe(1);
+	});
+
+	test("does NOT retry plain ok response", async () => {
+		scriptedResponses = [jsonRpcOk()];
+		const res = await callTool();
+		expect(res.status).toBe(200);
+		expect(fetchCalls.length).toBe(1);
+	});
+
+	test("gives up after 5 attempts on persistent -32010", async () => {
+		scriptedResponses = [
+			jsonRpcError(-32010),
+			jsonRpcError(-32010),
+			jsonRpcError(-32010),
+			jsonRpcError(-32010),
+			jsonRpcError(-32010),
+		];
+		const res = await callTool();
+		const body = await res.text();
+		expect(body).toContain('"code":-32010');
+		expect(fetchCalls.length).toBe(5);
+	}, 15_000); // backoff budget is 5.6s worst-case with jitter; bun's 5s default is too tight
+
+	test("preserves mcp-session-id across retried attempts", async () => {
+		scriptedResponses = [jsonRpcOk()];
+		await ORIG_FETCH(`${proxy.url}/mcp`, {
+			method: "POST",
+			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+		});
+		fetchCalls = [];
+		scriptedResponses = [jsonRpcError(-32010), jsonRpcOk()];
+		await callTool();
+		const h0 = fetchCalls[0]?.init.headers as Record<string, string>;
+		const h1 = fetchCalls[1]?.init.headers as Record<string, string>;
+		expect(h0?.["mcp-session-id"]).toBe("session-x");
+		expect(h1?.["mcp-session-id"]).toBe("session-x");
 	});
 });

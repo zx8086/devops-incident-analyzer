@@ -327,7 +327,12 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 			"/mcp": {
 				POST: async (req: Request) => {
 					const body = await req.text();
-					const maxAttempts = 2;
+					const tcpMaxAttempts = 2;
+					const requestStart = Date.now();
+					const deadline = requestStart + JSONRPC_RETRY_DEADLINE_MS;
+
+					if (!currentSessionAbort) currentSessionAbort = new AbortController();
+					const sessionAbort = currentSessionAbort;
 
 					// SIO-626: Log tool calls passing through the proxy for observability
 					let toolName: string | undefined;
@@ -341,101 +346,183 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 						// Not valid JSON or not a tool call -- continue silently
 					}
 
-					for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-						try {
-							const creds = await getCredentials();
-							const targetUrl = new URL(`${cfg.basePath}?${cfg.queryString}`, cfg.baseUrl);
+					// SIO-737: Inner TCP-level fetch with the original 2-attempt retry
+					// on TimeoutError/aborted/ECONNRESET. Returns the upstream Response
+					// plus its body (already consumed for classification) or a 502
+					// envelope on terminal TCP failure.
+					const doFetchWithTcpRetry = async (): Promise<{
+						response: Response;
+						clonedBody: string;
+						terminalFailure: boolean;
+					}> => {
+						for (let attempt = 1; attempt <= tcpMaxAttempts; attempt++) {
+							try {
+								const creds = await getCredentials();
+								const targetUrl = new URL(`${cfg.basePath}?${cfg.queryString}`, cfg.baseUrl);
+								const headers = signRequest("POST", targetUrl, body, creds, cfg.region);
+								if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
 
-							const headers = signRequest("POST", targetUrl, body, creds, cfg.region);
+								const response = await fetch(targetUrl.toString(), {
+									method: "POST",
+									headers,
+									body,
+									signal: AbortSignal.any([AbortSignal.timeout(30_000), sessionAbort.signal]),
+								});
 
-							if (mcpSessionId) {
-								headers["mcp-session-id"] = mcpSessionId;
-							}
+								const respSessionId = response.headers.get("mcp-session-id");
+								if (respSessionId) mcpSessionId = respSessionId;
 
-							const response = await fetch(targetUrl.toString(), {
-								method: "POST",
-								headers,
-								body,
-								signal: AbortSignal.timeout(30_000),
-							});
+								const clonedBody = await response.clone().text();
+								return { response, clonedBody, terminalFailure: false };
+							} catch (error) {
+								const isRetryable =
+									error instanceof Error &&
+									(error.name === "TimeoutError" ||
+										error.message.includes("aborted") ||
+										error.message.includes("ECONNRESET"));
 
-							const respSessionId = response.headers.get("mcp-session-id");
-							if (respSessionId) mcpSessionId = respSessionId;
-
-							const respHeaders = new Headers();
-							respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
-							if (respSessionId) respHeaders.set("mcp-session-id", respSessionId);
-
-							// SIO-718: read the cloned body so we can log the actual tool
-							// outcome on each line. Clone leaves response.body intact for
-							// streaming back to the caller. The HTTP envelope status is
-							// only surfaced when non-2xx -- on the happy path it is always
-							// 200 even when the wrapped tool failed, so logging it on every
-							// line is pure noise that obscures the tool result.
-							let toolStatus: string | undefined;
-							if (toolName) {
-								try {
-									const clonedBody = await response.clone().text();
-									toolStatus = classifyToolStatus(clonedBody);
-								} catch (err) {
-									toolStatus = "unparseable";
-									logger.debug(
-										{ tool: toolName, err: err instanceof Error ? err.message : String(err) },
-										"Failed to read cloned response body for tool-status logging",
+								if (isRetryable && attempt < tcpMaxAttempts) {
+									logger.warn(
+										{ attempt, error: error instanceof Error ? error.message : String(error) },
+										"Proxy request failed, retrying",
 									);
+									continue;
 								}
-								// Emit at warn when the tool call failed (any non-ok status),
-								// info when it succeeded. Without this, real upstream failures
-								// sit in the same column as the dozens of successful calls in
-								// a typical agent run and get visually missed.
-								const severity = severityForToolStatus(toolStatus ?? "unparseable");
+
+								logger.error(
+									{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp", attempt },
+									"Proxy request failed",
+								);
+								const envelope = Response.json(
+									{
+										jsonrpc: "2.0",
+										error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+										id: null,
+									},
+									{ status: 502 },
+								);
+								return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
+							}
+						}
+						// Unreachable, kept for exhaustiveness
+						const envelope = Response.json(
+							{ jsonrpc: "2.0", error: { code: -32000, message: "Max retries exceeded" }, id: null },
+							{ status: 502 },
+						);
+						return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
+					};
+
+					// SIO-737: Outer JSON-RPC -320xx retry loop. Bails on success,
+					// non-retryable code, attempt-budget exhaustion, or cumulative
+					// deadline. The 5-attempt budget is independent of the inner TCP
+					// retry counter; both share the cumulative 30s wallclock deadline.
+					let response: Response | undefined;
+					let clonedBody = "";
+					let terminalFailure = false;
+					for (let jsonRpcAttempt = 1; jsonRpcAttempt <= JSONRPC_RETRY_MAX_ATTEMPTS; jsonRpcAttempt++) {
+						({ response, clonedBody, terminalFailure } = await doFetchWithTcpRetry());
+						// SIO-737: when the inner TCP loop built a 502 envelope itself,
+						// the -32000 inside it is ours -- not AgentCore's. Don't retry on
+						// our own failure envelope; surface it to the caller untouched.
+						const jsonRpcCode = terminalFailure ? undefined : extractJsonRpcErrorCode(clonedBody);
+						const retryable = isRetryableJsonRpcCode(jsonRpcCode);
+						const isFinalAttempt = jsonRpcAttempt >= JSONRPC_RETRY_MAX_ATTEMPTS;
+
+						if (!retryable || isFinalAttempt) {
+							// Terminal path: log once and break out of the loop.
+							if (toolName) {
+								const toolStatus = classifyToolStatus(clonedBody);
+								const severity = severityForToolStatus(toolStatus);
 								const logFn = severity === "info" ? logger.info.bind(logger) : logger.warn.bind(logger);
 								const httpAbnormal = response.status >= 300;
 								const logFields: Record<string, unknown> = { tool: toolName, status: toolStatus };
 								if (httpAbnormal) logFields.httpStatus = response.status;
+								if (jsonRpcCode !== undefined) logFields.jsonRpcCode = jsonRpcCode;
+								if (jsonRpcAttempt > 1) {
+									logFields.attempt = jsonRpcAttempt;
+									logFields.maxAttempts = JSONRPC_RETRY_MAX_ATTEMPTS;
+								}
+								if (retryable && isFinalAttempt) {
+									logFields.gaveUpAfterMs = Date.now() - requestStart;
+								}
+								if (toolStatus === "ok" && jsonRpcAttempt > 1) {
+									logFields.recoveredAfterAttempts = jsonRpcAttempt;
+								}
 								const msgSuffix = httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus;
 								logFn(logFields, `Tool call proxied: ${toolName} -> ${msgSuffix}`);
 							}
+							break;
+						}
 
-							return new Response(response.body, {
-								status: response.status,
-								headers: respHeaders,
-							});
-						} catch (error) {
-							const isRetryable =
-								error instanceof Error &&
-								(error.name === "TimeoutError" ||
-									error.message.includes("aborted") ||
-									error.message.includes("ECONNRESET"));
-
-							if (isRetryable && attempt < maxAttempts) {
+						// Retryable -320xx with budget remaining. Compute jittered
+						// backoff and bail if it would overshoot the cumulative deadline.
+						const base = JSONRPC_RETRY_BACKOFFS_MS[jsonRpcAttempt - 1] ?? 0;
+						const retryAfterMs = computeJitteredBackoff(base);
+						if (Date.now() + retryAfterMs >= deadline) {
+							if (toolName) {
 								logger.warn(
-									{ attempt, error: error instanceof Error ? error.message : String(error) },
-									"Proxy request failed, retrying",
+									{
+										tool: toolName,
+										status: classifyToolStatus(clonedBody),
+										jsonRpcCode,
+										attempt: jsonRpcAttempt,
+										maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
+										gaveUpDueToDeadline: true,
+										totalMs: Date.now() - requestStart,
+									},
+									`Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`,
 								);
-								continue;
 							}
+							break;
+						}
 
-							logger.error(
-								{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp", attempt },
-								"Proxy request failed",
-							);
-							return Response.json(
+						if (toolName) {
+							logger.warn(
 								{
-									jsonrpc: "2.0",
-									error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
-									id: null,
+									tool: toolName,
+									status: classifyToolStatus(clonedBody),
+									jsonRpcCode,
+									attempt: jsonRpcAttempt,
+									maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
+									retryAfterMs,
 								},
+								`Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`,
+							);
+						} else {
+							logger.warn(
+								{ jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs },
+								"AgentCore -320xx response, retrying",
+							);
+						}
+
+						try {
+							await sleepWithAbort(retryAfterMs, sessionAbort.signal);
+						} catch {
+							if (toolName) {
+								logger.warn(
+									{ tool: toolName, attempt: jsonRpcAttempt, reason: "session-reset" },
+									`Tool call proxied: ${toolName} -> aborted`,
+								);
+							}
+							return Response.json(
+								{ jsonrpc: "2.0", error: { code: -32000, message: "Session reset during retry" }, id: null },
 								{ status: 502 },
 							);
 						}
 					}
 
-					// Unreachable, but TypeScript requires a return
-					return Response.json(
-						{ jsonrpc: "2.0", error: { code: -32000, message: "Max retries exceeded" }, id: null },
-						{ status: 502 },
-					);
+					if (!response) {
+						// Defensive: loop never executed (impossible because budget >= 1).
+						return Response.json(
+							{ jsonrpc: "2.0", error: { code: -32000, message: "Internal proxy error" }, id: null },
+							{ status: 502 },
+						);
+					}
+
+					const respHeaders = new Headers();
+					respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
+					if (mcpSessionId) respHeaders.set("mcp-session-id", mcpSessionId);
+					return new Response(clonedBody, { status: response.status, headers: respHeaders });
 				},
 
 				GET: () => new Response("Method not allowed", { status: 405 }),
