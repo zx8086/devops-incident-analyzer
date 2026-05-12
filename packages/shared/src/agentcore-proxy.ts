@@ -24,6 +24,24 @@ export function computeJitteredBackoff(baseMs: number): number {
 	return Math.round(baseMs * (0.8 + Math.random() * 0.4));
 }
 
+export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) {
+		return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
+	}
+	return new Promise<void>((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 function isRetryableJsonRpcCode(code: number | undefined): boolean {
 	return code !== undefined && code >= JSONRPC_SERVER_ERROR_MIN && code <= JSONRPC_SERVER_ERROR_MAX;
 }

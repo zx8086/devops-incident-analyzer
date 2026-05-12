@@ -82,6 +82,29 @@ describe("computeJitteredBackoff", () => {
 	});
 });
 
+describe("sleepWithAbort", () => {
+	test("resolves after the requested delay when not aborted", async () => {
+		const t0 = Date.now();
+		await sleepWithAbort(40, new AbortController().signal);
+		expect(Date.now() - t0).toBeGreaterThanOrEqual(35);
+	});
+
+	test("rejects immediately when signal already aborted", async () => {
+		const ac = new AbortController();
+		ac.abort(new Error("preempted"));
+		await expect(sleepWithAbort(1000, ac.signal)).rejects.toThrow("preempted");
+	});
+
+	test("rejects mid-sleep when signal aborts", async () => {
+		const ac = new AbortController();
+		const t0 = Date.now();
+		const sleepPromise = sleepWithAbort(5000, ac.signal);
+		setTimeout(() => ac.abort(new Error("midflight")), 20);
+		await expect(sleepPromise).rejects.toThrow("midflight");
+		expect(Date.now() - t0).toBeLessThan(200);
+	});
+});
+
 describe("session-scoped abort controller", () => {
 	let proxy: AgentCoreProxyHandle;
 	let fetchCalls: { url: string; init: RequestInit }[];
