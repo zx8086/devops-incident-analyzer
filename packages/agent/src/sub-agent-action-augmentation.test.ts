@@ -1,0 +1,108 @@
+// agent/src/sub-agent-action-augmentation.test.ts
+
+import { describe, expect, test } from "bun:test";
+import { type ToolDefinition, ToolDefinitionSchema, matchActionsByKeywords } from "@devops-agent/gitagent-bridge";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { selectToolsByAction } from "./sub-agent.ts";
+
+// Minimal kafka tool def fixture mirroring the real kafka-introspect.yaml's
+// action_tool_map + action_keywords for restproxy and connect_status.
+// Built via Zod parse so any future schema tightening (e.g. superRefine)
+// catches drift between this fixture and the canonical schema.
+const kafkaToolDef: ToolDefinition = ToolDefinitionSchema.parse({
+	name: "kafka-introspect",
+	description: "test fixture",
+	input_schema: { type: "object", properties: {}, required: [] },
+	tool_mapping: {
+		mcp_server: "kafka",
+		mcp_patterns: ["kafka_*", "ksql_*", "sr_*", "connect_*", "restproxy_*"],
+		action_tool_map: {
+			consumer_lag: ["kafka_list_consumer_groups", "kafka_describe_consumer_group", "kafka_get_consumer_group_lag"],
+			cluster_info: ["kafka_get_cluster_info", "kafka_describe_cluster"],
+			topic_throughput: ["kafka_list_topics", "kafka_describe_topic", "kafka_get_topic_offsets"],
+			connect_status: [
+				"connect_get_cluster_info",
+				"connect_list_connectors",
+				"connect_get_connector_status",
+				"connect_get_connector_task_status",
+			],
+			restproxy: [
+				"restproxy_list_topics",
+				"restproxy_get_topic",
+				"restproxy_get_partitions",
+				"restproxy_produce",
+				"restproxy_create_consumer",
+			],
+		},
+		action_keywords: {
+			connect_status: ["kafka connect", "connector", "connectors", "connect rest"],
+			restproxy: ["rest proxy", "restproxy", "confluent rest"],
+		},
+	},
+});
+
+function fakeTools(names: string[]): StructuredToolInterface[] {
+	return names.map((name) => ({ name }) as unknown as StructuredToolInterface);
+}
+
+// Build a tool list big enough that selectToolsByAction's filter path runs
+// (MAX_TOOLS_PER_AGENT = 25; need allTools.length > 25 to trigger filtering).
+function buildKafkaTools(): StructuredToolInterface[] {
+	const filler = Array.from({ length: 26 }, (_, i) => `kafka_filler_${i}`);
+	return fakeTools([
+		...filler,
+		"kafka_list_consumer_groups",
+		"kafka_get_cluster_info",
+		"restproxy_list_topics",
+		"restproxy_get_topic",
+		"connect_list_connectors",
+		"connect_get_connector_status",
+	]);
+}
+
+describe("SIO-738: keyword augmentation surfaces restproxy and connect tools", () => {
+	test("includes a restproxy_* tool when the query mentions 'REST Proxy'", () => {
+		const query = "check the kafka cluster and the REST Proxy health";
+		const baseActions = ["consumer_lag", "cluster_info"]; // LLM omitted restproxy
+		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
+		expect(keywordActions).toContain("restproxy");
+
+		const merged = [...new Set([...baseActions, ...keywordActions])];
+		const allTools = buildKafkaTools();
+		const { tools, filtered } = selectToolsByAction(allTools, "kafka", { kafka: merged }, kafkaToolDef);
+
+		expect(filtered).toBe(true);
+		const names = tools.map((t) => t.name);
+		expect(names).toContain("restproxy_list_topics");
+	});
+
+	test("includes a connect_* tool when the query mentions 'Kafka Connect'", () => {
+		const query = "are any kafka connect connectors failing?";
+		const baseActions = ["consumer_lag"];
+		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
+		expect(keywordActions).toContain("connect_status");
+
+		const merged = [...new Set([...baseActions, ...keywordActions])];
+		const allTools = buildKafkaTools();
+		const { tools, filtered } = selectToolsByAction(allTools, "kafka", { kafka: merged }, kafkaToolDef);
+
+		expect(filtered).toBe(true);
+		const names = tools.map((t) => t.name);
+		expect(names.some((n) => n.startsWith("connect_"))).toBe(true);
+	});
+
+	test("returns no keyword actions when the query is narrow and uninvolved", () => {
+		const query = "show me consumer lag for orders-consumer";
+		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
+		expect(keywordActions).toEqual([]);
+	});
+
+	test("does not duplicate actions the LLM already selected", () => {
+		const query = "check REST Proxy and Kafka Connect health";
+		const baseActions = ["restproxy", "connect_status"]; // LLM got it right
+		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
+		const merged = [...new Set([...baseActions, ...keywordActions])];
+		// Order-insensitive equality
+		expect(merged.sort()).toEqual(["connect_status", "restproxy"]);
+	});
+});
