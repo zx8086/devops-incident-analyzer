@@ -3,8 +3,16 @@
 import type { AppConfig } from "../../config/schemas.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
 
-export async function listTopics(service: KafkaService, params: { filter?: string }) {
-	return service.listTopics(params.filter);
+export async function listTopics(
+	service: KafkaService,
+	params: { filter?: string; prefix?: string; limit?: number; offset?: number },
+) {
+	return service.listTopicsPaged({
+		filter: params.filter,
+		prefix: params.prefix,
+		limit: params.limit ?? 100,
+		offset: params.offset ?? 0,
+	});
 }
 
 export async function describeTopic(service: KafkaService, params: { topic: string }) {
