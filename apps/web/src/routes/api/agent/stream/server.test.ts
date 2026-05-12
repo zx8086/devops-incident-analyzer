@@ -193,15 +193,15 @@ describe("POST /api/agent/stream — error path", () => {
 });
 
 describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
-	test("emits partial_failure for proposeMitigation timeout", async () => {
+	test("emits partial_failure for a mitigation branch timeout (SIO-741)", async () => {
 		invokeAgentMock.mockImplementationOnce(async () => ({
 			async *[Symbol.asyncIterator]() {
 				yield {
 					event: "on_chain_end",
-					name: "proposeMitigation",
+					name: "proposeMonitor",
 					data: {
 						output: {
-							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+							partialFailures: [{ node: "proposeMitigation.monitor", reason: "timeout" }],
 						},
 					},
 				};
@@ -215,21 +215,21 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 		expect(failureEvents).toHaveLength(1);
 		expect(failureEvents[0]).toMatchObject({
 			type: "partial_failure",
-			node: "proposeMitigation",
+			node: "proposeMitigation.monitor",
 			reason: "timeout",
 		});
 	});
 
-	test("emits two partial_failure events when both Step 1 and Step 2 timed out (different node keys)", async () => {
+	test("emits two partial_failure events when a branch and the action-proposal step both timed out (SIO-741)", async () => {
 		invokeAgentMock.mockImplementationOnce(async () => ({
 			async *[Symbol.asyncIterator]() {
 				yield {
 					event: "on_chain_end",
-					name: "proposeMitigation",
+					name: "aggregateMitigation",
 					data: {
 						output: {
 							partialFailures: [
-								{ node: "proposeMitigation", reason: "timeout" },
+								{ node: "proposeMitigation.monitor", reason: "timeout" },
 								{ node: "proposeMitigation.actionProposal", reason: "timeout" },
 							],
 						},
@@ -243,7 +243,7 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 
 		const failureEvents = events.filter((e) => e.type === "partial_failure");
 		expect(failureEvents).toHaveLength(2);
-		expect(failureEvents.map((e) => e.node)).toEqual(["proposeMitigation", "proposeMitigation.actionProposal"]);
+		expect(failureEvents.map((e) => e.node)).toEqual(["proposeMitigation.monitor", "proposeMitigation.actionProposal"]);
 	});
 
 	test("emits partial_failure for followUp timeout", async () => {
@@ -274,16 +274,16 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 	});
 
 	test("de-dups partial_failure events with identical node+reason key across nodes", async () => {
-		// Same key reported by both proposeMitigation and followUp on_chain_end events
+		// Same key reported by both aggregateMitigation and followUp on_chain_end events
 		// must emit only one SSE event.
 		invokeAgentMock.mockImplementationOnce(async () => ({
 			async *[Symbol.asyncIterator]() {
 				yield {
 					event: "on_chain_end",
-					name: "proposeMitigation",
+					name: "aggregateMitigation",
 					data: {
 						output: {
-							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+							partialFailures: [{ node: "proposeMitigation.monitor", reason: "timeout" }],
 						},
 					},
 				};
@@ -292,7 +292,7 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 					name: "followUp",
 					data: {
 						output: {
-							partialFailures: [{ node: "proposeMitigation", reason: "timeout" }],
+							partialFailures: [{ node: "proposeMitigation.monitor", reason: "timeout" }],
 						},
 					},
 				};
@@ -311,7 +311,7 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 			async *[Symbol.asyncIterator]() {
 				yield {
 					event: "on_chain_end",
-					name: "proposeMitigation",
+					name: "aggregateMitigation",
 					data: {
 						output: {
 							partialFailures: "not-an-array",
@@ -333,14 +333,14 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 			async *[Symbol.asyncIterator]() {
 				yield {
 					event: "on_chain_end",
-					name: "proposeMitigation",
+					name: "aggregateMitigation",
 					data: {
 						output: {
 							partialFailures: [
 								{ node: 42, reason: "timeout" },
-								{ node: "proposeMitigation", reason: null },
+								{ node: "proposeMitigation.monitor", reason: null },
 								null,
-								{ node: "proposeMitigation", reason: "timeout" },
+								{ node: "proposeMitigation.monitor", reason: "timeout" },
 							],
 						},
 					},
@@ -355,7 +355,7 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 		expect(failureEvents).toHaveLength(1);
 		expect(failureEvents[0]).toMatchObject({
 			type: "partial_failure",
-			node: "proposeMitigation",
+			node: "proposeMitigation.monitor",
 			reason: "timeout",
 		});
 	});

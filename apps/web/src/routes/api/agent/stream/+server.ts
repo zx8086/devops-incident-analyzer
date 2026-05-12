@@ -91,8 +91,23 @@ export const POST: RequestHandler = async ({ request }) => {
 								"aggregate",
 								"checkConfidence",
 								"validate",
-								"proposeMitigation",
+								// SIO-741: mitigation node split into three parallel branches + aggregator join
+								"proposeInvestigate",
+								"proposeMonitor",
+								"proposeEscalate",
+								"aggregateMitigation",
 								"responder",
+								"followUp",
+							]);
+							// SIO-741: nodes that may surface partialFailures (branch timeouts, aggregator
+							// action-proposal timeout, follow-up timeout). The append reducer ensures
+							// `event.data.output.partialFailures` carries the cumulative list at each emit,
+							// but the dedup set below prevents double-emission across sibling nodes.
+							const PARTIAL_FAILURE_SOURCES = new Set([
+								"proposeInvestigate",
+								"proposeMonitor",
+								"proposeEscalate",
+								"aggregateMitigation",
 								"followUp",
 							]);
 							const nodeStartTimes = new Map<string, number>();
@@ -139,16 +154,20 @@ export const POST: RequestHandler = async ({ request }) => {
 										});
 									}
 
-									// SIO-634, SIO-635: Emit pending action proposals for user confirmation
-									if (event.name === "proposeMitigation") {
+									// SIO-634, SIO-635 (SIO-741: renamed proposeMitigation -> aggregateMitigation):
+									// Emit pending action proposals for user confirmation. Action proposal
+									// (Step 2) still runs sequentially inside aggregateMitigation.
+									if (event.name === "aggregateMitigation") {
 										const pendingActions = event.data?.output?.pendingActions;
 										if (Array.isArray(pendingActions) && pendingActions.length > 0) {
 											send({ type: "pending_actions", actions: pendingActions });
 										}
 									}
 
-									// SIO-739: Emit partial_failure for any new entries added by this node.
-									if (event.name === "proposeMitigation" || event.name === "followUp") {
+									// SIO-739 (SIO-741: expanded source set): emit partial_failure for any
+									// new entries surfaced by the three mitigation branches, the aggregator,
+									// or follow-up. The shared dedup set keeps repeated keys from re-emitting.
+									if (event.name && PARTIAL_FAILURE_SOURCES.has(event.name)) {
 										const partialFailures = event.data?.output?.partialFailures;
 										if (Array.isArray(partialFailures)) {
 											for (const failure of partialFailures) {

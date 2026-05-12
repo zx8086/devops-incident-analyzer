@@ -3,7 +3,7 @@
 import { createCheckpointer } from "@devops-agent/checkpointer";
 import { getLogger, traceSpan } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { END, StateGraph } from "@langchain/langgraph";
+import { END, Send, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
@@ -16,7 +16,8 @@ import {
 import { extractEntities } from "./entity-extractor.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";
-import { proposeMitigation } from "./mitigation.ts";
+import { aggregateMitigation } from "./mitigation.ts";
+import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 import { normalizeIncident } from "./normalizer.ts";
 import { getAgent } from "./prompt-context.ts";
 import { respond } from "./responder.ts";
@@ -27,6 +28,13 @@ import { supervise } from "./supervisor.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
 
 const graphLogger = getLogger("agent:graph");
+
+// SIO-741: validate -> retry-aggregate OR three parallel mitigation branches.
+// Exported so the dispatcher can be unit-tested without booting the whole graph.
+export function routeAfterValidate(state: AgentStateType): "aggregate" | Send[] {
+	if (shouldRetryValidation(state)) return "aggregate";
+	return [new Send("proposeInvestigate", state), new Send("proposeMonitor", state), new Send("proposeEscalate", state)];
+}
 
 type NodeFn = (
 	state: AgentStateType,
@@ -78,7 +86,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("enforceCorrelationsAggregate", traceNode("enforceCorrelationsAggregate", enforceCorrelationsAggregate))
 		.addNode("checkConfidence", traceNode("checkConfidence", checkConfidence))
 		.addNode("validate", traceNode("validate", validate))
-		.addNode("proposeMitigation", traceNode("proposeMitigation", proposeMitigation))
+		.addNode("proposeInvestigate", traceNode("proposeInvestigate", proposeInvestigate))
+		.addNode("proposeMonitor", traceNode("proposeMonitor", proposeMonitor))
+		.addNode("proposeEscalate", traceNode("proposeEscalate", proposeEscalate))
+		.addNode("aggregateMitigation", traceNode("aggregateMitigation", aggregateMitigation))
 		.addNode("followUp", traceNode("followUp", generateSuggestions))
 		.addNode("selectRunbooks", traceNode("selectRunbooks", createSelectRunbooksNode()))
 
@@ -114,11 +125,20 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("enforceCorrelationsAggregate", "checkConfidence")
 		.addEdge("checkConfidence", "validate")
 
-		// SIO-631: Validate -> retry aggregate or proposeMitigation -> followUp -> END
-		.addConditionalEdges("validate", (state) => {
-			return shouldRetryValidation(state) ? "aggregate" : "proposeMitigation";
-		})
-		.addEdge("proposeMitigation", "followUp");
+		// SIO-631 + SIO-741: Validate -> retry aggregate OR fan out to three parallel
+		// mitigation branches that join at aggregateMitigation. The branches share the
+		// validated state; the aggregator merges their fragments + selectedRunbooks
+		// into mitigationSteps and then runs the sequential action-proposal step.
+		.addConditionalEdges("validate", routeAfterValidate, [
+			"aggregate",
+			"proposeInvestigate",
+			"proposeMonitor",
+			"proposeEscalate",
+		])
+		.addEdge("proposeInvestigate", "aggregateMitigation")
+		.addEdge("proposeMonitor", "aggregateMitigation")
+		.addEdge("proposeEscalate", "aggregateMitigation")
+		.addEdge("aggregateMitigation", "followUp");
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
 	return graph.compile({ checkpointer });

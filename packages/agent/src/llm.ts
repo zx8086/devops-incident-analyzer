@@ -31,6 +31,9 @@ export type LlmRole =
 	| "followUp"
 	| "normalizer"
 	| "mitigation"
+	| "mitigateInvestigate"
+	| "mitigateMonitor"
+	| "mitigateEscalate"
 	| "actionProposal"
 	| "runbookSelector";
 
@@ -48,6 +51,9 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	followUp: { temperature: 0.5, maxTokens: 256 },
 	normalizer: { temperature: 0 },
 	mitigation: { temperature: 0.2 },
+	mitigateInvestigate: { temperature: 0.2 },
+	mitigateMonitor: { temperature: 0.2 },
+	mitigateEscalate: { temperature: 0.2 },
 	actionProposal: { temperature: 0, maxTokens: 512 },
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 };
@@ -66,6 +72,10 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	followUp: 60_000,
 	normalizer: 0,
 	mitigation: 120_000,
+	// SIO-741: each branch does ~1/3 the work of the old monolithic mitigation call.
+	mitigateInvestigate: 60_000,
+	mitigateMonitor: 60_000,
+	mitigateEscalate: 60_000,
 	actionProposal: 60_000,
 	runbookSelector: 0,
 };

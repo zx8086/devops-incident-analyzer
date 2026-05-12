@@ -33,6 +33,15 @@ export interface PendingCorrelation {
 	timeoutMs: number;
 }
 
+// SIO-741: Per-branch output from the parallel mitigation step. Three branches
+// (investigate/monitor/escalate) write fragments which aggregateMitigation
+// merges into the durable mitigationSteps field.
+export interface MitigationFragment {
+	kind: "investigate" | "monitor" | "escalate";
+	items: string[];
+	failed?: boolean;
+}
+
 export const AgentState = Annotation.Root({
 	...MessagesAnnotation.spec,
 
@@ -162,6 +171,13 @@ export const AgentState = Annotation.Root({
 	mitigationSteps: Annotation<MitigationSteps>({
 		reducer: (_, next) => next,
 		default: () => ({ investigate: [], monitor: [], escalate: [], relatedRunbooks: [] }),
+	}),
+
+	// SIO-741: Transient per-branch fragments produced by the three parallel
+	// mitigation branches. Aggregated into mitigationSteps by aggregateMitigation.
+	mitigationFragments: Annotation<MitigationFragment[]>({
+		reducer: (prev, next) => [...prev, ...next],
+		default: () => [],
 	}),
 
 	// SIO-632: Confidence score extracted from aggregator output
