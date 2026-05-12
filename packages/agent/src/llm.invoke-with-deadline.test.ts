@@ -3,7 +3,13 @@
 // SIO-739: per-role deadline lookup + invokeWithDeadline helper.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { DeadlineExceededError, getRoleDeadlineMs, invokeWithDeadline, ROLE_DEADLINES_MS } from "./llm.ts";
+import {
+	DeadlineExceededError,
+	getRoleDeadlineMs,
+	type InvokableLlm,
+	invokeWithDeadline,
+	ROLE_DEADLINES_MS,
+} from "./llm.ts";
 
 describe("ROLE_DEADLINES_MS defaults", () => {
 	test("mitigation default is 120000", () => {
@@ -60,12 +66,7 @@ describe("getRoleDeadlineMs", () => {
 });
 
 describe("invokeWithDeadline", () => {
-	type FakeLlm = {
-		invoke: (
-			messages: unknown,
-			config?: { signal?: AbortSignal },
-		) => Promise<{ content: string }>;
-	};
+	type FakeLlm = InvokableLlm;
 
 	const ORIG_ENV = { ...process.env };
 
@@ -85,8 +86,8 @@ describe("invokeWithDeadline", () => {
 				return { content: "ok" };
 			},
 		};
-		const result = await invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []);
-		expect(result.content).toBe("ok");
+		const result = await invokeWithDeadline(llm, "mitigation", []);
+		expect((result as { content: string }).content).toBe("ok");
 	});
 
 	test("rejects with non-abort error → rethrows unchanged, NOT DeadlineExceededError", async () => {
@@ -96,9 +97,7 @@ describe("invokeWithDeadline", () => {
 				throw new Error("boom");
 			},
 		};
-		await expect(
-			invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []),
-		).rejects.toThrow("boom");
+		await expect(invokeWithDeadline(llm, "mitigation", [])).rejects.toThrow("boom");
 	});
 
 	test("hangs past deadline → throws DeadlineExceededError with role + deadlineMs", async () => {
@@ -116,7 +115,7 @@ describe("invokeWithDeadline", () => {
 		};
 		let caught: unknown;
 		try {
-			await invokeWithDeadline(llm as unknown as Parameters<typeof invokeWithDeadline>[0], "mitigation", []);
+			await invokeWithDeadline(llm, "mitigation", []);
 		} catch (err) {
 			caught = err;
 		}
@@ -128,10 +127,16 @@ describe("invokeWithDeadline", () => {
 	test("external signal aborts first → rethrows AbortError, NOT DeadlineExceededError", async () => {
 		process.env.AGENT_LLM_TIMEOUT_MITIGATION_MS = "1000";
 		const external = new AbortController();
-		setTimeout(() => external.abort(), 20);
+		external.abort();
 		const llm: FakeLlm = {
 			invoke: async (_messages, config) => {
 				return await new Promise((_resolve, reject) => {
+					if (config?.signal?.aborted) {
+						const err = new Error("Aborted by external signal");
+						err.name = "AbortError";
+						reject(err);
+						return;
+					}
 					config?.signal?.addEventListener("abort", () => {
 						const err = new Error("Aborted by external signal");
 						err.name = "AbortError";
@@ -142,12 +147,7 @@ describe("invokeWithDeadline", () => {
 		};
 		let caught: unknown;
 		try {
-			await invokeWithDeadline(
-				llm as unknown as Parameters<typeof invokeWithDeadline>[0],
-				"mitigation",
-				[],
-				{ signal: external.signal },
-			);
+			await invokeWithDeadline(llm, "mitigation", [], { signal: external.signal });
 		} catch (err) {
 			caught = err;
 		}
@@ -166,11 +166,7 @@ describe("invokeWithDeadline", () => {
 				return { content: "ok" };
 			},
 		};
-		const result = await invokeWithDeadline(
-			llm as unknown as Parameters<typeof invokeWithDeadline>[0],
-			"classifier",
-			[],
-		);
-		expect(result.content).toBe("ok");
+		const result = await invokeWithDeadline(llm, "classifier", []);
+		expect((result as { content: string }).content).toBe("ok");
 	});
 });

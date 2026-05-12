@@ -139,7 +139,7 @@ export function createLlm(role: LlmRole): ChatBedrockConverse {
 // the LangGraph RunnableConfig signal. The local AbortController is private,
 // so we can distinguish a local-deadline trip from an external graph abort
 // and only convert the former into DeadlineExceededError.
-type InvokableLlm = {
+export type InvokableLlm = {
 	invoke: (
 		messages: unknown,
 		config?: { signal?: AbortSignal; [key: string]: unknown },
@@ -162,19 +162,13 @@ export async function invokeWithDeadline<TLlm extends InvokableLlm>(
 	const localController = new AbortController();
 	const timer = setTimeout(() => localController.abort(), deadlineMs);
 	const externalSignal = config?.signal;
-	const merged = externalSignal
-		? AbortSignal.any([externalSignal, localController.signal])
-		: localController.signal;
+	const merged = externalSignal ? AbortSignal.any([externalSignal, localController.signal]) : localController.signal;
 
 	try {
 		const response = await llm.invoke(messages, { ...config, signal: merged });
 		return response as Awaited<ReturnType<TLlm["invoke"]>>;
 	} catch (err) {
-		if (
-			localController.signal.aborted &&
-			err instanceof Error &&
-			err.name === "AbortError"
-		) {
+		if (localController.signal.aborted && err instanceof Error && err.name === "AbortError") {
 			throw new DeadlineExceededError(role, deadlineMs);
 		}
 		throw err;
