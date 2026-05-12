@@ -61,3 +61,23 @@ describe("extractJsonRpcErrorCode", () => {
 		expect(extractJsonRpcErrorCode("")).toBeUndefined();
 	});
 });
+
+describe("computeJitteredBackoff", () => {
+	test("returns base +-20% on each call", () => {
+		for (let i = 0; i < 200; i++) {
+			const v = computeJitteredBackoff(1000);
+			expect(v).toBeGreaterThanOrEqual(800);
+			expect(v).toBeLessThanOrEqual(1200);
+		}
+	});
+
+	test("returns 0 when base is 0", () => {
+		expect(computeJitteredBackoff(0)).toBe(0);
+	});
+
+	test("is non-deterministic across calls (best-effort)", () => {
+		const samples = new Set<number>();
+		for (let i = 0; i < 50; i++) samples.add(computeJitteredBackoff(1000));
+		expect(samples.size).toBeGreaterThan(10);
+	});
+});

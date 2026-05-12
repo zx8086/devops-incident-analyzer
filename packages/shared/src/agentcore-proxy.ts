@@ -8,6 +8,26 @@ import { createMcpLogger } from "./logger.ts";
 
 const logger = createMcpLogger("agentcore-proxy");
 
+// SIO-737: retry policy for transient AgentCore JSON-RPC server errors.
+// Codes in the JSON-RPC 2.0 -32099..-32000 "implementation-defined
+// server-errors" band are the AgentCore transport layer's way of saying
+// the runtime container is not ready (cold-start, throttled, paused).
+// -32010 "Runtime health check failed or timed out" is the dominant case.
+const JSONRPC_RETRY_BACKOFFS_MS = [300, 800, 1500, 3000] as const;
+const JSONRPC_RETRY_MAX_ATTEMPTS = JSONRPC_RETRY_BACKOFFS_MS.length + 1; // 5
+const JSONRPC_RETRY_DEADLINE_MS = 30_000;
+const JSONRPC_SERVER_ERROR_MIN = -32099;
+const JSONRPC_SERVER_ERROR_MAX = -32000;
+
+export function computeJitteredBackoff(baseMs: number): number {
+	if (baseMs <= 0) return 0;
+	return Math.round(baseMs * (0.8 + Math.random() * 0.4));
+}
+
+function isRetryableJsonRpcCode(code: number | undefined): boolean {
+	return code !== undefined && code >= JSONRPC_SERVER_ERROR_MIN && code <= JSONRPC_SERVER_ERROR_MAX;
+}
+
 function readProxyConfig() {
 	const runtimeArn = process.env.AGENTCORE_RUNTIME_ARN;
 	if (!runtimeArn) {
