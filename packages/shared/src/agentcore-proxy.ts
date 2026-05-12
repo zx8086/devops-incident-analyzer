@@ -232,6 +232,30 @@ export function classifyToolStatus(rawBody: string): string {
 	return "error (unparsed)";
 }
 
+// SIO-737: parse out the JSON-RPC error.code from a response body so the
+// POST handler can decide whether to retry. Returns undefined for a
+// success body, malformed body, or an error object without a numeric
+// code. Shares SSE-frame stripping with classifyToolStatus.
+export function extractJsonRpcErrorCode(rawBody: string): number | undefined {
+	const dataLines = rawBody.split("\n").filter((l) => l.startsWith("data: "));
+	const jsonText = dataLines.length > 0 ? dataLines[dataLines.length - 1]?.slice(6) : rawBody.trim();
+	if (!jsonText) return undefined;
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(jsonText);
+	} catch {
+		return undefined;
+	}
+
+	if (typeof parsed !== "object" || parsed === null) return undefined;
+	const obj = parsed as Record<string, unknown>;
+	const err = obj.error;
+	if (typeof err !== "object" || err === null) return undefined;
+	const code = (err as Record<string, unknown>).code;
+	return typeof code === "number" ? code : undefined;
+}
+
 // SIO-718: pick the log severity for a proxied tool call based on its tool
 // status. Successful calls stay at info so the bulk of normal traffic is
 // unobtrusive; everything else (real upstream errors, parse failures,
