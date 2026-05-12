@@ -1,7 +1,26 @@
 // src/tools/restproxy/parameters.ts
 import { z } from "zod";
 
-export const ListTopicsParams = z.object({});
+export const ListTopicsParams = z.object({
+	prefix: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Case-sensitive prefix filter applied before paging (cheap startsWith). Example: 'DLQ_'."),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(500)
+		.optional()
+		.describe("Maximum number of topics to return (1-500). Default 100."),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe("Number of topics to skip from the start of the sorted result set (for pagination). Default 0."),
+});
 
 export const GetTopicParams = z.object({
 	name: z.string().min(1).describe("Topic name to fetch metadata for"),

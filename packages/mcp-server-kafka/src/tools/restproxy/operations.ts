@@ -8,12 +8,17 @@ import type {
 	DeleteConsumerParams,
 	GetPartitionsParams,
 	GetTopicParams,
+	ListTopicsParams,
 	ProduceParams,
 	SubscribeParams,
 } from "./parameters.ts";
 
-export async function listTopics(service: RestProxyService) {
-	return { topics: await service.listTopics() };
+export async function listTopics(service: RestProxyService, args: z.infer<typeof ListTopicsParams>) {
+	return service.listTopicsPaged({
+		prefix: args.prefix,
+		limit: args.limit ?? 100,
+		offset: args.offset ?? 0,
+	});
 }
 
 export async function getTopic(service: RestProxyService, args: z.infer<typeof GetTopicParams>) {

@@ -14,8 +14,8 @@ export function registerRestProxyTools(server: McpServer, service: RestProxyServ
 		"restproxy_list_topics",
 		prompts.RESTPROXY_LIST_TOPICS_DESCRIPTION,
 		params.ListTopicsParams.shape,
-		wrapHandler("restproxy_list_topics", config, async () => {
-			const result = await ops.listTopics(service);
+		wrapHandler("restproxy_list_topics", config, async (args) => {
+			const result = await ops.listTopics(service, args);
 			return ResponseBuilder.success(result);
 		}),
 	);
