@@ -272,4 +272,55 @@ describe("JSON-RPC -320xx retry", () => {
 		expect(h0?.["mcp-session-id"]).toBe("session-x");
 		expect(h1?.["mcp-session-id"]).toBe("session-x");
 	});
+
+	test("DELETE aborts in-flight retry sleep", async () => {
+		scriptedResponses = [jsonRpcError(-32010), jsonRpcOk()];
+		const callPromise = callTool();
+		await new Promise((r) => setTimeout(r, 80));
+		await ORIG_FETCH(`${proxy.url}/mcp`, { method: "DELETE" });
+
+		const res = await callPromise;
+		const body = await res.text();
+		expect(res.status).toBe(502);
+		expect(body).toContain("Session reset during retry");
+		expect(fetchCalls.length).toBe(1);
+	});
+
+	test("parallel calls de-sync via independent jitter", async () => {
+		const N = 5;
+		const fetchTimestamps: number[] = [];
+		let upstreamHits = 0;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			fetchTimestamps.push(Date.now());
+			fetchCalls.push({ url: String(input), init: init ?? {} });
+			upstreamHits++;
+			if (upstreamHits <= N) return jsonRpcError(-32010, upstreamHits);
+			return jsonRpcOk(upstreamHits);
+		}) as typeof fetch;
+
+		const promises = Array.from({ length: N }, (_, i) => callTool("kafka_get_cluster_info", 100 + i));
+		const responses = await Promise.all(promises);
+
+		for (const r of responses) expect(r.status).toBe(200);
+		const retryStamps = fetchTimestamps.slice(N).sort((a, b) => a - b);
+		expect(retryStamps.length).toBe(N);
+		const spread = (retryStamps[N - 1] ?? 0) - (retryStamps[0] ?? 0);
+		expect(spread).toBeGreaterThan(20);
+	});
+
+	test("TCP-error retry coexists with JSON-RPC retry", async () => {
+		let call = 0;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			call++;
+			fetchCalls.push({ url: String(input), init: init ?? {} });
+			if (call === 1) {
+				throw new TypeError("fetch failed: ECONNRESET");
+			}
+			return jsonRpcOk();
+		}) as typeof fetch;
+
+		const res = await callTool();
+		expect(res.status).toBe(200);
+		expect(call).toBe(2);
+	});
 });
