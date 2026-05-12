@@ -81,3 +81,50 @@ describe("computeJitteredBackoff", () => {
 		expect(samples.size).toBeGreaterThan(10);
 	});
 });
+
+describe("session-scoped abort controller", () => {
+	let proxy: AgentCoreProxyHandle;
+	let fetchCalls: { url: string; init: RequestInit }[];
+	let fetchResponder: (call: number) => Response | Promise<Response>;
+
+	beforeEach(async () => {
+		fetchCalls = [];
+		fetchResponder = () => new Response("not configured", { status: 500 });
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const callIdx = fetchCalls.length;
+			fetchCalls.push({ url: String(input), init: init ?? {} });
+			return fetchResponder(callIdx);
+		}) as typeof fetch;
+		clearCredentialCache();
+		proxy = await startAgentCoreProxy();
+	});
+
+	afterEach(async () => {
+		await proxy.close();
+	});
+
+	test("DELETE clears session and resets abort controller", async () => {
+		fetchResponder = () =>
+			new Response(`event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n\n`, {
+				status: 200,
+				headers: { "content-type": "text/event-stream", "mcp-session-id": "session-1" },
+			});
+		await fetch(`${proxy.url}/mcp`, {
+			method: "POST",
+			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+		});
+
+		const delRes = await fetch(`${proxy.url}/mcp`, { method: "DELETE" });
+		expect(delRes.status).toBe(200);
+
+		fetchCalls = [];
+		await fetch(`${proxy.url}/mcp`, {
+			method: "POST",
+			headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize" }),
+		});
+		const sentHeaders = fetchCalls[0]?.init.headers as Record<string, string>;
+		expect(sentHeaders["mcp-session-id"]).toBeUndefined();
+	});
+});

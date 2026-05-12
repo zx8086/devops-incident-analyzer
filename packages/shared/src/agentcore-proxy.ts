@@ -295,6 +295,10 @@ export interface AgentCoreProxyHandle {
 export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	const cfg = readProxyConfig();
 	let mcpSessionId: string | undefined;
+	// SIO-737: paired with mcpSessionId. DELETE aborts whichever retry
+	// loop is mid-flight for the session being torn down. Lazy-initialised
+	// on the first POST so an idle proxy holds no signal.
+	let currentSessionAbort: AbortController | undefined;
 
 	const server = Bun.serve({
 		port: cfg.port,
@@ -419,6 +423,10 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 				GET: () => new Response("Method not allowed", { status: 405 }),
 
 				DELETE: () => {
+					// SIO-737: abort any retry sleep mid-flight for this session,
+					// then mint a fresh controller for whatever comes next.
+					currentSessionAbort?.abort(new Error("Session reset via DELETE"));
+					currentSessionAbort = new AbortController();
 					mcpSessionId = undefined;
 					return new Response(null, { status: 200 });
 				},
