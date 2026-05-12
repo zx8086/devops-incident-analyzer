@@ -5,7 +5,7 @@ import type { MitigationSteps, PendingAction } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getAvailableActionTools } from "./action-tools/executor.ts";
-import { createLlm } from "./llm.ts";
+import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -106,16 +106,19 @@ export async function proposeMitigation(
 	const truncated = report.slice(0, 3000);
 	let mitigationSteps: MitigationSteps = { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] };
 	let pendingActions: PendingAction[] = [];
+	const partialFailures: Array<{ node: string; reason: string }> = [];
 
 	// Step 1: Generate mitigation steps
 	const llm = createLlm("mitigation");
 	try {
-		const response = await llm.invoke(
+		const response = await invokeWithDeadline(
+			llm as InvokableLlm,
+			"mitigation",
 			[
 				{ role: "system", content: `${buildMitigationPrompt()}${confidenceHint}${sourceContext}` },
 				{ role: "human", content: truncated },
 			],
-			config,
+			config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
 		);
 
 		const text = String(response.content);
@@ -136,7 +139,15 @@ export async function proposeMitigation(
 			logger.warn("Failed to parse mitigation JSON from LLM response");
 		}
 	} catch (error) {
-		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Mitigation generation failed");
+		if (error instanceof DeadlineExceededError) {
+			logger.warn(
+				{ role: error.role, deadlineMs: error.deadlineMs },
+				"Mitigation step 1 exceeded deadline; soft-failing",
+			);
+			partialFailures.push({ node: "proposeMitigation", reason: "timeout" });
+		} else {
+			logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Mitigation generation failed");
+		}
 	}
 
 	// Step 2: Generate action proposals (only if action tools are configured)
@@ -147,7 +158,9 @@ export async function proposeMitigation(
 	if (shouldPropose) {
 		const actionLlm = createLlm("actionProposal");
 		try {
-			const response = await actionLlm.invoke(
+			const response = await invokeWithDeadline(
+				actionLlm as InvokableLlm,
+				"actionProposal",
 				[
 					{ role: "system", content: buildActionProposalPrompt(availableTools) },
 					{
@@ -155,7 +168,7 @@ export async function proposeMitigation(
 						content: `Severity: ${severity}\nConfidence: ${confidence}\nDatasources: ${queriedSources.join(", ")}\n\n${truncated}`,
 					},
 				],
-				config,
+				config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
 			);
 
 			const text = String(response.content);
@@ -173,12 +186,20 @@ export async function proposeMitigation(
 				logger.info({ count: pendingActions.length }, "Action proposals generated");
 			}
 		} catch (error) {
-			logger.warn(
-				{ error: error instanceof Error ? error.message : String(error) },
-				"Action proposal generation failed",
-			);
+			if (error instanceof DeadlineExceededError) {
+				logger.warn(
+					{ role: error.role, deadlineMs: error.deadlineMs },
+					"Action proposal step exceeded deadline; soft-failing",
+				);
+				partialFailures.push({ node: "proposeMitigation.actionProposal", reason: "timeout" });
+			} else {
+				logger.warn(
+					{ error: error instanceof Error ? error.message : String(error) },
+					"Action proposal generation failed",
+				);
+			}
 		}
 	}
 
-	return { mitigationSteps, pendingActions };
+	return { mitigationSteps, pendingActions, partialFailures };
 }
