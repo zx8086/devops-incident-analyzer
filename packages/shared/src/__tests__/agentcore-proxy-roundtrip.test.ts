@@ -52,6 +52,90 @@ afterEach(async () => {
 	globalThis.fetch = ORIG_FETCH;
 });
 
+const SSE_HEADERS = { "content-type": "text/event-stream" };
+const JSON_HEADERS = { "content-type": "application/json" };
+
+function sseFrame(jsonRpc: object): string {
+	return `event: message\ndata: ${JSON.stringify(jsonRpc)}\n\n`;
+}
+
+function sseOk(id: number, result: unknown, extra: HeadersInit = {}): Response {
+	return new Response(sseFrame({ jsonrpc: "2.0", id, result }), { status: 200, headers: { ...SSE_HEADERS, ...extra } });
+}
+
+function sseInnerError(id: number, text: string, extra: HeadersInit = {}): Response {
+	return new Response(
+		sseFrame({
+			jsonrpc: "2.0",
+			id,
+			result: { isError: true, content: [{ type: "text", text }] },
+		}),
+		{ status: 200, headers: { ...SSE_HEADERS, ...extra } },
+	);
+}
+
+function jsonRpcErrorResponse(id: number, code: number, message: string): Response {
+	return new Response(sseFrame({ jsonrpc: "2.0", id, error: { code, message } }), {
+		status: 200,
+		headers: SSE_HEADERS,
+	});
+}
+
+function toolCall(id: number, name: string, args: object = {}): object {
+	return { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } };
+}
+
+function seedResponses(...responses: (Response | Error)[]) {
+	fetchResponder = (call) => {
+		const r = responses[call];
+		if (r === undefined) {
+			throw new Error(`fake fetch: no response seeded for call ${call} (seeded ${responses.length})`);
+		}
+		if (r instanceof Error) throw r;
+		return r;
+	};
+}
+
+// Uses ORIG_FETCH, not globalThis.fetch: the swapped fake is for outbound
+// calls FROM the proxy; the inbound test client must not get intercepted.
+async function callProxy(jsonRpcPayload: object) {
+	const response = await ORIG_FETCH(`${proxy.url}/mcp`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			accept: "application/json, text/event-stream",
+		},
+		body: JSON.stringify(jsonRpcPayload),
+	});
+	return { response, body: await response.text() };
+}
+
+const SIGV4_AUTH_RE =
+	/^AWS4-HMAC-SHA256 Credential=AKIA[A-Z0-9]+\/\d{8}\/eu-central-1\/bedrock-agentcore\/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=[0-9a-f]{64}$/;
+const AMZ_DATE_RE = /^\d{8}T\d{6}Z$/;
+
+function assertSigV4(call: { url: string; init: RequestInit }) {
+	const expectedUrl =
+		`https://bedrock-agentcore.${TEST_REGION}.amazonaws.com` +
+		`/runtimes/${encodeURIComponent(TEST_ARN)}/invocations?qualifier=DEFAULT`;
+	expect(call.url).toBe(expectedUrl);
+
+	const headers = call.init.headers as Record<string, string>;
+	const authMatch = headers.authorization?.match(SIGV4_AUTH_RE);
+	expect(authMatch).not.toBeNull();
+
+	const signedHeaders = authMatch?.[1]?.split(";") ?? [];
+	expect(signedHeaders).toEqual(
+		expect.arrayContaining(["accept", "content-type", "host", "x-amz-date", "x-amz-security-token"]),
+	);
+
+	expect(headers["x-amz-date"]).toMatch(AMZ_DATE_RE);
+	expect(headers["x-amz-security-token"]).toBe("test-session-token");
+	expect(headers["content-type"]).toBe("application/json");
+	expect(headers.accept).toBe("application/json, text/event-stream");
+	expect(headers.host).toBe(`bedrock-agentcore.${TEST_REGION}.amazonaws.com`);
+}
+
 describe("agentcore-proxy round trip — scaffold", () => {
 	test("proxy starts on an ephemeral port", () => {
 		expect(proxy.port).toBeGreaterThan(0);
