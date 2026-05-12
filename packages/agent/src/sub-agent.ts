@@ -180,6 +180,14 @@ export function extractToolErrors(
 const MAX_TOOLS_PER_AGENT = 25;
 const MIN_FILTERED_TOOLS = 5;
 
+// SIO-738: Shared merge step so the augmentation test exercises the same
+// dedup logic the production runSubAgent path uses. Returns baseActions
+// reference unchanged when keywordActions is empty (no extra allocation).
+export function mergeKeywordActions(baseActions: string[], keywordActions: string[]): string[] {
+	if (keywordActions.length === 0) return baseActions;
+	return [...new Set([...baseActions, ...keywordActions])];
+}
+
 export function selectToolsByAction(
 	allTools: StructuredToolInterface[],
 	dataSourceId: string,
@@ -272,7 +280,7 @@ async function runSubAgent(
 		const query = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
 		const baseActions = state.extractedEntities.toolActions?.[dataSourceId] ?? [];
 		const keywordActions = toolDef ? matchActionsByKeywords(query, toolDef) : [];
-		const mergedActions = keywordActions.length > 0 ? [...new Set([...baseActions, ...keywordActions])] : baseActions;
+		const mergedActions = mergeKeywordActions(baseActions, keywordActions);
 		const augmentedToolActions =
 			keywordActions.length > 0
 				? { ...state.extractedEntities.toolActions, [dataSourceId]: mergedActions }

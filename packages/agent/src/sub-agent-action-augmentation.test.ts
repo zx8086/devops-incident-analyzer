@@ -1,9 +1,9 @@
 // agent/src/sub-agent-action-augmentation.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { type ToolDefinition, ToolDefinitionSchema, matchActionsByKeywords } from "@devops-agent/gitagent-bridge";
+import { matchActionsByKeywords, type ToolDefinition, ToolDefinitionSchema } from "@devops-agent/gitagent-bridge";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { selectToolsByAction } from "./sub-agent.ts";
+import { mergeKeywordActions, selectToolsByAction } from "./sub-agent.ts";
 
 // Minimal kafka tool def fixture mirroring the real kafka-introspect.yaml's
 // action_tool_map + action_keywords for restproxy and connect_status.
@@ -67,7 +67,7 @@ describe("SIO-738: keyword augmentation surfaces restproxy and connect tools", (
 		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
 		expect(keywordActions).toContain("restproxy");
 
-		const merged = [...new Set([...baseActions, ...keywordActions])];
+		const merged = mergeKeywordActions(baseActions, keywordActions);
 		const allTools = buildKafkaTools();
 		const { tools, filtered } = selectToolsByAction(allTools, "kafka", { kafka: merged }, kafkaToolDef);
 
@@ -82,7 +82,7 @@ describe("SIO-738: keyword augmentation surfaces restproxy and connect tools", (
 		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
 		expect(keywordActions).toContain("connect_status");
 
-		const merged = [...new Set([...baseActions, ...keywordActions])];
+		const merged = mergeKeywordActions(baseActions, keywordActions);
 		const allTools = buildKafkaTools();
 		const { tools, filtered } = selectToolsByAction(allTools, "kafka", { kafka: merged }, kafkaToolDef);
 
@@ -101,7 +101,7 @@ describe("SIO-738: keyword augmentation surfaces restproxy and connect tools", (
 		const query = "check REST Proxy and Kafka Connect health";
 		const baseActions = ["restproxy", "connect_status"]; // LLM got it right
 		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
-		const merged = [...new Set([...baseActions, ...keywordActions])];
+		const merged = mergeKeywordActions(baseActions, keywordActions);
 		// Order-insensitive equality
 		expect(merged.sort()).toEqual(["connect_status", "restproxy"]);
 	});
