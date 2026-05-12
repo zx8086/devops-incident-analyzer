@@ -44,6 +44,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		suggestions: [],
 		normalizedIncident: {},
 		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		mitigationFragments: [],
 		confidenceScore: 0,
 		lowConfidence: false,
 		pendingActions: [],

@@ -81,6 +81,7 @@ function baseState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		suggestions: [],
 		normalizedIncident: {},
 		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		mitigationFragments: [],
 		confidenceScore: 0.7,
 		lowConfidence: false,
 		degradedRules: [],

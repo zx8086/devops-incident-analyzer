@@ -18,7 +18,8 @@ export {
 	getToolsForDataSource,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
-export { proposeMitigation } from "./mitigation.ts";
+export { aggregateMitigation } from "./mitigation.ts";
+export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent } from "./prompt-context.ts";
 export { respond } from "./responder.ts";

@@ -6,17 +6,9 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getAvailableActionTools } from "./action-tools/executor.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
-import { getRunbookFilenames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:mitigation");
-
-const MitigationOutputSchema = z.object({
-	investigate: z.array(z.string()),
-	monitor: z.array(z.string()),
-	escalate: z.array(z.string()),
-	relatedRunbooks: z.array(z.string()),
-});
 
 const ActionProposalSchema = z.object({
 	actions: z.array(
@@ -27,31 +19,6 @@ const ActionProposalSchema = z.object({
 		}),
 	),
 });
-
-function buildMitigationPrompt(): string {
-	const runbooks = getRunbookFilenames();
-	const runbookHint =
-		runbooks.length > 0
-			? `\n\nAvailable runbooks: ${runbooks.join(", ")}\nReference relevant runbooks by filename in relatedRunbooks.`
-			: '\nUse "knowledge/runbooks/<topic>.md" format for relatedRunbooks.';
-
-	return `Based on the incident analysis report below, suggest safe, non-destructive mitigation steps.
-
-Categorize each suggestion into exactly one category:
-- investigate: additional read-only queries or checks to narrow the root cause
-- monitor: specific metrics, thresholds, or dashboards to watch
-- escalate: actions requiring human approval (scaling, rollback, config changes)
-- relatedRunbooks: file paths or titles of relevant runbooks${runbookHint}
-
-RULES:
-- Never suggest destructive operations (restart, delete, drop, reset, truncate)
-- All "investigate" suggestions must be read-only and safe to automate
-- All "escalate" suggestions must explicitly state they require human approval
-- Limit to 3-5 suggestions per category
-- If the report confidence is low, lead investigate with broader diagnostic steps
-
-Return ONLY valid JSON matching: { investigate: string[], monitor: string[], escalate: string[], relatedRunbooks: string[] }`;
-}
 
 function buildActionProposalPrompt(availableTools: string[]): string {
 	const toolDescs: string[] = [];
@@ -81,7 +48,30 @@ RULES:
 Return ONLY valid JSON matching: { actions: [{ tool, params, reason }] }`;
 }
 
-export async function proposeMitigation(
+function mergeFragmentsToSteps(state: AgentStateType): MitigationSteps {
+	const byKind: { investigate: string[]; monitor: string[]; escalate: string[] } = {
+		investigate: [],
+		monitor: [],
+		escalate: [],
+	};
+	for (const f of state.mitigationFragments) {
+		if (f.failed) continue;
+		byKind[f.kind].push(...f.items);
+	}
+	return {
+		investigate: byKind.investigate,
+		monitor: byKind.monitor,
+		escalate: byKind.escalate,
+		relatedRunbooks: state.selectedRunbooks ?? [],
+	};
+}
+
+// SIO-741: Joins the three parallel mitigation branches. Merges mitigationFragments
+// into the durable mitigationSteps shape (single-writer for that field) and then
+// runs Step 2 (action proposal) sequentially, gated on severity and configured
+// action tools. Replaces the former proposeMitigation node which combined Step 1
+// (now split into three Send branches) with Step 2.
+export async function aggregateMitigation(
 	state: AgentStateType,
 	config?: RunnableConfig,
 ): Promise<Partial<AgentStateType>> {
@@ -94,68 +84,28 @@ export async function proposeMitigation(
 		};
 	}
 
-	const confidence = state.confidenceScore;
-	const confidenceHint =
-		confidence > 0 && confidence < 0.6
-			? "\n\nNOTE: Report confidence is below 0.6. Lead with broader investigation steps and explicitly note data gaps."
-			: "";
+	const mitigationSteps = mergeFragmentsToSteps(state);
+	logger.info(
+		{
+			investigate: mitigationSteps.investigate.length,
+			monitor: mitigationSteps.monitor.length,
+			escalate: mitigationSteps.escalate.length,
+			runbooks: mitigationSteps.relatedRunbooks.length,
+		},
+		"Mitigation fragments merged",
+	);
 
-	const queriedSources = state.targetDataSources;
-	const sourceContext = queriedSources.length > 0 ? `\nQueried datasources: ${queriedSources.join(", ")}` : "";
-
-	const truncated = report.slice(0, 3000);
-	let mitigationSteps: MitigationSteps = { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] };
 	let pendingActions: PendingAction[] = [];
 	const partialFailures: Array<{ node: string; reason: string }> = [];
 
-	// Step 1: Generate mitigation steps
-	const llm = createLlm("mitigation");
-	try {
-		const response = await invokeWithDeadline(
-			llm as InvokableLlm,
-			"mitigation",
-			[
-				{ role: "system", content: `${buildMitigationPrompt()}${confidenceHint}${sourceContext}` },
-				{ role: "human", content: truncated },
-			],
-			config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
-		);
-
-		const text = String(response.content);
-		const jsonMatch = text.match(/\{[\s\S]*\}/);
-		if (jsonMatch) {
-			const parsed = MitigationOutputSchema.parse(JSON.parse(jsonMatch[0]));
-			mitigationSteps = { ...parsed };
-			logger.info(
-				{
-					investigate: mitigationSteps.investigate.length,
-					monitor: mitigationSteps.monitor.length,
-					escalate: mitigationSteps.escalate.length,
-					runbooks: mitigationSteps.relatedRunbooks.length,
-				},
-				"Mitigation steps generated",
-			);
-		} else {
-			logger.warn("Failed to parse mitigation JSON from LLM response");
-		}
-	} catch (error) {
-		if (error instanceof DeadlineExceededError) {
-			logger.warn(
-				{ role: error.role, deadlineMs: error.deadlineMs },
-				"Mitigation step 1 exceeded deadline; soft-failing",
-			);
-			partialFailures.push({ node: "proposeMitigation", reason: "timeout" });
-		} else {
-			logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Mitigation generation failed");
-		}
-	}
-
-	// Step 2: Generate action proposals (only if action tools are configured)
 	const availableTools = getAvailableActionTools();
 	const severity = state.normalizedIncident?.severity;
 	const shouldPropose = availableTools.length > 0 && (severity === "critical" || severity === "high");
 
 	if (shouldPropose) {
+		const truncated = report.slice(0, 3000);
+		const queriedSources = state.targetDataSources;
+		const confidence = state.confidenceScore;
 		const actionLlm = createLlm("actionProposal");
 		try {
 			const response = await invokeWithDeadline(
