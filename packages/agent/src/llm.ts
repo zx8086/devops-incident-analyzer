@@ -52,6 +52,44 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 };
 
+// SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
+// value of 0 disables the per-call timer for that role (the graph-level signal
+// is still in force). Defaults cover the post-validate non-streaming hang
+// surface; other roles opt in when they need it.
+export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
+	orchestrator: 0,
+	classifier: 0,
+	subAgent: 0,
+	aggregator: 0,
+	responder: 0,
+	entityExtractor: 0,
+	followUp: 60_000,
+	normalizer: 0,
+	mitigation: 120_000,
+	actionProposal: 60_000,
+	runbookSelector: 0,
+};
+
+export function getRoleDeadlineMs(role: LlmRole): number {
+	const envKey = `AGENT_LLM_TIMEOUT_${role.toUpperCase()}_MS`;
+	const raw = process.env[envKey];
+	if (raw != null && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+	}
+	return ROLE_DEADLINES_MS[role];
+}
+
+export class DeadlineExceededError extends Error {
+	constructor(
+		public readonly role: LlmRole,
+		public readonly deadlineMs: number,
+	) {
+		super(`LLM call for role '${role}' exceeded deadline of ${deadlineMs}ms`);
+		this.name = "DeadlineExceededError";
+	}
+}
+
 function buildChatModel(
 	bedrockConfig: BedrockModelConfig,
 	overrides: Partial<BedrockModelConfig>,
