@@ -56,4 +56,23 @@ export const DescribeConsumerGroupParams = z.object({
 	groupId: GroupIdParam,
 });
 
-export const GetClusterInfoParams = z.object({});
+export const GetClusterInfoParams = z.object({
+	prefix: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Case-sensitive prefix filter for the embedded topic list (cheap startsWith). Example: 'DLQ_'."),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(500)
+		.optional()
+		.describe("Maximum number of topics to return in the topic list (1-500). Default 100. Does not affect topicCount."),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe("Number of topics to skip from the start of the sorted topic list (for pagination). Default 0."),
+});

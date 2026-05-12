@@ -561,8 +561,14 @@ export class KafkaService {
 		});
 	}
 
-	async getClusterInfo(): Promise<Record<string, unknown>> {
-		logger.debug("Getting cluster info");
+	// SIO-735: cluster info now paginates its embedded topic listing. topicCount
+	// stays as the unfiltered aggregate (useful even when topics is empty/sliced);
+	// the topics array follows the SIO-731 paged shape.
+	async getClusterInfo(options: { prefix?: string; limit: number; offset: number }): Promise<Record<string, unknown>> {
+		logger.debug(
+			{ prefix: options.prefix ?? null, limit: options.limit, offset: options.offset },
+			"Getting cluster info",
+		);
 		const provider = this.clientManager.getProvider();
 
 		const [topics, providerMetadata] = await Promise.all([
@@ -570,11 +576,16 @@ export class KafkaService {
 			provider.getClusterMetadata?.().catch(() => ({})) ?? Promise.resolve({}),
 		]);
 
+		const sliced = sliceTopics(topics, { prefix: options.prefix, limit: options.limit, offset: options.offset });
+
 		return {
 			provider: provider.type,
 			providerName: provider.name,
 			topicCount: topics.length,
-			topics,
+			topics: sliced.topics.map((name) => ({ name })),
+			total: sliced.total,
+			truncated: sliced.truncated,
+			...(sliced.hint ? { hint: sliced.hint } : {}),
 			...providerMetadata,
 		};
 	}

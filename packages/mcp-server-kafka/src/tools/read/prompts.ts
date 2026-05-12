@@ -12,4 +12,4 @@ export const LIST_CONSUMER_GROUPS_DESCRIPTION = `[READ] List consumer groups in 
 
 export const DESCRIBE_CONSUMER_GROUP_DESCRIPTION = `[READ] Get detailed information about a consumer group including members, assigned partitions, and committed offsets. Use this to debug consumer lag or group coordination issues.`;
 
-export const GET_CLUSTER_INFO_DESCRIPTION = `[READ] Get high-level information about the Kafka cluster including broker count, topic count, and provider-specific metadata. Use this as a starting point to understand the cluster.`;
+export const GET_CLUSTER_INFO_DESCRIPTION = `[READ] Get high-level information about the Kafka cluster including broker count, topic count, and provider-specific metadata. The embedded topic list paginates — use 'prefix' (case-sensitive startsWith, e.g. "DLQ_"), 'limit' (default 100, max 500), and 'offset'. Response includes topicCount (full aggregate), topics, total, truncated, and hint? when paging is incomplete. Use this as a starting point to understand the cluster.`;
