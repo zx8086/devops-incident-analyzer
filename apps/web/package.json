@@ -7,7 +7,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"test": "bun test",
-		"typecheck": "bunx svelte-check --tsconfig ./tsconfig.json"
+		"typecheck": "bunx svelte-kit sync && bunx svelte-check --tsconfig ./tsconfig.json"
 	},
 	"dependencies": {
 		"@devops-agent/agent": "workspace:*",
