@@ -1,6 +1,5 @@
 // shared/src/tracing/nested-trace.ts
-import { getCurrentRunTree, withRunTree } from "langsmith/singletons/traceable";
-import { traceable } from "langsmith/traceable";
+import { getCurrentRunTree, traceable, withRunTree } from "langsmith/traceable";
 import { isTracingActive } from "./langsmith.ts";
 
 export async function withNestedTrace<T>(

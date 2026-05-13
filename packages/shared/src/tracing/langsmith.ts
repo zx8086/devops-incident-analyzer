@@ -1,7 +1,6 @@
 // shared/src/tracing/langsmith.ts
 import type { RunTree } from "langsmith/run_trees";
-import { getCurrentRunTree, withRunTree } from "langsmith/singletons/traceable";
-import { traceable } from "langsmith/traceable";
+import { getCurrentRunTree, traceable, withRunTree } from "langsmith/traceable";
 
 let isTracingEnabled = false;
 let isInitialized = false;

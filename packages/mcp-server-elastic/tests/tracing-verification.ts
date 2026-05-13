@@ -7,8 +7,7 @@
  * Run with: bun tests/tracing-verification.ts
  */
 
-import { getCurrentRunTree } from "langsmith/singletons/traceable";
-import { traceable } from "langsmith/traceable";
+import { getCurrentRunTree, traceable } from "langsmith/traceable";
 import { notificationManager } from "../src/utils/notifications.js";
 import { initializeTracing, traceToolCall } from "../src/utils/tracing.js";
 
