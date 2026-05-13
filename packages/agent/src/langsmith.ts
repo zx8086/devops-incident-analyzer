@@ -113,7 +113,7 @@ async function loadModule(modulePath: string, ext: "cjs" | "js"): Promise<Record
 			const { createRequire } = await import("node:module");
 			return createRequire(import.meta.url)(modulePath) as Record<string, unknown>;
 		}
-		return (await import(modulePath)) as Record<string, unknown>;
+		return (await import(/* @vite-ignore */ modulePath)) as Record<string, unknown>;
 	} catch (error) {
 		logger.debug(
 			{ modulePath, error: error instanceof Error ? error.message : String(error) },
