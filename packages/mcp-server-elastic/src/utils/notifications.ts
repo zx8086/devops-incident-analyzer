@@ -2,7 +2,7 @@
 
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-import { getCurrentRunTree, withRunTree } from "langsmith/singletons/traceable";
+import { getCurrentRunTree, withRunTree } from "langsmith/traceable";
 import { logger } from "./logger.js";
 
 export interface ProgressNotification {
