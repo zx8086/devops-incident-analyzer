@@ -55,18 +55,14 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		return this.ensureFreshTokens();
 	}
 
-	// SIO-702: kept as a public method so proxy.callTool's defense-in-depth retry
-	// (proxy.ts:172) can force a refresh after an UnauthorizedError -- which
-	// implies the persisted access_token does not actually work, regardless of
-	// what our isExpired() heuristic says. Joins any in-flight refresh started
-	// by tokens() via the base-class lock so we never fire two POSTs in parallel.
+	// SIO-702 + SIO-747: defense-in-depth refresh forced by proxy.callTool when
+	// the SDK throws UnauthorizedError (proxy.ts:182). The base-class
+	// lockedRefresh() ensures (a) in-process single-flight via refreshInFlight,
+	// (b) cross-process serialization via the on-disk advisory lock, and
+	// (c) reload-from-disk before POSTing so we never replay a stale
+	// refresh_token after another process rotated it.
 	async refreshTokens(): Promise<OAuthTokens> {
-		if (this.refreshInFlight) return this.refreshInFlight;
-
-		this.refreshInFlight = this.doRefresh().finally(() => {
-			this.refreshInFlight = null;
-		});
-		return this.refreshInFlight;
+		return this.lockedRefresh();
 	}
 
 	// SIO-702: hook called by ensureFreshTokens() when the access_token is past

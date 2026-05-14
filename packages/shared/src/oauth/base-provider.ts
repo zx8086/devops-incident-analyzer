@@ -1,6 +1,15 @@
 // src/oauth/base-provider.ts
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -9,7 +18,7 @@ import type {
 	OAuthClientMetadata,
 	OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { OAuthRequiresInteractiveAuthError } from "./errors.ts";
+import { OAuthRefreshLockTimeoutError, OAuthRequiresInteractiveAuthError } from "./errors.ts";
 import { isHeadless } from "./headless.ts";
 
 export const OAUTH_CALLBACK_PATH = "/oauth/callback";
@@ -28,6 +37,23 @@ export const TOKEN_EXPIRY_SKEW_MS = 60_000;
 // /oauth/token round-trip plus retry stacking; outside this window the wipe is
 // a real auth failure and we honor it.
 export const STALE_INVALIDATION_WINDOW_MS = 5_000;
+
+// SIO-747: cross-process refresh lock tunables. The in-process refreshInFlight
+// Promise dedupes within a process; this lock dedupes across processes that
+// share the same on-disk token file (workspace dev + Claude Desktop stdio +
+// production AgentCore all key off ~/.mcp-auth/<ns>/<sanitized-key>.json).
+// 10s upper bound on contention is well above a healthy /oauth/token RTT
+// (~300-800ms on gitlab.com) plus the loser's reload + skip-or-POST decision.
+export const REFRESH_LOCK_TIMEOUT_MS = 10_000;
+// Initial backoff before retrying acquire after EEXIST. Jittered up to 2x.
+export const REFRESH_LOCK_RETRY_BASE_MS = 50;
+// Cap so backoff doesn't grow unbounded across the 10s window.
+export const REFRESH_LOCK_RETRY_CAP_MS = 1_000;
+// A held lock older than this is treated as orphaned (the holder process
+// crashed mid-refresh without releasing). 2x the timeout is safe: a healthy
+// holder cannot legitimately exceed the timeout itself, and a SIGKILL'd holder
+// can no longer write or release.
+export const REFRESH_LOCK_STALE_THRESHOLD_MS = 2 * REFRESH_LOCK_TIMEOUT_MS;
 
 export interface PersistedOAuthState {
 	clientInformation?: OAuthClientInformationMixed;
@@ -200,11 +226,12 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 		);
 	}
 
-	// SIO-702: single-flight refresh-on-read. All callers (the SDK transport via
-	// tokens(), our proxy retry via refreshTokens()) share one in-flight POST,
-	// which makes the rotation race impossible because there is only ever one
-	// refresher. Returns undefined when nothing is persisted (caller decides
-	// whether to start a new authorization).
+	// SIO-702 + SIO-747: single-flight refresh-on-read. All in-process callers
+	// (the SDK transport via tokens(), our proxy retry via refreshTokens())
+	// share one in-flight Promise (refreshInFlight); the cross-process file
+	// lock (acquireRefreshLock) ensures only one *process* POSTs at a time.
+	// Returns undefined when nothing is persisted (caller decides whether to
+	// start a new authorization).
 	protected async ensureFreshTokens(): Promise<OAuthTokens | undefined> {
 		const persisted = this.persisted.tokens;
 		if (!persisted) return undefined;
@@ -212,10 +239,176 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 
 		if (this.refreshInFlight) return this.refreshInFlight;
 
-		this.refreshInFlight = this.doRefresh().finally(() => {
+		this.refreshInFlight = this.lockedRefreshIfStillExpired().finally(() => {
 			this.refreshInFlight = null;
 		});
 		return this.refreshInFlight;
+	}
+
+	// SIO-747: invoked under in-process single-flight, this acquires the cross-
+	// process lock, reloads from disk, and re-checks expiry. If another process
+	// already rotated the chain while we were waiting, return that fresh token
+	// without POSTing. Otherwise POST under the lock so concurrent processes
+	// serialize on the same refresh_token chain.
+	private async lockedRefreshIfStillExpired(): Promise<OAuthTokens> {
+		const release = await this.acquireRefreshLock();
+		try {
+			this.reloadPersisted();
+			const reloaded = this.persisted.tokens;
+			if (reloaded && !this.isExpired(reloaded)) return reloaded;
+			return await this.doRefresh();
+		} finally {
+			release();
+		}
+	}
+
+	// SIO-747: defense-in-depth path for the proxy's 401-retry. Unlike
+	// ensureFreshTokens which trusts isExpired(), the caller of this method
+	// has direct evidence the in-memory access_token is rejected upstream.
+	// Inside the lock we still reload to (a) POST the *current* on-disk
+	// refresh_token rather than a stale in-memory copy, and (b) skip the POST
+	// entirely if another process rotated since we entered -- the new token
+	// might already work.
+	protected async lockedRefresh(): Promise<OAuthTokens> {
+		if (this.refreshInFlight) return this.refreshInFlight;
+
+		const previousAccessToken = this.persisted.tokens?.access_token;
+		this.refreshInFlight = (async () => {
+			const release = await this.acquireRefreshLock();
+			try {
+				this.reloadPersisted();
+				const reloaded = this.persisted.tokens;
+				if (reloaded?.access_token && reloaded.access_token !== previousAccessToken) {
+					return reloaded;
+				}
+				return await this.doRefresh();
+			} finally {
+				release();
+			}
+		})().finally(() => {
+			this.refreshInFlight = null;
+		});
+		return this.refreshInFlight;
+	}
+
+	// SIO-747: re-read tokens + tokenObtainedAt from disk. Restricted to those
+	// two fields so we don't clobber an in-flight DCR clientInformation write
+	// from a concurrent process (DCR runs at most once per provider lifetime,
+	// but the carve-out costs nothing and removes a footgun).
+	private reloadPersisted(): void {
+		const fresh = loadState(this.storageNamespace, this.storageKey, this.logger);
+		this.persisted.tokens = fresh.tokens;
+		this.persisted.tokenObtainedAt = fresh.tokenObtainedAt;
+	}
+
+	// SIO-747: cross-process advisory lock backed by openSync('wx'). Atomic on
+	// local filesystems (APFS, ext4); ~/.mcp-auth is local-home by design so
+	// NFS quirks don't apply. Stale-lock reclamation handles SIGKILL'd holders.
+	// Protected (not private) so the SIO-747 contention/timeout tests can drive
+	// it directly without reflection casts.
+	protected async acquireRefreshLock(): Promise<() => void> {
+		const lockPath = `${getStoragePath(this.storageNamespace, this.storageKey)}.lock`;
+		const startedAt = this.clock();
+		let attempt = 0;
+		let staleReclaimAttempted = false;
+
+		while (true) {
+			try {
+				const fd = openSync(lockPath, "wx", 0o600);
+				const payload = JSON.stringify({ pid: process.pid, acquiredAt: this.clock() });
+				writeFileSync(fd, payload, "utf-8");
+				closeSync(fd);
+				return () => {
+					try {
+						unlinkSync(lockPath);
+					} catch {
+						// Already gone (stale-reclaimed by another waiter, or release races
+						// a stale-reclaimer). Idempotent release is the contract.
+					}
+				};
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code !== "EEXIST") throw error;
+
+				if (!staleReclaimAttempted && this.tryReclaimStaleLock(lockPath)) {
+					staleReclaimAttempted = true;
+					continue;
+				}
+
+				const elapsed = this.clock() - startedAt;
+				if (elapsed >= REFRESH_LOCK_TIMEOUT_MS) {
+					throw new OAuthRefreshLockTimeoutError(this.storageNamespace, lockPath, REFRESH_LOCK_TIMEOUT_MS);
+				}
+
+				const backoff = Math.min(REFRESH_LOCK_RETRY_CAP_MS, REFRESH_LOCK_RETRY_BASE_MS * 2 ** attempt);
+				const jitter = Math.random() * backoff;
+				const remaining = REFRESH_LOCK_TIMEOUT_MS - elapsed;
+				await new Promise<void>((resolve) => setTimeout(resolve, Math.min(jitter, remaining)));
+				attempt++;
+			}
+		}
+	}
+
+	// SIO-747: read the lock file; if the holder PID is no longer alive
+	// (process.kill(pid, 0) throws ESRCH) or acquiredAt is older than
+	// REFRESH_LOCK_STALE_THRESHOLD_MS, unlink it and let the caller retry.
+	// Returns true if a stale lock was reclaimed.
+	private tryReclaimStaleLock(lockPath: string): boolean {
+		let raw: string;
+		try {
+			raw = readFileSync(lockPath, "utf-8");
+		} catch {
+			// The lock disappeared between our EEXIST and our read -- treat as a
+			// reclaim opportunity so the caller retries the openSync immediately.
+			return true;
+		}
+
+		let parsed: { pid?: number; acquiredAt?: number };
+		try {
+			parsed = JSON.parse(raw) as { pid?: number; acquiredAt?: number };
+		} catch {
+			// Malformed lock file (truncated mid-write by a crashed holder).
+			// Reclaim it.
+			parsed = {};
+		}
+
+		const pidIsAlive = typeof parsed.pid === "number" && this.isProcessAlive(parsed.pid);
+		const ageMs = typeof parsed.acquiredAt === "number" ? this.clock() - parsed.acquiredAt : Number.POSITIVE_INFINITY;
+
+		if (pidIsAlive && ageMs < REFRESH_LOCK_STALE_THRESHOLD_MS) {
+			return false;
+		}
+
+		try {
+			unlinkSync(lockPath);
+		} catch {
+			// Another waiter raced us to the reclaim. The next openSync iteration
+			// will either succeed or hit a fresh EEXIST owned by a new holder.
+		}
+		this.logger.warn(
+			{
+				namespace: this.storageNamespace,
+				lockPath,
+				holderPid: parsed.pid,
+				holderAgeMs: Number.isFinite(ageMs) ? ageMs : null,
+				holderAlive: pidIsAlive,
+			},
+			"OAuth refresh lock reclaimed (stale holder)",
+		);
+		return true;
+	}
+
+	// process.kill(pid, 0) returns true if the process exists; throws ESRCH
+	// otherwise. Permissions errors (EPERM) imply the process exists but is
+	// owned by another user -- we treat that as alive (do not reclaim).
+	private isProcessAlive(pid: number): boolean {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return code !== "ESRCH";
+		}
 	}
 
 	// SIO-747: proactive refresh keep-alive. The lazy ensureFreshTokens() path

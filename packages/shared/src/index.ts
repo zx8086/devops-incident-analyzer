@@ -113,6 +113,7 @@ export {
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
 	OAuthRefreshChainExpiredError,
+	OAuthRefreshLockTimeoutError,
 	OAuthRequiresInteractiveAuthError,
 	type PersistedOAuthState,
 	type SeedOAuthOptions,

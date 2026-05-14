@@ -151,6 +151,10 @@ export class GitLabMcpProxy {
 		// SIO-747: now that the chain is alive, start the keep-alive tick so
 		// idle gaps longer than GitLab's refresh_token TTL don't kill it.
 		// Default 30 min on gitlab.com (~2h public-DCR mcp-scope TTL, 4x headroom).
+		// Multi-process safety (workspace dev + Claude Desktop stdio + AgentCore
+		// sharing ~/.mcp-auth/gitlab/<key>.json) is provided by the base-class
+		// cross-process file lock around doRefresh, so the tick can run unchanged
+		// in every process without racing on the rotating refresh_token chain.
 		const intervalMs = parseProactiveRefreshIntervalMs();
 		this.stopProactiveRefresh = this.oauthProvider.startProactiveRefresh(intervalMs);
 		log.info({ intervalMs }, "OAuth proactive refresh started");
