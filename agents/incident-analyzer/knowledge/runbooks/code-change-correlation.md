@@ -1,3 +1,13 @@
+---
+triggers:
+  metrics:
+    - deploy
+    - release
+    - stack_trace
+    - commit
+    - mr
+  match: any
+---
 # Code Change Correlation
 
 ## Symptoms

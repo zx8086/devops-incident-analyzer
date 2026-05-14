@@ -1,3 +1,13 @@
+---
+triggers:
+  metrics:
+    - lag
+    - dlq
+    - dead_letter
+    - consumer_group
+    - kafka
+  match: any
+---
 # Kafka Consumer Lag Investigation
 
 ## Symptoms

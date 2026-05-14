@@ -1,3 +1,16 @@
+---
+triggers:
+  metrics:
+    - error_rate
+    - 5xx
+    - http_status
+    - gateway
+    - ingest_failure
+  severity:
+    - critical
+    - high
+  match: any
+---
 # High Error Rate Investigation
 
 ## Symptoms
