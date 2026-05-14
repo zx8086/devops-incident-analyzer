@@ -10,6 +10,22 @@ import { GitLabOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider.js";
 
 const log = createContextLogger("proxy");
 
+// SIO-747: keep-alive tick interval. Default 30 min (4x headroom against
+// gitlab.com's ~2h refresh_token inactivity TTL on the public-DCR mcp scope).
+// Clamped to [60_000, 3_600_000] so misconfiguration can't burn the rate limit
+// (lower bound) or render the keep-alive useless (upper bound).
+const DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS = 1_800_000;
+const MIN_PROACTIVE_REFRESH_INTERVAL_MS = 60_000;
+const MAX_PROACTIVE_REFRESH_INTERVAL_MS = 3_600_000;
+
+function parseProactiveRefreshIntervalMs(): number {
+	const raw = process.env.OAUTH_PROACTIVE_REFRESH_INTERVAL_MS;
+	if (raw === undefined || raw === "") return DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS;
+	const n = Number.parseInt(raw, 10);
+	if (!Number.isFinite(n) || n <= 0) return DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS;
+	return Math.min(MAX_PROACTIVE_REFRESH_INTERVAL_MS, Math.max(MIN_PROACTIVE_REFRESH_INTERVAL_MS, n));
+}
+
 export interface GitLabProxyConfig {
 	instanceUrl: string;
 	personalAccessToken: string;
@@ -47,6 +63,9 @@ export class GitLabMcpProxy {
 	// SIO-698: kept as a field (not a connect-local) so callTool can ask it
 	// to refresh tokens when the SDK throws UnauthorizedError mid-flight.
 	private oauthProvider: GitLabOAuthProvider | null = null;
+	// SIO-747: stop-handle for the proactive refresh interval. Started in
+	// connect() once the OAuth provider is live, cleared in disconnect().
+	private stopProactiveRefresh: (() => void) | null = null;
 
 	constructor(optionsOrConfig: GitLabMcpProxyOptions | GitLabProxyConfig) {
 		// Backwards-compatible: accept either the new options bag or the legacy config.
@@ -128,6 +147,13 @@ export class GitLabMcpProxy {
 				throw error;
 			}
 		}
+
+		// SIO-747: now that the chain is alive, start the keep-alive tick so
+		// idle gaps longer than GitLab's refresh_token TTL don't kill it.
+		// Default 30 min on gitlab.com (~2h public-DCR mcp-scope TTL, 4x headroom).
+		const intervalMs = parseProactiveRefreshIntervalMs();
+		this.stopProactiveRefresh = this.oauthProvider.startProactiveRefresh(intervalMs);
+		log.info({ intervalMs }, "OAuth proactive refresh started");
 	}
 
 	async listTools(): Promise<ProxyToolInfo[]> {
@@ -175,6 +201,12 @@ export class GitLabMcpProxy {
 	}
 
 	async disconnect(): Promise<void> {
+		// SIO-747: stop the keep-alive tick before closing the transport so a
+		// late tick doesn't fire a refresh against a closed connection.
+		if (this.stopProactiveRefresh) {
+			this.stopProactiveRefresh();
+			this.stopProactiveRefresh = null;
+		}
 		if (this.transport) {
 			await this.transport.close();
 			this.transport = null;

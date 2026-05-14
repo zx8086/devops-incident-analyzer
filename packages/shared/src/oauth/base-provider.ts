@@ -218,6 +218,44 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 		return this.refreshInFlight;
 	}
 
+	// SIO-747: proactive refresh keep-alive. The lazy ensureFreshTokens() path
+	// only fires when a tool call happens; if the agent sits idle longer than
+	// the OAuth provider's refresh_token TTL (~2h on gitlab.com for the public
+	// DCR `mcp` scope), the chain is dead by the next tool call and the user
+	// must re-seed interactively. A periodic tick keeps the chain alive without
+	// any tool traffic. Shares the existing single-flight lock so concurrent
+	// real tool calls join the tick's refresh.
+	//
+	// Returns a stop function. Subclasses wire this from the MCP server's
+	// initDatasource and store the handle for cleanup at disconnect/shutdown.
+	startProactiveRefresh(intervalMs: number): () => void {
+		const id = setInterval(async () => {
+			try {
+				await this.ensureFreshTokens();
+				this.logger.info({ namespace: this.storageNamespace, intervalMs }, "OAuth proactive refresh tick succeeded");
+			} catch (error) {
+				// On a terminal refresh failure (the chain is dead), stop the
+				// interval -- hammering /oauth/token won't revive it, and the
+				// next real tool call will surface the same error to the caller.
+				clearInterval(id);
+				this.logger.error(
+					{
+						namespace: this.storageNamespace,
+						error: error instanceof Error ? error.message : String(error),
+						remediation: `bun run oauth:seed:${this.storageNamespace}`,
+					},
+					"OAuth proactive refresh failed terminally; interval stopped, re-seed required",
+				);
+			}
+		}, intervalMs);
+		// Don't keep the event loop alive solely for this timer -- if the MCP
+		// server has shut down everything else, the process should exit.
+		if (typeof id === "object" && id !== null && "unref" in id && typeof id.unref === "function") {
+			id.unref();
+		}
+		return () => clearInterval(id);
+	}
+
 	// Treat tokens as expired when there is no obtainedAt timestamp on disk
 	// (legacy file written before SIO-702) -- one self-healing refresh restores
 	// the timestamp. expires_in is seconds-from-issue, so multiply by 1000.
