@@ -318,6 +318,19 @@ export function severityForToolStatus(status: string): "info" | "warn" {
 	return status === "ok" ? "info" : "warn";
 }
 
+// SIO-745: AgentCore Runtime cold-starts emit -32010 "Runtime health check
+// failed or timed out" for the first 1-2 requests after the container wakes,
+// then recovers. Logging every cold-start retry at warn floods incident reports
+// with 4-8 lines that look like a failure even when the recovery is automatic.
+// Log attempt 1 of -32010 at debug; escalate to warn from attempt 2 onward.
+// All other retryable -320xx codes stay at warn from attempt 1.
+const AGENTCORE_HEALTH_CHECK_CODE = -32010;
+
+export function severityForJsonRpcRetry(jsonRpcCode: number | undefined, attempt: number): "debug" | "warn" {
+	if (jsonRpcCode === AGENTCORE_HEALTH_CHECK_CODE && attempt <= 1) return "debug";
+	return "warn";
+}
+
 // Proxy handle returned to bootstrap for lifecycle management
 export interface AgentCoreProxyHandle {
 	port: number;
@@ -495,6 +508,11 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 							break;
 						}
 
+						// SIO-745: see severityForJsonRpcRetry -- cold-start -32010 attempt 1 is
+						// debug, everything else warn. Recovery still surfaces in the terminal
+						// "ok" log via recoveredAfterAttempts.
+						const retrySeverity = severityForJsonRpcRetry(jsonRpcCode, jsonRpcAttempt);
+						const retryLogFn = retrySeverity === "debug" ? logger.debug.bind(logger) : logger.warn.bind(logger);
 						if (toolName) {
 							const retryFields: Record<string, unknown> = {
 								tool: toolName,
@@ -505,11 +523,11 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 								retryAfterMs,
 							};
 							if (jsonRpcMessage !== undefined) retryFields.jsonRpcMessage = jsonRpcMessage;
-							logger.warn(retryFields, `Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`);
+							retryLogFn(retryFields, `Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`);
 						} else {
 							const anonFields: Record<string, unknown> = { jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs };
 							if (jsonRpcMessage !== undefined) anonFields.jsonRpcMessage = jsonRpcMessage;
-							logger.warn(anonFields, "AgentCore -320xx response, retrying");
+							retryLogFn(anonFields, "AgentCore -320xx response, retrying");
 						}
 
 						try {
