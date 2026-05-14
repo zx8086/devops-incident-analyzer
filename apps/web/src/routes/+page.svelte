@@ -144,6 +144,45 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </div>
 
+  {#if agentStore.topicShiftPrompt}
+    <!-- SIO-751: topic-shift HITL banner. The graph is paused on detectTopicShift
+         until the user picks continue or fresh. -->
+    <div class="border-t border-amber-300 bg-amber-50 px-4 py-3" role="dialog" aria-labelledby="topic-shift-heading">
+      <div class="max-w-4xl mx-auto">
+        <h3 id="topic-shift-heading" class="text-sm font-semibold text-amber-900">
+          New topic detected
+        </h3>
+        <p class="text-sm text-amber-800 mt-1">
+          {agentStore.topicShiftPrompt.message}
+        </p>
+        <div class="mt-2 flex flex-wrap gap-2 text-xs text-amber-900">
+          <span class="font-semibold">Prior services:</span>
+          <span>{agentStore.topicShiftPrompt.oldServices.join(", ") || "(none)"}</span>
+          <span class="font-semibold ml-3">New services:</span>
+          <span>{agentStore.topicShiftPrompt.newServices.join(", ") || "(none)"}</span>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button
+            type="button"
+            onclick={() => agentStore.resolveTopicShift("continue")}
+            disabled={agentStore.isStreaming}
+            class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-md hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Continue prior investigation
+          </button>
+          <button
+            type="button"
+            onclick={() => agentStore.resolveTopicShift("fresh")}
+            disabled={agentStore.isStreaming}
+            class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Start fresh
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="border-t border-gray-200 bg-white">
     <ChatInput
       onSend={handleSend}

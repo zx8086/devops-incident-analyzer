@@ -34,16 +34,12 @@ const COMPLEX_PATTERNS = [
 	/\b(how.+doing|what.+happening|what.+wrong|is.+ok|are.+ok)\b/i,
 ];
 
-const FOLLOW_UP_PATTERNS = [
-	/try again/i,
-	/retry/i,
-	/more details/i,
-	/can you also/i,
-	/what about/i,
-	/^yes\b/i,
-	/do it again/i,
-	/run that again/i,
-];
+// SIO-749: follow-up detection moved to the UI. apps/web/src/routes/+page.svelte
+// sets state.isFollowUp:true for every non-first turn based on the chat-window
+// message count, which is more accurate than guessing from the latest message
+// text. The classifier regex was a redundant backup that generated false
+// negatives ("is kafka still failing?" matched none of the patterns) and could
+// silently disagree with the UI signal.
 
 const MAX_CONTEXT_WORD_COUNT = 15;
 const MAX_CONTEXT_MESSAGES = 4;
@@ -149,12 +145,10 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 	const trimmed = query.trim();
 	logger.info({ query: trimmed.slice(0, 100) }, "Classifying query");
 
-	// Follow-up detection runs first so queries like "what about the kafka lag?"
-	// get isFollowUp: true even when they also match complex infrastructure patterns.
-	if (FOLLOW_UP_PATTERNS.some((p) => p.test(trimmed))) {
-		logger.info({ result: "complex", method: "follow-up-regex" }, "Classification complete");
-		return { ...turnReset, queryComplexity: "complex", isFollowUp: true };
-	}
+	// SIO-749: follow-up detection runs in the UI now (apps/web/src/routes/+page.svelte:35-40).
+	// state.isFollowUp arrives set by the inbound request and flows through unchanged via
+	// the Annotation reducer; we only return turnReset here so prior-turn data does not
+	// bleed into per-turn accumulators (dataSourceResults, alignmentRetries, alignmentHints).
 
 	// Fast path: regex pattern match
 	const patternResult = patternClassify(trimmed);

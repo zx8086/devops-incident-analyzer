@@ -5,6 +5,11 @@ import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
 
+// SIO-751: Command is imported lazily inside resumeAgent() because eager import
+// pulls in @langchain/langgraph's transformer modules which fail to resolve
+// `@langchain/core/language_models/stream` under bun test (the test harness
+// mocks @devops-agent/agent but not the langgraph dep graph).
+
 // SIO-621: Derive recursion limit from gitagent runtime.max_turns instead of hardcoding.
 // getRecursionLimit doubles max_turns to account for agent->tool round trips.
 function getGraphRecursionLimit(): number {
@@ -120,4 +125,55 @@ export async function invokeAgent(
 			},
 		},
 	);
+}
+
+// SIO-751: resume a graph that was interrupted by detectTopicShift. The
+// Command's resume payload is returned by interrupt() inside the node, which
+// then writes the appropriate state updates and continues to the supervisor.
+export async function resumeAgent(options: {
+	threadId: string;
+	resumeValue: unknown;
+	metadata?: Record<string, unknown>;
+}) {
+	if (isKillSwitchActive()) throw new KillSwitchError();
+
+	const graph = await getGraph();
+	// SIO-751: lazy import. See top-of-file comment.
+	const { Command } = await import("@langchain/langgraph");
+	// SIO-751: LangGraph 1.3.0 typing for streamEvents declares the input as
+	// `UpdateType | CommandInstance | null` but the exported Command class is
+	// typed as `Command<unknown, Record<string, unknown>, string>` which TS
+	// can't narrow to CommandInstance with our state's generics. Cast through
+	// Parameters[0] -- the runtime accepts Command instances per the docs at
+	// https://langchain-ai.github.io/langgraphjs/concepts/human_in_the_loop/.
+	const resumeInput = new Command({ resume: options.resumeValue }) as unknown as Parameters<
+		typeof graph.streamEvents
+	>[0];
+	return graph.streamEvents(resumeInput, {
+		configurable: { thread_id: options.threadId },
+		version: "v2",
+		recursionLimit: getGraphRecursionLimit(),
+		signal: AbortSignal.timeout(getGraphTimeoutMs()),
+		metadata: {
+			...complianceToMetadata(getAgent().manifest.compliance),
+			...options.metadata,
+		},
+	});
+}
+
+// SIO-751: after a stream completes, check whether the graph paused on an
+// interrupt rather than finishing. If so, return the interrupt payload so the
+// SSE handler can surface it to the UI. Returns undefined when the graph
+// completed normally.
+export async function getPendingInterrupt(threadId: string): Promise<{ value: unknown; id?: string } | undefined> {
+	const graph = await getGraph();
+	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+	const tasks = snapshot.tasks ?? [];
+	for (const task of tasks) {
+		const interrupts = (task as { interrupts?: Array<{ value: unknown; id?: string }> }).interrupts ?? [];
+		if (interrupts.length > 0) {
+			return interrupts[0];
+		}
+	}
+	return undefined;
 }

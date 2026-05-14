@@ -59,6 +59,8 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		confidenceCap: undefined,
 		pendingCorrelations: [],
 		partialFailures: [],
+		investigationFocus: undefined,
+		pendingTopicShiftPrompt: undefined,
 		...overrides,
 	};
 }

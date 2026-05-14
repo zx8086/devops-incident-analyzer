@@ -25,6 +25,7 @@ import { createSelectRunbooksNode } from "./runbook-selector.ts";
 import { AgentState, type AgentStateType } from "./state.ts";
 import { queryDataSource } from "./sub-agent.ts";
 import { supervise } from "./supervisor.ts";
+import { detectTopicShift } from "./topic-shift.ts";
 import { shouldRetryValidation, validate } from "./validator.ts";
 
 const graphLogger = getLogger("agent:graph");
@@ -92,6 +93,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("aggregateMitigation", traceNode("aggregateMitigation", aggregateMitigation))
 		.addNode("followUp", traceNode("followUp", generateSuggestions))
 		.addNode("selectRunbooks", traceNode("selectRunbooks", createSelectRunbooksNode()))
+		// SIO-751: topic-shift detection runs between entity extraction and the
+		// supervisor fan-out. Fast-path returns {} when overlap is non-zero so
+		// the happy path cost is negligible.
+		.addNode("detectTopicShift", traceNode("detectTopicShift", detectTopicShift))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -109,8 +114,12 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("normalize", runbookSelectorEnabled ? "selectRunbooks" : "entityExtractor")
 		.addEdge("selectRunbooks", "entityExtractor")
 
-		// EntityExtractor fans out to sub-agents via Send[]
-		.addConditionalEdges("entityExtractor", supervise)
+		// SIO-751: entityExtractor -> detectTopicShift -> supervise. The shift
+		// node either returns {} (no overlap problem) and we continue to the
+		// supervisor fan-out, OR it interrupts the graph for user input. The
+		// supervise function itself is unchanged; we just inserted a checkpoint.
+		.addEdge("entityExtractor", "detectTopicShift")
+		.addConditionalEdges("detectTopicShift", supervise)
 
 		// Sub-agent results flow to alignment
 		.addEdge("queryDataSource", "align")

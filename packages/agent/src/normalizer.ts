@@ -1,7 +1,7 @@
 // agent/src/normalizer.ts
 
 import { getLogger } from "@devops-agent/observability";
-import type { NormalizedIncident } from "@devops-agent/shared";
+import type { InvestigationFocus, NormalizedIncident } from "@devops-agent/shared";
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
@@ -61,6 +61,44 @@ Extract and return JSON with:
 
 Return ONLY valid JSON, no explanation.`;
 
+// SIO-750: Build the investigation focus anchor from the current normalized
+// incident + query. Deterministic (no LLM call). Called on the first complex
+// turn of a chat session; subsequent turns reuse the existing focus via the
+// state.ts sticky reducer.
+//
+// On cold restart with isFollowUp:true but no focus persisted (the MemorySaver
+// in packages/checkpointer was lost), we reconstruct from the current incident
+// as the best-effort recovery and log a warning so operators can detect this.
+export function buildInvestigationFocus(
+	state: AgentStateType,
+	incident: NormalizedIncident,
+	query: string,
+): InvestigationFocus {
+	if (state.isFollowUp && !state.investigationFocus) {
+		logger.warn(
+			{ isFollowUp: true, hasIncident: !!incident },
+			"Follow-up turn arrived without persisted investigationFocus -- checkpointer may have been lost; reconstructing from current incident",
+		);
+	}
+
+	const services = incident.affectedServices?.map((s) => s.name) ?? [];
+	const severity = incident.severity ?? "unspecified";
+	// One-line deterministic summary: "<severity> investigation of <services> -- <first 80 chars of query>".
+	const querySnippet = query.trim().replace(/\s+/g, " ").slice(0, 80);
+	const summary =
+		services.length > 0
+			? `${severity} investigation of ${services.join(", ")} -- ${querySnippet}`
+			: `${severity} investigation -- ${querySnippet}`;
+
+	return {
+		services,
+		datasources: [], // populated by the entity-extractor in stage 2
+		timeWindow: incident.timeWindow,
+		summary,
+		establishedAtTurn: state.messages.length,
+	};
+}
+
 export async function normalizeIncident(
 	state: AgentStateType,
 	config?: RunnableConfig,
@@ -74,11 +112,19 @@ export async function normalizeIncident(
 	const query = extractTextFromContent(lastMessage.content);
 	logger.info({ query: query.slice(0, 100) }, "Normalizing incident query");
 
-	// On follow-ups, provide previous incident context so the LLM can inherit time windows
+	// SIO-750: on follow-ups, surface the persisted investigation focus so the
+	// LLM does not drift to unrelated services or time ranges. The focus is the
+	// authoritative inheritance source; the legacy normalizedIncident.timeWindow
+	// fallback is kept for the (rare) case where focus is unset but a prior
+	// normalized incident exists (e.g. mid-session migration of an already-running
+	// chat).
+	const focus = state.investigationFocus;
 	const followUpHint =
-		state.isFollowUp && state.normalizedIncident?.timeWindow
-			? `\nPrevious incident context: severity=${state.normalizedIncident.severity ?? "unknown"}, timeWindow=${JSON.stringify(state.normalizedIncident.timeWindow)}. Inherit these if the new query does not override them.`
-			: "";
+		state.isFollowUp && focus
+			? `\nOriginal investigation: ${focus.summary}\nAnchored services: ${focus.services.join(", ") || "(none)"}\nAnchored datasources: ${focus.datasources.join(", ") || "(none)"}\nAnchored time window: ${focus.timeWindow ? JSON.stringify(focus.timeWindow) : "(none)"}\nTreat new services/metrics in the user's query as scoping additions to this investigation. Inherit anchored fields unless the query explicitly overrides them.`
+			: state.isFollowUp && state.normalizedIncident?.timeWindow
+				? `\nPrevious incident context: severity=${state.normalizedIncident.severity ?? "unknown"}, timeWindow=${JSON.stringify(state.normalizedIncident.timeWindow)}. Inherit these if the new query does not override them.`
+				: "";
 
 	const now = new Date();
 	const oneHourAgo = new Date(now.getTime() - 3600_000);
@@ -99,16 +145,23 @@ export async function normalizeIncident(
 		if (jsonMatch) {
 			const parsed = NormalizationSchema.parse(JSON.parse(jsonMatch[0]));
 			const incident: NormalizedIncident = { ...parsed };
+			// SIO-750: establish the investigation focus on the first complex
+			// turn. The sticky reducer in state.ts preserves the existing focus
+			// across later turns; we only build a fresh one here when none is
+			// persisted yet.
+			const investigationFocus = state.investigationFocus ?? buildInvestigationFocus(state, incident, query);
 			logger.info(
 				{
 					severity: incident.severity,
 					serviceCount: incident.affectedServices?.length ?? 0,
 					metricCount: incident.extractedMetrics?.length ?? 0,
 					hasTimeWindow: !!incident.timeWindow,
+					focusEstablishedAtTurn: investigationFocus.establishedAtTurn,
+					focusServices: investigationFocus.services,
 				},
 				"Normalization complete",
 			);
-			return { normalizedIncident: incident };
+			return { normalizedIncident: incident, investigationFocus };
 		}
 	} catch (error) {
 		logger.warn(

@@ -1,6 +1,15 @@
 // apps/web/src/lib/stores/agent-reducer.ts
 import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 
+export interface TopicShiftPrompt {
+	threadId: string;
+	oldFocusSummary: string;
+	newFocusSummary: string;
+	oldServices: string[];
+	newServices: string[];
+	message: string;
+}
+
 export interface ReducerState {
 	currentContent: string;
 	threadId: string;
@@ -15,6 +24,9 @@ export interface ReducerState {
 	lastDataSourceContext: DataSourceContext | undefined;
 	pendingActions: PendingAction[];
 	actionResults: ActionResult[];
+	// SIO-751: when the graph pauses on detectTopicShift, the SSE handler
+	// emits topic_shift_prompt and the UI shows a banner with two buttons.
+	topicShiftPrompt: TopicShiftPrompt | null;
 }
 
 export function initialReducerState(): ReducerState {
@@ -32,6 +44,7 @@ export function initialReducerState(): ReducerState {
 		lastDataSourceContext: undefined,
 		pendingActions: [],
 		actionResults: [],
+		topicShiftPrompt: null,
 	};
 }
 
@@ -81,6 +94,20 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			return { ...state, lastRunId: event.runId };
 		case "attachment_warnings":
 			return state;
+		case "topic_shift_prompt":
+			return {
+				...state,
+				topicShiftPrompt: {
+					threadId: event.threadId,
+					oldFocusSummary: event.oldFocusSummary,
+					newFocusSummary: event.newFocusSummary,
+					oldServices: event.oldServices,
+					newServices: event.newServices,
+					message: event.message,
+				},
+			};
+		case "topic_shift_resolved":
+			return { ...state, topicShiftPrompt: null };
 		default:
 			return state;
 	}
