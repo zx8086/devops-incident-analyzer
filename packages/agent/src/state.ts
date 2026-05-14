@@ -6,6 +6,7 @@ import type {
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
+	InvestigationFocus,
 	MitigationSteps,
 	NormalizedIncident,
 	PendingAction,
@@ -147,6 +148,25 @@ export const AgentState = Annotation.Root({
 	}),
 
 	dataSourceContext: Annotation<DataSourceContext | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-750: Investigation focus anchor. Sticky reducer: only an explicit
+	// non-undefined replacement (e.g. SIO-751 topic-shift "fresh" branch)
+	// overwrites the focus. Nodes that don't touch it return no key and the
+	// prior value is preserved across turns via the checkpointer.
+	investigationFocus: Annotation<InvestigationFocus | undefined>({
+		reducer: (current, next) => next ?? current,
+		default: () => undefined,
+	}),
+
+	// SIO-751: Pending HITL prompt for cross-turn topic shift. Populated by
+	// detectTopicShift when new-turn entities have no overlap with the
+	// investigation focus. Cleared on resume.
+	pendingTopicShiftPrompt: Annotation<
+		{ newFocusCandidate: InvestigationFocus; oldFocus: InvestigationFocus } | undefined
+	>({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),

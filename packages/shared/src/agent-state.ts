@@ -75,6 +75,26 @@ export const NormalizedIncidentSchema = z.object({
 });
 export type NormalizedIncident = z.infer<typeof NormalizedIncidentSchema>;
 
+// SIO-750: Investigation focus anchor. Established on the first complex turn
+// of a chat session and inherited across turns via the LangGraph checkpointer.
+// All prompts that run on follow-up turns (normalizer, entity-extractor,
+// sub-agent, aggregator) consume this so the LLM does not drift to unrelated
+// services, datasources, or time ranges. Replaced only by an explicit
+// "fresh" decision from the topic-shift HITL gate (Layer C).
+export const InvestigationFocusSchema = z.object({
+	services: z.array(z.string()),
+	datasources: z.array(z.string()),
+	timeWindow: z
+		.object({
+			from: z.string(),
+			to: z.string(),
+		})
+		.optional(),
+	summary: z.string(),
+	establishedAtTurn: z.number(),
+});
+export type InvestigationFocus = z.infer<typeof InvestigationFocusSchema>;
+
 // SIO-631: Mitigation steps produced by the propose-mitigation node
 export const MitigationStepsSchema = z.object({
 	investigate: z.array(z.string()),
@@ -127,5 +147,19 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("error"), message: z.string() }),
 	z.object({ type: z.literal("run_id"), runId: z.string() }),
 	z.object({ type: z.literal("attachment_warnings"), warnings: z.array(z.string()) }),
+	// SIO-751: graph paused on detectTopicShift; UI surfaces a "continue/fresh"
+	// banner and POSTs the decision to /api/agent/topic-shift to resume.
+	z.object({
+		type: z.literal("topic_shift_prompt"),
+		threadId: z.string(),
+		oldFocusSummary: z.string(),
+		newFocusSummary: z.string(),
+		oldServices: z.array(z.string()),
+		newServices: z.array(z.string()),
+		message: z.string(),
+	}),
+	// SIO-751: emitted at the start of a resumed stream so the UI knows to
+	// clear its banner before the resumed graph starts pushing events again.
+	z.object({ type: z.literal("topic_shift_resolved") }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

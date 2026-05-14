@@ -106,12 +106,21 @@ ${normalized.affectedServices?.length ? `- Affected services: ${normalized.affec
 ${normalized.extractedMetrics?.length ? `- Metrics mentioned: ${normalized.extractedMetrics.map((m) => `${m.name}${m.value ? `=${m.value}` : ""}`).join(", ")}` : ""}`
 			: "";
 
+	// SIO-750: on follow-ups, anchor the entity extractor to the investigation
+	// focus so it does not silently drop datasources the user established
+	// earlier in the chat. Explicit exclusions in the new query still win.
+	const focus = state.investigationFocus;
+	const focusHint =
+		state.isFollowUp && focus
+			? `\n\nInvestigation focus (from earlier turns of this chat): ${focus.summary}. Datasources already in scope: ${focus.datasources.join(", ") || "(none yet)"}. Do not drop these unless the new query explicitly excludes them (e.g. "ignore gitlab").`
+			: "";
+
 	const llm = createLlm("entityExtractor");
 	const systemPrompt = `Extract incident entities from the query. Available datasources: ${DATA_SOURCE_IDS.join(", ")}.
 Return JSON with: dataSources (array of {id, mentionedAs}), timeFrom, timeTo (ISO 8601), services (array), severity.
 Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect", "gitlab" or "pipeline" or "merge request" or "CI/CD" or "commit" or "deploy" or "code change" to "gitlab", "jira" or "confluence" or "ticket" or "runbook" or "incident page" or "wiki" to "atlassian".
 Always include "gitlab" alongside other datasources for complex incidents -- GitLab provides supplementary code and deployment correlation context.
-If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", ")}.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}`;
+If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", ")}.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}${focusHint}`;
 
 	const response = await withRetry(
 		() =>
@@ -149,10 +158,18 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 				{ extractedDataSources: extractedIds, uiSelected, effectiveTargets, isFollowUp },
 				"Entity extraction complete",
 			);
+			// SIO-750: stage 2 of the focus populate. The normalizer establishes
+			// the focus with an empty datasources list (because it runs before
+			// entity extraction); we fill it here on the first turn. Subsequent
+			// turns leave the existing focus untouched -- the sticky reducer
+			// preserves it when we return no investigationFocus key.
+			const focusUpdate =
+				focus && focus.datasources.length === 0 ? { investigationFocus: { ...focus, datasources: extractedIds } } : {};
 			return {
 				extractedEntities: entities,
 				previousEntities: state.extractedEntities,
 				targetDataSources: effectiveTargets,
+				...focusUpdate,
 			};
 		}
 	} catch (error) {

@@ -83,6 +83,8 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		pendingActions: [],
 		actionResults: [],
 		selectedRunbooks: null,
+		investigationFocus: undefined,
+		pendingTopicShiftPrompt: undefined,
 		...overrides,
 	} as AgentStateType;
 }
@@ -497,5 +499,69 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-711 self-defensive prose forbidden"
 		// would silently bypass the cap. The prompt rule must steer the LLM toward the
 		// matching form.
 		expect(prompt).toContain("## Gaps");
+	});
+});
+
+// SIO-750: continuation guidance replaces the older "Focus on answering the
+// current query. Reference prior findings where relevant but do not repeat the
+// full prior report." string whenever a priorAnswer AND an investigationFocus
+// are both present. The old phrasing is what let the LLM frame turn 2 as
+// "supersedes the prior analysis" and pivot to unrelated clusters.
+describe.skipIf(!hasRunbooks)("aggregate SIO-750 continuation-aware prompt", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.7";
+	});
+
+	test("with priorAnswer + investigationFocus, prompt anchors to focus and forbids 'supersedes' framing", async () => {
+		await aggregate(
+			makeState({
+				isFollowUp: true,
+				finalAnswer: "## Previous incident report\n\nThe styles-v3 service was over-fetching...",
+				investigationFocus: {
+					services: ["pvh-services-styles-v3"],
+					datasources: ["elastic", "kafka", "couchbase"],
+					timeWindow: { from: "2026-05-14T17:00:00Z", to: "2026-05-14T18:00:00Z" },
+					summary: "high investigation of pvh-services-styles-v3 -- styles-v3 over-fetch",
+					establishedAtTurn: 1,
+				},
+			}),
+		);
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("CONTINUING");
+		expect(prompt).toContain("pvh-services-styles-v3");
+		expect(prompt).toContain("styles-v3 over-fetch");
+		expect(prompt).toContain('do NOT start a fresh report or claim it "supersedes" the prior one');
+		expect(prompt).toContain("focused question");
+		// The older free-wander phrasing must not appear when a focus is set.
+		expect(prompt).not.toContain("do not repeat the full prior report");
+	});
+
+	test("with priorAnswer but no investigationFocus, falls back to legacy guidance", async () => {
+		await aggregate(
+			makeState({
+				isFollowUp: true,
+				finalAnswer: "## Previous incident report\n\nSome prior analysis...",
+				investigationFocus: undefined,
+			}),
+		);
+		const prompt = getUserPromptText();
+		// Legacy phrasing stays as a safety net for the (rare) cold-restart case
+		// where the checkpointer lost the focus but the message history still
+		// carries the prior answer.
+		expect(prompt).toContain("do not repeat the full prior report");
+		expect(prompt).not.toContain("CONTINUING");
+	});
+
+	test("with no priorAnswer, neither variant appears (clean first-turn prompt)", async () => {
+		await aggregate(makeState({ isFollowUp: false, finalAnswer: "" }));
+		const prompt = getUserPromptText();
+		expect(prompt).not.toContain("CONTINUING");
+		expect(prompt).not.toContain("do not repeat the full prior report");
 	});
 });

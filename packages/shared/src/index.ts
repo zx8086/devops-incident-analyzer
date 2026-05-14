@@ -12,6 +12,8 @@ export {
 	DataSourceResultSchema,
 	type ExtractedEntities,
 	ExtractedEntitiesSchema,
+	type InvestigationFocus,
+	InvestigationFocusSchema,
 	type MitigationSteps,
 	MitigationStepsSchema,
 	type NormalizedIncident,

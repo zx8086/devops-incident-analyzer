@@ -47,6 +47,8 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		confidenceCap: undefined,
 		pendingCorrelations: [],
 		partialFailures: [],
+		investigationFocus: undefined,
+		pendingTopicShiftPrompt: undefined,
 		...overrides,
 		// biome-ignore lint/suspicious/noExplicitAny: test helper; cast keeps the helper terse without redeclaring AgentStateType locally
 	} as any;

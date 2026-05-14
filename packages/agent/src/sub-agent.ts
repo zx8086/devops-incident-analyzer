@@ -280,7 +280,17 @@ async function runSubAgent(
 	const { deploymentId } = options;
 	try {
 		const allTools = getToolsForDataSource(dataSourceId);
-		const systemPrompt = buildSubAgentPrompt(agentName);
+		// SIO-750: wrap the base sub-agent prompt with the investigation focus
+		// anchor when present, so ReAct loops stay scoped to the chat session's
+		// investigation rather than wandering to unrelated clusters or services.
+		// We don't thread the focus through buildSubAgentPrompt itself because
+		// that helper is shared with non-investigation flows.
+		const baseSystemPrompt = buildSubAgentPrompt(agentName);
+		const focus = state.investigationFocus;
+		const focusBlock = focus
+			? `\n\n---\n\nINVESTIGATION FOCUS (continuing across turns):\n- Summary: ${focus.summary}\n- Anchored services: ${focus.services.join(", ") || "(none)"}\n- Anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none)"}\n\nAll tool calls must stay scoped to this investigation. Do not pivot to unrelated clusters, services, or time ranges. If the user's current message references "kafka" or "the broker" or similar pronouns, resolve them against the anchored services list, not the broadest possible interpretation.`
+			: "";
+		const systemPrompt = `${baseSystemPrompt}${focusBlock}`;
 		const llm = createLlm("subAgent");
 
 		if (allTools.length === 0) {
