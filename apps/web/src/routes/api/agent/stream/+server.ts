@@ -2,10 +2,11 @@
 
 import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
 import { traceSpan } from "@devops-agent/observability";
-import { AttachmentBlockSchema, DataSourceContextSchema, redactPiiContent } from "@devops-agent/shared";
+import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { invokeAgent } from "$lib/server/agent";
+import { getPendingInterrupt, invokeAgent } from "$lib/server/agent";
+import { emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
 
 const StreamRequestSchema = z.object({
@@ -81,131 +82,22 @@ export const POST: RequestHandler = async ({ request }) => {
 								},
 							});
 
-							const OUTPUT_NODES = new Set(["aggregate", "responder"]);
-							const PIPELINE_NODES = new Set([
-								"classify",
-								"normalize",
-								"entityExtractor",
-								"queryDataSource",
-								"align",
-								"aggregate",
-								"checkConfidence",
-								"validate",
-								// SIO-741: mitigation node split into three parallel branches + aggregator join
-								"proposeInvestigate",
-								"proposeMonitor",
-								"proposeEscalate",
-								"aggregateMitigation",
-								"responder",
-								"followUp",
-							]);
-							// SIO-741: nodes that may surface partialFailures (branch timeouts, aggregator
-							// action-proposal timeout, follow-up timeout). The append reducer ensures
-							// `event.data.output.partialFailures` carries the cumulative list at each emit,
-							// but the dedup set below prevents double-emission across sibling nodes.
-							const PARTIAL_FAILURE_SOURCES = new Set([
-								"proposeInvestigate",
-								"proposeMonitor",
-								"proposeEscalate",
-								"aggregateMitigation",
-								"followUp",
-							]);
-							const nodeStartTimes = new Map<string, number>();
-							const emittedFailures = new Set<string>();
-							let _responseContent = "";
-							const toolsUsed = new Set<string>();
-
-							for await (const event of eventStream) {
-								if (event.event === "on_chat_model_stream" && event.data?.chunk?.content) {
-									const tags: string[] = event.tags ?? [];
-									const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
-									const nodeName = event.metadata?.langgraph_node;
-									if (isOutputNode || OUTPUT_NODES.has(nodeName)) {
-										const content = redactPiiContent(String(event.data.chunk.content));
-										_responseContent += content;
-										send({ type: "message", content });
-									}
-								}
-
-								if (event.event === "on_chain_start" && event.name && PIPELINE_NODES.has(event.name)) {
-									nodeStartTimes.set(event.name, Date.now());
-									send({ type: "node_start", nodeId: event.name });
-								}
-
-								if (event.event === "on_chain_end" && event.name && PIPELINE_NODES.has(event.name)) {
-									const startTime = nodeStartTimes.get(event.name);
-									const duration = startTime ? Date.now() - startTime : 0;
-									nodeStartTimes.delete(event.name);
-									send({ type: "node_end", nodeId: event.name, duration });
-
-									// Suggestions are now generated inside the graph's followUp node
-									if (event.name === "followUp") {
-										const suggestions = event.data?.output?.suggestions;
-										if (Array.isArray(suggestions) && suggestions.length > 0) {
-											send({ type: "suggestions", suggestions });
-										}
-									}
-
-									// SIO-632: Notify frontend when confidence is below threshold
-									if (event.name === "checkConfidence" && event.data?.output?.lowConfidence === true) {
-										send({
-											type: "low_confidence",
-											message: "Report confidence is below the review threshold. Results may be incomplete.",
-										});
-									}
-
-									// SIO-634, SIO-635 (SIO-741: renamed proposeMitigation -> aggregateMitigation):
-									// Emit pending action proposals for user confirmation. Action proposal
-									// (Step 2) still runs sequentially inside aggregateMitigation.
-									if (event.name === "aggregateMitigation") {
-										const pendingActions = event.data?.output?.pendingActions;
-										if (Array.isArray(pendingActions) && pendingActions.length > 0) {
-											send({ type: "pending_actions", actions: pendingActions });
-										}
-									}
-
-									// SIO-739 (SIO-741: expanded source set): emit partial_failure for any
-									// new entries surfaced by the three mitigation branches, the aggregator,
-									// or follow-up. The shared dedup set keeps repeated keys from re-emitting.
-									if (event.name && PARTIAL_FAILURE_SOURCES.has(event.name)) {
-										const partialFailures = event.data?.output?.partialFailures;
-										if (Array.isArray(partialFailures)) {
-											for (const failure of partialFailures) {
-												if (
-													typeof failure === "object" &&
-													failure !== null &&
-													typeof failure.node === "string" &&
-													typeof failure.reason === "string"
-												) {
-													const key = `${failure.node}:${failure.reason}`;
-													if (!emittedFailures.has(key)) {
-														emittedFailures.add(key);
-														send({
-															type: "partial_failure",
-															node: failure.node,
-															reason: failure.reason,
-														});
-													}
-												}
-											}
-										}
-									}
-								}
-
-								if (event.event === "on_tool_start") {
-									const toolName = event.name ?? "unknown";
-									toolsUsed.add(toolName);
-									send({
-										type: "tool_call",
-										toolName,
-										args: event.data?.input ?? {},
-									});
-								}
-							}
-
-							const toolsUsedArray = [...toolsUsed];
+							// SIO-751: shared event-routing helper. Both the initial stream
+							// handler (here) and the resume endpoint use the same logic so
+							// resumed graphs surface identical events.
+							const { toolsUsed } = await pumpEventStream(eventStream, send);
 
 							await flushLangSmithCallbacks();
+
+							// SIO-751: if detectTopicShift paused the graph via interrupt(),
+							// the snapshot still has the interrupt pending and no "done"
+							// event has fired. Surface the prompt to the UI instead of done;
+							// the UI POSTs the user's decision to /api/agent/topic-shift.
+							const pendingInterrupt = await getPendingInterrupt(threadId);
+							if (pendingInterrupt) {
+								const surfaced = emitTopicShiftPrompt(send, threadId, pendingInterrupt.value);
+								if (surfaced) return;
+							}
 
 							// Build dataSourceContext from the datasources that were actually queried
 							const queriedDataSources = body.dataSources ?? [];
@@ -225,7 +117,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								requestId,
 								runId,
 								responseTime: Date.now() - startTime,
-								toolsUsed: toolsUsedArray,
+								toolsUsed,
 								dataSourceContext,
 							});
 						},

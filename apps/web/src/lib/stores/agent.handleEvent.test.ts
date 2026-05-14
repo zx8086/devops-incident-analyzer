@@ -103,4 +103,39 @@ describe("applyStreamEvent", () => {
 		const after = applyStreamEvent(before, { type: "future_event_x" } as unknown as StreamEvent);
 		expect(after).toBe(before);
 	});
+
+	// SIO-751: topic-shift events drive the HITL banner. topic_shift_prompt sets
+	// the banner state; topic_shift_resolved clears it before the resumed graph
+	// pushes new node_start / message events through the reducer.
+	test("topic_shift_prompt populates the banner state", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "topic_shift_prompt",
+			threadId: "t-1",
+			oldFocusSummary: "high investigation of styles-v3",
+			newFocusSummary: "low investigation of jira-mars",
+			oldServices: ["styles-v3"],
+			newServices: ["jira-mars"],
+			message: "Continue or fresh?",
+		});
+		expect(next.topicShiftPrompt).not.toBeNull();
+		expect(next.topicShiftPrompt?.threadId).toBe("t-1");
+		expect(next.topicShiftPrompt?.oldServices).toEqual(["styles-v3"]);
+		expect(next.topicShiftPrompt?.newServices).toEqual(["jira-mars"]);
+		expect(next.topicShiftPrompt?.message).toBe("Continue or fresh?");
+	});
+
+	test("topic_shift_resolved clears the banner state", () => {
+		const promoted = applyStreamEvent(initialReducerState(), {
+			type: "topic_shift_prompt",
+			threadId: "t-1",
+			oldFocusSummary: "x",
+			newFocusSummary: "y",
+			oldServices: [],
+			newServices: [],
+			message: "msg",
+		});
+		expect(promoted.topicShiftPrompt).not.toBeNull();
+		const cleared = applyStreamEvent(promoted, { type: "topic_shift_resolved" });
+		expect(cleared.topicShiftPrompt).toBeNull();
+	});
 });

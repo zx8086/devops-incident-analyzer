@@ -29,8 +29,13 @@ const invokeAgentMock = mock(
 	}),
 );
 
+// SIO-751: getPendingInterrupt is called after the stream drains to check
+// whether the graph paused on detectTopicShift. In the happy-path tests below
+// no interrupt is ever raised, so a stub returning undefined keeps the existing
+// done-event path intact.
 mock.module("$lib/server/agent", () => ({
 	invokeAgent: invokeAgentMock,
+	getPendingInterrupt: mock(async () => undefined),
 }));
 
 const { POST } = await import("./+server.ts");

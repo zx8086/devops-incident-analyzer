@@ -2,7 +2,7 @@
 
 import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
-import { applyStreamEvent, type ReducerState } from "./agent-reducer.ts";
+import { applyStreamEvent, type ReducerState, type TopicShiftPrompt } from "./agent-reducer.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
 
 export interface ChatMessage {
@@ -49,6 +49,8 @@ function createAgentStore() {
 	let pendingAttachments = $state<AttachmentBlock[]>([]);
 	let pendingActions = $state<PendingAction[]>([]);
 	let actionResults = $state<ActionResult[]>([]);
+	// SIO-751: HITL banner state for cross-turn topic-shift detection.
+	let topicShiftPrompt = $state<TopicShiftPrompt | null>(null);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -147,6 +149,7 @@ function createAgentStore() {
 			lastDataSourceContext,
 			pendingActions,
 			actionResults,
+			topicShiftPrompt,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -162,6 +165,7 @@ function createAgentStore() {
 		lastDataSourceContext = next.lastDataSourceContext;
 		pendingActions = next.pendingActions;
 		actionResults = next.actionResults;
+		topicShiftPrompt = next.topicShiftPrompt;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -289,6 +293,56 @@ function createAgentStore() {
 		pendingAttachments = [];
 		pendingActions = [];
 		actionResults = [];
+		topicShiftPrompt = null;
+	}
+
+	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
+	// pipe the resulting SSE stream back through handleEvent. The server emits
+	// `topic_shift_resolved` first (clearing the banner via the reducer) and
+	// then resumes the graph normally.
+	async function resolveTopicShift(decision: "continue" | "fresh") {
+		if (!topicShiftPrompt || isStreaming) return;
+		const tid = topicShiftPrompt.threadId;
+		isStreaming = true;
+		try {
+			const response = await fetch("/api/agent/topic-shift", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ threadId: tid, decision }),
+			});
+			if (!response.ok || !response.body) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			for await (const event of parseSseChunks(response.body)) {
+				handleEvent(event);
+			}
+		} catch (error) {
+			currentContent += `\n\n[Error resuming after topic-shift decision: ${error instanceof Error ? error.message : String(error)}]`;
+		} finally {
+			if (currentContent) {
+				messages = [
+					...messages,
+					{
+						role: "assistant",
+						content: currentContent,
+						suggestions: [...lastSuggestions],
+						responseTime: lastResponseTime,
+						toolsUsed: [...lastToolsUsed],
+						completedNodes: new Map(completedNodes),
+						dataSourceResults: new Map(dataSourceProgress),
+						feedback: null,
+						runId: lastRunId,
+						confidence: lastConfidence,
+					},
+				];
+				currentContent = "";
+			}
+			isStreaming = false;
+			activeNodes = new Set();
+			completedNodes = new Map();
+			lastSuggestions = [];
+			dataSourceProgress = new Map();
+		}
 	}
 
 	return {
@@ -349,6 +403,9 @@ function createAgentStore() {
 		get actionResults() {
 			return actionResults;
 		},
+		get topicShiftPrompt() {
+			return topicShiftPrompt;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
@@ -357,6 +414,7 @@ function createAgentStore() {
 		loadDataSources,
 		stopHealthPolling,
 		clearChat,
+		resolveTopicShift,
 	};
 }
 
