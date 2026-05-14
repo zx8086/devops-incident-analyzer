@@ -19,6 +19,9 @@ export const CompatibilityLevelParam = z
 
 export const ListSchemasParams = z.object({});
 
+// SIO-742: no-parameter health probe.
+export const SchemaRegistryHealthCheckParams = z.object({});
+
 export const GetSchemaParams = z.object({
 	subject: SubjectNameParam,
 	version: VersionParam,

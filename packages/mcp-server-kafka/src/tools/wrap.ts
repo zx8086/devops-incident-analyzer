@@ -34,10 +34,13 @@ const SCHEMA_REGISTRY_TOOLS = new Set([
 	"kafka_get_schema_config",
 	"kafka_set_schema_config",
 	"kafka_delete_schema_subject",
+	"schema_registry_health_check",
 ]);
 
 const KSQL_TOOLS = new Set([
 	"ksql_get_server_info",
+	"ksql_health_check",
+	"ksql_cluster_status",
 	"ksql_list_streams",
 	"ksql_list_tables",
 	"ksql_list_queries",

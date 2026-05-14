@@ -2,6 +2,10 @@
 
 export const LIST_SCHEMAS_DESCRIPTION = `[READ] List all registered schema subjects in the Schema Registry. Returns subject names which typically follow the pattern '<topic>-key' or '<topic>-value'. Use this to discover available schemas. Requires SCHEMA_REGISTRY_ENABLED=true.`;
 
+// SIO-742: first-iteration reachability probe.
+export const SCHEMA_REGISTRY_HEALTH_CHECK_DESCRIPTION =
+	"[READ] Probe Schema Registry reachability. No parameters. Returns { status: 'up' | 'down' | 'unreachable', service, endpoint, latencyMs, hostname?, details?, error? }. Call this FIRST when checking whether Schema Registry is available. Do NOT infer SR state from inferred subject names returned by kafka_list_schemas when the registry REST is unreachable.";
+
 export const GET_SCHEMA_DESCRIPTION = `[READ] Retrieve a schema by subject and version from the Schema Registry. Returns the schema definition (Avro, JSON Schema, or Protobuf), schema ID, version number, and schema type. Use 'latest' for the most recent version. Requires SCHEMA_REGISTRY_ENABLED=true.`;
 
 export const GET_SCHEMA_VERSIONS_DESCRIPTION = `[READ] List all version numbers for a specific schema subject. Use this to understand the evolution history of a schema before retrieving a specific version. Requires SCHEMA_REGISTRY_ENABLED=true.`;

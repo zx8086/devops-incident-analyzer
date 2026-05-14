@@ -188,6 +188,32 @@ export function mergeKeywordActions(baseActions: string[], keywordActions: strin
 	return [...new Set([...baseActions, ...keywordActions])];
 }
 
+// SIO-742: deterministic cluster-health action inference for the kafka sub-agent.
+// The substring keyword augmenter in matchActionsByKeywords misses natural
+// phrasings like "Kafka Rest" (not in action_keywords.restproxy) or "how is my
+// Kafka doing" (cluster-health implied but no single keyword present). This
+// function returns the full Confluent action set when the query references
+// cluster health, multiple components together, or asks reachability questions,
+// guaranteeing iteration-1 probes of restproxy/ksql/connect/SR.
+//
+// Kafka-only -- the supervisor's other sub-agents have their own keyword sets.
+const CLUSTER_HEALTH_PATTERNS: RegExp[] = [
+	/\bcluster\s+health\b/i,
+	/\brelated\s+services\b/i,
+	/\bhow\s+(is|are)\b.*\b(kafka|cluster|confluent)\b/i,
+	/\bconfluent\b.*\b(rest|platform|services)\b/i,
+	/\b(connect|ksql|schema\s+registry|rest\s+proxy)\b.*\b(working|up|enabled|healthy|reachable|down)\b/i,
+	/\bkafka\s+(rest|connect|and)\b/i,
+];
+
+export function inferClusterHealthActions(query: string, dataSourceId: string): string[] {
+	if (dataSourceId !== "kafka") return [];
+	if (!query) return [];
+	const matched = CLUSTER_HEALTH_PATTERNS.some((re) => re.test(query));
+	if (!matched) return [];
+	return ["health_check", "cluster_info", "restproxy", "ksql", "connect_status", "schema_registry"];
+}
+
 export function selectToolsByAction(
 	allTools: StructuredToolInterface[],
 	dataSourceId: string,
@@ -280,15 +306,19 @@ async function runSubAgent(
 		const query = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
 		const baseActions = state.extractedEntities.toolActions?.[dataSourceId] ?? [];
 		const keywordActions = toolDef ? matchActionsByKeywords(query, toolDef) : [];
-		const mergedActions = mergeKeywordActions(baseActions, keywordActions);
+		// SIO-742: cluster-health auto-include for kafka (covers phrasings the
+		// substring augmenter misses, e.g. "Kafka Rest", "related services").
+		const clusterHealthActions = inferClusterHealthActions(query, dataSourceId);
+		const augmentationActions = mergeKeywordActions(keywordActions, clusterHealthActions);
+		const mergedActions = mergeKeywordActions(baseActions, augmentationActions);
 		const augmentedToolActions =
-			keywordActions.length > 0
+			augmentationActions.length > 0
 				? { ...state.extractedEntities.toolActions, [dataSourceId]: mergedActions }
 				: state.extractedEntities.toolActions;
 
-		if (keywordActions.length > 0) {
+		if (augmentationActions.length > 0) {
 			log.info(
-				{ dataSourceId, baseActions, keywordActions, mergedActions, deploymentId },
+				{ dataSourceId, baseActions, keywordActions, clusterHealthActions, mergedActions, deploymentId },
 				"Augmented toolActions via keyword match",
 			);
 		}

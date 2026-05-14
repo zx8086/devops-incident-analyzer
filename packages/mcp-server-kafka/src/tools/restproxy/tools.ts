@@ -9,6 +9,17 @@ import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
 export function registerRestProxyTools(server: McpServer, service: RestProxyService, config: AppConfig): void {
+	// SIO-742: no-parameter reachability probe -- always registered.
+	server.tool(
+		"restproxy_health_check",
+		prompts.RESTPROXY_HEALTH_CHECK_DESCRIPTION,
+		params.HealthCheckParams.shape,
+		wrapHandler("restproxy_health_check", config, async () => {
+			const result = await ops.healthCheck(service, config);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
 	// 3 metadata reads — always registered when service is present
 	server.tool(
 		"restproxy_list_topics",

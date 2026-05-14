@@ -2,6 +2,10 @@
 
 export const CONNECT_GET_CLUSTER_INFO_DESCRIPTION = `[READ] Get Kafka Connect cluster information including version, commit, and the Kafka cluster ID it is attached to. Use this to verify Connect cluster connectivity and version. Requires CONNECT_ENABLED=true.`;
 
+// SIO-742: first-iteration reachability probe.
+export const CONNECT_HEALTH_CHECK_DESCRIPTION =
+	"[READ] Probe Kafka Connect REST API reachability. No parameters. Returns { status: 'up' | 'down' | 'unreachable', service, endpoint, latencyMs, hostname?, details?, error? }. Call this FIRST when checking whether Kafka Connect is healthy. Do NOT infer Connect state from connect-* consumer group presence -- those are MSK offset state, not live deployment.";
+
 export const CONNECT_LIST_CONNECTORS_DESCRIPTION = `[READ] List all Kafka Connect connectors with embedded status (state per connector + per task) and configuration info. Use this when many connect-* consumer groups are simultaneously EMPTY to determine whether the Connect cluster is unhealthy or whether individual connectors are stopped/failed. Requires CONNECT_ENABLED=true.`;
 
 export const CONNECT_GET_CONNECTOR_STATUS_DESCRIPTION = `[READ] Get the runtime status of a single Kafka Connect connector including its state (RUNNING/PAUSED/FAILED/UNASSIGNED), worker assignment, and the state of each task. Use this to investigate a specific connector's health, especially when a connect-<name> consumer group is EMPTY. Requires CONNECT_ENABLED=true.`;

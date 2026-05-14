@@ -1,10 +1,23 @@
 // src/tools/schema/operations.ts
 
+import type { AppConfig } from "../../config/schemas.ts";
 import type { SchemaRegistryService } from "../../services/schema-registry-service.ts";
+import { type HealthEnvelope, runHealthProbe } from "../shared/health-envelope.ts";
 
 export async function listSchemas(service: SchemaRegistryService) {
 	const subjects = await service.listSubjects();
 	return { subjects, count: subjects.length };
+}
+
+// SIO-742: probe Schema Registry reachability via the same /subjects path
+// the existing probeReachability uses. Returns the count as a sanity-check
+// detail on success so the LLM can see the registry has actual content.
+export async function healthCheck(service: SchemaRegistryService, config: AppConfig): Promise<HealthEnvelope> {
+	const endpoint = `${config.schemaRegistry.url.replace(/\/$/, "")}/subjects`;
+	return runHealthProbe("Schema Registry", endpoint, async () => {
+		const subjects = await service.listSubjects();
+		return { subjectCount: subjects.length };
+	});
 }
 
 export async function getSchema(

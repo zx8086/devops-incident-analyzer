@@ -1,5 +1,10 @@
 // src/tools/restproxy/prompts.ts
 
+// SIO-742: first-iteration reachability probe. Use this BEFORE restproxy_list_topics
+// or any other restproxy_* tool when checking whether REST Proxy is available.
+export const RESTPROXY_HEALTH_CHECK_DESCRIPTION =
+	"[READ] Probe REST Proxy reachability. No parameters. Returns { status: 'up' | 'down' | 'unreachable', service, endpoint, latencyMs, hostname?, error? }. Call this FIRST when the user asks whether REST Proxy is enabled, working, or reachable -- do not infer REST Proxy state from the absence of restproxy_* consumer groups.";
+
 export const RESTPROXY_LIST_TOPICS_DESCRIPTION =
 	"[READ] List topics visible via REST Proxy with pagination. Use 'prefix' to narrow by case-sensitive name prefix (e.g. 'DLQ_'), 'limit' (default 100, max 500), and 'offset' for paging. Returns { topics, total, truncated, hint? }. When 'truncated' is true, narrow with 'prefix' or page with 'offset'.";
 

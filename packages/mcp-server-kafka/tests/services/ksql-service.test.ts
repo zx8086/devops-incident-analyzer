@@ -58,6 +58,36 @@ describe("KsqlService", () => {
 		expect(result).toEqual(info);
 	});
 
+	// SIO-742: /healthcheck endpoint
+	test("getHealthcheck GETs /healthcheck and returns isHealthy", async () => {
+		mockFetch(200, { isHealthy: true, details: { kafka: { isHealthy: true } } });
+		const service = new KsqlService(mockConfig);
+		const result = await service.getHealthcheck();
+		expect(result.isHealthy).toBe(true);
+		expect(result.details?.kafka?.isHealthy).toBe(true);
+		const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+		expect(call?.[0]).toBe("http://localhost:8088/healthcheck");
+	});
+
+	// SIO-742: /clusterStatus endpoint parses the per-host map.
+	test("getClusterStatus GETs /clusterStatus and parses host map", async () => {
+		const body = {
+			clusterStatus: {
+				"ksql-1.example:8088": { hostAlive: true, lastStatusUpdateMs: 1_700_000_000 },
+				"ksql-2.example:8088": { hostAlive: false, lastStatusUpdateMs: 1_699_999_000 },
+				"ksql-3.example:8088": { hostAlive: false, lastStatusUpdateMs: 1_699_998_000 },
+			},
+		};
+		mockFetch(200, body);
+		const service = new KsqlService(mockConfig);
+		const result = await service.getClusterStatus();
+		expect(Object.keys(result.clusterStatus)).toHaveLength(3);
+		expect(result.clusterStatus["ksql-1.example:8088"]?.hostAlive).toBe(true);
+		expect(result.clusterStatus["ksql-2.example:8088"]?.hostAlive).toBe(false);
+		const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+		expect(call?.[0]).toBe("http://localhost:8088/clusterStatus");
+	});
+
 	test("listStreams parses streams from response", async () => {
 		const streams = [
 			{

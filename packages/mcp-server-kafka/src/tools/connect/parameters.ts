@@ -3,6 +3,9 @@ import { z } from "zod";
 
 export const ConnectGetClusterInfoParams = z.object({});
 
+// SIO-742: no-parameter health probe.
+export const ConnectHealthCheckParams = z.object({});
+
 export const ConnectListConnectorsParams = z.object({});
 
 export const ConnectGetConnectorStatusParams = z.object({

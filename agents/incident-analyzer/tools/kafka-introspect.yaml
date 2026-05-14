@@ -23,6 +23,7 @@ input_schema:
         - connect_status
         - connect_management
         - restproxy
+        - health_check
         - write_ops
       description: Type of Kafka inspection or management operation
     consumer_group:
@@ -86,6 +87,7 @@ tool_mapping:
       - kafka_get_topic_offsets
       - kafka_list_topics
     schema_registry:
+      - schema_registry_health_check
       - kafka_list_schemas
       - kafka_get_schema
       - kafka_get_schema_versions
@@ -103,6 +105,8 @@ tool_mapping:
       - sr_hard_delete_subject
       - sr_hard_delete_subject_version
     ksql:
+      - ksql_health_check
+      - ksql_cluster_status
       - ksql_get_server_info
       - ksql_list_streams
       - ksql_list_tables
@@ -111,6 +115,7 @@ tool_mapping:
       - ksql_run_query
       - ksql_execute_statement
     connect_status:
+      - connect_health_check
       - connect_get_cluster_info
       - connect_list_connectors
       - connect_get_connector_status
@@ -122,6 +127,7 @@ tool_mapping:
       - connect_restart_connector_task
       - connect_delete_connector
     restproxy:
+      - restproxy_health_check
       - restproxy_list_topics
       - restproxy_get_topic
       - restproxy_get_partitions
@@ -131,6 +137,12 @@ tool_mapping:
       - restproxy_consume
       - restproxy_commit_offsets
       - restproxy_delete_consumer
+    health_check:
+      - restproxy_health_check
+      - ksql_health_check
+      - ksql_cluster_status
+      - connect_health_check
+      - schema_registry_health_check
     write_ops:
       - kafka_produce_message
       - kafka_create_topic
@@ -149,6 +161,10 @@ tool_mapping:
     connect_status: when Kafka Connect connectors or tasks are failing, paused, or in unknown state -- read-only inspection
     connect_management: when pausing, resuming, restarting, or deleting Kafka Connect connectors (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
     restproxy: when producing to or consuming from Kafka via the Confluent REST Proxy v2 API (writes gated by KAFKA_ALLOW_WRITES)
+    health_check: >-
+      when checking whether the Confluent Platform services (REST Proxy, ksqlDB,
+      Kafka Connect, Schema Registry) are reachable from the agent --
+      first-iteration triage probe. Returns up/down/unreachable per component.
     write_ops: when producing test messages, creating/altering topics, deleting topics, or resetting consumer group offsets (gated by KAFKA_ALLOW_WRITES / KAFKA_ALLOW_DESTRUCTIVE)
   action_keywords:
     connect_status:
@@ -181,3 +197,11 @@ tool_mapping:
       - dead letter
       - dead-letter
       - dlq
+    health_check:
+      - cluster health
+      - related services
+      - how is my kafka
+      - reachable
+      - kafka rest
+      - confluent
+      - kafka and
