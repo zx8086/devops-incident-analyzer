@@ -331,6 +331,92 @@ describe("BaseOAuthClientProvider", () => {
 		});
 	});
 
+	// SIO-747: proactive refresh keep-alive
+	describe("startProactiveRefresh (SIO-747)", () => {
+		// Tests use fake timers via Bun's setTimeout/clearInterval visibility by
+		// driving the interval handler manually rather than waiting on wall time.
+		// The handler is registered with setInterval inside startProactiveRefresh,
+		// so we tick it by waiting a tiny real interval.
+
+		test("tick fires a refresh when tokens are persisted", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				return { access_token: "fresh", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+
+			const stop = provider.startProactiveRefresh(20);
+			await new Promise((r) => setTimeout(r, 60));
+			stop();
+
+			expect(refreshCount).toBeGreaterThanOrEqual(1);
+		});
+
+		test("terminal refresh failure stops the interval (no further ticks)", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				throw new Error("refresh chain expired");
+			};
+
+			const stop = provider.startProactiveRefresh(20);
+			await new Promise((r) => setTimeout(r, 120));
+			stop();
+
+			// The interval should have stopped itself after the first failure, so
+			// even though we waited long enough for ~6 ticks at 20ms, refreshCount
+			// is 1 (not 6).
+			expect(refreshCount).toBe(1);
+		});
+
+		test("stop function clears the interval (no refreshes after stop)", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				return { access_token: "fresh", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+
+			const stop = provider.startProactiveRefresh(20);
+			await new Promise((r) => setTimeout(r, 60));
+			const countAtStop = refreshCount;
+			stop();
+			await new Promise((r) => setTimeout(r, 80));
+
+			expect(refreshCount).toBe(countAtStop);
+		});
+
+		test("no-op when no tokens are persisted (ensureFreshTokens returns undefined)", async () => {
+			const provider = makeProvider({ clock: () => 1_000_000 });
+
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				return { access_token: "should-not-happen", token_type: "bearer", expires_in: 7200 };
+			};
+
+			const stop = provider.startProactiveRefresh(20);
+			await new Promise((r) => setTimeout(r, 60));
+			stop();
+
+			expect(refreshCount).toBe(0);
+		});
+	});
+
 	// SIO-702: stale-wipe guard
 	describe("invalidateCredentials stale-wipe guard (SIO-702)", () => {
 		test("ignores invalidate('tokens') within STALE_INVALIDATION_WINDOW_MS of saveTokens", async () => {

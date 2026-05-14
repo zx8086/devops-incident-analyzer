@@ -128,12 +128,28 @@ describe("runSelectRunbooks", () => {
 		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md"]);
 	});
 
-	test("7. three returned are truncated to two", async () => {
+	// SIO-746: max raised from 2 -> 3. Three picks now pass through untouched;
+	// four-or-more are truncated to three.
+	test("7. three returned pass through untouched", async () => {
 		llmResponse = {
 			content: '{"filenames":["a.md","b.md","c.md"],"reasoning":"all"}',
 		};
 		const result = await runSelectRunbooks(makeState(), buildRuntime());
-		expect(result.selectedRunbooks).toEqual(["a.md", "b.md"]);
+		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md"]);
+	});
+
+	test("7a. four returned are truncated to three", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "Runbook A", summary: "Pattern A summary" },
+			{ filename: "b.md", title: "Runbook B", summary: "Pattern B summary" },
+			{ filename: "c.md", title: "Runbook C", summary: "Pattern C summary" },
+			{ filename: "d.md", title: "Runbook D", summary: "Pattern D summary" },
+		];
+		llmResponse = {
+			content: '{"filenames":["a.md","b.md","c.md","d.md"],"reasoning":"all"}',
+		};
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md"]);
 	});
 
 	test("8. timeout triggers medium fallback (empty)", async () => {

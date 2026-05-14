@@ -1,8 +1,11 @@
 // packages/agent/src/runbook-selector.ts
 // SIO-640: Lazy runbook selection node. Runs between normalize and entityExtractor
 // when knowledge/index.yaml contains a runbook_selection block. Asks the
-// orchestrator LLM to pick 0-2 runbooks from the catalog and writes the
+// orchestrator LLM to pick 0-3 runbooks from the catalog and writes the
 // selection to state.selectedRunbooks as a tri-state (null | [] | [names]).
+// SIO-746: max picks raised from 2 -> 3 after cross-datasource incidents
+// (Couchbase + Elastic APM + Kafka DLQs) consistently surfaced only one
+// matched runbook even when 2-3 were applicable.
 
 import type { RunbookTriggers } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
@@ -120,8 +123,9 @@ export async function runSelectRunbooks(
 	const catalogBlock = catalog.map((e) => `  - ${e.filename}: ${e.title} -- ${e.summary}`).join("\n");
 
 	const systemPrompt = `You are selecting operational runbooks for a DevOps incident investigation.
-Pick 0 to 2 runbooks from the catalog that best match the incident. If no
-runbook clearly applies, return an empty list. Do not guess.`;
+Pick 0 to 3 runbooks from the catalog that best match the incident. Cross-
+datasource incidents (e.g. database + messaging + APM) often warrant 2-3
+runbooks. If no runbook clearly applies, return an empty list. Do not guess.`;
 
 	const userPrompt = `Incident summary:
 ${incidentSummary}
@@ -131,10 +135,11 @@ Available runbooks:
 ${catalogBlock}
 
 Return a JSON object matching this exact shape:
-{"filenames": ["name1.md", "name2.md"], "reasoning": "one sentence"}
+{"filenames": ["name1.md", "name2.md", "name3.md"], "reasoning": "one sentence"}
 
 Rules:
-- Pick 0 to 2 filenames. Prefer 1 if a single runbook clearly applies.
+- Pick 0 to 3 filenames. Include every runbook that clearly applies; do not
+  artificially prefer 1 if the incident spans multiple datasources.
 - Return empty filenames if no runbook clearly applies.
 - filenames must exactly match the list above. Do not invent new names.`;
 
@@ -178,10 +183,10 @@ Rules:
 		return enterFallback("fallback.invalid_filenames", severity, fallbackConfig, startTime);
 	}
 
-	// Step 6: truncate to max 2
-	const truncated = validPicks.slice(0, 2);
+	// Step 6: truncate to max 3 (SIO-746 -- was 2)
+	const truncated = validPicks.slice(0, 3);
 	let mode: SelectionMode = "llm";
-	if (parsed.filenames.length > 2) mode = "llm.truncated";
+	if (parsed.filenames.length > 3) mode = "llm.truncated";
 	else if (invalidPicks.length > 0) mode = "llm.partial";
 	else if (truncated.length === 0) mode = "llm.empty";
 

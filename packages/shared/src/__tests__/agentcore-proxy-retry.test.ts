@@ -11,6 +11,7 @@ import {
 	computeJitteredBackoff,
 	extractJsonRpcError,
 	extractJsonRpcErrorCode,
+	severityForJsonRpcRetry,
 	sleepWithAbort,
 	startAgentCoreProxy,
 } from "../agentcore-proxy.ts";
@@ -120,6 +121,30 @@ describe("extractJsonRpcError", () => {
 		for (const body of samples) {
 			expect(extractJsonRpcErrorCode(body)).toBe(extractJsonRpcError(body)?.code);
 		}
+	});
+});
+
+// SIO-745: cold-start AgentCore -32010 attempt 1 must log at debug to avoid
+// flooding incident reports with warnings for a self-healing condition.
+describe("severityForJsonRpcRetry", () => {
+	test("attempt 1 of -32010 (AgentCore health check) is debug", () => {
+		expect(severityForJsonRpcRetry(-32010, 1)).toBe("debug");
+	});
+
+	test("attempt 2+ of -32010 escalates to warn", () => {
+		expect(severityForJsonRpcRetry(-32010, 2)).toBe("warn");
+		expect(severityForJsonRpcRetry(-32010, 3)).toBe("warn");
+		expect(severityForJsonRpcRetry(-32010, 5)).toBe("warn");
+	});
+
+	test("other retryable -320xx codes stay at warn from attempt 1", () => {
+		expect(severityForJsonRpcRetry(-32000, 1)).toBe("warn");
+		expect(severityForJsonRpcRetry(-32099, 1)).toBe("warn");
+		expect(severityForJsonRpcRetry(-32603, 1)).toBe("warn");
+	});
+
+	test("undefined code stays at warn (defensive)", () => {
+		expect(severityForJsonRpcRetry(undefined, 1)).toBe("warn");
 	});
 });
 

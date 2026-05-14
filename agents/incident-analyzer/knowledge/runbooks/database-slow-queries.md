@@ -1,3 +1,13 @@
+---
+triggers:
+  metrics:
+    - n1ql
+    - slow_query
+    - query_latency
+    - couchbase
+    - fatal_request
+  match: any
+---
 # Couchbase Slow Query Investigation
 
 ## Symptoms
