@@ -37,10 +37,15 @@ const SearchParams = z.object({
 			"Number of documents to return. Default is 10. Use 0 for pure analytics (aggregations only), 10+ to include documents",
 		),
 	from: z.number().optional().describe("Starting offset for pagination. Default is 0"),
+	// SIO-744: ES accepts four sort shapes; the previous schema only matched the
+	// last one, so LLM-emitted `["@timestamp"]` or `[{"@timestamp": "desc"}]`
+	// failed Zod validation before reaching ES. Union covers all forms.
 	sort: z
-		.array(z.object({}).passthrough())
+		.array(z.union([z.string(), z.record(z.string(), z.union([z.enum(["asc", "desc"]), z.object({}).passthrough()]))]))
 		.optional()
-		.describe("Sort order. Example: [{ '@timestamp': { order: 'desc' } }]"),
+		.describe(
+			"Sort order. Accepts any of: ['@timestamp'] | [{'@timestamp': 'desc'}] | [{'@timestamp': {order: 'desc'}}] | [{'@timestamp': {order: 'desc', missing: '_last'}}]",
+		),
 	aggs: z.object({}).passthrough().optional().describe("Aggregations object for analytics queries"),
 	_source: z
 		.union([z.array(z.string()), z.boolean(), z.string()])

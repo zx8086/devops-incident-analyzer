@@ -11,7 +11,8 @@ import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
 
 // Ensure all queries use only the collection name in the FROM clause when using scope context
-const runQuery = async (params: { scope_name: string; query: string }, bucket: Bucket) => {
+// Exported for unit testing (SIO-744).
+export const runQuery = async (params: { scope_name: string; query: string }, bucket: Bucket) => {
 	if (!bucket) {
 		return {
 			content: [{ type: "text" as const, text: "Database error: bucket not found" }],
@@ -57,8 +58,11 @@ const runQuery = async (params: { scope_name: string; query: string }, bucket: B
 		};
 	} catch (error) {
 		logger.error({ error }, "Failed to execute query");
+		// SIO-744: surface the underlying N1QL error so the LLM can recover (e.g.
+		// fix a syntax issue or drop an unindexed predicate) instead of looping.
+		const message = error instanceof Error ? error.message : String(error);
 		return {
-			content: [{ type: "text" as const, text: "Failed to execute query" }],
+			content: [{ type: "text" as const, text: `Failed to execute query: ${message}` }],
 			isError: true,
 		};
 	}

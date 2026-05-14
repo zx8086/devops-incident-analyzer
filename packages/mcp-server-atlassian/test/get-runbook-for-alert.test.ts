@@ -46,6 +46,17 @@ describe("getRunbookForAlert.scorePage", () => {
 		expect(withLabel).toBeGreaterThan(withoutLabel);
 	});
 
+	// SIO-744: upstream sometimes omits `labels`; previously crashed with
+	// "undefined is not an object (evaluating 'page.labels.map')".
+	test("tolerates page with missing labels field", () => {
+		const score = scorePage(
+			{ title: "Page", lastUpdated: new Date().toISOString(), excerpt: "" } as Parameters<typeof scorePage>[0],
+			"svc",
+			["err"],
+		);
+		expect(score).toBeGreaterThanOrEqual(0);
+	});
+
 	test("recent update (within 90d) adds score", () => {
 		const recent = scorePage({ title: "Page", labels: [], lastUpdated: new Date().toISOString(), excerpt: "" }, "svc", [
 			"err",

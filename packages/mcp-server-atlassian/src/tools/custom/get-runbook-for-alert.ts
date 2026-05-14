@@ -86,7 +86,10 @@ export function scorePage(
 		if (titleLower.includes(kw.toLowerCase())) score += 2;
 	}
 
-	const labelNames = page.labels.map((l) => l.toLowerCase());
+	// SIO-744: upstream Confluence sometimes omits `labels` even though the Zod
+	// schema marks it required; parseAtlassianTextContent doesn't validate, so a
+	// raw `.map` crashed the whole tool. Treat missing as empty.
+	const labelNames = (page.labels ?? []).map((l) => l.toLowerCase());
 	if (labelNames.includes("runbook")) score += 2;
 
 	const ageMs = Date.now() - new Date(page.lastUpdated).getTime();
