@@ -54,6 +54,8 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		confidenceCap: undefined,
 		pendingCorrelations: [],
 		partialFailures: [],
+		investigationFocus: undefined,
+		pendingTopicShiftPrompt: undefined,
 		...overrides,
 	};
 }
@@ -89,17 +91,30 @@ describe("classifier: regex fast-path", () => {
 		expect(result.queryComplexity).toBe("simple");
 	});
 
-	test("detects follow-up 'try again' pattern", async () => {
-		const state = makeState({ messages: [new HumanMessage("try again with more detail")] });
+	// SIO-749: follow-up detection moved to the UI; classifier no longer fakes
+	// it up from a regex. These tests now verify that the UI signal flows
+	// through unchanged and that a first-turn complex query is classified
+	// correctly without isFollowUp being clobbered.
+	test("does not clobber inbound isFollowUp:true (UI signal flows through)", async () => {
+		const state = makeState({
+			messages: [new HumanMessage("is kafka still failing?")],
+			isFollowUp: true,
+		});
 		const result = await classify(state);
+		// classify() returns a partial state; isFollowUp is absent from the
+		// return because the classifier doesn't touch it. The Annotation
+		// reducer preserves the inbound value, so downstream nodes see true.
+		expect(result.isFollowUp).toBeUndefined();
 		expect(result.queryComplexity).toBe("complex");
-		expect(result.isFollowUp).toBe(true);
 	});
 
-	test("detects follow-up 'what about' pattern", async () => {
-		const state = makeState({ messages: [new HumanMessage("what about the kafka consumer lag?")] });
+	test("first-turn complex query leaves isFollowUp at default false", async () => {
+		const state = makeState({
+			messages: [new HumanMessage("check elasticsearch error logs for the past hour")],
+		});
 		const result = await classify(state);
-		expect(result.isFollowUp).toBe(true);
+		expect(result.isFollowUp).toBeUndefined();
+		expect(result.queryComplexity).toBe("complex");
 	});
 
 	test("returns simple for empty messages", async () => {
