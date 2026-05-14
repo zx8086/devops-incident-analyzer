@@ -271,6 +271,62 @@ export const correlationRules: CorrelationRule[] = [
 		retry: { attempts: 1, timeoutMs: 30_000 },
 		skipCoverageCheck: true,
 	},
+	{
+		// SIO-742: prior runs concluded "REST Proxy NOT DETECTED" by inferring
+		// from the absence of restproxy consumer groups in kafka_list_consumer_groups
+		// without calling restproxy_health_check. When prose names any Confluent
+		// component as NOT DETECTED / not detected / not confirmed / deployment
+		// unconfirmed, fan out to kafka-agent with the health_check action so the
+		// follow-up turn explicitly probes reachability before the agent gives up.
+		name: "confluent-component-not-probed",
+		description:
+			"Aggregator prose declared a Confluent component (REST Proxy, ksqlDB, Kafka Connect, Schema Registry) NOT DETECTED without first calling its *_health_check tool; dispatch a kafka-agent follow-up to probe reachability directly.",
+		trigger: (state) => {
+			const { prose } = getKafkaResultSignals(state);
+			if (!prose) return null;
+			// Match any of these "we did not detect" phrasings (case-insensitive).
+			const NOT_PROBED_RE =
+				/\b(NOT DETECTED|not detected|deployment status (is )?unconfirmed|deployment is unconfirmed|cannot confirm.*deploy|no [a-z]+ signal)\b/i;
+			if (!NOT_PROBED_RE.test(prose)) return null;
+			// Identify which components the prose claims are not detected.
+			const components: string[] = [];
+			if (/\brest proxy\b/i.test(prose)) components.push("restproxy");
+			if (/\bksql(db)?\b/i.test(prose)) components.push("ksql");
+			if (/\bkafka connect\b/i.test(prose)) components.push("connect");
+			if (/\bschema registry\b/i.test(prose)) components.push("schema_registry");
+			if (components.length === 0) return null;
+			return { context: { signal: "confluent-not-probed", components } };
+		},
+		requiredAgent: "kafka-agent",
+		retry: { attempts: 1, timeoutMs: 30_000 },
+		skipCoverageCheck: true,
+	},
+	{
+		// SIO-742: ksql_cluster_status surfaces per-host hostAlive directly. When
+		// the prose admits aliveHosts < totalHosts (or "X of Y workers" with X<Y,
+		// or "hostAlive: false"), cross-check ksqldb-server logs in Elastic to
+		// identify the cause. Distinct from the existing ksqldb-unresponsive rule
+		// which fires on the older "UNRESPONSIVE + statusCount" derivation; this
+		// one is the authoritative cluster-status path.
+		name: "ksql-cluster-status-degraded",
+		description:
+			"ksql_cluster_status reported degraded worker liveness (aliveHosts < totalHosts or hostAlive=false); correlate with ksqldb-server logs in Elastic.",
+		trigger: (state) => {
+			const { prose } = getKafkaResultSignals(state);
+			if (!prose) return null;
+			// Match the structured envelope shape (aliveHosts < totalHosts as
+			// numeric pair, or "degraded: true", or explicit hostAlive: false).
+			const degraded =
+				/\bhostAlive\s*[:=]\s*false\b/i.test(prose) ||
+				/\bdegraded\s*[:=]\s*true\b/i.test(prose) ||
+				/\baliveHosts\b/.test(prose) ||
+				/\b(\d+)\s*of\s*(\d+)\s+(workers?|hosts?|nodes?)\b.*(UNRESPONSIVE|degraded|down)/i.test(prose);
+			if (!degraded) return null;
+			return { context: { signal: "ksql-cluster-status-degraded" } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
 ];
 
 // SIO-712: deployment-vs-runtime contradiction helpers.

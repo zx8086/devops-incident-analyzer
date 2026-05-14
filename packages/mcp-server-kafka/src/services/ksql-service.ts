@@ -12,6 +12,34 @@ export interface KsqlServerInfo {
 	};
 }
 
+// ksqlDB /healthcheck endpoint shape. isHealthy is the load-bearing field
+// and reflects "this node is responsive". Sub-keys describe per-component
+// readiness (metastore, Kafka connectivity, command runner).
+export interface KsqlHealthcheck {
+	isHealthy: boolean;
+	details?: {
+		metastore?: { isHealthy: boolean };
+		kafka?: { isHealthy: boolean };
+		commandRunner?: { isHealthy: boolean };
+	};
+}
+
+// SIO-742: ksqlDB /clusterStatus surfaces per-host liveness in a 3-node cluster.
+// hostAlive=false on any host means quorum is degraded; the agent infers
+// "2 of 3 workers UNRESPONSIVE" from this map without needing to enumerate
+// queries first.
+export interface KsqlClusterStatus {
+	clusterStatus: Record<
+		string,
+		{
+			hostAlive: boolean;
+			lastStatusUpdateMs?: number;
+			activeStandbyPerQuery?: Record<string, unknown>;
+			hostStoreLags?: Record<string, unknown>;
+		}
+	>;
+}
+
 export interface KsqlStreamOrTable {
 	name: string;
 	topic: string;
@@ -55,6 +83,21 @@ export class KsqlService {
 	async getServerInfo(): Promise<KsqlServerInfo> {
 		const response = await this.request("/info", { method: "GET" });
 		return (await response.json()) as KsqlServerInfo;
+	}
+
+	// SIO-742: GET /healthcheck. Distinct from /info: this is a deliberate
+	// liveness probe that reports kafka + metastore + command-runner readiness.
+	async getHealthcheck(): Promise<KsqlHealthcheck> {
+		const response = await this.request("/healthcheck", { method: "GET" });
+		return (await response.json()) as KsqlHealthcheck;
+	}
+
+	// SIO-742: GET /clusterStatus. Returns a map of host -> { hostAlive, ... }
+	// across the ksqlDB cluster. Required to surface "N of M workers up"
+	// directly instead of inferring from ksql_list_queries response shape.
+	async getClusterStatus(): Promise<KsqlClusterStatus> {
+		const response = await this.request("/clusterStatus", { method: "GET" });
+		return (await response.json()) as KsqlClusterStatus;
 	}
 
 	async listStreams(): Promise<KsqlStreamOrTable[]> {

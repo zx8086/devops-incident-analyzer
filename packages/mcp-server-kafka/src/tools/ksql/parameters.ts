@@ -3,6 +3,11 @@ import { z } from "zod";
 
 export const KsqlGetServerInfoParams = z.object({});
 
+// SIO-742: no-parameter health probes.
+export const KsqlHealthCheckParams = z.object({});
+
+export const KsqlClusterStatusParams = z.object({});
+
 export const KsqlListStreamsParams = z.object({});
 
 export const KsqlListTablesParams = z.object({});

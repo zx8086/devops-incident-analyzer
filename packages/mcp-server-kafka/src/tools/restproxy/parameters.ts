@@ -1,6 +1,9 @@
 // src/tools/restproxy/parameters.ts
 import { z } from "zod";
 
+// SIO-742: no-parameter health probe.
+export const HealthCheckParams = z.object({});
+
 export const ListTopicsParams = z.object({
 	prefix: z
 		.string()

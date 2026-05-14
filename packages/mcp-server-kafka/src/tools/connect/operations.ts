@@ -1,9 +1,21 @@
 // src/tools/connect/operations.ts
 
+import type { AppConfig } from "../../config/schemas.ts";
 import type { ConnectService } from "../../services/connect-service.ts";
+import { type HealthEnvelope, runHealthProbe } from "../shared/health-envelope.ts";
 
 export async function getClusterInfo(service: ConnectService) {
 	return service.getClusterInfo();
+}
+
+// SIO-742: probe Kafka Connect reachability via the cluster-info endpoint
+// (GET /). Returns the version + cluster id as details on success.
+export async function healthCheck(service: ConnectService, config: AppConfig): Promise<HealthEnvelope> {
+	const endpoint = `${config.connect.url.replace(/\/$/, "")}/`;
+	return runHealthProbe("Kafka Connect", endpoint, async () => {
+		const info = await service.getClusterInfo();
+		return { version: info.version, kafkaClusterId: info.kafka_cluster_id };
+	});
 }
 
 export async function listConnectors(service: ConnectService) {

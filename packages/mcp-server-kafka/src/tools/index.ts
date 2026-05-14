@@ -64,17 +64,18 @@ export function registerAllTools(
 	const coreReads = 10;
 	const coreWrites = config.kafka.allowWrites ? 3 : 0;
 	const coreDestructive = config.kafka.allowDestructive ? 2 : 0;
-	const schemaReads = options?.schemaRegistryService ? 5 : 0;
+	// SIO-742: each component adds +1 health-check tool (ksql adds +2: health + cluster_status).
+	const schemaReads = options?.schemaRegistryService ? 6 : 0;
 	const schemaKafkaWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 2 : 0;
 	const schemaKafkaDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 1 : 0;
-	const ksqlReads = options?.ksqlService ? 6 : 0;
+	const ksqlReads = options?.ksqlService ? 8 : 0;
 	const ksqlWrites = options?.ksqlService && config.kafka.allowWrites ? 1 : 0;
-	const connectReads = options?.connectService ? 4 : 0;
+	const connectReads = options?.connectService ? 5 : 0;
 	const connectWrites = options?.connectService && config.kafka.allowWrites ? 3 : 0;
 	const connectDestructive = options?.connectService && config.kafka.allowDestructive ? 2 : 0;
 	const srWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 3 : 0;
 	const srDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 4 : 0;
-	const restProxyReads = options?.restProxyService ? 3 : 0;
+	const restProxyReads = options?.restProxyService ? 4 : 0;
 	const restProxyWrites = options?.restProxyService && config.kafka.allowWrites ? 6 : 0;
 	const toolCount =
 		coreReads +

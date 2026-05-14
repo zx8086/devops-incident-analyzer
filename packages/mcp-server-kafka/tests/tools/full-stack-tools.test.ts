@@ -68,7 +68,7 @@ describe("Full Confluent stack tool registration (B4 combo 5)", () => {
 		expect(tools).not.toContain("kafka_delete_topic");
 	});
 
-	test("full stack with allowWrites + allowDestructive registers exactly 55 tools", () => {
+	test("full stack with allowWrites + allowDestructive registers exactly 60 tools", () => {
 		const server = new McpServer({ name: "test", version: "0" });
 		const config = buildFullStackConfig({ allowWrites: true, allowDestructive: true });
 		registerAllTools(server, fakeKafka, config, {
@@ -78,13 +78,14 @@ describe("Full Confluent stack tool registration (B4 combo 5)", () => {
 			restProxyService: new RestProxyService(config),
 		});
 		const tools = listToolNames(server);
+		// SIO-742: + 5 health-check tools (1 restproxy, 2 ksql, 1 connect, 1 sr)
 		// 10 core reads + 3 core writes + 2 core destructive
-		// + 5 schema reads + 2 schema writes + 1 schema destructive
+		// + 6 schema reads (was 5; +1 schema_registry_health_check) + 2 schema writes + 1 schema destructive
 		// + 3 sr_* writes + 4 sr_* destructive
-		// + 6 ksql reads + 1 ksql write
-		// + 4 connect reads + 3 connect writes + 2 connect destructive
-		// + 3 restproxy reads + 6 restproxy writes = 55
-		expect(tools.length).toBe(55);
+		// + 8 ksql reads (was 6; +2 ksql_health_check + ksql_cluster_status) + 1 ksql write
+		// + 5 connect reads (was 4; +1 connect_health_check) + 3 connect writes + 2 connect destructive
+		// + 4 restproxy reads (was 3; +1 restproxy_health_check) + 6 restproxy writes = 60
+		expect(tools.length).toBe(60);
 		// Spot-check representative tools from each gated group
 		expect(tools).toContain("kafka_produce_message");
 		expect(tools).toContain("kafka_delete_topic");
@@ -98,9 +99,15 @@ describe("Full Confluent stack tool registration (B4 combo 5)", () => {
 		expect(tools).toContain("restproxy_list_topics");
 		expect(tools).toContain("restproxy_produce");
 		expect(tools).toContain("restproxy_delete_consumer");
+		// SIO-742 health checks
+		expect(tools).toContain("restproxy_health_check");
+		expect(tools).toContain("ksql_health_check");
+		expect(tools).toContain("ksql_cluster_status");
+		expect(tools).toContain("connect_health_check");
+		expect(tools).toContain("schema_registry_health_check");
 	});
 
-	test("full stack with allowWrites only (no destructive) registers 46 tools", () => {
+	test("full stack with allowWrites only (no destructive) registers 51 tools", () => {
 		// SIO-732: with destructive off, kafka_delete_topic, kafka_reset_consumer_group_offsets,
 		// kafka_delete_schema_subject, connect_restart_connector_task, connect_delete_connector,
 		// and the 4 sr_*_delete_subject* tools (9 total) are excluded.
@@ -113,8 +120,8 @@ describe("Full Confluent stack tool registration (B4 combo 5)", () => {
 			restProxyService: new RestProxyService(config),
 		});
 		const tools = listToolNames(server);
-		// 55 - 2 core destructive - 1 schema destructive - 2 connect destructive - 4 sr destructive = 46
-		expect(tools.length).toBe(46);
+		// SIO-742: 60 - 2 core destructive - 1 schema destructive - 2 connect destructive - 4 sr destructive = 51
+		expect(tools.length).toBe(51);
 		expect(tools).not.toContain("kafka_delete_topic");
 		expect(tools).not.toContain("kafka_reset_consumer_group_offsets");
 		expect(tools).not.toContain("kafka_delete_schema_subject");

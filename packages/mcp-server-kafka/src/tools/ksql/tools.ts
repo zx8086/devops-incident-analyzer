@@ -12,6 +12,27 @@ import * as prompts from "./prompts.ts";
 // so the gate around ksql_execute_statement honours the same config used elsewhere
 // in registerAllTools — required for tests that drive registration with a fixture.
 export function registerKsqlTools(server: McpServer, service: KsqlService, config: AppConfig): void {
+	// SIO-742: reachability probes -- always registered when ksql is enabled.
+	server.tool(
+		"ksql_health_check",
+		prompts.KSQL_HEALTH_CHECK_DESCRIPTION,
+		params.KsqlHealthCheckParams.shape,
+		wrapHandler("ksql_health_check", config, async () => {
+			const result = await ops.healthCheck(service, config);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
+	server.tool(
+		"ksql_cluster_status",
+		prompts.KSQL_CLUSTER_STATUS_DESCRIPTION,
+		params.KsqlClusterStatusParams.shape,
+		wrapHandler("ksql_cluster_status", config, async () => {
+			const result = await ops.clusterStatus(service, config);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
 	server.tool(
 		"ksql_get_server_info",
 		prompts.KSQL_GET_SERVER_INFO_DESCRIPTION,

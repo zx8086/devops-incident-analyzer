@@ -9,6 +9,17 @@ import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
 export function registerSchemaTools(server: McpServer, service: SchemaRegistryService, config: AppConfig): void {
+	// SIO-742: reachability probe -- always registered when SR is enabled.
+	server.tool(
+		"schema_registry_health_check",
+		prompts.SCHEMA_REGISTRY_HEALTH_CHECK_DESCRIPTION,
+		params.SchemaRegistryHealthCheckParams.shape,
+		wrapHandler("schema_registry_health_check", config, async () => {
+			const result = await ops.healthCheck(service, config);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
 	server.tool(
 		"kafka_list_schemas",
 		prompts.LIST_SCHEMAS_DESCRIPTION,

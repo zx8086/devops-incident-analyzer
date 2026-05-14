@@ -1,6 +1,8 @@
 // src/tools/restproxy/operations.ts
 import type { z } from "zod";
+import type { AppConfig } from "../../config/schemas.ts";
 import type { RestProxyService } from "../../services/restproxy-service.ts";
+import { type HealthEnvelope, runHealthProbe } from "../shared/health-envelope.ts";
 import type {
 	CommitOffsetsParams,
 	ConsumeParams,
@@ -12,6 +14,17 @@ import type {
 	ProduceParams,
 	SubscribeParams,
 } from "./parameters.ts";
+
+// SIO-742: probe REST Proxy reachability. Reuses the existing probeReachability
+// path so the envelope picks up the same hostname/contentType metadata as
+// regular tool errors.
+export async function healthCheck(service: RestProxyService, config: AppConfig): Promise<HealthEnvelope> {
+	const endpoint = `${config.restproxy.url.replace(/\/$/, "")}/topics`;
+	return runHealthProbe("REST Proxy", endpoint, async () => {
+		await service.probeReachability();
+		return undefined;
+	});
+}
 
 export async function listTopics(service: RestProxyService, args: z.infer<typeof ListTopicsParams>) {
 	return service.listTopicsPaged({

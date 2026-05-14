@@ -9,6 +9,17 @@ import * as params from "./parameters.ts";
 import * as prompts from "./prompts.ts";
 
 export function registerConnectTools(server: McpServer, service: ConnectService, config: AppConfig): void {
+	// SIO-742: reachability probe -- always registered.
+	server.tool(
+		"connect_health_check",
+		prompts.CONNECT_HEALTH_CHECK_DESCRIPTION,
+		params.ConnectHealthCheckParams.shape,
+		wrapHandler("connect_health_check", config, async () => {
+			const result = await ops.healthCheck(service, config);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
 	server.tool(
 		"connect_get_cluster_info",
 		prompts.CONNECT_GET_CLUSTER_INFO_DESCRIPTION,

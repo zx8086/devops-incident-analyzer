@@ -7,7 +7,7 @@ import { getAllActionToolNames, getAvailableActions } from "./tool-mapping.ts";
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 
 describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
-	test("declares 12 component-aligned actions", () => {
+	test("declares 13 component-aligned actions (SIO-742 added health_check)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
@@ -25,20 +25,21 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 			"connect_status",
 			"connect_management",
 			"restproxy",
+			"health_check",
 			"write_ops",
 		]);
 	});
 
-	test("covers all 55 unique MCP tool names across the action map", () => {
+	test("covers all 60 unique MCP tool names across the action map (SIO-742 adds 5 health-check tools)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
 		if (!kafka) return;
 		const tools = getAllActionToolNames(kafka);
-		expect(tools.length).toBe(55);
+		expect(tools.length).toBe(60);
 	});
 
-	test("includes the SIO-680 Connect read tools under connect_status", () => {
+	test("includes the SIO-680 Connect read tools under connect_status (SIO-742 prepends connect_health_check)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
@@ -47,6 +48,7 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		expect(map).toBeDefined();
 		if (!map) return;
 		expect(map.connect_status).toEqual([
+			"connect_health_check",
 			"connect_get_cluster_info",
 			"connect_list_connectors",
 			"connect_get_connector_status",
@@ -90,7 +92,7 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		]);
 	});
 
-	test("includes all 9 REST Proxy tools under restproxy", () => {
+	test("includes all 10 REST Proxy tools under restproxy (SIO-742 prepends restproxy_health_check)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
@@ -99,6 +101,7 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		expect(map).toBeDefined();
 		if (!map) return;
 		expect(map.restproxy).toEqual([
+			"restproxy_health_check",
 			"restproxy_list_topics",
 			"restproxy_get_topic",
 			"restproxy_get_partitions",
@@ -147,7 +150,7 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		expect(map.write_ops).toContain("kafka_delete_topic");
 	});
 
-	test("declares action_descriptions for all 12 actions, each non-empty", () => {
+	test("declares action_descriptions for all 13 actions, each non-empty (SIO-742 adds health_check)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
@@ -160,7 +163,7 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 			expect(descriptions[action]).toBeDefined();
 			expect((descriptions[action] ?? "").length).toBeGreaterThan(20);
 		}
-		expect(Object.keys(descriptions).length).toBe(12);
+		expect(Object.keys(descriptions).length).toBe(13);
 	});
 });
 
