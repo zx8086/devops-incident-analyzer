@@ -15,7 +15,7 @@
 #
 # Environment variables (override defaults):
 #   MCP_SERVER              - Server name: kafka|elastic|couchbase|konnect (default: kafka)
-#   AWS_REGION              - AWS region (default: eu-west-1)
+#   AWS_REGION              - AWS region (default: eu-central-1)
 #   RUNTIME_NAME            - AgentCore runtime name (default: <server>_mcp_server)
 #                             Must match [a-zA-Z][a-zA-Z0-9_]{0,47} (no hyphens).
 #   ECR_REPO                - ECR repository name (default: <server>-mcp-agentcore)
@@ -69,7 +69,7 @@ set -euo pipefail
 # -- Configuration --
 MCP_SERVER="${MCP_SERVER:-kafka}"
 MCP_SERVER_PACKAGE="mcp-server-${MCP_SERVER}"
-AWS_REGION="${AWS_REGION:-eu-west-1}"
+AWS_REGION="${AWS_REGION:-eu-central-1}"
 # AgentCore runtime names must match [a-zA-Z][a-zA-Z0-9_]{0,47} -- no hyphens.
 # IAM role/policy names allow hyphens, so ROLE_NAME below uses the hyphenated
 # form to stay aligned with the Phase 1 (SIO-757) trust-policy principal.
