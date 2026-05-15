@@ -44,6 +44,18 @@ function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]
 	return { toolErrors, prose };
 }
 
+// SIO-761 Phase 5: mirror of getKafkaResultSignals for aws-agent. The aws
+// sub-agent emits its findings as a prose string in result.data and structured
+// tool errors in result.toolErrors. Both are read by the new aws-* correlation
+// rules added in Phase 5.
+function getAwsResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
+	if (!result || result.status !== "success") return { toolErrors: [], prose: "" };
+	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
+	const prose = typeof result.data === "string" ? result.data : "";
+	return { toolErrors, prose };
+}
+
 // SIO-717: extract the upstream hostname from a Confluent Platform tool error
 // message. The Kafka MCP server (ksql-service.ts, connect-service.ts, etc.)
 // wraps upstream 5xx errors as "<Service> error <code>: <body>". Our env vars
@@ -325,6 +337,84 @@ export const correlationRules: CorrelationRule[] = [
 			return { context: { signal: "ksql-cluster-status-degraded" } };
 		},
 		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-761 Phase 5: aws-agent reported one or more ECS services in a
+		// degraded state (runningCount < desiredCount, or "0 of N tasks running",
+		// or explicit "service degraded" phrasing). Application logs/traces in
+		// Elasticsearch typically explain WHY the tasks aren't running (OOM,
+		// startup crash, image pull failure, etc.), so dispatch elastic-agent
+		// to cross-check before the report concludes.
+		name: "aws-ecs-degraded-needs-elastic-traces",
+		description:
+			"AWS sub-agent reported ECS service with runningCount < desiredCount; correlate with application traces in Elasticsearch.",
+		trigger: (state) => {
+			const { prose } = getAwsResultSignals(state);
+			if (!prose) return null;
+			// Three independent ECS-degraded shapes, any one suffices:
+			//   a) "<N> of <M> tasks running" with N < M (numeric pair)
+			//   b) "<service-name> is degraded" / "service degraded"
+			//   c) "desiredCount" + "runningCount" both named in the same prose
+			const taskMatch = prose.match(/\b(\d+)\s*of\s*(\d+)\s+tasks?\s+running\b/i);
+			const taskMismatch = !!(taskMatch && Number(taskMatch[1]) < Number(taskMatch[2]));
+			const degradedPhrasing = /\bservice(?:\s+[a-zA-Z0-9_-]+)?\s+(?:is\s+)?degraded\b/i.test(prose);
+			const structuredEnvelope = /\bdesiredCount\b/.test(prose) && /\brunningCount\b/.test(prose);
+			if (!taskMismatch && !degradedPhrasing && !structuredEnvelope) return null;
+			return { context: { signal: "aws-ecs-degraded" } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-761 Phase 5: aws-agent reported a CloudWatch alarm in ALARM state
+		// whose name or metric references Kafka/MSK. Consumer-lag spikes on the
+		// MSK side often anchor the alarm; fan out to kafka-agent for a lag
+		// snapshot before the report concludes.
+		name: "aws-cloudwatch-anomaly-needs-kafka-lag",
+		description:
+			"AWS sub-agent reported a CloudWatch alarm in ALARM state referencing Kafka/MSK; correlate with kafka-agent consumer-group lag.",
+		trigger: (state) => {
+			const { prose } = getAwsResultSignals(state);
+			if (!prose) return null;
+			// Both signals must coexist in the same prose blob: ALARM state AND a
+			// Kafka-related keyword. Either alone is too noisy (alarms exist for
+			// every service; Kafka is named in lots of contexts).
+			const alarmStated = /\bStateValue\b.*\bALARM\b/i.test(prose) || /\balarm.*\bin\s+ALARM\b/i.test(prose);
+			const kafkaContext = /\b(MSK|Kafka|kafka|consumer\s+lag|broker)\b/.test(prose);
+			if (!alarmStated || !kafkaContext) return null;
+			return { context: { signal: "aws-cloudwatch-alarm-kafka" } };
+		},
+		requiredAgent: "kafka-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
+	{
+		// SIO-761 Phase 5: kafka-agent reported broker-side timeout / unreachable
+		// MSK cluster / connection failure. AWS-side networking, EC2 instance
+		// health, or security-group changes are common root causes; fan out to
+		// aws-agent for an MSK cluster + EC2 cross-check.
+		name: "kafka-broker-timeout-needs-aws-metrics",
+		description:
+			"kafka-agent reported broker timeout / connection failure against MSK; correlate with AWS-side MSK cluster metrics, EC2 instance health, and security groups.",
+		trigger: (state) => {
+			const { toolErrors, prose } = getKafkaResultSignals(state);
+			// Two paths: structured tool errors (preferred -- ToolError.category
+			// is "transient" + the message has a network-shape pattern from
+			// mapAwsError) or prose-mention fallback. Same dual-path approach
+			// as SIO-717's findConfluent5xxToolErrors.
+			const networkErrorTransient = toolErrors.some(
+				(e) =>
+					e.category === "transient" &&
+					/(timeout|unreachable|unavailable|connection\s+refused|ENOTFOUND|ECONNREFUSED|ETIMEDOUT)/i.test(e.message),
+			);
+			const proseBrokerTimeout =
+				/\bbroker\b.*(timeout|unreachable|unavailable|connection\s+refused)/i.test(prose) ||
+				/\bMSK\b.*(timeout|unreachable|unavailable)/i.test(prose) ||
+				/\bkafka\b.*\bconnection\b.*\btimeout\b/i.test(prose);
+			if (!networkErrorTransient && !proseBrokerTimeout) return null;
+			return { context: { signal: "kafka-broker-timeout-needs-aws" } };
+		},
+		requiredAgent: "aws-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
 	},
 ];
