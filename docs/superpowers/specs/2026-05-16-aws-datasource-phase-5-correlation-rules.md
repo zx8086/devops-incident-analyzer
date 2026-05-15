@@ -158,16 +158,20 @@ Why this shape: `aws_cloudwatch_describe_alarms` returns each alarm with a `Stat
 		"kafka-agent reported broker timeout / connection failure against MSK; correlate with AWS-side MSK cluster metrics, EC2 instance health, and security groups.",
 	trigger: (state) => {
 		const { toolErrors, prose } = getKafkaResultSignals(state);
-		// Two paths: structured tool errors (preferred, set by SIO-725 errors
-		// from the kafka MCP server) or prose-mention fallback.
-		const networkErrorKind = toolErrors.some(
-			(e) => e.kind === "aws-network-error" || e.kind === "aws-server-error",
+		// Two paths: structured tool errors (preferred -- ToolError.category set
+		// to "transient" + a network-shape message; the kafka MCP server
+		// classifies broker/timeout/unreachable errors via mapAwsError before
+		// they reach the pipeline as ToolError) or prose-mention fallback.
+		const networkErrorTransient = toolErrors.some(
+			(e) =>
+				e.category === "transient" &&
+				/(timeout|unreachable|unavailable|connection\s+refused|ENOTFOUND|ECONNREFUSED|ETIMEDOUT)/i.test(e.message),
 		);
 		const proseBrokerTimeout =
 			/\bbroker\b.*(timeout|unreachable|unavailable|connection\s+refused)/i.test(prose) ||
 			/\bMSK\b.*(timeout|unreachable|unavailable)/i.test(prose) ||
 			/\bkafka\b.*\bconnection\b.*\btimeout\b/i.test(prose);
-		if (!networkErrorKind && !proseBrokerTimeout) return null;
+		if (!networkErrorTransient && !proseBrokerTimeout) return null;
 		return { context: { signal: "kafka-broker-timeout-needs-aws" } };
 	},
 	requiredAgent: "aws-agent",
@@ -175,7 +179,7 @@ Why this shape: `aws_cloudwatch_describe_alarms` returns each alarm with a `Stat
 },
 ```
 
-Why this shape: kafka-agent uses the structured `ToolError.kind` values from `mapAwsError` (defined in `packages/mcp-server-aws/src/tools/wrap.ts`). When the kafka MCP server hits an AWS-side networking error (e.g., MSK cluster unreachable), `kind` is `"aws-network-error"`. The prose fallback catches the case where the LLM has summarized the error in natural language but the structured field hasn't been preserved.
+Why this shape: `ToolError` (the wire shape in `packages/shared/src/agent-state.ts`) has `category` (enum: auth | session | transient | unknown) and `message`, not the MCP-server-side `kind` field. Transient + network-shape message identifies broker reachability problems. The prose fallback catches cases where the LLM summarized the error in natural language without preserving the structured error shape (sub-agents sometimes lose the toolError pass-through). Same pattern as SIO-717's `findConfluent5xxToolErrors` which uses `statusCode` + `message` regex.
 
 This is the only **bidirectional** rule — kafka-agent's findings cause an aws-agent fan-out, the inverse of rules 1 and 2. The framework already supports this; no new wiring needed.
 
@@ -258,10 +262,10 @@ describe("kafka-broker-timeout-needs-aws-metrics", () => {
 		expect(rule.trigger(state)).not.toBeNull();
 	});
 
-	test("fires on structured aws-network-error tool error", () => {
+	test("fires on transient ToolError with network-shape message", () => {
 		const state = makeStateWithKafkaProse(
 			"successful query",
-			[{ kind: "aws-network-error", message: "ENOTFOUND" } as never],
+			[{ category: "transient", message: "ENOTFOUND b-1.msk.amazonaws.com", toolName: "kafka_list_topics", retryable: true } as never],
 		);
 		expect(rule.trigger(state)).not.toBeNull();
 	});
