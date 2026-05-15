@@ -33,7 +33,7 @@ describe("HTTP transport", () => {
 	});
 
 	afterAll(async () => {
-		await close();
+		await close?.();
 	});
 
 	test("GET /ping returns 200", async () => {
