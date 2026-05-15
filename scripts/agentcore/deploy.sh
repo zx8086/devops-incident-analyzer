@@ -471,14 +471,17 @@ else
   RUNTIME_ID=$(echo "${RESULT}" | jq -r '.agentRuntimeId')
 fi
 
-echo "  Waiting for runtime to become ACTIVE..."
+# AgentCore's terminal-success status is READY (not ACTIVE -- ACTIVE is the
+# transient name used during the CREATING -> READY transition for some
+# resources). Accept both for forward compatibility.
+echo "  Waiting for runtime to become READY..."
 for i in $(seq 1 30); do
   STATUS=$(aws bedrock-agentcore-control get-agent-runtime \
     --agent-runtime-id "${RUNTIME_ID}" \
     --region "${AWS_REGION}" \
     --query 'status' \
     --output text 2>/dev/null || echo "CREATING")
-  if [ "${STATUS}" = "ACTIVE" ]; then
+  if [ "${STATUS}" = "READY" ] || [ "${STATUS}" = "ACTIVE" ]; then
     break
   fi
   echo "    Status: ${STATUS} (attempt ${i}/30)"
