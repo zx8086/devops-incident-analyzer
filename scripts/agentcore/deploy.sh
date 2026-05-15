@@ -15,9 +15,11 @@
 #
 # Environment variables (override defaults):
 #   MCP_SERVER              - Server name: kafka|elastic|couchbase|konnect (default: kafka)
-#   AWS_REGION              - AWS region (default: eu-west-1)
-#   RUNTIME_NAME            - AgentCore runtime name (default: <server>-mcp-server)
+#   AWS_REGION              - AWS region (default: eu-central-1)
+#   RUNTIME_NAME            - AgentCore runtime name (default: <server>_mcp_server)
+#                             Must match [a-zA-Z][a-zA-Z0-9_]{0,47} (no hyphens).
 #   ECR_REPO                - ECR repository name (default: <server>-mcp-agentcore)
+#   ROLE_NAME               - IAM execution role name (default: <server>-mcp-server-agentcore-role)
 #
 # Networking (optional, all servers):
 #   AGENTCORE_SUBNETS       - Comma-separated subnet IDs. If set, runtime is
@@ -55,14 +57,23 @@
 # Konnect-specific:
 #   KONNECT_ACCESS_TOKEN    - Kong Konnect API access token
 #   KONNECT_REGION          - Konnect region (us|eu|au|me|in)
+#
+# AWS-specific:
+#   AWS_ASSUMED_ROLE_ARN    - DevOpsAgentReadOnly role to assume in the runtime
+#                             (default: arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly)
+#   AWS_EXTERNAL_ID         - STS ExternalId required by the assumed role's trust
+#                             policy (default: aws-mcp-readonly-2026)
 
 set -euo pipefail
 
 # -- Configuration --
 MCP_SERVER="${MCP_SERVER:-kafka}"
 MCP_SERVER_PACKAGE="mcp-server-${MCP_SERVER}"
-AWS_REGION="${AWS_REGION:-eu-west-1}"
-RUNTIME_NAME="${RUNTIME_NAME:-${MCP_SERVER}-mcp-server}"
+AWS_REGION="${AWS_REGION:-eu-central-1}"
+# AgentCore runtime names must match [a-zA-Z][a-zA-Z0-9_]{0,47} -- no hyphens.
+# IAM role/policy names allow hyphens, so ROLE_NAME below uses the hyphenated
+# form to stay aligned with the Phase 1 (SIO-757) trust-policy principal.
+RUNTIME_NAME="${RUNTIME_NAME:-${MCP_SERVER}_mcp_server}"
 ECR_REPO="${ECR_REPO:-${MCP_SERVER}-mcp-agentcore}"
 KAFKA_PROVIDER="${KAFKA_PROVIDER:-msk}"
 # Default to 'none' to match the runtime default. Set MSK_AUTH_MODE=iam (or =tls)
@@ -73,7 +84,7 @@ AGENTCORE_SECURITY_GROUPS="${AGENTCORE_SECURITY_GROUPS:-}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 IMAGE_TAG="latest"
-ROLE_NAME="${RUNTIME_NAME}-agentcore-role"
+ROLE_NAME="${ROLE_NAME:-${MCP_SERVER}-mcp-server-agentcore-role}"
 
 # Validate networking inputs early -- VPC requires both subnets and SGs.
 if [ -n "${AGENTCORE_SUBNETS}" ] && [ -z "${AGENTCORE_SECURITY_GROUPS}" ]; then
@@ -117,7 +128,9 @@ if [ "${MCP_SERVER}" = "kafka" ] \
 fi
 
 echo "================================================================"
-echo "  ${MCP_SERVER^} MCP Server -> AgentCore Runtime Deployment"
+# Portable uppercase-first-char for bash 3.2 (macOS) compatibility.
+MCP_SERVER_TITLE="$(printf '%s' "${MCP_SERVER:0:1}" | tr '[:lower:]' '[:upper:]')${MCP_SERVER:1}"
+echo "  ${MCP_SERVER_TITLE} MCP Server -> AgentCore Runtime Deployment"
 echo "================================================================"
 echo "  Region:       ${AWS_REGION}"
 echo "  Account:      ${ACCOUNT_ID}"
@@ -129,6 +142,7 @@ case "${MCP_SERVER}" in
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
   couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
+  aws)      echo "  AWS:          role=${AWS_ASSUMED_ROLE_ARN:-DevOpsAgentReadOnly (default)}, externalId=set" ;;
 esac
 if [ -n "${AGENTCORE_SUBNETS}" ]; then
   echo "  Network:      VPC (subnets=${AGENTCORE_SUBNETS}, sgs=${AGENTCORE_SECURITY_GROUPS})"
@@ -266,6 +280,21 @@ if [ "${MCP_SERVER}" = "kafka" ] && [ "${MSK_AUTH_MODE}" != "none" ]; then
     }'
 fi
 
+# AWS: grant sts:AssumeRole on DevOpsAgentReadOnly. The trust policy on
+# DevOpsAgentReadOnly already names this execution role as the only permitted
+# principal; this statement is the matching permission side of the contract.
+# Always required: the runtime must assume DevOpsAgentReadOnly to call AWS APIs.
+if [ "${MCP_SERVER}" = "aws" ]; then
+  ASSUMED_ROLE_ARN="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
+  POLICY_STATEMENTS="${POLICY_STATEMENTS}"',
+    {
+      "Sid": "AssumeDevOpsAgentReadOnly",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "'"${ASSUMED_ROLE_ARN}"'"
+    }'
+fi
+
 POLICY_DOCUMENT='{"Version":"2012-10-17","Statement":'"${POLICY_STATEMENTS}"']}'
 
 POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${ROLE_NAME}-policy"
@@ -393,6 +422,12 @@ case "${MCP_SERVER}" in
       ENV_VARS="${ENV_VARS},KONNECT_REGION=${KONNECT_REGION}"
     fi
     ;;
+  aws)
+    AWS_ASSUMED_ROLE_ARN_RESOLVED="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
+    AWS_EXTERNAL_ID_RESOLVED="${AWS_EXTERNAL_ID:-aws-mcp-readonly-2026}"
+    ENV_VARS="${ENV_VARS},AWS_ASSUMED_ROLE_ARN=${AWS_ASSUMED_ROLE_ARN_RESOLVED}"
+    ENV_VARS="${ENV_VARS},AWS_EXTERNAL_ID=${AWS_EXTERNAL_ID_RESOLVED}"
+    ;;
 esac
 
 if [ -n "${AGENTCORE_SUBNETS}" ]; then
@@ -407,9 +442,12 @@ else
   NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
 fi
 
+# The list-agent-runtimes response uses the `agentRuntimes` array, not
+# `agentRuntimeSummaries`. The wrong key here meant updates always fell
+# through to create-agent-runtime and failed with ConflictException.
 EXISTING_RUNTIME=$(aws bedrock-agentcore-control list-agent-runtimes \
   --region "${AWS_REGION}" \
-  --query "agentRuntimeSummaries[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeId" \
+  --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeId" \
   --output text 2>/dev/null || echo "")
 
 if [ -n "${EXISTING_RUNTIME}" ] && [ "${EXISTING_RUNTIME}" != "None" ]; then
@@ -436,14 +474,17 @@ else
   RUNTIME_ID=$(echo "${RESULT}" | jq -r '.agentRuntimeId')
 fi
 
-echo "  Waiting for runtime to become ACTIVE..."
+# AgentCore's terminal-success status is READY (not ACTIVE -- ACTIVE is the
+# transient name used during the CREATING -> READY transition for some
+# resources). Accept both for forward compatibility.
+echo "  Waiting for runtime to become READY..."
 for i in $(seq 1 30); do
   STATUS=$(aws bedrock-agentcore-control get-agent-runtime \
     --agent-runtime-id "${RUNTIME_ID}" \
     --region "${AWS_REGION}" \
     --query 'status' \
     --output text 2>/dev/null || echo "CREATING")
-  if [ "${STATUS}" = "ACTIVE" ]; then
+  if [ "${STATUS}" = "READY" ] || [ "${STATUS}" = "ACTIVE" ]; then
     break
   fi
   echo "    Status: ${STATUS} (attempt ${i}/30)"

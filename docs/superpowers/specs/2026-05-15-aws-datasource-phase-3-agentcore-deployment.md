@@ -253,3 +253,42 @@ None. Items deferred to later phases per parent design:
 - `packages/shared/src/agentcore-proxy.ts` — the SigV4 proxy reused for the second runtime.
 - `packages/mcp-server-kafka/src/index.ts:76-110` — the Kafka proxy-mode branch mirrored by Change 3.
 - Memory notes referenced during brainstorming: `reference_aws_iam_role_and_externalid`, `reference_aws_iam_gotchas`, `project_deployment_target_agentcore`, `feedback_probe_agentcore_via_sigv4_proxy`.
+
+---
+
+## Appendix A: Phase 3 Verification Record
+
+**Date verified:** 2026-05-15
+**Verified by:** Simon Owusu (test account `356994971776`)
+**Linear issue:** SIO-759 (sub-issue of SIO-756)
+
+### What was deployed
+
+- ECR image: `356994971776.dkr.ecr.eu-central-1.amazonaws.com/aws-mcp-agentcore:latest` (sha `c6a3d02c...`)
+- AgentCore runtime: `aws_mcp_server-57wIOB35U1` (ARN: `arn:aws:bedrock-agentcore:eu-central-1:356994971776:runtime/aws_mcp_server-57wIOB35U1`), version 2, status READY
+- Execution role: `aws-mcp-server-agentcore-role` (ARN: `arn:aws:iam::356994971776:role/aws-mcp-server-agentcore-role`) with managed policy `aws-mcp-server-agentcore-role-policy` v4 (CloudWatchLogs + ECRPull + AssumeDevOpsAgentReadOnly)
+- Container env: `AWS_REGION=eu-central-1`, `AWS_ASSUMED_ROLE_ARN=arn:aws:iam::356994971776:role/DevOpsAgentReadOnly`, `AWS_EXTERNAL_ID=aws-mcp-readonly-2026`
+
+### Probe results
+
+| Probe | Tool | Result |
+|---|---|---|
+| 1 | `tools/list` | PASS — 39 tools returned across 17 service families (cloudformation, cloudwatch, config, dynamodb, ec2, ecs, elasticache, health, lambda, logs, sns, sqs, eventbridge, stepfunctions, rds, s3, resourcegroupstagging, xray) |
+| 2 | `aws_s3_list_buckets` (substituted for `sts:GetCallerIdentity` — no `call_aws` tool in the catalogue) | PASS — HTTP 200, 2 buckets returned, requestId `BWG8MD13C9TAWCXX`. AssumeRole chain works because S3 ListAllMyBuckets is granted via `DevOpsAgentReadOnly`. Container log line at startup confirms `assumedRole: arn:aws:iam::356994971776:role/DevOpsAgentReadOnly` |
+| 3 | `aws_logs_describe_log_groups` (limit 3) | PASS — HTTP 200, 3 log groups returned including `/aws/bedrock-agentcore/runtimes/aws_mcp_server-57wIOB35U1-DEFAULT`. Confirms the AssumeRole grant + LogsListUnscoped policy statement both work |
+
+### Pre-existing bugs surfaced and fixed during Phase 3
+
+Six pre-existing bugs were uncovered and fixed inline so the Phase 3 gate could complete. All are unrelated to Phase 3's scope but blocked it:
+
+1. `tools/logs/` directory missing (Phase 2 escape) — added 3 CloudWatch Logs tools mirroring the `cloudwatch/` family pattern.
+2. `${MCP_SERVER^}` bash 4+ expansion in `deploy.sh` line 126 — replaced with bash 3.2-portable `printf | tr`.
+3. `RUNTIME_NAME=${MCP_SERVER}-mcp-server` violated AgentCore's regex `[a-zA-Z][a-zA-Z0-9_]{0,47}` — changed default to underscores `${MCP_SERVER}_mcp_server` and decoupled `ROLE_NAME` to keep the Phase 1 placeholder reusable.
+4. `deploy.sh` defaulted to `AWS_REGION=eu-west-1` while every other AgentCore tool defaulted to `eu-central-1` — aligned the default.
+5. `deploy.sh` polling loop checked for status `ACTIVE`, but AgentCore reports `READY` — accepts both now.
+6. `EXISTING_RUNTIME` lookup used jmespath key `agentRuntimeSummaries` instead of `agentRuntimes` — re-deploys always fell through to `create-agent-runtime` and failed with `ConflictException`.
+7. AWS config schema only read `TRANSPORT_PORT`/`TRANSPORT_HOST`, ignoring the `MCP_PORT`/`MCP_HOST` env vars set by `Dockerfile.agentcore` — container listened on 9085, AgentCore expected 8000. Added the same fallback pattern already used for `TRANSPORT_MODE` (`MCP_TRANSPORT ?? TRANSPORT_MODE`).
+
+### Gate
+
+Phase 3 is complete. The runtime is reachable end-to-end via the local SigV4 proxy on :3001; the AssumeRole chain works; CloudWatch Logs is reachable from inside the container. Phase 4 (`aws-agent` gitagent + supervisor wiring) can begin against this runtime.
