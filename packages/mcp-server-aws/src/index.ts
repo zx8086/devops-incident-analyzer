@@ -5,6 +5,7 @@ import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config/index.ts";
 import { initializeTracing } from "./telemetry/tracing.ts";
 import { registerAllTools } from "./tools/register.ts";
+import { setDefaultCapBytes } from "./tools/wrap.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.ts";
 import { logger } from "./utils/logger.ts";
@@ -24,6 +25,7 @@ if (import.meta.main) {
 		initDatasource: async () => {
 			const config = loadConfig();
 			logger.level = config.logLevel;
+			setDefaultCapBytes(config.toolResultCapBytes);
 
 			const runtimeInfo = getRuntimeInfo();
 			logger.info(

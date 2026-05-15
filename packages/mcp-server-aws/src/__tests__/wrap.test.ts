@@ -1,6 +1,6 @@
 // src/__tests__/wrap.test.ts
-import { describe, expect, test } from "bun:test";
-import { mapAwsError, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mapAwsError, setDefaultCapBytes, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
 
 describe("wrapListTool", () => {
 	test("returns response unchanged when under cap", async () => {
@@ -110,6 +110,19 @@ describe("mapAwsError", () => {
 		expect(mapped.kind).toBe("assume-role-denied");
 	});
 
+	test("S3 bare AccessDenied with service action -> iam-permission-missing", () => {
+		// S3 v3 SDK throws with name="AccessDenied" (no Exception suffix) for IAM
+		// permission denials; must be classified as iam-permission-missing, not as
+		// the trust-policy/STS bucket (bug_018).
+		const err = Object.assign(
+			new Error("User is not authorized to perform: s3:GetBucketPolicyStatus on resource: arn:aws:s3:::foo"),
+			{ name: "AccessDenied", $metadata: { httpStatusCode: 403 } },
+		);
+		const mapped = mapAwsError(err);
+		expect(mapped.kind).toBe("iam-permission-missing");
+		expect(mapped.action).toBe("s3:GetBucketPolicyStatus");
+	});
+
 	test("AccessDeniedException with sts:AssumeRole action -> assume-role-denied", () => {
 		const err = Object.assign(new Error("User is not authorized to perform: sts:AssumeRole"), {
 			name: "AccessDeniedException",
@@ -127,6 +140,16 @@ describe("mapAwsError", () => {
 		const mapped = mapAwsError(err);
 		expect(mapped.kind).toBe("iam-permission-missing");
 		expect(mapped.action).toBe("ec2:DescribeVpcs");
+	});
+
+	test("ResourceNotFoundException -> resource-not-found", () => {
+		const err = Object.assign(new Error("Requested resource not found: Table: missing-table not found"), {
+			name: "ResourceNotFoundException",
+			$metadata: { httpStatusCode: 400 },
+		});
+		const mapped = mapAwsError(err);
+		expect(mapped.kind).toBe("resource-not-found");
+		expect(mapped.advice).toContain("does not exist");
 	});
 
 	test("ValidationException -> bad-input", () => {
@@ -156,5 +179,34 @@ describe("mapAwsError", () => {
 			$metadata: { httpStatusCode: 500 },
 		});
 		expect(mapAwsError(err).kind).toBe("aws-unknown");
+	});
+});
+
+describe("setDefaultCapBytes", () => {
+	// Restore the fallback default after this block so other tests see 32_000.
+	afterAll(() => setDefaultCapBytes(32_000));
+
+	test("applies to wrappers created without an explicit capBytes", async () => {
+		setDefaultCapBytes(200);
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: Array.from({ length: 100 }, (_, i) => ({ id: i, payload: "z".repeat(50) })) }),
+		});
+		const result = (await wrapped({})) as { items: unknown[]; _truncated: { total: number } };
+		expect(result._truncated.total).toBe(100);
+		expect(result.items.length).toBeLessThan(100);
+	});
+
+	test("per-call capBytes still overrides the module default", async () => {
+		setDefaultCapBytes(200);
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: [1, 2, 3] }),
+			capBytes: 1_000_000,
+		});
+		const result = await wrapped({});
+		expect(result).toEqual({ items: [1, 2, 3] });
 	});
 });

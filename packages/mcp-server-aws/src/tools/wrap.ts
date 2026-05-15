@@ -13,7 +13,7 @@ function isAwsError(err: unknown): err is AwsLikeError {
 
 // "User is not authorized to perform: ec2:DescribeVpcs ..." -> "ec2:DescribeVpcs"
 function extractAction(message: string): string | undefined {
-	const m = message.match(/not authorized to perform:\s*([a-z][a-zA-Z0-9-]*:[A-Za-z0-9*]+)/);
+	const m = message.match(/not authorized to perform:\s*([a-z][a-zA-Z0-9-]*:[A-Za-z0-9*]+)/i);
 	return m?.[1];
 }
 
@@ -40,18 +40,14 @@ export function mapAwsError(err: unknown): ToolError {
 	let action: string | undefined;
 
 	switch (err.name) {
-		case "AccessDenied": // STS-style
-			kind = "assume-role-denied";
-			break;
+		// STS-style (AccessDenied) and service-style (AccessDeniedException) both
+		// reach here. S3 v3 uses the bare AccessDenied for IAM-permission denials
+		// (legacy XML naming), so both arms must inspect the message to decide
+		// between trust-policy issues (sts:AssumeRole) and missing service actions.
+		case "AccessDenied":
 		case "AccessDeniedException": {
 			action = extractAction(err.message);
-			// If the action is sts:AssumeRole, treat as assume-role-denied even when
-			// the error name is AccessDeniedException rather than AccessDenied.
-			if (action?.startsWith("sts:AssumeRole")) {
-				kind = "assume-role-denied";
-			} else {
-				kind = "iam-permission-missing";
-			}
+			kind = action?.startsWith("sts:AssumeRole") ? "assume-role-denied" : "iam-permission-missing";
 			break;
 		}
 		case "ThrottlingException":
@@ -63,6 +59,10 @@ export function mapAwsError(err: unknown): ToolError {
 		case "InvalidParameterValue":
 		case "InvalidParameterException":
 			kind = "bad-input";
+			break;
+		case "ResourceNotFoundException":
+		case "NoSuchEntity":
+			kind = "resource-not-found";
 			break;
 		case "ServiceUnavailable":
 		case "InternalServerError":
@@ -84,6 +84,9 @@ export function mapAwsError(err: unknown): ToolError {
 			"Check the DevOpsAgentReadOnly trust policy. Verify ExternalId and that the caller principal is allowed.";
 	} else if (kind === "aws-throttled") {
 		toolError.advice = "AWS throttled the call (SDK already retried 3 times). Narrow scope or wait before retrying.";
+	} else if (kind === "resource-not-found") {
+		toolError.advice =
+			"The named resource does not exist in this account/region. Verify the identifier and the region; this may be a routine finding (resource deleted or never created).";
 	}
 
 	return toolError;
@@ -111,14 +114,23 @@ interface WrapListArgs<TResponse, TParams> {
 	capBytes?: number;
 }
 
-const DEFAULT_CAP_BYTES = 32_000;
+const FALLBACK_CAP_BYTES = 32_000;
 const TRUNCATION_OVERHEAD_BYTES = 200;
+
+// Mutable default so the bootstrap can apply SUBAGENT_TOOL_RESULT_CAP_BYTES once
+// at startup without threading the value through every family factory.
+// Per-call `capBytes` on wrap*Tool args still wins.
+let defaultCapBytes = FALLBACK_CAP_BYTES;
+
+export function setDefaultCapBytes(n: number): void {
+	if (Number.isFinite(n) && n > 0) defaultCapBytes = n;
+}
 
 export function wrapListTool<TResponse, TParams>(
 	args: WrapListArgs<TResponse, TParams>,
 ): (params: TParams) => Promise<TResponse | { _error: ToolError }> {
-	const cap = args.capBytes ?? DEFAULT_CAP_BYTES;
 	return async (params: TParams) => {
+		const cap = args.capBytes ?? defaultCapBytes;
 		const start = Date.now();
 		let response: TResponse;
 		try {
@@ -173,8 +185,8 @@ export function wrapBlobTool<TResponse, TParams>(
 ): (
 	params: TParams,
 ) => Promise<TResponse | { _raw: string; _truncated: { atBytes: number; advice: string } } | { _error: ToolError }> {
-	const cap = args.capBytes ?? DEFAULT_CAP_BYTES;
 	return async (params: TParams) => {
+		const cap = args.capBytes ?? defaultCapBytes;
 		const start = Date.now();
 		let response: TResponse;
 		try {

@@ -5,6 +5,7 @@ export type ToolErrorKind =
 	| "iam-permission-missing"
 	| "aws-throttled"
 	| "bad-input"
+	| "resource-not-found"
 	| "aws-server-error"
 	| "aws-network-error"
 	| "aws-unknown";
