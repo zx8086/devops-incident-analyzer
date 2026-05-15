@@ -442,9 +442,12 @@ else
   NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
 fi
 
+# The list-agent-runtimes response uses the `agentRuntimes` array, not
+# `agentRuntimeSummaries`. The wrong key here meant updates always fell
+# through to create-agent-runtime and failed with ConflictException.
 EXISTING_RUNTIME=$(aws bedrock-agentcore-control list-agent-runtimes \
   --region "${AWS_REGION}" \
-  --query "agentRuntimeSummaries[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeId" \
+  --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeId" \
   --output text 2>/dev/null || echo "")
 
 if [ -n "${EXISTING_RUNTIME}" ] && [ "${EXISTING_RUNTIME}" != "None" ]; then
