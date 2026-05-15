@@ -339,6 +339,33 @@ export const correlationRules: CorrelationRule[] = [
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
 	},
+	{
+		// SIO-761 Phase 5: aws-agent reported one or more ECS services in a
+		// degraded state (runningCount < desiredCount, or "0 of N tasks running",
+		// or explicit "service degraded" phrasing). Application logs/traces in
+		// Elasticsearch typically explain WHY the tasks aren't running (OOM,
+		// startup crash, image pull failure, etc.), so dispatch elastic-agent
+		// to cross-check before the report concludes.
+		name: "aws-ecs-degraded-needs-elastic-traces",
+		description:
+			"AWS sub-agent reported ECS service with runningCount < desiredCount; correlate with application traces in Elasticsearch.",
+		trigger: (state) => {
+			const { prose } = getAwsResultSignals(state);
+			if (!prose) return null;
+			// Three independent ECS-degraded shapes, any one suffices:
+			//   a) "<N> of <M> tasks running" with N < M (numeric pair)
+			//   b) "<service-name> is degraded" / "service degraded"
+			//   c) "desiredCount" + "runningCount" both named in the same prose
+			const taskMatch = prose.match(/\b(\d+)\s*of\s*(\d+)\s+tasks?\s+running\b/i);
+			const taskMismatch = !!(taskMatch && Number(taskMatch[1]) < Number(taskMatch[2]));
+			const degradedPhrasing = /\bservice(?:\s+[a-zA-Z0-9_-]+)?\s+(?:is\s+)?degraded\b/i.test(prose);
+			const structuredEnvelope = /\bdesiredCount\b/.test(prose) && /\brunningCount\b/.test(prose);
+			if (!taskMismatch && !degradedPhrasing && !structuredEnvelope) return null;
+			return { context: { signal: "aws-ecs-degraded" } };
+		},
+		requiredAgent: "elastic-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
 ];
 
 // SIO-712: deployment-vs-runtime contradiction helpers.
