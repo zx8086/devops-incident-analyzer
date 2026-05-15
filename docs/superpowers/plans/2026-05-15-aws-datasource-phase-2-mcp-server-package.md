@@ -1723,7 +1723,7 @@ export function register<Family>Tools(server: McpServer, config: AwsConfig): voi
 - Create/append: `packages/mcp-server-aws/src/__tests__/tools-smoke.test.ts`
 - Create/append: `packages/mcp-server-aws/src/__tests__/tools-integration.test.ts`
 
-- [ ] **Step 9.1: Write `describe-vpcs.ts` first (canonical example)**
+- [x] **Step 9.1: Write `describe-vpcs.ts` first (canonical example)**
 
 ```typescript
 // src/tools/ec2/describe-vpcs.ts
@@ -1771,7 +1771,7 @@ export function describeVpcs(config: AwsConfig) {
 }
 ```
 
-- [ ] **Step 9.2: Write `describe-instances.ts`**
+- [x] **Step 9.2: Write `describe-instances.ts`**
 
 ```typescript
 // src/tools/ec2/describe-instances.ts
@@ -1807,7 +1807,7 @@ export function describeInstances(config: AwsConfig) {
 }
 ```
 
-- [ ] **Step 9.3: Write `describe-security-groups.ts`**
+- [x] **Step 9.3: Write `describe-security-groups.ts`**
 
 ```typescript
 // src/tools/ec2/describe-security-groups.ts
@@ -1845,7 +1845,7 @@ export function describeSecurityGroups(config: AwsConfig) {
 }
 ```
 
-- [ ] **Step 9.4: Write the family registration `index.ts`**
+- [x] **Step 9.4: Write the family registration `index.ts`**
 
 ```typescript
 // src/tools/ec2/index.ts
@@ -1877,7 +1877,7 @@ export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 }
 ```
 
-- [ ] **Step 9.5: Wire EC2 into `register.ts`**
+- [x] **Step 9.5: Wire EC2 into `register.ts`**
 
 Edit `packages/mcp-server-aws/src/tools/register.ts`:
 
@@ -1892,7 +1892,7 @@ export function registerAllTools(server: McpServer, config: AwsConfig): void {
 }
 ```
 
-- [ ] **Step 9.6: Create the smoke-test file with EC2 tests**
+- [x] **Step 9.6: Create the smoke-test file with EC2 tests**
 
 Create `packages/mcp-server-aws/src/__tests__/tools-smoke.test.ts`:
 
@@ -1927,7 +1927,7 @@ describe("ec2 tool param schemas", () => {
 });
 ```
 
-- [ ] **Step 9.7: Create the integration-test file with EC2 family test**
+- [x] **Step 9.7: Create the integration-test file with EC2 family test**
 
 Create `packages/mcp-server-aws/src/__tests__/tools-integration.test.ts`:
 
@@ -1963,7 +1963,7 @@ describe("ec2 integration", () => {
 });
 ```
 
-- [ ] **Step 9.8: Run tests**
+- [x] **Step 9.8: Run tests**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/tools-smoke.test.ts \
@@ -1972,7 +1972,7 @@ bun test packages/mcp-server-aws/src/__tests__/tools-smoke.test.ts \
 
 Expected: 6 smoke passes + 1 integration pass.
 
-- [ ] **Step 9.9: Typecheck**
+- [x] **Step 9.9: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -1980,7 +1980,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 9.10: Commit**
+- [x] **Step 9.10: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/tools/ec2/ \
