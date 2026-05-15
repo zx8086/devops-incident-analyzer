@@ -1405,7 +1405,7 @@ git commit -m "SIO-PHASE2-AWS: stdio/http/agentcore transport (mirrors konnect)"
 **Files:**
 - Create: `packages/mcp-server-aws/src/tools/register.ts`
 
-- [ ] **Step 7.1: Create the registration scaffold**
+- [x] **Step 7.1: Create the registration scaffold**
 
 ```typescript
 // src/tools/register.ts
@@ -1423,7 +1423,7 @@ export function registerAllTools(server: McpServer, config: AwsConfig): void {
 }
 ```
 
-- [ ] **Step 7.2: Typecheck**
+- [x] **Step 7.2: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -1431,7 +1431,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 7.3: Commit**
+- [x] **Step 7.3: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/tools/register.ts
