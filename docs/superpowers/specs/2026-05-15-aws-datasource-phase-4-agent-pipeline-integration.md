@@ -229,11 +229,10 @@ Same `AGENT_NAMES` table needs the same entry. (The duplicate table is pre-exist
    couchbase: "capella-agent",
    konnect: "konnect-agent",
    gitlab: "gitlab-agent",
+   atlassian: "atlassian-agent",
 +  aws: "aws-agent",
  };
 ```
-
-(`sub-agent.ts`'s table doesn't currently include `atlassian` either — leaving that alone.)
 
 ### Change 3 — MCP bridge (1 file)
 
@@ -282,40 +281,41 @@ Three additions, all in existing patterns:
 
 No changes to header injection, retry, health-poll, or timeout logic. The AWS MCP server is served via the local SigV4 proxy which already handles all transport-level concerns including SIO-737 retries.
 
-### Change 4 — Per-server `<SERVER>_AGENTCORE_RUNTIME_ARN` refactor (5 files)
+### Change 4 — Per-server `<SERVER>_AGENTCORE_RUNTIME_ARN` for Kafka (1 file)
 
-Establish a uniform per-server ARN env-var pattern across all six MCP packages. Each `index.ts` reads its own var first, falls back to generic `AGENTCORE_RUNTIME_ARN`. Memory note `feedback_plan_authority_over_pattern` applies: this refactor is in-scope because the spec deliberately asked for it.
+Only Kafka and AWS have proxy-mode branches today (verified during plan-writing: `grep -l AGENTCORE_RUNTIME_ARN packages/mcp-server-*/src/index.ts` returns only those two). The AWS package already reads `AWS_AGENTCORE_RUNTIME_ARN` with fallback to generic (Phase 3). This change aligns Kafka with the same shape so the two servers can run side-by-side without env-var collision.
 
-The AWS package (`packages/mcp-server-aws/src/index.ts`) already has this pattern from Phase 3. The remaining five packages need the same shape.
+The other four servers (`mcp-server-elastic`, `mcp-server-couchbase`, `mcp-server-konnect`, `mcp-server-gitlab`) have no proxy-mode branch at all and don't currently support AgentCore deployment. Adding per-server ARN env vars to them would be dead code (YAGNI). When any of them eventually gets an AgentCore deploy, that's the right time to add the branch — copying the pattern from Kafka/AWS.
 
-For each of `mcp-server-kafka`, `mcp-server-elastic`, `mcp-server-couchbase`, `mcp-server-konnect`, `mcp-server-gitlab`:
+#### `packages/mcp-server-kafka/src/index.ts` (around line 76–110)
 
 ```diff
--if (process.env.AGENTCORE_RUNTIME_ARN) {
-+const runtimeArn = process.env.<SERVER>_AGENTCORE_RUNTIME_ARN ?? process.env.AGENTCORE_RUNTIME_ARN;
-+if (runtimeArn) {
-+  process.env.AGENTCORE_RUNTIME_ARN = runtimeArn;
-+  // <SERVER>_AGENTCORE_PROXY_PORT default: the existing port the server uses
-+  // (kafka=3000, elastic=3002, couchbase=3003, konnect=3004, gitlab=3005)
-+  process.env.AGENTCORE_PROXY_PORT = process.env.AGENTCORE_PROXY_PORT ?? "<PORT>";
-   const { startAgentCoreProxy } = await import("@devops-agent/shared");
-   ...
+ if (import.meta.main) {
+   // If AGENTCORE_RUNTIME_ARN is set, the Kafka MCP server runs remotely on AWS.
+   // Start only the local SigV4 proxy so the agent can reach it -- no local server needed.
+-  if (process.env.AGENTCORE_RUNTIME_ARN) {
++  const runtimeArn = process.env.KAFKA_AGENTCORE_RUNTIME_ARN ?? process.env.AGENTCORE_RUNTIME_ARN;
++  if (runtimeArn) {
++    // startAgentCoreProxy reads AGENTCORE_RUNTIME_ARN; set it from the resolved
++    // value so a developer can scope per-server (KAFKA_AGENTCORE_RUNTIME_ARN) or
++    // use the generic var as a single-server override.
++    process.env.AGENTCORE_RUNTIME_ARN = runtimeArn;
+     const { startAgentCoreProxy } = await import("@devops-agent/shared");
+     logger.info(
+       {
+-        arn: process.env.AGENTCORE_RUNTIME_ARN,
++        arn: runtimeArn,
+         transport: "agentcore-proxy",
+       },
+       "Starting Kafka MCP Server",
+     );
+     const proxy = await startAgentCoreProxy();
+     ...
 ```
 
-Per-server env var names and proxy ports:
+Kafka's existing proxy port (3000 — the default `AGENTCORE_PROXY_PORT` in `startAgentCoreProxy`) is unchanged. AWS's :3001 is set inside the AWS package's index.ts (Phase 3). No port collision.
 
-| Server | New env var | Proxy port |
-|---|---|---|
-| kafka | `KAFKA_AGENTCORE_RUNTIME_ARN` | 3000 (existing, default) |
-| aws | `AWS_AGENTCORE_RUNTIME_ARN` | 3001 (already in Phase 3) |
-| elastic | `ELASTIC_AGENTCORE_RUNTIME_ARN` | 3002 |
-| couchbase | `COUCHBASE_AGENTCORE_RUNTIME_ARN` | 3003 |
-| konnect | `KONNECT_AGENTCORE_RUNTIME_ARN` | 3004 |
-| gitlab | `GITLAB_AGENTCORE_RUNTIME_ARN` | 3005 |
-
-The port assignments are aspirational: only kafka and aws have AgentCore runtimes today. The other three values are reserved so when those servers eventually get deployed to AgentCore, the developer just sets the env var without picking a port.
-
-This change is **backwards-compatible**: any developer with `AGENTCORE_RUNTIME_ARN` set in `.env` keeps getting the same behavior because each package falls back to that var if the per-server var isn't set. The generic var continues to work as a single-server override too — useful for one-off testing.
+This change is **backwards-compatible**: any developer with `AGENTCORE_RUNTIME_ARN` in `.env` keeps getting the same behavior. The generic var continues to work as a single-server override. When both vars are set, the per-server var wins.
 
 ### Change 5 — Web app integration (3 files)
 
@@ -480,7 +480,7 @@ Phase 4 is complete when:
 2. `bun run typecheck` passes for `@devops-agent/agent`, `@devops-agent/shared`, and `@devops-agent/web`.
 3. `bun run lint` passes.
 4. `bun run --filter @devops-agent/agent test` passes including the two new test files (wiring + fan-out).
-5. The five `index.ts` refactor commits typecheck individually (per-server `<SERVER>_AGENTCORE_RUNTIME_ARN` reads its own var first).
+5. The Kafka `index.ts` refactor commit typechecks (`KAFKA_AGENTCORE_RUNTIME_ARN` reads its own var first, falls back to generic `AGENTCORE_RUNTIME_ARN`).
 6. Manual: with `AWS_MCP_URL=http://localhost:3001` set, the SvelteKit UI shows "AWS" in the data-source selector dropdown, and a complex incident query produces `dataSourceResults.length === 6`.
 
 ## Error modes and recovery
