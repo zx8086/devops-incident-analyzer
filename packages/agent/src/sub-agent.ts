@@ -51,13 +51,17 @@ export function getSubAgentRecursionLimit(
 	return Math.floor(parsed);
 }
 
-const AGENT_NAMES: Record<string, string> = {
+// Exported for wiring tests (packages/agent/src/wiring-aws.test.ts).
+// SIO-756 follow-up: this table duplicates supervisor.ts AGENT_NAMES;
+// collapsing them is pre-existing tech debt for a separate ticket.
+export const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
 	kafka: "kafka-agent",
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
 	gitlab: "gitlab-agent",
 	atlassian: "atlassian-agent",
+	aws: "aws-agent",
 };
 
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
