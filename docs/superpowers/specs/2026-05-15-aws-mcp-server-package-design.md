@@ -361,6 +361,58 @@ Phase 2 is one PR, end-to-end. No phased rollout within this phase — the deliv
 
 Each step is committable on its own, but they land in one PR — the unit isn't releasable until step 5.
 
+---
+
+## Appendix A: Phase 2 Verification Record
+
+**Date verified:** 2026-05-15
+**Verified by:** Simon Owusu (default profile, IAM user `7-zark-7` in account 356994971776)
+**Linear sub-issue:** SIO-758
+
+### Layer 1-3 (automated tests)
+
+- `bun test packages/mcp-server-aws/` — **126 pass, 0 fail** (config 6 + credentials 4 + client-factory 5 + wrap 14 + bootstrap 4 + tools-smoke 78 + tools-integration 15)
+- `bun run --filter '@devops-agent/mcp-server-aws' typecheck` — exit 0
+- `bunx biome check packages/mcp-server-aws/src/` — 0 errors, 0 warnings
+- `aws-sdk-client-mock` integration tests cover one representative tool per family (14 of 15 families, plus EC2 = 15)
+
+### Layer 4 (live AWS)
+
+- Trust policy: temporarily restored to Phase-1 dual-principal trust (AgentCore role + `7-zark-7` user, both gated by ExternalId `aws-mcp-readonly-2026`). Production AgentCore-only trust restored after verification.
+- `AssumeRole` via `fromTemporaryCredentials` succeeds as `arn:aws:sts::356994971776:assumed-role/DevOpsAgentReadOnly/aws-mcp-server`.
+- HTTP server starts on `:9085` with `MCP_TRANSPORT=http`; "Starting AWS MCP Server" + "AWS MCP server ready" log lines emitted.
+- `scripts/agentcore/test-local.sh MCP_SERVER=aws BASE_URL=http://localhost:9085` — **6 passed, 0 failed** (after fixing pre-existing Accept-header bug in the script; same fix applies to konnect/atlassian).
+- `tools/list` returns **39 tools** matching the spec's tool surface.
+
+Per-family probe results (one no-arg representative per family, via JSON-RPC `tools/call`):
+
+| Family | Tool probed | Result |
+|---|---|---|
+| EC2 | `aws_ec2_describe_vpcs` | OK — keys: `$metadata`, `Vpcs` |
+| ECS | `aws_ecs_list_clusters` | OK — keys: `$metadata`, `clusterArns` |
+| Lambda | `aws_lambda_list_functions` | OK — keys: `$metadata`, `Functions` |
+| CloudWatch | `aws_cloudwatch_describe_alarms` | OK — keys: `$metadata`, `CompositeAlarms`, `MetricAlarms` |
+| Logs | `aws_logs_describe_log_groups` | OK — keys: `$metadata`, `logGroups` |
+| Health | `aws_health_describe_events` | `_error` — `kind: aws-unknown`, `awsErrorName: SubscriptionRequiredException`, `httpStatusCode: 400`. **Expected**: AWS Health Events API requires a Business/Enterprise Support plan; this test account doesn't have one. Wrapper correctly classified as a recoverable structured error. Consider mapping `SubscriptionRequiredException` to its own `ToolErrorKind` in a follow-up. |
+| CloudFormation | `aws_cloudformation_list_stacks` | OK — keys: `$metadata`, `StackSummaries` |
+| RDS | `aws_rds_describe_db_instances` | OK — keys: `$metadata`, `DBInstances` |
+| DynamoDB | `aws_dynamodb_list_tables` | OK — keys: `$metadata`, `TableNames` |
+| S3 | `aws_s3_list_buckets` | OK — keys: `$metadata`, `Buckets`, `Owner` |
+| ElastiCache | `aws_elasticache_describe_cache_clusters` | OK — keys: `$metadata`, `CacheClusters` |
+| Messaging (SNS) | `aws_sns_list_topics` | OK — keys: `$metadata`, `Topics` |
+| Config | `aws_config_describe_config_rules` | OK — keys: `$metadata`, `ConfigRules` |
+| Tags | `aws_resourcegroupstagging_get_resources` | OK — keys: `$metadata`, `PaginationToken`, `ResourceTagMappingList` |
+
+13/14 families returned valid SDK shapes; 1 (Health) returned a structured `_error` because the API isn't usable in this account. X-Ray skipped from no-arg pass because `GetTraceSummaries` requires `StartTime`/`EndTime`; covered by integration tests.
+
+### Plan deltas to feed forward into Phase 3+
+
+- `WebStandardStreamableHTTPServerTransport` is the correct class for Bun (plan's `StreamableHTTPServerTransport` from `streamableHttp.js` was Node-only). Matches `mcp-server-konnect` and `mcp-server-atlassian` reference implementations.
+- `toMcp` serialization helper (raw SDK shape → MCP `{ content: [{ type: "text", text }] }` envelope) was lifted to `tools/wrap.ts` so all families share one definition.
+- `wrapListTool` returns `shown: 0 / total: N` when `capBytes` is too tight for even one item. Reachable only with non-default caps (default 32_000 makes it unreachable for real AWS responses), but a `shown=0 → shown=1` guard would prevent silent empty-list returns. Tracked as a follow-up; no production risk at default cap.
+- `test-local.sh` was missing the `Accept: application/json, text/event-stream` header required by `WebStandardStreamableHTTPServerTransport`. Fixed in this commit; benefits all servers using that transport (konnect, atlassian, aws).
+- Health API mapping: `SubscriptionRequiredException` currently falls through to `aws-unknown`. Consider adding a `subscription-required` `ToolErrorKind` so the agent can advise on the support-plan gap instead of treating it as transient.
+
 ## References
 
 - Parent spec: `docs/superpowers/specs/2026-05-15-aws-datasource-design.md`

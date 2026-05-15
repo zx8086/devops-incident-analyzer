@@ -2203,7 +2203,7 @@ Expected: all tests pass. The test summary should show roughly:
 
 **Files:** none modified — pure verification.
 
-- [ ] **Step 24.1: Re-add the Phase-1 dev trust to DevOpsAgentReadOnly**
+- [x] **Step 24.1: Re-add the Phase-1 dev trust to DevOpsAgentReadOnly**
 
 ```bash
 # This re-allows the dev user 7-zark-7 to assume DevOpsAgentReadOnly.
@@ -2214,7 +2214,7 @@ TRUST_POLICY_FILE=scripts/agentcore/policies/devops-agent-readonly-trust-policy-
 
 Note: this file is .gitignored (it contains your dev principal ARN). If missing, recreate it from Phase 1 Task 3 instructions.
 
-- [ ] **Step 24.2: Start the AWS MCP server in HTTP mode**
+- [x] **Step 24.2: Start the AWS MCP server in HTTP mode**
 
 In a background shell (or tmux pane):
 
@@ -2229,7 +2229,7 @@ bun run packages/mcp-server-aws/src/index.ts
 
 Expected: log lines for "Starting AWS MCP Server" and "AWS MCP server ready".
 
-- [ ] **Step 24.3: Probe via the existing test-local.sh**
+- [x] **Step 24.3: Probe via the existing test-local.sh**
 
 ```bash
 MCP_SERVER=aws BASE_URL=http://localhost:9085 ./scripts/agentcore/test-local.sh
@@ -2237,7 +2237,7 @@ MCP_SERVER=aws BASE_URL=http://localhost:9085 ./scripts/agentcore/test-local.sh
 
 Expected: all PASS results. The script tests `/ping`, `/health`, MCP `initialize`, and error cases.
 
-- [ ] **Step 24.4: Confirm 39 tools are listed**
+- [x] **Step 24.4: Confirm 39 tools are listed**
 
 ```bash
 curl -sX POST http://localhost:9085/mcp \
@@ -2248,7 +2248,7 @@ curl -sX POST http://localhost:9085/mcp \
 
 Expected: `39`.
 
-- [ ] **Step 24.5: Probe one tool per family (14 calls)**
+- [x] **Step 24.5: Probe one tool per family (14 calls)**
 
 For each of the 14 families, issue one `tools/call`. Example for EC2:
 
@@ -2264,11 +2264,11 @@ Expected: a non-error response — either a list (e.g., `["Vpcs"]`) or `["_error
 
 Run the same shape for: `aws_ecs_list_clusters`, `aws_lambda_list_functions`, `aws_cloudwatch_describe_alarms`, `aws_logs_describe_log_groups`, `aws_xray_get_trace_summaries` (with a 1h window), `aws_health_describe_events`, `aws_cloudformation_list_stacks`, `aws_rds_describe_db_instances`, `aws_dynamodb_list_tables`, `aws_s3_list_buckets`, `aws_elasticache_describe_cache_clusters`, `aws_sns_list_topics`, `aws_config_describe_config_rules`, `aws_resourcegroupstagging_get_resources`.
 
-- [ ] **Step 24.6: Stop the server**
+- [x] **Step 24.6: Stop the server**
 
 Ctrl-C in the shell where it's running, or `pkill -f 'packages/mcp-server-aws'`.
 
-- [ ] **Step 24.7: Append the Layer 4 verification record to the spec**
+- [x] **Step 24.7: Append the Layer 4 verification record to the spec**
 
 Edit `docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md`. Find the `## References` section near the bottom. **Above** the References, append a new section:
 
@@ -2304,7 +2304,7 @@ Edit `docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md`. Find 
 
 Fill in the placeholders with real values from Steps 24.1–24.6.
 
-- [ ] **Step 24.8: Commit the verification record**
+- [x] **Step 24.8: Commit the verification record**
 
 ```bash
 git add docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md
