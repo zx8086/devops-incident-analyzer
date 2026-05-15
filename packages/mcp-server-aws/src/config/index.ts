@@ -1,5 +1,5 @@
 // src/config/index.ts
-import { ConfigSchema, type Config } from "./schemas.ts";
+import { type Config, ConfigSchema } from "./schemas.ts";
 
 let cached: Config | undefined;
 
@@ -21,5 +21,5 @@ export function _resetConfigCacheForTests(): void {
 	cached = undefined;
 }
 
-export { ConfigSchema };
 export type { AwsConfig, Config, TransportConfig } from "./schemas.ts";
+export { ConfigSchema };

@@ -13,11 +13,11 @@ export const ConfigSchema = z.preprocess(
 			AWS_REGION: env.AWS_REGION,
 			AWS_ASSUMED_ROLE_ARN: env.AWS_ASSUMED_ROLE_ARN,
 			AWS_EXTERNAL_ID: env.AWS_EXTERNAL_ID,
-			AWS_MCP_LOG_LEVEL: env.AWS_MCP_LOG_LEVEL,
-			TRANSPORT_MODE: env.MCP_TRANSPORT ?? env.TRANSPORT_MODE,
+			AWS_MCP_LOG_LEVEL: env.AWS_MCP_LOG_LEVEL ?? "info",
+			TRANSPORT_MODE: env.MCP_TRANSPORT ?? env.TRANSPORT_MODE ?? "stdio",
 			TRANSPORT_PORT: env.TRANSPORT_PORT,
-			TRANSPORT_HOST: env.TRANSPORT_HOST,
-			TRANSPORT_PATH: env.TRANSPORT_PATH,
+			TRANSPORT_HOST: env.TRANSPORT_HOST ?? "0.0.0.0",
+			TRANSPORT_PATH: env.TRANSPORT_PATH ?? "/mcp",
 			SUBAGENT_TOOL_RESULT_CAP_BYTES: env.SUBAGENT_TOOL_RESULT_CAP_BYTES,
 		};
 	},
@@ -29,11 +29,11 @@ export const ConfigSchema = z.preprocess(
 				.regex(roleArnRegex, "Must be a valid IAM role ARN")
 				.describe("Role to assume for AWS API calls"),
 			AWS_EXTERNAL_ID: z.string().min(1).describe("STS ExternalId for the AssumeRole condition"),
-			AWS_MCP_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-			TRANSPORT_MODE: z.enum(["stdio", "http", "both", "agentcore"]).default("stdio"),
+			AWS_MCP_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]),
+			TRANSPORT_MODE: z.enum(["stdio", "http", "both", "agentcore"]),
 			TRANSPORT_PORT: numericString(9085),
-			TRANSPORT_HOST: z.string().default("0.0.0.0"),
-			TRANSPORT_PATH: z.string().default("/mcp"),
+			TRANSPORT_HOST: z.string(),
+			TRANSPORT_PATH: z.string(),
 			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(32000),
 		})
 		.transform((raw) => ({
