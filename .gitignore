@@ -12,6 +12,8 @@ coverage
 
 # logs
 logs
+# Exception: CloudWatch Logs MCP tool family lives in a directory named logs
+!packages/mcp-server-aws/src/tools/logs/
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
