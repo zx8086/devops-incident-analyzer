@@ -19,7 +19,7 @@ describe("buildAssumedCredsProvider", () => {
 		expect(() => buildAssumedCredsProvider(config)).not.toThrow();
 	});
 
-	test("uses a stable RoleSessionName for traceability", () => {
+	test("returns a function on every call (stable provider shape)", () => {
 		// fromTemporaryCredentials accepts an opaque config; we can't unit-test
 		// the AssumeRole call itself without mocking STS. Just confirm the
 		// returned provider is the same function shape on repeated calls.
