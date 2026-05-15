@@ -16,8 +16,10 @@
 # Environment variables (override defaults):
 #   MCP_SERVER              - Server name: kafka|elastic|couchbase|konnect (default: kafka)
 #   AWS_REGION              - AWS region (default: eu-west-1)
-#   RUNTIME_NAME            - AgentCore runtime name (default: <server>-mcp-server)
+#   RUNTIME_NAME            - AgentCore runtime name (default: <server>_mcp_server)
+#                             Must match [a-zA-Z][a-zA-Z0-9_]{0,47} (no hyphens).
 #   ECR_REPO                - ECR repository name (default: <server>-mcp-agentcore)
+#   ROLE_NAME               - IAM execution role name (default: <server>-mcp-server-agentcore-role)
 #
 # Networking (optional, all servers):
 #   AGENTCORE_SUBNETS       - Comma-separated subnet IDs. If set, runtime is
@@ -68,7 +70,10 @@ set -euo pipefail
 MCP_SERVER="${MCP_SERVER:-kafka}"
 MCP_SERVER_PACKAGE="mcp-server-${MCP_SERVER}"
 AWS_REGION="${AWS_REGION:-eu-west-1}"
-RUNTIME_NAME="${RUNTIME_NAME:-${MCP_SERVER}-mcp-server}"
+# AgentCore runtime names must match [a-zA-Z][a-zA-Z0-9_]{0,47} -- no hyphens.
+# IAM role/policy names allow hyphens, so ROLE_NAME below uses the hyphenated
+# form to stay aligned with the Phase 1 (SIO-757) trust-policy principal.
+RUNTIME_NAME="${RUNTIME_NAME:-${MCP_SERVER}_mcp_server}"
 ECR_REPO="${ECR_REPO:-${MCP_SERVER}-mcp-agentcore}"
 KAFKA_PROVIDER="${KAFKA_PROVIDER:-msk}"
 # Default to 'none' to match the runtime default. Set MSK_AUTH_MODE=iam (or =tls)
@@ -79,7 +84,7 @@ AGENTCORE_SECURITY_GROUPS="${AGENTCORE_SECURITY_GROUPS:-}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 IMAGE_TAG="latest"
-ROLE_NAME="${RUNTIME_NAME}-agentcore-role"
+ROLE_NAME="${ROLE_NAME:-${MCP_SERVER}-mcp-server-agentcore-role}"
 
 # Validate networking inputs early -- VPC requires both subnets and SGs.
 if [ -n "${AGENTCORE_SUBNETS}" ] && [ -z "${AGENTCORE_SECURITY_GROUPS}" ]; then
