@@ -15,50 +15,79 @@ interface AwsDatasource {
 }
 
 if (import.meta.main) {
-	createMcpApplication<AwsDatasource>({
-		name: "aws-mcp-server",
-		logger: createBootstrapAdapter(logger),
+	// Proxy-only mode: when an AgentCore runtime ARN is set, the AWS MCP server
+	// runs remotely on AWS. Start only the local SigV4 proxy so the agent can
+	// reach it. AWS_AGENTCORE_RUNTIME_ARN takes precedence over the generic
+	// AGENTCORE_RUNTIME_ARN to support running both Kafka and AWS proxies
+	// side-by-side without env-var collision.
+	const runtimeArn = process.env.AWS_AGENTCORE_RUNTIME_ARN ?? process.env.AGENTCORE_RUNTIME_ARN;
 
-		initTracing: () => initializeTracing(),
-		telemetry: buildTelemetryConfig("aws-mcp-server"),
+	if (runtimeArn) {
+		process.env.AGENTCORE_RUNTIME_ARN = runtimeArn;
+		process.env.AGENTCORE_PROXY_PORT = process.env.AGENTCORE_PROXY_PORT ?? "3001";
 
-		initDatasource: async () => {
-			const config = loadConfig();
-			logger.level = config.logLevel;
-			setDefaultCapBytes(config.toolResultCapBytes);
+		const { startAgentCoreProxy } = await import("@devops-agent/shared");
+		logger.info({ arn: runtimeArn, transport: "agentcore-proxy" }, "Starting AWS MCP Server");
+		const proxy = await startAgentCoreProxy();
+		logger.info({ transport: "agentcore-proxy", port: proxy.port, url: proxy.url }, "AWS MCP Server ready");
 
-			const runtimeInfo = getRuntimeInfo();
-			logger.info(
-				{
-					runtime: runtimeInfo.runtime,
-					version: runtimeInfo.version,
-					region: config.aws.region,
-					transport: config.transport.mode,
-					assumedRole: config.aws.assumedRoleArn,
-				},
-				"Starting AWS MCP Server",
-			);
+		let isShuttingDown = false;
+		const shutdown = async () => {
+			if (isShuttingDown) return;
+			isShuttingDown = true;
+			logger.info("Shutting down aws-mcp-server...");
+			await proxy.close();
+			logger.info("aws-mcp-server shutdown completed");
+			process.exit(0);
+		};
+		process.on("SIGINT", () => shutdown());
+		process.on("SIGTERM", () => shutdown());
+	} else {
+		createMcpApplication<AwsDatasource>({
+			name: "aws-mcp-server",
+			logger: createBootstrapAdapter(logger),
 
-			return { config };
-		},
+			initTracing: () => initializeTracing(),
+			telemetry: buildTelemetryConfig("aws-mcp-server"),
 
-		createServerFactory: (ds) => () => {
-			const server = new McpServer({ name: "aws-mcp-server", version: pkg.version });
-			registerAllTools(server, ds.config.aws);
-			return server;
-		},
+			initDatasource: async () => {
+				const config = loadConfig();
+				logger.level = config.logLevel;
+				setDefaultCapBytes(config.toolResultCapBytes);
 
-		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
+				const runtimeInfo = getRuntimeInfo();
+				logger.info(
+					{
+						runtime: runtimeInfo.runtime,
+						version: runtimeInfo.version,
+						region: config.aws.region,
+						transport: config.transport.mode,
+						assumedRole: config.aws.assumedRoleArn,
+					},
+					"Starting AWS MCP Server",
+				);
 
-		onStarted: (ds) => {
-			logger.info(
-				{
-					region: ds.config.aws.region,
-					transport: ds.config.transport.mode,
-					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
-				},
-				"AWS MCP server ready",
-			);
-		},
-	});
+				return { config };
+			},
+
+			createServerFactory: (ds) => () => {
+				const server = new McpServer({ name: "aws-mcp-server", version: pkg.version });
+				registerAllTools(server, ds.config.aws);
+				return server;
+			},
+
+			createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
+
+			onStarted: (ds) => {
+				logger.info(
+					{
+						region: ds.config.aws.region,
+						transport: ds.config.transport.mode,
+						port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
+					},
+					"AWS MCP server ready",
+				);
+			},
+		});
+	}
 }
