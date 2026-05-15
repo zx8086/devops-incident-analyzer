@@ -9,13 +9,15 @@ import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:supervisor");
 
-const AGENT_NAMES: Record<string, string> = {
+// Exported for wiring tests (packages/agent/src/wiring-aws.test.ts).
+export const AGENT_NAMES: Record<string, string> = {
 	elastic: "elastic-agent",
 	kafka: "kafka-agent",
 	couchbase: "capella-agent",
 	konnect: "konnect-agent",
 	gitlab: "gitlab-agent",
 	atlassian: "atlassian-agent",
+	aws: "aws-agent",
 };
 
 type DelegationMode = "auto" | "explicit" | "router";
