@@ -33,13 +33,25 @@ export async function startHttpTransport(
 					headers: { "content-type": "application/json" },
 				});
 			if (url.pathname !== options.path) return new Response("not found", { status: 404 });
-			if (req.method === "GET") return new Response("method not allowed", { status: 405 });
-			if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+			if (req.method !== "POST") {
+				return Response.json(
+					{ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null },
+					{ status: 405, headers: { Allow: "POST" } },
+				);
+			}
 
 			const mcpServer = serverFactory();
 			const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-			await mcpServer.connect(transport);
-			return transport.handleRequest(req);
+			try {
+				await mcpServer.connect(transport);
+				return await transport.handleRequest(req);
+			} catch (error) {
+				log.error({ error: error instanceof Error ? error.message : String(error) }, "MCP request handler error");
+				return Response.json(
+					{ jsonrpc: "2.0", error: { code: -32000, message: "Internal server error" }, id: null },
+					{ status: 500 },
+				);
+			}
 		},
 	});
 
@@ -50,7 +62,7 @@ export async function startHttpTransport(
 		port,
 		url,
 		close: async () => {
-			server.stop();
+			await server.stop(true);
 		},
 	};
 }
