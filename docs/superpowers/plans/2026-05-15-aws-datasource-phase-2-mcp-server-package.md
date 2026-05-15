@@ -564,7 +564,7 @@ git commit -m "SIO-PHASE2-AWS: AssumeRole credentials via fromTemporaryCredentia
 - Create: `packages/mcp-server-aws/src/services/client-factory.ts`
 - Create: `packages/mcp-server-aws/src/__tests__/client-factory.test.ts`
 
-- [ ] **Step 4.1: Write the failing tests first**
+- [x] **Step 4.1: Write the failing tests first**
 
 Create `packages/mcp-server-aws/src/__tests__/client-factory.test.ts`:
 
@@ -611,7 +611,7 @@ describe("client-factory", () => {
 });
 ```
 
-- [ ] **Step 4.2: Run tests to confirm they fail**
+- [x] **Step 4.2: Run tests to confirm they fail**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/client-factory.test.ts
@@ -619,7 +619,7 @@ bun test packages/mcp-server-aws/src/__tests__/client-factory.test.ts
 
 Expected: 4 failures.
 
-- [ ] **Step 4.3: Create `packages/mcp-server-aws/src/services/client-factory.ts`**
+- [x] **Step 4.3: Create `packages/mcp-server-aws/src/services/client-factory.ts`**
 
 This file is long because there are 18 SDK packages. Each factory follows the same shape. Write all 18 in one pass:
 
@@ -729,7 +729,7 @@ export function _resetClientsForTests(): void {
 }
 ```
 
-- [ ] **Step 4.4: Run tests to confirm they pass**
+- [x] **Step 4.4: Run tests to confirm they pass**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/client-factory.test.ts
@@ -737,7 +737,7 @@ bun test packages/mcp-server-aws/src/__tests__/client-factory.test.ts
 
 Expected: 4 passes.
 
-- [ ] **Step 4.5: Typecheck**
+- [x] **Step 4.5: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -745,7 +745,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 4.6: Commit**
+- [x] **Step 4.6: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/services/client-factory.ts packages/mcp-server-aws/src/__tests__/client-factory.test.ts
