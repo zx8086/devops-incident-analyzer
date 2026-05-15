@@ -364,3 +364,62 @@ None at design time. Items deliberately deferred to follow-up tickets:
   - `packages/agent/src/sub-agent.ts:56` (parallel mapping)
   - `packages/agent/src/correlation/rules.ts` (correlation framework, SIO-681)
 - Memory: `reference_kafka_mcp_agentcore_ksql_disabled`, `reference_confluent_prd_ecs_topology`, `feedback_probe_agentcore_via_sigv4_proxy`, `reference_subagent_env_tunables`.
+
+---
+
+## Appendix A: Phase 1 Verification Record
+
+**Date verified:** 2026-05-15
+**Verified by:** Simon Owusu (`arn:aws:iam::356994971776:user/7-zark-7`)
+**Linear issue:** SIO-PHASE1-AWS (placeholder; real issue to be created before merge)
+**Verification account:** `356994971776` (test account used as a stand-in for the production-design account `352896877281`; same IAM shape)
+
+### What was created
+
+- `DevOpsAgentReadOnly` role (ARN: `arn:aws:iam::356994971776:role/DevOpsAgentReadOnly`)
+- `DevOpsAgentReadOnlyPolicy` managed policy (ARN: `arn:aws:iam::356994971776:policy/DevOpsAgentReadOnlyPolicy`)
+- `aws-mcp-server-agentcore-role` **placeholder** (ARN: `arn:aws:iam::356994971776:role/aws-mcp-server-agentcore-role`) — empty role with a `bedrock-agentcore.amazonaws.com` service trust. Created because AWS requires trust-policy principals (when they are IAM roles) to exist at the moment the trust is created or updated. Phase 3's `deploy.sh` will overwrite this role's trust and attach the real execution-role permissions when `MCP_SERVER=aws` is added.
+
+### IAM verdicts (assumed-role session = `DevOpsAgentReadOnly`)
+
+All 11 statement blocks verified end-to-end. **One discrepancy from the spec was found and corrected**: the original `LogsReadLimitedByName` block bundled `DescribeLogGroups` / `DescribeLogStreams` with the prefix-scoped reads, but the list APIs operate at `log-group::` scope and cannot be restricted by name prefix at the IAM layer. Fix: split into two blocks — `LogsListUnscoped` (Describe* on `Resource: "*"`) and `LogsReadLimitedByName` (read APIs with prefix scope). Final policy statement count: **12** (was 11 in the original spec).
+
+| Block | Action | Verdict |
+|---|---|---|
+| 1 — IdentityAndAccountDiscovery | `sts:GetCallerIdentity` | PASS |
+| 2 — RegionalAndNetworkTopology | `ec2:DescribeVpcs` | PASS |
+| 3 — ComputeContainersAndServerlessRead | `ecs:ListClusters`, `lambda:ListFunctions` | PASS |
+| 4 — DatastoresAndStorageRead | `s3api:ListBuckets`, `dynamodb:ListTables` | PASS |
+| 5 — MessagingAndIntegrationRead | `sns:ListTopics`, `sqs:ListQueues` | PASS |
+| 6 — MetricsAlarmsAndDashboardsRead | `cloudwatch:DescribeAlarms` | PASS |
+| 7a — LogsListUnscoped (new) | `logs:DescribeLogGroups` | PASS |
+| 7b — LogsReadLimitedByName | `logs:FilterLogEvents` etc. (not exercised against a real group; IAM allows the call) | PASS (IAM) |
+| 8 — TracingAndServiceMapRead | `xray:GetServiceGraph` | PASS |
+| 9 — AwsHealthRead | `health:DescribeEvents` | ACCEPTABLE (account lacks Business support) |
+| 10 — ConfigInventoryReadOptional | `config:DescribeConfigRules` | PASS |
+| 11 — CloudFormationAndDeploymentContextRead | `cloudformation:ListStacks`, `tag:GetResources` | PASS |
+
+### Write-action denial (safety check)
+
+All three deliberate write attempts correctly denied:
+- `ec2:CreateTags` against a real VPC: `UnauthorizedOperation`
+- `s3:CreateBucket`: `AccessDenied`
+- `iam:CreateUser`: `AccessDenied`
+
+### Trust policy lockout (Task 6 gate)
+
+After switching from the Phase-1 trust (which allowed the dev user) to the production trust (only `aws-mcp-server-agentcore-role`), the dev user `7-zark-7` was confirmed locked out:
+
+```
+AccessDenied: User arn:aws:iam::356994971776:user/7-zark-7 is not authorized
+to perform: sts:AssumeRole on resource: arn:aws:iam::356994971776:role/DevOpsAgentReadOnly
+```
+
+Role is currently assumable only by the placeholder `aws-mcp-server-agentcore-role` — which has a Bedrock AgentCore service trust but no AgentCore runtime attached to it yet, so in practice the role is **assumable by nothing live** until Phase 3 lands.
+
+### Plan deltas (must be reflected in Phase 2+ plans)
+
+1. **Statement count is 12, not 11.** Update plan text in Phase 2+ where it references the count.
+2. **Trust policy principals must exist at trust-creation time** for IAM-role principals. Phase 3's `deploy.sh` must create the AgentCore execution role **before** the role assume policy is exercised. If `deploy.sh` already creates the execution role first (it does — Step 3 in `scripts/agentcore/deploy.sh`), this is automatic. Phase 3 plan should confirm this ordering explicitly.
+3. **Placeholder AgentCore role exists** in account `356994971776`. Phase 3 should `update-assume-role-policy` and `attach-role-policy` rather than `create-role` when the role already exists. The existing `deploy.sh` already handles this case (`if aws iam get-role ... 2>/dev/null`).
+
