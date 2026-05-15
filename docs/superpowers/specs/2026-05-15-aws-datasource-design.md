@@ -371,7 +371,7 @@ None at design time. Items deliberately deferred to follow-up tickets:
 
 **Date verified:** 2026-05-15
 **Verified by:** Simon Owusu (`arn:aws:iam::356994971776:user/7-zark-7`)
-**Linear issue:** SIO-PHASE1-AWS (placeholder; real issue to be created before merge)
+**Linear issue:** [SIO-757](https://linear.app/siobytes/issue/SIO-757) (parent epic: [SIO-756](https://linear.app/siobytes/issue/SIO-756))
 **Verification account:** `356994971776` (test account used as a stand-in for the production-design account `352896877281`; same IAM shape)
 
 ### What was created
