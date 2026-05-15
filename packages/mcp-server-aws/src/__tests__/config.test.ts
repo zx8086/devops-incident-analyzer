@@ -1,6 +1,6 @@
 // src/__tests__/config.test.ts
 import { describe, expect, test } from "bun:test";
-import { ConfigSchema, loadConfig } from "../config/index.ts";
+import { _resetConfigCacheForTests, ConfigSchema, getConfig, loadConfig } from "../config/index.ts";
 
 describe("ConfigSchema", () => {
 	const validEnv = {
@@ -41,9 +41,11 @@ describe("ConfigSchema", () => {
 		expect(result.toolResultCapBytes).toBe(4096);
 	});
 
-	test("loadConfig is idempotent (returns the same object on repeated calls)", () => {
-		const a = loadConfig(validEnv);
-		const b = loadConfig(validEnv);
-		expect(a).toEqual(b);
+	test("getConfig() returns same reference after loadConfig populates cache", () => {
+		_resetConfigCacheForTests();
+		loadConfig(validEnv);
+		const a = getConfig();
+		const b = getConfig();
+		expect(a).toBe(b);
 	});
 });

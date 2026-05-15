@@ -1,7 +1,7 @@
 // src/config/schemas.ts
 import { z } from "zod";
 
-const roleArnRegex = /^arn:aws:iam::\d{12}:role\/[A-Za-z0-9+=,.@_-]+$/;
+const roleArnRegex = /^arn:aws:iam::\d{12}:role\/[A-Za-z0-9+=,.@_/-]+$/;
 
 const numericString = (def: number) =>
 	z.preprocess((v) => (v === undefined || v === "" ? def : Number(v)), z.number().int().positive());
