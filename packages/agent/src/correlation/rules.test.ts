@@ -34,3 +34,17 @@ describe("aws-ecs-degraded-needs-elastic-traces", () => {
 		expect(rule.trigger(state)).not.toBeNull();
 	});
 });
+
+describe("aws-cloudwatch-anomaly-needs-kafka-lag", () => {
+	const rule = findRule("aws-cloudwatch-anomaly-needs-kafka-lag");
+
+	test("fires when ALARM state coexists with Kafka context", () => {
+		const state = makeStateWithAwsProse("Alarm 'MSK-ConsumerLag-High' StateValue: ALARM. Threshold: 10000 messages.");
+		expect(rule.trigger(state)).not.toBeNull();
+	});
+
+	test("does not fire for non-Kafka alarms", () => {
+		const state = makeStateWithAwsProse("Alarm 'RDS-CPU-High' StateValue: ALARM. Database under heavy load.");
+		expect(rule.trigger(state)).toBeNull();
+	});
+});

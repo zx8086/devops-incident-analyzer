@@ -366,6 +366,28 @@ export const correlationRules: CorrelationRule[] = [
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
 	},
+	{
+		// SIO-761 Phase 5: aws-agent reported a CloudWatch alarm in ALARM state
+		// whose name or metric references Kafka/MSK. Consumer-lag spikes on the
+		// MSK side often anchor the alarm; fan out to kafka-agent for a lag
+		// snapshot before the report concludes.
+		name: "aws-cloudwatch-anomaly-needs-kafka-lag",
+		description:
+			"AWS sub-agent reported a CloudWatch alarm in ALARM state referencing Kafka/MSK; correlate with kafka-agent consumer-group lag.",
+		trigger: (state) => {
+			const { prose } = getAwsResultSignals(state);
+			if (!prose) return null;
+			// Both signals must coexist in the same prose blob: ALARM state AND a
+			// Kafka-related keyword. Either alone is too noisy (alarms exist for
+			// every service; Kafka is named in lots of contexts).
+			const alarmStated = /\bStateValue\b.*\bALARM\b/i.test(prose) || /\balarm.*\bin\s+ALARM\b/i.test(prose);
+			const kafkaContext = /\b(MSK|Kafka|kafka|consumer\s+lag|broker)\b/.test(prose);
+			if (!alarmStated || !kafkaContext) return null;
+			return { context: { signal: "aws-cloudwatch-alarm-kafka" } };
+		},
+		requiredAgent: "kafka-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
 ];
 
 // SIO-712: deployment-vs-runtime contradiction helpers.
