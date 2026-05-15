@@ -15,7 +15,13 @@ import type {
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 // SIO-681: Union of all specialist sub-agent identifiers
-export type AgentName = "elastic-agent" | "kafka-agent" | "capella-agent" | "konnect-agent" | "gitlab-agent" | "aws-agent";
+export type AgentName =
+	| "elastic-agent"
+	| "kafka-agent"
+	| "capella-agent"
+	| "konnect-agent"
+	| "gitlab-agent"
+	| "aws-agent";
 
 // SIO-681: A correlation rule that fired but could not be fully satisfied
 export interface DegradedRule {
