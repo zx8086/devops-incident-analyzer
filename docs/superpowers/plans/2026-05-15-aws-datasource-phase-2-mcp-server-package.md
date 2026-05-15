@@ -1205,7 +1205,7 @@ git commit -m "SIO-PHASE2-AWS: tool wrappers (truncation + error mapping, 12 tes
 
 This task is mostly copy-and-adapt from `packages/mcp-server-konnect/src/transport/`. The transport itself has zero AWS-specific logic.
 
-- [ ] **Step 6.1: Read the Konnect transport files for reference**
+- [x] **Step 6.1: Read the Konnect transport files for reference**
 
 ```bash
 cat packages/mcp-server-konnect/src/transport/factory.ts
@@ -1214,7 +1214,7 @@ cat packages/mcp-server-konnect/src/transport/stdio.ts
 cat packages/mcp-server-konnect/src/transport/index.ts
 ```
 
-- [ ] **Step 6.2: Create `packages/mcp-server-aws/src/transport/stdio.ts`**
+- [x] **Step 6.2: Create `packages/mcp-server-aws/src/transport/stdio.ts`**
 
 ```typescript
 // src/transport/stdio.ts
@@ -1240,7 +1240,7 @@ export async function startStdioTransport(server: McpServer): Promise<StdioTrans
 }
 ```
 
-- [ ] **Step 6.3: Create `packages/mcp-server-aws/src/transport/http.ts`**
+- [x] **Step 6.3: Create `packages/mcp-server-aws/src/transport/http.ts`**
 
 Mirror the Konnect HTTP transport. Open `packages/mcp-server-konnect/src/transport/http.ts` and copy it into `packages/mcp-server-aws/src/transport/http.ts`, replacing the import for the logger with our own (`createContextLogger("transport-http")` from `../utils/logger.ts`). Drop any Konnect-specific middleware (`withApiKeyAuth`, `withOriginValidation`) — the AWS server is not externally exposed; it only ever takes traffic from the SigV4 proxy or local dev. The minimum HTTP transport needs:
 
@@ -1300,7 +1300,7 @@ export async function startHttpTransport(
 
 If the Konnect server has any additional setup (cookies, sessions), use its file as a model and adapt to AWS needs. **For the first pass, keep the AWS HTTP transport minimal** — we only need `/mcp` POST + `/ping` + `/health`.
 
-- [ ] **Step 6.4: Create `packages/mcp-server-aws/src/transport/factory.ts`**
+- [x] **Step 6.4: Create `packages/mcp-server-aws/src/transport/factory.ts`**
 
 ```typescript
 // src/transport/factory.ts
@@ -1374,7 +1374,7 @@ export async function createTransport(
 }
 ```
 
-- [ ] **Step 6.5: Create `packages/mcp-server-aws/src/transport/index.ts`**
+- [x] **Step 6.5: Create `packages/mcp-server-aws/src/transport/index.ts`**
 
 ```typescript
 // src/transport/index.ts
@@ -1383,7 +1383,7 @@ export { type HttpTransportResult, startHttpTransport } from "./http.ts";
 export { type StdioTransportResult, startStdioTransport } from "./stdio.ts";
 ```
 
-- [ ] **Step 6.6: Typecheck**
+- [x] **Step 6.6: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -1391,7 +1391,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 6.7: Commit**
+- [x] **Step 6.7: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/transport/
