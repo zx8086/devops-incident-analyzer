@@ -59,3 +59,6 @@ kafka-mcp-agentcore.tar.gz
 
 # SIO-687 investigation: local-only eval entrypoint (DO NOT COMMIT)
 packages/agent/src/eval/run-eval-no-precheck.ts
+
+# Phase 1 IAM trust policy with developer-specific principal — do not commit
+scripts/agentcore/policies/devops-agent-readonly-trust-policy-phase1.json

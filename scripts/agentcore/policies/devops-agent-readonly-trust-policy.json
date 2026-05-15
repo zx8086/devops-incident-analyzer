@@ -5,7 +5,7 @@
       "Sid": "AllowAgentCoreExecutionRoleToAssume",
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::352896877281:role/aws-mcp-server-agentcore-role"
+        "AWS": "arn:aws:iam::356994971776:role/aws-mcp-server-agentcore-role"
       },
       "Action": "sts:AssumeRole",
       "Condition": {
