@@ -11,6 +11,7 @@ const SERVER_TO_DATASOURCE: Record<string, string> = {
 	"konnect-mcp": "konnect",
 	"gitlab-mcp": "gitlab",
 	"atlassian-mcp": "atlassian",
+	"aws-mcp": "aws",
 };
 
 export const GET: RequestHandler = async () => {
@@ -25,6 +26,7 @@ export const GET: RequestHandler = async () => {
 	if (process.env.KONNECT_MCP_URL) dataSources.push("konnect");
 	if (process.env.GITLAB_MCP_URL) dataSources.push("gitlab");
 	if (process.env.ATLASSIAN_MCP_URL_LOCAL) dataSources.push("atlassian");
+	if (process.env.AWS_MCP_URL) dataSources.push("aws");
 
 	// Report which are actually connected
 	const connected = getConnectedServers()
