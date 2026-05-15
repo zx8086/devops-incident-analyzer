@@ -269,7 +269,7 @@ git commit -m "SIO-PHASE2-AWS: scaffold packages/mcp-server-aws/ (deps + logger 
 - Create: `packages/mcp-server-aws/src/config/index.ts`
 - Create: `packages/mcp-server-aws/src/__tests__/config.test.ts`
 
-- [ ] **Step 2.1: Write the failing tests first**
+- [x] **Step 2.1: Write the failing tests first**
 
 Create `packages/mcp-server-aws/src/__tests__/config.test.ts`:
 
@@ -325,7 +325,7 @@ describe("ConfigSchema", () => {
 });
 ```
 
-- [ ] **Step 2.2: Run the tests to confirm they fail**
+- [x] **Step 2.2: Run the tests to confirm they fail**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/config.test.ts
@@ -333,7 +333,7 @@ bun test packages/mcp-server-aws/src/__tests__/config.test.ts
 
 Expected: 6 failures because `config/index.ts` doesn't exist yet. (Bun emits "Cannot find module" errors.)
 
-- [ ] **Step 2.3: Create `packages/mcp-server-aws/src/config/schemas.ts`**
+- [x] **Step 2.3: Create `packages/mcp-server-aws/src/config/schemas.ts`**
 
 ```typescript
 // src/config/schemas.ts
@@ -396,7 +396,7 @@ export type AwsConfig = Config["aws"];
 export type TransportConfig = Config["transport"];
 ```
 
-- [ ] **Step 2.4: Create `packages/mcp-server-aws/src/config/index.ts`**
+- [x] **Step 2.4: Create `packages/mcp-server-aws/src/config/index.ts`**
 
 ```typescript
 // src/config/index.ts
@@ -426,7 +426,7 @@ export { ConfigSchema };
 export type { AwsConfig, Config, TransportConfig } from "./schemas.ts";
 ```
 
-- [ ] **Step 2.5: Run tests to confirm they pass**
+- [x] **Step 2.5: Run tests to confirm they pass**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/config.test.ts
@@ -434,7 +434,7 @@ bun test packages/mcp-server-aws/src/__tests__/config.test.ts
 
 Expected: 6 passes.
 
-- [ ] **Step 2.6: Typecheck**
+- [x] **Step 2.6: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -442,7 +442,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 2.7: Commit**
+- [x] **Step 2.7: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/config/ packages/mcp-server-aws/src/__tests__/config.test.ts
