@@ -62,6 +62,7 @@ echo "MCP protocol:"
 
 MCP_INIT=$(curl -s -X POST "${BASE_URL}/mcp" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
