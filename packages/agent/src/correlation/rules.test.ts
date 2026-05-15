@@ -16,6 +16,12 @@ function makeStateWithAwsProse(prose: string, toolErrors: ToolError[] = []) {
 	} as never; // partial AgentStateType, sufficient for trigger logic
 }
 
+function makeStateWithKafkaProse(prose: string, toolErrors: ToolError[] = []) {
+	return {
+		dataSourceResults: [{ dataSourceId: "kafka", status: "success" as const, data: prose, toolErrors }],
+	} as never;
+}
+
 describe("aws-ecs-degraded-needs-elastic-traces", () => {
 	const rule = findRule("aws-ecs-degraded-needs-elastic-traces");
 
@@ -46,5 +52,26 @@ describe("aws-cloudwatch-anomaly-needs-kafka-lag", () => {
 	test("does not fire for non-Kafka alarms", () => {
 		const state = makeStateWithAwsProse("Alarm 'RDS-CPU-High' StateValue: ALARM. Database under heavy load.");
 		expect(rule.trigger(state)).toBeNull();
+	});
+});
+
+describe("kafka-broker-timeout-needs-aws-metrics", () => {
+	const rule = findRule("kafka-broker-timeout-needs-aws-metrics");
+
+	test("fires on prose mentioning broker timeout", () => {
+		const state = makeStateWithKafkaProse("broker b-1.msk.amazonaws.com unreachable: connection timeout after 30s");
+		expect(rule.trigger(state)).not.toBeNull();
+	});
+
+	test("fires on transient ToolError with network-shape message", () => {
+		const state = makeStateWithKafkaProse("successful query", [
+			{
+				toolName: "kafka_list_topics",
+				category: "transient",
+				message: "ENOTFOUND b-1.msk.amazonaws.com",
+				retryable: true,
+			} as never,
+		]);
+		expect(rule.trigger(state)).not.toBeNull();
 	});
 });

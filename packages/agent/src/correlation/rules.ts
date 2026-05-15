@@ -388,6 +388,35 @@ export const correlationRules: CorrelationRule[] = [
 		requiredAgent: "kafka-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
 	},
+	{
+		// SIO-761 Phase 5: kafka-agent reported broker-side timeout / unreachable
+		// MSK cluster / connection failure. AWS-side networking, EC2 instance
+		// health, or security-group changes are common root causes; fan out to
+		// aws-agent for an MSK cluster + EC2 cross-check.
+		name: "kafka-broker-timeout-needs-aws-metrics",
+		description:
+			"kafka-agent reported broker timeout / connection failure against MSK; correlate with AWS-side MSK cluster metrics, EC2 instance health, and security groups.",
+		trigger: (state) => {
+			const { toolErrors, prose } = getKafkaResultSignals(state);
+			// Two paths: structured tool errors (preferred -- ToolError.category
+			// is "transient" + the message has a network-shape pattern from
+			// mapAwsError) or prose-mention fallback. Same dual-path approach
+			// as SIO-717's findConfluent5xxToolErrors.
+			const networkErrorTransient = toolErrors.some(
+				(e) =>
+					e.category === "transient" &&
+					/(timeout|unreachable|unavailable|connection\s+refused|ENOTFOUND|ECONNREFUSED|ETIMEDOUT)/i.test(e.message),
+			);
+			const proseBrokerTimeout =
+				/\bbroker\b.*(timeout|unreachable|unavailable|connection\s+refused)/i.test(prose) ||
+				/\bMSK\b.*(timeout|unreachable|unavailable)/i.test(prose) ||
+				/\bkafka\b.*\bconnection\b.*\btimeout\b/i.test(prose);
+			if (!networkErrorTransient && !proseBrokerTimeout) return null;
+			return { context: { signal: "kafka-broker-timeout-needs-aws" } };
+		},
+		requiredAgent: "aws-agent",
+		retry: { attempts: 2, timeoutMs: 30_000 },
+	},
 ];
 
 // SIO-712: deployment-vs-runtime contradiction helpers.
