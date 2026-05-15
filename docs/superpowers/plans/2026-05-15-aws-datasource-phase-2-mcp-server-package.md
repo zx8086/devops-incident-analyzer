@@ -137,7 +137,7 @@ Use the Linear MCP `save_issue` tool with:
 - Create: `packages/mcp-server-aws/src/utils/logger.ts`
 - Create: `packages/mcp-server-aws/src/utils/env.ts`
 
-- [ ] **Step 1.1: Create `packages/mcp-server-aws/package.json`**
+- [x] **Step 1.1: Create `packages/mcp-server-aws/package.json`**
 
 ```json
 {
@@ -190,7 +190,7 @@ Use the Linear MCP `save_issue` tool with:
 }
 ```
 
-- [ ] **Step 1.2: Create `packages/mcp-server-aws/tsconfig.json`**
+- [x] **Step 1.2: Create `packages/mcp-server-aws/tsconfig.json`**
 
 ```json
 {
@@ -202,7 +202,7 @@ Use the Linear MCP `save_issue` tool with:
 }
 ```
 
-- [ ] **Step 1.3: Create `packages/mcp-server-aws/src/utils/logger.ts`**
+- [x] **Step 1.3: Create `packages/mcp-server-aws/src/utils/logger.ts`**
 
 ```typescript
 // src/utils/logger.ts
@@ -215,7 +215,7 @@ export function createContextLogger(component: string) {
 }
 ```
 
-- [ ] **Step 1.4: Create `packages/mcp-server-aws/src/utils/env.ts`**
+- [x] **Step 1.4: Create `packages/mcp-server-aws/src/utils/env.ts`**
 
 ```typescript
 // src/utils/env.ts
@@ -235,7 +235,7 @@ export function getRuntimeInfo(): RuntimeInfo {
 }
 ```
 
-- [ ] **Step 1.5: Install dependencies**
+- [x] **Step 1.5: Install dependencies**
 
 Run from the repo root:
 
@@ -245,7 +245,7 @@ bun install
 
 Expected: no errors. Bun resolves all `@aws-sdk/*` packages plus `aws-sdk-client-mock`. May add many entries to `bun.lock`.
 
-- [ ] **Step 1.6: Typecheck the new package**
+- [x] **Step 1.6: Typecheck the new package**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -253,7 +253,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0, no errors. (Empty `src/` other than the two `utils/` files is fine — typecheck just verifies the tsconfig resolves.)
 
-- [ ] **Step 1.7: Commit**
+- [x] **Step 1.7: Commit**
 
 ```bash
 git add packages/mcp-server-aws/ bun.lock
