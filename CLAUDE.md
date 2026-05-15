@@ -131,7 +131,7 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating names, obvious `@re
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket references (`SIO-XXX`), non-obvious algorithm explanations.
 
 ### Servers
-- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Web: 5173
+- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | AWS MCP: 9085 | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
 - Kill background processes after testing
 
