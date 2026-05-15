@@ -132,11 +132,18 @@
       "Resource": "*"
     },
     {
-      "Sid": "LogsReadLimitedByName",
+      "Sid": "LogsListUnscoped",
       "Effect": "Allow",
       "Action": [
         "logs:DescribeLogGroups",
-        "logs:DescribeLogStreams",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsReadLimitedByName",
+      "Effect": "Allow",
+      "Action": [
         "logs:GetLogEvents",
         "logs:FilterLogEvents",
         "logs:StartQuery",
