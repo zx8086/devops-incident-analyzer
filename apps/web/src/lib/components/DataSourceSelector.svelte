@@ -16,6 +16,7 @@ const labels: Record<string, string> = {
 	konnect: "Konnect",
 	gitlab: "GitLab",
 	atlassian: "Atlassian",
+	aws: "AWS",
 };
 
 function isConnected(id: string): boolean {
