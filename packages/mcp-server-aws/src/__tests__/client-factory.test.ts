@@ -37,4 +37,11 @@ describe("client-factory", () => {
 		const region = await client.config.region();
 		expect(region).toBe("eu-central-1");
 	});
+
+	test("_resetClientsForTests clears the cache so next call returns a fresh instance", () => {
+		const a = getEc2Client(config);
+		_resetClientsForTests();
+		const b = getEc2Client(config);
+		expect(a).not.toBe(b);
+	});
 });

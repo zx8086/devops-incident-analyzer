@@ -25,6 +25,8 @@ import { buildAssumedCredsProvider } from "./credentials.ts";
 // so reusing the client keeps the cache warm.
 const clients = new Map<string, unknown>();
 
+// Config is captured at first call; subsequent calls with different configs are
+// ignored. Single-config-per-process is enforced at bootstrap (SIO-758).
 function lazyClient<T>(key: string, ctor: () => T): T {
 	if (!clients.has(key)) {
 		clients.set(key, ctor());
