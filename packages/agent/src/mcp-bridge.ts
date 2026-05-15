@@ -27,6 +27,7 @@ export interface McpClientConfig {
 	konnectUrl?: string;
 	gitlabUrl?: string;
 	atlassianUrl?: string;
+	awsUrl?: string;
 }
 
 // SIO-705: pino's default JSON serializer drops non-enumerable fields on Error
@@ -132,6 +133,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	if (config.atlassianUrl) {
 		serverEntries.push({ name: "atlassian-mcp", url: `${config.atlassianUrl}/mcp` });
 	}
+	if (config.awsUrl) {
+		serverEntries.push({ name: "aws-mcp", url: `${config.awsUrl}/mcp` });
+	}
 
 	if (serverEntries.length === 0) {
 		logger.warn("No MCP server URLs configured. Agent will have no tools.");
@@ -203,17 +207,19 @@ export function getConnectedServers(): string[] {
 	return [...connectedServers];
 }
 
-export function getToolsForDataSource(dataSourceId: string): StructuredToolInterface[] {
-	const serverMap: Record<string, string> = {
-		elastic: "elastic-mcp",
-		kafka: "kafka-mcp",
-		couchbase: "couchbase-mcp",
-		konnect: "konnect-mcp",
-		gitlab: "gitlab-mcp",
-		atlassian: "atlassian-mcp",
-	};
+// Exported for wiring tests (packages/agent/src/wiring-aws.test.ts).
+export const DATASOURCE_TO_MCP_SERVER: Record<string, string> = {
+	elastic: "elastic-mcp",
+	kafka: "kafka-mcp",
+	couchbase: "couchbase-mcp",
+	konnect: "konnect-mcp",
+	gitlab: "gitlab-mcp",
+	atlassian: "atlassian-mcp",
+	aws: "aws-mcp",
+};
 
-	const serverName = serverMap[dataSourceId];
+export function getToolsForDataSource(dataSourceId: string): StructuredToolInterface[] {
+	const serverName = DATASOURCE_TO_MCP_SERVER[dataSourceId];
 	if (!serverName) return allTools;
 
 	return toolsByServer.get(serverName) ?? [];
