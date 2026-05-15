@@ -1,13 +1,10 @@
 // src/tools/ec2/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
+import { toMcp } from "../wrap.ts";
 import { describeInstances, describeInstancesSchema } from "./describe-instances.ts";
 import { describeSecurityGroups, describeSecurityGroupsSchema } from "./describe-security-groups.ts";
 import { describeVpcs, describeVpcsSchema } from "./describe-vpcs.ts";
-
-function toMcp(result: unknown): { content: [{ type: "text"; text: string }] } {
-	return { content: [{ type: "text", text: JSON.stringify(result) }] };
-}
 
 export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 	const vpcs = describeVpcs(config);

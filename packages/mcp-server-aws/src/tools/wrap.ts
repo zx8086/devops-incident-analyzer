@@ -203,3 +203,9 @@ export function wrapBlobTool<TResponse, TParams>(
 		};
 	};
 }
+
+// wrap*Tool returns raw SDK shape; MCP server.tool() expects { content: [{ type, text }] }.
+// Every family index.ts bridges via toMcp(await handler(params)).
+export function toMcp(result: unknown): { content: [{ type: "text"; text: string }] } {
+	return { content: [{ type: "text", text: JSON.stringify(result) }] };
+}
