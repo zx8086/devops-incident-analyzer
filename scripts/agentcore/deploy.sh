@@ -55,6 +55,12 @@
 # Konnect-specific:
 #   KONNECT_ACCESS_TOKEN    - Kong Konnect API access token
 #   KONNECT_REGION          - Konnect region (us|eu|au|me|in)
+#
+# AWS-specific:
+#   AWS_ASSUMED_ROLE_ARN    - DevOpsAgentReadOnly role to assume in the runtime
+#                             (default: arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly)
+#   AWS_EXTERNAL_ID         - STS ExternalId required by the assumed role's trust
+#                             policy (default: aws-mcp-readonly-2026)
 
 set -euo pipefail
 
@@ -129,6 +135,7 @@ case "${MCP_SERVER}" in
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
   couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
+  aws)      echo "  AWS:          role=${AWS_ASSUMED_ROLE_ARN:-DevOpsAgentReadOnly (default)}, externalId=set" ;;
 esac
 if [ -n "${AGENTCORE_SUBNETS}" ]; then
   echo "  Network:      VPC (subnets=${AGENTCORE_SUBNETS}, sgs=${AGENTCORE_SECURITY_GROUPS})"
@@ -266,6 +273,21 @@ if [ "${MCP_SERVER}" = "kafka" ] && [ "${MSK_AUTH_MODE}" != "none" ]; then
     }'
 fi
 
+# AWS: grant sts:AssumeRole on DevOpsAgentReadOnly. The trust policy on
+# DevOpsAgentReadOnly already names this execution role as the only permitted
+# principal; this statement is the matching permission side of the contract.
+# Always required: the runtime must assume DevOpsAgentReadOnly to call AWS APIs.
+if [ "${MCP_SERVER}" = "aws" ]; then
+  ASSUMED_ROLE_ARN="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
+  POLICY_STATEMENTS="${POLICY_STATEMENTS}"',
+    {
+      "Sid": "AssumeDevOpsAgentReadOnly",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "'"${ASSUMED_ROLE_ARN}"'"
+    }'
+fi
+
 POLICY_DOCUMENT='{"Version":"2012-10-17","Statement":'"${POLICY_STATEMENTS}"']}'
 
 POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${ROLE_NAME}-policy"
@@ -392,6 +414,12 @@ case "${MCP_SERVER}" in
     if [ -n "${KONNECT_REGION:-}" ]; then
       ENV_VARS="${ENV_VARS},KONNECT_REGION=${KONNECT_REGION}"
     fi
+    ;;
+  aws)
+    AWS_ASSUMED_ROLE_ARN_RESOLVED="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
+    AWS_EXTERNAL_ID_RESOLVED="${AWS_EXTERNAL_ID:-aws-mcp-readonly-2026}"
+    ENV_VARS="${ENV_VARS},AWS_ASSUMED_ROLE_ARN=${AWS_ASSUMED_ROLE_ARN_RESOLVED}"
+    ENV_VARS="${ENV_VARS},AWS_EXTERNAL_ID=${AWS_EXTERNAL_ID_RESOLVED}"
     ;;
 esac
 
