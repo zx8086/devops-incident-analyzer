@@ -112,7 +112,7 @@ src/
 
 **Files:** none (Linear-only)
 
-- [ ] **Step 0.1: Create the Linear sub-issue**
+- [x] **Step 0.1: Create the Linear sub-issue**
 
 Use the Linear MCP `save_issue` tool with:
 - **Title:** `Phase 2: Native TypeScript MCP server packages/mcp-server-aws/`
@@ -123,9 +123,9 @@ Use the Linear MCP `save_issue` tool with:
 - **Priority:** `3` (Medium)
 - **Description:** Link the spec `docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md`, this plan, and the parent epic. State that this is Phase 2 of 5.
 
-- [ ] **Step 0.2: Record the issue ID**
+- [x] **Step 0.2: Record the issue ID**
 
-Note the returned `SIO-XXX` ID. Every commit message in this plan uses that prefix per CLAUDE.md. **In the steps below, the literal token `SIO-PHASE2-AWS` is a placeholder — substitute the real ID when committing.**
+**Issue ID: [SIO-758](https://linear.app/siobytes/issue/SIO-758)**. Every commit message in this plan uses that prefix per CLAUDE.md. The placeholder `SIO-PHASE2-AWS` is replaced by `SIO-758` in all subsequent commits.
 
 ---
 
