@@ -1447,7 +1447,7 @@ git commit -m "SIO-PHASE2-AWS: empty registerAllTools scaffold (filled by Tasks 
 - Create: `packages/mcp-server-aws/src/index.ts`
 - Create: `packages/mcp-server-aws/src/__tests__/bootstrap.test.ts`
 
-- [ ] **Step 8.1: Create `packages/mcp-server-aws/src/telemetry/tracing.ts`**
+- [x] **Step 8.1: Create `packages/mcp-server-aws/src/telemetry/tracing.ts`**
 
 Match the Konnect pattern exactly:
 
@@ -1463,7 +1463,7 @@ export async function initializeTracing(): Promise<void> {
 }
 ```
 
-- [ ] **Step 8.2: Write the failing bootstrap tests**
+- [x] **Step 8.2: Write the failing bootstrap tests**
 
 Create `packages/mcp-server-aws/src/__tests__/bootstrap.test.ts`:
 
@@ -1529,7 +1529,7 @@ describe("HTTP transport", () => {
 });
 ```
 
-- [ ] **Step 8.3: Run tests to confirm they fail**
+- [x] **Step 8.3: Run tests to confirm they fail**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/bootstrap.test.ts
@@ -1539,7 +1539,7 @@ Expected: failures (the test code references files that exist, but `createTransp
 
 If the tests pass already, great — but typically `Bun.serve` needs the actual port flow to be running. If failures complain about "missing module", check that Tasks 1-7 landed.
 
-- [ ] **Step 8.4: Create `packages/mcp-server-aws/src/index.ts`**
+- [x] **Step 8.4: Create `packages/mcp-server-aws/src/index.ts`**
 
 ```typescript
 // src/index.ts
@@ -1606,7 +1606,7 @@ if (import.meta.main) {
 }
 ```
 
-- [ ] **Step 8.5: Run tests to confirm they pass**
+- [x] **Step 8.5: Run tests to confirm they pass**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/bootstrap.test.ts
@@ -1614,7 +1614,7 @@ bun test packages/mcp-server-aws/src/__tests__/bootstrap.test.ts
 
 Expected: 4 passes.
 
-- [ ] **Step 8.6: Typecheck**
+- [x] **Step 8.6: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -1622,7 +1622,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 8.7: Manual smoke — server starts in stdio mode**
+- [x] **Step 8.7: Manual smoke — server starts in stdio mode**
 
 ```bash
 AWS_REGION=eu-central-1 \
@@ -1636,7 +1636,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 Expected: a single line of JSON-RPC `result` containing `"serverInfo":{"name":"aws-mcp-server"}`.
 
-- [ ] **Step 8.8: Commit**
+- [x] **Step 8.8: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/index.ts packages/mcp-server-aws/src/telemetry/tracing.ts packages/mcp-server-aws/src/__tests__/bootstrap.test.ts
