@@ -457,7 +457,7 @@ git commit -m "SIO-PHASE2-AWS: config schemas + loadConfig (6 tests)"
 - Create: `packages/mcp-server-aws/src/services/credentials.ts`
 - Create: `packages/mcp-server-aws/src/__tests__/credentials.test.ts`
 
-- [ ] **Step 3.1: Write the failing tests first**
+- [x] **Step 3.1: Write the failing tests first**
 
 Create `packages/mcp-server-aws/src/__tests__/credentials.test.ts`:
 
@@ -500,7 +500,7 @@ describe("buildAssumedCredsProvider", () => {
 });
 ```
 
-- [ ] **Step 3.2: Run tests to confirm they fail**
+- [x] **Step 3.2: Run tests to confirm they fail**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/credentials.test.ts
@@ -508,7 +508,7 @@ bun test packages/mcp-server-aws/src/__tests__/credentials.test.ts
 
 Expected: 4 failures because `services/credentials.ts` doesn't exist.
 
-- [ ] **Step 3.3: Create `packages/mcp-server-aws/src/services/credentials.ts`**
+- [x] **Step 3.3: Create `packages/mcp-server-aws/src/services/credentials.ts`**
 
 ```typescript
 // src/services/credentials.ts
@@ -533,7 +533,7 @@ export function buildAssumedCredsProvider(config: AwsConfig): AwsCredentialIdent
 }
 ```
 
-- [ ] **Step 3.4: Run tests to confirm they pass**
+- [x] **Step 3.4: Run tests to confirm they pass**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/credentials.test.ts
@@ -541,7 +541,7 @@ bun test packages/mcp-server-aws/src/__tests__/credentials.test.ts
 
 Expected: 4 passes.
 
-- [ ] **Step 3.5: Typecheck**
+- [x] **Step 3.5: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -549,7 +549,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 3.6: Commit**
+- [x] **Step 3.6: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/services/credentials.ts packages/mcp-server-aws/src/__tests__/credentials.test.ts
