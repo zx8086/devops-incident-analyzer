@@ -1,0 +1,212 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IdentityAndAccountDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity",
+        "organizations:DescribeOrganization",
+        "organizations:ListAccounts",
+        "account:ListRegions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RegionalAndNetworkTopology",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeRegions",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeNetworkAcls",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeVpcPeeringConnections",
+        "ec2:DescribeTransitGateways",
+        "ec2:DescribeTransitGatewayAttachments",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeAddresses",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ComputeContainersAndServerlessRead",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeLaunchTemplates",
+        "ec2:DescribeImages",
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeAutoScalingInstances",
+        "autoscaling:DescribePolicies",
+        "ecs:ListClusters",
+        "ecs:DescribeClusters",
+        "ecs:ListServices",
+        "ecs:DescribeServices",
+        "ecs:ListTasks",
+        "ecs:DescribeTasks",
+        "ecs:ListContainerInstances",
+        "ecs:DescribeContainerInstances",
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "lambda:ListFunctions",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetPolicy",
+        "lambda:ListEventSourceMappings",
+        "apigateway:GET",
+        "apigatewayv2:GetApis",
+        "apigatewayv2:GetStages",
+        "apigatewayv2:GetRoutes",
+        "apigatewayv2:GetIntegrations"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DatastoresAndStorageRead",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBSubnetGroups",
+        "rds:DescribeDBParameters",
+        "rds:DescribeDBClusterParameters",
+        "dynamodb:ListTables",
+        "dynamodb:DescribeTable",
+        "dynamodb:ListGlobalTables",
+        "elasticache:DescribeCacheClusters",
+        "elasticache:DescribeReplicationGroups",
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketEncryption",
+        "s3:GetBucketPolicyStatus",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketLogging",
+        "s3:GetBucketTagging",
+        "s3:GetBucketNotification",
+        "s3:ListBucket"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "MessagingAndIntegrationRead",
+      "Effect": "Allow",
+      "Action": [
+        "sns:ListTopics",
+        "sns:GetTopicAttributes",
+        "sqs:ListQueues",
+        "sqs:GetQueueAttributes",
+        "events:ListEventBuses",
+        "events:ListRules",
+        "events:DescribeRule",
+        "events:ListTargetsByRule",
+        "states:ListStateMachines",
+        "states:DescribeStateMachine",
+        "states:ListExecutions",
+        "states:DescribeExecution"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "MetricsAlarmsAndDashboardsRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:ListDashboards"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsListUnscoped",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsReadLimitedByName",
+      "Effect": "Allow",
+      "Action": [
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/aws/*",
+        "arn:aws:logs:*:*:log-group:/ecs/*",
+        "arn:aws:logs:*:*:log-group:/app/*",
+        "arn:aws:logs:*:*:log-group:/platform/*",
+        "arn:aws:logs:*:*:log-group:/prod/*"
+      ]
+    },
+    {
+      "Sid": "TracingAndServiceMapRead",
+      "Effect": "Allow",
+      "Action": [
+        "xray:GetServiceGraph",
+        "xray:GetTraceSummaries",
+        "xray:BatchGetTraces",
+        "xray:GetGroups",
+        "xray:GetGroup",
+        "xray:GetInsightSummaries",
+        "xray:GetInsight"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsHealthRead",
+      "Effect": "Allow",
+      "Action": [
+        "health:DescribeEvents",
+        "health:DescribeEventDetails",
+        "health:DescribeAffectedEntities"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ConfigInventoryReadOptional",
+      "Effect": "Allow",
+      "Action": [
+        "config:DescribeConfigRules",
+        "config:DescribeComplianceByConfigRule",
+        "config:GetResourceConfigHistory",
+        "config:ListDiscoveredResources"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFormationAndDeploymentContextRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:GetTemplate",
+        "cloudformation:ListStackResources",
+        "tag:GetResources",
+        "tag:GetTagKeys",
+        "tag:GetTagValues"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
