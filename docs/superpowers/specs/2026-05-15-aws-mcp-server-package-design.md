@@ -8,7 +8,7 @@ Parent spec: `docs/superpowers/specs/2026-05-15-aws-datasource-design.md` (Phase
 
 ## Goal
 
-Ship a native-TypeScript MCP server at `packages/mcp-server-aws/` that exposes 36 read-only AWS tools across 14 tool folders (covering ~18 AWS service families — the `messaging/` folder bundles SNS, SQS, EventBridge, and Step Functions for code organization). The server matches the existing 5-server pattern exactly (`createMcpApplication` bootstrap, Pino logging, OpenTelemetry tracing, stdio/http/agentcore transports). All AWS API calls go through `@aws-sdk/client-*` clients wrapped with the SDK's built-in `fromTemporaryCredentials` provider, which assumes the `DevOpsAgentReadOnly` role created in Phase 1.
+Ship a native-TypeScript MCP server at `packages/mcp-server-aws/` that exposes 39 read-only AWS tools across 14 tool folders (covering ~18 AWS service families — the `messaging/` folder bundles SNS, SQS, EventBridge, and Step Functions for code organization). The server matches the existing 5-server pattern exactly (`createMcpApplication` bootstrap, Pino logging, OpenTelemetry tracing, stdio/http/agentcore transports). All AWS API calls go through `@aws-sdk/client-*` clients wrapped with the SDK's built-in `fromTemporaryCredentials` provider, which assumes the `DevOpsAgentReadOnly` role created in Phase 1.
 
 ## Non-Goals (Phase 2 deliberately defers)
 
@@ -17,7 +17,7 @@ Ship a native-TypeScript MCP server at `packages/mcp-server-aws/` that exposes 3
 - **The aws-agent gitagent definition.** Phase 4.
 - **Correlation rules referencing `requiredAgent: "aws-agent"`.** Phase 5.
 - **LangSmith eval coverage for aws-agent findings.** Follow-up issue.
-- **Trimming the tool surface.** Phase 2 ships the full 36-tool coverage (per Q2 decision: "C, we can trim down later after testing exploration").
+- **Trimming the tool surface.** Phase 2 ships the full 39-tool coverage (per Q2 decision: "C, we can trim down later after testing exploration").
 
 ## Architecture
 
@@ -30,7 +30,7 @@ aws-agent (later — Phase 4)
   v
 mcp-server-aws (bun process locally, AgentCore container later)
   | createMcpApplication bootstrap (stdio | http | agentcore transport)
-  | ~36 tools, each: validate params -> SDK call -> wrap (truncate + error map) -> return
+  | ~39 tools, each: validate params -> SDK call -> wrap (truncate + error map) -> return
   v
 AWS SDK clients (lazy singletons, one per service — up to 18 distinct @aws-sdk/client-* packages)
   | each constructed with credentials: fromTemporaryCredentials({ RoleArn, ExternalId })
@@ -94,12 +94,12 @@ packages/mcp-server-aws/
     wrap.test.ts                 # truncation + error mapping (~12 tests)
     config.test.ts               # Zod schemas (~6 tests)
     client-factory.test.ts       # singleton behavior, credential provider wiring (~4 tests)
-    tools-smoke.test.ts          # each tool's param schema parses (~36 tests, one per tool)
+    tools-smoke.test.ts          # each tool's param schema parses (~39 tests minimum, one per tool)
     tools-integration.test.ts    # SDK-mocked end-to-end per service family (~15 tests)
     bootstrap.test.ts            # transport startup + /ping + /health (~4 tests)
 ```
 
-### Tool coverage (36 tools across 14 folders)
+### Tool coverage (39 tools across 14 folders)
 
 The 35 tools map directly onto the IAM policy verified in Phase 1. Each tool exposes one AWS SDK command:
 
@@ -297,7 +297,7 @@ LangSmith traces capture the structured `_error` automatically because the tool'
 | `wrap.test.ts` | 12 (truncation in both wrappers, error mapping for each `_error.kind`, valid-JSON walkback) |
 | `config.test.ts` | 6 (Zod schema accepts/rejects, defaults, idempotency) |
 | `client-factory.test.ts` | 4 (singleton behavior, credential-provider wiring, region override, 18 distinct clients) |
-| `tools-smoke.test.ts` | 36 (one per tool: paramsSchema parses valid + rejects invalid) |
+| `tools-smoke.test.ts` | 39 (one per tool: paramsSchema parses valid + rejects invalid) |
 
 ### Layer 2: Integration tests (SDK-mocked, ~15 tests)
 
@@ -325,7 +325,7 @@ bun run packages/mcp-server-aws/src/index.ts
 # Probe
 MCP_SERVER=aws BASE_URL=http://localhost:9085 ./scripts/agentcore/test-local.sh
 
-# tools/list — expect 36
+# tools/list — expect 39
 curl -sX POST http://localhost:9085/mcp \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
