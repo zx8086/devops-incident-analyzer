@@ -255,8 +255,8 @@ describe("s3 tool param schemas", () => {
 	test("listBuckets accepts empty input", () => {
 		expect(listBucketsSchema.safeParse({}).success).toBe(true);
 	});
-	test("listBuckets rejects unexpected field type (extra field string is ok, no strict)", () => {
-		expect(listBucketsSchema.safeParse({}).success).toBe(true);
+	test("listBuckets passes through unexpected fields (schema not strict)", () => {
+		expect(listBucketsSchema.safeParse({ unexpectedField: 123 }).success).toBe(true);
 	});
 	test("getBucketLocation accepts Bucket", () => {
 		expect(getBucketLocationSchema.safeParse({ Bucket: "my-bucket" }).success).toBe(true);

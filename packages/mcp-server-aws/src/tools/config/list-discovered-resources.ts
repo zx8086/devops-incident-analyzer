@@ -20,7 +20,7 @@ export function listDiscoveredResources(config: AwsConfig) {
 			const client = getConfigServiceClient(config);
 			return client.send(
 				new ListDiscoveredResourcesCommand({
-					resourceType: params.resourceType as unknown as ResourceType,
+					resourceType: params.resourceType as ResourceType,
 					nextToken: params.nextToken,
 				}),
 			);
