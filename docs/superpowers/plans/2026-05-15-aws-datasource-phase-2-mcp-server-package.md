@@ -16,6 +16,40 @@
 
 ---
 
+## Resume Instructions (cross-session handoff)
+
+This plan is designed to survive multiple sessions. A fresh session — including one with zero context from the planning phase — can pick up exactly where the previous one stopped.
+
+### How progress is tracked across sessions
+
+1. **Checkboxes.** Every step uses `- [ ]` / `- [x]` syntax. When a step is done, the implementer edits the plan to `- [x]` and commits the update alongside the code change. The plan file itself is the canonical progress tracker.
+2. **Commit history.** `git log --oneline origin/main..HEAD` always shows what's actually landed. Trust commits over checkboxes if they ever drift.
+3. **Linear sub-issue.** Once Task 0 lands, status moves there. Comments capture the PR URL.
+
+### To resume in a fresh session
+
+Read these in order:
+1. **This plan** (you're in it) — locate the highest-numbered `[x]` step; resume at the next `[ ]`.
+2. **`git log --oneline origin/main..HEAD`** — confirm the checkbox state matches reality.
+3. **The parent spec** at `docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md` — only if you need architectural context for a tricky task.
+
+The plan is self-contained: every task has exact file paths, complete code blocks, exact commands, and exact expected output. **No conversational context from the planning session is required.**
+
+### Critical session-state facts (not discoverable from the codebase alone)
+
+- **AWS test account is `356994971776`**, used as a stand-in for the production-design account `352896877281`. All IAM artifacts in this plan use `356994971776`. The Phase 1 `DevOpsAgentReadOnly` role exists in that account today.
+- **Dev IAM user is `arn:aws:iam::356994971776:user/7-zark-7`**. Layer 4 verification (Task 24) requires re-adding this user to the trust policy via the Phase-1 trust file (the file is `.gitignore`'d per Phase 1 design; recreate from Phase 1 Task 3 instructions if missing).
+- **Linear issue placeholder is `SIO-PHASE2-AWS`**. Real ID is assigned in Task 0; Task 25.4 rewrites commit history once the real ID is known. Do not push to remote before the rewrite unless you intend to leave the placeholder in the history.
+- **Phase 1 placeholder AgentCore role `aws-mcp-server-agentcore-role` exists** in the test account (created during Phase 1 verification — it has a Bedrock AgentCore service trust but no real permissions). The production trust policy references it. Phase 3 will overwrite its trust + attach real permissions; Phase 2 doesn't touch it.
+
+### One-line prompt for a fresh session
+
+Paste this into a new session to resume:
+
+> Continue Phase 2 implementation of the AWS datasource. Plan: `docs/superpowers/plans/2026-05-15-aws-datasource-phase-2-mcp-server-package.md`. Parent spec: `docs/superpowers/specs/2026-05-15-aws-mcp-server-package-design.md`. Branch: `claude/sio-aws-phase-2-mcp-server`. Use the plan's checkbox state and `git log --oneline origin/main..HEAD` to find the next `[ ]` task and continue. Use the `superpowers:subagent-driven-development` skill for execution. Honor the Resume Instructions block at the top of the plan.
+
+---
+
 ## File Structure (locked decisions from the spec)
 
 **New package:** `packages/mcp-server-aws/`
