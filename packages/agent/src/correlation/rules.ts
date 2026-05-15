@@ -44,6 +44,18 @@ function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]
 	return { toolErrors, prose };
 }
 
+// SIO-761 Phase 5: mirror of getKafkaResultSignals for aws-agent. The aws
+// sub-agent emits its findings as a prose string in result.data and structured
+// tool errors in result.toolErrors. Both are read by the new aws-* correlation
+// rules added in Phase 5.
+function getAwsResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
+	if (!result || result.status !== "success") return { toolErrors: [], prose: "" };
+	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
+	const prose = typeof result.data === "string" ? result.data : "";
+	return { toolErrors, prose };
+}
+
 // SIO-717: extract the upstream hostname from a Confluent Platform tool error
 // message. The Kafka MCP server (ksql-service.ts, connect-service.ts, etc.)
 // wraps upstream 5xx errors as "<Service> error <code>: <body>". Our env vars
