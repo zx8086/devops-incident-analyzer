@@ -763,7 +763,7 @@ This task is the highest-leverage piece of the package. Every tool depends on it
 - Create: `packages/mcp-server-aws/src/tools/wrap.ts`
 - Create: `packages/mcp-server-aws/src/__tests__/wrap.test.ts`
 
-- [ ] **Step 5.1: Create `packages/mcp-server-aws/src/tools/types.ts`**
+- [x] **Step 5.1: Create `packages/mcp-server-aws/src/tools/types.ts`**
 
 ```typescript
 // src/tools/types.ts
@@ -804,7 +804,7 @@ export type ToolResult<TResponse> =
 	| { _error: ToolError };
 ```
 
-- [ ] **Step 5.2: Write the failing tests for `wrap.ts`**
+- [x] **Step 5.2: Write the failing tests for `wrap.ts`**
 
 Create `packages/mcp-server-aws/src/__tests__/wrap.test.ts`:
 
@@ -955,7 +955,7 @@ describe("mapAwsError", () => {
 });
 ```
 
-- [ ] **Step 5.3: Run tests to confirm they fail**
+- [x] **Step 5.3: Run tests to confirm they fail**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/wrap.test.ts
@@ -963,7 +963,7 @@ bun test packages/mcp-server-aws/src/__tests__/wrap.test.ts
 
 Expected: 12 failures (module not found).
 
-- [ ] **Step 5.4: Create `packages/mcp-server-aws/src/tools/wrap.ts`**
+- [x] **Step 5.4: Create `packages/mcp-server-aws/src/tools/wrap.ts`**
 
 ```typescript
 // src/tools/wrap.ts
@@ -1170,7 +1170,7 @@ export function wrapBlobTool<TResponse, TParams>(
 }
 ```
 
-- [ ] **Step 5.5: Run tests to confirm they pass**
+- [x] **Step 5.5: Run tests to confirm they pass**
 
 ```bash
 bun test packages/mcp-server-aws/src/__tests__/wrap.test.ts
@@ -1178,7 +1178,7 @@ bun test packages/mcp-server-aws/src/__tests__/wrap.test.ts
 
 Expected: 12 passes.
 
-- [ ] **Step 5.6: Typecheck**
+- [x] **Step 5.6: Typecheck**
 
 ```bash
 bun run --filter '@devops-agent/mcp-server-aws' typecheck
@@ -1186,7 +1186,7 @@ bun run --filter '@devops-agent/mcp-server-aws' typecheck
 
 Expected: exit 0.
 
-- [ ] **Step 5.7: Commit**
+- [x] **Step 5.7: Commit**
 
 ```bash
 git add packages/mcp-server-aws/src/tools/types.ts packages/mcp-server-aws/src/tools/wrap.ts packages/mcp-server-aws/src/__tests__/wrap.test.ts
