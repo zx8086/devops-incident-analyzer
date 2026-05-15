@@ -21,7 +21,7 @@ describe("wrapListTool", () => {
 			fn: async () => ({ items: Array.from({ length: 100 }, (_, i) => ({ id: i, payload: "x".repeat(100) })) }),
 			capBytes: 2000,
 		});
-		const result = await wrapped({}) as { items: unknown[]; _truncated: { shown: number; total: number } };
+		const result = (await wrapped({})) as { items: unknown[]; _truncated: { shown: number; total: number } };
 		expect(result.items.length).toBeLessThan(100);
 		expect(result._truncated.total).toBe(100);
 		expect(result._truncated.shown).toBe(result.items.length);
@@ -35,7 +35,7 @@ describe("wrapListTool", () => {
 			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i })), nextToken: "abc", count: 50 }),
 			capBytes: 200,
 		});
-		const result = await wrapped({}) as { nextToken: string; count: number };
+		const result = (await wrapped({})) as { nextToken: string; count: number };
 		expect(result.nextToken).toBe("abc");
 		expect(result.count).toBe(50);
 	});
@@ -48,9 +48,11 @@ describe("wrapListTool", () => {
 		const wrapped = wrapListTool({
 			name: "test",
 			listField: "items",
-			fn: async () => { throw err; },
+			fn: async () => {
+				throw err;
+			},
 		});
-		const result = await wrapped({}) as { _error: { kind: string; action?: string } };
+		const result = (await wrapped({})) as { _error: { kind: string; action?: string } };
 		expect(result._error.kind).toBe("iam-permission-missing");
 		expect(result._error.action).toBe("rds:DescribeDBInstances");
 	});
@@ -73,7 +75,7 @@ describe("wrapBlobTool", () => {
 			fn: async () => ({ data: Array.from({ length: 1000 }, (_, i) => ({ id: i, payload: "y".repeat(50) })) }),
 			capBytes: 500,
 		});
-		const result = await wrapped({}) as { _raw: string; _truncated: { atBytes: number; advice: string } };
+		const result = (await wrapped({})) as { _raw: string; _truncated: { atBytes: number; advice: string } };
 		expect(result._raw).toBeDefined();
 		expect(result._truncated.atBytes).toBeLessThanOrEqual(500);
 		expect(result._truncated.advice).toBeDefined();
@@ -87,8 +89,13 @@ describe("wrapBlobTool", () => {
 			name: "ThrottlingException",
 			$metadata: { httpStatusCode: 400 },
 		});
-		const wrapped = wrapBlobTool({ name: "test", fn: async () => { throw err; } });
-		const result = await wrapped({}) as { _error: { kind: string } };
+		const wrapped = wrapBlobTool({
+			name: "test",
+			fn: async () => {
+				throw err;
+			},
+		});
+		const result = (await wrapped({})) as { _error: { kind: string } };
 		expect(result._error.kind).toBe("aws-throttled");
 	});
 });
@@ -97,6 +104,15 @@ describe("mapAwsError", () => {
 	test("STS AccessDenied -> assume-role-denied", () => {
 		const err = Object.assign(new Error("Not authorized to perform: sts:AssumeRole"), {
 			name: "AccessDenied",
+			$metadata: { httpStatusCode: 403 },
+		});
+		const mapped = mapAwsError(err);
+		expect(mapped.kind).toBe("assume-role-denied");
+	});
+
+	test("AccessDeniedException with sts:AssumeRole action -> assume-role-denied", () => {
+		const err = Object.assign(new Error("User is not authorized to perform: sts:AssumeRole"), {
+			name: "AccessDeniedException",
 			$metadata: { httpStatusCode: 403 },
 		});
 		const mapped = mapAwsError(err);

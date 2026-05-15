@@ -11,8 +11,8 @@ export type ToolErrorKind =
 
 export interface ToolError {
 	kind: ToolErrorKind;
-	action?: string;          // e.g. "ec2:DescribeVpcs" — populated for iam-permission-missing
-	awsErrorName?: string;    // raw SDK error.name
+	action?: string; // e.g. "ec2:DescribeVpcs" — populated for iam-permission-missing
+	awsErrorName?: string; // raw SDK error.name
 	awsErrorMessage?: string; // raw SDK error.message
 	awsRequestId?: string;
 	httpStatusCode?: number;

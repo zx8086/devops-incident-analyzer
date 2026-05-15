@@ -74,11 +74,14 @@ export function mapAwsError(err: unknown): ToolError {
 	}
 
 	const toolError: ToolError = { ...base, kind };
-	if (action) toolError.action = action;
-	if (kind === "iam-permission-missing") {
+	if (action) {
+		toolError.action = action;
+	}
+	if (kind === "iam-permission-missing" && action) {
 		toolError.advice = `Update DevOpsAgentReadOnlyPolicy to include "${action}", then re-run setup-aws-readonly-role.sh.`;
 	} else if (kind === "assume-role-denied") {
-		toolError.advice = "Check the DevOpsAgentReadOnly trust policy. Verify ExternalId and that the caller principal is allowed.";
+		toolError.advice =
+			"Check the DevOpsAgentReadOnly trust policy. Verify ExternalId and that the caller principal is allowed.";
 	} else if (kind === "aws-throttled") {
 		toolError.advice = "AWS throttled the call (SDK already retried 3 times). Narrow scope or wait before retrying.";
 	}
@@ -86,7 +89,7 @@ export function mapAwsError(err: unknown): ToolError {
 	return toolError;
 }
 
-function logError(name: string, err: unknown, mapped: ToolError, durationMs: number): void {
+function logError(name: string, _err: unknown, mapped: ToolError, durationMs: number): void {
 	logger.error(
 		{
 			tool: name,
@@ -126,7 +129,7 @@ export function wrapListTool<TResponse, TParams>(
 			return { _error: mapped };
 		}
 
-		const list = (response[args.listField] as unknown) as unknown[] | undefined;
+		const list = response[args.listField] as unknown as unknown[] | undefined;
 		if (!Array.isArray(list)) return response;
 
 		// Serialize the whole response once to check size.
