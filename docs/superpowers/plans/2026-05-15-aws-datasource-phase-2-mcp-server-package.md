@@ -2317,13 +2317,13 @@ git commit -m "SIO-PHASE2-AWS: record Phase 2 Layer 4 verification in spec"
 
 **Files:** none modified — git + GitHub + Linear only.
 
-- [ ] **Step 25.1: Push the branch**
+- [x] **Step 25.1: Push the branch**
 
 ```bash
 git push -u origin HEAD
 ```
 
-- [ ] **Step 25.2: Open a draft PR**
+- [x] **Step 25.2: Open a draft PR**
 
 ```bash
 gh pr create --draft \
@@ -2361,11 +2361,11 @@ EOF
 )"
 ```
 
-- [ ] **Step 25.3: Update the Linear sub-issue**
+- [x] **Step 25.3: Update the Linear sub-issue**
 
 Move the sub-issue from `Todo` → `In Review`. Add a comment with the PR URL.
 
-- [ ] **Step 25.4: Rewrite the SIO-PHASE2-AWS placeholder in commit messages**
+- [x] **Step 25.4: Rewrite the SIO-PHASE2-AWS placeholder in commit messages** (N/A — Task 0 locked in SIO-758 before any commits; no placeholders existed)
 
 Once the real Linear ID is known (from Task 0), rewrite local history before pushing:
 
