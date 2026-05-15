@@ -123,7 +123,9 @@ if [ "${MCP_SERVER}" = "kafka" ] \
 fi
 
 echo "================================================================"
-echo "  ${MCP_SERVER^} MCP Server -> AgentCore Runtime Deployment"
+# Portable uppercase-first-char for bash 3.2 (macOS) compatibility.
+MCP_SERVER_TITLE="$(printf '%s' "${MCP_SERVER:0:1}" | tr '[:lower:]' '[:upper:]')${MCP_SERVER:1}"
+echo "  ${MCP_SERVER_TITLE} MCP Server -> AgentCore Runtime Deployment"
 echo "================================================================"
 echo "  Region:       ${AWS_REGION}"
 echo "  Account:      ${ACCOUNT_ID}"
