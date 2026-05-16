@@ -59,6 +59,17 @@ export function registerReadTools(server: McpServer, service: KafkaService, conf
 		}),
 	);
 
+	// SIO-770: feeds kafkaFindings.dlqTopics[] for the kafka-dlq-growth correlation rule.
+	server.tool(
+		"kafka_list_dlq_topics",
+		prompts.LIST_DLQ_TOPICS_DESCRIPTION,
+		params.ListDlqTopicsParams.shape,
+		wrapHandler("kafka_list_dlq_topics", config, async (args) => {
+			const result = await ops.listDlqTopics(service, args);
+			return ResponseBuilder.success(result);
+		}),
+	);
+
 	server.tool(
 		"kafka_describe_consumer_group",
 		prompts.DESCRIBE_CONSUMER_GROUP_DESCRIPTION,
