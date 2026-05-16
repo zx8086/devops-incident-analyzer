@@ -54,6 +54,8 @@ The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkCon
 | capella-agent | :9082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | konnect-agent | :9083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
 | gitlab-agent | :9084 | Token + instance: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
+| atlassian-agent | :9085 | OAuth 2.1 (Rovo): `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_SITE_NAME`; proxies Atlassian Cloud |
+| aws-agent | :3001 (SigV4 proxy) | AgentCore runtime: `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_PROXY_PORT`; agent reads `AWS_MCP_URL` |
 
 Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. Sub-agents use action-driven tool selection (declared in tool YAML files) to filter 210+ MCP tools down to 5-25 per invocation, preventing context overflow.
 
@@ -142,7 +144,7 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating names, obvious `@re
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket references (`SIO-XXX`), non-obvious algorithm explanations.
 
 ### Servers
-- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | AWS MCP: 9085 | Web: 5173
+- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Atlassian MCP: 9085 | AWS MCP (SigV4 proxy): 3001 | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
 - Kill background processes after testing
 
