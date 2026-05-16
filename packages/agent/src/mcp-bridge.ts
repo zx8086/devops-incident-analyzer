@@ -69,7 +69,21 @@ let serverUrls: Map<string, string> = new Map();
 let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
 const HEALTH_POLL_INTERVAL_MS = 30_000;
-const MCP_CONNECT_TIMEOUT_MS = 10_000;
+
+// SIO-774: AgentCore-backed servers cold-start through a SigV4 proxy whose
+// JSON-RPC retry ladder runs to ~30s (see agentcore-proxy.ts JSONRPC_RETRY_DEADLINE_MS).
+// Bridge connect timeout must exceed that so the proxy's retry succeeds before
+// the bridge bails. Non-AgentCore servers have no cold-start cost and stay on 10s.
+const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 10_000;
+const AGENTCORE_MCP_CONNECT_TIMEOUT_MS = 35_000;
+const PER_SERVER_CONNECT_TIMEOUTS: Record<string, number> = {
+	"kafka-mcp": AGENTCORE_MCP_CONNECT_TIMEOUT_MS,
+	"aws-mcp": AGENTCORE_MCP_CONNECT_TIMEOUT_MS,
+};
+
+function connectTimeoutFor(serverName: string): number {
+	return PER_SERVER_CONNECT_TIMEOUTS[serverName] ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
+}
 
 // SIO-680/682: Generic timeout wrapper. Races the input promise against
 // AbortSignal.timeout(ms); rejects with a descriptive error if the promise
@@ -162,7 +176,7 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 					} as never,
 				},
 			});
-			const tools = await withTimeout(client.getTools(), MCP_CONNECT_TIMEOUT_MS, `MCP connect to '${name}' (${url})`);
+			const tools = await withTimeout(client.getTools(), connectTimeoutFor(name), `MCP connect to '${name}' (${url})`);
 			return { name, tools };
 		}),
 	);
@@ -260,7 +274,7 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		});
 		const tools = await withTimeout(
 			client.getTools(),
-			MCP_CONNECT_TIMEOUT_MS,
+			connectTimeoutFor(name),
 			`MCP reconnect to '${name}' (${mcpUrl})`,
 		);
 
@@ -341,4 +355,5 @@ export function stopHealthPolling(): void {
 }
 
 // SIO-680/682: exported for testing only. Do not import from production code.
-export { withTimeout as _withTimeoutForTest };
+// SIO-774: same test-only export pattern for the per-server connect-timeout helper.
+export { connectTimeoutFor as _connectTimeoutForTest, withTimeout as _withTimeoutForTest };
