@@ -14,6 +14,8 @@ export {
 	ExtractedEntitiesSchema,
 	type InvestigationFocus,
 	InvestigationFocusSchema,
+	type KafkaFindings,
+	KafkaFindingsSchema,
 	type MitigationSteps,
 	MitigationStepsSchema,
 	type NormalizedIncident,
