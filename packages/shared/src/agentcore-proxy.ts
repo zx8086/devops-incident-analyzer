@@ -69,6 +69,104 @@ function readProxyConfig() {
 	return { runtimeArn, region, port, qualifier, serverName, basePath, baseUrl, queryString, fullUrl };
 }
 
+export interface ProxyCredentials {
+	accessKeyId: string;
+	secretAccessKey: string;
+	sessionToken?: string;
+}
+
+/**
+ * Configuration for one running SigV4 proxy instance. Passed explicitly to
+ * startAgentCoreProxy(); no process.env reads inside the proxy.
+ */
+export interface ProxyConfig {
+	runtimeArn: string;
+	region: string;
+	port: number;
+	qualifier: string;
+	serverName: string;
+	/**
+	 * Either a static credentials object (for env-var creds) or an async
+	 * function (for AWS-CLI profile fallback, which may need to re-shell when
+	 * session-tokens expire).
+	 */
+	credentials: ProxyCredentials | (() => Promise<ProxyCredentials>);
+}
+
+/**
+ * Build a ProxyConfig from per-server-prefixed env vars. Reads ONLY the
+ * <prefix>_AGENTCORE_* namespace; never falls back to a generic AGENTCORE_*
+ * var. Throws if required vars are missing.
+ *
+ * Required env vars per prefix:
+ *   - <PREFIX>_AGENTCORE_RUNTIME_ARN
+ *   - <PREFIX>_AGENTCORE_REGION
+ *   - <PREFIX>_AGENTCORE_PROXY_PORT
+ *
+ * Optional env vars:
+ *   - <PREFIX>_AGENTCORE_QUALIFIER (default "DEFAULT")
+ *   - <PREFIX>_AGENTCORE_SERVER_NAME (default "mcp-server")
+ *   - <PREFIX>_AGENTCORE_AWS_ACCESS_KEY_ID + _SECRET_ACCESS_KEY (+ _SESSION_TOKEN)
+ *   - <PREFIX>_AGENTCORE_AWS_PROFILE (AWS CLI profile for lazy fallback)
+ */
+export function loadProxyConfigFromEnv(prefix: string): ProxyConfig {
+	const runtimeArn = process.env[`${prefix}_AGENTCORE_RUNTIME_ARN`];
+	if (!runtimeArn) {
+		throw new Error(`${prefix}_AGENTCORE_RUNTIME_ARN is required`);
+	}
+	const region = process.env[`${prefix}_AGENTCORE_REGION`];
+	if (!region) {
+		throw new Error(`${prefix}_AGENTCORE_REGION is required`);
+	}
+	const portRaw = process.env[`${prefix}_AGENTCORE_PROXY_PORT`];
+	if (!portRaw) {
+		throw new Error(`${prefix}_AGENTCORE_PROXY_PORT is required`);
+	}
+	const port = Number.parseInt(portRaw, 10);
+	if (!Number.isFinite(port) || port < 1 || port > 65535) {
+		throw new Error(`${prefix}_AGENTCORE_PROXY_PORT must be an integer in 1..65535, got: ${portRaw}`);
+	}
+	const qualifier = process.env[`${prefix}_AGENTCORE_QUALIFIER`] ?? "DEFAULT";
+	const serverName = process.env[`${prefix}_AGENTCORE_SERVER_NAME`] ?? "mcp-server";
+
+	const accessKeyId = process.env[`${prefix}_AGENTCORE_AWS_ACCESS_KEY_ID`];
+	const secretAccessKey = process.env[`${prefix}_AGENTCORE_AWS_SECRET_ACCESS_KEY`];
+	const sessionToken = process.env[`${prefix}_AGENTCORE_AWS_SESSION_TOKEN`];
+	const awsProfile = process.env[`${prefix}_AGENTCORE_AWS_PROFILE`];
+
+	let credentials: ProxyConfig["credentials"];
+	if (accessKeyId && secretAccessKey) {
+		credentials = { accessKeyId, secretAccessKey, sessionToken };
+	} else {
+		// Lazy AWS-CLI fallback. The function shells out on each call; the
+		// proxy caches the result per-handle (see startAgentCoreProxy below).
+		credentials = async () => {
+			const args = ["configure", "export-credentials", "--format", "env-no-export"];
+			if (awsProfile) args.push("--profile", awsProfile);
+			const proc = Bun.spawn(["aws", ...args], { stdout: "pipe", stderr: "pipe" });
+			const output = await new Response(proc.stdout).text();
+			await proc.exited;
+
+			const vars: Record<string, string> = {};
+			for (const line of output.split("\n")) {
+				const eq = line.indexOf("=");
+				if (eq > 0) vars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+			}
+			if (!vars.AWS_ACCESS_KEY_ID || !vars.AWS_SECRET_ACCESS_KEY) {
+				const profileNote = awsProfile ? ` (profile: ${awsProfile})` : "";
+				throw new Error(`No AWS credentials from 'aws configure export-credentials'${profileNote}`);
+			}
+			return {
+				accessKeyId: vars.AWS_ACCESS_KEY_ID,
+				secretAccessKey: vars.AWS_SECRET_ACCESS_KEY,
+				sessionToken: vars.AWS_SESSION_TOKEN,
+			};
+		};
+	}
+
+	return { runtimeArn, region, port, qualifier, serverName, credentials };
+}
+
 interface AwsCreds {
 	accessKeyId: string;
 	secretAccessKey: string;
