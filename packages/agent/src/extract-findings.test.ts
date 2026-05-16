@@ -84,4 +84,26 @@ describe("extractFindings node", () => {
 		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
 		expect(kafka?.data).toBe("prose summary");
 	});
+
+	test("end-to-end: a kafka_list_consumer_groups toolOutput parsed from a JSON string flows through", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					data: "summary",
+					status: "success",
+					duration: 100,
+					toolOutputs: [
+						{
+							toolName: "kafka_list_consumer_groups",
+							rawJson: { groups: [{ id: "payments-service", state: "Stable" }] },
+						},
+					],
+				},
+			],
+		};
+		const out = await extractFindings(state);
+		expect(out.dataSourceResults?.[0]?.kafkaFindings?.consumerGroups?.[0]?.id).toBe("payments-service");
+	});
 });
