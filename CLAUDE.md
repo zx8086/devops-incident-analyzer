@@ -8,7 +8,7 @@ Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestr
 
 ## Current State
 
-Fully implemented monorepo with 10 packages, 5 MCP servers, a 13-node LangGraph pipeline (SIO-681 added `correlationFetch` + `enforceCorrelationsAggregate` between aggregate and checkConfidence), gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo with 10 packages, 5 MCP servers, a 14-node LangGraph pipeline (SIO-681 added `correlationFetch` + `enforceCorrelationsAggregate` between aggregate and checkConfidence; SIO-764 added `extractFindings` after aggregate), gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
@@ -20,7 +20,7 @@ agents/                    Gitagent YAML/Markdown definitions
     agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/, gitlab-agent/
 packages/
   gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
-  agent/                   LangGraph supervisor + 13-node pipeline (incl. SIO-681 correlation enforcement)
+  agent/                   LangGraph supervisor + 14-node pipeline (incl. SIO-681 correlation enforcement, SIO-764 findings extraction)
   mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 69 tools)
   mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
   mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
@@ -33,17 +33,17 @@ apps/
   web/                     SvelteKit frontend (Svelte 5 runes, Tailwind, SSE streaming)
 ```
 
-### Agent Pipeline (13-node LangGraph StateGraph)
+### Agent Pipeline (14-node LangGraph StateGraph)
 
 ```
 START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
   -> [selectRunbooks] -> entityExtractor -> fan-out [elastic, kafka, capella, konnect, gitlab]
-  -> align -> aggregate -> {enforceCorrelationsRouter}
+  -> align -> aggregate -> extractFindings -> {enforceCorrelationsRouter}
   -> [correlationFetch ->] enforceCorrelationsAggregate
   -> checkConfidence -> validate -> proposeMitigation -> followUp -> END
 ```
 
-The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list.
+The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list. SIO-764 added the `extractFindings` node immediately after `aggregate`; it reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (`kafkaFindings`) onto the `DataSourceResult` for the rule engine to consume.
 
 ### Sub-Agents (named by MCP server)
 

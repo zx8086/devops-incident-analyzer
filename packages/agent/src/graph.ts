@@ -14,6 +14,7 @@ import {
 	enforceCorrelationsRouter,
 } from "./correlation/enforce-node.ts";
 import { extractEntities } from "./entity-extractor.ts";
+import { extractFindings } from "./extract-findings.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";
 import { aggregateMitigation } from "./mitigation.ts";
@@ -83,6 +84,7 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("queryDataSource", traceNode("queryDataSource", queryDataSource))
 		.addNode("align", traceNode("align", checkAlignment))
 		.addNode("aggregate", traceNode("aggregate", aggregate))
+		.addNode("extractFindings", traceNode("extractFindings", extractFindings))
 		.addNode("correlationFetch", traceNode("correlationFetch", correlationFetch))
 		.addNode("enforceCorrelationsAggregate", traceNode("enforceCorrelationsAggregate", enforceCorrelationsAggregate))
 		.addNode("checkConfidence", traceNode("checkConfidence", checkConfidence))
@@ -127,9 +129,15 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// Alignment -> Send[] retries or aggregate
 		.addConditionalEdges("align", routeAfterAlignment, ["queryDataSource", "aggregate"])
 
-		// SIO-681: Aggregate -> enforceCorrelations router (re-fan-out via correlationFetch when rules fire,
-		// otherwise straight to enforceCorrelationsAggregate which is a no-op pass-through)
-		.addConditionalEdges("aggregate", enforceCorrelationsRouter, ["correlationFetch", "enforceCorrelationsAggregate"])
+		// SIO-681 + SIO-764: Aggregate -> extractFindings -> enforceCorrelations router. extractFindings
+		// derives typed per-domain findings from each sub-agent's toolOutputs[] so the router can read
+		// them. Then re-fan-out via correlationFetch when rules fire, otherwise straight to
+		// enforceCorrelationsAggregate which is a no-op pass-through.
+		.addEdge("aggregate", "extractFindings")
+		.addConditionalEdges("extractFindings", enforceCorrelationsRouter, [
+			"correlationFetch",
+			"enforceCorrelationsAggregate",
+		])
 		.addEdge("correlationFetch", "enforceCorrelationsAggregate")
 		.addEdge("enforceCorrelationsAggregate", "checkConfidence")
 		.addEdge("checkConfidence", "validate")

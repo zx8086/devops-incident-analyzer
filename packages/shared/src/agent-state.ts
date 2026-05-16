@@ -27,6 +27,32 @@ export const ToolErrorSchema = z.object({
 });
 export type ToolError = z.infer<typeof ToolErrorSchema>;
 
+// SIO-764: Per-domain structured findings derived from toolOutputs[] by the
+// extractFindings graph node. Optional; absence = no extraction ran or
+// extractor soft-failed. Each agent gets its own *Findings field; rules
+// read the typed sibling instead of casting result.data through unknown.
+export const KafkaFindingsSchema = z.object({
+	consumerGroups: z
+		.array(
+			z.object({
+				id: z.string(),
+				state: z.string().optional(),
+				totalLag: z.number().optional(),
+			}),
+		)
+		.optional(),
+	dlqTopics: z
+		.array(
+			z.object({
+				name: z.string(),
+				totalMessages: z.number(),
+				recentDelta: z.number().nullable(),
+			}),
+		)
+		.optional(),
+});
+export type KafkaFindings = z.infer<typeof KafkaFindingsSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	// SIO-649: Populated when the elastic sub-agent fans out across deployments.
@@ -38,6 +64,8 @@ export const DataSourceResultSchema = z.object({
 	isAlignmentRetry: z.boolean().optional(),
 	error: z.string().optional(),
 	toolErrors: z.array(ToolErrorSchema).optional(),
+	// SIO-764: structured findings derived from toolOutputs[] in extractFindings node.
+	kafkaFindings: KafkaFindingsSchema.optional(),
 	// SIO-707: total LangGraph messages produced by the sub-agent run. Used by the aggregator
 	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
 	// the run completed but had a high per-iteration failure ratio.

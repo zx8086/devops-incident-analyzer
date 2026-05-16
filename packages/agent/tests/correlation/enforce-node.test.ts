@@ -8,7 +8,7 @@ import {
 	enforceCorrelationsRouter,
 } from "../../src/correlation/enforce-node";
 import type { AgentStateType, PendingCorrelation } from "../../src/state";
-import { baseState, withElasticResult, withKafkaResult } from "./test-helpers";
+import { baseState, withElasticResult, withKafkaFindings } from "./test-helpers";
 
 // ---------------------------------------------------------------------------
 // Router tests
@@ -16,7 +16,8 @@ import { baseState, withElasticResult, withKafkaResult } from "./test-helpers";
 
 describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
 	test("returns Send[] when kafka has an Empty group", () => {
-		const state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
 				{ id: "notification-service", state: "Empty" },
 				{ id: "payments-service", state: "Stable", totalLag: 0 },
@@ -32,7 +33,8 @@ describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
 
 describe("enforceCorrelationsRouter — returns string when no rules fire", () => {
 	test("returns 'enforceCorrelationsAggregate' when all groups are Stable with zero lag", () => {
-		const state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 0 }],
 		});
 		const result = enforceCorrelationsRouter(state);
@@ -44,7 +46,8 @@ describe("enforceCorrelationsRouter — dedups by agent", () => {
 	test("collapses multiple rules targeting the same agent into one Send", () => {
 		// kafka-empty-or-dead-groups and kafka-significant-lag both target elastic-agent
 		// Trigger both by having an Empty group AND a Stable group with high lag
-		const state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
 				{ id: "notification-service", state: "Empty" },
 				{ id: "payments-service", state: "Stable", totalLag: 50_000 },
@@ -83,7 +86,8 @@ describe("enforceCorrelationsAggregate — pending rule satisfied by elastic fin
 			},
 		];
 		// Kafka shows Empty group; elastic has findings for the same service
-		let state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		let state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "notification-service", state: "Empty" }],
 		});
 		state = withElasticResult(state, {
@@ -110,8 +114,9 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 			},
 		];
 		// Kafka shows Empty group but NO elastic results
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = {
-			...withKafkaResult(baseState(), {
+			...withKafkaFindings(baseState(), {
 				consumerGroups: [{ id: "notification-service", state: "Empty" }],
 			}),
 			confidenceScore: 0.85,
@@ -136,8 +141,9 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 				timeoutMs: 30_000,
 			},
 		];
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = {
-			...withKafkaResult(baseState(), {
+			...withKafkaFindings(baseState(), {
 				consumerGroups: [{ id: "notification-service", state: "Empty" }],
 			}),
 			confidenceScore: 0.4,
@@ -288,6 +294,7 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 	});
 
 	test("does NOT prepend banner when only non-skipCoverageCheck rules degrade", async () => {
+		// SIO-764: kafkaFindings is the typed sibling read by getKafkaData; data stays as prose.
 		const state = {
 			...baseState(),
 			finalAnswer: "# Report\n\nConfidence: 0.8",
@@ -305,7 +312,8 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 				{
 					dataSourceId: "kafka",
 					status: "success" as const,
-					data: { consumerGroups: [{ id: "group-x", state: "Stable", totalLag: 50000 }] },
+					data: "kafka prose summary",
+					kafkaFindings: { consumerGroups: [{ id: "group-x", state: "Stable", totalLag: 50000 }] },
 					duration: 100,
 				},
 			],

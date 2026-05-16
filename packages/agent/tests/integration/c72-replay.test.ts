@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { Send } from "@langchain/langgraph";
 import { enforceCorrelationsAggregate, enforceCorrelationsRouter } from "../../src/correlation/enforce-node";
 import type { PendingCorrelation } from "../../src/state";
-import { baseState, withElasticResult, withKafkaResult } from "../correlation/test-helpers";
+import { baseState, withElasticResult, withKafkaFindings } from "../correlation/test-helpers";
 
 const KAFKA_EMPTY_GROUP_PENDING: PendingCorrelation = {
 	ruleName: "kafka-empty-or-dead-groups",
@@ -24,7 +24,8 @@ describe("c72-style replay — elastic-agent unreachable", () => {
 	test("produces degradedRules entry, caps confidence, no 'Elasticsearch not queried' string", async () => {
 		// Construct state as it would exist after correlationFetch returned an error result:
 		// kafka shows Empty group for notification-service, elastic errored (ECONNREFUSED).
-		let state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		let state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "notification-service", state: "Empty", totalLag: 0 }],
 		});
 		state = {
@@ -73,7 +74,8 @@ describe("c72-style replay — elastic-agent reachable, findings cover triggered
 	test("clears pendingCorrelations, no confidence cap, no degradedRules", async () => {
 		// Construct state as it would exist after a successful correlationFetch:
 		// kafka shows Empty group, elastic returned matching service findings.
-		let state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		let state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "notification-service", state: "Empty", totalLag: 0 }],
 		});
 		state = withElasticResult(state, {
@@ -102,7 +104,8 @@ describe("c72-style replay — elastic-agent reachable, findings cover triggered
 
 describe("c72-style replay — all-Stable kafka, no rules fire", () => {
 	test("router returns 'enforceCorrelationsAggregate' string (no Send dispatched)", () => {
-		const state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "stable-svc", state: "Stable", totalLag: 100 }],
 		});
 
@@ -115,7 +118,8 @@ describe("c72-style replay — all-Stable kafka, no rules fire", () => {
 
 	test("router returns Send[] when a rule fires (confirms the stable test is testing the right path)", () => {
 		// Contrast: same shape but with an Empty group triggers a Send
-		const state = withKafkaResult(baseState(), {
+		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "notification-service", state: "Empty" }],
 		});
 

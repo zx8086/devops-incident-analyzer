@@ -136,6 +136,17 @@ function pickStructuredFields(raw: unknown): {
 	return out;
 }
 
+// SIO-764: tool message contents are sometimes JSON strings (kafka MCP responses),
+// sometimes plain text (upstream nginx 503 pages). Parse when possible; keep raw
+// otherwise. The extractFindings node handles either case.
+function tryParseJson(s: string): unknown {
+	try {
+		return JSON.parse(s);
+	} catch {
+		return s;
+	}
+}
+
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
 // when the MCP server emitted them. Redaction runs on the human part only -- hostnames in the
@@ -409,12 +420,17 @@ async function runSubAgent(
 			"Sub-agent completed",
 		);
 
+		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => ({
+			toolName: m.name ?? "unknown",
+			rawJson: tryParseJson(String(m.content)),
+		}));
+
 		return {
 			dataSourceId,
 			data: lastResponse ? String(lastResponse.content) : "No response from sub-agent",
 			status: allToolsFailed ? "error" : "success",
 			duration,
-			toolOutputs: [],
+			toolOutputs,
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
 			...(deploymentId && { deploymentId }),
