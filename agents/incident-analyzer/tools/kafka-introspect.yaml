@@ -79,6 +79,7 @@ tool_mapping:
     dlq_messages:
       - kafka_consume_messages
       - kafka_get_message_by_offset
+      - kafka_list_dlq_topics
     cluster_info:
       - kafka_get_cluster_info
       - kafka_describe_cluster

@@ -50,12 +50,13 @@ describe("tool description tag prefixes (SIO-730)", () => {
 
 	test("expected total description count (canary against silent additions/removals)", () => {
 		// SIO-742: +5 health-check descriptions
-		// 60 = 7 (read) + 3 (read-extended) + 3 (write) + 2 (destructive)
+		// SIO-770: +1 read description (LIST_DLQ_TOPICS_DESCRIPTION) -> read = 8
+		// 61 = 8 (read) + 3 (read-extended) + 3 (write) + 2 (destructive)
 		//    + 16 (schema: 8 kafka_* + 7 sr_* + 1 schema_registry_health_check)
 		//    + 9 (ksql: 7 + ksql_health_check + ksql_cluster_status)
 		//    + 10 (connect: 9 + connect_health_check)
 		//    + 10 (restproxy: 9 + restproxy_health_check)
 		// Bump this count when adding a new tool description; do not bypass.
-		expect(collectDescriptions().length).toBe(60);
+		expect(collectDescriptions().length).toBe(61);
 	});
 });

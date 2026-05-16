@@ -79,4 +79,34 @@ describe("extractKafkaFindings", () => {
 		];
 		expect(extractKafkaFindings(outputs)).toEqual({});
 	});
+
+	// SIO-770: kafka_list_dlq_topics returns a bare DlqTopic[] (not wrapped in {topics:[...]}),
+	// matching KafkaService.listDlqTopics + ResponseBuilder.success(JSON.stringify).
+	test("maps kafka_list_dlq_topics bare array response to dlqTopics[]", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "kafka_list_dlq_topics",
+				rawJson: [
+					{ name: "orders-dlq", totalMessages: 1247, recentDelta: 12 },
+					{ name: "shipments.DLQ", totalMessages: 88, recentDelta: 0 },
+				],
+			},
+		];
+		const findings = extractKafkaFindings(outputs);
+		expect(findings.dlqTopics).toEqual([
+			{ name: "orders-dlq", totalMessages: 1247, recentDelta: 12 },
+			{ name: "shipments.DLQ", totalMessages: 88, recentDelta: 0 },
+		]);
+	});
+
+	test("preserves recentDelta:null when the second sample was unavailable", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "kafka_list_dlq_topics",
+				rawJson: [{ name: "orders-dlq", totalMessages: 1247, recentDelta: null }],
+			},
+		];
+		const findings = extractKafkaFindings(outputs);
+		expect(findings.dlqTopics?.[0]?.recentDelta).toBeNull();
+	});
 });

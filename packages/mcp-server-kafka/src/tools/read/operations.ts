@@ -45,6 +45,10 @@ export async function listConsumerGroups(service: KafkaService, params: { filter
 	return service.listConsumerGroups(params.filter, params.states);
 }
 
+export async function listDlqTopics(service: KafkaService, params: { windowMs?: number; skipDelta?: boolean }) {
+	return service.listDlqTopics({ windowMs: params.windowMs, skipDelta: params.skipDelta });
+}
+
 export async function describeConsumerGroup(service: KafkaService, params: { groupId: string }) {
 	return service.describeConsumerGroup(params.groupId);
 }

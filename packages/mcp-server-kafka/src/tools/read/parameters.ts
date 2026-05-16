@@ -52,6 +52,27 @@ export const ListConsumerGroupsParams = z.object({
 	states: z.array(z.string()).optional().describe("Filter by consumer group states (e.g., STABLE, EMPTY)"),
 });
 
+// SIO-770: args mirror the service's ListDlqTopicsOptions (kafka-service.ts:140)
+// rather than renaming, so the MCP tool contract stays aligned with the underlying
+// API. DLQ topic detection itself is hardcoded to DLQ_PATTERNS in the service.
+export const ListDlqTopicsParams = z.object({
+	windowMs: z
+		.number()
+		.int()
+		.min(100)
+		.max(60_000)
+		.optional()
+		.describe(
+			"Milliseconds between the two listOffsets samples used to compute recentDelta. Defaults to 30_000 (30s). Lower values run faster but recentDelta becomes noisier.",
+		),
+	skipDelta: z
+		.boolean()
+		.optional()
+		.describe(
+			"When true, take only one sample and return recentDelta:null for every topic. Use for fast probes where current totalMessages is enough and growth rate is not needed.",
+		),
+});
+
 export const DescribeConsumerGroupParams = z.object({
 	groupId: GroupIdParam,
 });
