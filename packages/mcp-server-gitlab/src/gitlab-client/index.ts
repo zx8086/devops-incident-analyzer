@@ -158,6 +158,45 @@ export class GitLabRestClient {
 		});
 	}
 
+	// Numeric projectId only: URL-encoded path-style IDs 404 for this endpoint (memory: reference_gitlab_internal_vs_public)
+	async listMergeRequests(
+		projectId: number,
+		options?: {
+			state?: "merged" | "opened" | "closed" | "all";
+			updated_after?: string;
+			per_page?: number;
+		},
+	): Promise<
+		Array<{
+			id: number;
+			iid: number;
+			project_id: number;
+			title: string;
+			description: string;
+			state: string;
+			merged_at: string | null;
+			created_at: string;
+			updated_at: string;
+			author: { name: string; username: string };
+			merge_commit_sha: string | null;
+			sha: string;
+			source_branch: string;
+			target_branch: string;
+			web_url: string;
+		}>
+	> {
+		const query: Record<string, string | number | boolean | undefined> = {
+			state: options?.state ?? "merged",
+			per_page: options?.per_page ?? 20,
+		};
+		if (options?.updated_after) query.updated_after = options.updated_after;
+		log.debug({ projectId, ...options }, "Listing merge requests");
+		return this.request({
+			path: `/projects/${projectId}/merge_requests`,
+			query,
+		});
+	}
+
 	async searchBlobs(
 		projectId: string,
 		search: string,
