@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { serializeMcpConnectError, _withTimeoutForTest as withTimeout } from "./mcp-bridge.ts";
+import {
+	_connectTimeoutForTest as connectTimeoutFor,
+	serializeMcpConnectError,
+	_withTimeoutForTest as withTimeout,
+} from "./mcp-bridge.ts";
 
 // SIO-705: pino's default JSON serializer drops non-enumerable Error fields.
 // The styles-v3 production run logged `Failed to connect to MCP server` with
@@ -71,5 +75,31 @@ describe("withTimeout (SIO-680/682)", () => {
 	test("propagates the original error when promise rejects before timeout", async () => {
 		const fails = Promise.reject(new Error("connection refused"));
 		await expect(withTimeout(fails, 1000, "failing-call")).rejects.toThrow(/connection refused/);
+	});
+});
+
+// SIO-774: AgentCore-backed MCP servers (kafka-mcp, aws-mcp) ride a SigV4 proxy
+// whose cold-start retry ladder runs to ~30s. The bridge's connect timeout has
+// to outlast that budget so the proxy's retry can succeed before the bridge bails.
+// Non-AgentCore servers have no cold-start cost and keep the 10s default.
+describe("connectTimeoutFor (SIO-774)", () => {
+	test("kafka-mcp gets AgentCore-sized timeout", () => {
+		expect(connectTimeoutFor("kafka-mcp")).toBe(35_000);
+	});
+
+	test("aws-mcp gets AgentCore-sized timeout", () => {
+		expect(connectTimeoutFor("aws-mcp")).toBe(35_000);
+	});
+
+	test("non-AgentCore servers stay on the 10s default", () => {
+		expect(connectTimeoutFor("elastic-mcp")).toBe(10_000);
+		expect(connectTimeoutFor("couchbase-mcp")).toBe(10_000);
+		expect(connectTimeoutFor("konnect-mcp")).toBe(10_000);
+		expect(connectTimeoutFor("gitlab-mcp")).toBe(10_000);
+		expect(connectTimeoutFor("atlassian-mcp")).toBe(10_000);
+	});
+
+	test("unknown server falls back to default", () => {
+		expect(connectTimeoutFor("not-a-real-server")).toBe(10_000);
 	});
 });
