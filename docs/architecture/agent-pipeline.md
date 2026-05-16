@@ -60,6 +60,12 @@ elastic kafka capella konnect gitlab atlassian  (one per datasource, parallel)
 +-------+------+
         |
         v
++------------------+
+| extractFindings  |
+| (SIO-764)        |
++--------+---------+
+         |
+         v
 +----------------------+
 | enforceCorrelations  |--> rule satisfied OR
 | Router (SIO-681)     |    no rules to dispatch
@@ -404,6 +410,26 @@ The 0.59 value is deliberate: `checkConfidence` uses strict `<`, so 0.6 == 0.6 w
 
 ---
 
+### extractFindings (SIO-764)
+
+**Source:** `packages/agent/src/findings-extractor.ts`
+
+**Purpose:** Pure-function extraction of typed findings from sub-agent tool outputs. Reads each `DataSourceResult.toolOutputs[]` (raw ReAct messages from sub-agent invocations) and derives structured, domain-specific findings onto sibling result fields for the rule engine to consume without casting/parsing prose.
+
+**Position in pipeline:** Runs immediately after `aggregate` and before `enforceCorrelationsRouter`. Stateless, no I/O, no LLM call.
+
+**Current scope (Phase A):** Kafka findings only. Extracts `KafkaService` and `KafkaCluster` operations into typed `DataSourceResult.kafkaFindings` for rules like `kafka-significant-lag` and `kafka-dlq-growth` to query by structure instead of regexing aggregator prose. GitLab, Couchbase, and other datasources are deferred until their MCP servers expose the requisite source tools (e.g., GitLab slow-query detection is blocked on MCP server capability).
+
+**Soft-fail semantics:** Per-result extraction failures (e.g., unparseable tool output, missing keys) leave that result's findings undefined and mark the result `extractionStatus: "partial"` or `"failed"`. Affected rules stay dormant for that turn. The rest of the pipeline proceeds normally. No rule engine block on extraction errors.
+
+**Inputs consumed:** `dataSourceResults[].toolOutputs[]` (populated by `sub-agent.ts` from ReAct tool messages)
+
+**Outputs produced:** `DataSourceResult.kafkaFindings` (and future `.gitlabFindings`, `.couchbaseFindings`, etc.)
+
+**LLM model:** None (deterministic parsing)
+
+---
+
 ### validate
 
 **Source:** `packages/agent/src/validator.ts`
@@ -676,3 +702,4 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 | 2026-04-23 | Added Atlassian sub-agent (6th datasource) to fan-out diagram and targeting fallback references |
 | 2026-05-08 | SIO-681: documented the `enforceCorrelations` router/aggregator pair between `aggregate` and `checkConfidence`, the 4 initial correlation rules (kafka-empty-or-dead-groups, kafka-significant-lag, kafka-dlq-growth, kafka-tool-failures), the `degradedRules` / `confidenceCap` / `pendingCorrelations` AgentState fields, and the confidence-cap routing semantics. |
 | 2026-05-10 | SIO-697 / SIO-707 / SIO-709 / SIO-711 / SIO-712: confidence cap lowered from 0.6 to 0.59 (strict-less-than HITL gate); cap inputs broadened beyond `degradedRules` to include tool-error rate >= 15% and `## Gaps` section with >= 2 bullets; new `gitlab-deploy-vs-datastore-runtime` rule with `skipCoverageCheck` flag and contradiction banner; aggregator defensive-prose ban; alignment retry now scoped to failed deployments via `retryDeployments`; Elastic deployment fan-out parallelized; new `GRAPH_TIMEOUT_MS` and `SUB_AGENT_TIMEOUT_MS` env knobs (defaults 720 s / 360 000 ms). |
+| 2026-05-16 | SIO-764 Phase A: inserted `extractFindings` node between `aggregate` and `enforceCorrelationsRouter` (14 nodes total); pure-function extraction of typed findings from tool outputs (Kafka only in Phase A). |
