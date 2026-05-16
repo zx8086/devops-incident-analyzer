@@ -51,8 +51,20 @@ function alreadyCovered(state: AgentStateType, rule: CorrelationRule, match: Tri
 	return triggeredEntities.some((name) => knownServices.has(name));
 }
 
-function agentToDataSourceId(agent: string): string {
-	return agent.replace(/-agent$/, "");
+// SIO-763: explicit map prevents capella-agent → "capella" mismatch; canonical
+// datasource id for the couchbase MCP server is "couchbase".
+const AGENT_TO_DATASOURCE: Record<string, string> = {
+	"elastic-agent": "elastic",
+	"kafka-agent": "kafka",
+	"capella-agent": "couchbase",
+	"konnect-agent": "konnect",
+	"gitlab-agent": "gitlab",
+	"atlassian-agent": "atlassian",
+	"aws-agent": "aws",
+};
+
+export function agentToDataSourceId(agent: string): string {
+	return AGENT_TO_DATASOURCE[agent] ?? agent.replace(/-agent$/, "");
 }
 
 function extractEntityNames(context: Record<string, unknown>): string[] {
