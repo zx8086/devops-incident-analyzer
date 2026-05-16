@@ -8,7 +8,13 @@ import {
 	enforceCorrelationsRouter,
 } from "../../src/correlation/enforce-node";
 import type { AgentStateType, PendingCorrelation } from "../../src/state";
-import { baseState, withElasticResult, withKafkaFindings } from "./test-helpers";
+import {
+	baseState,
+	withCouchbaseFindings,
+	withElasticResult,
+	withGitLabFindings,
+	withKafkaFindings,
+} from "./test-helpers";
 
 // ---------------------------------------------------------------------------
 // Router tests
@@ -188,40 +194,24 @@ describe("enforceCorrelationsRouter skip-coverage routing", () => {
 	test("routes skipCoverageCheck rules directly to enforceCorrelationsAggregate without a fetch", () => {
 		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
 		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
-		const state = {
-			...baseState(),
-			dataSourceResults: [
+		const stateWithGitLab = withGitLabFindings(baseState(), {
+			mergedRequests: [
 				{
-					dataSourceId: "gitlab",
-					status: "success" as const,
-					data: {
-						mergedRequests: [
-							{
-								id: 153,
-								title: "Replace OFFSET scan",
-								description: "fix slow OFFSET 13000+ queries",
-								merged_at: merged,
-							},
-						],
-					},
-					duration: 100,
-				},
-				{
-					dataSourceId: "couchbase",
-					status: "success" as const,
-					data: {
-						slowQueries: [
-							{
-								statement: "SELECT ... OFFSET 13000 LIMIT 100",
-								lastExecutionTime: observed,
-								serviceTime: 9900,
-							},
-						],
-					},
-					duration: 200,
+					id: 153,
+					title: "Replace OFFSET scan",
+					description: "fix slow OFFSET 13000+ queries",
+					merged_at: merged,
 				},
 			],
-		} as AgentStateType;
+		});
+		const state = withCouchbaseFindings(stateWithGitLab, {
+			slowQueries: [
+				{
+					statement: "SELECT ... OFFSET 13000 LIMIT 100",
+					lastExecutionTime: observed,
+				},
+			],
+		});
 		const result = enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		const sends = result as Send[];
@@ -237,8 +227,21 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 	test("prepends WARNING banner to finalAnswer when a skipCoverageCheck rule degrades", async () => {
 		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
 		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
-		const state = {
-			...baseState(),
+		const stateWithGitLab = withGitLabFindings(baseState(), {
+			mergedRequests: [
+				{
+					id: 153,
+					title: "Replace OFFSET scan",
+					description: "fix slow OFFSET 13000+ queries",
+					merged_at: merged,
+				},
+			],
+		});
+		const stateWithDatastore = withCouchbaseFindings(stateWithGitLab, {
+			slowQueries: [{ statement: "SELECT ... OFFSET 13000 LIMIT 100", lastExecutionTime: observed }],
+		});
+		const state: AgentStateType = {
+			...stateWithDatastore,
 			finalAnswer: "# Incident report\n\n## Findings\n- something\n\nConfidence: 0.71",
 			confidenceScore: 0.71,
 			pendingCorrelations: [
@@ -254,33 +257,6 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 					},
 					attemptsRemaining: 1,
 					timeoutMs: 30_000,
-				},
-			],
-			dataSourceResults: [
-				{
-					dataSourceId: "gitlab",
-					status: "success" as const,
-					data: {
-						mergedRequests: [
-							{
-								id: 153,
-								title: "Replace OFFSET scan",
-								description: "fix slow OFFSET 13000+ queries",
-								merged_at: merged,
-							},
-						],
-					},
-					duration: 100,
-				},
-				{
-					dataSourceId: "couchbase",
-					status: "success" as const,
-					data: {
-						slowQueries: [
-							{ statement: "SELECT ... OFFSET 13000 LIMIT 100", lastExecutionTime: observed, serviceTime: 9900 },
-						],
-					},
-					duration: 200,
 				},
 			],
 		};

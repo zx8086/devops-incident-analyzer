@@ -5,12 +5,12 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { n1qlLongestRunningQueries } from "./analysisQueries";
-import { executeAnalysisQuery } from "./queryAnalysisUtils";
+import { executeAnalysisQueryStructured } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
 		"capella_get_longest_running_queries",
-		"Get the longest running queries based on service time",
+		"Get the longest running queries based on service time. Returns bare JSON array of {statement, avgServiceTime, lastExecutionTime, queries} -- machine-readable for correlation extractors.",
 		{
 			limit: z.number().optional().describe("Optional limit for the number of results to return"),
 			min_time_ms: z.number().optional().describe("Minimum execution time in milliseconds to include"),
@@ -40,7 +40,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				}
 			}
 
-			return executeAnalysisQuery(bucket, query, "Longest Running Queries", limit);
+			return executeAnalysisQueryStructured(bucket, query);
 		},
 	);
 };

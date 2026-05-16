@@ -1,6 +1,8 @@
 // agent/src/extract-findings.ts
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
+import { extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
+import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -8,6 +10,8 @@ const logger = getLogger("agent:extract-findings");
 
 const EXTRACTORS: Record<string, (r: DataSourceResult) => Partial<DataSourceResult>> = {
 	kafka: (r) => ({ kafkaFindings: extractKafkaFindings(r.toolOutputs ?? []) }),
+	gitlab: (r) => ({ gitlabFindings: extractGitLabFindings(r.toolOutputs ?? []) }),
+	couchbase: (r) => ({ couchbaseFindings: extractCouchbaseFindings(r.toolOutputs ?? []) }),
 };
 
 export async function extractFindings(state: AgentStateType): Promise<Partial<AgentStateType>> {

@@ -53,6 +53,38 @@ export const KafkaFindingsSchema = z.object({
 });
 export type KafkaFindings = z.infer<typeof KafkaFindingsSchema>;
 
+// SIO-771: mirrors GitLab REST /merge_requests response fields the
+// gitlab-deploy-vs-datastore-runtime rule consumes. snake_case matches the
+// upstream API exactly so the extractor stays a pass-through validator.
+export const GitLabMergedRequestSchema = z.object({
+	id: z.union([z.number(), z.string()]),
+	project_id: z.number().int().optional(),
+	title: z.string().optional(),
+	description: z.string().optional(),
+	merged_at: z.string().optional(),
+	web_url: z.string().optional(),
+});
+export type GitLabMergedRequest = z.infer<typeof GitLabMergedRequestSchema>;
+
+export const GitLabFindingsSchema = z.object({
+	mergedRequests: z.array(GitLabMergedRequestSchema).optional(),
+});
+export type GitLabFindings = z.infer<typeof GitLabFindingsSchema>;
+
+// SIO-772: rows emitted by n1qlLongestRunningQueries + lastExecutionTime column.
+export const CouchbaseSlowQuerySchema = z.object({
+	statement: z.string(),
+	avgServiceTime: z.string().optional(),
+	lastExecutionTime: z.string().optional(),
+	queries: z.number().int().optional(),
+});
+export type CouchbaseSlowQuery = z.infer<typeof CouchbaseSlowQuerySchema>;
+
+export const CouchbaseFindingsSchema = z.object({
+	slowQueries: z.array(CouchbaseSlowQuerySchema).optional(),
+});
+export type CouchbaseFindings = z.infer<typeof CouchbaseFindingsSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	// SIO-649: Populated when the elastic sub-agent fans out across deployments.
@@ -66,6 +98,8 @@ export const DataSourceResultSchema = z.object({
 	toolErrors: z.array(ToolErrorSchema).optional(),
 	// SIO-764: structured findings derived from toolOutputs[] in extractFindings node.
 	kafkaFindings: KafkaFindingsSchema.optional(),
+	gitlabFindings: GitLabFindingsSchema.optional(),
+	couchbaseFindings: CouchbaseFindingsSchema.optional(),
 	// SIO-707: total LangGraph messages produced by the sub-agent run. Used by the aggregator
 	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
 	// the run completed but had a high per-iteration failure ratio.

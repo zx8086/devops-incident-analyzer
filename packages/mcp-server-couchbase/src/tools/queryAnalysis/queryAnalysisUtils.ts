@@ -103,3 +103,40 @@ export async function executeAnalysisQuery(
 		};
 	}
 }
+
+/**
+ * SIO-772: machine-readable sibling of executeAnalysisQuery for tools whose
+ * output feeds correlation extractors. Returns ToolResponse with a bare-JSON
+ * text payload (no markdown rendering, no Limit Application section). The
+ * agent's tryParseJson(String(m.content)) parses it into ToolOutput.rawJson
+ * as the raw rows array.
+ *
+ * On cluster errors, returns { content: [{...}], isError: true } with a
+ * JSON-shaped error payload -- matches the sibling executeAnalysisQuery's
+ * MCP error contract so the agent surfaces it as a toolError rather than
+ * a thrown JSON-RPC error. Use this instead of executeAnalysisQuery when
+ * the consumer is structural (extractFindings node, sub-agent reasoning)
+ * rather than human (CLI render).
+ */
+export async function executeAnalysisQueryStructured(
+	bucket: Bucket,
+	queryString: string,
+	parameters?: Record<string, unknown>,
+): Promise<ToolResponse> {
+	try {
+		const hasParameters = parameters !== undefined && Object.keys(parameters).length > 0;
+		const cluster = bucket.cluster;
+		const result = hasParameters
+			? await cluster.query(queryString, { parameters })
+			: await cluster.query(queryString);
+		const rows = await result.rows;
+		return { content: [{ type: "text", text: JSON.stringify(rows) }] };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		logger.error(`Error executing structured analysis query: ${message}`);
+		return {
+			content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+			isError: true,
+		};
+	}
+}

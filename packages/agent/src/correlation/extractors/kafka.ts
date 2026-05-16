@@ -1,74 +1,49 @@
 // packages/agent/src/correlation/extractors/kafka.ts
 import type { KafkaFindings, ToolOutput } from "@devops-agent/shared";
+import { z } from "zod";
 
-interface ListConsumerGroupsRawGroup {
-	id: unknown;
-	state?: unknown;
-}
+// SIO-771/772: file-private schemas describe the **tool output** shape (what
+// the kafka MCP returns), not the **finding** shape (which lives in
+// @devops-agent/shared). Each tool's parser is owned by this extractor.
 
-function isRecord(x: unknown): x is Record<string, unknown> {
-	return typeof x === "object" && x !== null && !Array.isArray(x);
-}
+const ListConsumerGroupsRowSchema = z.object({ id: z.string(), state: z.string() });
+const ListConsumerGroupsWrapperSchema = z.object({ groups: z.array(z.unknown()) });
 
-function extractListConsumerGroupsEntries(rawJson: unknown): Array<{ id: string; state: string }> {
-	if (!isRecord(rawJson) || !Array.isArray(rawJson.groups)) return [];
-	const out: Array<{ id: string; state: string }> = [];
-	for (const g of rawJson.groups as ListConsumerGroupsRawGroup[]) {
-		if (!isRecord(g)) continue;
-		if (typeof g.id !== "string" || typeof g.state !== "string") continue;
-		out.push({ id: g.id, state: g.state });
-	}
-	return out;
-}
+const GetConsumerGroupLagSchema = z.object({ groupId: z.string(), totalLag: z.number() });
 
-function extractGetConsumerGroupLagEntry(rawJson: unknown): { id: string; totalLag: number } | null {
-	if (!isRecord(rawJson)) return null;
-	const id = rawJson.groupId;
-	const totalLag = rawJson.totalLag;
-	if (typeof id !== "string" || typeof totalLag !== "number") return null;
-	return { id, totalLag };
-}
-
-// SIO-770: KafkaService.listDlqTopics returns a bare DlqTopic[] which
-// ResponseBuilder.success serialises via JSON.stringify, so rawJson is the
-// array itself (not wrapped in {topics:[...]}). Each element is
-// {name: string, totalMessages: number, recentDelta: number | null}.
-function extractListDlqTopicsEntries(
-	rawJson: unknown,
-): Array<{ name: string; totalMessages: number; recentDelta: number | null }> {
-	if (!Array.isArray(rawJson)) return [];
-	const out: Array<{ name: string; totalMessages: number; recentDelta: number | null }> = [];
-	for (const t of rawJson) {
-		if (!isRecord(t)) continue;
-		if (typeof t.name !== "string" || typeof t.totalMessages !== "number") continue;
-		// recentDelta is intentionally nullable -- null signals the second sample
-		// failed (e.g. topic deleted between samples) or skipDelta:true was used.
-		// Preserve null so the rule's (delta ?? 0) > 0 check still treats it as zero.
-		const recentDelta = typeof t.recentDelta === "number" ? t.recentDelta : null;
-		out.push({ name: t.name, totalMessages: t.totalMessages, recentDelta });
-	}
-	return out;
-}
+const ListDlqTopicsRowSchema = z.object({
+	name: z.string(),
+	totalMessages: z.number(),
+	recentDelta: z.number().nullable(),
+});
 
 export function extractKafkaFindings(outputs: ToolOutput[]): KafkaFindings {
 	const byId = new Map<string, { id: string; state?: string; totalLag?: number }>();
-	const dlqTopics: Array<{ name: string; totalMessages: number; recentDelta: number | null }> = [];
+	const dlqTopics: Array<z.infer<typeof ListDlqTopicsRowSchema>> = [];
 
 	for (const o of outputs) {
 		if (o.toolName === "kafka_list_consumer_groups") {
-			for (const entry of extractListConsumerGroupsEntries(o.rawJson)) {
-				const existing = byId.get(entry.id) ?? { id: entry.id };
-				existing.state = entry.state;
-				byId.set(entry.id, existing);
+			const wrapper = ListConsumerGroupsWrapperSchema.safeParse(o.rawJson);
+			if (!wrapper.success) continue;
+			for (const g of wrapper.data.groups) {
+				const parsed = ListConsumerGroupsRowSchema.safeParse(g);
+				if (!parsed.success) continue;
+				const existing = byId.get(parsed.data.id) ?? { id: parsed.data.id };
+				existing.state = parsed.data.state;
+				byId.set(parsed.data.id, existing);
 			}
 		} else if (o.toolName === "kafka_get_consumer_group_lag") {
-			const entry = extractGetConsumerGroupLagEntry(o.rawJson);
-			if (!entry) continue;
-			const existing = byId.get(entry.id) ?? { id: entry.id };
-			existing.totalLag = entry.totalLag;
-			byId.set(entry.id, existing);
+			const parsed = GetConsumerGroupLagSchema.safeParse(o.rawJson);
+			if (!parsed.success) continue;
+			const existing = byId.get(parsed.data.groupId) ?? { id: parsed.data.groupId };
+			existing.totalLag = parsed.data.totalLag;
+			byId.set(parsed.data.groupId, existing);
 		} else if (o.toolName === "kafka_list_dlq_topics") {
-			dlqTopics.push(...extractListDlqTopicsEntries(o.rawJson));
+			if (!Array.isArray(o.rawJson)) continue;
+			for (const t of o.rawJson) {
+				const parsed = ListDlqTopicsRowSchema.safeParse(t);
+				if (parsed.success) dlqTopics.push(parsed.data);
+			}
 		}
 	}
 

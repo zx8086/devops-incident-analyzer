@@ -7,6 +7,7 @@ import { registerGetCommitDiffTool } from "./code-analysis/get-commit-diff.js";
 import { registerGetFileContentTool } from "./code-analysis/get-file-content.js";
 import { registerGetRepositoryTreeTool } from "./code-analysis/get-repository-tree.js";
 import { registerListCommitsTool } from "./code-analysis/list-commits.js";
+import { registerListMergeRequestsTool } from "./code-analysis/list-merge-requests.js";
 
 export function registerCodeAnalysisTools(server: McpServer, restClient: GitLabRestClient): number {
 	registerGetFileContentTool(server, restClient);
@@ -14,5 +15,6 @@ export function registerCodeAnalysisTools(server: McpServer, restClient: GitLabR
 	registerGetCommitDiffTool(server, restClient);
 	registerListCommitsTool(server, restClient);
 	registerGetRepositoryTreeTool(server, restClient);
-	return 5;
+	registerListMergeRequestsTool(server, restClient);
+	return 6;
 }

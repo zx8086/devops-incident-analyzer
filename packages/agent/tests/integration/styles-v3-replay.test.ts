@@ -84,22 +84,22 @@ function styleV3State(): AgentStateType {
 			{
 				dataSourceId: "gitlab",
 				status: "success",
-				data: {
+				data: "gitlab prose summary placeholder",
+				duration: 800,
+				gitlabFindings: {
 					mergedRequests: [
 						{ id: 153, title: "Replace OFFSET scan", description: "fix slow OFFSET 13000+ queries", merged_at: merged },
 					],
 				},
-				duration: 800,
 			},
 			{
 				dataSourceId: "couchbase",
 				status: "success",
-				data: {
-					slowQueries: [
-						{ statement: "SELECT ... OFFSET 13000 LIMIT 100", lastExecutionTime: observed, serviceTime: 9900 },
-					],
-				},
+				data: "couchbase prose summary placeholder",
 				duration: 1200,
+				couchbaseFindings: {
+					slowQueries: [{ statement: "SELECT ... OFFSET 13000 LIMIT 100", lastExecutionTime: observed }],
+				},
 			},
 		],
 		messages: [],
