@@ -74,34 +74,13 @@ interface KafkaDatasource {
 }
 
 if (import.meta.main) {
-	// Proxy-only mode: when an AgentCore runtime ARN is set, the Kafka MCP
-	// server runs remotely on AWS. Start only the local SigV4 proxy so the
-	// agent can reach it. KAFKA_AGENTCORE_RUNTIME_ARN takes precedence over
-	// the generic AGENTCORE_RUNTIME_ARN to support running Kafka + AWS
-	// proxies side-by-side without env-var collision (Phase 4: SIO-760).
-	const runtimeArn = process.env.KAFKA_AGENTCORE_RUNTIME_ARN ?? process.env.AGENTCORE_RUNTIME_ARN;
-	if (runtimeArn) {
-		// startAgentCoreProxy reads AGENTCORE_RUNTIME_ARN; set it from the
-		// resolved value so a developer can scope per-server or use the
-		// generic var as a single-server override.
-		process.env.AGENTCORE_RUNTIME_ARN = runtimeArn;
-		const { startAgentCoreProxy } = await import("@devops-agent/shared");
-		logger.info(
-			{
-				arn: runtimeArn,
-				transport: "agentcore-proxy",
-			},
-			"Starting Kafka MCP Server",
-		);
-		const proxy = await startAgentCoreProxy();
-		logger.info(
-			{
-				transport: "agentcore-proxy",
-				port: proxy.port,
-				url: proxy.url,
-			},
-			"Kafka MCP Server ready",
-		);
+	if (process.env.KAFKA_AGENTCORE_RUNTIME_ARN) {
+		const { loadProxyConfigFromEnv, startAgentCoreProxy } = await import("@devops-agent/shared");
+		const config = loadProxyConfigFromEnv("KAFKA");
+
+		logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting Kafka MCP Server");
+		const proxy = await startAgentCoreProxy(config);
+		logger.info({ transport: "agentcore-proxy", port: proxy.port, url: proxy.url }, "Kafka MCP Server ready");
 		logger.info("kafka-mcp-server started successfully");
 
 		let isShuttingDown = false;
