@@ -134,7 +134,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// them. Then re-fan-out via correlationFetch when rules fire, otherwise straight to
 		// enforceCorrelationsAggregate which is a no-op pass-through.
 		.addEdge("aggregate", "extractFindings")
-		.addConditionalEdges("extractFindings", enforceCorrelationsRouter, ["correlationFetch", "enforceCorrelationsAggregate"])
+		.addConditionalEdges("extractFindings", enforceCorrelationsRouter, [
+			"correlationFetch",
+			"enforceCorrelationsAggregate",
+		])
 		.addEdge("correlationFetch", "enforceCorrelationsAggregate")
 		.addEdge("enforceCorrelationsAggregate", "checkConfidence")
 		.addEdge("checkConfidence", "validate")
