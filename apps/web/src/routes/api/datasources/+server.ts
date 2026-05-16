@@ -25,7 +25,7 @@ export const GET: RequestHandler = async () => {
 	if (process.env.COUCHBASE_MCP_URL) dataSources.push("couchbase");
 	if (process.env.KONNECT_MCP_URL) dataSources.push("konnect");
 	if (process.env.GITLAB_MCP_URL) dataSources.push("gitlab");
-	if (process.env.ATLASSIAN_MCP_URL_LOCAL) dataSources.push("atlassian");
+	if (process.env.ATLASSIAN_MCP_URL) dataSources.push("atlassian");
 	if (process.env.AWS_MCP_URL) dataSources.push("aws");
 
 	// Report which are actually connected

@@ -291,8 +291,8 @@ OAuth 2.0 configuration for the Atlassian MCP server, which proxies Jira and Con
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ATLASSIAN_MCP_URL` | No | `https://mcp.atlassian.com/v1/mcp` | Upstream Atlassian Cloud MCP endpoint the server proxies to |
-| `ATLASSIAN_MCP_URL_LOCAL` | Yes | `http://localhost:9085` | URL the agent uses to connect to the local Atlassian MCP server |
+| `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (matches every other datasource's `*_MCP_URL` convention) |
+| `ATLASSIAN_UPSTREAM_MCP_URL` | No | `https://mcp.atlassian.com/v1/mcp` | Upstream Atlassian Cloud Rovo endpoint the local proxy forwards to. Consumed by `mcp-server-atlassian` only. |
 | `ATLASSIAN_MCP_PORT` | No | `9085` | Local HTTP port the server listens on |
 | `ATLASSIAN_SITE_NAME` | Yes | -- | Atlassian Cloud site identifier (e.g., `your-company`) |
 | `ATLASSIAN_OAUTH_CALLBACK_PORT` | No | `9185` | Port for the OAuth 2.0 redirect handler |
@@ -334,7 +334,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `COUCHBASE_MCP_URL` | Yes | `http://localhost:9082` | Couchbase Capella MCP server URL |
 | `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
-| `ATLASSIAN_MCP_URL_LOCAL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (distinct from `ATLASSIAN_MCP_URL`, which is the upstream Atlassian Cloud endpoint) |
+| `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
@@ -371,3 +371,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-04-23 | Added Atlassian MCP server env vars (ATLASSIAN_SITE_NAME, ATLASSIAN_MCP_URL upstream, ATLASSIAN_MCP_URL_LOCAL, ATLASSIAN_OAUTH_CALLBACK_PORT, ATLASSIAN_READ_ONLY, ATLASSIAN_INCIDENT_PROJECTS, ATLASSIAN_TIMEOUT, ATLASSIAN_MCP_PORT, ATLASSIAN_LANGSMITH_PROJECT) |
 | 2026-05-08 | SIO-682: added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
 | 2026-05-10 | SIO-708 / SIO-710 / SIO-697 post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
+| 2026-05-16 | SIO-766: collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |

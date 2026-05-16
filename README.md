@@ -88,7 +88,7 @@ apps/
 | Couchbase Capella | 9082 | ~15 | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 15 enhanced + proxy | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |
 | GitLab | 9084 | proxy + 5-8 custom | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
-| Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_MCP_URL`, `ATLASSIAN_READ_ONLY` |
+| Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_READ_ONLY` |
 
 ## Commands
 
@@ -110,8 +110,8 @@ See [.env.example](.env.example) for the full list. Minimum required:
 
 - `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` -- Bedrock LLM access
 - `ES_URL`, `ES_API_KEY` -- Elasticsearch connection
-- `ELASTIC_MCP_URL`, `KAFKA_MCP_URL`, `COUCHBASE_MCP_URL`, `KONNECT_MCP_URL`, `GITLAB_MCP_URL`, `ATLASSIAN_MCP_URL_LOCAL` -- MCP server URLs for the agent
-- `ATLASSIAN_MCP_URL` -- upstream Atlassian Cloud endpoint; `ATLASSIAN_SITE_NAME` -- your Atlassian Cloud site
+- `ELASTIC_MCP_URL`, `KAFKA_MCP_URL`, `COUCHBASE_MCP_URL`, `KONNECT_MCP_URL`, `GITLAB_MCP_URL`, `ATLASSIAN_MCP_URL` -- MCP server URLs for the agent
+- `ATLASSIAN_UPSTREAM_MCP_URL` -- upstream Atlassian Cloud Rovo endpoint (the local proxy forwards to it); `ATLASSIAN_SITE_NAME` -- your Atlassian Cloud site
 
 ## Documentation
 

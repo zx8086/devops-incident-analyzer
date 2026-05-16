@@ -43,7 +43,7 @@ function getMcpConfig() {
 		capellaUrl: process.env.COUCHBASE_MCP_URL,
 		konnectUrl: process.env.KONNECT_MCP_URL,
 		gitlabUrl: process.env.GITLAB_MCP_URL,
-		atlassianUrl: process.env.ATLASSIAN_MCP_URL_LOCAL,
+		atlassianUrl: process.env.ATLASSIAN_MCP_URL,
 		awsUrl: process.env.AWS_MCP_URL,
 	};
 }

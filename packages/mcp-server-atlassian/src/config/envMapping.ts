@@ -14,7 +14,11 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	{ configPath: "application.environment", envVar: "NODE_ENV", default: configDefaults.application.environment },
 	{ configPath: "application.logLevel", envVar: "LOG_LEVEL", default: configDefaults.application.logLevel },
 
-	{ configPath: "atlassian.mcpEndpoint", envVar: "ATLASSIAN_MCP_URL", default: configDefaults.atlassian.mcpEndpoint },
+	{
+		configPath: "atlassian.mcpEndpoint",
+		envVar: "ATLASSIAN_UPSTREAM_MCP_URL",
+		default: configDefaults.atlassian.mcpEndpoint,
+	},
 	{ configPath: "atlassian.siteName", envVar: "ATLASSIAN_SITE_NAME", default: "" },
 	{ configPath: "atlassian.readOnly", envVar: "ATLASSIAN_READ_ONLY", default: configDefaults.atlassian.readOnly },
 	{

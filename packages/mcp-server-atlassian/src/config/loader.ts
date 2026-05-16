@@ -38,7 +38,7 @@ export class ConfigurationManager {
 				) as Config["application"]["logLevel"],
 			},
 			atlassian: {
-				mcpEndpoint: getEnvVarWithDefault("ATLASSIAN_MCP_URL", configDefaults.atlassian.mcpEndpoint),
+				mcpEndpoint: getEnvVarWithDefault("ATLASSIAN_UPSTREAM_MCP_URL", configDefaults.atlassian.mcpEndpoint),
 				siteName: getEnvVar("ATLASSIAN_SITE_NAME") || undefined,
 				readOnly: getEnvVarWithDefault("ATLASSIAN_READ_ONLY", configDefaults.atlassian.readOnly) === "true",
 				oauthCallbackPort: parseInt(

@@ -21,6 +21,7 @@ export type AgentName =
 	| "capella-agent"
 	| "konnect-agent"
 	| "gitlab-agent"
+	| "atlassian-agent"
 	| "aws-agent";
 
 // SIO-681: A correlation rule that fired but could not be fully satisfied

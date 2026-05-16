@@ -14,7 +14,7 @@ Default transport: stdio. Set `MCP_TRANSPORT=http` and `MCP_PORT=9085` for HTTP 
 
 | Var | Default | Description |
 |---|---|---|
-| `ATLASSIAN_MCP_URL` | `https://mcp.atlassian.com/v1/mcp` | Rovo endpoint |
+| `ATLASSIAN_UPSTREAM_MCP_URL` | `https://mcp.atlassian.com/v1/mcp` | Upstream Rovo endpoint the server proxies to. (Distinct from `ATLASSIAN_MCP_URL`, which is the local proxy URL the agent connects to — see the top-level `.env.example`.) |
 | `ATLASSIAN_SITE_NAME` | (unset) | Match a site name to select cloudId; first accessible used if unset |
 | `ATLASSIAN_READ_ONLY` | `true` | Filter write tools at registration |
 | `ATLASSIAN_INCIDENT_PROJECTS` | (unset, warned) | Comma-separated Jira project keys for custom tools |
