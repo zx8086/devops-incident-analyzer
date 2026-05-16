@@ -7,8 +7,13 @@
 // Companion to the SIO-718 inner-status unit tests in
 // ./agentcore-proxy-tool-status.test.ts.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { type AgentCoreProxyHandle, clearCredentialCache, startAgentCoreProxy } from "../agentcore-proxy.ts";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+	type AgentCoreProxyHandle,
+	type ProxyConfig,
+	type ProxyCredentials,
+	startAgentCoreProxy,
+} from "../agentcore-proxy.ts";
 
 const ORIG_ENV = { ...process.env };
 const ORIG_FETCH = globalThis.fetch;
@@ -16,15 +21,20 @@ const ORIG_FETCH = globalThis.fetch;
 const TEST_ARN = "arn:aws:bedrock:eu-central-1:123456789012:agent-runtime/test-mcp-XXXXX";
 const TEST_REGION = "eu-central-1";
 
-beforeAll(() => {
-	process.env.AGENTCORE_RUNTIME_ARN = TEST_ARN;
-	process.env.AGENTCORE_REGION = TEST_REGION;
-	process.env.AGENTCORE_AWS_ACCESS_KEY_ID = "AKIATESTACCESSKEY123";
-	process.env.AGENTCORE_AWS_SECRET_ACCESS_KEY = "test-secret-key";
-	process.env.AGENTCORE_AWS_SESSION_TOKEN = "test-session-token";
-	process.env.AGENTCORE_PROXY_PORT = "0";
-	process.env.MCP_SERVER_NAME = "mcp-server-roundtrip-test";
-});
+const TEST_CREDS: ProxyCredentials = {
+	accessKeyId: "AKIATESTACCESSKEY123",
+	secretAccessKey: "test-secret-key",
+	sessionToken: "test-session-token",
+};
+
+const TEST_CONFIG: ProxyConfig = {
+	runtimeArn: TEST_ARN,
+	region: TEST_REGION,
+	port: 0, // 0 = ephemeral; Bun.serve assigns a free port
+	qualifier: "DEFAULT",
+	serverName: "mcp-server",
+	credentials: TEST_CREDS,
+};
 
 afterAll(() => {
 	process.env = ORIG_ENV;
@@ -43,8 +53,7 @@ beforeEach(async () => {
 		fetchCalls.push({ url: String(input), init: init ?? {} });
 		return fetchResponder(callIdx);
 	}) as typeof fetch;
-	clearCredentialCache();
-	proxy = await startAgentCoreProxy();
+	proxy = await startAgentCoreProxy(TEST_CONFIG);
 });
 
 afterEach(async () => {
@@ -188,26 +197,27 @@ describe("agentcore-proxy round trip — happy paths", () => {
 	});
 
 	test("omits x-amz-security-token when sessionToken is unset", async () => {
-		const savedToken = process.env.AGENTCORE_AWS_SESSION_TOKEN;
 		await proxy.close();
-		try {
-			delete process.env.AGENTCORE_AWS_SESSION_TOKEN;
-			clearCredentialCache();
-			proxy = await startAgentCoreProxy();
+		const configWithoutToken: ProxyConfig = {
+			...TEST_CONFIG,
+			credentials: {
+				accessKeyId: TEST_CREDS.accessKeyId,
+				secretAccessKey: TEST_CREDS.secretAccessKey,
+				// sessionToken intentionally omitted
+			},
+		};
+		proxy = await startAgentCoreProxy(configWithoutToken);
 
-			seedResponses(sseOk(5, { content: [{ type: "text", text: "ok" }] }));
-			await callProxy(toolCall(5, "noop"));
+		seedResponses(sseOk(5, { content: [{ type: "text", text: "ok" }] }));
+		await callProxy(toolCall(5, "noop"));
 
-			expect(fetchCalls).toHaveLength(1);
-			// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
-			const headers = fetchCalls[0]!.init.headers as Record<string, string>;
-			expect(headers["x-amz-security-token"]).toBeUndefined();
+		expect(fetchCalls).toHaveLength(1);
+		// biome-ignore lint/style/noNonNullAssertion: SIO-733 - length asserted above
+		const headers = fetchCalls[0]!.init.headers as Record<string, string>;
+		expect(headers["x-amz-security-token"]).toBeUndefined();
 
-			const signedHeaders = headers.authorization?.match(SIGV4_AUTH_RE)?.[1]?.split(";") ?? [];
-			expect(signedHeaders).not.toContain("x-amz-security-token");
-		} finally {
-			if (savedToken) process.env.AGENTCORE_AWS_SESSION_TOKEN = savedToken;
-		}
+		const signedHeaders = headers.authorization?.match(SIGV4_AUTH_RE)?.[1]?.split(";") ?? [];
+		expect(signedHeaders).not.toContain("x-amz-security-token");
 	});
 });
 

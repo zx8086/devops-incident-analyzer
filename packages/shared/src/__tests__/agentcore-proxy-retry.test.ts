@@ -4,13 +4,14 @@
 // inside successful HTTP envelopes by the AgentCore runtime. Reuses the
 // fetch-monkey-patch harness from agentcore-proxy-roundtrip.test.ts.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	type AgentCoreProxyHandle,
-	clearCredentialCache,
 	computeJitteredBackoff,
 	extractJsonRpcError,
 	extractJsonRpcErrorCode,
+	type ProxyConfig,
+	type ProxyCredentials,
 	severityForJsonRpcRetry,
 	sleepWithAbort,
 	startAgentCoreProxy,
@@ -22,15 +23,20 @@ const ORIG_FETCH = globalThis.fetch;
 const TEST_ARN = "arn:aws:bedrock:eu-central-1:123456789012:agent-runtime/test-mcp-XXXXX";
 const TEST_REGION = "eu-central-1";
 
-beforeAll(() => {
-	process.env.AGENTCORE_RUNTIME_ARN = TEST_ARN;
-	process.env.AGENTCORE_REGION = TEST_REGION;
-	process.env.AGENTCORE_AWS_ACCESS_KEY_ID = "AKIATESTACCESSKEY123";
-	process.env.AGENTCORE_AWS_SECRET_ACCESS_KEY = "test-secret-key";
-	process.env.AGENTCORE_AWS_SESSION_TOKEN = "test-session-token";
-	process.env.AGENTCORE_PROXY_PORT = "0";
-	process.env.MCP_SERVER_NAME = "mcp-server-retry-test";
-});
+const TEST_CREDS: ProxyCredentials = {
+	accessKeyId: "AKIATESTACCESSKEY123",
+	secretAccessKey: "test-secret-key",
+	sessionToken: "test-session-token",
+};
+
+const TEST_CONFIG: ProxyConfig = {
+	runtimeArn: TEST_ARN,
+	region: TEST_REGION,
+	port: 0, // 0 = ephemeral
+	qualifier: "DEFAULT",
+	serverName: "mcp-server",
+	credentials: TEST_CREDS,
+};
 
 afterAll(() => {
 	process.env = ORIG_ENV;
@@ -204,8 +210,7 @@ describe("session-scoped abort controller", () => {
 			fetchCalls.push({ url: String(input), init: init ?? {} });
 			return fetchResponder(callIdx);
 		}) as typeof fetch;
-		clearCredentialCache();
-		proxy = await startAgentCoreProxy();
+		proxy = await startAgentCoreProxy(TEST_CONFIG);
 	});
 
 	afterEach(async () => {
@@ -253,8 +258,7 @@ describe("JSON-RPC -320xx retry", () => {
 			if (!entry) return new Response("scripted-exhausted", { status: 500 });
 			return typeof entry === "function" ? entry() : entry.clone();
 		}) as typeof fetch;
-		clearCredentialCache();
-		proxy = await startAgentCoreProxy();
+		proxy = await startAgentCoreProxy(TEST_CONFIG);
 	});
 
 	afterEach(async () => {

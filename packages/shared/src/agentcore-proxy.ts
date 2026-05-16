@@ -46,94 +46,110 @@ function isRetryableJsonRpcCode(code: number | undefined): boolean {
 	return code !== undefined && code >= JSONRPC_SERVER_ERROR_MIN && code <= JSONRPC_SERVER_ERROR_MAX;
 }
 
-function readProxyConfig() {
-	const runtimeArn = process.env.AGENTCORE_RUNTIME_ARN;
-	if (!runtimeArn) {
-		logger.fatal(
-			"AGENTCORE_RUNTIME_ARN is required. Example: arn:aws:bedrock:eu-central-1:123456789:agent-runtime/my_mcp_server-XXXXX",
-		);
-		process.exit(1);
-	}
-
-	const region = process.env.AGENTCORE_REGION || process.env.AWS_REGION || "eu-central-1";
-	const port = parseInt(process.env.AGENTCORE_PROXY_PORT || "3000", 10);
-	const qualifier = process.env.AGENTCORE_QUALIFIER || "DEFAULT";
-	const serverName = process.env.MCP_SERVER_NAME || "mcp-server";
-
-	const encodedArn = encodeURIComponent(runtimeArn);
-	const basePath = `/runtimes/${encodedArn}/invocations`;
-	const baseUrl = `https://bedrock-agentcore.${region}.amazonaws.com`;
-	const queryString = `qualifier=${qualifier}`;
-	const fullUrl = `${baseUrl}${basePath}?${queryString}`;
-
-	return { runtimeArn, region, port, qualifier, serverName, basePath, baseUrl, queryString, fullUrl };
-}
-
-interface AwsCreds {
+export interface ProxyCredentials {
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
 }
 
-let cachedCreds: AwsCreds | null = null;
-let credsExpiresAt = 0;
-
-// SIO-733: test seam. Lets the round-trip suite reset the cache between
-// proxy restarts when credential env vars change mid-suite. Not used by
-// production code.
-export function clearCredentialCache(): void {
-	cachedCreds = null;
-	credsExpiresAt = 0;
+/**
+ * Configuration for one running SigV4 proxy instance. Passed explicitly to
+ * startAgentCoreProxy(); no process.env reads inside the proxy.
+ */
+export interface ProxyConfig {
+	runtimeArn: string;
+	region: string;
+	port: number;
+	qualifier: string;
+	serverName: string;
+	/**
+	 * Either a static credentials object (for env-var creds) or an async
+	 * function (for AWS-CLI profile fallback, which may need to re-shell when
+	 * session-tokens expire).
+	 */
+	credentials: ProxyCredentials | (() => Promise<ProxyCredentials>);
 }
 
-async function getCredentials(): Promise<AwsCreds> {
-	// Return cached if still valid (5min buffer)
-	if (cachedCreds && Date.now() < credsExpiresAt - 300_000) {
-		return cachedCreds;
+/**
+ * Build a ProxyConfig from per-server-prefixed env vars. Reads ONLY the
+ * <prefix>_AGENTCORE_* namespace; never falls back to a generic AGENTCORE_*
+ * var. Throws if required vars are missing.
+ *
+ * Required env vars per prefix:
+ *   - <PREFIX>_AGENTCORE_RUNTIME_ARN
+ *   - <PREFIX>_AGENTCORE_REGION
+ *   - <PREFIX>_AGENTCORE_PROXY_PORT
+ *
+ * Optional env vars:
+ *   - <PREFIX>_AGENTCORE_QUALIFIER (default "DEFAULT")
+ *   - <PREFIX>_AGENTCORE_SERVER_NAME (default "mcp-server")
+ *   - <PREFIX>_AGENTCORE_AWS_ACCESS_KEY_ID + _SECRET_ACCESS_KEY (+ _SESSION_TOKEN)
+ *   - <PREFIX>_AGENTCORE_AWS_PROFILE (AWS CLI profile for lazy fallback)
+ */
+export function loadProxyConfigFromEnv(prefix: string): ProxyConfig {
+	const runtimeArn = process.env[`${prefix}_AGENTCORE_RUNTIME_ARN`];
+	if (!runtimeArn) {
+		throw new Error(`${prefix}_AGENTCORE_RUNTIME_ARN is required`);
 	}
+	const region = process.env[`${prefix}_AGENTCORE_REGION`];
+	if (!region) {
+		throw new Error(`${prefix}_AGENTCORE_REGION is required`);
+	}
+	const portRaw = process.env[`${prefix}_AGENTCORE_PROXY_PORT`];
+	if (!portRaw) {
+		throw new Error(`${prefix}_AGENTCORE_PROXY_PORT is required`);
+	}
+	const port = Number.parseInt(portRaw, 10);
+	if (!Number.isFinite(port) || port < 1 || port > 65535) {
+		throw new Error(`${prefix}_AGENTCORE_PROXY_PORT must be an integer in 1..65535, got: ${portRaw}`);
+	}
+	const qualifier = process.env[`${prefix}_AGENTCORE_QUALIFIER`] ?? "DEFAULT";
+	const serverName = process.env[`${prefix}_AGENTCORE_SERVER_NAME`] ?? "mcp-server";
 
-	// Try proxy-specific env vars first (AGENTCORE_AWS_*), then generic AWS_*
-	const accessKeyId = process.env.AGENTCORE_AWS_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
-	const secretAccessKey = process.env.AGENTCORE_AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
-	const sessionToken = process.env.AGENTCORE_AWS_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN;
+	const accessKeyId = process.env[`${prefix}_AGENTCORE_AWS_ACCESS_KEY_ID`];
+	const secretAccessKey = process.env[`${prefix}_AGENTCORE_AWS_SECRET_ACCESS_KEY`];
+	const sessionToken = process.env[`${prefix}_AGENTCORE_AWS_SESSION_TOKEN`];
+	const awsProfile = process.env[`${prefix}_AGENTCORE_AWS_PROFILE`];
 
+	let credentials: ProxyConfig["credentials"];
 	if (accessKeyId && secretAccessKey) {
-		cachedCreds = { accessKeyId, secretAccessKey, sessionToken };
-		credsExpiresAt = Date.now() + 3600_000; // env creds don't expire, refresh hourly
-		return cachedCreds;
-	}
+		credentials = { accessKeyId, secretAccessKey, sessionToken };
+	} else {
+		// Lazy AWS-CLI fallback. The function shells out on each call; the
+		// proxy caches the result per-handle (see startAgentCoreProxy below).
+		credentials = async () => {
+			const args = ["configure", "export-credentials", "--format", "env-no-export"];
+			if (awsProfile) args.push("--profile", awsProfile);
+			const proc = Bun.spawn(["aws", ...args], { stdout: "pipe", stderr: "pipe" });
+			const output = await new Response(proc.stdout).text();
+			await proc.exited;
 
-	// Fall back to AWS CLI credential export
-	try {
-		const proc = Bun.spawn(["aws", "configure", "export-credentials", "--format", "env-no-export"], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const output = await new Response(proc.stdout).text();
-		await proc.exited;
-
-		const vars: Record<string, string> = {};
-		for (const line of output.split("\n")) {
-			const eq = line.indexOf("=");
-			if (eq > 0) vars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-		}
-
-		if (vars.AWS_ACCESS_KEY_ID && vars.AWS_SECRET_ACCESS_KEY) {
-			cachedCreds = {
+			const vars: Record<string, string> = {};
+			for (const line of output.split("\n")) {
+				const eq = line.indexOf("=");
+				if (eq > 0) vars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+			}
+			if (!vars.AWS_ACCESS_KEY_ID || !vars.AWS_SECRET_ACCESS_KEY) {
+				const profileNote = awsProfile ? ` (profile: ${awsProfile})` : "";
+				throw new Error(`No AWS credentials from 'aws configure export-credentials'${profileNote}`);
+			}
+			return {
 				accessKeyId: vars.AWS_ACCESS_KEY_ID,
 				secretAccessKey: vars.AWS_SECRET_ACCESS_KEY,
 				sessionToken: vars.AWS_SESSION_TOKEN,
 			};
-			// Session tokens typically expire in 1h; refresh after 45min
-			credsExpiresAt = Date.now() + 2700_000;
-			return cachedCreds;
-		}
-	} catch {
-		// fall through
+		};
 	}
 
-	throw new Error("No AWS credentials found. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure AWS CLI.");
+	return { runtimeArn, region, port, qualifier, serverName, credentials };
 }
+
+// AwsCreds, module-level cachedCreds, clearCredentialCache, and the
+// module-level getCredentials function were removed by SIO-767. The
+// credential cache now lives in a closure inside startAgentCoreProxy(),
+// so each proxy instance has its own cache (no cross-proxy poisoning).
+// Static-vs-lazy credentials resolution moved to loadProxyConfigFromEnv
+// above.
 
 function sha256(data: string | Buffer): string {
 	return createHash("sha256").update(data).digest("hex");
@@ -151,7 +167,13 @@ function uriEncodePathForSigV4(pathname: string): string {
 		.join("/");
 }
 
-function signRequest(method: string, url: URL, body: string, creds: AwsCreds, region: string): Record<string, string> {
+function signRequest(
+	method: string,
+	url: URL,
+	body: string,
+	creds: ProxyCredentials,
+	region: string,
+): Record<string, string> {
 	const service = "bedrock-agentcore";
 	const now = new Date();
 	const amzDate = now
@@ -338,8 +360,33 @@ export interface AgentCoreProxyHandle {
 	close(): Promise<void>;
 }
 
-export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
-	const cfg = readProxyConfig();
+export async function startAgentCoreProxy(config: ProxyConfig): Promise<AgentCoreProxyHandle> {
+	// Derive URL pieces from runtimeArn + region. Equivalent to the old
+	// readProxyConfig but using the explicitly-passed config.
+	const encodedArn = encodeURIComponent(config.runtimeArn);
+	const basePath = `/runtimes/${encodedArn}/invocations`;
+	const baseUrl = `https://bedrock-agentcore.${config.region}.amazonaws.com`;
+	const queryString = `qualifier=${config.qualifier}`;
+	const fullUrl = `${baseUrl}${basePath}?${queryString}`;
+
+	// Per-handle credential cache (replaces the deleted module-level
+	// cachedCreds singleton). Each invocation of startAgentCoreProxy gets
+	// its own cache via closure -- enables two proxies in one process to
+	// hold credentials for different AWS accounts.
+	let cachedCreds: ProxyCredentials | null = null;
+	let credsExpiresAt = 0;
+
+	async function getCredentials(): Promise<ProxyCredentials> {
+		if (cachedCreds && Date.now() < credsExpiresAt - 300_000) return cachedCreds;
+
+		const creds = typeof config.credentials === "function" ? await config.credentials() : config.credentials;
+		cachedCreds = creds;
+		// Static creds (env-var) refresh hourly; lazy creds (AWS-CLI) refresh
+		// after 45min to stay ahead of typical session-token expiry.
+		credsExpiresAt = typeof config.credentials === "function" ? Date.now() + 2_700_000 : Date.now() + 3_600_000;
+		return cachedCreds;
+	}
+
 	let mcpSessionId: string | undefined;
 	// SIO-737: paired with mcpSessionId. DELETE aborts whichever retry
 	// loop is mid-flight for the session being torn down. Lazy-initialised
@@ -347,7 +394,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	let currentSessionAbort: AbortController | undefined;
 
 	const server = Bun.serve({
-		port: cfg.port,
+		port: config.port,
 		hostname: "127.0.0.1",
 		idleTimeout: 120,
 
@@ -386,8 +433,8 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 						for (let attempt = 1; attempt <= tcpMaxAttempts; attempt++) {
 							try {
 								const creds = await getCredentials();
-								const targetUrl = new URL(`${cfg.basePath}?${cfg.queryString}`, cfg.baseUrl);
-								const headers = signRequest("POST", targetUrl, body, creds, cfg.region);
+								const targetUrl = new URL(`${basePath}?${queryString}`, baseUrl);
+								const headers = signRequest("POST", targetUrl, body, creds, config.region);
 								if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
 
 								const response = await fetch(targetUrl.toString(), {
@@ -576,7 +623,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 				GET: async () => {
 					try {
 						await getCredentials();
-						return Response.json({ status: "ok", target: "agentcore", region: cfg.region });
+						return Response.json({ status: "ok", target: "agentcore", region: config.region });
 					} catch {
 						return Response.json({ status: "error", message: "credentials unavailable" }, { status: 503 });
 					}
@@ -584,7 +631,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 			},
 
 			"/ping": {
-				GET: () => Response.json({ status: "ok", proxy: true, target: cfg.fullUrl }),
+				GET: () => Response.json({ status: "ok", proxy: true, target: fullUrl }),
 			},
 		},
 
@@ -594,7 +641,7 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	const proxyUrl = `http://127.0.0.1:${server.port}`;
 
 	logger.info(
-		{ port: server.port, target: cfg.fullUrl, region: cfg.region, serverName: cfg.serverName },
+		{ port: server.port, target: fullUrl, region: config.region, serverName: config.serverName },
 		`AgentCore SigV4 Proxy running at ${proxyUrl}`,
 	);
 
@@ -608,7 +655,6 @@ export async function startAgentCoreProxy(): Promise<AgentCoreProxyHandle> {
 	};
 }
 
-// Standalone execution: `bun run shared/src/agentcore-proxy.ts`
-if (import.meta.main) {
-	startAgentCoreProxy();
-}
+// Standalone-run block removed: startAgentCoreProxy now requires an explicit
+// ProxyConfig argument. The proxy is a library; spawning it standalone would
+// require choosing an arbitrary <PREFIX>_AGENTCORE_* namespace.
