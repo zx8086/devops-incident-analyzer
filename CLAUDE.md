@@ -96,6 +96,17 @@ bun run yaml:check                                     # Validate agent YAML def
 
 SIO-537 -> SIO-540 -> SIO-546 -> SIO-547 -> SIO-555 -> SIO-559 -> SIO-569 -> SIO-578 -> SIO-588
 
+## Handover Documents
+
+Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Project-specific rules:
+
+- **Location**: `experiments/HANDOFF-<YYYY-MM-DD>-<SIO-XXX-or-topic>.md`. The `experiments/` directory is gitignored — handovers stay local-only, never committed (see `.gitignore` + memory slug `reference_experiments_dir_gitignored`).
+- **One ticket per file** when handing off multiple tickets. Don't bundle SIO-X and SIO-Y unless they truly must be done together.
+- **Linear URLs**: every ticket reference uses the full URL `https://linear.app/siobytes/issue/SIO-XXX`. Show parent/child relationships in the header block.
+- **Cite specs/plans/PRs by full path**: `docs/superpowers/specs/<date>-<topic>-design.md`, `docs/superpowers/plans/<date>-<topic>.md`, PR `#NN`. A fresh session must be able to open them directly without searching.
+- **Memory references section** at the end lists relevant slugs from `/Users/Simon.Owusu@Tommy.com/.claude/projects/-Users-Simon-Owusu-Tommy-com-WebstormProjects-devops-incident-analyzer/memory/` so the next session knows which prior learnings apply.
+- **Verification block must include `bun run typecheck && bun run lint && bun run test`** at minimum, plus any manual probe relevant to the ticket (LangSmith trace inspection, MCP `tools/list` curl, integration replay query).
+
 ## Critical Rules
 
 ### Workflow
