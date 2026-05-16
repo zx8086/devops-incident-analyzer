@@ -316,6 +316,64 @@ describe("validator: anti-hallucination checks", () => {
 	test("shouldRetryValidation returns false for pass_with_warnings", () => {
 		expect(shouldRetryValidation(makeState({ validationResult: "pass_with_warnings", retryCount: 0 }))).toBe(false);
 	});
+
+	// SIO-768: regression — the AWS SDK returns EC2 StateTransitionReason as
+	// "User initiated (2025-10-18 21:13:00 GMT)". The aggregator normalizes this
+	// to ISO-8601 in the final answer. Pre-fix, the validator's T-only regex
+	// missed the AWS-format string in the source data and flagged the answer
+	// as fabricated even though the timestamp originated from a real tool output.
+	test("AWS-format timestamps in source data match ISO-format timestamps in answer", () => {
+		const state = makeState({
+			finalAnswer:
+				"Analysis of the aws account shows instance i-abc has been stopped since 2025-10-18T21:13:00Z. The security group rule remains permissive on TCP/22.",
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					data: "EC2 instance i-abc stopped. StateTransitionReason: User initiated (2025-10-18 21:13:00 GMT). SG sg-xyz allows 0.0.0.0/0:22.",
+					status: "success" as const,
+				},
+			],
+		});
+		const result = validate(state);
+		expect(result.validationResult).toBe("pass");
+	});
+
+	// SIO-768: AWS SDK's Date fields serialize to ISO with millis ("2026-05-15T22:48:00.000Z").
+	// The aggregator typically drops the millis. The normalization step must collapse
+	// these two forms to the same key so the answer is not flagged.
+	test("ISO-with-millis source matches ISO-without-millis answer", () => {
+		const state = makeState({
+			finalAnswer: "The aws EC2 instance was launched at 2026-05-15T22:48:00Z. No alarms have fired since startup.",
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					data: "EC2 instance i-def LaunchTime: 2026-05-15T22:48:00.000Z, state: running.",
+					status: "success" as const,
+				},
+			],
+		});
+		const result = validate(state);
+		expect(result.validationResult).toBe("pass");
+	});
+
+	// SIO-768: ensure the widened regex still catches genuine fabrications.
+	// A timestamp that cannot be normalized to anything present in source data
+	// (and is outside the 5-minute "now" window) must still trigger a warning.
+	test("genuinely fabricated timestamp (not in any source format) still flags", () => {
+		const state = makeState({
+			finalAnswer:
+				"The aws EC2 instance i-ghi is currently running and has no recorded events. There was an incident at 2020-01-01T00:00:00Z but no record exists.",
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					data: "EC2 instance i-ghi LaunchTime: 2026-05-10T10:00:00.000Z, state: running.",
+					status: "success" as const,
+				},
+			],
+		});
+		const result = validate(state);
+		expect(result.validationResult).toBe("pass_with_warnings");
+	});
 });
 
 describe("graph: compilation smoke test", () => {

@@ -43,23 +43,37 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 		sourceData = `${sourceData} ${priorAssistantContent}`;
 	}
 
-	// Check for hallucination indicators -- fabricated timestamps not in source data.
+	// SIO-768: Match BOTH ISO-8601 (`T` separator) and AWS-style string formats
+	// (space separator, optional GMT/UTC/numeric-offset suffix) and normalize before
+	// comparison. The previous T-only regex missed AWS SDK string outputs like
+	// EC2 `StateTransitionReason` ("User initiated (2025-10-18 21:13:00 GMT)"), so
+	// the aggregator's correctly-normalized ISO form in the answer was flagged as
+	// fabricated even though the timestamp existed in the source data.
+	const timestampPattern = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|GMT|UTC|[+-]\d{2}:?\d{2})?/g;
+
+	// Collapse AWS/ISO/precision variants to a single canonical key so source and
+	// answer matches compare equal regardless of which form each side used.
+	const normalizeTimestamp = (ts: string): string =>
+		ts
+			.replace(" ", "T")
+			.replace(/\.\d+/, "")
+			.replace(/(Z|GMT|UTC|[+-]\d{2}:?\d{2})$/, "");
+
+	const answerTimestamps = answer.match(timestampPattern) ?? [];
+	const sourceTimestamps = new Set((sourceData.match(timestampPattern) ?? []).map(normalizeTimestamp));
+
 	// The aggregator prompt injects a "Report generation timestamp" which the LLM
 	// echoes in the report header. Timestamps within 5 minutes of now are legitimate.
-	const timestampPattern = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/g;
-	const answerTimestamps = answer.match(timestampPattern) ?? [];
-	const sourceTimestamps = new Set(sourceData.match(timestampPattern) ?? []);
-
 	const nowMs = Date.now();
 	const GENERATION_WINDOW_MS = 5 * 60 * 1000;
-	// Append Z if missing so timestamps without timezone are parsed as UTC (matching the
-	// aggregator's new Date().toISOString() output which is always UTC)
 	const isNearNow = (ts: string) => {
-		const utcTs = ts.endsWith("Z") || ts.includes("+") ? ts : `${ts}Z`;
-		return Math.abs(new Date(utcTs).getTime() - nowMs) < GENERATION_WINDOW_MS;
+		const normalized = normalizeTimestamp(ts);
+		return Math.abs(new Date(`${normalized}Z`).getTime() - nowMs) < GENERATION_WINDOW_MS;
 	};
 
-	const fabricatedTimestamps = answerTimestamps.filter((t) => !sourceTimestamps.has(t) && !isNearNow(t));
+	const fabricatedTimestamps = answerTimestamps.filter(
+		(t) => !sourceTimestamps.has(normalizeTimestamp(t)) && !isNearNow(t),
+	);
 	if (fabricatedTimestamps.length > 0 && sourceTimestamps.size > 0) {
 		warnings.push(`Potential fabricated timestamps: ${fabricatedTimestamps.join(", ")}`);
 	}
