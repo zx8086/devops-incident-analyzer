@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { evaluate } from "../../src/correlation/engine";
 import { correlationRules } from "../../src/correlation/rules";
-import { baseState, withElasticResult, withKafkaFindings, withKafkaResult } from "./test-helpers";
+import { baseState, withElasticResult, withKafkaFindings, withKafkaResult, withKafkaToolErrors } from "./test-helpers";
 
 describe("correlation engine — kafka-empty-or-dead-groups", () => {
 	test("fires when at least one Empty or Dead group exists", () => {
@@ -75,13 +75,21 @@ describe("correlation engine — kafka-dlq-growth", () => {
 });
 
 describe("correlation engine — kafka-tool-failures", () => {
-	test("fires when toolErrors array is non-empty", () => {
-		const state = withKafkaResult(baseState(), {
-			toolErrors: [{ tool: "kafka_get_consumer_groups", code: "ECONNREFUSED" }],
-		});
+	test("fires when top-level toolErrors array is non-empty", () => {
+		// SIO-769: rule reads top-level result.toolErrors (ToolError[]), not the
+		// nested kafkaFindings.toolErrors slot which has never been populated.
+		const state = withKafkaToolErrors(baseState(), [
+			{
+				toolName: "kafka_get_consumer_groups",
+				category: "transient",
+				message: "ECONNREFUSED",
+				retryable: true,
+			},
+		]);
 		const decisions = evaluate(state, correlationRules);
 		const rule = decisions.find((d) => d.rule.name === "kafka-tool-failures");
 		expect(rule?.status).toBe("needs-invocation");
+		expect(rule?.match?.context.toolErrors).toHaveLength(1);
 	});
 });
 
