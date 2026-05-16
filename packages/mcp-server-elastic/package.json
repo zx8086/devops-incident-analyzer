@@ -16,6 +16,7 @@
 		"@elastic/transport": "^9.3.5",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@opentelemetry/api": "^1.9.1",
+		"langsmith": "catalog:",
 		"pino": "catalog:",
 		"zod": "catalog:"
 	},
