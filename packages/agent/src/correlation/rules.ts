@@ -21,15 +21,15 @@ export interface TriggerMatch {
 }
 
 function getKafkaData(state: AgentStateType): {
-	consumerGroups?: Array<{ id: string; state: string; totalLag?: number }>;
+	consumerGroups?: Array<{ id: string; state?: string; totalLag?: number }>;
 	dlqTopics?: Array<{ name: string; totalMessages: number; recentDelta: number | null }>;
 	toolErrors?: Array<{ tool: string; code: string }>;
 } {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
-	if (!result || result.status !== "success" || !result.data || typeof result.data !== "object") {
-		return {};
-	}
-	return result.data as never;
+	if (!result || result.status !== "success") return {};
+	// SIO-764: read the structured sibling populated by extractFindings; result.data
+	// stays as the prose summary for aggregator/UI.
+	return result.kafkaFindings ?? {};
 }
 
 // SIO-717: read the result-level toolErrors (populated by sub-agent.ts) and
