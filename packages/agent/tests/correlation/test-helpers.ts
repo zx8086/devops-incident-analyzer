@@ -1,5 +1,5 @@
 // packages/agent/tests/correlation/test-helpers.ts
-import type { ToolError } from "@devops-agent/shared";
+import type { KafkaFindings, ToolError } from "@devops-agent/shared";
 import type { AgentStateType } from "../../src/state";
 
 export function baseState(): AgentStateType {
@@ -44,6 +44,22 @@ export function withKafkaResult(state: AgentStateType, data: unknown): AgentStat
 		dataSourceResults: [
 			...state.dataSourceResults,
 			{ dataSourceId: "kafka", status: "success", data, duration: 100 } as never,
+		],
+	};
+}
+
+export function withKafkaFindings(state: AgentStateType, kafkaFindings: KafkaFindings): AgentStateType {
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "kafka",
+				status: "success",
+				data: "prose summary placeholder",
+				duration: 100,
+				kafkaFindings,
+			} as never,
 		],
 	};
 }

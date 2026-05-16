@@ -2,11 +2,11 @@
 import { describe, expect, test } from "bun:test";
 import { evaluate } from "../../src/correlation/engine";
 import { correlationRules } from "../../src/correlation/rules";
-import { baseState, withElasticResult, withKafkaResult } from "./test-helpers";
+import { baseState, withElasticResult, withKafkaFindings, withKafkaResult } from "./test-helpers";
 
 describe("correlation engine — kafka-empty-or-dead-groups", () => {
 	test("fires when at least one Empty or Dead group exists", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
 				{ id: "notification-service", state: "Empty" },
 				{ id: "payments-service", state: "Stable", totalLag: 0 },
@@ -19,7 +19,7 @@ describe("correlation engine — kafka-empty-or-dead-groups", () => {
 	});
 
 	test("does not fire when all groups are Stable", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 0 }],
 		});
 		const decisions = evaluate(state, correlationRules);
@@ -30,7 +30,7 @@ describe("correlation engine — kafka-empty-or-dead-groups", () => {
 
 describe("correlation engine — kafka-significant-lag", () => {
 	test("fires when a Stable group has lag > 10K", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 50_000 }],
 		});
 		const decisions = evaluate(state, correlationRules);
@@ -39,7 +39,7 @@ describe("correlation engine — kafka-significant-lag", () => {
 	});
 
 	test("does not fire below threshold", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 100 }],
 		});
 		const decisions = evaluate(state, correlationRules);
@@ -50,7 +50,7 @@ describe("correlation engine — kafka-significant-lag", () => {
 
 describe("correlation engine — kafka-dlq-growth", () => {
 	test("fires when any DLQ has positive recentDelta", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			dlqTopics: [
 				{ name: "orders-dlq", totalMessages: 100, recentDelta: 5 },
 				{ name: "payments-dlq", totalMessages: 999, recentDelta: 0 },
@@ -62,7 +62,7 @@ describe("correlation engine — kafka-dlq-growth", () => {
 	});
 
 	test("does not fire when all deltas are zero or null", () => {
-		const state = withKafkaResult(baseState(), {
+		const state = withKafkaFindings(baseState(), {
 			dlqTopics: [
 				{ name: "orders-dlq", totalMessages: 100, recentDelta: 0 },
 				{ name: "sap-car-prices-dlt", totalMessages: 177_700, recentDelta: null },
