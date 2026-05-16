@@ -87,6 +87,25 @@ export function withKafkaProseResult(
 	};
 }
 
+// SIO-769: build a kafka result with top-level toolErrors populated, mirroring
+// sub-agent.ts:421 (`...(toolErrors.length > 0 && { toolErrors })`). Used by
+// the kafka-tool-failures rule test, which reads result.toolErrors directly.
+export function withKafkaToolErrors(state: AgentStateType, toolErrors: ToolError[]): AgentStateType {
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "kafka",
+				status: "success",
+				data: "prose summary placeholder",
+				duration: 100,
+				...(toolErrors.length > 0 && { toolErrors }),
+			} as never,
+		],
+	};
+}
+
 export function withElasticSyntheticUp(state: AgentStateType, hostname: string, when: string): AgentStateType {
 	return withElasticResult(state, {
 		syntheticMonitors: [

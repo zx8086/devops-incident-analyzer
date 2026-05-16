@@ -23,7 +23,6 @@ export interface TriggerMatch {
 function getKafkaData(state: AgentStateType): {
 	consumerGroups?: Array<{ id: string; state?: string; totalLag?: number }>;
 	dlqTopics?: Array<{ name: string; totalMessages: number; recentDelta: number | null }>;
-	toolErrors?: Array<{ tool: string; code: string }>;
 } {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
 	if (!result || result.status !== "success") return {};
@@ -175,10 +174,14 @@ export const correlationRules: CorrelationRule[] = [
 		name: "kafka-tool-failures",
 		description: "kafka-agent tool calls failed; check whether broker logs in Elastic show cluster-side issues.",
 		trigger: (state) => {
-			const failures = getKafkaData(state).toolErrors ?? [];
-			return failures.length === 0
-				? null
-				: { context: { errors: failures.map((e) => ({ tool: e.tool, code: e.code })) } };
+			// SIO-769: read top-level result.toolErrors (populated since SIO-725/728 via
+			// the sub-agent's ---STRUCTURED--- sentinel), not kafkaFindings.toolErrors
+			// which was never a populated slot. Mirrors getKafkaResultSignals (rules.ts:39).
+			const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
+			if (!result || result.status !== "success") return null;
+			const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
+			if (toolErrors.length === 0) return null;
+			return { context: { toolErrors } };
 		},
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 3, timeoutMs: 30_000 },
@@ -205,8 +208,8 @@ export const correlationRules: CorrelationRule[] = [
 	{
 		// SIO-717: HTTP 5xx from a connect_* tool indicates Kafka Connect is
 		// unavailable from the agent's network path. Distinct from the broader
-		// kafka-tool-failures rule which fires on getKafkaData().toolErrors
-		// (dormant in production). This one reads result.toolErrors (real).
+		// kafka-tool-failures rule, which (since SIO-769) also reads
+		// result.toolErrors but fires on any tool failure regardless of category.
 		name: "connect-service-unavailable",
 		description:
 			"Kafka Connect tool returned a 5xx; correlate with kafka-connect logs in Elastic to confirm cluster-side vs network failure.",
