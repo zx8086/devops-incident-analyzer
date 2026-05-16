@@ -234,10 +234,11 @@ KAFKA_MCP_URL=http://localhost:9081
 COUCHBASE_MCP_URL=http://localhost:9082
 KONNECT_MCP_URL=http://localhost:9083
 GITLAB_MCP_URL=http://localhost:9084
-ATLASSIAN_MCP_URL_LOCAL=http://localhost:9085
+ATLASSIAN_MCP_URL=http://localhost:9085
+ATLASSIAN_UPSTREAM_MCP_URL=https://mcp.atlassian.com/v1/mcp
 ```
 
-Note that `ATLASSIAN_MCP_URL` (without the `_LOCAL` suffix) points at the upstream Atlassian Cloud endpoint, not the local server. The agent connects to the local server via `ATLASSIAN_MCP_URL_LOCAL`.
+SIO-766: `ATLASSIAN_MCP_URL` is the local proxy the agent connects to (consistent with every other datasource). `ATLASSIAN_UPSTREAM_MCP_URL` is the Atlassian Cloud Rovo endpoint the local proxy forwards to — set in the mcp-server-atlassian package's config.
 
 ---
 

@@ -61,7 +61,7 @@ Server URLs are configured via environment variables:
 | `CAPELLA_MCP_URL` | `http://localhost:9082` | Couchbase Capella MCP |
 | `KONNECT_MCP_URL` | `http://localhost:9083` | Kong Konnect MCP |
 | `GITLAB_MCP_URL` | `http://localhost:9084` | GitLab MCP |
-| `ATLASSIAN_MCP_URL_LOCAL` | `http://localhost:9085` | Atlassian MCP (Jira/Confluence). Separate from `ATLASSIAN_MCP_URL` which is the upstream Atlassian Cloud endpoint. |
+| `ATLASSIAN_MCP_URL` | `http://localhost:9085` | Atlassian MCP (Jira/Confluence). The upstream Rovo endpoint the local proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`. |
 
 Each URL gets `/mcp` appended as the transport endpoint. The connection initialization in `createMcpClient()` uses `Promise.allSettled()` to connect to all servers concurrently and independently.
 
@@ -106,7 +106,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
 | `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
-| `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL_LOCAL` | proxy + custom |
+| `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL` | proxy + custom |
 
 The mapping is defined in `mcp-bridge.ts`:
 
