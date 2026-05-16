@@ -44,6 +44,7 @@ export const n1qlQueryFatalRequests: string = `
 export const n1qlLongestRunningQueries: string = `
 SELECT statement,
     DURATION_TO_STR(avgServiceTime) AS avgServiceTime,
+    MAX(requestTime) AS lastExecutionTime,
     COUNT(1) AS queries
 FROM system:completed_requests
 WHERE UPPER(statement) NOT LIKE 'INFER %'

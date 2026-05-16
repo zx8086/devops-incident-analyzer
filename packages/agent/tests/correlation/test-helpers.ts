@@ -1,5 +1,5 @@
 // packages/agent/tests/correlation/test-helpers.ts
-import type { KafkaFindings, ToolError } from "@devops-agent/shared";
+import type { CouchbaseFindings, GitLabFindings, KafkaFindings, ToolError } from "@devops-agent/shared";
 import type { AgentStateType } from "../../src/state";
 
 export function baseState(): AgentStateType {
@@ -101,6 +101,41 @@ export function withKafkaToolErrors(state: AgentStateType, toolErrors: ToolError
 				data: "prose summary placeholder",
 				duration: 100,
 				...(toolErrors.length > 0 && { toolErrors }),
+			} as never,
+		],
+	};
+}
+
+// SIO-771/772: build gitlab/couchbase results with typed-finding siblings
+// populated, mirroring the pattern from withKafkaFindings. Used by the
+// gitlab-deploy-vs-datastore-runtime engine tests.
+export function withGitLabFindings(state: AgentStateType, gitlabFindings: GitLabFindings): AgentStateType {
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "gitlab",
+				status: "success",
+				data: "prose summary placeholder",
+				duration: 100,
+				gitlabFindings,
+			} as never,
+		],
+	};
+}
+
+export function withCouchbaseFindings(state: AgentStateType, couchbaseFindings: CouchbaseFindings): AgentStateType {
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "couchbase",
+				status: "success",
+				data: "prose summary placeholder",
+				duration: 100,
+				couchbaseFindings,
 			} as never,
 		],
 	};

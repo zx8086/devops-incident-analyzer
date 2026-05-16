@@ -1,5 +1,5 @@
 // agent/src/correlation/rules.ts
-import type { ToolError } from "@devops-agent/shared";
+import type { CouchbaseSlowQuery, GitLabMergedRequest, ToolError } from "@devops-agent/shared";
 import type { AgentName, AgentStateType } from "../state";
 
 export interface CorrelationRule {
@@ -446,19 +446,6 @@ const DEPLOY_RUNTIME_STOPWORDS = new Set([
 const DEPLOY_RUNTIME_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DEPLOY_RUNTIME_TOKEN_MIN_LEN = 6;
 
-interface GitLabMergedRequest {
-	id: number | string;
-	title?: string;
-	description?: string;
-	merged_at?: string;
-}
-
-interface DatastoreSlowQuery {
-	statement?: string;
-	lastExecutionTime?: string;
-	serviceTime?: number;
-}
-
 function distinctiveTokens(text: string): Set<string> {
 	const tokens = text.toLowerCase().match(/[a-z][a-z0-9_]*/g) ?? [];
 	const out = new Set<string>();
@@ -480,25 +467,30 @@ function shareDistinctiveToken(a: string, b: string): boolean {
 	return false;
 }
 
-// SIO-712: This rule's helpers expect structured DataSourceResult.data (object
-// with mergedRequests / slowQueries arrays). In production today, sub-agents
-// return a string in `data` (see sub-agent.ts:301), so the rule is dormant
-// against real traffic and only fires in tests that hand-construct structured
-// data. Matches the same dormancy pattern as the existing kafka rules (see
-// getKafkaData above). Structured sub-agent output is the unblocking work;
-// not in scope for SIO-712.
+// SIO-771/772: gitlab + couchbase sides now wired -- this rule fires in
+// production when a recent merged MR shares a distinctive token with a
+// post-merge couchbase slowQuery statement. konnect side intentionally
+// deferred until a real consumer arrives (see SIO-773 deferral policy).
+
+// SIO-771: reads result.gitlabFindings.mergedRequests, populated by
+// extractGitLabFindings from the gitlab_list_merge_requests tool. Pre-SIO-771
+// this cast result.data to a typed object that production never wrote --
+// dormant since SIO-712.
 function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
-	if (!result || result.status !== "success" || !result.data || typeof result.data !== "object") return [];
-	const data = result.data as { mergedRequests?: GitLabMergedRequest[] };
-	return Array.isArray(data.mergedRequests) ? data.mergedRequests : [];
+	if (!result || result.status !== "success") return [];
+	return result.gitlabFindings?.mergedRequests ?? [];
 }
 
-function getDatastoreSlowQueries(state: AgentStateType, dataSourceId: "couchbase" | "konnect"): DatastoreSlowQuery[] {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === dataSourceId);
-	if (!result || result.status !== "success" || !result.data || typeof result.data !== "object") return [];
-	const data = result.data as { slowQueries?: DatastoreSlowQuery[] };
-	return Array.isArray(data.slowQueries) ? data.slowQueries : [];
+// SIO-772: couchbase reads the typed sibling populated by extractCouchbaseFindings.
+// SIO-771/772 intentionally defers the konnect side -- no extractor wired this
+// iteration. Returns [] for konnect, which makes the rule's konnect iteration a
+// no-op without removing the branch (future konnect work activates it).
+function getDatastoreSlowQueries(state: AgentStateType, dataSourceId: "couchbase" | "konnect"): CouchbaseSlowQuery[] {
+	if (dataSourceId === "konnect") return [];
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "couchbase");
+	if (!result || result.status !== "success") return [];
+	return result.couchbaseFindings?.slowQueries ?? [];
 }
 
 correlationRules.push({
