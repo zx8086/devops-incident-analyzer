@@ -91,10 +91,6 @@ function statusDotClass(status: string): string {
       />
     </button>
 
-    {#if kafkaFindings}
-      <KafkaFindingsCard findings={kafkaFindings} />
-    {/if}
-
     {#if expanded}
       <div class="mt-1 bg-green-50 border border-green-100 rounded-lg px-3 py-2.5 animate-slide-up-fade">
         {#if completedNodes.size > 0}
@@ -125,6 +121,11 @@ function statusDotClass(status: string): string {
                     <span class="text-[0.625rem] text-red-600 ml-auto truncate max-w-[200px]">{ds.message}</span>
                   {/if}
                 </div>
+                {#if id === "kafka" && kafkaFindings}
+                  <div class="ml-3.5">
+                    <KafkaFindingsCard findings={kafkaFindings} />
+                  </div>
+                {/if}
               {/each}
             </div>
           </div>
