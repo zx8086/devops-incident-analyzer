@@ -35,6 +35,23 @@ describe("canonicalizeUpstream", () => {
 		const b = canonicalizeUpstream({ deployments: [{ name: "prod", apiKey: "key-2" }] });
 		expect(a).toBe(b);
 	});
+
+	test("nested non-credential fields are preserved in fingerprint", () => {
+		// Regression guard: the previous JSON.stringify(value, topKeys.sort())
+		// implementation silently dropped any nested key not present at the top
+		// level, including non-credential fields like `host` and `env`. The
+		// recursive sortKeysDeep approach must preserve them.
+		const prod = canonicalizeUpstream({ deployments: [{ host: "prod.es", env: "prod" }] });
+		const staging = canonicalizeUpstream({ deployments: [{ host: "staging.es", env: "staging" }] });
+		expect(prod).not.toBe(staging);
+	});
+
+	test("deeply nested field order independence", () => {
+		// The recursive sort must apply at every depth, not just the top.
+		const a = canonicalizeUpstream({ deployments: [{ host: "x", env: "prod" }] });
+		const b = canonicalizeUpstream({ deployments: [{ env: "prod", host: "x" }] });
+		expect(a).toBe(b);
+	});
 });
 
 describe("buildIdentityCard", () => {

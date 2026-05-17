@@ -46,13 +46,28 @@ export function buildIdentityCard(opts: BuildIdentityCardOptions): IdentityCard 
 const CREDENTIAL_KEY_RE = /password|secret|token|key/i;
 const ALLOWED_KEY_RE = /^(publicKey|instanceId)$/;
 
-// 16-hex-char fingerprint over canonical JSON with sorted keys.
+// 16-hex-char fingerprint over canonical JSON with sorted keys at every depth.
 // Credential-bearing keys (matching /password|secret|token|key/i) are stripped
 // before hashing, except for `publicKey` and `instanceId` which are public.
 export function canonicalizeUpstream(config: Record<string, unknown>): string {
-	const redacted = redactCredentials(config) as Record<string, unknown>;
-	const sorted = JSON.stringify(redacted, Object.keys(redacted).sort());
-	return createHash("sha256").update(sorted).digest("hex").slice(0, 16);
+	const redacted = redactCredentials(config);
+	// JSON.stringify with an array replacer applies the whitelist at every
+	// nesting depth, which silently drops nested keys not present at the top.
+	// Sort keys recursively first, then serialize with no replacer.
+	const canonical = JSON.stringify(sortKeysDeep(redacted));
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+}
+
+function sortKeysDeep(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(sortKeysDeep);
+	if (value !== null && typeof value === "object") {
+		const sorted: Record<string, unknown> = {};
+		for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+			sorted[k] = sortKeysDeep((value as Record<string, unknown>)[k]);
+		}
+		return sorted;
+	}
+	return value;
 }
 
 function redactCredentials(value: unknown): unknown {
