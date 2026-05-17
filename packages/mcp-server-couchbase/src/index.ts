@@ -3,9 +3,14 @@
 // Import global setup first
 import "./set-global";
 
-import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
-import { config } from "./config";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
+import { config } from "./config";
 import { connectionManager } from "./lib/connectionManager";
 import { createServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
@@ -79,8 +84,9 @@ if (import.meta.main) {
 		createServerFactory: (bucket) => () => createServer(bucket),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-		createTransport: (serverFactory, _ds, identityCard) => createTransport(config.transport, serverFactory!, identityCard),
+		createTransport: (serverFactory, _ds, identityCard) =>
+			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+			createTransport(config.transport, serverFactory!, identityCard),
 
 		cleanupDatasource: async () => {
 			await connectionManager.close();
