@@ -32,8 +32,70 @@ The plumbing is documented and tested. Building cards #2 and #3 should be straig
 
 - `packages/agent/src/correlation/extractors/kafka.ts` — `normalize` + `tokenize` + `isRelevantById` + `isRelevantDlq`. Suffix list: `consumer|sink|eventing|prod|stg|dev|svc|service`. Min token length: 4. Per-token plural-s strip after tokenization.
 - `packages/agent/src/extract-findings.ts:11-22` — `collectFocusServices(state)` unions `state.investigationFocus.services` and `state.normalizedIncident.affectedServices[].name`.
+- `packages/agent/src/extract-findings.ts:25-50` — diagnostic log emitted on every kafka extraction. Pino structured, logger name `agent:extract-findings`, tag `KafkaFindingsCard`. Reports `focusServices`, `rawConsumerGroups` count, `filteredConsumerGroups` count, `filterMode` (`scoped` vs `show-all`), and first 3 raw group ids.
 - Always-pass-through rules: `state !== "Stable"` OR `totalLag > 0` OR `dlqTopic.recentDelta > 0`.
 - Empty-focus fallback: render all (matches pre-SIO-785 behaviour).
+
+### Diagnostic log shape
+
+Every kafka findings extraction emits one log line. Example from a scoped run:
+
+```
+info: kafka findings extracted {
+  "service": "agent:extract-findings",
+  "tag": "KafkaFindingsCard",
+  "focusServices": ["notification-service", "orders-service"],
+  "focusServicesCount": 2,
+  "rawConsumerGroups": 3,
+  "filteredConsumerGroups": 2,
+  "dlqTopics": 0,
+  "sampleRawIds": ["notification-service-consumer", "orders-service-sink", "unrelated-group"],
+  "filterMode": "scoped"
+}
+```
+
+Example from an unfocused run:
+
+```
+info: kafka findings extracted {
+  "tag": "KafkaFindingsCard",
+  "focusServices": [],
+  "focusServicesCount": 0,
+  "rawConsumerGroups": 50,
+  "filteredConsumerGroups": 50,
+  "filterMode": "show-all"
+}
+```
+
+### How to inspect during live testing
+
+Three options, pick one based on where you're running the dev server:
+
+**Option A — terminal foreground:** the SvelteKit dev server's stdout has Pino JSON inline with normal logs. Pipe through `grep` to isolate:
+
+```bash
+bun run --filter @devops-agent/web dev 2>&1 | grep "KafkaFindingsCard"
+```
+
+**Option B — already-running dev server:** dump recent logs from the process. If you have it backgrounded, you'll need to redirect stderr/stdout at launch time. Otherwise re-launch with logging:
+
+```bash
+bun run --filter @devops-agent/web dev > /tmp/web-dev.log 2>&1 &
+tail -f /tmp/web-dev.log | grep KafkaFindingsCard
+```
+
+**Option C — LangSmith trace:** the log fires inside the `extractFindings` LangGraph span. Look at the span's events/attributes — Pino-wrapped logs appear there too when OTEL is configured.
+
+### Diagnostic interpretation table
+
+| `filterMode` | `rawConsumerGroups` | `filteredConsumerGroups` | Interpretation |
+|---|---|---|---|
+| `show-all` | N | N | No focus services anchored. All groups pass through. Expected for generic "is kafka healthy" questions. |
+| `scoped` | N | M < N | Filter is working. M groups matched focus or are degraded/lagged. Verify the M ids by inspecting the `kafkaFindings.consumerGroups` array in the SSE response — they should either name-match the focus or have non-Stable state / non-zero lag. |
+| `scoped` | N | 0 | Filter is rejecting everything. Likely wrong: even if no group matches the focus, any degraded/lagged group should still pass. Investigate. |
+| `scoped` | N | N | Filter passed all groups even with focus. Either every group is degraded/lagged, OR the focus is so broad (e.g. token overlap on a common word) that everything matches. Inspect `sampleRawIds`. |
+| `scoped` | 0 | 0 | Sub-agent ran `kafka_list_consumer_groups` but the extractor's schema parsing failed silently. Likely a SIO-783-style shape mismatch — verify against `packages/mcp-server-kafka/src/services/kafka-service.ts`. |
+| `show-all` | 0 | 0 | Sub-agent never called `kafka_list_consumer_groups` (or called it but the response failed both bare-array and wrapped-object parsing). Not a filter bug. |
 
 ### Tests already passing
 
