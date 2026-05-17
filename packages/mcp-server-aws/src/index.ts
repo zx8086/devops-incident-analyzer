@@ -16,25 +16,25 @@ interface AwsDatasource {
 
 if (import.meta.main) {
 	if (process.env.AWS_AGENTCORE_RUNTIME_ARN) {
-		const { loadProxyConfigFromEnv, startAgentCoreProxy } = await import("@devops-agent/shared");
-		const config = loadProxyConfigFromEnv("AWS");
+		const { createAgentCoreProxyTransport, loadProxyConfigFromEnv } = await import("@devops-agent/shared");
+		type AwsProxyDatasource = { config: ReturnType<typeof loadProxyConfigFromEnv> };
 
-		logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting AWS MCP Server");
-		const proxy = await startAgentCoreProxy(config);
-		logger.info({ transport: "agentcore-proxy", port: proxy.port, url: proxy.url }, "AWS MCP Server ready");
-		logger.info("aws-mcp-server started successfully");
-
-		let isShuttingDown = false;
-		const shutdown = async () => {
-			if (isShuttingDown) return;
-			isShuttingDown = true;
-			logger.info("Shutting down aws-mcp-server...");
-			await proxy.close();
-			logger.info("aws-mcp-server shutdown completed");
-			process.exit(0);
-		};
-		process.on("SIGINT", () => shutdown());
-		process.on("SIGTERM", () => shutdown());
+		createMcpApplication<AwsProxyDatasource>({
+			name: "aws-mcp-server",
+			logger: createBootstrapAdapter(logger),
+			initTracing: () => initializeTracing(),
+			telemetry: buildTelemetryConfig("aws-mcp-server"),
+			mode: "proxy",
+			initDatasource: async () => {
+				const config = loadProxyConfigFromEnv("AWS");
+				logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting AWS MCP Server");
+				return { config };
+			},
+			createTransport: async () => createAgentCoreProxyTransport("AWS", createBootstrapAdapter(logger)),
+			onStarted: (ds) => {
+				logger.info({ arn: ds.config.runtimeArn, transport: "agentcore-proxy" }, "AWS MCP server ready");
+			},
+		});
 	} else {
 		createMcpApplication<AwsDatasource>({
 			name: "aws-mcp-server",
