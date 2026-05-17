@@ -1,4 +1,5 @@
 // src/transport/http.ts
+import type { IdentityCard } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createContextLogger } from "../utils/logger.ts";
@@ -9,6 +10,8 @@ export interface HttpTransportOptions {
 	port: number;
 	host: string;
 	path: string;
+	// SIO-780: identity card returned by GET /identity
+	identityCard?: IdentityCard;
 }
 
 export interface HttpTransportResult {
@@ -32,6 +35,10 @@ export async function startHttpTransport(
 					status: 200,
 					headers: { "content-type": "application/json" },
 				});
+			if (url.pathname === "/identity")
+				return options.identityCard
+					? Response.json(options.identityCard)
+					: Response.json({ error: "identity not configured" }, { status: 503 });
 			if (url.pathname !== options.path) return new Response("not found", { status: 404 });
 			if (req.method !== "POST") {
 				return Response.json(
