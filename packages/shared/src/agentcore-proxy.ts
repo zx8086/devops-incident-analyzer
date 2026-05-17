@@ -6,6 +6,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { createMcpLogger } from "./logger.ts";
 import type { IdentityCard } from "./transport/identity.ts";
+import { createProxyReadinessProbe } from "./transport/proxy-readiness.ts";
 
 const logger = createMcpLogger("agentcore-proxy");
 
@@ -364,6 +365,7 @@ export interface AgentCoreProxyHandle {
 export async function startAgentCoreProxy(
 	config: ProxyConfig,
 	identityCard: IdentityCard,
+	role: "aws-proxy" | "kafka-proxy",
 ): Promise<AgentCoreProxyHandle> {
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
@@ -390,6 +392,22 @@ export async function startAgentCoreProxy(
 		credsExpiresAt = typeof config.credentials === "function" ? Date.now() + 2_700_000 : Date.now() + 3_600_000;
 		return cachedCreds;
 	}
+
+	// SIO-780: readiness probe combining credentials + SigV4-signed tools/list +
+	// role-specific sentinel tool. Reuses the existing signRequest helper so
+	// SigV4 signing logic lives in one place.
+	const readinessProbe = createProxyReadinessProbe({
+		role,
+		getCredentials,
+		upstreamUrl: fullUrl,
+		sigv4Fetch: async (req) => {
+			const reqUrl = new URL(req.url);
+			const reqBody = await req.text();
+			const creds = await getCredentials();
+			const headers = signRequest(req.method, reqUrl, reqBody, creds, config.region);
+			return fetch(reqUrl.toString(), { method: req.method, headers, body: reqBody });
+		},
+	});
 
 	let mcpSessionId: string | undefined;
 	// SIO-737: paired with mcpSessionId. DELETE aborts whichever retry
@@ -640,6 +658,20 @@ export async function startAgentCoreProxy(
 
 			"/identity": {
 				GET: () => Response.json(identityCard),
+			},
+
+			"/ready": {
+				GET: async (): Promise<Response> => {
+					try {
+						const snap = await readinessProbe();
+						return Response.json(snap, { status: snap.ready ? 200 : 503 });
+					} catch (err) {
+						return Response.json(
+							{ ready: false, error: err instanceof Error ? err.message : String(err) },
+							{ status: 503 },
+						);
+					}
+				},
 			},
 		},
 

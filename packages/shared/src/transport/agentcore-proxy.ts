@@ -10,10 +10,11 @@ export async function createAgentCoreProxyTransport(
 	identityCard: IdentityCard,
 ): Promise<BootstrapTransportResult> {
 	const config = loadProxyConfigFromEnv(prefix);
+	const role: "kafka-proxy" | "aws-proxy" = prefix === "KAFKA" ? "kafka-proxy" : "aws-proxy";
 	const proxy = await traceSpan(
 		"agentcore-proxy",
 		"proxy.connect",
-		async (_span) => startAgentCoreProxy(config, identityCard),
+		async (_span) => startAgentCoreProxy(config, identityCard, role),
 		{
 			"proxy.prefix": prefix,
 			"proxy.runtimeArn": config.runtimeArn,

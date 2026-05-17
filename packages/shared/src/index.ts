@@ -206,6 +206,10 @@ export {
 	type McpTransportMode,
 } from "./transport/identity.ts";
 export {
+	type CreateProxyReadinessProbeOptions,
+	createProxyReadinessProbe,
+} from "./transport/proxy-readiness.ts";
+export {
 	type ComponentStatus,
 	type CreateReadinessProbeOptions,
 	createReadinessProbe,

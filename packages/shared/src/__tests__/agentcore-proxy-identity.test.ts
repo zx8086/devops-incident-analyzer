@@ -32,7 +32,7 @@ const fixtureConfig: ProxyConfig = {
 
 describe("agentcore proxy /identity", () => {
 	test("GET /identity returns the supplied IdentityCard", async () => {
-		const handle = await startAgentCoreProxy(fixtureConfig, fixtureCard);
+		const handle = await startAgentCoreProxy(fixtureConfig, fixtureCard, "kafka-proxy");
 		try {
 			const url = `${handle.url}/identity`;
 			const res = await fetch(url);
@@ -45,7 +45,7 @@ describe("agentcore proxy /identity", () => {
 	});
 
 	test("GET /health is unchanged (sibling route still works)", async () => {
-		const handle = await startAgentCoreProxy(fixtureConfig, fixtureCard);
+		const handle = await startAgentCoreProxy(fixtureConfig, fixtureCard, "kafka-proxy");
 		try {
 			const res = await fetch(`${handle.url}/health`);
 			expect(res.status).toBe(200);
