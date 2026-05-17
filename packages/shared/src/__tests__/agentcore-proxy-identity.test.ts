@@ -1,7 +1,7 @@
-// packages/shared/src/transport/__tests__/agentcore-proxy.identity.test.ts
+// packages/shared/src/__tests__/agentcore-proxy-identity.test.ts
 import { describe, expect, test } from "bun:test";
-import { type ProxyConfig, startAgentCoreProxy } from "../../agentcore-proxy.ts";
-import type { IdentityCard } from "../../transport/identity.ts";
+import { type ProxyConfig, startAgentCoreProxy } from "../agentcore-proxy.ts";
+import type { IdentityCard } from "../transport/identity.ts";
 
 // We test startAgentCoreProxy directly (not createAgentCoreProxyTransport),
 // because the wrapper requires env-var loading that complicates fixture setup.
