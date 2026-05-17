@@ -1,7 +1,8 @@
 // src/index.ts
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { KongApi } from "./api/kong-api.js";
 import { type Config, loadConfiguration } from "./config/index.js";
+import pkg from "../package.json" with { type: "json" };
 import { createKonnectServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
@@ -22,6 +23,10 @@ if (import.meta.main) {
 
 		initTracing: () => initializeTracing(),
 		telemetry: buildTelemetryConfig("konnect-mcp-server"),
+
+		role: "konnect-mcp",
+		version: pkg.version,
+		identityFingerprint: (ds) => canonicalizeUpstream({ region: ds.config.kong.region }),
 
 		initDatasource: async () => {
 			const config = await loadConfiguration();
@@ -50,7 +55,7 @@ if (import.meta.main) {
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
+		createTransport: (serverFactory, ds, identityCard) => createTransport(ds.config.transport, serverFactory!, identityCard),
 
 		onStarted: (ds) => {
 			serverLog.info(
