@@ -2,7 +2,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getLogger } from "@devops-agent/observability";
-import type { McpRole } from "@devops-agent/shared";
+import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
 
@@ -265,18 +265,101 @@ export function getAllTools(): StructuredToolInterface[] {
 	return allTools;
 }
 
-// SIO-608: Health check a single MCP server via its /health endpoint
-async function healthCheckServer(mcpUrl: string): Promise<boolean> {
-	const healthUrl = mcpUrl.replace(/\/mcp$/, "/health");
+// SIO-780: three-tier probe replacing the single /health check. Tier 1 hits
+// /health (2s) for liveness, Tier 2 hits /identity (1s) to detect replaced or
+// misidentified instances, Tier 3 hits /ready (5s) for upstream readiness.
+// Total worst-case budget 8s -- well inside the 35s AgentCore connect window.
+type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
+
+type ProbeResult =
+	| { state: "ready"; card: IdentityCard }
+	| { state: "unready"; card: IdentityCard; snapshot: ReadinessSnapshot }
+	| { state: "down"; reason: string }
+	| { state: "replaced"; reason: string; card: IdentityCard }
+	| { state: "misidentified"; reason: string; card: IdentityCard };
+
+const expectedIdentity = new Map<string, IdentityCard>();
+const lastProbeState = new Map<string, ProbeState>();
+
+function probeErrorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+async function probeServer(name: string, url: string): Promise<ProbeResult> {
+	const baseUrl = url.replace(/\/mcp$/, "");
+
+	// Tier 1: liveness (2s budget)
 	try {
-		const response = await fetch(healthUrl, {
-			method: "GET",
-			signal: AbortSignal.timeout(5_000),
-		});
-		return response.ok;
-	} catch {
-		return false;
+		const r = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2_000) });
+		if (!r.ok) return { state: "down", reason: `health returned ${r.status}` };
+	} catch (err) {
+		return { state: "down", reason: `health unreachable: ${probeErrorMessage(err)}` };
 	}
+
+	// Tier 2: identity (1s budget)
+	let card: IdentityCard;
+	try {
+		const r = await fetch(`${baseUrl}/identity`, { signal: AbortSignal.timeout(1_000) });
+		if (!r.ok) return { state: "down", reason: `identity returned ${r.status}` };
+		card = (await r.json()) as IdentityCard;
+	} catch (err) {
+		return { state: "down", reason: `identity unreachable: ${probeErrorMessage(err)}` };
+	}
+
+	// Seed on first probe; subsequent probes compare against the seeded card.
+	// Order: role mismatch (misidentified) > instanceId (replaced) > upstream fingerprint (replaced).
+	const expected = expectedIdentity.get(name);
+	if (!expected) {
+		expectedIdentity.set(name, card);
+	} else {
+		if (card.role !== expected.role) {
+			return {
+				state: "misidentified",
+				reason: `role mismatch: expected ${expected.role}, got ${card.role}`,
+				card,
+			};
+		}
+		if (card.instanceId !== expected.instanceId) {
+			return { state: "replaced", reason: "instanceId changed", card };
+		}
+		if (card.upstreamFingerprint !== expected.upstreamFingerprint) {
+			return { state: "replaced", reason: "upstream config fingerprint changed", card };
+		}
+	}
+
+	// Tier 3: readiness (5s budget). 404 means Phase B not yet deployed for this server -- treat as ready.
+	try {
+		const r = await fetch(`${baseUrl}/ready`, { signal: AbortSignal.timeout(5_000) });
+		if (r.status === 404) return { state: "ready", card };
+		if (!r.ok) {
+			const snapshot = (await r.json().catch(() => ({}))) as ReadinessSnapshot;
+			return { state: "unready", card, snapshot };
+		}
+		return { state: "ready", card };
+	} catch (err) {
+		return {
+			state: "unready",
+			card,
+			snapshot: {
+				ready: false,
+				components: {},
+				cachedAt: new Date().toISOString(),
+				errors: { _probe: probeErrorMessage(err) },
+			},
+		};
+	}
+}
+
+// Test escape hatches. Underscore prefix marks these as internal -- do not import from production code.
+export const _probeServerForTest = probeServer;
+export function _resetExpectedIdentityForTest(): void {
+	expectedIdentity.clear();
+	lastProbeState.clear();
+}
+
+// Read-only snapshot of the most recent probe state per server, for the dashboard endpoint (Task C4).
+export function getServerStates(): Record<string, ProbeState> {
+	return Object.fromEntries(lastProbeState.entries());
 }
 
 // SIO-608: Reconnect a single server that was previously down
@@ -321,36 +404,70 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 	}
 }
 
-// SIO-608: Poll all servers and update connectedServers
+// SIO-780: state-aware health poll. Dispatches per ProbeResult.state:
+//   ready        -> reconnect if not connected, otherwise no-op
+//   down         -> drop connection
+//   unready      -> log warn, keep tools (UI shows degraded via getServerStates)
+//   replaced     -> reconnect + update expectedIdentity (SSE event deferred to C5)
+//   misidentified -> drop connection + log error (no reconnect; the server is wrong)
 async function pollServerHealth(): Promise<void> {
 	if (isPolling) return;
 	isPolling = true;
 
 	try {
 		const checks = [...serverUrls.entries()].map(async ([name, url]) => {
-			const healthy = await healthCheckServer(url);
-			return { name, url, healthy };
+			const result = await probeServer(name, url);
+			return { name, url, result };
 		});
 
-		const results = await Promise.allSettled(checks);
+		const settled = await Promise.allSettled(checks);
 
-		for (const result of results) {
-			if (result.status !== "fulfilled") continue;
-			const { name, url, healthy } = result.value;
+		for (const settledResult of settled) {
+			if (settledResult.status !== "fulfilled") continue;
+			const { name, url, result } = settledResult.value;
+			lastProbeState.set(name, result.state);
 
-			if (healthy && !connectedServers.has(name)) {
-				// Server came back online
-				const hasTools = (toolsByServer.get(name)?.length ?? 0) > 0;
-				if (hasTools) {
-					connectedServers.add(name);
-					logger.info({ serverName: name }, "MCP server back online (tools cached)");
-				} else {
+			switch (result.state) {
+				case "ready":
+					if (!connectedServers.has(name)) {
+						const hasTools = (toolsByServer.get(name)?.length ?? 0) > 0;
+						if (hasTools) {
+							connectedServers.add(name);
+							logger.info({ serverName: name }, "MCP server back online (tools cached)");
+						} else {
+							await reconnectServer(name, url);
+						}
+					}
+					break;
+				case "down":
+					if (connectedServers.has(name)) {
+						connectedServers.delete(name);
+						logger.warn({ serverName: name, reason: result.reason }, "MCP server down, marking disconnected");
+					}
+					break;
+				case "unready":
+					logger.warn({ serverName: name, components: result.snapshot.components }, "MCP server upstream degraded");
+					break;
+				case "replaced": {
+					const oldCard = expectedIdentity.get(name);
+					logger.info(
+						{
+							serverName: name,
+							reason: result.reason,
+							oldInstanceId: oldCard?.instanceId ?? null,
+							newInstanceId: result.card.instanceId,
+						},
+						"MCP server replaced, reconnecting",
+					);
 					await reconnectServer(name, url);
+					expectedIdentity.set(name, result.card);
+					// SSE event emitted in Task C5
+					break;
 				}
-			} else if (!healthy && connectedServers.has(name)) {
-				// Server went down
-				connectedServers.delete(name);
-				logger.warn({ serverName: name }, "MCP server health check failed, marking disconnected");
+				case "misidentified":
+					logger.error({ serverName: name, reason: result.reason }, "MCP server misidentified mid-session");
+					connectedServers.delete(name);
+					break;
 			}
 		}
 	} finally {
