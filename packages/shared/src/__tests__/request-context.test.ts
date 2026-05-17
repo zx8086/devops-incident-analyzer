@@ -1,5 +1,7 @@
 // shared/src/__tests__/request-context.test.ts
 import { describe, expect, test } from "bun:test";
+import pino from "pino";
+import { buildEcsOptions } from "../logger.ts";
 import { getCurrentRequestContext, runWithRequestContext } from "../request-context.ts";
 
 describe("RequestContext", () => {
@@ -38,5 +40,38 @@ describe("RequestContext", () => {
 		const ctx = { threadId: "t1", runId: "r1", requestId: "q1" };
 		const result = await runWithRequestContext(ctx, async () => "done");
 		expect(result).toBe("done");
+	});
+});
+
+describe("RequestContext + pino mixin", () => {
+	function captureLogs() {
+		const records: Array<Record<string, unknown>> = [];
+		const dest = {
+			write(data: string) {
+				records.push(JSON.parse(data));
+			},
+		};
+		const opts = buildEcsOptions({ serviceName: "test" });
+		const logger = pino({ level: "info", ...opts }, dest).child({ service: "test" });
+		return { logger, records };
+	}
+
+	test("logs inside runWithRequestContext include threadId/runId/requestId", async () => {
+		const { logger, records } = captureLogs();
+		await runWithRequestContext({ threadId: "t-1", runId: "r-1", requestId: "q-1" }, async () => {
+			logger.info("inside");
+		});
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ threadId: "t-1", runId: "r-1", requestId: "q-1" });
+	});
+
+	test("logs outside the run do NOT include those fields", () => {
+		const { logger, records } = captureLogs();
+		logger.info("outside");
+		expect(records).toHaveLength(1);
+		const record = records[0] as Record<string, unknown>;
+		expect(record.threadId).toBeUndefined();
+		expect(record.runId).toBeUndefined();
+		expect(record.requestId).toBeUndefined();
 	});
 });
