@@ -1,6 +1,6 @@
 // src/transport/factory.ts
 
-import type { IdentityCard } from "@devops-agent/shared";
+import type { IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
 import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createContextLogger, logger } from "../utils/logger.js";
@@ -53,6 +53,10 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 export async function createTransport(
 	config: TransportConfig,
 	serverFactory: () => McpServer,
+	// SIO-780: optional readiness probe wired into HTTP transport's /ready route.
+	// Stdio and AgentCore transports ignore this argument (no HTTP surface to
+	// register the route on; AgentCore's framework health is authoritative).
+	readinessProbe?: () => Promise<ReadinessSnapshot>,
 	// SIO-780: identity card threaded from createMcpApplication into /identity route
 	identityCard?: IdentityCard,
 ): Promise<TransportResult> {
@@ -85,6 +89,7 @@ export async function createTransport(
 			idleTimeout: config.idleTimeout,
 			apiKey: config.apiKey || undefined,
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
+			readinessProbe,
 			identityCard,
 		});
 	}
