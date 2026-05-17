@@ -8,10 +8,25 @@
 
 import { createReadinessProbe, type ReadinessSnapshot } from "./readiness.ts";
 
+// Sentinel tools must exist in the upstream MCP server's tools/list response.
+// aws_cloudwatch_describe_alarms is the AWS agent's primary triage entry per
+// agents/incident-analyzer/agents/aws-agent/RULES.md and is always registered.
 const ROLE_SENTINEL_TOOLS: Record<"aws-proxy" | "kafka-proxy", string> = {
-	"aws-proxy": "aws___call_aws",
+	"aws-proxy": "aws_cloudwatch_describe_alarms",
 	"kafka-proxy": "kafka_list_topics",
 };
+
+// AgentCore's streamable-HTTP MCP transport returns SSE-framed JSON-RPC
+// ("event: message\ndata: <json>\n\n") once the runtime is warm, and bare
+// JSON ({"jsonrpc","error":{"code":-32010,...}}) during cold-start. Mirrors
+// the parse pattern in agentcore-proxy.ts:230 (classifyToolStatus). Returns
+// the last data: frame, or the raw body trimmed when no SSE framing exists.
+function parseAgentCoreBody(rawBody: string): unknown {
+	const dataLines = rawBody.split("\n").filter((l) => l.startsWith("data: "));
+	const jsonText = dataLines.length > 0 ? (dataLines[dataLines.length - 1]?.slice(6) ?? "") : rawBody.trim();
+	if (!jsonText) throw new Error("empty response body");
+	return JSON.parse(jsonText);
+}
 
 export interface CreateProxyReadinessProbeOptions {
 	role: "aws-proxy" | "kafka-proxy";
@@ -41,7 +56,20 @@ export function createProxyReadinessProbe(opts: CreateProxyReadinessProbeOptions
 				if (!res.ok) {
 					throw new Error(`tools/list returned ${res.status}`);
 				}
-				const body = (await res.json()) as { result?: { tools?: Array<{ name: string }> } };
+				const rawBody = await res.text();
+				const body = parseAgentCoreBody(rawBody) as {
+					result?: { tools?: Array<{ name: string }> };
+					error?: { code: number; message?: string };
+				};
+				// Cold-start: AgentCore returns -32010 while the runtime boots. The probe
+				// should surface this explicitly so the operator doesn't chase a missing
+				// sentinel tool that won't appear until the runtime is up.
+				if (body.error?.code === -32010) {
+					throw new Error(`AgentCore cold-start in progress (-32010): ${body.error.message ?? ""}`.trim());
+				}
+				if (body.error) {
+					throw new Error(`tools/list returned JSON-RPC error ${body.error.code}: ${body.error.message ?? ""}`.trim());
+				}
 				const tools = body.result?.tools ?? [];
 				const found = tools.some((t) => t.name === sentinelTool);
 				if (!found) {
