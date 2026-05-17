@@ -5,6 +5,11 @@ import { z } from "zod";
 mock.module("@devops-agent/agent", () => ({
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
+	// SIO-780: datasources route test runs later in the same process and imports
+	// these from the same module specifier; include them so the cached namespace
+	// has the symbols regardless of file ordering.
+	getConnectedServers: mock(() => [] as string[]),
+	getServerStates: mock(() => ({}) as Record<string, string>),
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 }));
 

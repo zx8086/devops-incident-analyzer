@@ -11,8 +11,16 @@ import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
 
-onMount(async () => {
-	await agentStore.loadDataSources();
+onMount(() => {
+	let es: EventSource | undefined;
+	(async () => {
+		await agentStore.loadDataSources();
+		es = new EventSource("/api/events");
+		es.addEventListener("mcp_replaced", (e) => {
+			console.log("[mcp_replaced]", JSON.parse((e as MessageEvent).data));
+		});
+	})();
+	return () => es?.close();
 });
 
 onDestroy(() => {
@@ -73,7 +81,7 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </header>
 
-  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
+  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
 
   {#if agentStore.selectedDataSources.includes("elastic")}
     <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />

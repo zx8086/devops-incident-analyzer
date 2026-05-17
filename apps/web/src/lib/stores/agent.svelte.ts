@@ -26,6 +26,9 @@ export interface FollowUpContext {
 // SIO-608: Frontend polling interval for health status
 const HEALTH_POLL_INTERVAL_MS = 15_000;
 
+// SIO-780: probe state literal-union (mirrors mcp-bridge ProbeState)
+type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
+
 function createAgentStore() {
 	let messages = $state<ChatMessage[]>([]);
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
@@ -35,6 +38,8 @@ function createAgentStore() {
 	let selectedDataSources = $state<string[]>([]);
 	let connectedDataSources = $state<string[]>([]);
 	let availableDataSources = $state<string[]>([]);
+	// SIO-780: per-datasource probe state ("ready" | "unready" | "down" | "replaced" | "misidentified")
+	let stateDataSources = $state<Record<string, ProbeState>>({});
 	// SIO-649: Available is populated from GET /api/deployments on mount; selected defaults to all.
 	let availableElasticDeployments = $state<string[]>([]);
 	let selectedElasticDeployments = $state<string[]>([]);
@@ -224,11 +229,13 @@ function createAgentStore() {
 			const data = await res.json();
 			availableDataSources = data.dataSources ?? [];
 			connectedDataSources = data.connected ?? [];
+			stateDataSources = data.states ?? {};
 			selectedDataSources = connectedDataSources.length > 0 ? [...connectedDataSources] : [...availableDataSources];
 		} catch {
 			availableDataSources = [];
 			selectedDataSources = [];
 			connectedDataSources = [];
+			stateDataSources = {};
 		}
 		// SIO-649: Best-effort deployment list fetch. A failure here just hides the sub-selector.
 		try {
@@ -249,11 +256,13 @@ function createAgentStore() {
 		healthPollTimer = setInterval(async () => {
 			try {
 				const res = await fetch("/api/datasources");
-				const data: { dataSources: string[]; connected: string[] } = await res.json();
+				const data: { dataSources: string[]; connected: string[]; states?: Record<string, ProbeState> } =
+					await res.json();
 				const newConnected = data.connected ?? [];
 				const prevConnected = connectedDataSources;
 
 				connectedDataSources = newConnected;
+				stateDataSources = data.states ?? {};
 
 				if (!isStreaming) {
 					// Auto-deselect datasources that went offline
@@ -372,6 +381,9 @@ function createAgentStore() {
 		},
 		get availableDataSources() {
 			return availableDataSources;
+		},
+		get stateDataSources() {
+			return stateDataSources;
 		},
 		get availableElasticDeployments() {
 			return availableElasticDeployments;
