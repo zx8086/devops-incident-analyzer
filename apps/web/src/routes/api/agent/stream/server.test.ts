@@ -10,6 +10,13 @@ mock.module("@devops-agent/agent", () => ({
 
 mock.module("@devops-agent/observability", () => ({
 	traceSpan: mock(async (_name: string, _op: string, fn: () => Promise<unknown>) => fn()),
+	getLogger: mock(() => ({
+		info: mock(() => undefined),
+		error: mock(() => undefined),
+		warn: mock(() => undefined),
+		debug: mock(() => undefined),
+	})),
+	runWithRequestContext: mock(async (_ctx: unknown, fn: () => Promise<unknown>) => fn()),
 }));
 
 // SIO-586: AttachmentBlockSchema and DataSourceContextSchema are composed via real
@@ -33,6 +40,10 @@ const invokeAgentMock = mock(
 // whether the graph paused on detectTopicShift. In the happy-path tests below
 // no interrupt is ever raised, so a stub returning undefined keeps the existing
 // done-event path intact.
+mock.module("$lib/server/langsmith-tags", () => ({
+	buildLangSmithTags: mock(() => []),
+}));
+
 mock.module("$lib/server/agent", () => ({
 	invokeAgent: invokeAgentMock,
 	getPendingInterrupt: mock(async () => undefined),

@@ -1,13 +1,16 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
 import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
-import { traceSpan } from "@devops-agent/observability";
+import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import { getPendingInterrupt, invokeAgent } from "$lib/server/agent";
+import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
+
+const log = getLogger("api.agent.stream");
 
 const StreamRequestSchema = z.object({
 	messages: z.array(
@@ -52,82 +55,102 @@ export const POST: RequestHandler = async ({ request }) => {
 					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
 				};
 
-				try {
-					await traceSpan(
-						"agent",
-						"agent.request",
-						async () => {
-							const startTime = Date.now();
+				await runWithRequestContext({ threadId, runId, requestId }, async () => {
+					log.info("agent.request.start");
+					try {
+						await traceSpan(
+							"agent",
+							"agent.request",
+							async () => {
+								const startTime = Date.now();
 
-							// Send run_id immediately so client can submit feedback before graph output
-							send({ type: "run_id", runId });
+								// Send run_id immediately so client can submit feedback before graph output
+								send({ type: "run_id", runId });
 
-							// Send attachment warnings if any
-							if (processedAttachments?.warnings.length) {
-								send({ type: "attachment_warnings", warnings: processedAttachments.warnings });
-							}
+								// Send attachment warnings if any
+								if (processedAttachments?.warnings.length) {
+									send({ type: "attachment_warnings", warnings: processedAttachments.warnings });
+								}
 
-							const eventStream = await invokeAgent(body.messages, {
-								threadId,
-								runId,
-								dataSources: body.dataSources,
-								targetDeployments: body.targetDeployments,
-								isFollowUp: body.isFollowUp,
-								dataSourceContext: body.dataSourceContext,
-								attachmentContentBlocks: processedAttachments?.contentBlocks,
-								attachmentMeta: processedAttachments?.metadata,
-								metadata: {
-									request_id: requestId,
-									session_id: threadId,
-								},
-							});
+								const eventStream = await invokeAgent(body.messages, {
+									threadId,
+									runId,
+									dataSources: body.dataSources,
+									targetDeployments: body.targetDeployments,
+									isFollowUp: body.isFollowUp,
+									dataSourceContext: body.dataSourceContext,
+									attachmentContentBlocks: processedAttachments?.contentBlocks,
+									attachmentMeta: processedAttachments?.metadata,
+									runName: "agent.request",
+									tags: buildLangSmithTags({
+										threadId,
+										dataSources: body.dataSources,
+										isFollowUp: body.isFollowUp,
+									}),
+									metadata: {
+										request_id: requestId,
+										session_id: threadId,
+									},
+								});
 
-							// SIO-751: shared event-routing helper. Both the initial stream
-							// handler (here) and the resume endpoint use the same logic so
-							// resumed graphs surface identical events.
-							const { toolsUsed } = await pumpEventStream(eventStream, send);
+								// SIO-751: shared event-routing helper. Both the initial stream
+								// handler (here) and the resume endpoint use the same logic so
+								// resumed graphs surface identical events.
+								const { toolsUsed } = await pumpEventStream(eventStream, send);
 
-							await flushLangSmithCallbacks();
+								await flushLangSmithCallbacks();
 
-							// SIO-751: if detectTopicShift paused the graph via interrupt(),
-							// the snapshot still has the interrupt pending and no "done"
-							// event has fired. Surface the prompt to the UI instead of done;
-							// the UI POSTs the user's decision to /api/agent/topic-shift.
-							const pendingInterrupt = await getPendingInterrupt(threadId);
-							if (pendingInterrupt) {
-								const surfaced = emitTopicShiftPrompt(send, threadId, pendingInterrupt.value);
-								if (surfaced) return;
-							}
+								// SIO-751: if detectTopicShift paused the graph via interrupt(),
+								// the snapshot still has the interrupt pending and no "done"
+								// event has fired. Surface the prompt to the UI instead of done;
+								// the UI POSTs the user's decision to /api/agent/topic-shift.
+								const pendingInterrupt = await getPendingInterrupt(threadId);
+								if (pendingInterrupt) {
+									const surfaced = emitTopicShiftPrompt(send, threadId, pendingInterrupt.value);
+									if (surfaced) {
+										log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.request.end");
+										return;
+									}
+								}
 
-							// Build dataSourceContext from the datasources that were actually queried
-							const queriedDataSources = body.dataSources ?? [];
-							const dataSourceContext =
-								body.dataSourceContext ??
-								(queriedDataSources.length > 0
-									? {
-											type: "EXPLICIT" as const,
-											dataSources: queriedDataSources,
-											scope: "all" as const,
-										}
-									: undefined);
+								// Build dataSourceContext from the datasources that were actually queried
+								const queriedDataSources = body.dataSources ?? [];
+								const dataSourceContext =
+									body.dataSourceContext ??
+									(queriedDataSources.length > 0
+										? {
+												type: "EXPLICIT" as const,
+												dataSources: queriedDataSources,
+												scope: "all" as const,
+											}
+										: undefined);
 
-							send({
-								type: "done",
-								threadId,
-								requestId,
-								runId,
-								responseTime: Date.now() - startTime,
-								toolsUsed,
-								dataSourceContext,
-							});
-						},
-						{ "request.id": requestId, "thread.id": threadId },
-					);
-				} catch (error) {
-					send({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
-				} finally {
-					controller.close();
-				}
+								const responseTime = Date.now() - startTime;
+								log.info({ responseTime, toolsUsed: toolsUsed.length, toolNames: toolsUsed }, "agent.request.end");
+								send({
+									type: "done",
+									threadId,
+									requestId,
+									runId,
+									responseTime,
+									toolsUsed,
+									dataSourceContext,
+								});
+							},
+							{ "request.id": requestId, "thread.id": threadId, "run.id": runId },
+						);
+					} catch (error) {
+						log.error(
+							{
+								err:
+									error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) },
+							},
+							"agent.request.error",
+						);
+						send({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
+					}
+				});
+				controller.close();
 			},
 		});
 
