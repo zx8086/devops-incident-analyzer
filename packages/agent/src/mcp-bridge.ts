@@ -214,6 +214,44 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	allTools = tools;
 	logger.info({ toolCount: allTools.length, servers: [...connectedServers] }, "MCP tools loaded");
 
+	// SIO-780: boot-strict identity check (B1). Refuse to start the agent if any
+	// connected MCP returns a /identity card with a role that does not match the
+	// expected MCP_SERVER_TO_ROLE entry. Operators see a precise error message
+	// naming the env var to fix; no silent misrouting. Servers whose /identity is
+	// unreachable at boot are logged-warn and skipped (defense-in-depth during
+	// rollout windows).
+	for (const { name, url } of serverEntries) {
+		if (!connectedServers.has(name)) continue;
+		const baseUrl = url.replace(/\/mcp$/, "");
+		let card: IdentityCard;
+		try {
+			const r = await fetch(`${baseUrl}/identity`, { signal: AbortSignal.timeout(2_000) });
+			if (!r.ok) {
+				logger.warn(
+					{ serverName: name, status: r.status },
+					"MCP server /identity unavailable at boot -- skipping strict check",
+				);
+				continue;
+			}
+			card = (await r.json()) as IdentityCard;
+		} catch (err) {
+			logger.warn(
+				{ serverName: name, error: probeErrorMessage(err) },
+				"MCP server /identity probe failed at boot -- skipping strict check",
+			);
+			continue;
+		}
+		const expectedRole = MCP_SERVER_TO_ROLE[name];
+		if (!expectedRole) continue;
+		if (card.role !== expectedRole) {
+			throw new McpRoleMismatchError(
+				`${name} (${url}) returned identity card with role="${card.role}", expected "${expectedRole}". ` +
+					`Check ${name.toUpperCase().replace(/-/g, "_")}_URL env var.`,
+			);
+		}
+		expectedIdentity.set(name, card);
+	}
+
 	// SIO-608: Start periodic health polling
 	startHealthPolling();
 }
