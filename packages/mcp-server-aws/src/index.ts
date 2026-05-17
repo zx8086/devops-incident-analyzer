@@ -69,7 +69,9 @@ if (import.meta.main) {
 				return server;
 			},
 
-			createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
+			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
+			// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+			createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
 
 			onStarted: (ds) => {
 				logger.info(

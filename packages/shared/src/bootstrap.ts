@@ -33,8 +33,9 @@ export interface McpApplicationOptions<T> {
 	initTracing: () => void;
 	telemetry: TelemetryConfig;
 	initDatasource: () => Promise<T>;
-	createServerFactory: (datasource: T) => () => McpServer;
-	createTransport: (serverFactory: () => McpServer, datasource: T) => Promise<BootstrapTransportResult>;
+	mode?: "server" | "proxy";
+	createServerFactory?: (datasource: T) => () => McpServer;
+	createTransport: (serverFactory: (() => McpServer) | undefined, datasource: T) => Promise<BootstrapTransportResult>;
 	cleanupDatasource?: (datasource: T) => Promise<void>;
 	onStarted?: (datasource: T) => void;
 	// SIO-671: opt-in dispatcher-level read-only enforcement. When supplied,
@@ -63,18 +64,24 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		logger.info(`Initializing datasource for ${name}`);
 		const datasource = await options.initDatasource();
 
-		// Step 4: Create server factory
-		const innerFactory = options.createServerFactory(datasource);
+		// Step 4: Create server factory (skipped in proxy mode)
+		const mode = options.mode ?? "server";
+		if (mode !== "proxy" && !options.createServerFactory) {
+			throw new Error("createServerFactory is required when mode != 'proxy'");
+		}
+		const innerFactory =
+			mode === "proxy" || !options.createServerFactory ? undefined : options.createServerFactory(datasource);
 		const readOnlyConfig = options.readOnly;
-		const serverFactory: () => McpServer = readOnlyConfig
-			? () => {
-					const server = innerFactory();
-					installReadOnlyChokepoint(server, readOnlyConfig.manager);
-					return server;
-				}
-			: innerFactory;
+		const serverFactory: (() => McpServer) | undefined =
+			innerFactory && readOnlyConfig
+				? () => {
+						const server = innerFactory();
+						installReadOnlyChokepoint(server, readOnlyConfig.manager);
+						return server;
+					}
+				: innerFactory;
 
-		// Step 5: Start transport
+		// Step 5: Start transport (serverFactory may be undefined in proxy mode)
 		const transport = await options.createTransport(serverFactory, datasource);
 
 		// Step 6: Build structured shutdown function with re-entrancy guard

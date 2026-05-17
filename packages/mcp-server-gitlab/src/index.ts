@@ -78,7 +78,9 @@ if (import.meta.main) {
 		// Sync factory: creates a new McpServer per request with pre-discovered tools
 		createServerFactory: (ds) => () => createGitLabServer(ds),
 
-		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory),
+		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
+		// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
 
 		cleanupDatasource: async (ds) => {
 			await ds.proxy.disconnect();

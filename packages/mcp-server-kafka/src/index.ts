@@ -158,10 +158,12 @@ if (import.meta.main) {
 			// registered with, then thread it into the HTTP transport. Stdio and
 			// AgentCore transport modes ignore it -- AgentCore's framework health
 			// surface is authoritative there.
+			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 			createTransport: (serverFactory, ds) =>
 				createTransport(
 					config.transport,
-					serverFactory,
+					// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+					serverFactory!,
 					createReadinessProbe({
 						clientManager: ds.clientManager,
 						toolOptions: ds.toolOptions,

@@ -281,3 +281,76 @@ describe("createMcpApplication", () => {
 		});
 	});
 });
+
+describe("createMcpApplication proxy mode", () => {
+	test("mode: 'proxy' without createServerFactory does not throw", async () => {
+		const { options } = createTestOptions<{ proxy: string }>({
+			initDatasource: async () => ({ proxy: "ok" }),
+		});
+		// Remove createServerFactory; proxy mode shouldn't need it
+		const proxyOptions: McpApplicationOptions<{ proxy: string }> = {
+			...options,
+			mode: "proxy",
+			createServerFactory: undefined,
+		};
+		const app = await createMcpApplication(proxyOptions);
+		expect(app.datasource).toEqual({ proxy: "ok" });
+		try {
+			await app.shutdown();
+		} catch {
+			// process.exit(0) throws in our mock
+		}
+		expect(exitCode).toBe(0);
+	});
+
+	test("mode: 'server' (default) without createServerFactory throws", async () => {
+		const { options } = createTestOptions<{ x: number }>({
+			initDatasource: async () => ({ x: 1 }),
+		});
+		const bad: McpApplicationOptions<{ x: number }> = {
+			...options,
+			createServerFactory: undefined,
+		};
+		// createMcpApplication catches and calls process.exit(1) on fatal error
+		await expect(createMcpApplication(bad)).rejects.toThrow(/process\.exit\(1\)/);
+	});
+
+	test("mode: 'proxy' runs initTracing, telemetry, initDatasource, createTransport", async () => {
+		const initTracing = mock(() => {});
+		const initDatasource = mock(async () => ({ proxy: "ok" }));
+		const createTransport = mock(async () => ({ closeAll: mock(async () => {}) }));
+		const createServerFactory = mock((_ds: { proxy: string }) => mock(() => ({}) as unknown as McpServer));
+		const { options } = createTestOptions<{ proxy: string }>({
+			initDatasource,
+		});
+		await createMcpApplication({
+			...options,
+			mode: "proxy",
+			initTracing,
+			initDatasource,
+			createTransport,
+			createServerFactory, // should NOT be called in proxy mode
+		});
+		expect(initTracing).toHaveBeenCalledTimes(1);
+		expect(initDatasource).toHaveBeenCalledTimes(1);
+		expect(createTransport).toHaveBeenCalledTimes(1);
+		expect(createServerFactory).not.toHaveBeenCalled();
+	});
+
+	test("mode: 'proxy' registers SIGINT/SIGTERM/uncaughtException/unhandledRejection handlers", async () => {
+		const before = {
+			sigint: process.listenerCount("SIGINT"),
+			sigterm: process.listenerCount("SIGTERM"),
+			uncaught: process.listenerCount("uncaughtException"),
+			unhandled: process.listenerCount("unhandledRejection"),
+		};
+		const { options } = createTestOptions<{ proxy: string }>({
+			initDatasource: async () => ({ proxy: "ok" }),
+		});
+		await createMcpApplication({ ...options, mode: "proxy", createServerFactory: undefined });
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint + 1);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm + 1);
+		expect(process.listenerCount("uncaughtException")).toBe(before.uncaught + 1);
+		expect(process.listenerCount("unhandledRejection")).toBe(before.unhandled + 1);
+	});
+});
