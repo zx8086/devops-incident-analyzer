@@ -1,6 +1,11 @@
 // src/index.ts
 
-import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { getConfig } from "./config/index.ts";

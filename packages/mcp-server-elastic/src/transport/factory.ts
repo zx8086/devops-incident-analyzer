@@ -1,6 +1,7 @@
 // src/transport/factory.ts
-import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
+
 import type { IdentityCard } from "@devops-agent/shared";
+import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createContextLogger, logger } from "../utils/logger.js";
 import type { HttpTransportResult } from "./http.js";

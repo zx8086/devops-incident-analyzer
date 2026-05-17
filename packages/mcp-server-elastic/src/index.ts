@@ -1,10 +1,15 @@
 #!/usr/bin/env bun
 
 // src/index.ts
-import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
+import pkg from "../package.json" with { type: "json" };
 import { initializeCloudClient } from "./clients/cloudClient.js";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
-import pkg from "../package.json" with { type: "json" };
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
