@@ -6,10 +6,27 @@ import { z } from "zod";
 // the kafka MCP returns), not the **finding** shape (which lives in
 // @devops-agent/shared). Each tool's parser is owned by this extractor.
 
+// SIO-783: kafka-service.ts listConsumerGroups returns a bare Array<{id, state, ...}>.
+// Accept either the bare array (production shape) or the {groups: [...]} wrapper
+// (back-compat for any callers that wrap).
 const ListConsumerGroupsRowSchema = z.object({ id: z.string(), state: z.string() });
+const ListConsumerGroupsArraySchema = z.array(z.unknown());
 const ListConsumerGroupsWrapperSchema = z.object({ groups: z.array(z.unknown()) });
 
-const GetConsumerGroupLagSchema = z.object({ groupId: z.string(), totalLag: z.number() });
+// SIO-783: kafka-service.ts getConsumerGroupLag returns totalLag as a string ("0",
+// "12345"). Accept string or number, coerce to number at parse time. Falls back to
+// the raw value when the string isn't numeric (lets safeParse fail cleanly).
+const GetConsumerGroupLagSchema = z.object({
+	groupId: z.string(),
+	totalLag: z.union([z.number(), z.string()]).transform((v, ctx) => {
+		const n = typeof v === "number" ? v : Number(v);
+		if (!Number.isFinite(n)) {
+			ctx.addIssue({ code: "custom", message: "totalLag is not a finite number" });
+			return z.NEVER;
+		}
+		return n;
+	}),
+});
 
 const ListDlqTopicsRowSchema = z.object({
 	name: z.string(),
@@ -23,9 +40,17 @@ export function extractKafkaFindings(outputs: ToolOutput[]): KafkaFindings {
 
 	for (const o of outputs) {
 		if (o.toolName === "kafka_list_consumer_groups") {
-			const wrapper = ListConsumerGroupsWrapperSchema.safeParse(o.rawJson);
-			if (!wrapper.success) continue;
-			for (const g of wrapper.data.groups) {
+			// SIO-783: prefer bare-array shape (real MCP output), fall back to wrapper.
+			const arr = ListConsumerGroupsArraySchema.safeParse(o.rawJson);
+			let rows: unknown[];
+			if (arr.success) {
+				rows = arr.data;
+			} else {
+				const wrapper = ListConsumerGroupsWrapperSchema.safeParse(o.rawJson);
+				if (!wrapper.success) continue;
+				rows = wrapper.data.groups;
+			}
+			for (const g of rows) {
 				const parsed = ListConsumerGroupsRowSchema.safeParse(g);
 				if (!parsed.success) continue;
 				const existing = byId.get(parsed.data.id) ?? { id: parsed.data.id };
