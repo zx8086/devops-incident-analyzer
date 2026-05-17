@@ -395,7 +395,9 @@ export async function startAgentCoreProxy(
 
 	// SIO-780: readiness probe combining credentials + SigV4-signed tools/list +
 	// role-specific sentinel tool. Reuses the existing signRequest helper so
-	// SigV4 signing logic lives in one place.
+	// SigV4 signing logic lives in one place. 20s timeout accommodates AgentCore
+	// cold-start (memory: reference_sio774_per_server_connect_timeouts -- the
+	// connect deadline is 35s; the probe runs well inside that envelope).
 	const readinessProbe = createProxyReadinessProbe({
 		role,
 		getCredentials,
@@ -407,6 +409,7 @@ export async function startAgentCoreProxy(
 			const headers = signRequest(req.method, reqUrl, reqBody, creds, config.region);
 			return fetch(reqUrl.toString(), { method: req.method, headers, body: reqBody });
 		},
+		timeoutMs: 20_000,
 	});
 
 	let mcpSessionId: string | undefined;
