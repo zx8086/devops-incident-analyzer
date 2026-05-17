@@ -106,4 +106,59 @@ describe("extractFindings node", () => {
 		const out = await extractFindings(state);
 		expect(out.dataSourceResults?.[0]?.kafkaFindings?.consumerGroups?.[0]?.id).toBe("payments-service");
 	});
+
+	// SIO-785: confirms focusServices is collected from state.investigationFocus and
+	// state.normalizedIncident.affectedServices, and passed into the kafka extractor.
+	test("collects focusServices from investigationFocus + normalizedIncident and filters kafka findings", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["notification-service"],
+				datasources: ["kafka"],
+				summary: "investigating notification lag",
+				establishedAtTurn: 1,
+			},
+			normalizedIncident: {
+				affectedServices: [{ name: "orders-service" }],
+			},
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service-consumer", state: "Stable" },
+							{ id: "orders-service-sink", state: "Stable" },
+							{ id: "unrelated-group", state: "Stable" },
+						],
+					},
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id)).toEqual([
+			"notification-service-consumer",
+			"orders-service-sink",
+		]);
+	});
+
+	test("with no investigationFocus or normalizedIncident, kafka extractor renders all groups", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "Stable" },
+							{ id: "unrelated-group", state: "Stable" },
+						],
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
+	});
 });
