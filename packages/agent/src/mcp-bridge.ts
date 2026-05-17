@@ -2,6 +2,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getLogger } from "@devops-agent/observability";
+import type { McpRole } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
 
@@ -230,6 +231,27 @@ export const DATASOURCE_TO_MCP_SERVER: Record<string, string> = {
 	gitlab: "gitlab-mcp",
 	atlassian: "atlassian-mcp",
 	aws: "aws-mcp",
+};
+
+export class McpRoleMismatchError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "McpRoleMismatchError";
+	}
+}
+
+// SIO-780: expected role per logical server name. Proxy roles for kafka and aws
+// reflect today's deployment topology (both run via AgentCore SigV4 proxies).
+// Mismatches between the card returned by /identity and this map -> boot-strict
+// throw at agent startup.
+export const MCP_SERVER_TO_ROLE: Record<string, McpRole> = {
+	"elastic-mcp": "elastic-mcp",
+	"kafka-mcp": "kafka-proxy",
+	"couchbase-mcp": "couchbase-mcp",
+	"konnect-mcp": "konnect-mcp",
+	"gitlab-mcp": "gitlab-mcp",
+	"atlassian-mcp": "atlassian-mcp",
+	"aws-mcp": "aws-proxy",
 };
 
 export function getToolsForDataSource(dataSourceId: string): StructuredToolInterface[] {
