@@ -152,6 +152,11 @@ export {
 	type ReadOnlyManagerLike,
 	type ReadOnlyMiddlewareConfig,
 } from "./read-only-chokepoint.ts";
+export {
+	getCurrentRequestContext,
+	type RequestContext,
+	runWithRequestContext,
+} from "./request-context.ts";
 export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
 	buildTelemetryConfig,
