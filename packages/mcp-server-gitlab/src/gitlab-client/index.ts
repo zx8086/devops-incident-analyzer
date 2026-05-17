@@ -31,6 +31,11 @@ export class GitLabRestClient {
 		this.timeout = config.timeout;
 	}
 
+	// SIO-780: cheapest token-validating REST call. Used by /ready probe.
+	async getCurrentUser(): Promise<{ id: number; username: string; name: string }> {
+		return this.request({ path: "/user" });
+	}
+
 	private async request<T>(options: RequestOptions): Promise<T> {
 		const url = new URL(`${this.baseUrl}${options.path}`);
 		if (options.query) {
