@@ -1,5 +1,5 @@
 // src/transport/http.ts
-import type { IdentityCard } from "@devops-agent/shared";
+import type { IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createContextLogger } from "../utils/logger.ts";
@@ -10,6 +10,10 @@ export interface HttpTransportOptions {
 	port: number;
 	host: string;
 	path: string;
+	// SIO-780: readiness probe wired into GET /ready; single-component
+	// STS GetCallerIdentity call validates the assumed-role credential chain.
+	// When omitted, /ready returns 404 (stdio/AgentCore have no HTTP surface).
+	readinessProbe?: () => Promise<ReadinessSnapshot>;
 	// SIO-780: identity card returned by GET /identity
 	identityCard?: IdentityCard;
 }
@@ -39,6 +43,24 @@ export async function startHttpTransport(
 				return options.identityCard
 					? Response.json(options.identityCard)
 					: Response.json({ error: "identity not configured" }, { status: 503 });
+			// SIO-780: readiness route. Internal probe exceptions render as 503 so
+			// /ready never 500s -- an internal failure inside the probe is itself a
+			// readiness failure. When no probe is configured, return 404.
+			if (url.pathname === "/ready") {
+				if (!options.readinessProbe) {
+					return Response.json({ error: "Not found" }, { status: 404 });
+				}
+				try {
+					const snapshot = await options.readinessProbe();
+					return Response.json(snapshot, { status: snapshot.ready ? 200 : 503 });
+				} catch (err) {
+					log.error({ error: err instanceof Error ? err.message : String(err) }, "Readiness probe threw");
+					return Response.json(
+						{ ready: false, error: err instanceof Error ? err.message : String(err) },
+						{ status: 503 },
+					);
+				}
+			}
 			if (url.pathname !== options.path) return new Response("not found", { status: 404 });
 			if (req.method !== "POST") {
 				return Response.json(

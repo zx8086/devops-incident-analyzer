@@ -1,13 +1,16 @@
 // src/index.ts
+import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import {
 	buildTelemetryConfig,
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config/index.ts";
+import { buildAssumedCredsProvider } from "./services/credentials.ts";
 import { initializeTracing } from "./telemetry/tracing.ts";
 import { registerAllTools } from "./tools/register.ts";
 import { setDefaultCapBytes } from "./tools/wrap.ts";
@@ -84,9 +87,25 @@ if (import.meta.main) {
 			},
 
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-			createTransport: (serverFactory, ds, identityCard) =>
+			createTransport: (serverFactory, ds, identityCard) => {
+				// SIO-780: STS GetCallerIdentity probe validates the assumed-role
+				// credential chain that every tool client uses. maxAttempts: 1 keeps
+				// the call inside the 5s default withTimeout window during AWS hiccups.
+				const stsClient = new STSClient({
+					region: ds.config.aws.region,
+					credentials: buildAssumedCredsProvider(ds.config.aws),
+					maxAttempts: 1,
+				});
+				const awsProbe = createReadinessProbe({
+					components: {
+						sts: async () => {
+							await stsClient.send(new GetCallerIdentityCommand({}));
+						},
+					},
+				});
 				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-				createTransport(ds.config.transport, serverFactory!, identityCard),
+				return createTransport(ds.config.transport, serverFactory!, awsProbe, identityCard);
+			},
 
 			onStarted: (ds) => {
 				logger.info(
