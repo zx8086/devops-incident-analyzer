@@ -149,4 +149,178 @@ describe("extractKafkaFindings", () => {
 		const findings = extractKafkaFindings(outputs);
 		expect(findings.dlqTopics?.[0]?.recentDelta).toBeNull();
 	});
+
+	// SIO-785: relevance filter — focusServices scopes findings to related groups.
+	describe("relevance filter (SIO-785)", () => {
+		const baseGroups = (groups: Array<{ id: string; state: string }>) => ({
+			toolName: "kafka_list_consumer_groups",
+			rawJson: groups,
+		});
+		const baseLag = (groupId: string, lag: string) => ({
+			toolName: "kafka_get_consumer_group_lag",
+			rawJson: { groupId, totalLag: lag, topics: [] },
+		});
+
+		test("empty focusServices returns all groups (fallback to current behavior)", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([
+					{ id: "notification-service", state: "Stable" },
+					{ id: "orders-svc", state: "Stable" },
+					{ id: "payments-consumer", state: "Stable" },
+				]),
+			];
+			const findings = extractKafkaFindings(outputs, []);
+			expect(findings.consumerGroups).toHaveLength(3);
+		});
+
+		test("exact normalized match passes", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([
+					{ id: "notification-service", state: "Stable" },
+					{ id: "orders-svc", state: "Stable" },
+				]),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.consumerGroups?.map((g) => g.id)).toEqual(["notification-service"]);
+		});
+
+		test("plural-vs-singular match passes (kafka -service vs APM -services divergence)", () => {
+			// reference_b2b_apm_service_naming: kafka uses `notification-service`,
+			// Elastic APM uses `notifications-service`. Both normalize to "notification".
+			const outputs: ToolOutput[] = [baseGroups([{ id: "notification-service-consumer", state: "Stable" }])];
+			const findings = extractKafkaFindings(outputs, ["notifications-service"]);
+			expect(findings.consumerGroups).toHaveLength(1);
+		});
+
+		test("suffix-stripped match (-consumer, -sink, -prod, -eventing) passes", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([
+					{ id: "orders-service-consumer", state: "Stable" },
+					{ id: "orders-service-prod", state: "Stable" },
+					{ id: "orders-service-sink", state: "Stable" },
+					{ id: "orders-service-eventing", state: "Stable" },
+					{ id: "unrelated-service", state: "Stable" },
+				]),
+			];
+			const findings = extractKafkaFindings(outputs, ["orders-service"]);
+			expect(findings.consumerGroups?.map((g) => g.id)).toEqual([
+				"orders-service-consumer",
+				"orders-service-prod",
+				"orders-service-sink",
+				"orders-service-eventing",
+			]);
+		});
+
+		test("token-overlap match passes (shared token of length >= 4)", () => {
+			const outputs: ToolOutput[] = [baseGroups([{ id: "pim-sink-articles", state: "Stable" }])];
+			const findings = extractKafkaFindings(outputs, ["pim-articles-importer"]);
+			// Shares "articles" token (length 8). Should match.
+			expect(findings.consumerGroups).toHaveLength(1);
+		});
+
+		test("short common tokens (prod, svc, dev) do NOT cause false matches", () => {
+			const outputs: ToolOutput[] = [baseGroups([{ id: "unrelated-prod", state: "Stable" }])];
+			const findings = extractKafkaFindings(outputs, ["notification-prod"]);
+			// "prod" has length 4 but is in SUFFIX_PATTERN — gets stripped before tokenization.
+			expect(findings.consumerGroups).toBeUndefined();
+		});
+
+		test("non-Stable state always passes through regardless of name match", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([
+					{ id: "unrelated-group", state: "Rebalancing" },
+					{ id: "another-group", state: "Dead" },
+					{ id: "third-group", state: "Empty" },
+				]),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.consumerGroups?.map((g) => g.id)).toEqual(["unrelated-group", "another-group", "third-group"]);
+		});
+
+		test("non-zero totalLag always passes through regardless of name match", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([{ id: "unrelated-group", state: "Stable" }]),
+				baseLag("unrelated-group", "1500"),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.consumerGroups).toHaveLength(1);
+			expect(findings.consumerGroups?.[0]?.totalLag).toBe(1500);
+		});
+
+		test("zero-lag stable group with no match is filtered out", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([{ id: "unrelated-group", state: "Stable" }]),
+				baseLag("unrelated-group", "0"),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.consumerGroups).toBeUndefined();
+		});
+
+		test("DLQ with recentDelta > 0 always passes through regardless of name match", () => {
+			const outputs: ToolOutput[] = [
+				{
+					toolName: "kafka_list_dlq_topics",
+					rawJson: [{ name: "unrelated-dlq", totalMessages: 50, recentDelta: 10 }],
+				},
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.dlqTopics).toHaveLength(1);
+		});
+
+		test("DLQ with recentDelta = 0 / null and no name match is filtered out", () => {
+			const outputs: ToolOutput[] = [
+				{
+					toolName: "kafka_list_dlq_topics",
+					rawJson: [
+						{ name: "unrelated-dlq-a", totalMessages: 50, recentDelta: 0 },
+						{ name: "unrelated-dlq-b", totalMessages: 50, recentDelta: null },
+					],
+				},
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.dlqTopics).toBeUndefined();
+		});
+
+		test("DLQ name fuzzy-matches focus service via token overlap", () => {
+			const outputs: ToolOutput[] = [
+				{
+					toolName: "kafka_list_dlq_topics",
+					rawJson: [
+						{ name: "notification-service-dlq", totalMessages: 50, recentDelta: 0 },
+						{ name: "unrelated-dlq", totalMessages: 50, recentDelta: 0 },
+					],
+				},
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.dlqTopics?.map((d) => d.name)).toEqual(["notification-service-dlq"]);
+		});
+
+		test("multiple focus services match independently (any-of)", () => {
+			const outputs: ToolOutput[] = [
+				baseGroups([
+					{ id: "notification-service", state: "Stable" },
+					{ id: "orders-service", state: "Stable" },
+					{ id: "unrelated-group", state: "Stable" },
+				]),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service", "orders-service"]);
+			expect(findings.consumerGroups?.map((g) => g.id)).toEqual(["notification-service", "orders-service"]);
+		});
+
+		test("merged state + lag honors degraded pass-through after merge", () => {
+			// Group is Stable from list call, but lag call later sets totalLag > 0.
+			// The merged entry should pass the filter on lag.
+			const outputs: ToolOutput[] = [
+				baseGroups([{ id: "unrelated-group", state: "Stable" }]),
+				baseLag("unrelated-group", "42"),
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.consumerGroups).toHaveLength(1);
+			expect(findings.consumerGroups?.[0]).toEqual({
+				id: "unrelated-group",
+				state: "Stable",
+				totalLag: 42,
+			});
+		});
+	});
 });

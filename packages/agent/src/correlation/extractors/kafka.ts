@@ -34,7 +34,84 @@ const ListDlqTopicsRowSchema = z.object({
 	recentDelta: z.number().nullable(),
 });
 
-export function extractKafkaFindings(outputs: ToolOutput[]): KafkaFindings {
+// SIO-785: tokens used as suffixes/qualifiers on kafka consumer-group ids that
+// should be stripped before fuzzy-matching against APM service names. Kafka groups
+// often look like `<service>-prod-consumer`, `<service>-sink`, `<service>-eventing`.
+const SUFFIX_PATTERN = /-?(consumer|sink|eventing|prod|stg|dev|svc|service)$/g;
+const MIN_TOKEN_LENGTH = 4;
+
+function normalize(s: string): string {
+	let result = s.toLowerCase();
+	// Strip suffix tokens iteratively (a group can be e.g. `notifications-service-consumer`).
+	let prev = "";
+	while (prev !== result) {
+		prev = result;
+		result = result.replace(SUFFIX_PATTERN, "");
+	}
+	// Singular form: drop trailing `s` (handles notifications-service vs notification-service).
+	return result.replace(/s$/, "");
+}
+
+function tokenize(s: string): Set<string> {
+	// SIO-785: depluralise per token so `articles` matches `article`. The whole-string
+	// normalize only strips a single trailing `s`, but kafka group ids embed plural
+	// nouns mid-string (e.g. `pim-sink-articles`).
+	return new Set(
+		normalize(s)
+			.split(/[-_.]/)
+			.filter((t) => t.length >= MIN_TOKEN_LENGTH)
+			.map((t) => t.replace(/s$/, "")),
+	);
+}
+
+// SIO-785: "related to" matching between a finding name and the investigation
+// focus services. Pass-through any finding that is degraded (non-Stable state,
+// non-zero lag, or DLQ with growth) regardless of name match — those are
+// operational signals the user should see even if they didn't ask by name.
+function isRelevantById(
+	id: string | undefined,
+	state: string | undefined,
+	totalLag: number | undefined,
+	focusServices: string[],
+): boolean {
+	if (state !== undefined && state !== "Stable") return true;
+	if ((totalLag ?? 0) > 0) return true;
+	if (focusServices.length === 0) return true;
+	if (!id) return false;
+	const idNorm = normalize(id);
+	const idTokens = tokenize(id);
+	for (const svc of focusServices) {
+		const sNorm = normalize(svc);
+		if (sNorm.length > 0 && (idNorm.includes(sNorm) || sNorm.includes(idNorm))) return true;
+		const sTokens = tokenize(svc);
+		for (const t of sTokens) {
+			if (idTokens.has(t)) return true;
+		}
+	}
+	return false;
+}
+
+function isRelevantDlq(name: string, recentDelta: number | null, focusServices: string[]): boolean {
+	if (recentDelta !== null && recentDelta > 0) return true;
+	if (focusServices.length === 0) return true;
+	const nameNorm = normalize(name);
+	const nameTokens = tokenize(name);
+	for (const svc of focusServices) {
+		const sNorm = normalize(svc);
+		if (sNorm.length > 0 && (nameNorm.includes(sNorm) || sNorm.includes(nameNorm))) return true;
+		const sTokens = tokenize(svc);
+		for (const t of sTokens) {
+			if (nameTokens.has(t)) return true;
+		}
+	}
+	return false;
+}
+
+// SIO-785: focusServices is an optional list of service names from the
+// investigation context (InvestigationFocus.services + NormalizedIncident.affectedServices.name).
+// Empty/omitted = render all (current behavior). Populated = scope findings to
+// related groups via fuzzy match, with degraded-pass-through.
+export function extractKafkaFindings(outputs: ToolOutput[], focusServices: string[] = []): KafkaFindings {
 	const byId = new Map<string, { id: string; state?: string; totalLag?: number }>();
 	const dlqTopics: Array<z.infer<typeof ListDlqTopicsRowSchema>> = [];
 
@@ -72,8 +149,15 @@ export function extractKafkaFindings(outputs: ToolOutput[]): KafkaFindings {
 		}
 	}
 
+	// SIO-785: apply relevance filter at emit time. Done after accumulation so the
+	// merged state/totalLag (set by separate tool outputs) is visible to the filter.
+	const filteredGroups = Array.from(byId.values()).filter((g) =>
+		isRelevantById(g.id, g.state, g.totalLag, focusServices),
+	);
+	const filteredDlqs = dlqTopics.filter((d) => isRelevantDlq(d.name, d.recentDelta, focusServices));
+
 	const findings: KafkaFindings = {};
-	if (byId.size > 0) findings.consumerGroups = Array.from(byId.values());
-	if (dlqTopics.length > 0) findings.dlqTopics = dlqTopics;
+	if (filteredGroups.length > 0) findings.consumerGroups = filteredGroups;
+	if (filteredDlqs.length > 0) findings.dlqTopics = filteredDlqs;
 	return findings;
 }
