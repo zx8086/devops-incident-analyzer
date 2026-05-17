@@ -1,4 +1,6 @@
 // src/transport/factory.ts
+
+import type { IdentityCard } from "@devops-agent/shared";
 import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportConfig } from "../config/schemas.ts";
@@ -31,6 +33,8 @@ export function resolveTransportMode(mode: string): { stdio: boolean; http: bool
 export async function createTransport(
 	config: TransportConfig,
 	serverFactory: () => McpServer,
+	// SIO-780: identity card threaded from createMcpApplication into /identity route
+	identityCard?: IdentityCard,
 ): Promise<TransportResult> {
 	const modes = resolveTransportMode(config.mode);
 	log.info({ mode: config.mode, ...modes }, "Resolving transport mode");
@@ -56,6 +60,7 @@ export async function createTransport(
 			port: config.port,
 			host: config.host,
 			path: config.path,
+			identityCard,
 		});
 	}
 

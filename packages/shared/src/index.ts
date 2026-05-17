@@ -197,3 +197,11 @@ export {
 } from "./transport/agentcore.ts";
 export { createAgentCoreProxyTransport } from "./transport/agentcore-proxy.ts";
 export { drainBunServer } from "./transport/drain-helper.ts";
+export {
+	type BuildIdentityCardOptions,
+	buildIdentityCard,
+	canonicalizeUpstream,
+	type IdentityCard,
+	type McpRole,
+	type McpTransportMode,
+} from "./transport/identity.ts";

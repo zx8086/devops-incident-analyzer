@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pino from "pino";
 import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
+import { buildIdentityCard, type IdentityCard, type McpRole } from "./transport/identity.ts";
 
 export type { TelemetryConfig };
 
@@ -35,13 +36,21 @@ export interface McpApplicationOptions<T> {
 	initDatasource: () => Promise<T>;
 	mode?: "server" | "proxy";
 	createServerFactory?: (datasource: T) => () => McpServer;
-	createTransport: (serverFactory: (() => McpServer) | undefined, datasource: T) => Promise<BootstrapTransportResult>;
+	createTransport: (
+		serverFactory: (() => McpServer) | undefined,
+		datasource: T,
+		identityCard: IdentityCard,
+	) => Promise<BootstrapTransportResult>;
 	cleanupDatasource?: (datasource: T) => Promise<void>;
 	onStarted?: (datasource: T) => void;
 	// SIO-671: opt-in dispatcher-level read-only enforcement. When supplied,
 	// every McpServer produced by createServerFactory has its tools/call
 	// handler wrapped to consult the manager before delegating.
 	readOnly?: ReadOnlyMiddlewareConfig;
+	// SIO-780 Phase A
+	role: McpRole;
+	version: string;
+	identityFingerprint: (datasource: T) => string;
 }
 
 export interface McpApplication<T> {
@@ -81,8 +90,21 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 					}
 				: innerFactory;
 
+		// Step 4b: Build IdentityCard for /identity route consumers (Phase A: SIO-780)
+		const identityCard = buildIdentityCard({
+			role: options.role,
+			version: options.version,
+			mode: mode === "proxy" ? "agentcore-proxy" : "http",
+			upstreamFingerprint: options.identityFingerprint(datasource),
+		});
+		logger.info("Identity card built", {
+			instanceId: identityCard.instanceId,
+			role: identityCard.role,
+			upstreamFingerprint: identityCard.upstreamFingerprint,
+		});
+
 		// Step 5: Start transport (serverFactory may be undefined in proxy mode)
-		const transport = await options.createTransport(serverFactory, datasource);
+		const transport = await options.createTransport(serverFactory, datasource, identityCard);
 
 		// Step 6: Build structured shutdown function with re-entrancy guard
 		let isShuttingDown = false;

@@ -1,7 +1,13 @@
 #!/usr/bin/env bun
 
 // src/index.ts
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
+import pkg from "../package.json" with { type: "json" };
 import { initializeCloudClient } from "./clients/cloudClient.js";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
@@ -17,6 +23,13 @@ if (import.meta.main) {
 
 		initTracing: () => initializeTracing(),
 		telemetry: buildTelemetryConfig("elastic-mcp-server"),
+
+		role: "elastic-mcp",
+		version: pkg.version,
+		identityFingerprint: () =>
+			canonicalizeUpstream({
+				deployments: (config.elasticsearch.deployments ?? []).map((d) => ({ id: d.id, url: d.url })),
+			}),
 
 		initDatasource: async () => {
 			const configWarnings = getConfigWarnings();
@@ -69,7 +82,7 @@ if (import.meta.main) {
 			},
 		},
 
-		createTransport: (serverFactory) =>
+		createTransport: (serverFactory, _ds, identityCard) =>
 			createTransport(
 				{
 					mode: config.server.transportMode,
@@ -84,6 +97,7 @@ if (import.meta.main) {
 				// SIO-779: server mode always provides createServerFactory; non-null assertion is safe
 				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 				serverFactory!,
+				identityCard,
 			),
 
 		onStarted: () => {

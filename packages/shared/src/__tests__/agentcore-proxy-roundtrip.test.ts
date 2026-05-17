@@ -14,6 +14,7 @@ import {
 	type ProxyCredentials,
 	startAgentCoreProxy,
 } from "../agentcore-proxy.ts";
+import type { IdentityCard } from "../transport/identity.ts";
 
 const ORIG_ENV = { ...process.env };
 const ORIG_FETCH = globalThis.fetch;
@@ -36,6 +37,16 @@ const TEST_CONFIG: ProxyConfig = {
 	credentials: TEST_CREDS,
 };
 
+const TEST_CARD: IdentityCard = {
+	instanceId: "44444444-4444-4444-4444-444444444444",
+	role: "aws-proxy",
+	version: "0.0.0",
+	bootedAt: "2026-05-17T00:00:00.000Z",
+	pid: 1,
+	mode: "agentcore-proxy",
+	upstreamFingerprint: "0000000000000000",
+};
+
 afterAll(() => {
 	process.env = ORIG_ENV;
 	globalThis.fetch = ORIG_FETCH;
@@ -53,7 +64,7 @@ beforeEach(async () => {
 		fetchCalls.push({ url: String(input), init: init ?? {} });
 		return fetchResponder(callIdx);
 	}) as typeof fetch;
-	proxy = await startAgentCoreProxy(TEST_CONFIG);
+	proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
 });
 
 afterEach(async () => {
@@ -206,7 +217,7 @@ describe("agentcore-proxy round trip — happy paths", () => {
 				// sessionToken intentionally omitted
 			},
 		};
-		proxy = await startAgentCoreProxy(configWithoutToken);
+		proxy = await startAgentCoreProxy(configWithoutToken, TEST_CARD);
 
 		seedResponses(sseOk(5, { content: [{ type: "text", text: "ok" }] }));
 		await callProxy(toolCall(5, "noop"));

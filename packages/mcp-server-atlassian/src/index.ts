@@ -1,10 +1,12 @@
 // src/index.ts
 import {
 	buildTelemetryConfig,
+	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
 	warnIfOAuthNotSeeded,
 } from "@devops-agent/shared";
+import pkg from "../package.json" with { type: "json" };
 import { AtlassianMcpProxy } from "./atlassian-client/index.js";
 import { loadConfiguration } from "./config/index.js";
 import { type AtlassianDatasource, createAtlassianServer, discoverRemoteTools } from "./server.js";
@@ -22,6 +24,14 @@ if (import.meta.main) {
 
 		initTracing: () => initializeTracing(),
 		telemetry: buildTelemetryConfig("atlassian-mcp-server"),
+
+		role: "atlassian-mcp",
+		version: pkg.version,
+		identityFingerprint: (ds) =>
+			canonicalizeUpstream({
+				mcpEndpoint: ds.config.atlassian.mcpEndpoint,
+				siteName: ds.config.atlassian.siteName,
+			}),
 
 		initDatasource: async () => {
 			const config = await loadConfiguration();
@@ -60,8 +70,9 @@ if (import.meta.main) {
 		createServerFactory: (ds) => () => createAtlassianServer(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
+		createTransport: (serverFactory, ds, identityCard) =>
+			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+			createTransport(ds.config.transport, serverFactory!, identityCard),
 
 		cleanupDatasource: async (ds) => {
 			await ds.proxy.disconnect();

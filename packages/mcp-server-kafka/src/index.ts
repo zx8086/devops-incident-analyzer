@@ -1,6 +1,11 @@
 // src/index.ts
 
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { getConfig } from "./config/index.ts";
@@ -84,12 +89,16 @@ if (import.meta.main) {
 			initTracing: () => initializeTracing(),
 			telemetry: buildTelemetryConfig("kafka-mcp-server"),
 			mode: "proxy",
+			role: "kafka-proxy",
+			version: pkg.version,
+			identityFingerprint: (ds) => canonicalizeUpstream({ runtimeArn: ds.config.runtimeArn, region: ds.config.region }),
 			initDatasource: async () => {
 				const config = loadProxyConfigFromEnv("KAFKA");
 				logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting Kafka MCP Server");
 				return { config };
 			},
-			createTransport: async () => createAgentCoreProxyTransport("KAFKA", createBootstrapAdapter(logger)),
+			createTransport: async (_factory, _ds, identityCard) =>
+				createAgentCoreProxyTransport("KAFKA", createBootstrapAdapter(logger), identityCard),
 			onStarted: (ds) => {
 				logger.info({ arn: ds.config.runtimeArn, transport: "agentcore-proxy" }, "Kafka MCP server ready");
 			},
@@ -105,6 +114,18 @@ if (import.meta.main) {
 
 			initTracing: () => initializeTracing(),
 			telemetry: buildTelemetryConfig("kafka-mcp-server"),
+
+			role: "kafka-mcp",
+			version: pkg.version,
+			identityFingerprint: () =>
+				canonicalizeUpstream({
+					provider: config.kafka.provider,
+					clientId: config.kafka.clientId,
+					schemaRegistryEnabled: config.schemaRegistry.enabled,
+					ksqlEnabled: config.ksql.enabled,
+					connectEnabled: config.connect.enabled,
+					restproxyEnabled: config.restproxy.enabled,
+				}),
 
 			initDatasource: async () => {
 				logger.info(
@@ -159,7 +180,7 @@ if (import.meta.main) {
 			// AgentCore transport modes ignore it -- AgentCore's framework health
 			// surface is authoritative there.
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-			createTransport: (serverFactory, ds) =>
+			createTransport: (serverFactory, ds, identityCard) =>
 				createTransport(
 					config.transport,
 					// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
@@ -169,6 +190,7 @@ if (import.meta.main) {
 						toolOptions: ds.toolOptions,
 						config,
 					}),
+					identityCard,
 				),
 
 			cleanupDatasource: async (ds) => {

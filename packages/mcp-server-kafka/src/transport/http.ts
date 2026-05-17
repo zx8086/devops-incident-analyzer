@@ -1,5 +1,6 @@
 // src/transport/http.ts
 
+import type { IdentityCard } from "@devops-agent/shared";
 import { createBootstrapAdapter, drainBunServer, withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -30,6 +31,8 @@ interface HttpTransportConfig {
 	// before force-closing. 0 = immediate force-close (parity with pre-SIO-727).
 	// Tunable via SHUTDOWN_DRAIN_TIMEOUT_MS env var; default 25s.
 	drainTimeoutMs?: number;
+	// SIO-780: identity card returned by GET /identity
+	identityCard?: IdentityCard;
 }
 
 type ServerFactory = () => McpServer;
@@ -260,6 +263,12 @@ export async function startHttpTransport(
 			},
 			"/health": {
 				GET: () => Response.json({ status: "ok" }),
+			},
+			"/identity": {
+				GET: () =>
+					config.identityCard
+						? Response.json(config.identityCard)
+						: Response.json({ error: "identity not configured" }, { status: 503 }),
 			},
 			"/ready": {
 				GET: readyHandler,

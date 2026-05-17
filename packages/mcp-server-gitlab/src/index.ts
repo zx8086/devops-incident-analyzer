@@ -1,10 +1,12 @@
 // src/index.ts
 import {
 	buildTelemetryConfig,
+	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
 	warnIfOAuthNotSeeded,
 } from "@devops-agent/shared";
+import pkg from "../package.json" with { type: "json" };
 import { loadConfiguration } from "./config/index.js";
 import { GitLabRestClient } from "./gitlab-client/index.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
@@ -23,6 +25,10 @@ if (import.meta.main) {
 
 		initTracing: () => initializeTracing(),
 		telemetry: buildTelemetryConfig("gitlab-mcp-server"),
+
+		role: "gitlab-mcp",
+		version: pkg.version,
+		identityFingerprint: (ds) => canonicalizeUpstream({ instanceUrl: ds.config.gitlab.instanceUrl }),
 
 		initDatasource: async () => {
 			const config = await loadConfiguration();
@@ -79,8 +85,9 @@ if (import.meta.main) {
 		createServerFactory: (ds) => () => createGitLabServer(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
+		createTransport: (serverFactory, ds, identityCard) =>
+			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+			createTransport(ds.config.transport, serverFactory!, identityCard),
 
 		cleanupDatasource: async (ds) => {
 			await ds.proxy.disconnect();

@@ -16,6 +16,7 @@ import {
 	sleepWithAbort,
 	startAgentCoreProxy,
 } from "../agentcore-proxy.ts";
+import type { IdentityCard } from "../transport/identity.ts";
 
 const ORIG_ENV = { ...process.env };
 const ORIG_FETCH = globalThis.fetch;
@@ -36,6 +37,16 @@ const TEST_CONFIG: ProxyConfig = {
 	qualifier: "DEFAULT",
 	serverName: "mcp-server",
 	credentials: TEST_CREDS,
+};
+
+const TEST_CARD: IdentityCard = {
+	instanceId: "33333333-3333-3333-3333-333333333333",
+	role: "kafka-proxy",
+	version: "0.0.0",
+	bootedAt: "2026-05-17T00:00:00.000Z",
+	pid: 1,
+	mode: "agentcore-proxy",
+	upstreamFingerprint: "0000000000000000",
 };
 
 afterAll(() => {
@@ -210,7 +221,7 @@ describe("session-scoped abort controller", () => {
 			fetchCalls.push({ url: String(input), init: init ?? {} });
 			return fetchResponder(callIdx);
 		}) as typeof fetch;
-		proxy = await startAgentCoreProxy(TEST_CONFIG);
+		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
 	});
 
 	afterEach(async () => {
@@ -258,7 +269,7 @@ describe("JSON-RPC -320xx retry", () => {
 			if (!entry) return new Response("scripted-exhausted", { status: 500 });
 			return typeof entry === "function" ? entry() : entry.clone();
 		}) as typeof fetch;
-		proxy = await startAgentCoreProxy(TEST_CONFIG);
+		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
 	});
 
 	afterEach(async () => {

@@ -1,5 +1,10 @@
 // src/index.ts
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	createMcpApplication,
+} from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config/index.ts";
@@ -25,12 +30,16 @@ if (import.meta.main) {
 			initTracing: () => initializeTracing(),
 			telemetry: buildTelemetryConfig("aws-mcp-server"),
 			mode: "proxy",
+			role: "aws-proxy",
+			version: pkg.version,
+			identityFingerprint: (ds) => canonicalizeUpstream({ runtimeArn: ds.config.runtimeArn, region: ds.config.region }),
 			initDatasource: async () => {
 				const config = loadProxyConfigFromEnv("AWS");
 				logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting AWS MCP Server");
 				return { config };
 			},
-			createTransport: async () => createAgentCoreProxyTransport("AWS", createBootstrapAdapter(logger)),
+			createTransport: async (_factory, _ds, identityCard) =>
+				createAgentCoreProxyTransport("AWS", createBootstrapAdapter(logger), identityCard),
 			onStarted: (ds) => {
 				logger.info({ arn: ds.config.runtimeArn, transport: "agentcore-proxy" }, "AWS MCP server ready");
 			},
@@ -42,6 +51,11 @@ if (import.meta.main) {
 
 			initTracing: () => initializeTracing(),
 			telemetry: buildTelemetryConfig("aws-mcp-server"),
+
+			role: "aws-mcp",
+			version: pkg.version,
+			identityFingerprint: (ds) =>
+				canonicalizeUpstream({ region: ds.config.aws.region, externalId: ds.config.aws.externalId }),
 
 			initDatasource: async () => {
 				const config = loadConfig();
@@ -70,8 +84,9 @@ if (import.meta.main) {
 			},
 
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-			createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
+			createTransport: (serverFactory, ds, identityCard) =>
+				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+				createTransport(ds.config.transport, serverFactory!, identityCard),
 
 			onStarted: (ds) => {
 				logger.info(
