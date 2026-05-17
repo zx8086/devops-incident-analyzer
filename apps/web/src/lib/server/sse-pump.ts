@@ -28,6 +28,9 @@ const PIPELINE_NODES = new Set([
 	"queryDataSource",
 	"align",
 	"aggregate",
+	// SIO-775: surface extractFindings in the pipeline display; this is also
+	// where we emit datasource_result events carrying typed findings.
+	"extractFindings",
 	"checkConfidence",
 	"validate",
 	"proposeInvestigate",
@@ -99,6 +102,39 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 						type: "low_confidence",
 						message: "Report confidence is below the review threshold. Results may be incomplete.",
 					});
+				}
+			}
+
+			// SIO-775: emit one datasource_result per sub-agent result. extractFindings
+			// runs after aggregate and is where kafka/gitlab/couchbase findings are
+			// populated; it's the first node whose output has the typed siblings.
+			if (event.name === "extractFindings") {
+				const results = (event.data?.output as { dataSourceResults?: unknown })?.dataSourceResults;
+				if (Array.isArray(results)) {
+					for (const r of results) {
+						if (typeof r !== "object" || r === null) continue;
+						const result = r as {
+							dataSourceId?: unknown;
+							status?: unknown;
+							duration?: unknown;
+							error?: unknown;
+							kafkaFindings?: unknown;
+							gitlabFindings?: unknown;
+							couchbaseFindings?: unknown;
+						};
+						if (typeof result.dataSourceId !== "string") continue;
+						if (result.status !== "success" && result.status !== "error") continue;
+						send({
+							type: "datasource_result",
+							dataSourceId: result.dataSourceId,
+							status: result.status,
+							...(typeof result.duration === "number" && { duration: result.duration }),
+							...(typeof result.error === "string" && { error: result.error }),
+							...(result.kafkaFindings !== undefined && { kafkaFindings: result.kafkaFindings }),
+							...(result.gitlabFindings !== undefined && { gitlabFindings: result.gitlabFindings }),
+							...(result.couchbaseFindings !== undefined && { couchbaseFindings: result.couchbaseFindings }),
+						});
+					}
 				}
 			}
 

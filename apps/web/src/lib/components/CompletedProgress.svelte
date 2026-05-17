@@ -1,6 +1,8 @@
 <script lang="ts">
 // apps/web/src/lib/components/CompletedProgress.svelte
+import type { DataSourceFindings } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
+import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
 
 const NODE_LABELS: Record<string, string> = {
 	classify: "Classified",
@@ -8,6 +10,7 @@ const NODE_LABELS: Record<string, string> = {
 	queryDataSource: "Queried",
 	align: "Aligned",
 	aggregate: "Analyzed",
+	extractFindings: "Findings",
 	validate: "Validated",
 };
 
@@ -21,19 +24,27 @@ let {
 	toolsUsed = [],
 	completedNodes = new Map(),
 	dataSourceResults,
+	dataSourceFindings,
 }: {
 	responseTime?: number;
 	toolsUsed?: string[];
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, DataSourceStatus>;
+	dataSourceFindings?: Map<string, DataSourceFindings>;
 } = $props();
 
 let expanded = $state(false);
 
 const dataSources = $derived(dataSourceResults ? [...dataSourceResults.entries()] : []);
+const findings = $derived(dataSourceFindings ? [...dataSourceFindings.entries()] : []);
+const kafkaFindings = $derived(dataSourceFindings?.get("kafka")?.kafkaFindings);
 
 const hasContent = $derived(
-	responseTime !== undefined || toolsUsed.length > 0 || completedNodes.size > 0 || dataSources.length > 0,
+	responseTime !== undefined ||
+		toolsUsed.length > 0 ||
+		completedNodes.size > 0 ||
+		dataSources.length > 0 ||
+		findings.length > 0,
 );
 
 const formattedTime = $derived(responseTime !== undefined ? `${(responseTime / 1000).toFixed(1)}s` : undefined);
@@ -79,6 +90,10 @@ function statusDotClass(status: string): string {
         class="w-3 h-3 text-green-500 ml-auto shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
       />
     </button>
+
+    {#if kafkaFindings}
+      <KafkaFindingsCard findings={kafkaFindings} />
+    {/if}
 
     {#if expanded}
       <div class="mt-1 bg-green-50 border border-green-100 rounded-lg px-3 py-2.5 animate-slide-up-fade">

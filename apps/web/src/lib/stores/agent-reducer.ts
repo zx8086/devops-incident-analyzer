@@ -1,5 +1,13 @@
 // apps/web/src/lib/stores/agent-reducer.ts
-import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
+import type {
+	ActionResult,
+	CouchbaseFindings,
+	DataSourceContext,
+	GitLabFindings,
+	KafkaFindings,
+	PendingAction,
+	StreamEvent,
+} from "@devops-agent/shared";
 
 export interface TopicShiftPrompt {
 	threadId: string;
@@ -10,12 +18,26 @@ export interface TopicShiftPrompt {
 	message: string;
 }
 
+// SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
+// "couchbase"). Populated by datasource_result events emitted from the
+// extractFindings node. Absence of an entry = sub-agent didn't run or had
+// nothing typed to report.
+export interface DataSourceFindings {
+	status: "success" | "error";
+	duration?: number;
+	error?: string;
+	kafkaFindings?: KafkaFindings;
+	gitlabFindings?: GitLabFindings;
+	couchbaseFindings?: CouchbaseFindings;
+}
+
 export interface ReducerState {
 	currentContent: string;
 	threadId: string;
 	activeNodes: Set<string>;
 	completedNodes: Map<string, { duration: number }>;
 	dataSourceProgress: Map<string, { status: string; message?: string }>;
+	dataSourceFindings: Map<string, DataSourceFindings>;
 	lastSuggestions: string[];
 	lastResponseTime: number | undefined;
 	lastToolsUsed: string[];
@@ -36,6 +58,7 @@ export function initialReducerState(): ReducerState {
 		activeNodes: new Set(),
 		completedNodes: new Map(),
 		dataSourceProgress: new Map(),
+		dataSourceFindings: new Map(),
 		lastSuggestions: [],
 		lastResponseTime: undefined,
 		lastToolsUsed: [],
@@ -58,6 +81,18 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			const next = new Map(state.dataSourceProgress);
 			next.set(event.dataSourceId, { status: event.status, message: event.message });
 			return { ...state, dataSourceProgress: next };
+		}
+		case "datasource_result": {
+			const next = new Map(state.dataSourceFindings);
+			next.set(event.dataSourceId, {
+				status: event.status,
+				duration: event.duration,
+				error: event.error,
+				kafkaFindings: event.kafkaFindings,
+				gitlabFindings: event.gitlabFindings,
+				couchbaseFindings: event.couchbaseFindings,
+			});
+			return { ...state, dataSourceFindings: next };
 		}
 		case "node_start": {
 			const next = new Set(state.activeNodes);
