@@ -188,6 +188,20 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		status: z.enum(["pending", "running", "success", "error"]),
 		message: z.string().optional(),
 	}),
+	// SIO-775: terminal per-datasource result with typed findings. Emitted once
+	// per sub-agent at aggregate on_chain_end so the UI can render typed cards
+	// (KafkaFindingsCard, etc.) inline. Distinct from datasource_progress
+	// (lifecycle ticks). Findings fields are optional; absence = nothing to render.
+	z.object({
+		type: z.literal("datasource_result"),
+		dataSourceId: z.string(),
+		status: z.enum(["success", "error"]),
+		duration: z.number().optional(),
+		error: z.string().optional(),
+		kafkaFindings: KafkaFindingsSchema.optional(),
+		gitlabFindings: GitLabFindingsSchema.optional(),
+		couchbaseFindings: CouchbaseFindingsSchema.optional(),
+	}),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),
 	z.object({ type: z.literal("suggestions"), suggestions: z.array(z.string()) }),

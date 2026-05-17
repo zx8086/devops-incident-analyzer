@@ -2,7 +2,12 @@
 
 import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
-import { applyStreamEvent, type ReducerState, type TopicShiftPrompt } from "./agent-reducer.ts";
+import {
+	applyStreamEvent,
+	type DataSourceFindings,
+	type ReducerState,
+	type TopicShiftPrompt,
+} from "./agent-reducer.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
 
 export interface ChatMessage {
@@ -13,6 +18,8 @@ export interface ChatMessage {
 	toolsUsed?: string[];
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, { status: string; message?: string }>;
+	// SIO-775: typed findings per datasource (keyed by bare id e.g. "kafka").
+	dataSourceFindings?: Map<string, DataSourceFindings>;
 	feedback?: "up" | "down" | null;
 	runId?: string;
 	confidence?: number;
@@ -32,6 +39,7 @@ type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
 function createAgentStore() {
 	let messages = $state<ChatMessage[]>([]);
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
+	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
 	let isStreaming = $state(false);
 	let threadId = $state<string>("");
 	let currentContent = $state("");
@@ -70,6 +78,7 @@ function createAgentStore() {
 		isStreaming = true;
 		currentContent = "";
 		dataSourceProgress = new Map();
+		dataSourceFindings = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
 		lastSuggestions = [];
@@ -124,6 +133,7 @@ function createAgentStore() {
 						toolsUsed: [...lastToolsUsed],
 						completedNodes: new Map(completedNodes),
 						dataSourceResults: new Map(dataSourceProgress),
+						dataSourceFindings: new Map(dataSourceFindings),
 						feedback: null,
 						runId: lastRunId,
 						confidence: lastConfidence,
@@ -136,6 +146,7 @@ function createAgentStore() {
 			completedNodes = new Map();
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
+			dataSourceFindings = new Map();
 		}
 	}
 
@@ -146,6 +157,7 @@ function createAgentStore() {
 			activeNodes,
 			completedNodes,
 			dataSourceProgress,
+			dataSourceFindings,
 			lastSuggestions,
 			lastResponseTime,
 			lastToolsUsed,
@@ -162,6 +174,7 @@ function createAgentStore() {
 		activeNodes = next.activeNodes;
 		completedNodes = next.completedNodes;
 		dataSourceProgress = next.dataSourceProgress;
+		dataSourceFindings = next.dataSourceFindings;
 		lastSuggestions = next.lastSuggestions;
 		lastResponseTime = next.lastResponseTime;
 		lastToolsUsed = next.lastToolsUsed;
@@ -295,6 +308,7 @@ function createAgentStore() {
 		threadId = "";
 		currentContent = "";
 		dataSourceProgress = new Map();
+		dataSourceFindings = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
 		lastSuggestions = [];
@@ -339,6 +353,7 @@ function createAgentStore() {
 						toolsUsed: [...lastToolsUsed],
 						completedNodes: new Map(completedNodes),
 						dataSourceResults: new Map(dataSourceProgress),
+						dataSourceFindings: new Map(dataSourceFindings),
 						feedback: null,
 						runId: lastRunId,
 						confidence: lastConfidence,
@@ -351,6 +366,7 @@ function createAgentStore() {
 			completedNodes = new Map();
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
+			dataSourceFindings = new Map();
 		}
 	}
 

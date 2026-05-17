@@ -78,6 +78,40 @@ describe("applyStreamEvent", () => {
 		expect(initial.dataSourceProgress.size).toBe(0);
 	});
 
+	// SIO-775: datasource_result carries typed findings for the *FindingsCard
+	// components. Stored in a separate dataSourceFindings map keyed by bare id.
+	test("records datasource_result with typed kafkaFindings", () => {
+		const initial = initialReducerState();
+		const next = applyStreamEvent(initial, {
+			type: "datasource_result",
+			dataSourceId: "kafka",
+			status: "success",
+			duration: 1234,
+			kafkaFindings: {
+				consumerGroups: [{ id: "pim-sink", state: "Stable", totalLag: 42 }],
+				dlqTopics: [{ name: "orders.dlq", totalMessages: 17, recentDelta: 3 }],
+			},
+		});
+		const entry = next.dataSourceFindings.get("kafka");
+		expect(entry?.status).toBe("success");
+		expect(entry?.duration).toBe(1234);
+		expect(entry?.kafkaFindings?.consumerGroups?.[0]?.id).toBe("pim-sink");
+		expect(initial.dataSourceFindings.size).toBe(0);
+	});
+
+	test("records datasource_result error without findings", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "datasource_result",
+			dataSourceId: "kafka",
+			status: "error",
+			error: "MCP error -32010",
+		});
+		const entry = next.dataSourceFindings.get("kafka");
+		expect(entry?.status).toBe("error");
+		expect(entry?.error).toBe("MCP error -32010");
+		expect(entry?.kafkaFindings).toBeUndefined();
+	});
+
 	test("does not mutate input state when handling node_start", () => {
 		const before = initialReducerState();
 		const sizeBefore = before.activeNodes.size;

@@ -58,12 +58,13 @@ let {
           {/if}
         </div>
 
-        {#if !isStreaming && (message.responseTime !== undefined || (message.toolsUsed && message.toolsUsed.length > 0) || (message.dataSourceResults && message.dataSourceResults.size > 0))}
+        {#if !isStreaming && (message.responseTime !== undefined || (message.toolsUsed && message.toolsUsed.length > 0) || (message.dataSourceResults && message.dataSourceResults.size > 0) || (message.dataSourceFindings && message.dataSourceFindings.size > 0))}
           <CompletedProgress
             responseTime={message.responseTime}
             toolsUsed={message.toolsUsed}
             completedNodes={message.completedNodes}
             dataSourceResults={message.dataSourceResults}
+            dataSourceFindings={message.dataSourceFindings}
           />
         {/if}
 
