@@ -1,11 +1,15 @@
 <script lang="ts">
+type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
+
 let {
 	dataSources,
 	connected = [],
+	states = {},
 	selected = $bindable([]),
 }: {
 	dataSources: string[];
 	connected: string[];
+	states: Record<string, ProbeState>;
 	selected: string[];
 } = $props();
 
@@ -19,12 +23,49 @@ const labels: Record<string, string> = {
 	aws: "AWS",
 };
 
-function isConnected(id: string): boolean {
-	return connected.includes(id);
+function stateFor(id: string): ProbeState {
+	return states[id] ?? (connected.includes(id) ? "ready" : "down");
+}
+
+function isInteractive(id: string): boolean {
+	const s = stateFor(id);
+	return s === "ready" || s === "unready" || s === "replaced";
+}
+
+function classFor(id: string, isSelected: boolean): string {
+	const s = stateFor(id);
+	if (s === "down") {
+		return "bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300";
+	}
+	if (s === "misidentified") {
+		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed";
+	}
+	if (s === "unready") {
+		return isSelected
+			? "bg-tommy-accent-blue text-white border border-yellow-500"
+			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600";
+	}
+	if (s === "replaced") {
+		return "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse";
+	}
+	// ready
+	return isSelected
+		? "bg-tommy-accent-blue text-white"
+		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue";
+}
+
+function titleFor(id: string): string {
+	const label = labels[id] ?? id;
+	const s = stateFor(id);
+	if (s === "down") return `${label} - not connected`;
+	if (s === "misidentified") return `${label} - wrong server on this port. Check env config.`;
+	if (s === "unready") return `${label} - upstream degraded`;
+	if (s === "replaced") return `${label} - process replaced, reloading tools`;
+	return label;
 }
 
 function toggle(id: string) {
-	if (!isConnected(id)) return;
+	if (!isInteractive(id)) return;
 	if (selected.includes(id)) {
 		selected = selected.filter((s) => s !== id);
 	} else {
@@ -33,7 +74,7 @@ function toggle(id: string) {
 }
 
 function selectAll() {
-	selected = dataSources.filter((ds) => isConnected(ds));
+	selected = dataSources.filter(isInteractive);
 }
 
 function selectNone() {
@@ -48,15 +89,9 @@ function selectNone() {
       {#each dataSources as ds}
         <button
           onclick={() => toggle(ds)}
-          disabled={!isConnected(ds)}
-          class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors
-            {!isConnected(ds)
-              ? 'bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300'
-              : selected.includes(ds)
-                ? 'bg-tommy-accent-blue text-white'
-                : 'bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue'
-            }"
-          title={isConnected(ds) ? labels[ds] ?? ds : `${labels[ds] ?? ds} - not connected`}
+          disabled={!isInteractive(ds)}
+          class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors {classFor(ds, selected.includes(ds))}"
+          title={titleFor(ds)}
         >
           {labels[ds] ?? ds}
         </button>

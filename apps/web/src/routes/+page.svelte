@@ -81,7 +81,7 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </header>
 
-  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} bind:selected={agentStore.selectedDataSources} />
+  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
 
   {#if agentStore.selectedDataSources.includes("elastic")}
     <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />
