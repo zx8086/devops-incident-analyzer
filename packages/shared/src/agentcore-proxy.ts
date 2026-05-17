@@ -5,6 +5,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { createMcpLogger } from "./logger.ts";
+import type { IdentityCard } from "./transport/identity.ts";
 
 const logger = createMcpLogger("agentcore-proxy");
 
@@ -360,7 +361,10 @@ export interface AgentCoreProxyHandle {
 	close(): Promise<void>;
 }
 
-export async function startAgentCoreProxy(config: ProxyConfig): Promise<AgentCoreProxyHandle> {
+export async function startAgentCoreProxy(
+	config: ProxyConfig,
+	identityCard: IdentityCard,
+): Promise<AgentCoreProxyHandle> {
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
 	const encodedArn = encodeURIComponent(config.runtimeArn);
@@ -632,6 +636,10 @@ export async function startAgentCoreProxy(config: ProxyConfig): Promise<AgentCor
 
 			"/ping": {
 				GET: () => Response.json({ status: "ok", proxy: true, target: fullUrl }),
+			},
+
+			"/identity": {
+				GET: () => Response.json(identityCard),
 			},
 		},
 

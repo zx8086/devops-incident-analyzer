@@ -1,5 +1,6 @@
 // shared/src/transport/__tests__/agentcore-proxy.test.ts
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import type { IdentityCard } from "../identity.ts";
 
 const startProxyMock = mock(async () => ({
 	port: 3001,
@@ -44,6 +45,16 @@ mock.module("../../telemetry/telemetry.ts", () => ({
 
 const { createAgentCoreProxyTransport } = await import("../agentcore-proxy.ts");
 
+const fixtureCard: IdentityCard = {
+	instanceId: "22222222-2222-2222-2222-222222222222",
+	role: "aws-proxy",
+	version: "0.0.1",
+	bootedAt: "2026-05-17T00:00:00.000Z",
+	pid: 1,
+	mode: "agentcore-proxy",
+	upstreamFingerprint: "abcd1234abcd1234",
+};
+
 function captureLogger() {
 	const records: Array<{ level: string; msg: string; meta?: unknown }> = [];
 	return {
@@ -65,14 +76,14 @@ describe("createAgentCoreProxyTransport", () => {
 
 	test("loads config for the prefix and starts the proxy", async () => {
 		const { logger } = captureLogger();
-		await createAgentCoreProxyTransport("AWS", logger);
+		await createAgentCoreProxyTransport("AWS", logger, fixtureCard);
 		expect(loadConfigMock).toHaveBeenCalledWith("AWS");
 		expect(startProxyMock).toHaveBeenCalledTimes(1);
 	});
 
 	test("wraps connect in proxy.connect span with prefix attribute", async () => {
 		const { logger } = captureLogger();
-		await createAgentCoreProxyTransport("KAFKA", logger);
+		await createAgentCoreProxyTransport("KAFKA", logger, fixtureCard);
 		const connect = spanCalls.find((c) => c.name === "proxy.connect");
 		expect(connect).toBeDefined();
 		expect(connect?.attrs).toMatchObject({ "proxy.prefix": "KAFKA" });
@@ -81,7 +92,7 @@ describe("createAgentCoreProxyTransport", () => {
 
 	test("emits 'AgentCore proxy ready' log on connect", async () => {
 		const { logger, records } = captureLogger();
-		await createAgentCoreProxyTransport("AWS", logger);
+		await createAgentCoreProxyTransport("AWS", logger, fixtureCard);
 		const ready = records.find((r) => r.msg === "AgentCore proxy ready");
 		expect(ready).toBeDefined();
 		expect(ready?.meta).toMatchObject({ prefix: "AWS", port: 3001 });
@@ -89,7 +100,7 @@ describe("createAgentCoreProxyTransport", () => {
 
 	test("closeAll wraps proxy.close in proxy.close span and logs", async () => {
 		const { logger, records } = captureLogger();
-		const transport = await createAgentCoreProxyTransport("AWS", logger);
+		const transport = await createAgentCoreProxyTransport("AWS", logger, fixtureCard);
 		await transport.closeAll();
 		const close = spanCalls.find((c) => c.name === "proxy.close");
 		expect(close).toBeDefined();
@@ -104,7 +115,7 @@ describe("createAgentCoreProxyTransport", () => {
 			throw new Error("boom");
 		});
 		const { logger } = captureLogger();
-		await expect(createAgentCoreProxyTransport("AWS", logger)).rejects.toThrow("boom");
+		await expect(createAgentCoreProxyTransport("AWS", logger, fixtureCard)).rejects.toThrow("boom");
 		const connect = spanCalls.find((c) => c.name === "proxy.connect");
 		expect(connect?.ok).toBe(false);
 		expect(connect?.err).toBe("boom");
