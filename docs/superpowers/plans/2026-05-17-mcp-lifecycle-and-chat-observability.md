@@ -135,7 +135,7 @@ Expected: 5 PASS.
 
 ```bash
 git add packages/shared/src/request-context.ts packages/shared/src/__tests__/request-context.test.ts
-git commit -m "SIO-XXX: add RequestContext AsyncLocalStorage primitive in shared"
+git commit -m "SIO-779: add RequestContext AsyncLocalStorage primitive in shared"
 ```
 
 ---
@@ -167,7 +167,7 @@ Expected: PASS, no errors.
 
 ```bash
 git add packages/shared/src/index.ts
-git commit -m "SIO-XXX: export RequestContext from @devops-agent/shared"
+git commit -m "SIO-779: export RequestContext from @devops-agent/shared"
 ```
 
 ---
@@ -239,7 +239,7 @@ import { getCurrentRequestContext } from "./request-context.ts";
 Find the existing `mixin()` function inside `buildEcsOptions` (around lines 63-97). At the end of the function, just before `return fields;`, add:
 
 ```ts
-		// Chat request correlation (SIO-XXX)
+		// Chat request correlation (SIO-779)
 		const reqCtx = getCurrentRequestContext();
 		if (reqCtx) {
 			fields.threadId = reqCtx.threadId;
@@ -264,7 +264,7 @@ Expected: all green. No existing test should break — new fields appear only wh
 
 ```bash
 git add packages/shared/src/logger.ts packages/shared/src/__tests__/request-context.test.ts
-git commit -m "SIO-XXX: inject threadId/runId/requestId via pino mixin"
+git commit -m "SIO-779: inject threadId/runId/requestId via pino mixin"
 ```
 
 ---
@@ -310,7 +310,7 @@ Expected: PASS.
 
 ```bash
 git add packages/observability/src/index.ts
-git commit -m "SIO-XXX: re-export RequestContext from observability for ergonomic imports"
+git commit -m "SIO-779: re-export RequestContext from observability for ergonomic imports"
 ```
 
 ---
@@ -465,7 +465,7 @@ Expected: all original + 4 new tests PASS.
 
 ```bash
 git add packages/shared/src/bootstrap.ts packages/shared/src/__tests__/bootstrap.test.ts
-git commit -m "SIO-XXX: add mode: 'proxy' option to createMcpApplication"
+git commit -m "SIO-779: add mode: 'proxy' option to createMcpApplication"
 ```
 
 ---
@@ -665,7 +665,7 @@ Expected: PASS.
 git add packages/shared/src/transport/agentcore-proxy.ts \
         packages/shared/src/transport/__tests__/agentcore-proxy.test.ts \
         packages/shared/src/index.ts
-git commit -m "SIO-XXX: add createAgentCoreProxyTransport helper with OTEL spans"
+git commit -m "SIO-779: add createAgentCoreProxyTransport helper with OTEL spans"
 ```
 
 ---
@@ -758,7 +758,7 @@ If the proxy fails to connect because the runtime ARN is fake, that's fine — c
 
 ```bash
 git add packages/mcp-server-aws/src/index.ts
-git commit -m "SIO-XXX: collapse AWS MCP proxy branch into createMcpApplication"
+git commit -m "SIO-779: collapse AWS MCP proxy branch into createMcpApplication"
 ```
 
 ---
@@ -825,7 +825,7 @@ Expected: PASS.
 
 ```bash
 git add packages/mcp-server-kafka/src/index.ts
-git commit -m "SIO-XXX: collapse Kafka MCP proxy branch into createMcpApplication"
+git commit -m "SIO-779: collapse Kafka MCP proxy branch into createMcpApplication"
 ```
 
 ---
@@ -910,7 +910,7 @@ Expected: 4 PASS.
 
 ```bash
 git add apps/web/src/lib/server/langsmith-tags.ts apps/web/src/lib/server/langsmith-tags.test.ts
-git commit -m "SIO-XXX: add buildLangSmithTags helper for chat run tagging"
+git commit -m "SIO-779: add buildLangSmithTags helper for chat run tagging"
 ```
 
 ---
@@ -995,7 +995,7 @@ Expected: PASS.
 
 ```bash
 git add apps/web/src/lib/server/agent.ts
-git commit -m "SIO-XXX: forward runName + tags from invokeAgent to LangGraph streamEvents"
+git commit -m "SIO-779: forward runName + tags from invokeAgent to LangGraph streamEvents"
 ```
 
 ---
@@ -1145,7 +1145,7 @@ Expected: PASS.
 
 ```bash
 git add apps/web/src/routes/api/agent/stream/+server.ts
-git commit -m "SIO-XXX: bracket /api/agent/stream with runWithRequestContext + lifecycle logs"
+git commit -m "SIO-779: bracket /api/agent/stream with runWithRequestContext + lifecycle logs"
 ```
 
 ---
@@ -1270,7 +1270,7 @@ Expected: all PASS.
 
 ```bash
 git add apps/web/src/routes/api/agent/stream/server.test.ts
-git commit -m "SIO-XXX: test agent.request lifecycle logs + LangSmith tags + ALS propagation"
+git commit -m "SIO-779: test agent.request lifecycle logs + LangSmith tags + ALS propagation"
 ```
 
 ---
@@ -1343,7 +1343,7 @@ Expected: PASS.
 
 ```bash
 git add apps/web/src/routes/api/agent/topic-shift/+server.ts
-git commit -m "SIO-XXX: bracket /api/agent/topic-shift resume with runWithRequestContext + logs"
+git commit -m "SIO-779: bracket /api/agent/topic-shift resume with runWithRequestContext + logs"
 ```
 
 ---
@@ -1407,7 +1407,7 @@ Expected: PASS.
 
 ```bash
 git add apps/web/src/routes/api/agent/topic-shift/+server.test.ts
-git commit -m "SIO-XXX: test /api/agent/topic-shift resume lifecycle logs + resumed tag"
+git commit -m "SIO-779: test /api/agent/topic-shift resume lifecycle logs + resumed tag"
 ```
 
 ---

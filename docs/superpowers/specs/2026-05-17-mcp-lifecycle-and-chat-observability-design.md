@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-17
 **Status:** Spec — pending user review
-**Linear:** TBD (to be created after spec approval)
+**Linear:** [SIO-779](https://linear.app/siobytes/issue/SIO-779/mcp-lifecycle-unification-chat-observability-wiring)
 
 ## TL;DR
 
