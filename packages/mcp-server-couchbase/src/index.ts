@@ -3,8 +3,9 @@
 // Import global setup first
 import "./set-global";
 
-import { buildTelemetryConfig, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
+import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter, createMcpApplication } from "@devops-agent/shared";
 import { config } from "./config";
+import pkg from "../package.json" with { type: "json" };
 import { connectionManager } from "./lib/connectionManager";
 import { createServer } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
@@ -53,6 +54,14 @@ if (import.meta.main) {
 		initTracing: () => initializeTracing(),
 		telemetry: buildTelemetryConfig("couchbase-mcp-server"),
 
+		role: "couchbase-mcp",
+		version: pkg.version,
+		identityFingerprint: () =>
+			canonicalizeUpstream({
+				connectionString: config.database.connectionString,
+				bucket: config.database.bucketName,
+			}),
+
 		initDatasource: async () => {
 			logger.info(
 				{
@@ -71,7 +80,7 @@ if (import.meta.main) {
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-		createTransport: (serverFactory) => createTransport(config.transport, serverFactory!),
+		createTransport: (serverFactory, _ds, identityCard) => createTransport(config.transport, serverFactory!, identityCard),
 
 		cleanupDatasource: async () => {
 			await connectionManager.close();
