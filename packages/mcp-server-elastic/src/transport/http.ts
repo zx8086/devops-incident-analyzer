@@ -1,6 +1,7 @@
 // src/transport/http.ts
 
 import { withTraceContextMiddleware } from "@devops-agent/shared";
+import type { IdentityCard } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { DEPLOYMENT_HEADER, runWithDeployment } from "../clients/context.js";
@@ -30,6 +31,8 @@ interface HttpTransportConfig {
 	idleTimeout: number;
 	apiKey?: string;
 	allowedOrigins?: string[];
+	// SIO-780: identity card returned by GET /identity
+	identityCard?: IdentityCard;
 }
 
 type ServerFactory = () => McpServer;
@@ -205,6 +208,12 @@ export async function startHttpTransport(
 			},
 			"/health": {
 				GET: () => Response.json({ status: "ok" }),
+			},
+			"/identity": {
+				GET: () =>
+					config.identityCard
+						? Response.json(config.identityCard)
+						: Response.json({ error: "identity not configured" }, { status: 503 }),
 			},
 		},
 
