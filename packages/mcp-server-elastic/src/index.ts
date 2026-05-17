@@ -81,7 +81,9 @@ if (import.meta.main) {
 					apiKey: config.server.apiKey,
 					allowedOrigins: config.server.allowedOrigins,
 				},
-				serverFactory,
+				// SIO-779: server mode always provides createServerFactory; non-null assertion is safe
+				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+				serverFactory!,
 			),
 
 		onStarted: () => {

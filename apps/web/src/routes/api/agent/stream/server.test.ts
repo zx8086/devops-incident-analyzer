@@ -8,8 +8,18 @@ mock.module("@devops-agent/agent", () => ({
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 }));
 
+const sharedLogger = {
+	info: mock(() => undefined),
+	error: mock(() => undefined),
+	warn: mock(() => undefined),
+	debug: mock(() => undefined),
+};
+const runWithRequestContextMock = mock(async (_ctx: unknown, fn: () => Promise<unknown>) => fn());
+
 mock.module("@devops-agent/observability", () => ({
 	traceSpan: mock(async (_name: string, _op: string, fn: () => Promise<unknown>) => fn()),
+	getLogger: mock(() => sharedLogger),
+	runWithRequestContext: runWithRequestContextMock,
 }));
 
 // SIO-586: AttachmentBlockSchema and DataSourceContextSchema are composed via real
@@ -33,6 +43,11 @@ const invokeAgentMock = mock(
 // whether the graph paused on detectTopicShift. In the happy-path tests below
 // no interrupt is ever raised, so a stub returning undefined keeps the existing
 // done-event path intact.
+const buildLangSmithTagsMock = mock(() => [] as string[]);
+mock.module("$lib/server/langsmith-tags", () => ({
+	buildLangSmithTags: buildLangSmithTagsMock,
+}));
+
 mock.module("$lib/server/agent", () => ({
 	invokeAgent: invokeAgentMock,
 	getPendingInterrupt: mock(async () => undefined),
@@ -362,6 +377,96 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 			type: "partial_failure",
 			node: "proposeMitigation.monitor",
 			reason: "timeout",
+		});
+	});
+});
+
+describe("POST /api/agent/stream — lifecycle logging", () => {
+	test("emits agent.request.start with correlation IDs via runWithRequestContext", async () => {
+		sharedLogger.info.mockClear();
+		runWithRequestContextMock.mockClear();
+
+		await POST(makeRequest({ messages: [{ role: "user", content: "hi" }] }));
+
+		const allInfoCalls = sharedLogger.info.mock.calls as unknown as unknown[][];
+		const startCalls = allInfoCalls.filter(
+			(c) => c[c.length - 1] === "agent.request.start" || c[0] === "agent.request.start",
+		);
+		expect(startCalls.length).toBeGreaterThan(0);
+
+		expect(runWithRequestContextMock).toHaveBeenCalled();
+		const ctxCalls = runWithRequestContextMock.mock.calls as unknown as unknown[][];
+		const ctx = ctxCalls[0]?.[0] as { threadId: string; runId: string; requestId: string };
+		expect(typeof ctx.threadId).toBe("string");
+		expect(typeof ctx.runId).toBe("string");
+		expect(typeof ctx.requestId).toBe("string");
+	});
+
+	test("emits agent.request.end with responseTime + toolsUsed after happy path", async () => {
+		sharedLogger.info.mockClear();
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				// empty stream — done event still fires
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "hi" }] }));
+		await collectSse(response);
+
+		const infoCalls = sharedLogger.info.mock.calls as unknown as unknown[][];
+		const endCall = infoCalls.find((c) => c[c.length - 1] === "agent.request.end" || c[0] === "agent.request.end");
+		expect(endCall).toBeDefined();
+		// Pino call shape: logger.info(meta, msg). meta is the first arg.
+		const meta = endCall?.[0] as { responseTime?: number; toolsUsed?: number };
+		expect(typeof meta.responseTime).toBe("number");
+		expect(typeof meta.toolsUsed).toBe("number");
+	});
+
+	test("emits agent.request.error when invokeAgent throws", async () => {
+		sharedLogger.error.mockClear();
+		invokeAgentMock.mockImplementationOnce(async () => {
+			throw new Error("boom");
+		});
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "hi" }] }));
+		await collectSse(response);
+
+		const errorCalls = sharedLogger.error.mock.calls as unknown as unknown[][];
+		const errCall = errorCalls.find((c) => c[c.length - 1] === "agent.request.error" || c[0] === "agent.request.error");
+		expect(errCall).toBeDefined();
+		const meta = errCall?.[0] as { err?: { message?: string } };
+		expect(meta.err?.message).toBe("boom");
+	});
+
+	test("invokeAgent receives runName 'agent.request' and chat tags", async () => {
+		invokeAgentMock.mockClear();
+		buildLangSmithTagsMock.mockClear();
+		buildLangSmithTagsMock.mockImplementationOnce(
+			() => ["chat", "thread:xyz", "datasources:elastic,kafka", "follow-up"] as string[],
+		);
+
+		await POST(
+			makeRequest({
+				messages: [{ role: "user", content: "hi" }],
+				threadId: "xyz",
+				dataSources: ["elastic", "kafka"],
+				isFollowUp: true,
+			}),
+		);
+
+		expect(invokeAgentMock).toHaveBeenCalled();
+		const agentCalls = invokeAgentMock.mock.calls as unknown as unknown[][];
+		const args = agentCalls[0]?.[1] as { runName?: string; tags?: string[] };
+		expect(args.runName).toBe("agent.request");
+		expect(args.tags).toContain("chat");
+		expect(args.tags).toContain("thread:xyz");
+		expect(args.tags).toContain("datasources:elastic,kafka");
+		expect(args.tags).toContain("follow-up");
+
+		expect(buildLangSmithTagsMock).toHaveBeenCalledWith({
+			threadId: "xyz",
+			dataSources: ["elastic", "kafka"],
+			isFollowUp: true,
 		});
 	});
 });

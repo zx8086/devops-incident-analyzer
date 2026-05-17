@@ -75,25 +75,25 @@ interface KafkaDatasource {
 
 if (import.meta.main) {
 	if (process.env.KAFKA_AGENTCORE_RUNTIME_ARN) {
-		const { loadProxyConfigFromEnv, startAgentCoreProxy } = await import("@devops-agent/shared");
-		const config = loadProxyConfigFromEnv("KAFKA");
+		const { createAgentCoreProxyTransport, loadProxyConfigFromEnv } = await import("@devops-agent/shared");
+		type KafkaProxyDatasource = { config: ReturnType<typeof loadProxyConfigFromEnv> };
 
-		logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting Kafka MCP Server");
-		const proxy = await startAgentCoreProxy(config);
-		logger.info({ transport: "agentcore-proxy", port: proxy.port, url: proxy.url }, "Kafka MCP Server ready");
-		logger.info("kafka-mcp-server started successfully");
-
-		let isShuttingDown = false;
-		const shutdown = async () => {
-			if (isShuttingDown) return;
-			isShuttingDown = true;
-			logger.info("Shutting down kafka-mcp-server...");
-			await proxy.close();
-			logger.info("kafka-mcp-server shutdown completed");
-			process.exit(0);
-		};
-		process.on("SIGINT", () => shutdown());
-		process.on("SIGTERM", () => shutdown());
+		createMcpApplication<KafkaProxyDatasource>({
+			name: "kafka-mcp-server",
+			logger: createBootstrapAdapter(logger),
+			initTracing: () => initializeTracing(),
+			telemetry: buildTelemetryConfig("kafka-mcp-server"),
+			mode: "proxy",
+			initDatasource: async () => {
+				const config = loadProxyConfigFromEnv("KAFKA");
+				logger.info({ arn: config.runtimeArn, transport: "agentcore-proxy" }, "Starting Kafka MCP Server");
+				return { config };
+			},
+			createTransport: async () => createAgentCoreProxyTransport("KAFKA", createBootstrapAdapter(logger)),
+			onStarted: (ds) => {
+				logger.info({ arn: ds.config.runtimeArn, transport: "agentcore-proxy" }, "Kafka MCP server ready");
+			},
+		});
 	} else {
 		// Local mode: start the Kafka MCP server locally.
 		const config = getConfig();
@@ -158,10 +158,12 @@ if (import.meta.main) {
 			// registered with, then thread it into the HTTP transport. Stdio and
 			// AgentCore transport modes ignore it -- AgentCore's framework health
 			// surface is authoritative there.
+			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 			createTransport: (serverFactory, ds) =>
 				createTransport(
 					config.transport,
-					serverFactory,
+					// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
+					serverFactory!,
 					createReadinessProbe({
 						clientManager: ds.clientManager,
 						toolOptions: ds.toolOptions,

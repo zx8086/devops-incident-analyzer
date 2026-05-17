@@ -79,6 +79,8 @@ export async function invokeAgent(
 		attachmentContentBlocks?: MessageContentComplex[];
 		attachmentMeta?: AttachmentMeta[];
 		metadata?: Record<string, unknown>;
+		runName?: string;
+		tags?: string[];
 	},
 ) {
 	// SIO-637: Kill switch prevents new graph invocations
@@ -120,6 +122,8 @@ export async function invokeAgent(
 			version: "v2",
 			recursionLimit: getGraphRecursionLimit(),
 			signal: AbortSignal.timeout(getGraphTimeoutMs()),
+			...(options.runName && { runName: options.runName }),
+			...(options.tags && { tags: options.tags }),
 			metadata: {
 				...complianceToMetadata(getAgent().manifest.compliance),
 				...options.metadata,
@@ -135,6 +139,8 @@ export async function resumeAgent(options: {
 	threadId: string;
 	resumeValue: unknown;
 	metadata?: Record<string, unknown>;
+	runName?: string;
+	tags?: string[];
 }) {
 	if (isKillSwitchActive()) throw new KillSwitchError();
 
@@ -155,6 +161,8 @@ export async function resumeAgent(options: {
 		version: "v2",
 		recursionLimit: getGraphRecursionLimit(),
 		signal: AbortSignal.timeout(getGraphTimeoutMs()),
+		...(options.runName && { runName: options.runName }),
+		...(options.tags && { tags: options.tags }),
 		metadata: {
 			...complianceToMetadata(getAgent().manifest.compliance),
 			...options.metadata,

@@ -2,6 +2,7 @@
 import ecsFormat from "@elastic/ecs-pino-format";
 import { trace } from "@opentelemetry/api";
 import pino from "pino";
+import { getCurrentRequestContext } from "./request-context.ts";
 import { getCurrentTrace } from "./tracing/langsmith.ts";
 
 const SENSITIVE_KEYS = [
@@ -91,6 +92,14 @@ export function buildEcsOptions(config: EcsLoggerConfig & { retentionPeriod?: st
 				}
 			} catch {
 				// LangSmith not available
+			}
+
+			// Chat request correlation (SIO-779)
+			const reqCtx = getCurrentRequestContext();
+			if (reqCtx) {
+				fields.threadId = reqCtx.threadId;
+				fields.runId = reqCtx.runId;
+				fields.requestId = reqCtx.requestId;
 			}
 
 			return fields;

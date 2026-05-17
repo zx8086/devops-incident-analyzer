@@ -152,6 +152,11 @@ export {
 	type ReadOnlyManagerLike,
 	type ReadOnlyMiddlewareConfig,
 } from "./read-only-chokepoint.ts";
+export {
+	getCurrentRequestContext,
+	type RequestContext,
+	runWithRequestContext,
+} from "./request-context.ts";
 export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
 export {
 	buildTelemetryConfig,
@@ -190,4 +195,5 @@ export {
 	type AgentCoreTransportResult,
 	startAgentCoreTransport,
 } from "./transport/agentcore.ts";
+export { createAgentCoreProxyTransport } from "./transport/agentcore-proxy.ts";
 export { drainBunServer } from "./transport/drain-helper.ts";
