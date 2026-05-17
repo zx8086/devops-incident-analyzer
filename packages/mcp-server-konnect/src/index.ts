@@ -4,6 +4,7 @@ import {
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
 import { KongApi } from "./api/kong-api.js";
@@ -59,9 +60,17 @@ if (import.meta.main) {
 		createServerFactory: (ds) => () => createKonnectServer(ds.api, ds.config),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		createTransport: (serverFactory, ds, identityCard) =>
+		createTransport: (serverFactory, ds, identityCard) => {
+			const konnectProbe = createReadinessProbe({
+				components: {
+					konnectControlPlane: async () => {
+						await ds.api.listControlPlanes(1);
+					},
+				},
+			});
 			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-			createTransport(ds.config.transport, serverFactory!, identityCard),
+			return createTransport(ds.config.transport, serverFactory!, konnectProbe, identityCard);
+		},
 
 		onStarted: (ds) => {
 			serverLog.info(
