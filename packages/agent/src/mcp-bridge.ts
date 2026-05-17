@@ -320,6 +320,14 @@ type ProbeResult =
 const expectedIdentity = new Map<string, IdentityCard>();
 const lastProbeState = new Map<string, ProbeState>();
 
+// SIO-782: debounce the "MCP server upstream degraded" warn. A single unready
+// cycle is usually probe-timeout noise against a cold AgentCore runtime; only
+// emit once the server has been unready for UNREADY_WARN_THRESHOLD consecutive
+// cycles (HEALTH_POLL_INTERVAL_MS * threshold = sustained-degradation budget).
+// Reset on any transition out of unready.
+const unreadyStreak = new Map<string, number>();
+const UNREADY_WARN_THRESHOLD = 3;
+
 // SIO-780: per-process event bus for proxied server lifecycle events.
 // Frontend consumes via /api/events SSE endpoint (apps/web).
 export const mcpEvents = new EventEmitter();
@@ -378,9 +386,13 @@ async function probeServer(name: string, url: string): Promise<ProbeResult> {
 		}
 	}
 
-	// Tier 3: readiness (5s budget). 404 means Phase B not yet deployed for this server -- treat as ready.
+	// Tier 3: readiness. SIO-782: budget tracks the per-server connect timeout so
+	// AgentCore-hosted proxies (kafka/aws, 35s envelope from SIO-774) outlive the
+	// proxy's own 20s upstream probe instead of timing out at a fixed 5s and
+	// synthesising a false-positive unready. 404 means Phase B not yet deployed
+	// for this server -- treat as ready.
 	try {
-		const r = await fetch(`${baseUrl}/ready`, { signal: AbortSignal.timeout(5_000) });
+		const r = await fetch(`${baseUrl}/ready`, { signal: AbortSignal.timeout(connectTimeoutFor(name)) });
 		if (r.status === 404) return { state: "ready", card };
 		if (!r.ok) {
 			const snapshot = (await r.json().catch(() => ({}))) as ReadinessSnapshot;
@@ -388,6 +400,8 @@ async function probeServer(name: string, url: string): Promise<ProbeResult> {
 		}
 		return { state: "ready", card };
 	} catch (err) {
+		// SIO-782: tag synthetic snapshots so pollServerHealth can distinguish
+		// agent-side probe timeouts from proxy-side 503s with real components.
 		return {
 			state: "unready",
 			card,
@@ -395,7 +409,7 @@ async function probeServer(name: string, url: string): Promise<ProbeResult> {
 				ready: false,
 				components: {},
 				cachedAt: new Date().toISOString(),
-				errors: { _probe: probeErrorMessage(err) },
+				errors: { _probe: probeErrorMessage(err), _probeTimeout: "true" },
 			},
 		};
 	}
@@ -478,6 +492,10 @@ async function pollServerHealth(): Promise<void> {
 			const { name, url, result } = settledResult.value;
 			lastProbeState.set(name, result.state);
 
+			// SIO-782: any transition out of unready clears the streak counter so a
+			// future cold-start probe-timeout doesn't immediately cross the threshold.
+			if (result.state !== "unready") unreadyStreak.delete(name);
+
 			switch (result.state) {
 				case "ready":
 					if (!connectedServers.has(name)) {
@@ -496,9 +514,29 @@ async function pollServerHealth(): Promise<void> {
 						logger.warn({ serverName: name, reason: result.reason }, "MCP server down, marking disconnected");
 					}
 					break;
-				case "unready":
-					logger.warn({ serverName: name, components: result.snapshot.components }, "MCP server upstream degraded");
+				case "unready": {
+					// SIO-782: emit the warn only on threshold crossing. Probe-timeout
+					// synthetic snapshots (tagged via errors._probeTimeout in probeServer)
+					// log at info even at threshold, because they signal "agent gave up
+					// probing" not "proxy reported a real outage".
+					const streak = (unreadyStreak.get(name) ?? 0) + 1;
+					unreadyStreak.set(name, streak);
+					if (streak === UNREADY_WARN_THRESHOLD) {
+						const probeTimeout = result.snapshot.errors?._probeTimeout === "true";
+						const logFields = {
+							serverName: name,
+							components: result.snapshot.components,
+							streak,
+							probeTimeout,
+						};
+						if (probeTimeout) {
+							logger.info(logFields, "MCP server probe timing out (probe-side, not upstream)");
+						} else {
+							logger.warn(logFields, "MCP server upstream degraded");
+						}
+					}
 					break;
+				}
 				case "replaced": {
 					const oldCard = expectedIdentity.get(name);
 					logger.info(
@@ -556,4 +594,15 @@ export function stopHealthPolling(): void {
 
 // SIO-680/682: exported for testing only. Do not import from production code.
 // SIO-774: same test-only export pattern for the per-server connect-timeout helper.
+// SIO-782: pollServerHealth + serverUrls + unreadyStreak exposed for debounce tests.
 export { connectTimeoutFor as _connectTimeoutForTest, withTimeout as _withTimeoutForTest };
+export const _pollServerHealthForTest = pollServerHealth;
+export function _setServerUrlsForTest(entries: Array<[string, string]>): void {
+	serverUrls = new Map(entries);
+}
+export function _resetUnreadyStreakForTest(): void {
+	unreadyStreak.clear();
+}
+export function _getLoggerForTest(): typeof logger {
+	return logger;
+}
