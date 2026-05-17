@@ -8,6 +8,7 @@ import {
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
 import { config } from "./config";
@@ -84,9 +85,23 @@ if (import.meta.main) {
 		createServerFactory: (bucket) => () => createServer(bucket),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		createTransport: (serverFactory, _ds, identityCard) =>
+		createTransport: (serverFactory, _ds, identityCard) => {
+			// SIO-780: cluster.ping readiness probe -- the connectionManager singleton
+			// owns the Cluster; initDatasource returns a Bucket so we reach for the
+			// cluster directly here. Throwing when null surfaces "unreachable" with a
+			// meaningful message in the snapshot.
+			const couchbaseProbe = createReadinessProbe({
+				components: {
+					cluster: async () => {
+						const cluster = connectionManager.getCluster();
+						if (!cluster) throw new Error("Couchbase cluster not initialized");
+						await cluster.ping();
+					},
+				},
+			});
 			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-			createTransport(config.transport, serverFactory!, identityCard),
+			return createTransport(config.transport, serverFactory!, couchbaseProbe, identityCard);
+		},
 
 		cleanupDatasource: async () => {
 			await connectionManager.close();

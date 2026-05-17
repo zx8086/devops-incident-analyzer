@@ -5,6 +5,7 @@ import {
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
@@ -19,7 +20,6 @@ import { RestProxyService } from "./services/restproxy-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
 import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
-import { createReadinessProbe } from "./transport/readiness.ts";
 import { logger } from "./utils/logger.ts";
 import { initializeTracing } from "./utils/tracing.ts";
 
@@ -180,18 +180,29 @@ if (import.meta.main) {
 			// AgentCore transport modes ignore it -- AgentCore's framework health
 			// surface is authoritative there.
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-			createTransport: (serverFactory, ds, identityCard) =>
-				createTransport(
+			createTransport: (serverFactory, ds, identityCard) => {
+				// SIO-780: capture optional services into locals so the closures the
+				// shared probe receives don't trip biome's noNonNullAssertion rule.
+				const { schemaRegistryService, ksqlService, connectService, restProxyService } = ds.toolOptions;
+				return createTransport(
 					config.transport,
 					// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 					serverFactory!,
 					createReadinessProbe({
-						clientManager: ds.clientManager,
-						toolOptions: ds.toolOptions,
-						config,
+						components: {
+							kafka: () =>
+								ds.clientManager.withAdmin(async (admin) => {
+									await admin.metadata({});
+								}),
+							schemaRegistry: schemaRegistryService ? () => schemaRegistryService.probeReachability() : null,
+							ksql: ksqlService ? () => ksqlService.probeReachability() : null,
+							connect: connectService ? () => connectService.probeReachability() : null,
+							restproxy: restProxyService ? () => restProxyService.probeReachability() : null,
+						},
 					}),
 					identityCard,
-				),
+				);
+			},
 
 			cleanupDatasource: async (ds) => {
 				await ds.clientManager.close();

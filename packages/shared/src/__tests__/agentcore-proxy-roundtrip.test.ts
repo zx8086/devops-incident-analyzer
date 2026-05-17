@@ -64,7 +64,7 @@ beforeEach(async () => {
 		fetchCalls.push({ url: String(input), init: init ?? {} });
 		return fetchResponder(callIdx);
 	}) as typeof fetch;
-	proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
+	proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD, "aws-proxy");
 });
 
 afterEach(async () => {
@@ -217,7 +217,7 @@ describe("agentcore-proxy round trip — happy paths", () => {
 				// sessionToken intentionally omitted
 			},
 		};
-		proxy = await startAgentCoreProxy(configWithoutToken, TEST_CARD);
+		proxy = await startAgentCoreProxy(configWithoutToken, TEST_CARD, "aws-proxy");
 
 		seedResponses(sseOk(5, { content: [{ type: "text", text: "ok" }] }));
 		await callProxy(toolCall(5, "noop"));

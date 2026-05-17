@@ -6,9 +6,12 @@ import {
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
 import { initializeCloudClient } from "./clients/cloudClient.js";
+import { runWithDeployment } from "./clients/context.js";
+import { listRegisteredDeploymentIds } from "./clients/registry.js";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
 import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
@@ -82,8 +85,24 @@ if (import.meta.main) {
 			},
 		},
 
-		createTransport: (serverFactory, _ds, identityCard) =>
-			createTransport(
+		// SIO-780: build a per-deployment readiness probe. One component per
+		// registered deployment so a single-cluster outage in multi-deployment
+		// setups is visible in the snapshot. runWithDeployment sets the AsyncLocalStorage
+		// context the registry Proxy reads so esClient.cluster.health() routes to the
+		// right cluster. Stdio/AgentCore modes ignore the probe (no /ready route).
+		createTransport: (serverFactory, esClient, identityCard) => {
+			const elasticProbe = createReadinessProbe({
+				components: Object.fromEntries(
+					listRegisteredDeploymentIds().map((id) => [
+						`elastic-${id}`,
+						() =>
+							runWithDeployment(id, async () => {
+								await esClient.cluster.health();
+							}),
+					]),
+				),
+			});
+			return createTransport(
 				{
 					mode: config.server.transportMode,
 					port: config.server.port,
@@ -97,8 +116,10 @@ if (import.meta.main) {
 				// SIO-779: server mode always provides createServerFactory; non-null assertion is safe
 				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 				serverFactory!,
+				elasticProbe,
 				identityCard,
-			),
+			);
+		},
 
 		onStarted: () => {
 			logger.info(

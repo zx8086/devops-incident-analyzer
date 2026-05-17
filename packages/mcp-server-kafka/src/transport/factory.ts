@@ -1,6 +1,6 @@
 // src/transport/factory.ts
 
-import type { IdentityCard } from "@devops-agent/shared";
+import type { IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
 import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { splitCommaSeparated } from "../config/helpers.ts";
@@ -8,7 +8,6 @@ import type { TransportConfig } from "../config/schemas.ts";
 import { createContextLogger, logger } from "../utils/logger.ts";
 import type { HttpTransportResult } from "./http.ts";
 import { startHttpTransport } from "./http.ts";
-import type { ReadinessSnapshot } from "./readiness.ts";
 import type { StdioTransportResult } from "./stdio.ts";
 import { startStdioTransport } from "./stdio.ts";
 

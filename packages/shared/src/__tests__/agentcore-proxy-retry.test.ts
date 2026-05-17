@@ -221,7 +221,7 @@ describe("session-scoped abort controller", () => {
 			fetchCalls.push({ url: String(input), init: init ?? {} });
 			return fetchResponder(callIdx);
 		}) as typeof fetch;
-		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
+		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD, "kafka-proxy");
 	});
 
 	afterEach(async () => {
@@ -269,7 +269,7 @@ describe("JSON-RPC -320xx retry", () => {
 			if (!entry) return new Response("scripted-exhausted", { status: 500 });
 			return typeof entry === "function" ? entry() : entry.clone();
 		}) as typeof fetch;
-		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD);
+		proxy = await startAgentCoreProxy(TEST_CONFIG, TEST_CARD, "kafka-proxy");
 	});
 
 	afterEach(async () => {

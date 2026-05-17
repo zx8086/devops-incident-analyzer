@@ -4,6 +4,7 @@ import {
 	canonicalizeUpstream,
 	createBootstrapAdapter,
 	createMcpApplication,
+	createReadinessProbe,
 	warnIfOAuthNotSeeded,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
@@ -85,9 +86,17 @@ if (import.meta.main) {
 		createServerFactory: (ds) => () => createGitLabServer(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		createTransport: (serverFactory, ds, identityCard) =>
+		createTransport: (serverFactory, ds, identityCard) => {
+			const gitlabProbe = createReadinessProbe({
+				components: {
+					gitlab: async () => {
+						await ds.restClient.getCurrentUser();
+					},
+				},
+			});
 			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-			createTransport(ds.config.transport, serverFactory!, identityCard),
+			return createTransport(ds.config.transport, serverFactory!, gitlabProbe, identityCard);
+		},
 
 		cleanupDatasource: async (ds) => {
 			await ds.proxy.disconnect();

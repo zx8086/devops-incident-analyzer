@@ -205,3 +205,13 @@ export {
 	type McpRole,
 	type McpTransportMode,
 } from "./transport/identity.ts";
+export {
+	type CreateProxyReadinessProbeOptions,
+	createProxyReadinessProbe,
+} from "./transport/proxy-readiness.ts";
+export {
+	type ComponentStatus,
+	type CreateReadinessProbeOptions,
+	createReadinessProbe,
+	type ReadinessSnapshot,
+} from "./transport/readiness.ts";

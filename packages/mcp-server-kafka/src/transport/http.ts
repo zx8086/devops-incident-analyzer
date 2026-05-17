@@ -1,12 +1,11 @@
 // src/transport/http.ts
 
-import type { IdentityCard } from "@devops-agent/shared";
+import type { IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
 import { createBootstrapAdapter, drainBunServer, withTraceContextMiddleware } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createContextLogger } from "../utils/logger.ts";
 import { withApiKeyAuth, withOriginValidation } from "./middleware.ts";
-import type { ReadinessSnapshot } from "./readiness.ts";
 
 const log = createContextLogger("transport");
 
