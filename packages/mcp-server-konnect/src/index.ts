@@ -49,7 +49,7 @@ if (import.meta.main) {
 		createServerFactory: (ds) => () => createKonnectServer(ds.api, ds.config),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 		createTransport: (serverFactory, ds) => createTransport(ds.config.transport, serverFactory!),
 
 		onStarted: (ds) => {

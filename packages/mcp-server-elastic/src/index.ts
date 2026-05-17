@@ -82,7 +82,7 @@ if (import.meta.main) {
 					allowedOrigins: config.server.allowedOrigins,
 				},
 				// SIO-779: server mode always provides createServerFactory; non-null assertion is safe
-				// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 				serverFactory!,
 			),
 

@@ -70,7 +70,7 @@ if (import.meta.main) {
 		createServerFactory: (bucket) => () => createServer(bucket),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
-		// biome-ignore lint/style/noNonNullAssertion: proxy mode is not used for this server
+		// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 		createTransport: (serverFactory) => createTransport(config.transport, serverFactory!),
 
 		cleanupDatasource: async () => {
