@@ -1,5 +1,5 @@
 // apps/web/src/routes/api/datasources/+server.ts
-import { getConnectedServers } from "@devops-agent/agent";
+import { getConnectedServers, getServerStates } from "@devops-agent/agent";
 import { json } from "@sveltejs/kit";
 import { ensureMcpConnected } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
@@ -15,10 +15,8 @@ const SERVER_TO_DATASOURCE: Record<string, string> = {
 };
 
 export const GET: RequestHandler = async () => {
-	// Ensure MCP servers are connected before checking status
 	await ensureMcpConnected();
 
-	// Report all configured datasources (from env vars)
 	const dataSources: string[] = [];
 	if (process.env.ELASTIC_MCP_URL) dataSources.push("elastic");
 	if (process.env.KAFKA_MCP_URL) dataSources.push("kafka");
@@ -28,10 +26,17 @@ export const GET: RequestHandler = async () => {
 	if (process.env.ATLASSIAN_MCP_URL) dataSources.push("atlassian");
 	if (process.env.AWS_MCP_URL) dataSources.push("aws");
 
-	// Report which are actually connected
 	const connected = getConnectedServers()
 		.map((s) => SERVER_TO_DATASOURCE[s])
 		.filter(Boolean);
 
-	return json({ dataSources, connected });
+	// SIO-780 Phase C: surface five-state probe results for the UI
+	const rawStates = getServerStates();
+	const states: Record<string, string> = {};
+	for (const [serverName, state] of Object.entries(rawStates)) {
+		const dsId = SERVER_TO_DATASOURCE[serverName];
+		if (dsId) states[dsId] = state;
+	}
+
+	return json({ dataSources, connected, states });
 };
