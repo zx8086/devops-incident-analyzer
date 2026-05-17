@@ -17,6 +17,8 @@ export {
 	getConnectedServers,
 	getServerStates,
 	getToolsForDataSource,
+	type McpReplacedEvent,
+	mcpEvents,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
 export { aggregateMitigation } from "./mitigation.ts";

@@ -1,6 +1,7 @@
 // agent/src/mcp-bridge.ts
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { EventEmitter } from "node:events";
 import { getLogger } from "@devops-agent/observability";
 import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -319,6 +320,18 @@ type ProbeResult =
 const expectedIdentity = new Map<string, IdentityCard>();
 const lastProbeState = new Map<string, ProbeState>();
 
+// SIO-780: per-process event bus for proxied server lifecycle events.
+// Frontend consumes via /api/events SSE endpoint (apps/web).
+export const mcpEvents = new EventEmitter();
+
+export interface McpReplacedEvent {
+	type: "mcp_replaced";
+	server: string;
+	oldInstanceId: string | null;
+	newInstanceId: string;
+	toolCountDelta: number;
+}
+
 function probeErrorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -497,9 +510,19 @@ async function pollServerHealth(): Promise<void> {
 						},
 						"MCP server replaced, reconnecting",
 					);
+					const oldToolCount = toolsByServer.get(name)?.length ?? 0;
 					await reconnectServer(name, url);
+					const newToolCount = toolsByServer.get(name)?.length ?? 0;
 					expectedIdentity.set(name, result.card);
-					// SSE event emitted in Task C5
+					const event: McpReplacedEvent = {
+						type: "mcp_replaced",
+						server: name,
+						oldInstanceId: oldCard?.instanceId ?? null,
+						newInstanceId: result.card.instanceId,
+						toolCountDelta: newToolCount - oldToolCount,
+					};
+					mcpEvents.emit("mcp_replaced", event);
+					logger.info(event, "mcp_replaced event emitted");
 					break;
 				}
 				case "misidentified":

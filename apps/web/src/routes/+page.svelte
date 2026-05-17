@@ -11,8 +11,16 @@ import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
 
-onMount(async () => {
-	await agentStore.loadDataSources();
+onMount(() => {
+	let es: EventSource | undefined;
+	(async () => {
+		await agentStore.loadDataSources();
+		es = new EventSource("/api/events");
+		es.addEventListener("mcp_replaced", (e) => {
+			console.log("[mcp_replaced]", JSON.parse((e as MessageEvent).data));
+		});
+	})();
+	return () => es?.close();
 });
 
 onDestroy(() => {

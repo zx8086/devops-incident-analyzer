@@ -1,7 +1,7 @@
 // packages/agent/src/__tests__/mcp-bridge.probe.test.ts
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { IdentityCard } from "@devops-agent/shared";
-import { _probeServerForTest, _resetExpectedIdentityForTest } from "../mcp-bridge.ts";
+import { _probeServerForTest, _resetExpectedIdentityForTest, mcpEvents } from "../mcp-bridge.ts";
 
 const fixtureCard = (overrides: Partial<IdentityCard> = {}): IdentityCard => ({
 	instanceId: "fixture-id",
@@ -122,5 +122,18 @@ describe("probeServer", () => {
 		}) as unknown as typeof fetch;
 		const result = await _probeServerForTest("konnect-mcp", "http://localhost:9083/mcp");
 		expect(result.state).toBe("ready");
+	});
+});
+
+describe("mcpEvents", () => {
+	test("is an EventEmitter that supports on/off/emit", () => {
+		let received: unknown;
+		const handler = (e: unknown) => {
+			received = e;
+		};
+		mcpEvents.on("mcp_replaced", handler);
+		mcpEvents.emit("mcp_replaced", { test: 1 });
+		expect(received).toEqual({ test: 1 });
+		mcpEvents.off("mcp_replaced", handler);
 	});
 });
