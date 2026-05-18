@@ -8,7 +8,7 @@
 // Extend with new branches when other deterministic signals stabilise (APM
 // service summary, top error log clusters, etc.). Each new branch should pull
 // from a specific ES index pattern + query type so the schema stays tight.
-import type { ElasticFindings, ElasticSyntheticMonitor, ToolOutput } from "@devops-agent/shared";
+import type { ElasticApmService, ElasticFindings, ElasticSyntheticMonitor, ToolOutput } from "@devops-agent/shared";
 import { z } from "zod";
 
 // Elasticsearch hit envelope.
@@ -187,16 +187,142 @@ function looksLikeSyntheticIndex(o: ToolOutput): boolean {
 	return false;
 }
 
+// SIO-787 (SIO-778 Phase B): APM bucket shape produced by
+// `traces-apm-*` + terms-agg on service.name. The real eu-b2b response is a
+// multi-text-block MCP payload (joined by normalizeToolContent in sub-agent.ts):
+//
+//   "Search results with aggregations (10000 total hits, 419ms):\n\n{
+//      "by_service": { "buckets": [{ key, doc_count, errors:{doc_count},
+//                                    avg_duration:{value}, latest:{value_as_string} }, ...] }
+//    }"
+//
+// tryParseJson fails on the prefixed mixed content, so the extractor sees
+// `rawJson` as a string and uses the brace-balanced JSON walker.
+const ApmBucketSchema = z.object({
+	key: z.string(),
+	doc_count: z.number(),
+	avg_duration: z.object({ value: z.number().nullable().optional() }).optional(),
+	errors: z.object({ doc_count: z.number().optional() }).optional(),
+	latest: z
+		.object({
+			value_as_string: z.string().optional(),
+		})
+		.optional(),
+});
+const ApmAggregationSchema = z.object({
+	by_service: z.object({
+		buckets: z.array(ApmBucketSchema),
+	}),
+});
+
+function looksLikeApmIndex(o: ToolOutput): boolean {
+	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	if (args && typeof args === "object") {
+		const index = (args as { index?: unknown }).index;
+		if (typeof index === "string" && /traces-apm/i.test(index)) return true;
+	}
+	return false;
+}
+
+function bucketToApmService(b: z.infer<typeof ApmBucketSchema>): ElasticApmService {
+	const out: ElasticApmService = {
+		serviceName: b.key,
+		transactionCount: b.doc_count,
+	};
+	// SIO-787: divide-by-zero guard. Don't emit a 0/0 errorRate; skip the field.
+	if (b.doc_count > 0 && b.errors?.doc_count !== undefined) {
+		out.errorRate = b.errors.doc_count / b.doc_count;
+	}
+	if (b.avg_duration?.value !== undefined && b.avg_duration.value !== null) {
+		// µs -> ms. Real eu-b2b response stores transaction.duration.us as
+		// microseconds; the card displays milliseconds.
+		out.avgDurationMs = b.avg_duration.value / 1000;
+	}
+	if (b.latest?.value_as_string) {
+		out.observedAt = b.latest.value_as_string;
+	}
+	return out;
+}
+
+function parseApmAggregationFromText(content: string): ElasticApmService[] {
+	// SIO-787: the elastic MCP wraps aggregation responses as a two-block
+	// payload — a prefix sentence + a JSON object holding aggregation results
+	// at the root (e.g. `{ "by_service": { "buckets": [...] } }`). The text
+	// arrives joined with "\n\n" by normalizeToolContent. Locate the first
+	// `{` and walk brace-balanced JSON to the matching `}`.
+	const firstBrace = content.indexOf("{");
+	if (firstBrace === -1) return [];
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	let end = -1;
+	for (let i = firstBrace; i < content.length; i++) {
+		const ch = content[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") depth++;
+		else if (ch === "}") {
+			depth--;
+			if (depth === 0) {
+				end = i;
+				break;
+			}
+		}
+	}
+	if (end === -1) return [];
+	let body: unknown;
+	try {
+		body = JSON.parse(content.slice(firstBrace, end + 1));
+	} catch {
+		return [];
+	}
+	return parseApmAggregationFromJson(body);
+}
+
+function parseApmAggregationFromJson(rawJson: unknown): ElasticApmService[] {
+	// Tolerate both shapes: aggregations.by_service.buckets (full ES envelope)
+	// AND by_service.buckets at root (when the MCP server unwraps the body).
+	if (!rawJson || typeof rawJson !== "object") return [];
+	const candidate = (rawJson as { aggregations?: unknown }).aggregations ?? rawJson;
+	const parsed = ApmAggregationSchema.safeParse(candidate);
+	if (!parsed.success) return [];
+	return parsed.data.by_service.buckets.map(bucketToApmService);
+}
+
 export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 	const monitorsByName = new Map<string, ElasticSyntheticMonitor>();
+	const apmByName = new Map<string, ElasticApmService>();
 
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search") continue;
+
+		// SIO-787: APM branch must run alongside (not instead of) the synthetic
+		// branch. Detection is strict per spec risk register: route to APM only
+		// when toolArgs.index matches /traces-apm/i OR the response payload
+		// contains a `by_service.buckets` aggregation shape.
+		const apmByIndex = looksLikeApmIndex(o);
 
 		// SIO-786: real elastic MCP returns multi-text-block content joined into
 		// a string by tryParseJson's fall-through. Detect string rawJson and
 		// route to the text-block parser; otherwise keep the JSON-envelope path.
 		if (typeof o.rawJson === "string") {
+			if (apmByIndex || o.rawJson.includes("by_service")) {
+				for (const svc of parseApmAggregationFromText(o.rawJson)) {
+					if (apmByName.has(svc.serviceName)) continue;
+					apmByName.set(svc.serviceName, svc);
+				}
+			}
 			// SIO-786: parseSyntheticMonitorsFromText dedupes by monitor.id || name;
 			// the outer monitorsByName dedupes across ToolOutput entries by name only.
 			// Synthetic monitor names are unique in practice, so the asymmetry is benign;
@@ -204,6 +330,15 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 			for (const m of parseSyntheticMonitorsFromText(o.rawJson)) {
 				if (monitorsByName.has(m.name)) continue;
 				monitorsByName.set(m.name, m);
+			}
+			continue;
+		}
+
+		// JSON-envelope path: try APM first (when index hints) then synthetic.
+		if (apmByIndex) {
+			for (const svc of parseApmAggregationFromJson(o.rawJson)) {
+				if (apmByName.has(svc.serviceName)) continue;
+				apmByName.set(svc.serviceName, svc);
 			}
 			continue;
 		}
@@ -231,6 +366,8 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 		}
 	}
 
-	if (monitorsByName.size === 0) return {};
-	return { syntheticMonitors: Array.from(monitorsByName.values()) };
+	const findings: ElasticFindings = {};
+	if (monitorsByName.size > 0) findings.syntheticMonitors = Array.from(monitorsByName.values());
+	if (apmByName.size > 0) findings.apmServices = Array.from(apmByName.values());
+	return findings;
 }

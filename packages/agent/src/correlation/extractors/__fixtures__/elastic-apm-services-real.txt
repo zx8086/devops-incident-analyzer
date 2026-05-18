@@ -1,0 +1,711 @@
+Search results with aggregations (10000 total hits, 419ms):
+
+
+{
+  "by_service": {
+    "doc_count_error_upper_bound": 0,
+    "sum_other_doc_count": 550,
+    "buckets": [
+      {
+        "key": "pvh-services-styles-v3",
+        "doc_count": 3120165,
+        "avg_duration": {
+          "value": 169766.12100230795
+        },
+        "errors": {
+          "doc_count": 1303
+        },
+        "latest": {
+          "value": 1779121997643,
+          "value_as_string": "2026-05-18T16:33:17.643Z"
+        }
+      },
+      {
+        "key": "prana-order-service",
+        "doc_count": 2079488,
+        "avg_duration": {
+          "value": 112470.12213073853
+        },
+        "errors": {
+          "doc_count": 20
+        },
+        "latest": {
+          "value": 1779121997649,
+          "value_as_string": "2026-05-18T16:33:17.649Z"
+        }
+      },
+      {
+        "key": "corrected-delivery-dates-service",
+        "doc_count": 837676,
+        "avg_duration": {
+          "value": 133317.11181837472
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121995583,
+          "value_as_string": "2026-05-18T16:33:15.583Z"
+        }
+      },
+      {
+        "key": "material-order_Mdx",
+        "doc_count": 176416,
+        "avg_duration": {
+          "value": 4822.982824687103
+        },
+        "errors": {
+          "doc_count": 4
+        },
+        "latest": {
+          "value": 1779121981321,
+          "value_as_string": "2026-05-18T16:33:01.321Z"
+        }
+      },
+      {
+        "key": "connectors-api",
+        "doc_count": 117011,
+        "avg_duration": {
+          "value": 345295.4971602037
+        },
+        "errors": {
+          "doc_count": 8382
+        },
+        "latest": {
+          "value": 1779121997641,
+          "value_as_string": "2026-05-18T16:33:17.641Z"
+        }
+      },
+      {
+        "key": "martech-contact",
+        "doc_count": 57247,
+        "avg_duration": {
+          "value": 93825.43373979643
+        },
+        "errors": {
+          "doc_count": 7566
+        },
+        "latest": {
+          "value": 1779121997266,
+          "value_as_string": "2026-05-18T16:33:17.266Z"
+        }
+      },
+      {
+        "key": "authentication-service",
+        "doc_count": 48686,
+        "avg_duration": {
+          "value": 2958.33926471741
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121997606,
+          "value_as_string": "2026-05-18T16:33:17.606Z"
+        }
+      },
+      {
+        "key": "kong-eu_oit",
+        "doc_count": 38875,
+        "avg_duration": {
+          "value": 149985.5698141264
+        },
+        "errors": {
+          "doc_count": 720
+        },
+        "latest": {
+          "value": 1779121996937,
+          "value_as_string": "2026-05-18T16:33:16.937Z"
+        }
+      },
+      {
+        "key": "notifications-webhook-service",
+        "doc_count": 25226,
+        "avg_duration": {
+          "value": 3.4166666666666665
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121894339,
+          "value_as_string": "2026-05-18T16:31:34.339Z"
+        }
+      },
+      {
+        "key": "martech-marketing-consent",
+        "doc_count": 23987,
+        "avg_duration": {
+          "value": 49153.93631539045
+        },
+        "errors": {
+          "doc_count": 611
+        },
+        "latest": {
+          "value": 1779121997433,
+          "value_as_string": "2026-05-18T16:33:17.433Z"
+        }
+      },
+      {
+        "key": "webshop-catalog-service",
+        "doc_count": 23905,
+        "avg_duration": {
+          "value": 40645.455343152615
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121997632,
+          "value_as_string": "2026-05-18T16:33:17.632Z"
+        }
+      },
+      {
+        "key": "martech-membership",
+        "doc_count": 17067,
+        "avg_duration": {
+          "value": 42646.49831047506
+        },
+        "errors": {
+          "doc_count": 481
+        },
+        "latest": {
+          "value": 1779121995695,
+          "value_as_string": "2026-05-18T16:33:15.695Z"
+        }
+      },
+      {
+        "key": "kong-eu_b2becom_v2",
+        "doc_count": 16643,
+        "avg_duration": {
+          "value": 29656.923895689197
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121985942,
+          "value_as_string": "2026-05-18T16:33:05.942Z"
+        }
+      },
+      {
+        "key": "orders-api-legacy",
+        "doc_count": 14633,
+        "avg_duration": {
+          "value": 9.308564631245044
+        },
+        "errors": {
+          "doc_count": 93
+        },
+        "latest": {
+          "value": 1779121997595,
+          "value_as_string": "2026-05-18T16:33:17.595Z"
+        }
+      },
+      {
+        "key": "cBase_Mdx",
+        "doc_count": 13458,
+        "avg_duration": {
+          "value": 141689.44441967603
+        },
+        "errors": {
+          "doc_count": 1
+        },
+        "latest": {
+          "value": 1779121980665,
+          "value_as_string": "2026-05-18T16:33:00.665Z"
+        }
+      },
+      {
+        "key": "martech-voucher",
+        "doc_count": 12004,
+        "avg_duration": {
+          "value": 44865.26301179736
+        },
+        "errors": {
+          "doc_count": 49
+        },
+        "latest": {
+          "value": 1779121995669,
+          "value_as_string": "2026-05-18T16:33:15.669Z"
+        }
+      },
+      {
+        "key": "martech-contact-data-stream-processor",
+        "doc_count": 11777,
+        "avg_duration": {
+          "value": 23.93141797961075
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121991544,
+          "value_as_string": "2026-05-18T16:33:11.544Z"
+        }
+      },
+      {
+        "key": "boomi-atom",
+        "doc_count": 8717,
+        "avg_duration": {
+          "value": 30286.46747734312
+        },
+        "errors": {
+          "doc_count": 9
+        },
+        "latest": {
+          "value": 1779121997076,
+          "value_as_string": "2026-05-18T16:33:17.076Z"
+        }
+      },
+      {
+        "key": "kong-eu_shared_services",
+        "doc_count": 8535,
+        "avg_duration": {
+          "value": 36655.57269700333
+        },
+        "errors": {
+          "doc_count": 11
+        },
+        "latest": {
+          "value": 1779121995665,
+          "value_as_string": "2026-05-18T16:33:15.665Z"
+        }
+      },
+      {
+        "key": "martech-order",
+        "doc_count": 4651,
+        "avg_duration": {
+          "value": 6989.733043478261
+        },
+        "errors": {
+          "doc_count": 136
+        },
+        "latest": {
+          "value": 1779121997136,
+          "value_as_string": "2026-05-18T16:33:17.136Z"
+        }
+      },
+      {
+        "key": "prana-order-service-v2",
+        "doc_count": 4601,
+        "avg_duration": {
+          "value": 7186.556441326531
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121994167,
+          "value_as_string": "2026-05-18T16:33:14.167Z"
+        }
+      },
+      {
+        "key": "82ade8db-6f75-45c1-b7eb-4d62f3ea2ea7",
+        "doc_count": 4277,
+        "avg_duration": {
+          "value": 980831.8678980594
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121997596,
+          "value_as_string": "2026-05-18T16:33:17.596Z"
+        }
+      },
+      {
+        "key": "prices-api-v2",
+        "doc_count": 3460,
+        "avg_duration": {
+          "value": 12841.322832369942
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121996725,
+          "value_as_string": "2026-05-18T16:33:16.725Z"
+        }
+      },
+      {
+        "key": "catalog-service",
+        "doc_count": 2834,
+        "avg_duration": {
+          "value": 1422876.1024590165
+        },
+        "errors": {
+          "doc_count": 3
+        },
+        "latest": {
+          "value": 1779121972943,
+          "value_as_string": "2026-05-18T16:32:52.943Z"
+        }
+      },
+      {
+        "key": "webshop-notifications",
+        "doc_count": 2708,
+        "avg_duration": {
+          "value": 109154.55427841634
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121997631,
+          "value_as_string": "2026-05-18T16:33:17.631Z"
+        }
+      },
+      {
+        "key": "pfb-backend-for-frontend",
+        "doc_count": 2700,
+        "avg_duration": {
+          "value": null
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121989253,
+          "value_as_string": "2026-05-18T16:33:09.253Z"
+        }
+      },
+      {
+        "key": "kong-eu_ddm",
+        "doc_count": 1632,
+        "avg_duration": {
+          "value": 96964.78139534884
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121983812,
+          "value_as_string": "2026-05-18T16:33:03.812Z"
+        }
+      },
+      {
+        "key": "martech-mnl-voucher",
+        "doc_count": 1610,
+        "avg_duration": {
+          "value": 7945.717813051147
+        },
+        "errors": {
+          "doc_count": 120
+        },
+        "latest": {
+          "value": 1779121989766,
+          "value_as_string": "2026-05-18T16:33:09.766Z"
+        }
+      },
+      {
+        "key": "webshop-assortments",
+        "doc_count": 1593,
+        "avg_duration": {
+          "value": 4560.209345794393
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121993615,
+          "value_as_string": "2026-05-18T16:33:13.615Z"
+        }
+      },
+      {
+        "key": "martech-stock",
+        "doc_count": 1340,
+        "avg_duration": {
+          "value": 548.7906976744187
+        },
+        "errors": {
+          "doc_count": 8
+        },
+        "latest": {
+          "value": 1779121995852,
+          "value_as_string": "2026-05-18T16:33:15.852Z"
+        }
+      },
+      {
+        "key": "storytelling-api",
+        "doc_count": 1334,
+        "avg_duration": {
+          "value": 23030.695
+        },
+        "errors": {
+          "doc_count": 38
+        },
+        "latest": {
+          "value": 1779121995106,
+          "value_as_string": "2026-05-18T16:33:15.106Z"
+        }
+      },
+      {
+        "key": "webshop-hcl-integration-service",
+        "doc_count": 1193,
+        "avg_duration": {
+          "value": 814.7265135699374
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121993615,
+          "value_as_string": "2026-05-18T16:33:13.615Z"
+        }
+      },
+      {
+        "key": "prana-document-management-service",
+        "doc_count": 941,
+        "avg_duration": {
+          "value": 84882.11182108626
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121996000,
+          "value_as_string": "2026-05-18T16:33:16.000Z"
+        }
+      },
+      {
+        "key": "localcore-service",
+        "doc_count": 917,
+        "avg_duration": {
+          "value": 615603.3751363141
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121981003,
+          "value_as_string": "2026-05-18T16:33:01.003Z"
+        }
+      },
+      {
+        "key": "pvh-services-images-v2",
+        "doc_count": 660,
+        "avg_duration": {
+          "value": 3216.224242424242
+        },
+        "errors": {
+          "doc_count": 1
+        },
+        "latest": {
+          "value": 1779121970962,
+          "value_as_string": "2026-05-18T16:32:50.962Z"
+        }
+      },
+      {
+        "key": "martech-cart",
+        "doc_count": 654,
+        "avg_duration": {
+          "value": 1096.880733944954
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121994764,
+          "value_as_string": "2026-05-18T16:33:14.764Z"
+        }
+      },
+      {
+        "key": "prices-producer-v2-service",
+        "doc_count": 590,
+        "avg_duration": {
+          "value": 38418.22222222222
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121992882,
+          "value_as_string": "2026-05-18T16:33:12.882Z"
+        }
+      },
+      {
+        "key": "prana-import-export-service",
+        "doc_count": 506,
+        "avg_duration": {
+          "value": 82503.62178217822
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121996000,
+          "value_as_string": "2026-05-18T16:33:16.000Z"
+        }
+      },
+      {
+        "key": "space_Mdx",
+        "doc_count": 442,
+        "avg_duration": {
+          "value": 26587.904977375565
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121980075,
+          "value_as_string": "2026-05-18T16:33:00.075Z"
+        }
+      },
+      {
+        "key": "notifications-scheduler",
+        "doc_count": 375,
+        "avg_duration": {
+          "value": 19986.869565217392
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121993283,
+          "value_as_string": "2026-05-18T16:33:13.283Z"
+        }
+      },
+      {
+        "key": "pim-source-connector",
+        "doc_count": 310,
+        "avg_duration": {
+          "value": 392.77096774193546
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121984318,
+          "value_as_string": "2026-05-18T16:33:04.318Z"
+        }
+      },
+      {
+        "key": "stock-service",
+        "doc_count": 301,
+        "avg_duration": {
+          "value": 4046.913357400722
+        },
+        "errors": {
+          "doc_count": 4
+        },
+        "latest": {
+          "value": 1779121990982,
+          "value_as_string": "2026-05-18T16:33:10.982Z"
+        }
+      },
+      {
+        "key": "pvh-services-brads",
+        "doc_count": 297,
+        "avg_duration": {
+          "value": 13530.54054054054
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121842482,
+          "value_as_string": "2026-05-18T16:30:42.482Z"
+        }
+      },
+      {
+        "key": "sample-order-hub_Mdx",
+        "doc_count": 240,
+        "avg_duration": {
+          "value": 54404.04583333333
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121980849,
+          "value_as_string": "2026-05-18T16:33:00.849Z"
+        }
+      },
+      {
+        "key": "kong-eu_martech_mnl",
+        "doc_count": 224,
+        "avg_duration": {
+          "value": 44638.51351351351
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121972567,
+          "value_as_string": "2026-05-18T16:32:52.567Z"
+        }
+      },
+      {
+        "key": "mars_Mdx",
+        "doc_count": 199,
+        "avg_duration": {
+          "value": 3525795.0201005023
+        },
+        "errors": {
+          "doc_count": 1
+        },
+        "latest": {
+          "value": 1779121993506,
+          "value_as_string": "2026-05-18T16:33:13.506Z"
+        }
+      },
+      {
+        "key": "images-api",
+        "doc_count": 188,
+        "avg_duration": {
+          "value": 94695.56382978724
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121045627,
+          "value_as_string": "2026-05-18T16:17:25.627Z"
+        }
+      },
+      {
+        "key": "prana-document-management-service-v2",
+        "doc_count": 182,
+        "avg_duration": {
+          "value": 89434.01098901099
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121996001,
+          "value_as_string": "2026-05-18T16:33:16.001Z"
+        }
+      },
+      {
+        "key": "Couchbase CapellaQL Service",
+        "doc_count": 180,
+        "avg_duration": {
+          "value": 860.7444444444444
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121993428,
+          "value_as_string": "2026-05-18T16:33:13.428Z"
+        }
+      },
+      {
+        "key": "product-improvement_Mdx",
+        "doc_count": 120,
+        "avg_duration": {
+          "value": 17686.175
+        },
+        "errors": {
+          "doc_count": 0
+        },
+        "latest": {
+          "value": 1779121980186,
+          "value_as_string": "2026-05-18T16:33:00.186Z"
+        }
+      }
+    ]
+  }
+}
