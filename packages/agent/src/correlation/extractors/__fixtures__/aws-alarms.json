@@ -1,26 +1,26 @@
 {
-  "MetricAlarms": [
-    {
-      "AlarmName": "msk-broker-cpu-high",
-      "StateValue": "ALARM",
-      "StateReason": "Threshold Crossed: 1 datapoint [82.5] was greater than or equal to the threshold (80.0).",
-      "MetricName": "CPUUtilization",
-      "Namespace": "AWS/Kafka",
-      "StateUpdatedTimestamp": "2026-05-18T11:00:00.000Z"
-    },
-    {
-      "AlarmName": "rds-connections-warn",
-      "StateValue": "INSUFFICIENT_DATA",
-      "StateReason": "Insufficient Data: 1 datapoint was unknown.",
-      "MetricName": "DatabaseConnections",
-      "Namespace": "AWS/RDS"
-    },
-    {
-      "AlarmName": "lambda-errors-ok",
-      "StateValue": "OK",
-      "MetricName": "Errors",
-      "Namespace": "AWS/Lambda"
-    }
-  ],
-  "CompositeAlarms": []
+	"MetricAlarms": [
+		{
+			"AlarmName": "msk-broker-cpu-high",
+			"StateValue": "ALARM",
+			"StateReason": "Threshold Crossed: 1 datapoint [82.5] was greater than or equal to the threshold (80.0).",
+			"MetricName": "CPUUtilization",
+			"Namespace": "AWS/Kafka",
+			"StateUpdatedTimestamp": "2026-05-18T11:00:00.000Z"
+		},
+		{
+			"AlarmName": "rds-connections-warn",
+			"StateValue": "INSUFFICIENT_DATA",
+			"StateReason": "Insufficient Data: 1 datapoint was unknown.",
+			"MetricName": "DatabaseConnections",
+			"Namespace": "AWS/RDS"
+		},
+		{
+			"AlarmName": "lambda-errors-ok",
+			"StateValue": "OK",
+			"MetricName": "Errors",
+			"Namespace": "AWS/Lambda"
+		}
+	],
+	"CompositeAlarms": []
 }

@@ -6,9 +6,7 @@ import { extractAwsFindings } from "./aws.ts";
 
 describe("extractAwsFindings", () => {
 	test("returns empty findings when no relevant tool outputs are present", () => {
-		const outputs: ToolOutput[] = [
-			{ toolName: "aws_ec2_describe_instances", rawJson: { Reservations: [] } },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "aws_ec2_describe_instances", rawJson: { Reservations: [] } }];
 		expect(extractAwsFindings(outputs)).toEqual({});
 	});
 
@@ -40,11 +38,9 @@ describe("extractAwsFindings", () => {
 	});
 
 	test("returns empty when MetricAlarms is missing or empty", () => {
-		expect(
-			extractAwsFindings([
-				{ toolName: "aws_cloudwatch_describe_alarms", rawJson: { MetricAlarms: [] } },
-			]),
-		).toEqual({});
+		expect(extractAwsFindings([{ toolName: "aws_cloudwatch_describe_alarms", rawJson: { MetricAlarms: [] } }])).toEqual(
+			{},
+		);
 		expect(
 			extractAwsFindings([
 				{ toolName: "aws_cloudwatch_describe_alarms", rawJson: { $metadata: { httpStatusCode: 200 } } },
@@ -70,9 +66,7 @@ describe("extractAwsFindings", () => {
 
 	test("ignores non-object rawJson (defensive)", () => {
 		expect(
-			extractAwsFindings([
-				{ toolName: "aws_cloudwatch_describe_alarms", rawJson: "upstream returned text" },
-			]),
+			extractAwsFindings([{ toolName: "aws_cloudwatch_describe_alarms", rawJson: "upstream returned text" }]),
 		).toEqual({});
 		expect(extractAwsFindings([{ toolName: "aws_cloudwatch_describe_alarms", rawJson: null }])).toEqual({});
 	});

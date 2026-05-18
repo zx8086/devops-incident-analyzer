@@ -6,9 +6,7 @@ import { extractAtlassianFindings } from "./atlassian.ts";
 
 describe("extractAtlassianFindings", () => {
 	test("returns empty when no findLinkedIncidents tool outputs", () => {
-		const outputs: ToolOutput[] = [
-			{ toolName: "atlassian_searchJiraIssuesUsingJql", rawJson: { issues: [] } },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "atlassian_searchJiraIssuesUsingJql", rawJson: { issues: [] } }];
 		expect(extractAtlassianFindings(outputs)).toEqual({});
 	});
 
@@ -88,10 +86,7 @@ describe("extractAtlassianFindings", () => {
 			{
 				toolName: "findLinkedIncidents",
 				rawJson: {
-					issues: [
-						{ key: "A-1", summary: "A", status: "Open" },
-						{ foo: "bar" },
-					],
+					issues: [{ key: "A-1", summary: "A", status: "Open" }, { foo: "bar" }],
 				},
 			},
 		]);
@@ -100,9 +95,7 @@ describe("extractAtlassianFindings", () => {
 	});
 
 	test("ignores non-object rawJson (defensive)", () => {
-		expect(
-			extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: "upstream text" }]),
-		).toEqual({});
+		expect(extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: "upstream text" }])).toEqual({});
 		expect(extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: null }])).toEqual({});
 	});
 });
