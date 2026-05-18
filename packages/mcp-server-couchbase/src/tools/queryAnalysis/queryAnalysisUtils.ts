@@ -126,9 +126,7 @@ export async function executeAnalysisQueryStructured(
 	try {
 		const hasParameters = parameters !== undefined && Object.keys(parameters).length > 0;
 		const cluster = bucket.cluster;
-		const result = hasParameters
-			? await cluster.query(queryString, { parameters })
-			: await cluster.query(queryString);
+		const result = hasParameters ? await cluster.query(queryString, { parameters }) : await cluster.query(queryString);
 		const rows = await result.rows;
 		return { content: [{ type: "text", text: JSON.stringify(rows) }] };
 	} catch (error) {

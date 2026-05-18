@@ -35,10 +35,7 @@ describe("extractGitLabFindings", () => {
 		const outputs: ToolOutput[] = [
 			{
 				toolName: "gitlab_list_merge_requests",
-				rawJson: [
-					{ title: "no id here" },
-					{ id: 99, title: "valid sibling" },
-				],
+				rawJson: [{ title: "no id here" }, { id: 99, title: "valid sibling" }],
 			},
 		];
 		const findings = extractGitLabFindings(outputs);

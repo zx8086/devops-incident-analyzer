@@ -5,8 +5,8 @@
 // future refactor doesn't quietly move the card back.
 import { describe, expect, test } from "bun:test";
 import { render } from "svelte/server";
-import ChatMessage from "./ChatMessage.svelte";
 import type { ChatMessage as ChatMessageType } from "$lib/stores/agent.svelte";
+import ChatMessage from "./ChatMessage.svelte";
 
 const baseAssistant: ChatMessageType = {
 	role: "assistant",
@@ -107,9 +107,7 @@ describe("ChatMessage placement", () => {
 					{
 						status: "success",
 						gitlabFindings: {
-							mergedRequests: [
-								{ id: 361, title: "Merge release/AMS-2026", merged_at: "2026-05-05T14:23:18Z" },
-							],
+							mergedRequests: [{ id: 361, title: "Merge release/AMS-2026", merged_at: "2026-05-05T14:23:18Z" }],
 						},
 					},
 				],

@@ -11,11 +11,7 @@ const cluster = $derived(findings.cluster);
 const connectors = $derived(findings.connectors ?? []);
 const ksqlQueries = $derived(findings.ksqlQueries ?? []);
 const hasContent = $derived(
-	consumerGroups.length > 0 ||
-		dlqTopics.length > 0 ||
-		!!cluster ||
-		connectors.length > 0 ||
-		ksqlQueries.length > 0,
+	consumerGroups.length > 0 || dlqTopics.length > 0 || !!cluster || connectors.length > 0 || ksqlQueries.length > 0,
 );
 
 const maxLag = $derived(Math.max(...consumerGroups.map((g) => g.totalLag ?? 0), 1));

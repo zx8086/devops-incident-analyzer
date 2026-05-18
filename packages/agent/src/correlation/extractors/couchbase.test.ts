@@ -5,9 +5,7 @@ import { extractCouchbaseFindings } from "./couchbase.ts";
 
 describe("extractCouchbaseFindings", () => {
 	test("returns empty findings when no relevant tool outputs are present", () => {
-		const outputs: ToolOutput[] = [
-			{ toolName: "capella_get_fatal_requests", rawJson: [] },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "capella_get_fatal_requests", rawJson: [] }];
 		expect(extractCouchbaseFindings(outputs)).toEqual({});
 	});
 
