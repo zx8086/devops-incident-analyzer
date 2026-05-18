@@ -1,7 +1,10 @@
 // packages/agent/src/correlation/extractors/elastic.test.ts
 // SIO-785 follow-up (2026-05-18): minimal Elastic extractor surfaces synthetic
 // monitor status. Tests mirror the SOUL-mandated cross-check pattern (SIO-717).
+
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ToolOutput } from "@devops-agent/shared";
 import { extractElasticFindings } from "./elastic.ts";
 
@@ -645,5 +648,39 @@ describe("extractElasticFindings — log clusters (SIO-788)", () => {
 		expect(findings.logClusters?.length).toBe(1);
 		expect(findings.syntheticMonitors?.[0]?.name).toBe("phase-a-monitor");
 		expect(findings.apmServices?.[0]?.serviceName).toBe("phase-b-service");
+	});
+
+	test("parses against the captured live eu-b2b logs-* fixture", () => {
+		const fixturePath = join(import.meta.dir, "__fixtures__", "elastic-log-clusters-real.txt");
+		const realResponse = readFileSync(fixturePath, "utf-8");
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "logs-*" },
+				rawJson: realResponse,
+			} as unknown as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		const clusters = findings.logClusters ?? [];
+		// Real fixture has 100 documents covering at least 2 distinct error patterns.
+		expect(clusters.length).toBeGreaterThanOrEqual(2);
+		// Top-K cap is 10.
+		expect(clusters.length).toBeLessThanOrEqual(10);
+		// Sorted by count desc.
+		for (let i = 1; i < clusters.length; i++) {
+			const prev = clusters[i - 1];
+			const curr = clusters[i];
+			if (prev && curr) expect(prev.count).toBeGreaterThanOrEqual(curr.count);
+		}
+		// Every cluster has a 16-char sha1-hex signature and a non-empty sample.
+		for (const c of clusters) {
+			expect(c.signature).toMatch(/^[0-9a-f]{16}$/);
+			expect(c.sampleMessage.length).toBeGreaterThan(0);
+		}
+		// At least one cluster has its modal service resolved to a real eu-b2b
+		// service-name string (e.g. "metricbeat"). The control-plane log entries
+		// without `service.name` legitimately produce undefined; verify the
+		// branch fires at all.
+		expect(clusters.some((c) => typeof c.service === "string" && c.service.length > 0)).toBe(true);
 	});
 });
