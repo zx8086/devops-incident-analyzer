@@ -140,6 +140,49 @@ export const ElasticFindingsSchema = z.object({
 });
 export type ElasticFindings = z.infer<typeof ElasticFindingsSchema>;
 
+// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch alarm findings.
+// Source: aws_cloudwatch_describe_alarms returns `{MetricAlarms: [...]}` with
+// PascalCase SDK fields. The extractor maps them to camelCase here so the
+// card stays consistent with the other findings types. CompositeAlarms are
+// out of scope for v1 (rarely the triage signal); add a sibling field when
+// composite triage becomes a real use case.
+export const AwsCloudWatchAlarmSchema = z.object({
+	name: z.string(),
+	state: z.string(), // "OK" | "ALARM" | "INSUFFICIENT_DATA"
+	reason: z.string().optional(),
+	metricName: z.string().optional(),
+	namespace: z.string().optional(),
+	stateUpdatedAt: z.string().optional(),
+});
+export type AwsCloudWatchAlarm = z.infer<typeof AwsCloudWatchAlarmSchema>;
+
+export const AwsFindingsSchema = z.object({
+	alarms: z.array(AwsCloudWatchAlarmSchema).optional(),
+});
+export type AwsFindings = z.infer<typeof AwsFindingsSchema>;
+
+// SIO-785 Phase 2 (2026-05-18): Atlassian linked-incident findings.
+// Source: the custom `findLinkedIncidents` tool (packages/mcp-server-atlassian/
+// src/tools/custom/find-linked-incidents.ts) emits a shaped envelope
+// `{service, jql, count, issues: ShapedIssue[]}`. We mirror the upstream
+// ShapedIssue camelCase here verbatim; the extractor reads `rawJson.issues`.
+export const AtlassianLinkedIssueSchema = z.object({
+	key: z.string(),
+	summary: z.string(),
+	status: z.string(),
+	severity: z.string().nullable().optional(),
+	createdAt: z.string().optional(),
+	resolvedAt: z.string().nullable().optional(),
+	mttrMinutes: z.number().nullable().optional(),
+	url: z.string().optional(),
+});
+export type AtlassianLinkedIssue = z.infer<typeof AtlassianLinkedIssueSchema>;
+
+export const AtlassianFindingsSchema = z.object({
+	linkedIssues: z.array(AtlassianLinkedIssueSchema).optional(),
+});
+export type AtlassianFindings = z.infer<typeof AtlassianFindingsSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	// SIO-649: Populated when the elastic sub-agent fans out across deployments.
@@ -157,6 +200,9 @@ export const DataSourceResultSchema = z.object({
 	couchbaseFindings: CouchbaseFindingsSchema.optional(),
 	// SIO-785 follow-up (2026-05-18).
 	elasticFindings: ElasticFindingsSchema.optional(),
+	// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch + Atlassian linked incidents.
+	awsFindings: AwsFindingsSchema.optional(),
+	atlassianFindings: AtlassianFindingsSchema.optional(),
 	// SIO-707: total LangGraph messages produced by the sub-agent run. Used by the aggregator
 	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
 	// the run completed but had a high per-iteration failure ratio.
@@ -259,6 +305,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		gitlabFindings: GitLabFindingsSchema.optional(),
 		couchbaseFindings: CouchbaseFindingsSchema.optional(),
 		elasticFindings: ElasticFindingsSchema.optional(),
+		// SIO-785 Phase 2 (2026-05-18).
+		awsFindings: AwsFindingsSchema.optional(),
+		atlassianFindings: AtlassianFindingsSchema.optional(),
 	}),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),

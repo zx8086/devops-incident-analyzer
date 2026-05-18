@@ -174,8 +174,16 @@ describe("instrumentTools", () => {
 		expect(Object.keys(parsed.connectors)).toHaveLength(100);
 	});
 
-	test("does NOT truncate kafka_list_consumer_groups, ksql_list_queries, kafka_list_dlq_topics", async () => {
-		const cases = ["kafka_list_consumer_groups", "ksql_list_queries", "kafka_list_dlq_topics"];
+	test("does NOT truncate kafka_list_consumer_groups, ksql_list_queries, kafka_list_dlq_topics, aws_cloudwatch_describe_alarms, findLinkedIncidents", async () => {
+		// SIO-785 Phase 2 (2026-05-18): aws + atlassian extractors added to the
+		// typed-finding allowlist alongside the existing kafka core tools.
+		const cases = [
+			"kafka_list_consumer_groups",
+			"ksql_list_queries",
+			"kafka_list_dlq_topics",
+			"aws_cloudwatch_describe_alarms",
+			"findLinkedIncidents",
+		];
 		for (const name of cases) {
 			const { entries, logger } = makeLog();
 			const payload = bigHitsPayload(200); // 200KB+ payload, oversized

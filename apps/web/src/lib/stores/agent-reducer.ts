@@ -1,6 +1,8 @@
 // apps/web/src/lib/stores/agent-reducer.ts
 import type {
 	ActionResult,
+	AtlassianFindings,
+	AwsFindings,
 	CouchbaseFindings,
 	DataSourceContext,
 	ElasticFindings,
@@ -31,6 +33,9 @@ export interface DataSourceFindings {
 	gitlabFindings?: GitLabFindings;
 	couchbaseFindings?: CouchbaseFindings;
 	elasticFindings?: ElasticFindings;
+	// SIO-785 Phase 2 (2026-05-18).
+	awsFindings?: AwsFindings;
+	atlassianFindings?: AtlassianFindings;
 }
 
 export interface ReducerState {
@@ -94,6 +99,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				gitlabFindings: event.gitlabFindings,
 				couchbaseFindings: event.couchbaseFindings,
 				elasticFindings: event.elasticFindings,
+				// SIO-785 Phase 2 (2026-05-18).
+				awsFindings: event.awsFindings,
+				atlassianFindings: event.atlassianFindings,
 			});
 			return { ...state, dataSourceFindings: next };
 		}

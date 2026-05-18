@@ -6,6 +6,14 @@ export {
 	PendingActionSchema,
 } from "./action-types.ts";
 export {
+	type AtlassianFindings,
+	AtlassianFindingsSchema,
+	type AtlassianLinkedIssue,
+	AtlassianLinkedIssueSchema,
+	type AwsCloudWatchAlarm,
+	AwsCloudWatchAlarmSchema,
+	type AwsFindings,
+	AwsFindingsSchema,
 	type CouchbaseFindings,
 	CouchbaseFindingsSchema,
 	type CouchbaseSlowQuery,
