@@ -182,7 +182,7 @@ describe("extractKafkaFindings", () => {
 				toolName: "connect_list_connectors",
 				rawJson: {
 					connectors: {
-						"C_SINK_COUCHBASE_ARTICLES_V3": {
+						C_SINK_COUCHBASE_ARTICLES_V3: {
 							status: {
 								name: "C_SINK_COUCHBASE_ARTICLES_V3",
 								connector: { state: "RUNNING" },
@@ -193,7 +193,7 @@ describe("extractKafkaFindings", () => {
 								type: "sink",
 							},
 						},
-						"C_SOURCE_PIM_ARTICLES_V3": {
+						C_SOURCE_PIM_ARTICLES_V3: {
 							status: {
 								connector: { state: "FAILED" },
 								tasks: [{ id: 0, state: "FAILED" }],

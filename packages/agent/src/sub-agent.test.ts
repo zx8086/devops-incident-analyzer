@@ -255,7 +255,7 @@ describe("normalizeToolContent SIO-786", () => {
 	test("joins array of text content blocks with double-newline", () => {
 		const content = [
 			{ type: "text", text: "Total results: 10000, showing 2 from position 0" },
-			{ type: "text", text: "Document ID: AAA\nmonitor: { \"name\": \"x\" }" },
+			{ type: "text", text: 'Document ID: AAA\nmonitor: { "name": "x" }' },
 		];
 		const result = normalizeToolContent(content);
 		expect(result).toContain("Total results");

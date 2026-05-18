@@ -233,9 +233,7 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
 		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
 		const stateWithGitLab = withGitLabFindings(baseState(), {
-			mergedRequests: [
-				{ id: 99, title: "Update with the from", description: "stopwords only", merged_at: merged },
-			],
+			mergedRequests: [{ id: 99, title: "Update with the from", description: "stopwords only", merged_at: merged }],
 		});
 		const state = withCouchbaseFindings(stateWithGitLab, {
 			slowQueries: [{ statement: "SELECT with the from", lastExecutionTime: observed }],

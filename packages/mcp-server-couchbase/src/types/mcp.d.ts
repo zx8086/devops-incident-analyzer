@@ -33,7 +33,7 @@ declare module "@modelcontextprotocol/sdk/server/sse.js" {
 }
 
 declare module "@modelcontextprotocol/sdk/server/stdio.js" {
-	import { Transport, JSONRPCMessage, TransportSendOptions } from "@modelcontextprotocol/sdk/server/sse.js";
+	import { JSONRPCMessage, Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/server/sse.js";
 
 	export class StdioServerTransport implements Transport {
 		constructor();
