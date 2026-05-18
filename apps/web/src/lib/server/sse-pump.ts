@@ -122,6 +122,8 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 							gitlabFindings?: unknown;
 							couchbaseFindings?: unknown;
 							elasticFindings?: unknown;
+							awsFindings?: unknown;
+							atlassianFindings?: unknown;
 						};
 						if (typeof result.dataSourceId !== "string") continue;
 						if (result.status !== "success" && result.status !== "error") continue;
@@ -146,6 +148,9 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 							...(result.gitlabFindings !== undefined && { gitlabFindings: result.gitlabFindings }),
 							...(result.couchbaseFindings !== undefined && { couchbaseFindings: result.couchbaseFindings }),
 							...(result.elasticFindings !== undefined && { elasticFindings: result.elasticFindings }),
+							// SIO-785 Phase 2 (2026-05-18).
+							...(result.awsFindings !== undefined && { awsFindings: result.awsFindings }),
+							...(result.atlassianFindings !== undefined && { atlassianFindings: result.atlassianFindings }),
 						});
 					}
 				}
