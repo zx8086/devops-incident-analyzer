@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # scripts/agentcore/push-to-production-ecr.sh
 #
-# Builds the Kafka MCP Server container image and delivers it to a production
+# Builds an MCP Server container image and delivers it to a production
 # ECR repository. The production team does not have access to this source repo,
 # so this script is the mechanism for getting the image to them.
+#
+# Supports any MCP server package via --package (default: mcp-server-kafka).
 #
 # Two delivery modes:
 #   1. Direct ECR push  (default) -- pushes to a target ECR URI
@@ -11,10 +13,11 @@
 #
 # Usage:
 #   ./scripts/agentcore/push-to-production-ecr.sh \
+#     --package mcp-server-kafka \
 #     --ecr-uri 123456789012.dkr.ecr.eu-central-1.amazonaws.com/kafka-mcp-agentcore \
 #     --region eu-central-1
 #
-#   ./scripts/agentcore/push-to-production-ecr.sh --export-tarball
+#   ./scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball
 #
 # Prerequisites:
 #   - Docker Desktop (Apple Silicon builds arm64 natively)
@@ -28,9 +31,7 @@ ECR_URI=""
 AWS_REGION=""
 EXPORT_TARBALL=false
 MCP_SERVER_PACKAGE="mcp-server-kafka"
-IMAGE_NAME="kafka-mcp-agentcore"
 IMAGE_TAG="latest"
-TARBALL_NAME="kafka-mcp-agentcore.tar.gz"
 SKIP_SMOKE_TEST=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -38,6 +39,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # -- Parse arguments --
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --package)
+      MCP_SERVER_PACKAGE="$2"
+      shift 2
+      ;;
     --ecr-uri)
       ECR_URI="$2"
       shift 2
@@ -61,9 +66,11 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       echo "Usage: $0 [OPTIONS]"
       echo ""
-      echo "Builds the Kafka MCP Server container and delivers it to production."
+      echo "Builds an MCP Server container and delivers it to production."
       echo ""
       echo "Options:"
+      echo "  --package NAME      MCP server package (default: mcp-server-kafka)"
+      echo "                      Examples: mcp-server-kafka, mcp-server-aws"
       echo "  --ecr-uri URI       Target ECR repository URI (required for direct push)"
       echo "  --region REGION     AWS region of the target ECR (required for direct push)"
       echo "  --export-tarball    Export image as .tar.gz instead of pushing to ECR"
@@ -72,11 +79,13 @@ while [[ $# -gt 0 ]]; do
       echo "  -h, --help          Show this help message"
       echo ""
       echo "Examples:"
-      echo "  # Push to production ECR"
-      echo "  $0 --ecr-uri 123456789012.dkr.ecr.eu-central-1.amazonaws.com/kafka-mcp-agentcore --region eu-central-1"
+      echo "  # Push kafka to production ECR"
+      echo "  $0 --package mcp-server-kafka \\"
+      echo "    --ecr-uri 123456789012.dkr.ecr.eu-central-1.amazonaws.com/kafka-mcp-agentcore --region eu-central-1"
       echo ""
-      echo "  # Export tarball for manual transfer"
-      echo "  $0 --export-tarball"
+      echo "  # Export tarballs for manual transfer"
+      echo "  $0 --package mcp-server-kafka --export-tarball"
+      echo "  $0 --package mcp-server-aws --export-tarball"
       exit 0
       ;;
     *)
@@ -86,6 +95,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# -- Validate package and derive names --
+if [ ! -d "${PROJECT_ROOT}/packages/${MCP_SERVER_PACKAGE}" ]; then
+  echo "Error: package not found at packages/${MCP_SERVER_PACKAGE}"
+  exit 1
+fi
+# Strip leading "mcp-server-" to get the short name (kafka, aws, ...)
+SHORT_NAME="${MCP_SERVER_PACKAGE#mcp-server-}"
+IMAGE_NAME="${SHORT_NAME}-mcp-agentcore"
+TARBALL_NAME="${SHORT_NAME}-mcp-agentcore.tar.gz"
 
 # -- Validate arguments --
 if [ "$EXPORT_TARBALL" = false ] && [ -z "$ECR_URI" ]; then
@@ -106,7 +125,8 @@ fi
 
 # -- Header --
 echo "================================================================"
-echo "  Kafka MCP Server -- Production Image Build"
+SHORT_NAME_UPPER=$(echo "$SHORT_NAME" | tr '[:lower:]' '[:upper:]')
+echo "  ${SHORT_NAME_UPPER} MCP Server -- Production Image Build"
 echo "================================================================"
 if [ "$EXPORT_TARBALL" = true ]; then
   echo "  Mode:     Tarball export"
@@ -168,10 +188,21 @@ else
   }
   trap cleanup_smoke EXIT
 
+  # Package-specific env so the container can boot far enough for /ping to respond.
+  SMOKE_ENV_ARGS=()
+  case "$MCP_SERVER_PACKAGE" in
+    mcp-server-kafka)
+      SMOKE_ENV_ARGS=(-e KAFKA_PROVIDER=local -e LOCAL_BOOTSTRAP_SERVERS=localhost:9092)
+      ;;
+    mcp-server-aws)
+      # AWS MCP boots without creds; tool calls would fail but /ping doesn't need them.
+      SMOKE_ENV_ARGS=(-e AWS_REGION=eu-central-1)
+      ;;
+  esac
+
   CONTAINER_ID=$(docker run -d --rm \
     -p ${SMOKE_PORT}:8000 \
-    -e KAFKA_PROVIDER=local \
-    -e LOCAL_BOOTSTRAP_SERVERS=localhost:9092 \
+    "${SMOKE_ENV_ARGS[@]}" \
     "$BUILD_TAG")
 
   echo "  Container started: ${CONTAINER_ID:0:12}"
@@ -217,17 +248,17 @@ if [ "$EXPORT_TARBALL" = true ]; then
   echo ""
   echo "    # Tag for their ECR repository"
   echo "    docker tag ${IMAGE_NAME}:${IMAGE_TAG} \\"
-  echo "      <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/kafka-mcp-agentcore:${IMAGE_TAG}"
+  echo "      <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/${IMAGE_NAME}:${IMAGE_TAG}"
   echo ""
   echo "    # Authenticate to ECR"
   echo "    aws ecr get-login-password --region <REGION> | \\"
   echo "      docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com"
   echo ""
   echo "    # Push"
-  echo "    docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/kafka-mcp-agentcore:${IMAGE_TAG}"
+  echo "    docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/${IMAGE_NAME}:${IMAGE_TAG}"
   echo ""
   echo "    # Verify arm64"
-  echo "    docker inspect <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/kafka-mcp-agentcore:${IMAGE_TAG} \\"
+  echo "    docker inspect <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/${IMAGE_NAME}:${IMAGE_TAG} \\"
   echo "      --format '{{.Architecture}}'"
   echo ""
   echo "================================================================"
