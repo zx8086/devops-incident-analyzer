@@ -102,7 +102,7 @@ SIO-537 -> SIO-540 -> SIO-546 -> SIO-547 -> SIO-555 -> SIO-559 -> SIO-569 -> SIO
 
 Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Project-specific rules:
 
-- **Location**: `docs/handovers/HANDOFF-<YYYY-MM-DD>-<SIO-XXX-or-topic>.md`. **Always commit handovers to `main` directly** — even mid-feature handovers belong in version control so the next session can find them via `git log` regardless of which branch/worktree they were written in. Treat handovers as documentation, not scratch notes. The `experiments/` directory remains gitignored for actual experiments; handovers no longer go there.
+- **Location**: `experiments/HANDOFF-<YYYY-MM-DD>-<SIO-XXX-or-topic>.md`. **Always commit handovers to `main` directly** — even mid-feature handovers belong in version control so the next session can find them via `git log` regardless of which branch/worktree they were written in. The `experiments/` directory is checked into git (was previously gitignored; that rule was removed 2026-05-18). Treat handovers as documentation, not scratch notes.
 - **One ticket per file** when handing off multiple tickets. Don't bundle SIO-X and SIO-Y unless they truly must be done together.
 - **Linear URLs**: every ticket reference uses the full URL `https://linear.app/siobytes/issue/SIO-XXX`. Show parent/child relationships in the header block.
 - **Cite specs/plans/PRs by full path**: `docs/superpowers/specs/<date>-<topic>-design.md`, `docs/superpowers/plans/<date>-<topic>.md`, PR `#NN`. A fresh session must be able to open them directly without searching.
