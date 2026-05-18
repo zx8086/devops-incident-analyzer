@@ -25,8 +25,8 @@ describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
-				{ id: "notification-service", state: "Empty" },
-				{ id: "payments-service", state: "Stable", totalLag: 0 },
+				{ id: "notification-service", state: "EMPTY" },
+				{ id: "payments-service", state: "STABLE", totalLag: 0 },
 			],
 		});
 		const result = enforceCorrelationsRouter(state);
@@ -41,7 +41,7 @@ describe("enforceCorrelationsRouter — returns string when no rules fire", () =
 	test("returns 'enforceCorrelationsAggregate' when all groups are Stable with zero lag", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 0 }],
+			consumerGroups: [{ id: "payments-service", state: "STABLE", totalLag: 0 }],
 		});
 		const result = enforceCorrelationsRouter(state);
 		expect(result).toBe("enforceCorrelationsAggregate");
@@ -55,8 +55,8 @@ describe("enforceCorrelationsRouter — dedups by agent", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
-				{ id: "notification-service", state: "Empty" },
-				{ id: "payments-service", state: "Stable", totalLag: 50_000 },
+				{ id: "notification-service", state: "EMPTY" },
+				{ id: "payments-service", state: "STABLE", totalLag: 50_000 },
 			],
 		});
 		const result = enforceCorrelationsRouter(state);
@@ -94,7 +94,7 @@ describe("enforceCorrelationsAggregate — pending rule satisfied by elastic fin
 		// Kafka shows Empty group; elastic has findings for the same service
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		let state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "notification-service", state: "Empty" }],
+			consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 		});
 		state = withElasticResult(state, {
 			services: [{ name: "notification-service", errorRate: 0.02 }],
@@ -123,7 +123,7 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = {
 			...withKafkaFindings(baseState(), {
-				consumerGroups: [{ id: "notification-service", state: "Empty" }],
+				consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 			}),
 			confidenceScore: 0.85,
 			pendingCorrelations: pending,
@@ -150,7 +150,7 @@ describe("enforceCorrelationsAggregate — pending rule unsatisfied", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = {
 			...withKafkaFindings(baseState(), {
-				consumerGroups: [{ id: "notification-service", state: "Empty" }],
+				consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 			}),
 			confidenceScore: 0.4,
 			pendingCorrelations: pending,
@@ -289,7 +289,7 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 					dataSourceId: "kafka",
 					status: "success" as const,
 					data: "kafka prose summary",
-					kafkaFindings: { consumerGroups: [{ id: "group-x", state: "Stable", totalLag: 50000 }] },
+					kafkaFindings: { consumerGroups: [{ id: "group-x", state: "STABLE", totalLag: 50000 }] },
 					duration: 100,
 				},
 			],
