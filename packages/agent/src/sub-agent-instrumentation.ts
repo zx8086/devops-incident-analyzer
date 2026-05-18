@@ -32,6 +32,9 @@ const TYPED_FINDING_TOOLS = new Set<string>([
 	// elastic extractor (only when searching synthetics-* indices, but the
 	// extractor narrows by shape so it's safe to include unconditionally).
 	"elasticsearch_search",
+	// SIO-785 Phase 2 (2026-05-18): aws extractor + atlassian extractor.
+	"aws_cloudwatch_describe_alarms",
+	"findLinkedIncidents",
 ]);
 
 interface InstrumentLogger {

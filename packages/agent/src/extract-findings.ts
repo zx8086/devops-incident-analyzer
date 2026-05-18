@@ -1,6 +1,7 @@
 // agent/src/extract-findings.ts
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
+import { extractAwsFindings } from "./correlation/extractors/aws.ts";
 import { extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
 import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
@@ -83,6 +84,8 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 		gitlab: (r) => ({ gitlabFindings: extractGitLabFindings(r.toolOutputs ?? []) }),
 		couchbase: (r) => ({ couchbaseFindings: extractCouchbaseFindings(r.toolOutputs ?? []) }),
 		elastic: (r) => ({ elasticFindings: extractElasticFindings(r.toolOutputs ?? []) }),
+		// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch alarms.
+		aws: (r) => ({ awsFindings: extractAwsFindings(r.toolOutputs ?? []) }),
 	};
 	const dataSourceResults = state.dataSourceResults.map((r) => {
 		const extractor = extractors[r.dataSourceId];
