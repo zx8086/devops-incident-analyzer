@@ -102,4 +102,102 @@ describe("extractElasticFindings", () => {
 		];
 		expect(extractElasticFindings(outputs)).toEqual({});
 	});
+
+	test("parses synthetic monitors from real text-block MCP response (string rawJson)", () => {
+		const realResponse = [
+			"Total results: 10000, showing 2 from position 0",
+			"",
+			"Document ID: AbcXyz",
+			"Score: 1",
+			"",
+			'agent: {\n  "name": "job-1",\n  "type": "heartbeat"\n}',
+			'monitor: {\n  "origin": "ui",\n  "name": "https://example.com/page",\n  "id": "mon-uuid-1",\n  "type": "browser",\n  "status": "down"\n}',
+			'url: {\n  "full": "https://example.com/page"\n}',
+			'observer: {\n  "geo": {\n    "name": "Europe - Germany"\n  },\n  "name": "europe-west3-a"\n}',
+			"@timestamp: 2026-05-18T14:58:52.969Z",
+		].join("\n");
+
+		const outputs: ToolOutput[] = [
+			{ toolName: "elasticsearch_search", rawJson: realResponse },
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.syntheticMonitors).toHaveLength(1);
+		expect(findings.syntheticMonitors?.[0]).toEqual({
+			name: "https://example.com/page",
+			status: "down",
+			url: "https://example.com/page",
+			observedAt: "2026-05-18T14:58:52.969Z",
+			geo: "Europe - Germany",
+		});
+	});
+
+	test("falls back to summary.status when monitor.status is missing", () => {
+		const realResponse = [
+			"Document ID: AbcXyz",
+			"",
+			'monitor: {\n  "name": "https://example.com/x",\n  "id": "mon-uuid-2",\n  "type": "browser"\n}',
+			'summary: {\n  "up": 0,\n  "down": 1,\n  "status": "down"\n}',
+			"@timestamp: 2026-05-18T14:58:52.969Z",
+		].join("\n");
+		const outputs: ToolOutput[] = [
+			{ toolName: "elasticsearch_search", rawJson: realResponse },
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.syntheticMonitors?.[0]?.status).toBe("down");
+	});
+
+	test("falls back to state.status when monitor.status AND summary.status are missing", () => {
+		const realResponse = [
+			"Document ID: AbcXyz",
+			"",
+			'monitor: {\n  "name": "https://example.com/y",\n  "id": "mon-uuid-3"\n}',
+			'state: {\n  "up": 0,\n  "down": 4323,\n  "status": "down"\n}',
+		].join("\n");
+		const outputs: ToolOutput[] = [
+			{ toolName: "elasticsearch_search", rawJson: realResponse },
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.syntheticMonitors?.[0]?.status).toBe("down");
+	});
+
+	test("dedupes by monitor.id (not name) across multiple Document blocks", () => {
+		// Two heartbeat records for the same monitor.id — first wins (most-recent).
+		const realResponse = [
+			"Document ID: First",
+			"",
+			'monitor: {\n  "name": "https://example.com/z",\n  "id": "shared-uuid",\n  "status": "up"\n}',
+			"@timestamp: 2026-05-18T15:00:00.000Z",
+			"",
+			"Document ID: Second",
+			"",
+			'monitor: {\n  "name": "https://example.com/z",\n  "id": "shared-uuid",\n  "status": "down"\n}',
+			"@timestamp: 2026-05-18T14:00:00.000Z",
+		].join("\n");
+		const outputs: ToolOutput[] = [
+			{ toolName: "elasticsearch_search", rawJson: realResponse },
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.syntheticMonitors).toHaveLength(1);
+		expect(findings.syntheticMonitors?.[0]?.status).toBe("up"); // first wins
+	});
+
+	test("parses against the captured live fixture", async () => {
+		const fs = await import("node:fs/promises");
+		const path = await import("node:path");
+		const fixturePath = path.join(import.meta.dir, "__fixtures__", "elastic-synthetics-real.txt");
+		const realResponse = await fs.readFile(fixturePath, "utf-8");
+		const outputs: ToolOutput[] = [
+			{ toolName: "elasticsearch_search", rawJson: realResponse },
+		];
+		const findings = extractElasticFindings(outputs);
+		// Real fixture has at least one parseable monitor record.
+		expect((findings.syntheticMonitors ?? []).length).toBeGreaterThan(0);
+		// Every parsed monitor has a name and a status string.
+		for (const m of findings.syntheticMonitors ?? []) {
+			expect(typeof m.name).toBe("string");
+			expect(m.name.length).toBeGreaterThan(0);
+			expect(typeof m.status).toBe("string");
+			expect(m.status.length).toBeGreaterThan(0);
+		}
+	});
 });

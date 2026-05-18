@@ -1,0 +1,246 @@
+Total results: 10000, showing 3 from position 0
+
+Document ID: DrlFPJsBU3TbVRPNk2-p
+Score: 1
+
+agent: {
+  "name": "job-6e65cd2aa1b77bf6-4x2wk",
+  "id": "a2a6a73b-e6b4-4e6f-a3d8-c84f4a577ae8",
+  "type": "heartbeat",
+  "ephemeral_id": "b03cf4d8-6bc8-4f55-9746-c85093c302d2",
+  "version": "9.1.0"
+}
+package: {
+  "name": "@elastic/synthetics",
+  "version": "1.18.0"
+}
+os: {
+  "platform": "linux"
+}
+synthetics: {
+  "package_version": "1.18.0",
+  "journey": {
+    "name": "inline",
+    "id": "inline"
+  },
+  "payload": {
+    "source": "async () => {\n  await page.goto('https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1');\n}",
+    "url": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+    "status": "failed"
+  },
+  "index": 1,
+  "step": {
+    "duration": {
+      "us": 245776
+    },
+    "name": "Go to https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+    "index": 1,
+    "status": "failed"
+  },
+  "error": {
+    "stack": "\npage.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\nCall log:\n  - navigating to \"https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\", waiting until \"load\"\n",
+    "name": "Error",
+    "message": "page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1"
+  },
+  "type": "step/end"
+}
+monitor: {
+  "origin": "ui",
+  "name": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+  "check_group": "65a8e321-ddb4-11f0-b935-02efdbd0c878-1",
+  "id": "b223ae62-2836-4423-9627-aec21637399e",
+  "timespan": {
+    "lt": "2025-12-20T15:08:52.970Z",
+    "gte": "2025-12-20T14:58:52.970Z"
+  },
+  "type": "browser"
+}
+error: {
+  "code": "",
+  "stack_trace": "\npage.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\nCall log:\n  - navigating to \"https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\", waiting until \"load\"\n",
+  "type": "Error",
+  "message": "error executing step: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1"
+}
+url: {
+  "path": "/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+  "scheme": "https",
+  "port": 443,
+  "domain": "www.calvinklein.ee",
+  "full": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1"
+}
+observer: {
+  "geo": {
+    "name": "Europe - Germany",
+    "location": "50.110924, 8.682127"
+  },
+  "name": "europe-west3-a"
+}
+@timestamp: 2025-12-20T14:58:52.969Z
+ecs: {
+  "version": "8.0.0"
+}
+config_id: b223ae62-2836-4423-9627-aec21637399e
+meta: {
+  "space_id": [
+    "b2c"
+  ]
+}
+data_stream: {
+  "namespace": "b2c",
+  "type": "synthetics",
+  "dataset": "browser"
+}
+event: {
+  "agent_id_status": "auth_metadata_missing",
+  "ingested": "2025-12-20T14:59:11Z",
+  "type": "step/end",
+  "dataset": "browser"
+}
+
+Document ID: ErlFPJsBU3TbVRPNk2-p
+Score: 1
+
+summary: {
+  "retry_group": "65a8e321-ddb4-11f0-b935-02efdbd0c878",
+  "max_attempts": 2,
+  "up": 0,
+  "attempt": 1,
+  "final_attempt": true,
+  "down": 1,
+  "status": "down"
+}
+agent: {
+  "name": "job-6e65cd2aa1b77bf6-4x2wk",
+  "id": "a2a6a73b-e6b4-4e6f-a3d8-c84f4a577ae8",
+  "ephemeral_id": "b03cf4d8-6bc8-4f55-9746-c85093c302d2",
+  "type": "heartbeat",
+  "version": "9.1.0"
+}
+synthetics: {
+  "type": "heartbeat/summary"
+}
+monitor: {
+  "duration": {
+    "us": 248709
+  },
+  "origin": "ui",
+  "name": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+  "timespan": {
+    "lt": "2025-12-20T15:08:53.478Z",
+    "gte": "2025-12-20T14:58:53.478Z"
+  },
+  "id": "b223ae62-2836-4423-9627-aec21637399e",
+  "check_group": "65a8e321-ddb4-11f0-b935-02efdbd0c878-1",
+  "type": "browser",
+  "status": "down"
+}
+error: {
+  "code": "",
+  "stack_trace": "\npage.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\nCall log:\n  - navigating to \"https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1\", waiting until \"load\"\n",
+  "type": "Error",
+  "message": "error executing step: page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1"
+}
+url: {
+  "path": "/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+  "scheme": "https",
+  "port": 443,
+  "domain": "www.calvinklein.ee",
+  "full": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1"
+}
+observer: {
+  "geo": {
+    "name": "Europe - Germany",
+    "location": "50.110924, 8.682127"
+  },
+  "name": "europe-west3-a"
+}
+@timestamp: 2025-12-20T14:58:53.499Z
+ecs: {
+  "version": "8.0.0"
+}
+config_id: b223ae62-2836-4423-9627-aec21637399e
+data_stream: {
+  "namespace": "b2c",
+  "type": "synthetics",
+  "dataset": "browser"
+}
+meta: {
+  "space_id": [
+    "b2c"
+  ]
+}
+state: {
+  "duration_ms": "2592212420",
+  "checks": 4323,
+  "ends": null,
+  "started_at": "2025-11-20T14:55:21.078704688Z",
+  "id": "europe-west3-a-19aa1c347f6-0",
+  "up": 0,
+  "flap_history": [],
+  "down": 4323,
+  "status": "down"
+}
+event: {
+  "agent_id_status": "auth_metadata_missing",
+  "ingested": "2025-12-20T14:59:11Z",
+  "type": "heartbeat/summary",
+  "dataset": "browser"
+}
+
+Document ID: CrlFPJsBU3TbVRPNk2-p
+Score: 1
+
+observer: {
+  "geo": {
+    "name": "Europe - Germany",
+    "location": "50.110924, 8.682127"
+  },
+  "name": "europe-west3-a"
+}
+agent: {
+  "name": "job-6e65cd2aa1b77bf6-4x2wk",
+  "id": "a2a6a73b-e6b4-4e6f-a3d8-c84f4a577ae8",
+  "ephemeral_id": "b03cf4d8-6bc8-4f55-9746-c85093c302d2",
+  "type": "heartbeat",
+  "version": "9.1.0"
+}
+@timestamp: 2025-12-20T14:58:52.424Z
+ecs: {
+  "version": "8.0.0"
+}
+config_id: b223ae62-2836-4423-9627-aec21637399e
+meta: {
+  "space_id": [
+    "b2c"
+  ]
+}
+synthetics: {
+  "package_version": "",
+  "payload": {
+    "message": "⚠ Throttling may not be active when the tests run - see"
+  },
+  "index": 0,
+  "type": "stderr"
+}
+data_stream: {
+  "namespace": "b2c",
+  "type": "synthetics",
+  "dataset": "browser"
+}
+monitor: {
+  "origin": "ui",
+  "name": "https://www.calvinklein.ee/5-pack-trunks-icon-cotton-stretch-lv00nb4437ub1",
+  "check_group": "65a8e321-ddb4-11f0-b935-02efdbd0c878-1",
+  "timespan": {
+    "lt": "2025-12-20T15:08:52.424Z",
+    "gte": "2025-12-20T14:58:52.424Z"
+  },
+  "id": "b223ae62-2836-4423-9627-aec21637399e",
+  "type": "browser"
+}
+event: {
+  "agent_id_status": "auth_metadata_missing",
+  "ingested": "2025-12-20T14:59:11Z",
+  "type": "stderr",
+  "dataset": "browser"
+}
