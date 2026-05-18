@@ -96,9 +96,7 @@ describe("extractElasticFindings", () => {
 	});
 
 	test("ignores malformed JSON-envelope elasticsearch_search outputs", () => {
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: { not: "an es response" } },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: { not: "an es response" } }];
 		expect(extractElasticFindings(outputs)).toEqual({});
 	});
 
@@ -125,9 +123,7 @@ describe("extractElasticFindings", () => {
 			"@timestamp: 2026-05-18T14:58:52.969Z",
 		].join("\n");
 
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: realResponse },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: realResponse }];
 		const findings = extractElasticFindings(outputs);
 		expect(findings.syntheticMonitors).toHaveLength(1);
 		expect(findings.syntheticMonitors?.[0]).toEqual({
@@ -147,9 +143,7 @@ describe("extractElasticFindings", () => {
 			'summary: {\n  "up": 0,\n  "down": 1,\n  "status": "down"\n}',
 			"@timestamp: 2026-05-18T14:58:52.969Z",
 		].join("\n");
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: realResponse },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: realResponse }];
 		const findings = extractElasticFindings(outputs);
 		expect(findings.syntheticMonitors?.[0]?.status).toBe("down");
 	});
@@ -161,9 +155,7 @@ describe("extractElasticFindings", () => {
 			'monitor: {\n  "name": "https://example.com/y",\n  "id": "mon-uuid-3"\n}',
 			'state: {\n  "up": 0,\n  "down": 4323,\n  "status": "down"\n}',
 		].join("\n");
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: realResponse },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: realResponse }];
 		const findings = extractElasticFindings(outputs);
 		expect(findings.syntheticMonitors?.[0]?.status).toBe("down");
 	});
@@ -181,9 +173,7 @@ describe("extractElasticFindings", () => {
 			'monitor: {\n  "name": "https://example.com/z",\n  "id": "shared-uuid",\n  "status": "down"\n}',
 			"@timestamp: 2026-05-18T14:00:00.000Z",
 		].join("\n");
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: realResponse },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: realResponse }];
 		const findings = extractElasticFindings(outputs);
 		expect(findings.syntheticMonitors).toHaveLength(1);
 		expect(findings.syntheticMonitors?.[0]?.status).toBe("up"); // first wins
@@ -194,9 +184,7 @@ describe("extractElasticFindings", () => {
 		const path = await import("node:path");
 		const fixturePath = path.join(import.meta.dir, "__fixtures__", "elastic-synthetics-real.txt");
 		const realResponse = await fs.readFile(fixturePath, "utf-8");
-		const outputs: ToolOutput[] = [
-			{ toolName: "elasticsearch_search", rawJson: realResponse },
-		];
+		const outputs: ToolOutput[] = [{ toolName: "elasticsearch_search", rawJson: realResponse }];
 		const findings = extractElasticFindings(outputs);
 		// Real fixture has at least one parseable monitor record.
 		expect((findings.syntheticMonitors ?? []).length).toBeGreaterThan(0);

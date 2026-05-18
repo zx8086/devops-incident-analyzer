@@ -71,15 +71,15 @@ function extractJsonBlock(text: string, key: string): string | null {
 	const start = m.index + m[0].length - 1; // position of opening brace
 	let depth = 0;
 	let inString = false;
-	let escape = false;
+	let escaped = false;
 	for (let i = start; i < text.length; i++) {
 		const ch = text[i];
-		if (escape) {
-			escape = false;
+		if (escaped) {
+			escaped = false;
 			continue;
 		}
 		if (ch === "\\") {
-			escape = true;
+			escaped = true;
 			continue;
 		}
 		if (ch === '"') {
@@ -142,7 +142,7 @@ function parseSyntheticMonitorsFromText(content: string): ElasticSyntheticMonito
 	const monitorsByKey = new Map<string, ElasticSyntheticMonitor>();
 	for (const section of sections) {
 		const monitor = parseJsonBlock<ParsedMonitorSection>(section, "monitor");
-		if (!monitor || !monitor.name) continue;
+		if (!monitor?.name) continue;
 
 		// Status priority: monitor.status -> summary.status -> state.status.
 		let status = monitor.status;
