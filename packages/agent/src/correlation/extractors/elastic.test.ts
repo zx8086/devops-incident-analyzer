@@ -95,10 +95,18 @@ describe("extractElasticFindings", () => {
 		expect(findings.syntheticMonitors?.[0]?.name).toBe("valid-monitor");
 	});
 
-	test("ignores malformed elasticsearch_search outputs", () => {
+	test("ignores malformed JSON-envelope elasticsearch_search outputs", () => {
 		const outputs: ToolOutput[] = [
 			{ toolName: "elasticsearch_search", rawJson: { not: "an es response" } },
+		];
+		expect(extractElasticFindings(outputs)).toEqual({});
+	});
+
+	test("returns empty for a string rawJson with no Document ID markers", () => {
+		const outputs: ToolOutput[] = [
 			{ toolName: "elasticsearch_search", rawJson: "string response" },
+			{ toolName: "elasticsearch_search", rawJson: "" },
+			{ toolName: "elasticsearch_search", rawJson: "Total results: 10000, showing 0 from position 0" },
 		];
 		expect(extractElasticFindings(outputs)).toEqual({});
 	});

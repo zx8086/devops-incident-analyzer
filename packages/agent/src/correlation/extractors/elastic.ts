@@ -156,7 +156,8 @@ function parseSyntheticMonitorsFromText(content: string): ElasticSyntheticMonito
 		}
 		if (!status) continue; // no resolvable status — skip
 
-		const dedupeKey = monitor.id ?? monitor.name;
+		// Use || (not ??) so empty-string monitor.id falls back to name.
+		const dedupeKey = monitor.id || monitor.name;
 		if (monitorsByKey.has(dedupeKey)) continue; // first wins (most-recent)
 
 		const url = parseJsonBlock<ParsedUrlSection>(section, "url");
@@ -196,6 +197,10 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 		// a string by tryParseJson's fall-through. Detect string rawJson and
 		// route to the text-block parser; otherwise keep the JSON-envelope path.
 		if (typeof o.rawJson === "string") {
+			// SIO-786: parseSyntheticMonitorsFromText dedupes by monitor.id || name;
+			// the outer monitorsByName dedupes across ToolOutput entries by name only.
+			// Synthetic monitor names are unique in practice, so the asymmetry is benign;
+			// revisit if two monitors with the same name but different ids ever surface.
 			for (const m of parseSyntheticMonitorsFromText(o.rawJson)) {
 				if (monitorsByName.has(m.name)) continue;
 				monitorsByName.set(m.name, m);
