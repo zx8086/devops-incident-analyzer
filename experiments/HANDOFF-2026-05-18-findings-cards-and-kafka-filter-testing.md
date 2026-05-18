@@ -159,6 +159,267 @@ The 2026-05-18 00:08 production trace (thread `cce7190e-0afd-4849-9c35-cebe12b7a
 
 Open a follow-up Linear ticket child of SIO-785 capturing the failing input/output, file the failing test fixture in `kafka.test.ts`, then patch. Do NOT block SIO-776/777 on this unless the breakage is severe — Couchbase and GitLab cards don't depend on the kafka filter at all.
 
+### Part 1 — live verification results (2026-05-18)
+
+Verified against real `c72-shared-services-msk` (Confluent prd via AgentCore proxy on `localhost:3000`). Two bugs surfaced; both fixed in the same session before this note was written. **Filter logic re-verification still needed** with the fix applied — the runs below predate the fix.
+
+**Scenario A — focused: "What's the consumer group lag on notification-service?"**
+
+Diagnostic (9:11:45 AM):
+
+```json
+{"tag":"KafkaFindingsCard","focusServices":["notification-service"],"focusServicesCount":1,
+ "rawConsumerGroups":1,"filteredConsumerGroups":1,"dlqTopics":0,
+ "sampleRawIds":["notification-service"],"filterMode":"scoped"}
+```
+
+SSE wire (DevTools `/api/agent/stream` → EventStream):
+
+```json
+{"type":"datasource_result","dataSourceId":"kafka","status":"success","duration":38955,
+ "kafkaFindings":{"consumerGroups":[{"id":"notification-service","state":"STABLE","totalLag":0}]}}
+```
+
+Filter behaviour looked correct here (1→1, group matches focus name). But trivially so — only one group in the result. Bug masked.
+
+**Scenario B — generic: "Is kafka healthy?"**
+
+Diagnostic (9:20:34 AM):
+
+```json
+{"tag":"KafkaFindingsCard","focusServices":["kafka"],"focusServicesCount":1,
+ "rawConsumerGroups":74,"filteredConsumerGroups":74,"dlqTopics":0,
+ "sampleRawIds":["_confluent-ksql-default_query_CSAS_S_PRIVATE_PRODUCT_IMAGES_RICH_NOTIFICATIONS_4529",
+                 "_confluent-ksql-default_query_CSAS_S_PRIVATE_SINK_NUXEO_LOOK_ASSETS_3359",
+                 "connect-C_SINK_COUCHBASE_PRICES_DOCUMENTS"],
+ "filterMode":"scoped"}
+```
+
+SSE payload analysis (74 groups, parsed JSON):
+
+- 69 `state: "STABLE"`, 5 `state: "EMPTY"`
+- 72 zero-lag, 2 high-lag (`Apache_Kafka_Consumer_configuration-*` with `totalLag: 2897180`)
+- Only 4 of 74 ids contain substring `"kafka"`
+- All 74 retained — filter is degenerate.
+
+**Verdict: FAIL.** The filter passes every group regardless of state or name match.
+
+**Root cause:** case-sensitivity bug in three call sites + the UI component. Real Kafka admin API (`@platformatic/kafka`, AWS MSK, Confluent) emits `state` in **uppercase**: `"STABLE"`, `"EMPTY"`, `"DEAD"`, `"PREPARING_REBALANCE"`. The SIO-785 code compared against title-case `"Stable"`:
+
+- `packages/agent/src/correlation/extractors/kafka.ts:77` — `state !== "Stable"` → every real group force-passed as "non-stable", defeating the filter.
+- `packages/agent/src/correlation/rules.ts:136` — `g.state === "Empty" || g.state === "Dead"` → kafka-empty-or-dead-groups rule never fires on real data.
+- `packages/agent/src/correlation/rules.ts:147` — `g.state === "Stable" && lag > 10_000` → kafka-significant-lag rule never fires (would have missed the two 2.9M-lag groups in Scenario B).
+- `apps/web/src/lib/components/KafkaFindingsCard.svelte:25-30` — `stateDotClass` switch on `"Stable" | "Rebalancing" | "Dead"` → every real group gets the default gray dot.
+
+The unit tests in `kafka.test.ts` + `extract-findings.test.ts` passed because their fixtures used title-case. Classic instance of memory `feedback_extractor_fixtures_must_mirror_real_mcp`.
+
+**Fix shipped this session (commit pending):**
+
+- `extractors/kafka.ts` — `ListConsumerGroupsRowSchema.state` now `z.string().transform((s) => s.toUpperCase())`. Single chokepoint; downstream comparisons see canonical uppercase.
+- `extractors/kafka.ts:77` — compare against `"STABLE"`.
+- `rules.ts:136` — `"EMPTY" || "DEAD"`.
+- `rules.ts:147` — `"STABLE"`.
+- `KafkaFindingsCard.svelte:23-32` — switch uppercases input, cases for `"STABLE"`, `"PREPARING_REBALANCE" / "COMPLETING_REBALANCE"`, `"DEAD" / "EMPTY"`.
+- All test fixtures updated to use uppercase (`kafka.test.ts`, `extract-findings.test.ts`, `KafkaFindingsCard.test.ts`, `sse-pump.test.ts`, `agent.handleEvent.test.ts`, `stream-event-schema.test.ts`).
+- `bun run typecheck` clean. `bun test packages/agent/src/correlation src/extract-findings.test.ts` 56/56. Web + shared tests 22 + 4 pass.
+
+**Fix re-verified live (Scenario B re-run, 9:43:50 AM):**
+
+```json
+{"tag":"KafkaFindingsCard","focusServices":["kafka"],"focusServicesCount":1,
+ "rawConsumerGroups":74,"filteredConsumerGroups":9,"dlqTopics":0,
+ "filterMode":"scoped"}
+```
+
+Filter dropped 74→9 (was 74→74 before fix). All 9 retained for valid reasons (SSE payload parsed):
+
+| id | state | totalLag | why retained |
+|---|---|---|---|
+| amazon.msk.canary.group.broker-1/2/3 | EMPTY | — | non-STABLE pass-through |
+| Apache_Kafka_Consumer_configuration-3fca... | EMPTY | 3,133,910 | non-STABLE + huge lag |
+| Apache_Kafka_Consumer_configuration-1e4f... | EMPTY | 3,133,904 | non-STABLE + huge lag |
+| Apache_Kafka_Consumer_configuration-1a41... | STABLE | — | token match on "kafka" |
+| Apache_Kafka_Consumer_configuration-5451... | STABLE | — | token match on "kafka" |
+| orders-service-stg | STABLE | 232,884 | lag pass-through |
+| orders-service-prd | STABLE | 206,862 | lag pass-through |
+
+The two `Apache_Kafka_Consumer_configuration-*` groups with 3.1M lag are real production findings — exactly what the card should surface. The mis-anchored `focusServices: ["kafka"]` still pulled in 2 extra STABLE rows on token match; non-critical but a follow-up.
+
+**Remaining follow-ups (separate Linear tickets):**
+
+1. Investigation: **classifier / entity-extractor uses `"kafka"` as a focus service** for the generic question (`focusServices: ["kafka"]`). "kafka" is a datasource id, not a service name. Either filter it out before `collectFocusServices()` reads it, OR keep `entityExtractor` from coercing datasource ids into `investigationFocus.services`. Minor noise — kept 2 extra STABLE rows in the re-verify run.
+2. `datasource_progress` SSE events not emitted — see separate finding below; this blocks the card from rendering even when findings are populated.
+
+### Part 1 — separate finding: KafkaFindingsCard never renders (datasource_progress gap) — FIXED
+
+Verified live (pre-fix): the SSE pump emitted `datasource_result` (carrying `kafkaFindings`) but **never emitted `datasource_progress`** events for the kafka sub-agent run. Grep against captured SSE: 0 `datasource_progress` events, 1 `datasource_result` event.
+
+`apps/web/src/lib/stores/agent.svelte.ts:135` assembles the assistant message's `dataSourceResults` map exclusively from `dataSourceProgress` (which only `datasource_progress` populates). `CompletedProgress.svelte:111-132` gated the entire "Data Sources" section (and the inline KafkaFindingsCard at `:124-128`) on `dataSources.length > 0` derived from `dataSourceResults`. Result: even with the SIO-785 filter fix, the card had no row to mount under and rendered nowhere.
+
+**Fix shipped (same session, both layers belt-and-braces):**
+
+- **Server (`apps/web/src/lib/server/sse-pump.ts`):** the `extractFindings` `on_chain_end` block now emits one `datasource_progress` event per sub-agent result, immediately before the corresponding `datasource_result`. Status maps `success|error`; `error` populates the optional `message` field. Unit test `sse-pump.test.ts` now asserts both events are emitted per entry.
+- **Client (`apps/web/src/lib/components/CompletedProgress.svelte`):** `dataSources` is now derived from the union of `dataSourceResults.keys()` ∪ `dataSourceFindings.keys()`, with status inferred from findings entry when no progress tick arrived. Defensive against future emit-order regressions; allows the card to render even on code paths that emit findings but no progress.
+
+**Verified end-to-end after fix:** focused query `"What's the consumer group lag on notification-service?"` renders the KafkaFindingsCard inline under the kafka row. DOM probe via chrome-devtools: `dataSourcesSectionRendered=true`, `kafkaFindingsLabelCount=1`, `cardVisible=true`, card content `"Kafka findings Consumer groups notification-service 0"`. Panel header now reads `"Completed in 39.2s -- 1 data source"` (was previously missing the data-source count, since `dataSources.length===0`).
+
+### Part 1 — UX placement fix: promote card out of Completed diagnostic panel
+
+User feedback after visual review: the card was technically in the right DOM location (inside the Data Sources block under the kafka row in CompletedProgress) but UX-wrong — buried inside the collapsed "Completed in Xs" diagnostic accordion, below the assistant's main markdown-rendered incident report. The expectation is that the card is *part of the findings*, not part of the diagnostics.
+
+**Fix shipped:**
+
+- `apps/web/src/lib/components/ChatMessage.svelte` — added KafkaFindingsCard render block immediately after `MarkdownRenderer` (line ~60), before `CompletedProgress`. Uses `message.dataSourceFindings.get("kafka")?.kafkaFindings`.
+- `apps/web/src/lib/components/CompletedProgress.svelte` — removed `KafkaFindingsCard` import, `kafkaFindings` `$derived`, and the inline render block inside the Data Sources `{#each}`. The Completed panel still shows the kafka data-source row (status + label) for diagnostic purposes; it just no longer hosts the card.
+
+**Verified end-to-end:** screenshot confirms card renders directly under the assistant's "Incident Report" markdown, with sections in order: report → KafkaFindingsCard → Completed diagnostic panel → feedback → follow-ups.
+
+When CouchbaseFindingsCard / GitLabFindingsCard ship (SIO-776 / SIO-777), they follow the same template in `ChatMessage.svelte`: read from `message.dataSourceFindings.get("<id>")` and render as a sibling block under the assistant bubble's main content.
+
+### Part 1 — what KafkaFindingsCard supports vs what we've seen live
+
+The card has two display sections, controlled by `KafkaFindings` schema (`packages/shared/src/agent-state.ts:34-67`):
+
+1. **Consumer groups** (verified live in Scenarios A + B): state dot (STABLE/REBALANCING/DEAD/EMPTY), group id, lag bar (linear or log if max > 100k), formatted lag.
+2. **DLQ topics** (NOT verified live, render path proven by unit test `KafkaFindingsCard.test.ts` "renders both consumer groups and DLQ topics with full payload"): topic name, totalMessages, recentDelta with growth glyph (▲ red if growing, ▼ green if draining, "no baseline" if first sample).
+
+**Scenario C attempt 2026-05-18 10:42-10:44** — DLQ-centric query `"Show me the dead letter topics"` ran successfully but produced empty `dlqTopics` in the typed finding. Diagnostic: `rawConsumerGroups: 0, dlqTopics: 0`. Markdown report DID contain rich DLQ data (33 topics, 13 with messages, 5.99M failed events) — but produced via `kafka_list_topics` + `kafka_get_topic_offsets`, NOT via `kafka_list_dlq_topics`.
+
+**Root cause:** the sub-agent's action filter (`packages/agent/src/sub-agent.ts:351`, `selectToolsByAction`) selected 5 of 55 kafka tools — none was `kafka_list_dlq_topics`. The extractor at `packages/agent/src/correlation/extractors/kafka.ts:143-149` only parses `kafka_list_dlq_topics` output, so DLQ data harvested via other tools is invisible to the typed-finding path. The query "dead letter" should have matched the `dlq_messages` action keyword in `kafka-introspect.yaml` and added the DLQ tool to the filtered set; either the keyword matcher in `tool-mapping.ts:matchActionsByKeywords` didn't fire, or the entity-extractor LLM's action pick overrode the result.
+
+**Action-selection investigation result (later in same session) — ROOT CAUSE is a deployment lag, not a code bug:**
+
+Three layers of fix attempted this session:
+
+1. **`MIN_FILTERED_TOOLS` floor** (`packages/agent/src/sub-agent.ts:196`): lowered from 5 to 1. Live-verified the action filter now honors `dlq_messages` (3 tools) instead of falling through to the all-actions kitchen-sink. Regression test added in `sub-agent-action-augmentation.test.ts`.
+2. **SOUL.md guidance** (`agents/incident-analyzer/agents/kafka-agent/SOUL.md`): added a top-of-file "Tool Selection Priority (READ THIS FIRST)" section instructing the LLM to call `kafka_list_dlq_topics` first for any DLQ-centric query. Cached agent loader required a web dev restart to pick up; verified loaded.
+3. **`narrowOnHighPrecisionIntent`** (new helper in `sub-agent.ts`): when the deterministic keyword pass detects a high-precision intent (`dlq_messages` from "dead letter"/"dlq"), strips ambient LLM-added actions (`topic_throughput`, `describe_topic`) that expose `kafka_list_topics`. The LLM was choosing the generic list tool over the specialized DLQ tool because the deployed tool description literally suggests `prefix="DLQ_"`. Narrowing removes the competing actions upstream. Regression tests added (3 scenarios).
+
+**Live-verified fix #3 works:** `preNarrowMerged: [dlq_messages, describe_topic, topic_throughput, health_check]` -> `mergedActions: [dlq_messages, health_check]`. The LLM correctly picked a `dlq_messages` tool (`kafka_consume_messages`) — proving the narrowing forced the LLM into the right action set.
+
+**But the DLQ card still didn't populate.** Why: `kafka_list_dlq_topics` is **NOT registered on the deployed AgentCore kafka MCP runtime** (`arn:aws:bedrock-agentcore:eu-central-1:399987695868:runtime/kafka_mcp_server-7RjmF16MqA`). Verified by direct `tools/list` probe against `http://localhost:3000/mcp`:
+
+```
+DLQ-related tools registered: ['kafka_consume_messages', 'kafka_describe_consumer_group',
+'kafka_get_consumer_group_lag', 'kafka_get_message_by_offset', 'kafka_list_consumer_groups',
+'kafka_produce_message', 'kafka_reset_consumer_group_offsets', 'restproxy_consume',
+'restproxy_create_consumer', 'restproxy_delete_consumer']
+total tools: 55
+```
+
+`kafka_list_dlq_topics` is in local source (`packages/mcp-server-kafka/src/tools/read/tools.ts:64`) but missing from the deployed runtime. SIO-770 shipped the tool locally; the AgentCore deployment hasn't been updated. The extractor at `packages/agent/src/correlation/extractors/kafka.ts:143-149` ONLY parses `kafka_list_dlq_topics` output — so even with all three local fixes in place, no DLQ data can flow until the runtime is redeployed.
+
+Confirming evidence from the last live run's assistant report Gaps section: "DLQ topic list not enumerated... `kafka_list_dlq_topics` was not reached due to runtime failure." The LLM correctly identified the right tool was unavailable.
+
+**Action required to make the DLQ card render live:** redeploy kafka MCP to AgentCore with `kafka_list_dlq_topics` registered. File this as a follow-up Linear ticket. After deploy, no further code change is required — all four local fixes already account for the DLQ path.
+
+**Other Kafka tool outputs the extractor doesn't yet ingest** (potential future card sections — not in current schema):
+- `kafka_describe_consumer_group` (group state, member list, host assignments) — would surface group-membership detail in the card
+- `kafka_get_topic_offsets` / `kafka_describe_topic` (partition counts, lead-broker, retention) — topic-level telemetry tile
+- `kafka_describe_cluster` (broker count, controller id, version) — cluster-health tile
+
+These are documented in the assistant's markdown today but not part of the typed finding. Adding them requires schema extension in `packages/shared/src/agent-state.ts` (`KafkaFindings` shape) and corresponding extractor branches.
+
+### Part 2 — KafkaFindingsCard extensions shipped + live verification (2026-05-18)
+
+Three new card sections shipped this session, all backed by deployed AgentCore tools:
+
+1. **Cluster summary tile** — from `kafka_describe_cluster` / `kafka_get_cluster_info`. Shows provider · brokers · topics · controller in a single inline row.
+2. **Connect connectors section** — from `connect_list_connectors` (object-keyed shape `{connectors: {<name>: {status: {connector: {state}, tasks, type}}}}`). State dot + per-state aggregate header + task-failure count.
+3. **ksqlDB queries section** — from `ksql_list_queries`. State dot + per-state aggregate header + compact statusCount badge (e.g. `1R 2U` for `{RUNNING: 1, UNRESPONSIVE: 2}`).
+
+Schema additions in `packages/shared/src/agent-state.ts:KafkaFindingsSchema`:
+
+```ts
+cluster: { provider?, brokerCount?, topicCount?, controllerId? }
+connectors: Array<{ name, state, type?, taskFailures? }>
+ksqlQueries: Array<{ id, state, queryType?, statusCount? }>
+```
+
+Extractor branches in `packages/agent/src/correlation/extractors/kafka.ts`:
+- `kafka_describe_cluster` / `kafka_get_cluster_info` — merged via spread; first call wins per-field.
+- `connect_list_connectors` — iterates object values, derives `taskFailures` from `tasks[]`.
+- `connect_get_connector_status` — singleton shape; sets one entry by name.
+- `ksql_list_queries` — pass-through via Zod schema.
+
+Live verification (2026-05-18 12:46 PM, kafka-only query "Give me a Kafka cluster overview..."):
+
+| Section | Result |
+|---|---|
+| Cluster summary | **PASS** — "Provider msk · Brokers 3 · Topics 142 · Controller 2" |
+| ksqlDB queries | **PASS** — 3 RUNNING queries with `1R 2U` statusCount badge on each |
+| Connect connectors | **FAIL** — see truncation finding below |
+| Existing sections (consumer groups, DLQs) | unaffected, hidden when not queried |
+
+Unit tests added (8 new in `kafka.test.ts` + `KafkaFindingsCard.test.ts`); all 441/441 agent tests and 88/88 web tests pass per-package.
+
+### Part 2 — separate finding: connect_list_connectors response truncation
+
+The Connect connectors section did not render despite the LLM correctly calling `connect_list_connectors`. Log shows:
+
+```
+Tool result observed: toolName=connect_list_connectors, bytes=226863, contentType=object
+Tool result truncated: originalBytes=226863, finalBytes=32804, strategy=text
+```
+
+The response (226KB — 100+ connectors with full config payload) exceeded `SUBAGENT_TOOL_RESULT_CAP_BYTES` (32KB effective). Truncation is `strategy: "text"` (byte boundary, not JSON-aware), so the truncated `m.content` is invalid JSON. `tryParseJson` returns the raw string, the extractor's `ListConnectorsWrappedSchema.safeParse` fails, and the connectors[] array stays empty.
+
+**Three possible fixes, ordered by surface area:**
+
+1. **Server-side response slimming** (preferred): add a `summary: true` option to `connect_list_connectors` that returns only `{name, state, type, taskFailures}` per connector, dropping the multi-KB config blobs. ~10 LOC in mcp-server-kafka. Requires AgentCore redeploy.
+2. **Higher truncation cap for typed-finding tools**: skip truncation entirely for tools whose output is consumed by an extractor (`kafka_list_consumer_groups`, `kafka_list_dlq_topics`, `connect_list_connectors`, `ksql_list_queries`, `kafka_describe_cluster`). Local code change in sub-agent.ts.
+3. **JSON-aware truncation**: truncate by dropping array elements / object entries instead of bytes. Bigger change in the truncator code.
+
+Option (1) is cleanest; the LLM doesn't need full connector config either, so the slimming benefits the entire pipeline. File as a follow-up Linear ticket. The card + extractor + schema are all correct; only the data-availability is blocked.
+
+### Part 2 — truncation allowlist fix shipped + live-verified
+
+Implemented option (2) in `packages/agent/src/sub-agent-instrumentation.ts`: typed-finding tools are added to a `TYPED_FINDING_TOOLS` allowlist. When their output exceeds `SUBAGENT_TOOL_RESULT_CAP_BYTES`, the truncator emits a new `subagent.tool_result_truncation_skipped` log line and returns the original result unchanged. The LLM ReAct loop sees the full payload (slightly more context per call, but these tools are infrequent), and the typed-finding extractor receives parseable JSON.
+
+Allowlist:
+```ts
+kafka_list_consumer_groups · kafka_get_consumer_group_lag · kafka_list_dlq_topics
+kafka_describe_cluster · kafka_get_cluster_info
+connect_list_connectors · connect_get_connector_status
+ksql_list_queries
+capella_get_longest_running_queries
+gitlab_list_merge_requests
+elasticsearch_search
+```
+
+3 new unit tests in `sub-agent-instrumentation.test.ts` verify (a) connect_list_connectors at 200KB+ is NOT truncated, (b) other allowlisted tools behave identically, (c) regression guard — non-allowlisted tools still truncate normally. All 8/8 tests pass.
+
+**Live re-verification (2026-05-18 12:58 PM, "List the Kafka Connect connectors and their states"):**
+
+- Truncation skip log: `connect_list_connectors`, 226863 bytes, `reason: "typed-finding tool"`
+- SSE wire payload contains 33 connectors, all `state=RUNNING`, with `type` and `taskFailures` fields populated
+- UI renders "Connect connectors 33 RUNNING" header + 33 rows with state dot + name + type
+- Same upstream payload that previously broke the run now renders correctly
+
+This closes the Connect-connectors-blocker. The connectors section of KafkaFindingsCard is now production-ready.
+
+### Part 3 — three new findings cards shipped (closes SIO-776 + SIO-777, opens minimal Elastic)
+
+- **CouchbaseFindingsCard** (`apps/web/src/lib/components/CouchbaseFindingsCard.svelte`): slow N1QL queries from `capella_get_longest_running_queries`. Statement (single-line truncated, full on hover) · avgServiceTime bar (parsed to seconds) · run count. Sorted desc by avgServiceTime. Closes **SIO-776**.
+- **GitLabFindingsCard** (`apps/web/src/lib/components/GitLabFindingsCard.svelte`): deploy timeline from `gitlab_list_merge_requests`. Date · project name parsed from `web_url` (last 2 path segments) · MR title with link. Sorted desc by `merged_at`. Closes **SIO-777**.
+- **ElasticFindingsCard** (`apps/web/src/lib/components/ElasticFindingsCard.svelte`): synthetic monitor status from `elasticsearch_search` against `synthetics-*` index. Dedupes by monitor name (first / most-recent doc wins). Status dot (up=green, down=red, degraded=amber) · monitor name · geo · observed timestamp. New schema: `ElasticFindings { syntheticMonitors[] }`. Mirrors the SOUL's SIO-717 Synthetic-Monitor Cross-Check pattern.
+
+Wiring in `apps/web/src/lib/components/ChatMessage.svelte`: cards mount in stable order under the assistant's markdown report:
+
+```
+[markdown report]
+[KafkaFindingsCard if findings]
+[CouchbaseFindingsCard if findings]
+[GitLabFindingsCard if findings]
+[ElasticFindingsCard if findings]
+[Completed in Xs diagnostic panel (collapsed)]
+[Feedback bar / Follow-up suggestions]
+```
+
+Negative-tested in browser: kafka-only query renders only KafkaFindingsCard; other cards correctly hidden.
+
+Tests added: 5 CouchbaseFindingsCard + 6 GitLabFindingsCard + 5 ElasticFindingsCard + 5 elastic extractor + 4 new ChatMessage placement tests. All pass.
+
 ---
 
 ## Part 2 — SIO-776: CouchbaseFindingsCard
