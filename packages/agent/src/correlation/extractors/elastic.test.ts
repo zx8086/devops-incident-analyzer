@@ -399,3 +399,251 @@ describe("extractElasticFindings — APM services (SIO-787)", () => {
 		expect(findings.apmServices?.[0]?.avgDurationMs).toBe(200);
 	});
 });
+
+// SIO-788 (SIO-778 Phase C): log-cluster extractor tests. Synthetic-fixture
+// driven; live eu-b2b capture deferred per session decision (see ticket
+// "Preconditions"). When the real fixture lands, add a fixture-driven happy
+// path test that loads __fixtures__/elastic-log-clusters-real.txt and asserts
+// >=2 clusters, sorted by count desc, capped at 10.
+describe("extractElasticFindings — log clusters (SIO-788)", () => {
+	function logsResponse(hits: Array<Record<string, unknown>>, index = "logs-app-*"): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index },
+			rawJson: { hits: { hits: hits.map((_source) => ({ _source })) } },
+		} as unknown as ToolOutput;
+	}
+
+	test("signature is deterministic across calls for the same distinctive-token set", () => {
+		const a = logsResponse([
+			{
+				message: "Database connection timeout after 30000 ms for tenant abc-123",
+				level: "error",
+				service: "payments-service",
+				"@timestamp": "2026-05-18T10:00:00.000Z",
+			},
+		]);
+		const b = logsResponse([
+			{
+				message: "Database connection timeout after 30000 ms for tenant abc-123",
+				level: "error",
+				service: "payments-service",
+				"@timestamp": "2026-05-18T10:05:00.000Z",
+			},
+		]);
+		const sigA = extractElasticFindings([a]).logClusters?.[0]?.signature;
+		const sigB = extractElasticFindings([b]).logClusters?.[0]?.signature;
+		expect(sigA).toBeDefined();
+		expect(sigA).toBe(sigB);
+		expect(sigA).toMatch(/^[0-9a-f]{16}$/);
+	});
+
+	test("collapses noisy variations that differ only in numbers/short tokens", () => {
+		const output = logsResponse([
+			{
+				message: "Database connection timeout after 30000 ms for tenant abc-001",
+				level: "error",
+				"@timestamp": "2026-05-18T10:00:00.000Z",
+			},
+			{
+				message: "Database connection timeout after 45000 ms for tenant xyz-999",
+				level: "error",
+				"@timestamp": "2026-05-18T10:01:00.000Z",
+			},
+			{
+				message: "Different error entirely: cache eviction loop runaway repeating",
+				level: "error",
+				"@timestamp": "2026-05-18T10:02:00.000Z",
+			},
+		]);
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters?.length).toBe(2);
+		const top = findings.logClusters?.find((c) => c.count === 2);
+		expect(top?.count).toBe(2);
+		expect(top?.sampleMessage).toBe("Database connection timeout after 30000 ms for tenant abc-001");
+	});
+
+	test("service field uses modal value when one covers >=50% of hits; omitted otherwise", () => {
+		const dominant = logsResponse([
+			{ message: "Repeating distinctive failure pattern xyzzy", service: "svc-a" },
+			{ message: "Repeating distinctive failure pattern xyzzy", service: "svc-a" },
+			{ message: "Repeating distinctive failure pattern xyzzy", service: "svc-a" },
+			{ message: "Repeating distinctive failure pattern xyzzy", service: "svc-b" },
+		]);
+		const a = extractElasticFindings([dominant]).logClusters?.[0];
+		expect(a?.service).toBe("svc-a");
+
+		// 1/3 split: top value covers only 33% — below the 50% threshold.
+		const minority = logsResponse([
+			{ message: "Yet another distinctive failure pattern quuux", service: "svc-a" },
+			{ message: "Yet another distinctive failure pattern quuux", service: "svc-b" },
+			{ message: "Yet another distinctive failure pattern quuux", service: "svc-c" },
+		]);
+		const c = extractElasticFindings([minority]).logClusters?.[0];
+		expect(c?.service).toBeUndefined();
+	});
+
+	test("firstSeen / lastSeen track min and max timestamps across the cluster", () => {
+		const output = logsResponse([
+			{
+				message: "Repeating distinctive failure pattern xyzzy",
+				"@timestamp": "2026-05-18T10:05:00.000Z",
+			},
+			{
+				message: "Repeating distinctive failure pattern xyzzy",
+				"@timestamp": "2026-05-18T10:01:00.000Z",
+			},
+			{
+				message: "Repeating distinctive failure pattern xyzzy",
+				"@timestamp": "2026-05-18T10:08:00.000Z",
+			},
+		]);
+		const cluster = extractElasticFindings([output]).logClusters?.[0];
+		expect(cluster?.firstSeen).toBe("2026-05-18T10:01:00.000Z");
+		expect(cluster?.lastSeen).toBe("2026-05-18T10:08:00.000Z");
+	});
+
+	test("drops hits whose distinctive-token set is empty (pure stopwords / short tokens)", () => {
+		const output = logsResponse([{ message: "the and or in of to as is it" }, { message: "404 500 200 ok yes no" }]);
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters).toBeUndefined();
+	});
+
+	test("caps output at 10 clusters sorted by count desc", () => {
+		const hits: Array<Record<string, unknown>> = [];
+		const baseTokens = [
+			"alpha_distinctive_failure_xyzzy_pattern",
+			"bravo_distinctive_failure_xyzzy_pattern",
+			"charlie_distinctive_failure_xyzzy_pattern",
+			"delta_distinctive_failure_xyzzy_pattern",
+			"echo_distinctive_failure_xyzzy_pattern",
+			"foxtrot_distinctive_failure_xyzzy_pattern",
+			"golf_distinctive_failure_xyzzy_pattern",
+			"hotel_distinctive_failure_xyzzy_pattern",
+			"india_distinctive_failure_xyzzy_pattern",
+			"juliet_distinctive_failure_xyzzy_pattern",
+			"kilo_distinctive_failure_xyzzy_pattern",
+			"lima_distinctive_failure_xyzzy_pattern",
+			"mike_distinctive_failure_xyzzy_pattern",
+			"november_distinctive_failure_xyzzy_pattern",
+			"oscar_distinctive_failure_xyzzy_pattern",
+		];
+		for (let i = 0; i < 5; i++) hits.push({ message: baseTokens[0] });
+		for (let i = 1; i < baseTokens.length; i++) hits.push({ message: baseTokens[i] });
+		const output = logsResponse(hits);
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters?.length).toBe(10);
+		expect(findings.logClusters?.[0]?.count).toBe(5);
+		const others = findings.logClusters?.slice(1) ?? [];
+		expect(others.every((c) => c.count === 1)).toBe(true);
+	});
+
+	test("does NOT fire when toolArgs.index points to traces-apm-* (mutual exclusion)", () => {
+		const output: ToolOutput = {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "traces-apm-*" },
+			rawJson: {
+				hits: {
+					hits: [
+						{
+							_source: {
+								message: "Distinctive repeating failure pattern xyzzy that would cluster",
+								level: "error",
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolOutput;
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters).toBeUndefined();
+	});
+
+	test("does NOT fire when toolArgs.index points to synthetics-* (mutual exclusion)", () => {
+		const output: ToolOutput = {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "synthetics-prod-*" },
+			rawJson: {
+				hits: {
+					hits: [
+						{
+							_source: {
+								message: "Distinctive repeating failure pattern xyzzy that would cluster",
+								level: "error",
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolOutput;
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters).toBeUndefined();
+	});
+
+	test("fires without an index hint when a majority of hits have level: error", () => {
+		const output: ToolOutput = {
+			toolName: "elasticsearch_search",
+			toolArgs: {},
+			rawJson: {
+				hits: {
+					hits: [
+						{ _source: { message: "Distinctive repeating failure pattern xyzzy", level: "error" } },
+						{ _source: { message: "Distinctive repeating failure pattern xyzzy", level: "error" } },
+						{ _source: { message: "Distinctive repeating failure pattern xyzzy", level: "info" } },
+					],
+				},
+			},
+		} as unknown as ToolOutput;
+		const findings = extractElasticFindings([output]);
+		expect(findings.logClusters?.length).toBe(1);
+		expect(findings.logClusters?.[0]?.count).toBe(3);
+		expect(findings.logClusters?.[0]?.level).toBe("error");
+	});
+
+	test("Phase A / B no-regression: combined output produces all three populated arrays", () => {
+		const synthetic: ToolOutput = {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "synthetics-prod-*" },
+			rawJson: {
+				hits: {
+					hits: [
+						{
+							_source: {
+								monitor: { name: "phase-a-monitor", status: "up" },
+								"@timestamp": "2026-05-18T07:00:00.000Z",
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolOutput;
+		const apm: ToolOutput = {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "traces-apm-*" },
+			rawJson: {
+				aggregations: {
+					by_service: {
+						buckets: [
+							{
+								key: "phase-b-service",
+								doc_count: 100,
+								errors: { doc_count: 5 },
+								avg_duration: { value: 250000 },
+							},
+						],
+					},
+				},
+			},
+		} as unknown as ToolOutput;
+		const logs = logsResponse(
+			[{ message: "Phase-c distinctive repeating failure pattern xyzzy", level: "error" }],
+			"logs-app-*",
+		);
+		const findings = extractElasticFindings([synthetic, apm, logs]);
+		expect(findings.syntheticMonitors?.length).toBe(1);
+		expect(findings.apmServices?.length).toBe(1);
+		expect(findings.logClusters?.length).toBe(1);
+		expect(findings.syntheticMonitors?.[0]?.name).toBe("phase-a-monitor");
+		expect(findings.apmServices?.[0]?.serviceName).toBe("phase-b-service");
+	});
+});

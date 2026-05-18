@@ -152,9 +152,27 @@ export const ElasticApmServiceSchema = z.object({
 });
 export type ElasticApmService = z.infer<typeof ElasticApmServiceSchema>;
 
+// SIO-788 (SIO-778 Phase C, 2026-05-18): one row per distinct error-message
+// cluster from `logs-*`. Clustering is client-side: signature is sha1(hex,16)
+// of the sorted distinctive-token set from `_source.message`. `sampleMessage`
+// preserves the first observed message verbatim. `service` is the modal
+// `_source.service` value when one dominates the cluster (>=50%); otherwise
+// omitted. Top 10 clusters by `count` desc.
+export const ElasticLogClusterSchema = z.object({
+	signature: z.string(),
+	sampleMessage: z.string(),
+	count: z.number(),
+	level: z.string(),
+	service: z.string().optional(),
+	firstSeen: z.string().optional(),
+	lastSeen: z.string().optional(),
+});
+export type ElasticLogCluster = z.infer<typeof ElasticLogClusterSchema>;
+
 export const ElasticFindingsSchema = z.object({
 	syntheticMonitors: z.array(ElasticSyntheticMonitorSchema).optional(),
 	apmServices: z.array(ElasticApmServiceSchema).optional(),
+	logClusters: z.array(ElasticLogClusterSchema).optional(),
 });
 export type ElasticFindings = z.infer<typeof ElasticFindingsSchema>;
 

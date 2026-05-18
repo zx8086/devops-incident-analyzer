@@ -18,7 +18,18 @@ const apmServices = $derived.by(() => {
 	});
 	return sorted.slice(0, 10);
 });
-const hasContent = $derived(syntheticMonitors.length > 0 || apmServices.length > 0);
+// SIO-788 (Phase C): cap at 10 rows sorted by count desc. Extractor already
+// caps but the derivation defends against future schema relaxation.
+const logClusters = $derived.by(() => {
+	const all = findings.logClusters ?? [];
+	return [...all].sort((a, b) => b.count - a.count).slice(0, 10);
+});
+const hasContent = $derived(syntheticMonitors.length > 0 || apmServices.length > 0 || logClusters.length > 0);
+
+function truncate(text: string, max: number): string {
+	if (text.length <= max) return text;
+	return `${text.slice(0, max - 1)}…`;
+}
 
 function statusDotClass(status: string): string {
 	switch (status.toLowerCase()) {
@@ -100,6 +111,26 @@ function errorRateClass(rate: number | undefined): string {
               {/if}
               {#if service.observedAt}
                 <span class="ml-auto text-[0.5625rem] text-gray-500 tabular-nums shrink-0" title={service.observedAt}>{shortTimestamp(service.observedAt)}</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    {#if logClusters.length > 0}
+      <div class={syntheticMonitors.length > 0 || apmServices.length > 0 ? "mt-2" : ""}>
+        <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Log clusters</span>
+        <div class="mt-1 flex flex-col gap-1">
+          {#each logClusters as cluster}
+            <div class="flex items-center gap-2 text-[0.6875rem]">
+              <span class="font-mono text-gray-800 truncate max-w-[260px]" title={cluster.sampleMessage}>{truncate(cluster.sampleMessage, 80)}</span>
+              <span class="inline-flex items-center justify-center min-w-[1.25rem] px-1 rounded bg-purple-100 text-purple-700 text-[0.5625rem] tabular-nums font-medium" title="cluster size">{cluster.count}</span>
+              {#if cluster.service}
+                <span class="text-[0.5625rem] text-gray-500 truncate max-w-[140px]" title={cluster.service}>{cluster.service}</span>
+              {/if}
+              {#if cluster.lastSeen}
+                <span class="ml-auto text-[0.5625rem] text-gray-500 tabular-nums shrink-0" title={cluster.lastSeen}>{shortTimestamp(cluster.lastSeen)}</span>
               {/if}
             </div>
           {/each}

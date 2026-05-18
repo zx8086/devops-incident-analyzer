@@ -446,7 +446,9 @@ const DEPLOY_RUNTIME_STOPWORDS = new Set([
 const DEPLOY_RUNTIME_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DEPLOY_RUNTIME_TOKEN_MIN_LEN = 6;
 
-function distinctiveTokens(text: string): Set<string> {
+// SIO-788 (Phase C, 2026-05-18): exported for reuse by the elastic log-cluster
+// extractor. Behaviour unchanged from the rules-engine deploy-vs-runtime path.
+export function distinctiveTokens(text: string): Set<string> {
 	const tokens = text.toLowerCase().match(/[a-z][a-z0-9_]*/g) ?? [];
 	const out = new Set<string>();
 	for (const t of tokens) {

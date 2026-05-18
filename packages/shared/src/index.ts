@@ -26,6 +26,8 @@ export {
 	ElasticApmServiceSchema,
 	type ElasticFindings,
 	ElasticFindingsSchema,
+	type ElasticLogCluster,
+	ElasticLogClusterSchema,
 	type ElasticSyntheticMonitor,
 	ElasticSyntheticMonitorSchema,
 	type ExtractedEntities,
