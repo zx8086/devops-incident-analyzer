@@ -3,6 +3,7 @@
 import type { ActionResult, PendingAction } from "@devops-agent/shared";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
+import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
 import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
@@ -67,6 +68,7 @@ let {
           {@const couchbaseFindings = message.dataSourceFindings.get("couchbase")?.couchbaseFindings}
           {@const gitlabFindings = message.dataSourceFindings.get("gitlab")?.gitlabFindings}
           {@const elasticFindings = message.dataSourceFindings.get("elastic")?.elasticFindings}
+          {@const awsFindings = message.dataSourceFindings.get("aws")?.awsFindings}
           {#if kafkaFindings}
             <div class="mt-2">
               <KafkaFindingsCard findings={kafkaFindings} />
@@ -85,6 +87,11 @@ let {
           {#if elasticFindings}
             <div class="mt-2">
               <ElasticFindingsCard findings={elasticFindings} />
+            </div>
+          {/if}
+          {#if awsFindings}
+            <div class="mt-2">
+              <AWSFindingsCard findings={awsFindings} />
             </div>
           {/if}
         {/if}
