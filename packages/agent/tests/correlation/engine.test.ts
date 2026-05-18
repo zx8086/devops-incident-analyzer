@@ -16,8 +16,8 @@ describe("correlation engine — kafka-empty-or-dead-groups", () => {
 	test("fires when at least one Empty or Dead group exists", () => {
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
-				{ id: "notification-service", state: "Empty" },
-				{ id: "payments-service", state: "Stable", totalLag: 0 },
+				{ id: "notification-service", state: "EMPTY" },
+				{ id: "payments-service", state: "STABLE", totalLag: 0 },
 			],
 		});
 		const decisions = evaluate(state, correlationRules);
@@ -28,7 +28,7 @@ describe("correlation engine — kafka-empty-or-dead-groups", () => {
 
 	test("does not fire when all groups are Stable", () => {
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 0 }],
+			consumerGroups: [{ id: "payments-service", state: "STABLE", totalLag: 0 }],
 		});
 		const decisions = evaluate(state, correlationRules);
 		const rule = decisions.find((d) => d.rule.name === "kafka-empty-or-dead-groups");
@@ -39,7 +39,7 @@ describe("correlation engine — kafka-empty-or-dead-groups", () => {
 describe("correlation engine — kafka-significant-lag", () => {
 	test("fires when a Stable group has lag > 10K", () => {
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 50_000 }],
+			consumerGroups: [{ id: "payments-service", state: "STABLE", totalLag: 50_000 }],
 		});
 		const decisions = evaluate(state, correlationRules);
 		const rule = decisions.find((d) => d.rule.name === "kafka-significant-lag");
@@ -48,7 +48,7 @@ describe("correlation engine — kafka-significant-lag", () => {
 
 	test("does not fire below threshold", () => {
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "payments-service", state: "Stable", totalLag: 100 }],
+			consumerGroups: [{ id: "payments-service", state: "STABLE", totalLag: 100 }],
 		});
 		const decisions = evaluate(state, correlationRules);
 		const rule = decisions.find((d) => d.rule.name === "kafka-significant-lag");
@@ -104,7 +104,7 @@ describe("correlation engine — kafka-tool-failures", () => {
 describe("correlation engine — idempotency", () => {
 	test("rule already covered by elastic findings is satisfied", () => {
 		const s1 = withKafkaResult(baseState(), {
-			consumerGroups: [{ id: "notification-service", state: "Empty" }],
+			consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 		});
 		const s2 = withElasticResult(s1, {
 			services: [{ name: "notification-service", errorRate: 0.02 }],

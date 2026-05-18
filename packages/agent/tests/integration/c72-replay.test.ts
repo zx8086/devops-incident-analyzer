@@ -26,7 +26,7 @@ describe("c72-style replay — elastic-agent unreachable", () => {
 		// kafka shows Empty group for notification-service, elastic errored (ECONNREFUSED).
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		let state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "notification-service", state: "Empty", totalLag: 0 }],
+			consumerGroups: [{ id: "notification-service", state: "EMPTY", totalLag: 0 }],
 		});
 		state = {
 			...state,
@@ -76,7 +76,7 @@ describe("c72-style replay — elastic-agent reachable, findings cover triggered
 		// kafka shows Empty group, elastic returned matching service findings.
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		let state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "notification-service", state: "Empty", totalLag: 0 }],
+			consumerGroups: [{ id: "notification-service", state: "EMPTY", totalLag: 0 }],
 		});
 		state = withElasticResult(state, {
 			services: [{ name: "notification-service", errorRate: 0.02, log_count: 1500 }],
@@ -106,7 +106,7 @@ describe("c72-style replay — all-Stable kafka, no rules fire", () => {
 	test("router returns 'enforceCorrelationsAggregate' string (no Send dispatched)", () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "stable-svc", state: "Stable", totalLag: 100 }],
+			consumerGroups: [{ id: "stable-svc", state: "STABLE", totalLag: 100 }],
 		});
 
 		const result = enforceCorrelationsRouter(state);
@@ -120,7 +120,7 @@ describe("c72-style replay — all-Stable kafka, no rules fire", () => {
 		// Contrast: same shape but with an Empty group triggers a Send
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
-			consumerGroups: [{ id: "notification-service", state: "Empty" }],
+			consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 		});
 
 		const result = enforceCorrelationsRouter(state);
