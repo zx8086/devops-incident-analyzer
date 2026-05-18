@@ -147,6 +147,29 @@ function tryParseJson(s: string): unknown {
 	}
 }
 
+// SIO-786: when an MCP tool returns multiple content blocks (e.g. elastic's
+// elasticsearch_search emits a summary block + one block per hit),
+// @langchain/mcp-adapters delivers them as an array of {type:"text", text:"..."}
+// objects on ToolMessage.content. Plain String() of that array yields
+// "[object Object],..." — useless for downstream JSON or text-block parsers.
+// Normalise to a single string by joining the `text` fields with "\n\n" so the
+// extractors see the same shape that a single-block response produces.
+// Exported for unit tests.
+export function normalizeToolContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		const texts: string[] = [];
+		for (const block of content) {
+			if (block && typeof block === "object" && "text" in block) {
+				const t = (block as { text?: unknown }).text;
+				if (typeof t === "string") texts.push(t);
+			}
+		}
+		if (texts.length > 0) return texts.join("\n\n");
+	}
+	return String(content);
+}
+
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
 // when the MCP server emitted them. Redaction runs on the human part only -- hostnames in the
@@ -472,7 +495,7 @@ async function runSubAgent(
 
 		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => ({
 			toolName: m.name ?? "unknown",
-			rawJson: tryParseJson(String(m.content)),
+			rawJson: tryParseJson(normalizeToolContent(m.content)),
 		}));
 
 		return {

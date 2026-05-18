@@ -1,6 +1,12 @@
 // packages/agent/src/sub-agent.test.ts
 import { describe, expect, test } from "bun:test";
-import { classifyToolError, extractToolErrors, getSubAgentRecursionLimit, getSubAgentTimeoutMs } from "./sub-agent.ts";
+import {
+	classifyToolError,
+	extractToolErrors,
+	getSubAgentRecursionLimit,
+	getSubAgentTimeoutMs,
+	normalizeToolContent,
+} from "./sub-agent.ts";
 
 interface FakeToolMessage {
 	_getType(): string;
@@ -237,5 +243,47 @@ describe("extractToolErrors SIO-728 structured sentinel", () => {
 		const content = `ksqlDB error 503${sentinel}{"hostname":"a","statusCode":503}`;
 		const errors = extractToolErrors([toolMsg(content, "tool_x")]);
 		expect(errors[0]?.category).toBe("transient");
+	});
+});
+
+// SIO-786: normalize ToolMessage.content shapes before downstream parsing.
+describe("normalizeToolContent SIO-786", () => {
+	test("passes through string content unchanged", () => {
+		expect(normalizeToolContent("hello")).toBe("hello");
+	});
+
+	test("joins array of text content blocks with double-newline", () => {
+		const content = [
+			{ type: "text", text: "Total results: 10000, showing 2 from position 0" },
+			{ type: "text", text: "Document ID: AAA\nmonitor: { \"name\": \"x\" }" },
+		];
+		const result = normalizeToolContent(content);
+		expect(result).toContain("Total results");
+		expect(result).toContain("Document ID: AAA");
+		expect(result).toContain("\n\n");
+	});
+
+	test("ignores non-text blocks in mixed array", () => {
+		const content = [
+			{ type: "text", text: "first" },
+			{ type: "image", data: "..." },
+			{ type: "text", text: "second" },
+		];
+		expect(normalizeToolContent(content)).toBe("first\n\nsecond");
+	});
+
+	test("falls back to String() for empty arrays (no text blocks)", () => {
+		expect(normalizeToolContent([])).toBe("");
+	});
+
+	test("falls back to String() for plain objects (kafka MCP returns single string in object wrapper rarely)", () => {
+		const result = normalizeToolContent({ foo: "bar" });
+		// String({foo:"bar"}) returns "[object Object]"; this is the safe fallback
+		expect(result).toBe("[object Object]");
+	});
+
+	test("handles null/undefined gracefully", () => {
+		expect(normalizeToolContent(null)).toBe("null");
+		expect(normalizeToolContent(undefined)).toBe("undefined");
 	});
 });
