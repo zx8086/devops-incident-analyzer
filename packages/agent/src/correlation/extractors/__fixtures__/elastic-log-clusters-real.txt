@@ -1,0 +1,1418 @@
+Total results: 10000, showing 100 from position 0
+
+Document ID: qqNMPJ4B5iEYZoQE7xfj
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM08359, colorCode=V7M)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.642Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: p6NMPJ4B5iEYZoQE7xfj
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM08359, colorCode=V7M)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.628Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6if
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.586Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_daemonset"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj4jVVs
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.514Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6ie
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.473Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_statefulset"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6id
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.441Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSkJ9D
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.432Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iV
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.415Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSkJ87
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.406Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj4jVVk
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.387Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iT
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.360Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_storageclass"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TO8JPOPcbhH1bMtG
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.311Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSkGYC
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.297Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhH1bMs-
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.295Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSj2b6
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.281Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iS
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.260Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_resourcequota"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iR
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.242Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_service"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: nKNMPJ4B5iEYZoQE7xfj
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFASU, divisionCode=01, styleCode=XM0XM07592, colorCode=DW5)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.231Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: 5GlMPJ4BhFdNfJFH6x7h
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFASU, divisionCode=01, styleCode=XM0XM07592, colorCode=DW5)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.216Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-227.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iQ
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.129Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_replicaset"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: maNMPJ4B5iEYZoQE7xfj
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM07297, colorCode=C30)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.125Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: 4WlMPJ4BhFdNfJFH6x7h
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM07297, colorCode=C30)
+trace: {
+  "id": "fdab992e04fe8a4062af756d639384f9"
+}
+@timestamp: 2026-05-18T18:15:34.107Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-227.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48Te8JPOPcbhEBbd_U
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.062Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEBbd_N
+Score: null
+
+@timestamp: 2026-05-18T18:15:34.037Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iP
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.996Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_job"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj9jl49
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.871Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iO
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.856Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_namespace"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iN
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.843Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_deployment"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgCjpH1
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.815Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgfkUKP
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.812Z
+host: {
+  "name": "ip-10-34-20-182.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "composable.providers.kubernetes_leaderelection"
+}
+message: provider "kubernetes_leaderelection" failed to run (will retry in 30s)
+
+Document ID: AZ48TfIRbnrhSLgCjpHt
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.769Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj9jl41
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.760Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iM
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.728Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_cronjob"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iL
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.614Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_container"
+}
+message: Error fetching data for metricset kubernetes.state_container: error getting families: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iK
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.602Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_node"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iJ
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.583Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_pod"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iI
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.461Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_persistentvolumeclaim"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgNj6iH
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.357Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "kubernetes.state_persistentvolume"
+}
+message: unexpected status code 400 from server
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgSkJ85
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.320Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48Te8JPOPcbhEFbnzi
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.178Z
+host: {
+  "name": "ip-10-35-240-178.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: xGlMPJ4BhFdNfJFH6x7h
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesDivisionPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026WISPSP, divisionCode=01) and variant data: VariantData(optionCodes=[XM0XM06192TOG, XM0XM06192XKR, XM0XM06192XLG, XM0XM06192YCF, XM0XM06193C30, XM0XM06193DW5, XM0XM06193L47, XM0XM06193TOG, XM0XM06193XIT, XM0XM06193XKR, XM0XM06194C30, XM0XM06194CSR, XM0XM06194DW5, XM0XM06194L13, XM0XM06194P61, XM0XM06194TOG, XM0XM06194XIT, XM0XM06194YCF, XM0XM06195BDS, XM0XM06195C30, XM0XM06195CSR, XM0XM06195D03, XM0XM06195DW5, XM0XM06195L1Y, XM0XM06195SCX, XM0XM06195XIT, XM0XM06195XKR, XM0XM06195YCF, XM0XM06195Z00, XM0XM061970XM, XM0XM061970XN, XM0XM06197C30, XM0XM06197D03, XM0XM06197L13, XM0XM06197L47, XM0XM06197L4F, XM0XM06197RBT, XM0XM06197SCX, XM0XM06197TOG, XM0XM06197XIT, XM0XM06197XKR, XM0XM06197ZF0, XM0XM06198ACG, XM0XM06198CYW, XM0XM06198D03, XM0XM06198DW5, XM0XM06198L1Y, XM0XM06198LXY, XM0XM06198TOG, XM0XM06198XIT, XM0XM06198ZHH, XM0XM06199C30, XM0XM06199D03, XM0XM06199DW5, XM0XM06199L13, XM0XM06199SCX, XM0XM06199TOG, XM0XM06199XIT, XM0XM06199YCF, XM0XM06200D03, XM0XM06200ZGY, XM0XM06201BDS, XM0XM06201D03, XM0XM06201DW5, XM0XM06201LXY, XM0XM06201RBT, XM0XM06201SCX, XM0XM06201XIT, XM0XM06201ZF0, XM0XM06202BDS, XM0XM06202C1O, XM0XM06202D03, XM0XM06202DW5, XM0XM06202XIT, XM0XM06202YCF, XM0XM06204BDS, XM0XM06204DW5, XM0XM06204LXY, XM0XM06204RBT, XM0XM06204SCX, XM0XM06204YCF, XM0XM06205AEP, XM0XM06205DW5, XM0XM06214BDS, XM0XM06214CYW, XM0XM06214D03, XM0XM06214DW5, XM0XM06214L1Y, XM0XM06214P61, XM0XM06214RBT, XM0XM06214SCX, XM0XM06214TOG, XM0XM06214XKR, XM0XM06214XLG, XM0XM06214YCF, XM0XM06214ZF0, XM0XM06226D0I, XM0XM06226DS9, XM0XM06226HDV, XM0XM06226M1G])
+trace: {
+  "id": "c65e93bba7eaefaede2395b0adf88507"
+}
+@timestamp: 2026-05-18T18:15:33.140Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFiv
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.050Z
+host: {
+  "name": "ip-10-35-12-177.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.38.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - prd | Document Management Service-eu-oit.prd-developer-experience-ec574775-4e3c-45b2-9c71-b587d35ec619". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj1jFin
+Score: null
+
+@timestamp: 2026-05-18T18:15:33.026Z
+host: {
+  "name": "ip-10-35-12-177.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.38.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - prd | Document Management Service-eu-oit.prd-developer-experience-ec574775-4e3c-45b2-9c71-b587d35ec619". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj4jVVi
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.870Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSkJ82
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.824Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6iG
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.782Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgNj6h-
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.756Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhH1bMs8
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.640Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgSkJ8w
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.632Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhH1bMs0
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.620Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj4jVVa
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.511Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHra1Ar
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.372Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHra1Aj
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.356Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEBbd_K
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.114Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEBbd_D
+Score: null
+
+@timestamp: 2026-05-18T18:15:32.097Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj9jl4z
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.869Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHra1Ah
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.661Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgCjpHo
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.636Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj9jl4r
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.560Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TfIRbnrhSLgCjpHg
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.554Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj1jFil
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.187Z
+host: {
+  "name": "ip-10-35-12-177.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.38.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - prd | Document Management Service-eu-oit.prd-developer-experience-ec574775-4e3c-45b2-9c71-b587d35ec619". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj1jFid
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.170Z
+host: {
+  "name": "ip-10-35-12-177.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.38.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - prd | Document Management Service-eu-oit.prd-developer-experience-ec574775-4e3c-45b2-9c71-b587d35ec619". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj4jVVY
+Score: null
+
+@timestamp: 2026-05-18T18:15:31.128Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: G2lMPJ4BhFdNfJFH4BZH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesDivisionPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026WISPSP, divisionCode=01) and variant data: VariantData(optionCodes=[XM0XM06157MBP, XM0XM06157TJ5, XM0XM06158DAF, XM0XM06158YA8, XM0XM06159DAF, XM0XM06159YA8, XM0XM06160C30, XM0XM06160XLD, XM0XM06161C1Z, XM0XM06161DW5, XM0XM06161TOG, XM0XM06161XKR, XM0XM06161YCF, XM0XM06162DCC, XM0XM06163DAF, XM0XM06164C1Z, XM0XM06164DW5, XM0XM06164L8Q, XM0XM06164RBT, XM0XM06164TOG, XM0XM06165ACI, XM0XM06165C1O, XM0XM06165DW5, XM0XM06165TOG, XM0XM06166ACI, XM0XM06166C1O, XM0XM06166DW5, XM0XM06166TOG, XM0XM06167AB4, XM0XM06167DCC, XM0XM06168D03, XM0XM06168DAF, XM0XM06169D03, XM0XM06169DAF, XM0XM06170DAF, XM0XM06170YA8, XM0XM06171DAF, XM0XM06171YA8, XM0XM06172DW5, XM0XM06172XKR, XM0XM06173DW5, XM0XM06173XKR, XM0XM06174C1O, XM0XM06174TOG, XM0XM06175C1O, XM0XM06175TOG, XM0XM06176DW5, XM0XM06176DYM, XM0XM06176GW8, XM0XM06176MBP, XM0XM06176TJ5, XM0XM06177DAF, XM0XM06177YA8, XM0XM06181C1Z, XM0XM06181C5J, XM0XM06181M1C, XM0XM06181TOG, XM0XM06181TPZ, XM0XM06181XKR, XM0XM06181ZH3, XM0XM06185BDS, XM0XM06185CYW, XM0XM06185D03, XM0XM06185DW5, XM0XM06185L1Y, XM0XM06185L8Q, XM0XM06185RBT, XM0XM06185TOG, XM0XM06185XKR, XM0XM06186BDS, XM0XM06186CYW, XM0XM06186D03, XM0XM06186DW5, XM0XM06186L1Y, XM0XM06186L8Q, XM0XM06186RBT, XM0XM06186XKR, XM0XM06190BDS, XM0XM06190CYW, XM0XM06190D03, XM0XM06190DW5, XM0XM06190L1Y, XM0XM06190L8Q, XM0XM06190RBT, XM0XM06190XKR, XM0XM06191C30, XM0XM06191D03, XM0XM06191DW5, XM0XM06191L1Y, XM0XM06191L47, XM0XM06191RBT, XM0XM06191TOG, XM0XM06191XKR, XM0XM06191YCF, XM0XM06192C30, XM0XM06192D03, XM0XM06192DW5, XM0XM06192L1Y, XM0XM06192L47, XM0XM06192RBT])
+trace: {
+  "id": "ecf6f34555f51bfda57086ae6aff3aee"
+}
+@timestamp: 2026-05-18T18:15:30.955Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: r2lMPJ4BhFdNfJFH5BwK
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2027WISPWI, divisionCode=05, styleCode=XW0XW10823, colorCode=CUN)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.937Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: GWlMPJ4BhFdNfJFH4BZH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2027WISPWI, divisionCode=05, styleCode=XW0XW10823, colorCode=CUN)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.921Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TO8JPOPcbhHra5Ng
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.810Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHwa1KE
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.722Z
+host: {
+  "name": "ip-10-35-241-11.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TO8JPOPcbhHra5NY
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.714Z
+host: {
+  "name": "ip-10-35-2-251.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.15.id', has a duplicate id "synthetics/http-synthetics-Prana - API Health - stg | Connectors Service-eu-oit.stg-developer-experience-07e0676a-6e4e-48f8-ba74-606acb114c3f". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEabzKm
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.695Z
+host: {
+  "name": "ip-10-35-242-6.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLjmi5J6
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.670Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLjmi5Jy
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.648Z
+host: {
+  "name": "ip-10-34-4-76.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.7.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj1jFRc
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.614Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: Exiting: beater returned an error: VulnerabilityWorker: could not get init NewVulnerabilityRunner: DB error: failed to download vulnerability DB: OCI artifact error: failed to download vulnerability DB: failed to download artifact from public.ecr.aws/aquasecurity/trivy-db:2: oci download error: download error: failed to download /tmp/trivy-572658/oci-download-3671200479/db.tar.gz: chtimes db/trivy.db: operation not permitted
+
+Document ID: AZ48TPIRbnrhSLj1jFRb
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.613Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: Exiting: beater returned an error: VulnerabilityWorker: could not get init NewVulnerabilityRunner: DB error: failed to download vulnerability DB: OCI artifact error: failed to download vulnerability DB: failed to download artifact from public.ecr.aws/aquasecurity/trivy-db:2: oci download error: download error: failed to download /tmp/trivy-572658/oci-download-3671200479/db.tar.gz: chtimes db/trivy.db: operation not permitted
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFRT
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.611Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "centralmgmt.V2-manager"
+}
+message: elastic-agent-client error: rpc error: code = Canceled desc = context canceled
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFRU
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.611Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "centralmgmt.V2-manager"
+}
+message: elastic-agent-client error: rpc error: code = Canceled desc = context canceled
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFRO
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.610Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "vulnerability"
+}
+message: vulnerability.runIteration worker creation failed
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFRQ
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.610Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "launcher"
+}
+message: Launcher stopped by error: beater returned an error: VulnerabilityWorker: could not get init NewVulnerabilityRunner: DB error: failed to download vulnerability DB: OCI artifact error: failed to download vulnerability DB: failed to download artifact from public.ecr.aws/aquasecurity/trivy-db:2: oci download error: download error: failed to download /tmp/trivy-572658/oci-download-3671200479/db.tar.gz: chtimes db/trivy.db: operation not permitted
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFRN
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.609Z
+host: {
+  "name": "ip-10-34-51-244.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "vulnerability"
+}
+message: NewVulnerabilityRunner: NewRunner error: DB error: failed to download vulnerability DB: OCI artifact error: failed to download vulnerability DB: failed to download artifact from public.ecr.aws/aquasecurity/trivy-db:2: oci download error: download error: failed to download /tmp/trivy-572658/oci-download-3671200479/db.tar.gz: chtimes db/trivy.db: operation not permitted
+service: {
+  "name": "cloudbeat"
+}
+
+Document ID: AZ48TO8JPOPcbhH1bMsy
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.598Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj4jVVQ
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.590Z
+host: {
+  "name": "ip-10-34-51-167.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.66.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - prd | C_SINK_COUCHBASE_ARTICLES_V3_RELOAD-eu-shared-services.prd-developer-experience-eu-shared-services.prd-developer-experience-4132adb4-7ea4-45ea-93c7-1d486924cb5e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHra1Ag
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.588Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhH1bMsq
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.583Z
+host: {
+  "name": "ip-10-34-4-187.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TO8JPOPcbhHra1AY
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.570Z
+host: {
+  "name": "ip-10-33-92-211.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.6.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - prd | Boomi AS2 Atom-eu-ediservices.prd-developer-experience-0628c81c-399d-4ba5-8100-e5113febbd7a". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhECbf3w
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.427Z
+host: {
+  "name": "ip-10-34-20-172.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "composable.providers.kubernetes_leaderelection"
+}
+message: provider "kubernetes_leaderelection" failed to run (will retry in 30s)
+
+Document ID: eWlMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026WISPWI, divisionCode=05, styleCode=T7076J4878, colorCode=TIJ)
+trace: {
+  "id": "8ba860bc2a96265b757610d2e03958fe"
+}
+@timestamp: 2026-05-18T18:15:30.417Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: dmlMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026WISPWI, divisionCode=05, styleCode=T7076J4878, colorCode=TIJ)
+trace: {
+  "id": "8ba860bc2a96265b757610d2e03958fe"
+}
+@timestamp: 2026-05-18T18:15:30.403Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: c2lMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM07767, colorCode=XLG)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.340Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: cGlMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFAFA, divisionCode=01, styleCode=XM0XM07767, colorCode=XLG)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.326Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: K2lMPJ4BhFdNfJFH3A9P
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFASU, divisionCode=01, styleCode=T7078JA145, colorCode=30U)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.231Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-227.eu-central-1.compute.internal"
+}
+
+Document ID: bWlMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFASU, divisionCode=01, styleCode=T7078JA145, colorCode=30U)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:30.215Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TPIRbnrhSLj1jFib
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.195Z
+host: {
+  "name": "ip-10-35-12-177.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error",
+  "logger": "system.process"
+}
+message: Error fetching data for metricset system.process: non fatal error; reporting partial metrics: error fetching PID metrics for 4 processes, most likely a "permission denied" error. Enable debug logging to determine the exact cause.
+service: {
+  "name": "metricbeat"
+}
+
+Document ID: AZ48TfIRbnrhSLgCjpHd
+Score: null
+
+@timestamp: 2026-05-18T18:15:30.004Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj9jl4p
+Score: null
+
+@timestamp: 2026-05-18T18:15:29.972Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEBbd_A
+Score: null
+
+@timestamp: 2026-05-18T18:15:29.954Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: applying new policy: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48Te8JPOPcbhEBbd-5
+Score: null
+
+@timestamp: 2026-05-18T18:15:29.937Z
+host: {
+  "name": "ip-10-33-89-22.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.2.id', has a duplicate id "synthetics/http-synthetics-CCI - Application Health - dev | Boomi Atom-eu-ediservices.dev-developer-experience-adc7911b-934b-4d1a-b145-f2d52e6b2174". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: BWlMPJ4BhFdNfJFH3AtP
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=INLC, seasonCode=2026SUFASU, divisionCode=04, styleCode=T7071J3882, colorCode=FAP)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:29.860Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-51-117.eu-central-1.compute.internal"
+}
+
+Document ID: amlMPJ4BhFdNfJFH4BNH
+Score: null
+
+log: {
+  "level": "ERROR"
+}
+message: Exception message: No delivery dates for: DeliveryDatesPathParams(brandCode=TH, salesOrganizationCode=THE1, seasonCode=2026SUFASU, divisionCode=04, styleCode=T7071J3882, colorCode=FAP)
+trace: {
+  "id": "08f4b06bdfa2c7aaef227abc94fdb848"
+}
+@timestamp: 2026-05-18T18:15:29.844Z
+service: {
+  "name": "corrected-delivery-dates-service"
+}
+host: {
+  "name": "ip-10-34-50-157.eu-central-1.compute.internal"
+}
+
+Document ID: AZ48TfIRbnrhSLgCjpHV
+Score: null
+
+@timestamp: 2026-05-18T18:15:29.830Z
+host: {
+  "name": "ip-10-34-4-17.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.4.id', has a duplicate id "synthetics/browser-synthetics-b2b_ecom_site_login_dev-eu-b2becom.dev-developer-experience-b2b7ab04-99ca-4d48-8db7-3dbcdfb58ce8". Please add a unique value for the 'id' key to each input in the agent policy
+
+Document ID: AZ48TPIRbnrhSLj9jl4h
+Score: null
+
+@timestamp: 2026-05-18T18:15:29.751Z
+host: {
+  "name": "ip-10-34-25-96.eu-central-1.compute.internal"
+}
+log: {
+  "level": "error"
+}
+message: updating log level: generating component model: failed to render components: invalid 'inputs.52.id', has a duplicate id "synthetics/http-synthetics-DS - Kafka Connector - stg | C_SOURCE_SAP_DISTRIBUTION_CURVES_RISE_1-eu-shared-services.stg-developer-experience-eu-shared-services.stg-developer-experience-8f3812b7-ff09-4416-b2c6-27e379e2a06e". Please add a unique value for the 'id' key to each input in the agent policy

@@ -457,6 +457,57 @@ function logsHitsErrorMajority(hits: unknown[]): boolean {
 	return errors * 2 > hits.length;
 }
 
+// SIO-788 post-merge fix: the real eu-b2b logs-* response is the same
+// "Document ID: ..." YAML-block shape that Phase A parses for synthetic
+// monitors — NOT a JSON envelope. Each section carries top-level YAML-like
+// keys, with values that are either bare scalars (`@timestamp: ...`,
+// `message: ...`) or single-key JSON objects (`log: { "level": "ERROR" }`,
+// `service: { "name": "..." }`). Synthesise `_source` shapes from these
+// sections and feed them into the existing `extractLogClustersFromHits` so
+// the clustering / signature / dominant-value logic stays in one place.
+interface ParsedLogLevelSection {
+	level?: string;
+}
+interface ParsedServiceNameSection {
+	name?: string;
+}
+
+function extractMultiLineScalar(text: string, key: string): string | null {
+	// Bare-scalar but allow the value to continue until the next top-level
+	// `<key>:` line. Captures messages that wrap onto subsequent lines.
+	const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const re = new RegExp(`^${escaped}:\\s*(.*)$`, "m");
+	const m = re.exec(text);
+	if (!m) return null;
+	const startIdx = (m.index ?? 0) + m[0].length;
+	// Look ahead for the next line that starts with `<word>:` (a new YAML key)
+	// or a blank line followed by `Document ID:`. The value is everything
+	// between the match and that boundary, on a single logical line.
+	const rest = text.slice(startIdx);
+	const boundary = rest.match(/\n(?=[A-Za-z_@][A-Za-z0-9_.-]*:\s|Document ID:)/);
+	const tail = boundary ? rest.slice(0, boundary.index) : rest;
+	return `${m[1] ?? ""}${tail}`.trim();
+}
+
+function parseLogClustersFromBlockText(content: string): unknown[] {
+	const sections = content.split(/^Document ID:.*$/m).slice(1);
+	if (sections.length === 0) return [];
+	const synthesized: unknown[] = [];
+	for (const section of sections) {
+		const message = extractMultiLineScalar(section, "message");
+		if (!message) continue;
+		const log = parseJsonBlock<ParsedLogLevelSection>(section, "log");
+		const service = parseJsonBlock<ParsedServiceNameSection>(section, "service");
+		const timestamp = extractScalarField(section, "@timestamp");
+		const source: Record<string, unknown> = { message };
+		if (log?.level) source.level = log.level;
+		if (service?.name) source.service = service.name;
+		if (timestamp) source["@timestamp"] = timestamp;
+		synthesized.push({ _source: source });
+	}
+	return synthesized;
+}
+
 function parseLogsHitsFromText(content: string): unknown[] {
 	// SIO-788: defensive text-block path. The Phase B walker for APM extracts a
 	// single brace-balanced JSON object after a prefix sentence. If the logs
@@ -544,11 +595,16 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 				if (monitorsByName.has(m.name)) continue;
 				monitorsByName.set(m.name, m);
 			}
-			// SIO-788: defensive text-block path for logs. Only fires when the
-			// index hint suggests logs and the content does not look like an APM
-			// aggregation envelope (which would already be handled above).
+			// SIO-788: text-block paths for logs. Two real shapes have been seen:
+			//   1. YAML-style "Document ID: ..." blocks (eu-b2b production shape,
+			//      same family as Phase A's synthetic monitor response).
+			//   2. Bare JSON envelope with prefix sentence (defensive fallback).
+			// Only fires when the index hint suggests logs and the content does
+			// not look like an APM aggregation envelope (handled above).
 			if (logsByIndex && !nonLogsIndex && !o.rawJson.includes("by_service")) {
-				const hits = parseLogsHitsFromText(o.rawJson);
+				const blockHits = parseLogClustersFromBlockText(o.rawJson);
+				const jsonHits = blockHits.length > 0 ? [] : parseLogsHitsFromText(o.rawJson);
+				const hits = blockHits.length > 0 ? blockHits : jsonHits;
 				for (const cluster of extractLogClustersFromHits(hits)) {
 					if (clustersBySignature.has(cluster.signature)) continue;
 					clustersBySignature.set(cluster.signature, cluster);
