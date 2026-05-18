@@ -227,3 +227,128 @@ bun run lint                                            # biome clean
 - `reference_subagent_env_tunables` — explains `SUBAGENT_TOOL_RESULT_CAP_BYTES` shape; informs the new typed-finding allowlist.
 - `reference_kafka_mcp_tool_count_canaries` — when re-adding `kafka_list_dlq_topics` to AgentCore deploy, bump the hardcoded tool counts in `full-stack-tools.test.ts` + `prompts-tags.test.ts` atomically.
 - `reference_bun_hot_does_not_reresolve_modules` — `bun --hot` won't pick up agent code changes; restart the web dev server fully when iterating on `packages/agent/` files.
+
+---
+
+## Addendum (later 2026-05-18) — next-session scope + infrastructure blockers
+
+User clarified: the kafka MCP redeploy + AWS work is deferred. **Finish all render-card work first.** Resumed session to scope and start, hit infra blockers, paused before committing anything. Branch `simonowusupvh/findings-card-followups` was created but deleted again because no code landed.
+
+### Render-card scope agreed for the next session (user-confirmed)
+
+In order:
+
+1. **Live-verify the 3 cards built but never browser-tested:** CouchbaseFindingsCard, GitLabFindingsCard, ElasticFindingsCard. Unit tests pass but the real-MCP shape was never confirmed end-to-end (same risk pattern as SIO-783 / SIO-785).
+2. **Build AWSFindingsCard surfacing CloudWatch alarms.** Tool: `aws_cloudwatch_describe_alarms`. Render: state dot (OK green / ALARM red / INSUFFICIENT_DATA gray) + alarm name + reason. Mirrors the consumer-groups visual.
+3. **Build AtlassianFindingsCard surfacing linked Jira issues.** Tool: `findLinkedIncidents` (custom atlassian tool, see `packages/mcp-server-atlassian/src/tools/custom/find-linked-incidents.ts`). Render: key + summary + status + priority, one row per issue. Mirrors the GitLab MR timeline.
+4. **Browser-verify both new cards live.**
+
+Konnect card deferred (user said skip). Component health badges row deferred (depends on `*_health_check` tools which need the kafka redeploy — explicitly deferred per user).
+
+### Infrastructure blockers hit while attempting verification
+
+Trying to start the 3 MCPs needed for live-verification revealed:
+
+| MCP | Result |
+|---|---|
+| GitLab (`packages/mcp-server-gitlab`) | ✅ starts cleanly on :9084 with 18 proxy tools |
+| Couchbase (`packages/mcp-server-couchbase`) | ❌ `Failed to connect to Couchbase cluster: unambiguous timeout` after 5 retries against `couchbases://cb.mn1uxqblvorb0cle.cloud.couchbase.com`. Capella IP allowlist likely doesn't trust the dev IP, OR network egress is blocked. Need user to (a) add the current public IP to the Couchbase Capella allowed-IP list OR (b) confirm via VPN. |
+| Atlassian (`packages/mcp-server-atlassian`) | ❌ `OAuthRequiresInteractiveAuthError`. Tokens not seeded. Need user to run `bun run oauth:seed:atlassian` once interactively to seed tokens; subsequent starts work headless. |
+| Elastic (not yet attempted) | unknown; env keys present but never started |
+| AWS (was already up on :3001) | ✅ existing SigV4 proxy listening |
+| Kafka | not started this session; identical to prior session pattern via AgentCore SigV4 proxy |
+
+### Setup checklist for the next session (run BEFORE picking up the work)
+
+```bash
+# 1. Atlassian OAuth seed (one-time interactive, opens browser)
+bun run oauth:seed:atlassian
+
+# 2. Couchbase Capella IP allowlist
+# Visit https://cloud.couchbase.com → your cluster → Settings → IP Allowlist
+# Add the current public IP (curl ifconfig.me) for "Development access"
+
+# 3. Verify all MCPs can start cleanly before doing anything else:
+bun --filter @devops-agent/mcp-server-couchbase dev > /tmp/cb.log 2>&1 &
+bun --filter @devops-agent/mcp-server-gitlab dev > /tmp/gl.log 2>&1 &
+bun --filter @devops-agent/mcp-server-atlassian dev > /tmp/at.log 2>&1 &
+bun --filter @devops-agent/mcp-server-elastic dev > /tmp/el.log 2>&1 &
+sleep 20
+for f in cb gl at el; do
+  echo "=== $f ==="
+  grep -E "server ready|server.*started successfully|Fatal error" /tmp/$f.log | tail -2
+done
+```
+
+All four should show `ready` / `started successfully` before proceeding.
+
+### AWS card design notes (research already done this session)
+
+AWS MCP exposes 30+ tools. For the card, **CloudWatch alarms** is the highest-signal/lowest-noise choice. Confirmed tools deployed (saw `aws-mcp` with toolCount=39 in prior runs):
+
+- `aws_cloudwatch_describe_alarms` → returns `{MetricAlarms: [{AlarmName, StateValue, StateReason, ...}], CompositeAlarms: [...]}`
+- StateValue enum: `OK` / `ALARM` / `INSUFFICIENT_DATA`
+
+Schema proposal (`packages/shared/src/agent-state.ts`):
+```ts
+export const AwsCloudWatchAlarmSchema = z.object({
+  name: z.string(),
+  state: z.string(),       // "OK" | "ALARM" | "INSUFFICIENT_DATA"
+  reason: z.string().optional(),
+  metricName: z.string().optional(),
+  namespace: z.string().optional(),
+});
+export const AwsFindingsSchema = z.object({
+  alarms: z.array(AwsCloudWatchAlarmSchema).optional(),
+});
+```
+
+Extractor (`packages/agent/src/correlation/extractors/aws.ts`): parse `MetricAlarms[]` from `aws_cloudwatch_describe_alarms` output, map to the typed shape. Add `aws_cloudwatch_describe_alarms` to `TYPED_FINDING_TOOLS` allowlist in `sub-agent-instrumentation.ts`.
+
+Card (`apps/web/src/lib/components/AWSFindingsCard.svelte`): mirrors KafkaFindingsCard consumer-groups section. State aggregate header (`5 OK · 2 ALARM`), per-row state dot + alarm name + reason on hover. Sort: ALARM first, then INSUFFICIENT_DATA, then OK.
+
+Wire into `ChatMessage.svelte` between elastic and the diagnostic panel. Add reducer field `awsFindings?: AwsFindings` in `agent-reducer.ts`. Threaded through SSE pump.
+
+Estimated effort: ~150 LOC + ~5-8 unit tests. Pattern is identical to the existing cards.
+
+### Atlassian card design notes
+
+Custom tool `findLinkedIncidents` (see `packages/mcp-server-atlassian/src/tools/custom/find-linked-incidents.ts`) is the right input. Returns an array of Jira issues; need to probe the exact shape live before locking in the schema. The proxy tool `atlassian_searchJiraIssuesUsingJql` is more general but its response shape is JIRA-version-dependent.
+
+Schema proposal:
+```ts
+export const AtlassianLinkedIssueSchema = z.object({
+  key: z.string(),               // "INC-1234"
+  summary: z.string().optional(),
+  status: z.string().optional(), // "To Do" | "In Progress" | "Done" | etc.
+  priority: z.string().optional(),
+  url: z.string().optional(),    // direct link to Jira ticket
+});
+export const AtlassianFindingsSchema = z.object({
+  linkedIssues: z.array(AtlassianLinkedIssueSchema).optional(),
+});
+```
+
+Extractor branch on `findLinkedIncidents` tool name (custom tool, not proxy). Add to allowlist.
+
+Card: status dot or status pill, key + summary, link to Jira. Mirrors GitLab MR row.
+
+### Updated tasks open in this branch
+
+The branch `simonowusupvh/findings-card-followups` was created and immediately deleted (no commits). Next session should branch fresh after running the infrastructure setup above.
+
+Tasks in the next session's todo list:
+
+1. Probe atlassian + couchbase + gitlab tool shapes (live curl)
+2. Live-verify CouchbaseFindingsCard
+3. Live-verify GitLabFindingsCard
+4. Live-verify ElasticFindingsCard
+5. Probe AWS CloudWatch alarms shape
+6. Build AWSFindingsCard (schema + extractor + card + tests + wire)
+7. Probe atlassian findLinkedIncidents shape
+8. Build AtlassianFindingsCard (schema + extractor + card + tests + wire)
+9. Live-verify AWS + Atlassian cards in browser
+10. Update handover with verification results
+11. Push branch + open PR
+
+Estimated total: ~2 sessions if infra blockers clear cleanly. Phase 1 (verify existing + AWS card) is one session; Phase 2 (Atlassian card + browser-verify all) is another.
