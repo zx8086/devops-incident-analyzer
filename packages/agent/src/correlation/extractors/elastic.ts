@@ -8,8 +8,16 @@
 // Extend with new branches when other deterministic signals stabilise (APM
 // service summary, top error log clusters, etc.). Each new branch should pull
 // from a specific ES index pattern + query type so the schema stays tight.
-import type { ElasticApmService, ElasticFindings, ElasticSyntheticMonitor, ToolOutput } from "@devops-agent/shared";
+import { createHash } from "node:crypto";
+import type {
+	ElasticApmService,
+	ElasticFindings,
+	ElasticLogCluster,
+	ElasticSyntheticMonitor,
+	ToolOutput,
+} from "@devops-agent/shared";
 import { z } from "zod";
+import { distinctiveTokens } from "../rules.ts";
 
 // Elasticsearch hit envelope.
 const HitSchema = z.object({
@@ -300,9 +308,209 @@ function parseApmAggregationFromJson(rawJson: unknown): ElasticApmService[] {
 	return parsed.data.by_service.buckets.map(bucketToApmService);
 }
 
+// SIO-788 (SIO-778 Phase C): log-cluster source-document shape per
+// packages/mcp-server-elastic/tests/dev/fixtures/real-elasticsearch-data.json.
+// `service` is sometimes a string and sometimes a nested object (`{name: ...}`)
+// in ECS-conformant logs; tolerate both shapes by accepting unknown and
+// narrowing at use site.
+const LogsHitSourceSchema = z.object({
+	message: z.string(),
+	level: z.string().optional(),
+	service: z.unknown().optional(),
+	"@timestamp": z.string().optional(),
+});
+
+function looksLikeLogsIndex(o: ToolOutput): boolean {
+	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	if (args && typeof args === "object") {
+		const index = (args as { index?: unknown }).index;
+		if (typeof index === "string" && /logs-/i.test(index)) return true;
+	}
+	return false;
+}
+
+function looksLikeNonLogsIndex(o: ToolOutput): boolean {
+	// Strict exclusion: if the index hint clearly points to APM or synthetics,
+	// the logs branch must not fire even if a hits-level-error majority would
+	// otherwise trip the detector.
+	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	if (!args || typeof args !== "object") return false;
+	const index = (args as { index?: unknown }).index;
+	if (typeof index !== "string") return false;
+	return /traces-apm/i.test(index) || /synthetics?/i.test(index);
+}
+
+function signatureFromTokens(tokens: Set<string>): string {
+	const sorted = [...tokens].sort().join(" ");
+	return createHash("sha1").update(sorted).digest("hex").slice(0, 16);
+}
+
+function dominantValue(values: string[], minShare: number): string | undefined {
+	// Returns the modal value when one covers >= minShare of the cluster.
+	// Tiebreak alphabetical. Undefined when no value clears the threshold or
+	// values is empty.
+	if (values.length === 0) return undefined;
+	const counts = new Map<string, number>();
+	for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+	let best: string | undefined;
+	let bestCount = -1;
+	const sortedKeys = [...counts.keys()].sort();
+	for (const key of sortedKeys) {
+		const c = counts.get(key) ?? 0;
+		if (c > bestCount) {
+			best = key;
+			bestCount = c;
+		}
+	}
+	if (best === undefined) return undefined;
+	if (bestCount / values.length < minShare) return undefined;
+	return best;
+}
+
+function extractServiceName(rawService: unknown): string | undefined {
+	if (typeof rawService === "string") return rawService;
+	if (rawService && typeof rawService === "object") {
+		const name = (rawService as { name?: unknown }).name;
+		if (typeof name === "string") return name;
+	}
+	return undefined;
+}
+
+interface LogClusterAccumulator {
+	signature: string;
+	sampleMessage: string;
+	count: number;
+	levels: string[];
+	services: string[];
+	firstSeen?: string;
+	lastSeen?: string;
+}
+
+function extractLogClustersFromHits(hits: unknown[]): ElasticLogCluster[] {
+	const bySignature = new Map<string, LogClusterAccumulator>();
+	let totalErrorLevel = 0;
+
+	for (const hit of hits) {
+		if (!hit || typeof hit !== "object") continue;
+		const source = (hit as { _source?: unknown })._source;
+		const parsed = LogsHitSourceSchema.safeParse(source);
+		if (!parsed.success) continue;
+		const tokens = distinctiveTokens(parsed.data.message);
+		if (tokens.size === 0) continue;
+		const sig = signatureFromTokens(tokens);
+		const level = parsed.data.level ?? "";
+		if (level.toLowerCase() === "error") totalErrorLevel++;
+		const ts = parsed.data["@timestamp"];
+		const serviceName = extractServiceName(parsed.data.service);
+
+		let acc = bySignature.get(sig);
+		if (!acc) {
+			acc = {
+				signature: sig,
+				sampleMessage: parsed.data.message,
+				count: 0,
+				levels: [],
+				services: [],
+			};
+			bySignature.set(sig, acc);
+		}
+		acc.count++;
+		if (level) acc.levels.push(level);
+		if (serviceName) acc.services.push(serviceName);
+		if (ts) {
+			if (acc.firstSeen === undefined || ts < acc.firstSeen) acc.firstSeen = ts;
+			if (acc.lastSeen === undefined || ts > acc.lastSeen) acc.lastSeen = ts;
+		}
+	}
+
+	// Track whether the hits-level-error majority detector would have tripped.
+	// Caller uses this when no index hint is present.
+	const projected: (ElasticLogCluster & { __errorMajority?: boolean })[] = [];
+	const errorMajority = hits.length > 0 && totalErrorLevel * 2 > hits.length;
+	for (const acc of bySignature.values()) {
+		const cluster: ElasticLogCluster = {
+			signature: acc.signature,
+			sampleMessage: acc.sampleMessage,
+			count: acc.count,
+			level: dominantValue(acc.levels, 0) ?? "",
+		};
+		const service = dominantValue(acc.services, 0.5);
+		if (service) cluster.service = service;
+		if (acc.firstSeen) cluster.firstSeen = acc.firstSeen;
+		if (acc.lastSeen) cluster.lastSeen = acc.lastSeen;
+		projected.push({ ...cluster, __errorMajority: errorMajority });
+	}
+	projected.sort((a, b) => b.count - a.count);
+	return projected.slice(0, 10).map(({ __errorMajority: _err, ...rest }) => rest);
+}
+
+function logsHitsErrorMajority(hits: unknown[]): boolean {
+	if (hits.length === 0) return false;
+	let errors = 0;
+	for (const hit of hits) {
+		if (!hit || typeof hit !== "object") continue;
+		const source = (hit as { _source?: unknown })._source;
+		if (!source || typeof source !== "object") continue;
+		const level = (source as { level?: unknown }).level;
+		if (typeof level === "string" && level.toLowerCase() === "error") errors++;
+	}
+	return errors * 2 > hits.length;
+}
+
+function parseLogsHitsFromText(content: string): unknown[] {
+	// SIO-788: defensive text-block path. The Phase B walker for APM extracts a
+	// single brace-balanced JSON object after a prefix sentence. If the logs
+	// MCP response arrives as text (rather than JSON envelope), we expect the
+	// same shape: prefix + `{ "hits": { "hits": [...] } }`.
+	const firstBrace = content.indexOf("{");
+	if (firstBrace === -1) return [];
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	let end = -1;
+	for (let i = firstBrace; i < content.length; i++) {
+		const ch = content[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") depth++;
+		else if (ch === "}") {
+			depth--;
+			if (depth === 0) {
+				end = i;
+				break;
+			}
+		}
+	}
+	if (end === -1) return [];
+	try {
+		const body = JSON.parse(content.slice(firstBrace, end + 1)) as {
+			hits?: { hits?: unknown };
+		};
+		const inner = body?.hits?.hits;
+		return Array.isArray(inner) ? inner : [];
+	} catch {
+		return [];
+	}
+}
+
 export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 	const monitorsByName = new Map<string, ElasticSyntheticMonitor>();
 	const apmByName = new Map<string, ElasticApmService>();
+	// SIO-788: dedupe log clusters across multiple ToolOutput entries by signature.
+	// Within a single ToolOutput, extractLogClustersFromHits already caps at 10
+	// and aggregates per-signature; the outer map merges across calls (first wins).
+	const clustersBySignature = new Map<string, ElasticLogCluster>();
 
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search") continue;
@@ -312,6 +520,11 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 		// when toolArgs.index matches /traces-apm/i OR the response payload
 		// contains a `by_service.buckets` aggregation shape.
 		const apmByIndex = looksLikeApmIndex(o);
+		// SIO-788: logs branch uses the same alongside model. Strict detection:
+		// `/logs-/i` index hint OR majority-error hits, with explicit exclusion
+		// when the index points to APM or synthetics (mutual exclusion).
+		const logsByIndex = looksLikeLogsIndex(o);
+		const nonLogsIndex = looksLikeNonLogsIndex(o);
 
 		// SIO-786: real elastic MCP returns multi-text-block content joined into
 		// a string by tryParseJson's fall-through. Detect string rawJson and
@@ -331,6 +544,16 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 				if (monitorsByName.has(m.name)) continue;
 				monitorsByName.set(m.name, m);
 			}
+			// SIO-788: defensive text-block path for logs. Only fires when the
+			// index hint suggests logs and the content does not look like an APM
+			// aggregation envelope (which would already be handled above).
+			if (logsByIndex && !nonLogsIndex && !o.rawJson.includes("by_service")) {
+				const hits = parseLogsHitsFromText(o.rawJson);
+				for (const cluster of extractLogClustersFromHits(hits)) {
+					if (clustersBySignature.has(cluster.signature)) continue;
+					clustersBySignature.set(cluster.signature, cluster);
+				}
+			}
 			continue;
 		}
 
@@ -346,6 +569,22 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 		const parsed = SearchResponseSchema.safeParse(o.rawJson);
 		if (!parsed.success) continue;
 		const hits = parsed.data.hits.hits;
+
+		// SIO-788: logs branch — fire when the index hint matches /logs-/i, or
+		// when no APM/synthetics hint is present AND a majority of hits carry
+		// `level: "error"`. Explicit exclusion guards against false positives
+		// when the index clearly points elsewhere.
+		const wantLogs = !nonLogsIndex && (logsByIndex || (!looksLikeSyntheticIndex(o) && logsHitsErrorMajority(hits)));
+		if (wantLogs) {
+			for (const cluster of extractLogClustersFromHits(hits)) {
+				if (clustersBySignature.has(cluster.signature)) continue;
+				clustersBySignature.set(cluster.signature, cluster);
+			}
+			// A logs-branch hit consumes this output; do not also attempt the
+			// synthetic branch on the same payload.
+			continue;
+		}
+
 		// Heuristic: if the search wasn't against synthetics, the hits won't have
 		// the monitor.status shape and the inner safeParse will skip them.
 		const wantSynthetic = looksLikeSyntheticIndex(o) || hits.length > 0;
@@ -369,5 +608,11 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 	const findings: ElasticFindings = {};
 	if (monitorsByName.size > 0) findings.syntheticMonitors = Array.from(monitorsByName.values());
 	if (apmByName.size > 0) findings.apmServices = Array.from(apmByName.values());
+	if (clustersBySignature.size > 0) {
+		// SIO-788: outer top-10 cap. Each ToolOutput contributes up to 10 clusters;
+		// when multiple outputs feed in, sort the merged set and cap at 10.
+		const all = Array.from(clustersBySignature.values()).sort((a, b) => b.count - a.count);
+		findings.logClusters = all.slice(0, 10);
+	}
 	return findings;
 }
