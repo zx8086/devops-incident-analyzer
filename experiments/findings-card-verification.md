@@ -59,7 +59,7 @@ This log records browser-verified renders of each FindingsCard against real MCP 
 
 ---
 
-## Task 3: ElasticFindingsCard — FAIL (regression discovered)
+## Task 3: ElasticFindingsCard — PASS (after SIO-786 fix; was FAIL/regression)
 
 **Probe (Step 3.1):** `elasticsearch_search` against `synthetics-*` on the elastic MCP at `:9080`.
 
@@ -87,15 +87,24 @@ This is **exactly the failure mode the `feedback_extractor_fixtures_must_mirror_
 
 **Screenshot:** `experiments/screenshots/2026-05-18-elastic-no-card.png` (markdown report visible; no card)
 
-**Verdict:** REGRESSION — agent data flows through markdown but typed card path is broken. Fix is out of scope for this plan (SIO-785 Phase 2 covers AWS + Atlassian cards and verification of existing cards, not extractor-pipeline bugs).
+**Verdict (original, SIO-785 Phase 2):** REGRESSION — agent data flows through markdown but typed card path is broken.
 
-**Follow-up ticket to file:** `ElasticFindingsCard never renders against real elastic MCP output`. Three fix options ranked by surgicality:
+**Verdict (after SIO-786 fix, 2026-05-18 same day):** PASS — root cause was deeper than the original plan assumed.
 
-- **(A) Lightweight, recommended:** Update `extractElasticFindings` to also handle the text-block format. Detect a `tryParseJson` failure followed by a `Document ID:` regex, then parse the pretty-printed `observer:`/`monitor:`/`summary:` blocks via regex. Defensive and self-contained; no MCP/agent changes.
-- **(B) Cleaner:** Update the elastic MCP `elasticsearch_search` tool to emit a structured JSON content block (the `hits.hits[]` envelope) **in addition to** the human-readable blocks. Requires MCP redeploy. Then the JSON block is parsed correctly and the extractor works unchanged.
-- **(C) Most invasive:** Change `sub-agent.ts:473-476` to preserve all `m.content` blocks (not the joined string) in `toolOutputs[].rawJson`. Requires updating every extractor that currently reads `rawJson` as either array or object; risk of breaking the 4 working extractors.
+`@langchain/mcp-adapters` v1.1.3 delivers multi-content-block tool responses as an **array of `{type:"text", text:"..."}` content-block objects** on `ToolMessage.content`, not as a joined string. `sub-agent.ts:475` then called `String(content)` on that array → produced `"[object Object],[object Object],..."` → the text-block parser saw no `Document ID:` markers → returned no findings even after option (A) was applied.
 
-Recommendation: (A) for the follow-up ticket — narrow blast radius.
+Fix applied in two layers:
+
+1. **`packages/agent/src/sub-agent.ts`** — new exported `normalizeToolContent(content)` helper joins the `text` fields from a content-block array with `\n\n` before `tryParseJson` runs. Falls back to `String(content)` for unknown shapes (preserves existing behavior for kafka/couchbase/gitlab/aws/atlassian which return single content blocks).
+2. **`packages/agent/src/correlation/extractors/elastic.ts`** — adds a `typeof o.rawJson === "string"` branch that calls `parseSyntheticMonitorsFromText`. Splits on `Document ID:` markers, extracts `monitor:`/`url:`/`observer:`/`summary:`/`state:` JSON blocks via brace-balanced parsing, resolves status from a priority chain (`monitor.status` → `summary.status` → `state.status`) since browser synthetic heartbeats don't always carry `monitor.status`.
+
+Live-verified 2026-05-18 against `ap-cld` cluster. Card rendered with one synthetic monitor row: `quickpoll (ap-quickpoll-nonprod)` · `DOWN` · `DC AP1` · `2026-05-18 14:57`. Diagnostic log confirmed: `toolOutputCount=2, rawJsonTypes=[string,string], monitorCount=1`.
+
+**Screenshot (fixed):** `experiments/screenshots/2026-05-18-elastic-card-fixed.png`.
+
+**Test coverage:** 11 unit tests in `packages/agent/src/correlation/extractors/elastic.test.ts` (5 original JSON-envelope + 5 text-block + 1 split malformed-input pair) + 6 unit tests in `packages/agent/src/sub-agent.test.ts` for `normalizeToolContent`.
+
+**Plan-of-record fix path:** the `normalizeToolContent` layer was added during execution after the original option (A) plan didn't work — see commit `2c44ddf` (TBD; this commit lands the helper + tests).
 
 ---
 
@@ -165,12 +174,12 @@ Recommendation: (A) for the follow-up ticket — narrow blast radius.
 |---|---|---|---|
 | CouchbaseFindingsCard | matches | renders 5+ rows | PASS |
 | GitLabFindingsCard | matches | renders 3 rows | PASS |
-| ElasticFindingsCard | mismatch (text blocks vs JSON envelope) | does NOT render | **REGRESSION** — follow-up ticket required |
+| ElasticFindingsCard | mismatch (text blocks via array-of-content-blocks shape) | **PASS (after SIO-786 fix)** — 1 monitor rendered live | normalizeToolContent helper + text-block parser shipped together |
 | AWSFindingsCard | matches | empty account, no rows to render | PASS (pipeline + unit tests) |
 | AtlassianFindingsCard | matches | empty Jira, no rows to render | PASS (pipeline + unit tests) |
 
 **Open items for next session:**
 
-1. ElasticFindingsCard regression — file follow-up ticket; recommended fix is option (A) above (update extractor to parse text-block format).
+1. ~~ElasticFindingsCard regression~~ — RESOLVED in SIO-786 (same day fix). See revised "Verdict (after SIO-786 fix)" section above.
 2. Kafka MCP redeploy to AgentCore (deferred from prior session) — needed for DLQ + component health badges work.
 3. Optional: storybook-style preview route in apps/web so populated-state renders can be visually QA'd without depending on real data conditions.
