@@ -22,6 +22,8 @@ export {
 	DataSourceContextSchema,
 	type DataSourceResult,
 	DataSourceResultSchema,
+	type ElasticApmService,
+	ElasticApmServiceSchema,
 	type ElasticFindings,
 	ElasticFindingsSchema,
 	type ElasticSyntheticMonitor,

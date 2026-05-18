@@ -135,8 +135,26 @@ export const ElasticSyntheticMonitorSchema = z.object({
 });
 export type ElasticSyntheticMonitor = z.infer<typeof ElasticSyntheticMonitorSchema>;
 
+// SIO-787 (SIO-778 Phase B, 2026-05-18): one row per APM service observed in the
+// `traces-apm-*` aggregation window. `serviceName` mirrors the document field
+// `service.name` verbatim -- this means the eu-b2b plural form
+// (`notifications-service`) on prod, NOT the Kafka group-id singular form
+// (`notification-service`). See memory `reference_b2b_apm_service_naming`. Any
+// future rule that joins this against `kafkaFindings.consumerGroups[]` must
+// normalise (Phase D, deferred to SIO-773).
+export const ElasticApmServiceSchema = z.object({
+	serviceName: z.string(),
+	environment: z.string().optional(),
+	errorRate: z.number().optional(),
+	transactionCount: z.number().optional(),
+	avgDurationMs: z.number().optional(),
+	observedAt: z.string().optional(),
+});
+export type ElasticApmService = z.infer<typeof ElasticApmServiceSchema>;
+
 export const ElasticFindingsSchema = z.object({
 	syntheticMonitors: z.array(ElasticSyntheticMonitorSchema).optional(),
+	apmServices: z.array(ElasticApmServiceSchema).optional(),
 });
 export type ElasticFindings = z.infer<typeof ElasticFindingsSchema>;
 

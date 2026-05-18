@@ -197,3 +197,205 @@ describe("extractElasticFindings", () => {
 		}
 	});
 });
+
+// SIO-787 (SIO-778 Phase B): APM service aggregation extraction from
+// `elasticsearch_search` against the `traces-apm-*` index pattern.
+describe("extractElasticFindings — APM services (SIO-787)", () => {
+	test("parses APM aggregation buckets from real eu-b2b text-block fixture", async () => {
+		const fs = await import("node:fs/promises");
+		const path = await import("node:path");
+		const fixturePath = path.join(import.meta.dir, "__fixtures__", "elastic-apm-services-real.txt");
+		const realResponse = await fs.readFile(fixturePath, "utf-8");
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { deployment: "eu-b2b", index: "traces-apm-*" },
+				rawJson: realResponse,
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		// Real fixture captured 50 buckets from eu-b2b.
+		expect(findings.apmServices).toBeDefined();
+		expect(findings.apmServices?.length).toBe(50);
+		// Phase A path must not fire — fixture has no synthetic monitor docs.
+		expect(findings.syntheticMonitors).toBeUndefined();
+		// Spot-check two well-known buckets from the live capture.
+		const martech = findings.apmServices?.find((s) => s.serviceName === "martech-contact");
+		expect(martech).toBeDefined();
+		expect(martech?.transactionCount).toBe(57247);
+		expect(martech?.errorRate).toBeCloseTo(0.1321, 3);
+		expect(martech?.avgDurationMs).toBeCloseTo(93.83, 1);
+		expect(martech?.observedAt).toBe("2026-05-18T16:33:17.266Z");
+
+		const connectors = findings.apmServices?.find((s) => s.serviceName === "connectors-api");
+		expect(connectors?.errorRate).toBeCloseTo(0.0716, 3);
+		expect(connectors?.avgDurationMs).toBeCloseTo(345.3, 1);
+	});
+
+	test("preserves eu-b2b plural service-name form verbatim (reference_b2b_apm_service_naming)", () => {
+		// The eu-b2b APM index stores plural service names (`notifications-service`)
+		// while kafka consumer groups use the singular form. The extractor must
+		// not normalise — that responsibility belongs to a future Phase D rule
+		// helper (`getElasticApmService`) per SIO-778 spec lines 196-207.
+		const rawJson =
+			"Search results with aggregations:\n\n" +
+			JSON.stringify({
+				by_service: {
+					buckets: [
+						{
+							key: "notifications-service",
+							doc_count: 10000,
+							errors: { doc_count: 50 },
+							avg_duration: { value: 100000 },
+							latest: { value_as_string: "2026-05-18T16:00:00.000Z" },
+						},
+					],
+				},
+			});
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { deployment: "eu-b2b", index: "traces-apm-*" },
+				rawJson,
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices?.[0]?.serviceName).toBe("notifications-service");
+	});
+
+	test("skips errorRate when doc_count is zero (divide-by-zero guard)", () => {
+		const rawJson =
+			"Search results with aggregations:\n\n" +
+			JSON.stringify({
+				by_service: {
+					buckets: [
+						{
+							key: "idle-service",
+							doc_count: 0,
+							errors: { doc_count: 0 },
+							avg_duration: { value: null },
+						},
+					],
+				},
+			});
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "traces-apm-*" },
+				rawJson,
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices?.[0]?.serviceName).toBe("idle-service");
+		expect(findings.apmServices?.[0]?.transactionCount).toBe(0);
+		expect(findings.apmServices?.[0]?.errorRate).toBeUndefined();
+		expect(findings.apmServices?.[0]?.avgDurationMs).toBeUndefined();
+	});
+
+	test("converts avg_duration.value from microseconds to milliseconds", () => {
+		const rawJson =
+			"Search results with aggregations:\n\n" +
+			JSON.stringify({
+				by_service: {
+					buckets: [
+						{
+							key: "fast-service",
+							doc_count: 100,
+							errors: { doc_count: 0 },
+							avg_duration: { value: 1_500_000 }, // 1.5s in µs
+						},
+					],
+				},
+			});
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "traces-apm-*" },
+				rawJson,
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices?.[0]?.avgDurationMs).toBe(1500);
+	});
+
+	test("returns empty apmServices when aggregation object is missing", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "traces-apm-*" },
+				rawJson: "Search results with aggregations:\n\n{}",
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices).toBeUndefined();
+	});
+
+	test("does not fire on a generic logs-* search (no false positives)", () => {
+		// A logs-* search returns hits[].source documents, not aggregations.
+		// The extractor must not infer APM intent from a hits payload.
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "logs-*" },
+				rawJson: {
+					hits: {
+						hits: [{ _source: { message: "error: timeout", level: "error" } }],
+					},
+				},
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices).toBeUndefined();
+	});
+
+	test("Phase A synthetic-monitor fixture still parses without spurious apmServices", async () => {
+		// Regression guard: parsing the Phase A fixture must yield syntheticMonitors
+		// and zero apmServices, even though the text contains the literal substring
+		// "by_service" in some monitor configurations (it does not in this fixture,
+		// but the test pins the behavior).
+		const fs = await import("node:fs/promises");
+		const path = await import("node:path");
+		const fixturePath = path.join(import.meta.dir, "__fixtures__", "elastic-synthetics-real.txt");
+		const realResponse = await fs.readFile(fixturePath, "utf-8");
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "synthetics-*" },
+				rawJson: realResponse,
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect((findings.syntheticMonitors ?? []).length).toBeGreaterThan(0);
+		expect(findings.apmServices).toBeUndefined();
+	});
+
+	test("accepts JSON-envelope form with aggregations.by_service at root", () => {
+		// When the MCP response is already a parsed object (no text-block prefix),
+		// the extractor must walk rawJson.aggregations.by_service.buckets[].
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "elasticsearch_search",
+				toolArgs: { index: "traces-apm-*" },
+				rawJson: {
+					aggregations: {
+						by_service: {
+							buckets: [
+								{
+									key: "envelope-svc",
+									doc_count: 1000,
+									errors: { doc_count: 10 },
+									avg_duration: { value: 200_000 },
+									latest: { value_as_string: "2026-05-18T16:00:00.000Z" },
+								},
+							],
+						},
+					},
+				},
+			} as ToolOutput,
+		];
+		const findings = extractElasticFindings(outputs);
+		expect(findings.apmServices?.[0]?.serviceName).toBe("envelope-svc");
+		expect(findings.apmServices?.[0]?.errorRate).toBeCloseTo(0.01, 4);
+		expect(findings.apmServices?.[0]?.avgDurationMs).toBe(200);
+	});
+});
