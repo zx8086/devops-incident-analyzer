@@ -2,7 +2,6 @@
 // apps/web/src/lib/components/CompletedProgress.svelte
 import type { DataSourceFindings } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
-import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
 
 const NODE_LABELS: Record<string, string> = {
 	classify: "Classified",
@@ -35,9 +34,28 @@ let {
 
 let expanded = $state(false);
 
-const dataSources = $derived(dataSourceResults ? [...dataSourceResults.entries()] : []);
+// SIO-785 follow-up: union keys from progress map + findings map so the Data
+// Sources section renders whenever EITHER signal exists. Previously gated on
+// dataSourceResults alone, which left findings cards homeless when the pump
+// emitted datasource_result without datasource_progress.
+const dataSources = $derived.by(() => {
+	const ids = new Set<string>();
+	if (dataSourceResults) for (const k of dataSourceResults.keys()) ids.add(k);
+	if (dataSourceFindings) for (const k of dataSourceFindings.keys()) ids.add(k);
+	const out: Array<[string, DataSourceStatus]> = [];
+	for (const id of ids) {
+		const fromResults = dataSourceResults?.get(id);
+		if (fromResults) {
+			out.push([id, fromResults]);
+			continue;
+		}
+		const f = dataSourceFindings?.get(id);
+		// Infer status from findings entry when no progress tick arrived.
+		out.push([id, { status: f?.status ?? "success", message: f?.error }]);
+	}
+	return out;
+});
 const findings = $derived(dataSourceFindings ? [...dataSourceFindings.entries()] : []);
-const kafkaFindings = $derived(dataSourceFindings?.get("kafka")?.kafkaFindings);
 
 const hasContent = $derived(
 	responseTime !== undefined ||
@@ -121,11 +139,6 @@ function statusDotClass(status: string): string {
                     <span class="text-[0.625rem] text-red-600 ml-auto truncate max-w-[200px]">{ds.message}</span>
                   {/if}
                 </div>
-                {#if id === "kafka" && kafkaFindings}
-                  <div class="ml-3.5">
-                    <KafkaFindingsCard findings={kafkaFindings} />
-                  </div>
-                {/if}
               {/each}
             </div>
           </div>

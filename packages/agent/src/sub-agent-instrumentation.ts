@@ -5,6 +5,35 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
+// SIO-785 follow-up (2026-05-18): tools whose output is consumed by typed-finding
+// extractors must NOT be truncated. The byte-boundary truncator breaks JSON, so
+// the downstream extractor (packages/agent/src/correlation/extractors/*.ts) sees
+// an unparseable string and emits empty findings — which means the UI card has
+// nothing to render. Concrete failure observed live: connect_list_connectors
+// returned 226KB, was cut to 32KB, KafkaFindingsCard.connectors[] stayed empty.
+//
+// Add a tool name to this set when (a) it feeds an extractor and (b) the
+// extractor reads structured JSON rather than raw text. Free-text tools
+// (e.g. consume_messages output, query results) can still be truncated.
+const TYPED_FINDING_TOOLS = new Set<string>([
+	// kafka extractor
+	"kafka_list_consumer_groups",
+	"kafka_get_consumer_group_lag",
+	"kafka_list_dlq_topics",
+	"kafka_describe_cluster",
+	"kafka_get_cluster_info",
+	"connect_list_connectors",
+	"connect_get_connector_status",
+	"ksql_list_queries",
+	// couchbase extractor
+	"capella_get_longest_running_queries",
+	// gitlab extractor
+	"gitlab_list_merge_requests",
+	// elastic extractor (only when searching synthetics-* indices, but the
+	// extractor narrows by shape so it's safe to include unconditionally).
+	"elasticsearch_search",
+]);
+
 interface InstrumentLogger {
 	info: (...args: unknown[]) => unknown;
 	warn: (...args: unknown[]) => unknown;
@@ -74,6 +103,24 @@ function processResult(result: unknown, toolName: string, iteration: number, ctx
 
 	const text = stringifyContent(content);
 	if (Buffer.byteLength(text, "utf8") <= ctx.capBytes) return result;
+
+	// SIO-785 follow-up (2026-05-18): preserve raw JSON for typed-finding
+	// extractors. See TYPED_FINDING_TOOLS for rationale.
+	if (TYPED_FINDING_TOOLS.has(toolName)) {
+		ctx.log.info(
+			{
+				event: "subagent.tool_result_truncation_skipped",
+				dataSourceId: ctx.dataSourceId,
+				deploymentId: ctx.deploymentId,
+				toolName,
+				iteration,
+				bytes,
+				reason: "typed-finding tool",
+			},
+			"Tool result truncation skipped to preserve typed-finding JSON",
+		);
+		return result;
+	}
 
 	const truncated = truncateToolOutput(text, ctx.capBytes);
 	if (truncated.strategy === "none") return result;

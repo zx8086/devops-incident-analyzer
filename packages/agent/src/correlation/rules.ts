@@ -133,7 +133,7 @@ export const correlationRules: CorrelationRule[] = [
 			"Kafka consumer groups in Empty/Dead state imply the consuming app may have exceptions; correlate with app logs.",
 		trigger: (state) => {
 			const groups = getKafkaData(state).consumerGroups ?? [];
-			const matched = groups.filter((g) => g.state === "Empty" || g.state === "Dead");
+			const matched = groups.filter((g) => g.state === "EMPTY" || g.state === "DEAD");
 			return matched.length === 0 ? null : { context: { groupIds: matched.map((g) => g.id) } };
 		},
 		requiredAgent: "elastic-agent",
@@ -144,7 +144,7 @@ export const correlationRules: CorrelationRule[] = [
 		description: "Stable consumer group with lag > 10K messages; app-level slowness or downstream errors are likely.",
 		trigger: (state) => {
 			const groups = getKafkaData(state).consumerGroups ?? [];
-			const matched = groups.filter((g) => g.state === "Stable" && (g.totalLag ?? 0) > 10_000);
+			const matched = groups.filter((g) => g.state === "STABLE" && (g.totalLag ?? 0) > 10_000);
 			return matched.length === 0
 				? null
 				: {

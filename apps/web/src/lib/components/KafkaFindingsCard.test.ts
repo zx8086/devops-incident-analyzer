@@ -41,13 +41,77 @@ describe("KafkaFindingsCard.svelte", () => {
 		expect(body).toContain("no baseline");
 	});
 
+	// SIO-785 follow-up (2026-05-18): new sections — cluster, connectors, ksqlQueries.
+	test("renders cluster summary tile when findings.cluster is set", () => {
+		const { body } = render(KafkaFindingsCard, {
+			props: {
+				findings: {
+					cluster: { provider: "msk", brokerCount: 3, topicCount: 42, controllerId: 2 },
+				},
+			},
+		});
+		expect(body).toContain("Kafka findings");
+		expect(body).toContain("msk");
+		expect(body).toContain("3"); // brokerCount
+		expect(body).toContain("42"); // topicCount
+		expect(body).toContain("Controller");
+	});
+
+	test("renders Connect connectors section with state dots + per-state aggregate", () => {
+		const { body } = render(KafkaFindingsCard, {
+			props: {
+				findings: {
+					connectors: [
+						{ name: "C_SINK_COUCHBASE_ARTICLES_V3", state: "RUNNING", type: "sink", taskFailures: 0 },
+						{ name: "C_SOURCE_PIM_VARIANTS", state: "FAILED", type: "source", taskFailures: 1 },
+					],
+				},
+			},
+		});
+		expect(body).toContain("Connect connectors");
+		expect(body).toContain("C_SINK_COUCHBASE_ARTICLES_V3");
+		expect(body).toContain("C_SOURCE_PIM_VARIANTS");
+		expect(body).toContain("1 task fail");
+		// State counts: "1 RUNNING" + "1 FAILED" in some order.
+		expect(body).toMatch(/RUNNING|FAILED/);
+	});
+
+	test("renders ksqlDB queries with status count compaction when distribution is mixed", () => {
+		const { body } = render(KafkaFindingsCard, {
+			props: {
+				findings: {
+					ksqlQueries: [
+						{
+							id: "CSAS_S_PRIVATE_SINK_PIM_VARIANTS_V3_4859",
+							state: "RUNNING",
+							queryType: "PERSISTENT",
+							statusCount: { RUNNING: 1, UNRESPONSIVE: 2 },
+						},
+					],
+				},
+			},
+		});
+		expect(body).toContain("ksqlDB queries");
+		expect(body).toContain("CSAS_S_PRIVATE_SINK_PIM_VARIANTS_V3_4859");
+		// statusCount compacted as "1R 2U"
+		expect(body).toContain("1R");
+		expect(body).toContain("2U");
+	});
+
+	test("renders nothing when ALL findings sections are empty including new ones", () => {
+		const { body } = render(KafkaFindingsCard, { props: { findings: {} } });
+		expect(body).not.toContain("Kafka findings");
+		expect(body).not.toContain("Connect connectors");
+		expect(body).not.toContain("ksqlDB queries");
+	});
+
 	test("renders both consumer groups and DLQ topics with full payload", () => {
 		const { body } = render(KafkaFindingsCard, {
 			props: {
 				findings: {
 					consumerGroups: [
-						{ id: "pim-sink", state: "Stable", totalLag: 42 },
-						{ id: "orders-consumer", state: "Rebalancing", totalLag: 1500 },
+						{ id: "pim-sink", state: "STABLE", totalLag: 42 },
+						{ id: "orders-consumer", state: "PREPARING_REBALANCE", totalLag: 1500 },
 					],
 					dlqTopics: [
 						{ name: "orders.dlq", totalMessages: 17, recentDelta: 3 },

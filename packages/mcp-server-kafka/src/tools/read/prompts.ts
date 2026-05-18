@@ -1,6 +1,10 @@
 // src/tools/read/prompts.ts
 
-export const LIST_TOPICS_DESCRIPTION = `[READ] List Kafka topics in the cluster with pagination. Use 'prefix' to narrow by case-sensitive name prefix (e.g. "DLQ_"), 'filter' for regex matching, 'limit' (default 100, max 500), and 'offset' for paging. Returns { topics, total, truncated, hint? }. When 'truncated' is true, narrow with 'prefix' or page with 'offset'.`;
+// SIO-785 follow-up (2026-05-18): removed the "DLQ_" prefix example because
+// the LLM took it as a recommendation and used this tool for DLQ queries
+// instead of kafka_list_dlq_topics, leaving typed DLQ findings empty and the
+// UI card invisible. Last sentence redirects DLQ intent to the right tool.
+export const LIST_TOPICS_DESCRIPTION = `[READ] List Kafka topics in the cluster with pagination. Use 'prefix' to narrow by case-sensitive name prefix, 'filter' for regex matching, 'limit' (default 100, max 500), and 'offset' for paging. Returns { topics, total, truncated, hint? }. When 'truncated' is true, narrow with 'prefix' or page with 'offset'. For dead-letter queue inspection use 'kafka_list_dlq_topics' instead — it returns sizes and recent-delta in one call.`;
 
 export const DESCRIBE_TOPIC_DESCRIPTION = `[READ] Get detailed information about a specific Kafka topic including partition details, replica configuration, and topic-level settings. Use this to understand topic structure and configuration.`;
 

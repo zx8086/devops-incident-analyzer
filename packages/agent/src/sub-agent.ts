@@ -193,7 +193,12 @@ export function extractToolErrors(
 }
 
 const MAX_TOOLS_PER_AGENT = 25;
-const MIN_FILTERED_TOOLS = 5;
+// SIO-785 follow-up (2026-05-18): floor lowered from 5 to 1 so a narrow action
+// (e.g. dlq_messages -> 3 tools: consume / get_message / list_dlq_topics) is
+// honored instead of falling through to the all-action fallback. The old floor
+// was crowding out kafka_list_dlq_topics for DLQ-specific queries, breaking
+// typed findings -> empty KafkaFindingsCard DLQ section.
+const MIN_FILTERED_TOOLS = 1;
 
 // SIO-738: Shared merge step so the augmentation test exercises the same
 // dedup logic the production runSubAgent path uses. Returns baseActions
@@ -201,6 +206,34 @@ const MIN_FILTERED_TOOLS = 5;
 export function mergeKeywordActions(baseActions: string[], keywordActions: string[]): string[] {
 	if (keywordActions.length === 0) return baseActions;
 	return [...new Set([...baseActions, ...keywordActions])];
+}
+
+// SIO-785 follow-up (2026-05-18): when a high-precision keyword match flags a
+// specific intent (e.g. dlq_messages from "dead letter"), drop ambient actions
+// that would surface tools competing for the same intent (e.g. kafka_list_topics
+// from topic_throughput / describe_topic). Without this, the LLM picks the
+// generic listing tool over the specialized one and the typed extractor sees
+// no DLQ data.
+const HIGH_PRECISION_NARROWING_RULES: Record<string, string[]> = {
+	// When the user asks about DLQs explicitly, hide the broad topic-listing
+	// actions. Kept actions: dlq_messages plus anything else the keyword pass
+	// matched (those are also high-confidence).
+	dlq_messages: ["topic_throughput", "describe_topic"],
+};
+
+export function narrowOnHighPrecisionIntent(mergedActions: string[], keywordActions: string[]): string[] {
+	let actions = mergedActions;
+	for (const trigger of keywordActions) {
+		const toDrop = HIGH_PRECISION_NARROWING_RULES[trigger];
+		if (!toDrop || toDrop.length === 0) continue;
+		const dropSet = new Set(toDrop);
+		// Don't drop something the keyword pass itself anchored.
+		for (const k of keywordActions) dropSet.delete(k);
+		const next = actions.filter((a) => !dropSet.has(a));
+		if (next.length === 0) continue; // refuse to empty the list
+		actions = next;
+	}
+	return actions;
 }
 
 // SIO-742: deterministic cluster-health action inference for the kafka sub-agent.
@@ -335,15 +368,32 @@ async function runSubAgent(
 		// substring augmenter misses, e.g. "Kafka Rest", "related services").
 		const clusterHealthActions = inferClusterHealthActions(query, dataSourceId);
 		const augmentationActions = mergeKeywordActions(keywordActions, clusterHealthActions);
-		const mergedActions = mergeKeywordActions(baseActions, augmentationActions);
+		const preNarrowMerged = mergeKeywordActions(baseActions, augmentationActions);
+		// SIO-785 follow-up (2026-05-18): when the deterministic keyword pass detects
+		// a high-precision intent (currently dlq_messages — "dead letter" / "dlq"),
+		// strip ambient LLM-added topic-discovery actions (topic_throughput,
+		// describe_topic) that would otherwise expose kafka_list_topics. The LLM
+		// trusts kafka_list_topics's "prefix" example over SOUL directives and
+		// picks it instead of kafka_list_dlq_topics — leaving typed dlqTopics empty
+		// and the UI card invisible. The remote AgentCore-deployed tool description
+		// is not editable from local code, so we narrow the toolset upstream.
+		const mergedActions = narrowOnHighPrecisionIntent(preNarrowMerged, keywordActions);
 		const augmentedToolActions =
-			augmentationActions.length > 0
+			augmentationActions.length > 0 || mergedActions.length !== preNarrowMerged.length
 				? { ...state.extractedEntities.toolActions, [dataSourceId]: mergedActions }
 				: state.extractedEntities.toolActions;
 
-		if (augmentationActions.length > 0) {
+		if (augmentationActions.length > 0 || mergedActions.length !== preNarrowMerged.length) {
 			log.info(
-				{ dataSourceId, baseActions, keywordActions, clusterHealthActions, mergedActions, deploymentId },
+				{
+					dataSourceId,
+					baseActions,
+					keywordActions,
+					clusterHealthActions,
+					preNarrowMerged,
+					mergedActions,
+					deploymentId,
+				},
 				"Augmented toolActions via keyword match",
 			);
 		}

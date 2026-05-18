@@ -88,7 +88,7 @@ describe("applyStreamEvent", () => {
 			status: "success",
 			duration: 1234,
 			kafkaFindings: {
-				consumerGroups: [{ id: "pim-sink", state: "Stable", totalLag: 42 }],
+				consumerGroups: [{ id: "pim-sink", state: "STABLE", totalLag: 42 }],
 				dlqTopics: [{ name: "orders.dlq", totalMessages: 17, recentDelta: 3 }],
 			},
 		});

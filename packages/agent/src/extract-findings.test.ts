@@ -26,14 +26,14 @@ describe("extractFindings node", () => {
 				kafkaResult([
 					{
 						toolName: "kafka_list_consumer_groups",
-						rawJson: { groups: [{ id: "notification-service", state: "Empty" }] },
+						rawJson: { groups: [{ id: "notification-service", state: "EMPTY" }] },
 					},
 				]),
 			],
 		};
 		const out = await extractFindings(state);
 		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
-		expect(kafka?.kafkaFindings?.consumerGroups).toEqual([{ id: "notification-service", state: "Empty" }]);
+		expect(kafka?.kafkaFindings?.consumerGroups).toEqual([{ id: "notification-service", state: "EMPTY" }]);
 	});
 
 	test("leaves non-kafka results untouched (no extractor registered)", async () => {
@@ -97,7 +97,7 @@ describe("extractFindings node", () => {
 					toolOutputs: [
 						{
 							toolName: "kafka_list_consumer_groups",
-							rawJson: { groups: [{ id: "payments-service", state: "Stable" }] },
+							rawJson: { groups: [{ id: "payments-service", state: "STABLE" }] },
 						},
 					],
 				},
@@ -126,9 +126,9 @@ describe("extractFindings node", () => {
 					{
 						toolName: "kafka_list_consumer_groups",
 						rawJson: [
-							{ id: "notification-service-consumer", state: "Stable" },
-							{ id: "orders-service-sink", state: "Stable" },
-							{ id: "unrelated-group", state: "Stable" },
+							{ id: "notification-service-consumer", state: "STABLE" },
+							{ id: "orders-service-sink", state: "STABLE" },
+							{ id: "unrelated-group", state: "STABLE" },
 						],
 					},
 				]),
@@ -150,8 +150,8 @@ describe("extractFindings node", () => {
 					{
 						toolName: "kafka_list_consumer_groups",
 						rawJson: [
-							{ id: "notification-service", state: "Stable" },
-							{ id: "unrelated-group", state: "Stable" },
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "unrelated-group", state: "STABLE" },
 						],
 					},
 				]),

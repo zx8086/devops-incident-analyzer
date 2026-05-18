@@ -40,7 +40,7 @@ describe("pumpEventStream datasource_result", () => {
 									status: "success",
 									duration: 1234,
 									kafkaFindings: {
-										consumerGroups: [{ id: "pim-sink", state: "Stable", totalLag: 42 }],
+										consumerGroups: [{ id: "pim-sink", state: "STABLE", totalLag: 42 }],
 										dlqTopics: [{ name: "orders.dlq", totalMessages: 17, recentDelta: 3 }],
 									},
 								},
@@ -60,12 +60,23 @@ describe("pumpEventStream datasource_result", () => {
 		const resultEvents = captured.filter((e) => e.type === "datasource_result");
 		expect(resultEvents).toHaveLength(2);
 
+		// SIO-785 follow-up: progress events emitted alongside results so the
+		// store's dataSourceProgress map is populated and the Data Sources
+		// section renders. Without this, findings cards have no row to mount.
+		const progressEvents = captured.filter((e) => e.type === "datasource_progress");
+		expect(progressEvents).toHaveLength(2);
+		const kafkaProgress = progressEvents.find((e) => e.dataSourceId === "kafka");
+		expect(kafkaProgress?.status).toBe("success");
+		const gitlabProgress = progressEvents.find((e) => e.dataSourceId === "gitlab");
+		expect(gitlabProgress?.status).toBe("error");
+		expect(gitlabProgress?.message).toBe("MCP error -32010");
+
 		const kafka = resultEvents.find((e) => e.dataSourceId === "kafka") as Record<string, unknown> | undefined;
 		expect(kafka).toBeDefined();
 		expect(kafka?.status).toBe("success");
 		expect(kafka?.duration).toBe(1234);
 		expect(kafka?.kafkaFindings).toEqual({
-			consumerGroups: [{ id: "pim-sink", state: "Stable", totalLag: 42 }],
+			consumerGroups: [{ id: "pim-sink", state: "STABLE", totalLag: 42 }],
 			dlqTopics: [{ name: "orders.dlq", totalMessages: 17, recentDelta: 3 }],
 		});
 

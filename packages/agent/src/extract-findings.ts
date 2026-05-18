@@ -2,6 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
+import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import type { AgentStateType } from "./state.ts";
@@ -81,6 +82,7 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 		},
 		gitlab: (r) => ({ gitlabFindings: extractGitLabFindings(r.toolOutputs ?? []) }),
 		couchbase: (r) => ({ couchbaseFindings: extractCouchbaseFindings(r.toolOutputs ?? []) }),
+		elastic: (r) => ({ elasticFindings: extractElasticFindings(r.toolOutputs ?? []) }),
 	};
 	const dataSourceResults = state.dataSourceResults.map((r) => {
 		const extractor = extractors[r.dataSourceId];

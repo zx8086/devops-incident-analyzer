@@ -50,6 +50,40 @@ export const KafkaFindingsSchema = z.object({
 			}),
 		)
 		.optional(),
+	// SIO-785 follow-up (2026-05-18): summary fields surfaced by KafkaFindingsCard.
+	// Cluster: from kafka_describe_cluster (MSK admin API).
+	cluster: z
+		.object({
+			provider: z.string().optional(),
+			brokerCount: z.number().int().optional(),
+			topicCount: z.number().int().optional(),
+			controllerId: z.number().int().optional(),
+		})
+		.optional(),
+	// Connectors: from connect_list_connectors. State is uppercase Confluent state
+	// (RUNNING, PAUSED, FAILED, UNASSIGNED). taskFailures counts non-RUNNING tasks.
+	connectors: z
+		.array(
+			z.object({
+				name: z.string(),
+				state: z.string(),
+				type: z.string().optional(), // "sink" | "source"
+				taskFailures: z.number().int().optional(),
+			}),
+		)
+		.optional(),
+	// ksqlDB queries: from ksql_list_queries. statusCount is the per-replica
+	// state distribution emitted by ksqlDB (e.g. {RUNNING: 1, UNRESPONSIVE: 2}).
+	ksqlQueries: z
+		.array(
+			z.object({
+				id: z.string(),
+				state: z.string(),
+				queryType: z.string().optional(),
+				statusCount: z.record(z.string(), z.number().int()).optional(),
+			}),
+		)
+		.optional(),
 });
 export type KafkaFindings = z.infer<typeof KafkaFindingsSchema>;
 
@@ -85,6 +119,27 @@ export const CouchbaseFindingsSchema = z.object({
 });
 export type CouchbaseFindings = z.infer<typeof CouchbaseFindingsSchema>;
 
+// SIO-785 follow-up (2026-05-18): minimal Elastic findings. Today surfaces the
+// most-deterministic structured signal the elastic sub-agent produces during
+// incident analysis: synthetic monitor status. The SOUL's Synthetic-Monitor
+// Cross-Check rule (SIO-717) mandates these queries when investigating Confluent
+// service outages, so the tool output shape is stable across runs. Extend with
+// new fields (APM service summary, top error log clusters) when those signals
+// stabilise.
+export const ElasticSyntheticMonitorSchema = z.object({
+	name: z.string(),
+	status: z.string(), // "up" / "down"
+	url: z.string().optional(),
+	observedAt: z.string().optional(),
+	geo: z.string().optional(),
+});
+export type ElasticSyntheticMonitor = z.infer<typeof ElasticSyntheticMonitorSchema>;
+
+export const ElasticFindingsSchema = z.object({
+	syntheticMonitors: z.array(ElasticSyntheticMonitorSchema).optional(),
+});
+export type ElasticFindings = z.infer<typeof ElasticFindingsSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	// SIO-649: Populated when the elastic sub-agent fans out across deployments.
@@ -100,6 +155,8 @@ export const DataSourceResultSchema = z.object({
 	kafkaFindings: KafkaFindingsSchema.optional(),
 	gitlabFindings: GitLabFindingsSchema.optional(),
 	couchbaseFindings: CouchbaseFindingsSchema.optional(),
+	// SIO-785 follow-up (2026-05-18).
+	elasticFindings: ElasticFindingsSchema.optional(),
 	// SIO-707: total LangGraph messages produced by the sub-agent run. Used by the aggregator
 	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
 	// the run completed but had a high per-iteration failure ratio.
@@ -201,6 +258,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		kafkaFindings: KafkaFindingsSchema.optional(),
 		gitlabFindings: GitLabFindingsSchema.optional(),
 		couchbaseFindings: CouchbaseFindingsSchema.optional(),
+		elasticFindings: ElasticFindingsSchema.optional(),
 	}),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),

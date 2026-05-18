@@ -3,7 +3,12 @@
 import { describe, expect, test } from "bun:test";
 import { matchActionsByKeywords, type ToolDefinition, ToolDefinitionSchema } from "@devops-agent/gitagent-bridge";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { inferClusterHealthActions, mergeKeywordActions, selectToolsByAction } from "./sub-agent.ts";
+import {
+	inferClusterHealthActions,
+	mergeKeywordActions,
+	narrowOnHighPrecisionIntent,
+	selectToolsByAction,
+} from "./sub-agent.ts";
 
 // Minimal kafka tool def fixture mirroring the real kafka-introspect.yaml's
 // action_tool_map + action_keywords for restproxy and connect_status.
@@ -20,6 +25,7 @@ const kafkaToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 			consumer_lag: ["kafka_list_consumer_groups", "kafka_describe_consumer_group", "kafka_get_consumer_group_lag"],
 			cluster_info: ["kafka_get_cluster_info", "kafka_describe_cluster"],
 			topic_throughput: ["kafka_list_topics", "kafka_describe_topic", "kafka_get_topic_offsets"],
+			dlq_messages: ["kafka_consume_messages", "kafka_get_message_by_offset", "kafka_list_dlq_topics"],
 			connect_status: [
 				"connect_get_cluster_info",
 				"connect_list_connectors",
@@ -37,6 +43,7 @@ const kafkaToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 		action_keywords: {
 			connect_status: ["kafka connect", "connector", "connectors", "connect rest"],
 			restproxy: ["rest proxy", "restproxy", "confluent rest"],
+			dlq_messages: ["dead letter", "dead-letter", "dlq"],
 		},
 	},
 });
@@ -53,6 +60,9 @@ function buildKafkaTools(): StructuredToolInterface[] {
 		...filler,
 		"kafka_list_consumer_groups",
 		"kafka_get_cluster_info",
+		"kafka_consume_messages",
+		"kafka_get_message_by_offset",
+		"kafka_list_dlq_topics",
 		"restproxy_list_topics",
 		"restproxy_get_topic",
 		"connect_list_connectors",
@@ -104,6 +114,62 @@ describe("SIO-738: keyword augmentation surfaces restproxy and connect tools", (
 		const merged = mergeKeywordActions(baseActions, keywordActions);
 		// Order-insensitive equality
 		expect(merged.sort()).toEqual(["connect_status", "restproxy"]);
+	});
+
+	// SIO-785 follow-up (2026-05-18): when a DLQ keyword anchors the query,
+	// strip the LLM's noise actions (describe_topic / topic_throughput) so
+	// the LLM cannot wander to kafka_list_topics. The remote AgentCore-deployed
+	// tool description points the LLM at "prefix=DLQ_" — and the only way to
+	// neutralize that is to remove the competing actions upstream.
+	test("narrowOnHighPrecisionIntent strips topic_throughput + describe_topic when dlq_messages anchors", () => {
+		const merged = ["dlq_messages", "describe_topic", "topic_throughput", "health_check"];
+		const keywordActions = ["dlq_messages"];
+		const narrowed = narrowOnHighPrecisionIntent(merged, keywordActions);
+		expect(narrowed.sort()).toEqual(["dlq_messages", "health_check"]);
+	});
+
+	test("narrowOnHighPrecisionIntent leaves merged unchanged when no high-precision trigger fires", () => {
+		const merged = ["consumer_lag", "topic_throughput", "cluster_info"];
+		const keywordActions = ["consumer_lag"]; // not in the narrowing rules
+		const narrowed = narrowOnHighPrecisionIntent(merged, keywordActions);
+		expect(narrowed).toEqual(merged);
+	});
+
+	test("narrowOnHighPrecisionIntent refuses to empty the action list", () => {
+		// Edge case: if narrowing would leave NO actions, fall back to merged.
+		const merged = ["describe_topic", "topic_throughput"]; // only the drop-targets
+		const keywordActions = ["dlq_messages"]; // would drop both
+		const narrowed = narrowOnHighPrecisionIntent(merged, keywordActions);
+		// Since narrowing would empty the list, keep merged as-is.
+		expect(narrowed).toEqual(merged);
+	});
+
+	// SIO-785 follow-up (2026-05-18): narrow single-action selection must NOT
+	// fall through to the all-action fallback. The old MIN_FILTERED_TOOLS=5
+	// floor crowded out kafka_list_dlq_topics for DLQ-specific queries — the
+	// dlq_messages action resolves to 3 tools and was rejected as "too few",
+	// so the fallback picked the first 25 across all actions, omitting the
+	// DLQ tool. Live-verified on 2026-05-18 against c72-shared-services-msk.
+	test("narrow single-action selection (dlq_messages, 3 tools) is honored, not fallen-through", () => {
+		const query = "List the dead letter queue topics and their sizes";
+		const baseActions: string[] = []; // LLM picked nothing
+		const keywordActions = matchActionsByKeywords(query, kafkaToolDef);
+		expect(keywordActions).toEqual(["dlq_messages"]);
+
+		const merged = mergeKeywordActions(baseActions, keywordActions);
+		const allTools = buildKafkaTools();
+		const { tools, filtered } = selectToolsByAction(allTools, "kafka", { kafka: merged }, kafkaToolDef);
+
+		expect(filtered).toBe(true);
+		const names = tools.map((t) => t.name);
+		// Must include kafka_list_dlq_topics so the extractor can populate
+		// dlqTopics[] for KafkaFindingsCard's DLQ section.
+		expect(names).toContain("kafka_list_dlq_topics");
+		// Must NOT degenerate into a 25-tool kitchen-sink (that's the fallback).
+		// dlq_messages alone has 3 tools.
+		expect(names).toHaveLength(3);
+		// And the 3 tools must be the dlq_messages ones, not random.
+		expect(names.sort()).toEqual(["kafka_consume_messages", "kafka_get_message_by_offset", "kafka_list_dlq_topics"]);
 	});
 });
 

@@ -4,9 +4,13 @@ import type { ActionResult, PendingAction } from "@devops-agent/shared";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
+import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
+import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
 import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
+import GitLabFindingsCard from "./GitLabFindingsCard.svelte";
 import Icon from "./Icon.svelte";
+import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
 let {
@@ -57,6 +61,33 @@ let {
             {/if}
           {/if}
         </div>
+
+        {#if !isStreaming && message.dataSourceFindings}
+          {@const kafkaFindings = message.dataSourceFindings.get("kafka")?.kafkaFindings}
+          {@const couchbaseFindings = message.dataSourceFindings.get("couchbase")?.couchbaseFindings}
+          {@const gitlabFindings = message.dataSourceFindings.get("gitlab")?.gitlabFindings}
+          {@const elasticFindings = message.dataSourceFindings.get("elastic")?.elasticFindings}
+          {#if kafkaFindings}
+            <div class="mt-2">
+              <KafkaFindingsCard findings={kafkaFindings} />
+            </div>
+          {/if}
+          {#if couchbaseFindings}
+            <div class="mt-2">
+              <CouchbaseFindingsCard findings={couchbaseFindings} />
+            </div>
+          {/if}
+          {#if gitlabFindings}
+            <div class="mt-2">
+              <GitLabFindingsCard findings={gitlabFindings} />
+            </div>
+          {/if}
+          {#if elasticFindings}
+            <div class="mt-2">
+              <ElasticFindingsCard findings={elasticFindings} />
+            </div>
+          {/if}
+        {/if}
 
         {#if !isStreaming && (message.responseTime !== undefined || (message.toolsUsed && message.toolsUsed.length > 0) || (message.dataSourceResults && message.dataSourceResults.size > 0) || (message.dataSourceFindings && message.dataSourceFindings.size > 0))}
           <CompletedProgress

@@ -124,6 +124,87 @@ describe("instrumentTools", () => {
 		expect(wrapped.schema).toBeDefined();
 	});
 
+	// SIO-785 follow-up (2026-05-18): typed-finding tools must NOT be truncated
+	// because the byte-boundary truncator breaks JSON and the downstream extractor
+	// emits empty findings. Test name matches the allowlist in
+	// sub-agent-instrumentation.ts:TYPED_FINDING_TOOLS.
+	test("does NOT truncate connect_list_connectors even when oversized", async () => {
+		const { entries, logger } = makeLog();
+		// Build a connectors response that exceeds the cap.
+		const connectors: Record<string, unknown> = {};
+		const longKey = "x".repeat(50);
+		const longVal = "y".repeat(500);
+		for (let i = 0; i < 100; i++) {
+			connectors[`C_SINK_${i}`] = {
+				status: { connector: { state: "RUNNING" }, tasks: [{ id: 0, state: "RUNNING" }], type: "sink" },
+				info: { config: { [longKey]: longVal } },
+			};
+		}
+		const payload = JSON.stringify({ connectors, count: 100 });
+		const fake = tool(async () => payload, {
+			name: "connect_list_connectors",
+			description: "Test fixture",
+			schema: z.object({}),
+		});
+		const wrapped = instrumentTools([fake], { dataSourceId: "kafka", log: logger, capBytes: 32_768 })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const result = await wrapped.invoke({
+			id: "call_1",
+			name: "connect_list_connectors",
+			args: {},
+			type: "tool_call",
+		});
+
+		// No truncation log
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeUndefined();
+		// New skip log present
+		const skipLog = entries.find((e) => e.event === "subagent.tool_result_truncation_skipped");
+		expect(skipLog).toBeDefined();
+		expect(skipLog?.toolName).toBe("connect_list_connectors");
+		expect(skipLog?.reason).toBe("typed-finding tool");
+
+		// Result content preserved at full length
+		const tm = result as ToolMessage;
+		const finalText = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
+		expect(finalText.length).toBe(payload.length);
+		// Parseable as JSON
+		const parsed = JSON.parse(finalText) as { connectors: Record<string, unknown>; count: number };
+		expect(parsed.count).toBe(100);
+		expect(Object.keys(parsed.connectors)).toHaveLength(100);
+	});
+
+	test("does NOT truncate kafka_list_consumer_groups, ksql_list_queries, kafka_list_dlq_topics", async () => {
+		const cases = ["kafka_list_consumer_groups", "ksql_list_queries", "kafka_list_dlq_topics"];
+		for (const name of cases) {
+			const { entries, logger } = makeLog();
+			const payload = bigHitsPayload(200); // 200KB+ payload, oversized
+			const fake = tool(async () => payload, { name, description: "x", schema: z.object({}) });
+			const wrapped = instrumentTools([fake], { dataSourceId: "kafka", log: logger, capBytes: 32_768 })[0];
+			if (!wrapped) throw new Error("instrumentTools returned empty array");
+			await wrapped.invoke({ id: "c", name, args: {}, type: "tool_call" });
+			expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeUndefined();
+			expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")?.toolName).toBe(name);
+		}
+	});
+
+	test("still truncates non-allowlisted tools (regression guard for the skip path)", async () => {
+		const { entries, logger } = makeLog();
+		const payload = bigHitsPayload(200);
+		const fake = tool(async () => payload, {
+			name: "kafka_consume_messages", // NOT in allowlist
+			description: "x",
+			schema: z.object({}),
+		});
+		const wrapped = instrumentTools([fake], { dataSourceId: "kafka", log: logger, capBytes: 32_768 })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+		await wrapped.invoke({ id: "c", name: "kafka_consume_messages", args: {}, type: "tool_call" });
+		// Truncation log present
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeDefined();
+		// Skip log absent
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")).toBeUndefined();
+	});
+
 	test("increments iteration counter across multiple invocations", async () => {
 		const { entries, logger } = makeLog();
 		const wrapped = wrapOne("small", { dataSourceId: "elastic", log: logger });

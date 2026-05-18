@@ -3,6 +3,7 @@ import type {
 	ActionResult,
 	CouchbaseFindings,
 	DataSourceContext,
+	ElasticFindings,
 	GitLabFindings,
 	KafkaFindings,
 	PendingAction,
@@ -29,6 +30,7 @@ export interface DataSourceFindings {
 	kafkaFindings?: KafkaFindings;
 	gitlabFindings?: GitLabFindings;
 	couchbaseFindings?: CouchbaseFindings;
+	elasticFindings?: ElasticFindings;
 }
 
 export interface ReducerState {
@@ -91,6 +93,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				kafkaFindings: event.kafkaFindings,
 				gitlabFindings: event.gitlabFindings,
 				couchbaseFindings: event.couchbaseFindings,
+				elasticFindings: event.elasticFindings,
 			});
 			return { ...state, dataSourceFindings: next };
 		}

@@ -121,9 +121,21 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 							kafkaFindings?: unknown;
 							gitlabFindings?: unknown;
 							couchbaseFindings?: unknown;
+							elasticFindings?: unknown;
 						};
 						if (typeof result.dataSourceId !== "string") continue;
 						if (result.status !== "success" && result.status !== "error") continue;
+						// SIO-785 follow-up: emit datasource_progress so the store's
+						// dataSourceProgress map is populated. CompletedProgress.svelte
+						// gates the Data Sources section (where findings cards mount)
+						// on that map being non-empty. Without this, even valid
+						// kafkaFindings have no UI row to render under.
+						send({
+							type: "datasource_progress",
+							dataSourceId: result.dataSourceId,
+							status: result.status,
+							...(typeof result.error === "string" && { message: result.error }),
+						});
 						send({
 							type: "datasource_result",
 							dataSourceId: result.dataSourceId,
@@ -133,6 +145,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 							...(result.kafkaFindings !== undefined && { kafkaFindings: result.kafkaFindings }),
 							...(result.gitlabFindings !== undefined && { gitlabFindings: result.gitlabFindings }),
 							...(result.couchbaseFindings !== undefined && { couchbaseFindings: result.couchbaseFindings }),
+							...(result.elasticFindings !== undefined && { elasticFindings: result.elasticFindings }),
 						});
 					}
 				}

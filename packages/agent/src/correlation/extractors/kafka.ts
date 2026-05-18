@@ -9,7 +9,14 @@ import { z } from "zod";
 // SIO-783: kafka-service.ts listConsumerGroups returns a bare Array<{id, state, ...}>.
 // Accept either the bare array (production shape) or the {groups: [...]} wrapper
 // (back-compat for any callers that wrap).
-const ListConsumerGroupsRowSchema = z.object({ id: z.string(), state: z.string() });
+// Live-verification 2026-05-18: real Confluent/MSK admin API emits state in
+// uppercase ("STABLE", "EMPTY", "DEAD", "PREPARING_REBALANCE", ...). Normalize
+// at parse so downstream comparisons (extractor pass-through, correlation rules,
+// UI dot colour) all see one canonical shape.
+const ListConsumerGroupsRowSchema = z.object({
+	id: z.string(),
+	state: z.string().transform((s) => s.toUpperCase()),
+});
 const ListConsumerGroupsArraySchema = z.array(z.unknown());
 const ListConsumerGroupsWrapperSchema = z.object({ groups: z.array(z.unknown()) });
 
@@ -32,6 +39,50 @@ const ListDlqTopicsRowSchema = z.object({
 	name: z.string(),
 	totalMessages: z.number(),
 	recentDelta: z.number().nullable(),
+});
+
+// SIO-785 follow-up (2026-05-18): shape from kafka_describe_cluster.
+// Live-probed against c72-shared-services-msk on 2026-05-18; matches MSK admin API.
+const DescribeClusterSchema = z.object({
+	provider: z.string().optional(),
+	brokerCount: z.number().int().optional(),
+	topicCount: z.number().int().optional(),
+	controllerId: z.number().int().optional(),
+});
+
+// SIO-785 follow-up (2026-05-18): shape from connect_list_connectors.
+// Response is { connectors: { <name>: { status: { connector: { state }, tasks: [{state}], type } } } }
+// — an object keyed by connector name, NOT an array. The status.connector.state
+// is the canonical connector state; tasks[] is per-worker.
+const ConnectorStatusEntrySchema = z.object({
+	status: z.object({
+		name: z.string().optional(),
+		connector: z.object({ state: z.string() }),
+		tasks: z
+			.array(
+				z.object({
+					id: z.number().int().optional(),
+					state: z.string(),
+				}),
+			)
+			.optional(),
+		type: z.string().optional(),
+	}),
+});
+const ListConnectorsWrappedSchema = z.object({
+	connectors: z.record(z.string(), ConnectorStatusEntrySchema),
+});
+
+// SIO-785 follow-up (2026-05-18): shape from ksql_list_queries.
+// Response: { queries: [{ id, state, queryType, statusCount: {<replicaState>: count} }] }
+const KsqlQueryRowSchema = z.object({
+	id: z.string(),
+	state: z.string(),
+	queryType: z.string().optional(),
+	statusCount: z.record(z.string(), z.number().int()).optional(),
+});
+const ListKsqlQueriesWrappedSchema = z.object({
+	queries: z.array(z.unknown()),
 });
 
 // SIO-785: tokens used as suffixes/qualifiers on kafka consumer-group ids that
@@ -74,7 +125,7 @@ function isRelevantById(
 	totalLag: number | undefined,
 	focusServices: string[],
 ): boolean {
-	if (state !== undefined && state !== "Stable") return true;
+	if (state !== undefined && state !== "STABLE") return true;
 	if ((totalLag ?? 0) > 0) return true;
 	if (focusServices.length === 0) return true;
 	if (!id) return false;
@@ -114,6 +165,9 @@ function isRelevantDlq(name: string, recentDelta: number | null, focusServices: 
 export function extractKafkaFindings(outputs: ToolOutput[], focusServices: string[] = []): KafkaFindings {
 	const byId = new Map<string, { id: string; state?: string; totalLag?: number }>();
 	const dlqTopics: Array<z.infer<typeof ListDlqTopicsRowSchema>> = [];
+	let cluster: NonNullable<KafkaFindings["cluster"]> | undefined;
+	const connectorsByName = new Map<string, NonNullable<KafkaFindings["connectors"]>[number]>();
+	const ksqlQueries: NonNullable<KafkaFindings["ksqlQueries"]> = [];
 
 	for (const o of outputs) {
 		if (o.toolName === "kafka_list_consumer_groups") {
@@ -146,6 +200,47 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 				const parsed = ListDlqTopicsRowSchema.safeParse(t);
 				if (parsed.success) dlqTopics.push(parsed.data);
 			}
+		} else if (o.toolName === "kafka_describe_cluster" || o.toolName === "kafka_get_cluster_info") {
+			// Cluster summary tile. Both tools return overlapping shapes; merge.
+			const parsed = DescribeClusterSchema.safeParse(o.rawJson);
+			if (!parsed.success) continue;
+			cluster = { ...(cluster ?? {}), ...parsed.data };
+		} else if (o.toolName === "connect_list_connectors") {
+			// connect_list_connectors returns an object keyed by name. Iterate values.
+			const parsed = ListConnectorsWrappedSchema.safeParse(o.rawJson);
+			if (!parsed.success) continue;
+			for (const [name, entry] of Object.entries(parsed.data.connectors)) {
+				const tasks = entry.status.tasks ?? [];
+				const taskFailures = tasks.filter((t) => t.state !== "RUNNING").length;
+				connectorsByName.set(name, {
+					name,
+					state: entry.status.connector.state,
+					...(entry.status.type ? { type: entry.status.type } : {}),
+					...(tasks.length > 0 ? { taskFailures } : {}),
+				});
+			}
+		} else if (o.toolName === "connect_get_connector_status") {
+			// Singleton variant: { name, connector: {state}, tasks: [{state}], type }
+			const parsed = ConnectorStatusEntrySchema.safeParse({ status: o.rawJson });
+			if (!parsed.success) continue;
+			const name = parsed.data.status.name;
+			if (!name) continue;
+			const tasks = parsed.data.status.tasks ?? [];
+			const taskFailures = tasks.filter((t) => t.state !== "RUNNING").length;
+			connectorsByName.set(name, {
+				name,
+				state: parsed.data.status.connector.state,
+				...(parsed.data.status.type ? { type: parsed.data.status.type } : {}),
+				...(tasks.length > 0 ? { taskFailures } : {}),
+			});
+		} else if (o.toolName === "ksql_list_queries") {
+			const parsed = ListKsqlQueriesWrappedSchema.safeParse(o.rawJson);
+			if (!parsed.success) continue;
+			for (const q of parsed.data.queries) {
+				const row = KsqlQueryRowSchema.safeParse(q);
+				if (!row.success) continue;
+				ksqlQueries.push(row.data);
+			}
 		}
 	}
 
@@ -159,5 +254,8 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 	const findings: KafkaFindings = {};
 	if (filteredGroups.length > 0) findings.consumerGroups = filteredGroups;
 	if (filteredDlqs.length > 0) findings.dlqTopics = filteredDlqs;
+	if (cluster) findings.cluster = cluster;
+	if (connectorsByName.size > 0) findings.connectors = Array.from(connectorsByName.values());
+	if (ksqlQueries.length > 0) findings.ksqlQueries = ksqlQueries;
 	return findings;
 }
