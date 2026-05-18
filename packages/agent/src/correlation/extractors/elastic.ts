@@ -44,6 +44,136 @@ const SyntheticHitSourceSchema = z.object({
 		.optional(),
 });
 
+// SIO-786 (2026-05-18): real elastic MCP returns multi-text-block content
+// joined into a single string by @langchain/mcp-adapters. Each document is a
+// section starting with "Document ID: <id>" containing YAML-like top-level
+// fields with JSON object values:
+//
+//   monitor: { "name": "...", "id": "...", "status": "down" }
+//   url: { "full": "..." }
+//   observer: { "geo": { "name": "..." } }
+//   summary: { "up": 0, "down": 1, "status": "down" }
+//   state: { "status": "down" }
+//   @timestamp: 2026-05-18T14:58:52.969Z
+//
+// `monitor.status` is not always present on browser synthetic heartbeat
+// records; resolve status from monitor.status -> summary.status -> state.status.
+// Dedupe by monitor.id (stable UUID); fall back to monitor.name when id is
+// absent.
+
+// Find a "<key>: {" line and return the substring of the brace-balanced JSON
+// object that follows. Returns null when the key isn't present or braces
+// don't balance.
+function extractJsonBlock(text: string, key: string): string | null {
+	const re = new RegExp(`^${key}:\\s*\\{`, "m");
+	const m = re.exec(text);
+	if (!m) return null;
+	const start = m.index + m[0].length - 1; // position of opening brace
+	let depth = 0;
+	let inString = false;
+	let escape = false;
+	for (let i = start; i < text.length; i++) {
+		const ch = text[i];
+		if (escape) {
+			escape = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escape = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") depth++;
+		else if (ch === "}") {
+			depth--;
+			if (depth === 0) return text.slice(start, i + 1);
+		}
+	}
+	return null;
+}
+
+function parseJsonBlock<T = unknown>(text: string, key: string): T | null {
+	const block = extractJsonBlock(text, key);
+	if (block === null) return null;
+	try {
+		return JSON.parse(block) as T;
+	} catch {
+		return null;
+	}
+}
+
+// Bare-scalar field, e.g. `@timestamp: 2026-05-18T14:58:52.969Z` (no quotes,
+// not a JSON value).
+function extractScalarField(text: string, key: string): string | null {
+	const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const re = new RegExp(`^${escaped}:\\s*(\\S.*?)\\s*$`, "m");
+	const m = re.exec(text);
+	return m ? (m[1] ?? null) : null;
+}
+
+interface ParsedMonitorSection {
+	name?: string;
+	id?: string;
+	status?: string;
+	type?: string;
+}
+interface ParsedUrlSection {
+	full?: string;
+}
+interface ParsedObserverSection {
+	geo?: { name?: string };
+	name?: string;
+}
+interface ParsedStatusSection {
+	status?: string;
+}
+
+function parseSyntheticMonitorsFromText(content: string): ElasticSyntheticMonitor[] {
+	// Split on "Document ID:" — the leading marker for each hit's section.
+	// The first split element (before the first Document ID) is the summary
+	// line ("Total results: ...") which we drop.
+	const sections = content.split(/^Document ID:.*$/m).slice(1);
+	if (sections.length === 0) return [];
+
+	const monitorsByKey = new Map<string, ElasticSyntheticMonitor>();
+	for (const section of sections) {
+		const monitor = parseJsonBlock<ParsedMonitorSection>(section, "monitor");
+		if (!monitor || !monitor.name) continue;
+
+		// Status priority: monitor.status -> summary.status -> state.status.
+		let status = monitor.status;
+		if (!status) {
+			const summary = parseJsonBlock<ParsedStatusSection>(section, "summary");
+			status = summary?.status;
+		}
+		if (!status) {
+			const state = parseJsonBlock<ParsedStatusSection>(section, "state");
+			status = state?.status;
+		}
+		if (!status) continue; // no resolvable status — skip
+
+		const dedupeKey = monitor.id ?? monitor.name;
+		if (monitorsByKey.has(dedupeKey)) continue; // first wins (most-recent)
+
+		const url = parseJsonBlock<ParsedUrlSection>(section, "url");
+		const observer = parseJsonBlock<ParsedObserverSection>(section, "observer");
+		const timestamp = extractScalarField(section, "@timestamp");
+
+		monitorsByKey.set(dedupeKey, {
+			name: monitor.name,
+			status,
+			...(url?.full && { url: url.full }),
+			...(timestamp && { observedAt: timestamp }),
+			...(observer?.geo?.name && { geo: observer.geo.name }),
+		});
+	}
+	return Array.from(monitorsByKey.values());
+}
+
 function looksLikeSyntheticIndex(o: ToolOutput): boolean {
 	// SIO-717: the SOUL pattern is `synthetics-*`. Soft-detect via the index
 	// or query arg if the agent included it in toolArgs (typical via MCP).
@@ -61,6 +191,18 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search") continue;
+
+		// SIO-786: real elastic MCP returns multi-text-block content joined into
+		// a string by tryParseJson's fall-through. Detect string rawJson and
+		// route to the text-block parser; otherwise keep the JSON-envelope path.
+		if (typeof o.rawJson === "string") {
+			for (const m of parseSyntheticMonitorsFromText(o.rawJson)) {
+				if (monitorsByName.has(m.name)) continue;
+				monitorsByName.set(m.name, m);
+			}
+			continue;
+		}
+
 		const parsed = SearchResponseSchema.safeParse(o.rawJson);
 		if (!parsed.success) continue;
 		const hits = parsed.data.hits.hits;
