@@ -11,6 +11,9 @@ import { logger } from "../utils/logger.js";
 export interface CloudRequestOptions {
 	query?: Record<string, string | number | boolean | undefined>;
 	signal?: AbortSignal;
+	// When true, a 404 response resolves to null instead of throwing. Used by plan/activity
+	// fallback paths where "deployment exists but has no in-flight plan" is a valid state.
+	notFoundOk?: boolean;
 }
 
 // Subset of fetch we depend on -- typed loosely so test doubles can stand in.
@@ -33,8 +36,17 @@ export class CloudClient {
 		this.fetchImpl = fetchImpl;
 	}
 
-	async get<T = unknown>(path: string, options: CloudRequestOptions = {}): Promise<T> {
+	async get<T = unknown>(path: string, options?: CloudRequestOptions & { notFoundOk?: false }): Promise<T>;
+	async get<T = unknown>(path: string, options: CloudRequestOptions & { notFoundOk: true }): Promise<T | null>;
+	async get<T = unknown>(path: string, options: CloudRequestOptions = {}): Promise<T | null> {
 		return this.request<T>("GET", path, options);
+	}
+
+	// DELETE is idempotent, so it shares the retry path. Used by cancel-pending-plan style tools.
+	async del<T = unknown>(path: string, options?: CloudRequestOptions & { notFoundOk?: false }): Promise<T>;
+	async del<T = unknown>(path: string, options: CloudRequestOptions & { notFoundOk: true }): Promise<T | null>;
+	async del<T = unknown>(path: string, options: CloudRequestOptions = {}): Promise<T | null> {
+		return this.request<T>("DELETE", path, options);
 	}
 
 	private buildUrl(path: string, query?: CloudRequestOptions["query"]): string {
@@ -50,7 +62,7 @@ export class CloudClient {
 
 	// Idempotent retry: 5xx and network errors back off and retry up to maxRetries. We never
 	// retry 4xx -- a 401/404 retried doesn't change. PUT/POST should not call this method.
-	private async request<T>(method: "GET", path: string, options: CloudRequestOptions): Promise<T> {
+	private async request<T>(method: "GET" | "DELETE", path: string, options: CloudRequestOptions): Promise<T | null> {
 		const url = this.buildUrl(path, options.query);
 		const headers: Record<string, string> = {
 			Authorization: `ApiKey ${this.apiKey}`,
@@ -70,6 +82,10 @@ export class CloudClient {
 
 				if (response.ok) {
 					return (await response.json()) as T;
+				}
+
+				if (response.status === 404 && options.notFoundOk) {
+					return null;
 				}
 
 				const bodyText = await response.text().catch(() => "");

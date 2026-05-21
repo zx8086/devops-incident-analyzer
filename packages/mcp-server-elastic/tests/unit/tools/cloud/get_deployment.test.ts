@@ -43,6 +43,18 @@ describe("elasticsearch_cloud_get_deployment", () => {
 		await expect(handler({ deployment_id: "" })).rejects.toBeInstanceOf(McpError);
 	});
 
+	test("forwards show_plan_history and force_all_plan_history as query params", async () => {
+		let capturedUrl = "";
+		const handler = makeHandler(async (url) => {
+			capturedUrl = String(url);
+			return new Response(JSON.stringify({ id: "abc" }), { status: 200 });
+		});
+		await handler({ deployment_id: "abc", show_plan_history: true, force_all_plan_history: true });
+		const u = new URL(capturedUrl);
+		expect(u.searchParams.get("show_plan_history")).toBe("true");
+		expect(u.searchParams.get("force_all_plan_history")).toBe("true");
+	});
+
 	test("returns the JSON response in a single text content block", async () => {
 		const handler = makeHandler(
 			async () => new Response(JSON.stringify({ id: "eu-b2b", name: "eu-b2b" }), { status: 200 }),

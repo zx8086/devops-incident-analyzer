@@ -13,6 +13,11 @@ const validator = z.object({
 	show_metadata: z.boolean().optional(),
 	show_plans: z.boolean().optional(),
 	show_plan_logs: z.boolean().optional(),
+	// SIO-XXX: ECH defaults show_plan_history to false, which is why plan_info.history
+	// arrives as []. Set show_plan_history=true to populate prior plan attempts. Pair with
+	// force_all_plan_history=true to bypass the default first-10 + last-90 cap.
+	show_plan_history: z.boolean().optional(),
+	force_all_plan_history: z.boolean().optional(),
 	show_settings: z.boolean().optional(),
 	show_security: z.boolean().optional(),
 });
@@ -30,6 +35,8 @@ export const registerCloudGetDeploymentTool: CloudToolRegistrationFunction = (se
 					show_metadata: params.show_metadata,
 					show_plans: params.show_plans,
 					show_plan_logs: params.show_plan_logs,
+					show_plan_history: params.show_plan_history,
+					force_all_plan_history: params.force_all_plan_history,
 					show_settings: params.show_settings,
 					show_security: params.show_security,
 				},
@@ -58,7 +65,7 @@ export const registerCloudGetDeploymentTool: CloudToolRegistrationFunction = (se
 		{
 			title: "Elastic Cloud: get deployment",
 			description:
-				"Elastic Cloud Deployment API -- fetch the full plan for one deployment, including per-tier autoscaling_max, autoscaling_min, size, zone_count, instance_configuration_id, and version. Use this to confirm autoscaling ceilings after a console plan change. READ operation. Operates on api.elastic-cloud.com, not on cluster state.",
+				"Elastic Cloud Deployment API -- fetch the full plan for one deployment, including per-tier autoscaling_max, autoscaling_min, size, zone_count, instance_configuration_id, and version. Use this to confirm autoscaling ceilings after a console plan change. On Elastic Cloud Hosted (ECH), pass show_plan_history=true to populate plan_info.history[] (default false; pair with force_all_plan_history=true to bypass the first-10 + last-90 cap). READ operation. Operates on api.elastic-cloud.com, not on cluster state.",
 			inputSchema: validator.shape,
 		},
 		handler,

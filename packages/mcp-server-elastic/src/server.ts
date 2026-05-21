@@ -9,9 +9,15 @@ import { type CloudClient, initializeCloudClient } from "./clients/cloudClient.j
 import { createClientProxy, registerClients } from "./clients/registry.js";
 import type { Config, DeploymentConfig } from "./config/index.js";
 import { registerBillingGetDeploymentCostsTool } from "./tools/billing/get_deployment_costs.js";
+import { registerBillingGetInstanceChartsTool } from "./tools/billing/get_instance_charts.js";
+import { registerBillingGetInstanceItemsTool } from "./tools/billing/get_instance_items.js";
 import { registerBillingGetOrgChartsTool } from "./tools/billing/get_org_charts.js";
 import { registerBillingGetOrgCostsTool } from "./tools/billing/get_org_costs.js";
+import { registerBillingListInstancesTool } from "./tools/billing/list_instances.js";
+import { registerCloudCancelPendingPlanTool } from "./tools/cloud/cancel_pending_plan.js";
+import { registerCloudGetAccountTool } from "./tools/cloud/get_account.js";
 import { registerCloudGetDeploymentTool } from "./tools/cloud/get_deployment.js";
+import { registerCloudGetEsResourceTool } from "./tools/cloud/get_es_resource.js";
 import { registerCloudGetPlanActivityTool } from "./tools/cloud/get_plan_activity.js";
 import { registerCloudGetPlanHistoryTool } from "./tools/cloud/get_plan_history.js";
 import { registerCloudListDeploymentsTool } from "./tools/cloud/list_deployments.js";
@@ -248,18 +254,24 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 }
 
 // SIO-674: Conditionally register the org-scoped Elastic Cloud + Billing tools. Called only
-// when initializeCloudClient produced a non-null client (i.e. EC_API_KEY is set). The 7
-// tools all use the lazy-auth CloudClient -- failures surface on first invocation, never at
-// boot, so self-hosted ES users are unaffected.
+// when initializeCloudClient produced a non-null client (i.e. EC_API_KEY is set). All tools
+// use the lazy-auth CloudClient -- failures surface on first invocation, never at boot, so
+// self-hosted ES users are unaffected.
 function registerCloudAndBillingTools(server: McpServer, cloudClient: CloudClient): void {
 	registerCloudListDeploymentsTool(server, cloudClient);
 	registerCloudGetDeploymentTool(server, cloudClient);
+	registerCloudGetEsResourceTool(server, cloudClient);
 	registerCloudGetPlanActivityTool(server, cloudClient);
 	registerCloudGetPlanHistoryTool(server, cloudClient);
+	registerCloudGetAccountTool(server, cloudClient);
+	registerCloudCancelPendingPlanTool(server, cloudClient);
 	registerBillingGetOrgCostsTool(server, cloudClient);
 	registerBillingGetDeploymentCostsTool(server, cloudClient);
 	registerBillingGetOrgChartsTool(server, cloudClient);
-	logger.info("Registered 7 Elastic Cloud Deployment + Billing tools");
+	registerBillingListInstancesTool(server, cloudClient);
+	registerBillingGetInstanceItemsTool(server, cloudClient);
+	registerBillingGetInstanceChartsTool(server, cloudClient);
+	logger.info("Registered 13 Elastic Cloud Deployment + Billing tools");
 }
 
 // Sync -- called per-request by factory. Creates McpServer and registers tools.
