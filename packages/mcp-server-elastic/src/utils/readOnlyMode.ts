@@ -50,6 +50,9 @@ export const DESTRUCTIVE_TOOLS = new Set([
 	"delete_data_stream",
 	// Ingest pipeline destructive operations
 	"delete_ingest_pipeline",
+	// Cloud control plane destructive ops -- registered with full tool name since
+	// the cancel-plan handler calls checkOperation(TOOL_NAME) verbatim.
+	"elasticsearch_cloud_cancel_pending_plan",
 ]);
 
 export const WRITE_TOOLS = new Set([
@@ -96,6 +99,8 @@ export const DELETE_TOOLS = new Set([
 	"delete_data_stream",
 	// Ingest pipeline delete operations
 	"delete_ingest_pipeline",
+	// Cloud control plane DELETE ops (full tool name -- see DESTRUCTIVE_TOOLS note).
+	"elasticsearch_cloud_cancel_pending_plan",
 ]);
 
 export class ReadOnlyModeManager {

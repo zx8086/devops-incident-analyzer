@@ -140,6 +140,31 @@ describe("CloudClient", () => {
 		}
 	});
 
+	test("del() issues DELETE with same auth + retry semantics", async () => {
+		const { fetchImpl, calls } = recordingFetch([() => jsonResponse({ id: "deploy-1" })]);
+		const client = new CloudClient(baseCloudConfig, fetchImpl);
+		const result = await client.del<{ id: string }>(
+			"/api/v1/deployments/abc/elasticsearch/main-elasticsearch/plan/pending",
+		);
+		expect(result.id).toBe("deploy-1");
+		expect(calls[0]?.init?.method).toBe("DELETE");
+		const headers = calls[0]?.init?.headers as Record<string, string>;
+		expect(headers?.Authorization).toBe("ApiKey test-api-key");
+	});
+
+	test("notFoundOk: 404 resolves to null instead of throwing", async () => {
+		const { fetchImpl } = recordingFetch([() => new Response("missing", { status: 404 })]);
+		const client = new CloudClient(baseCloudConfig, fetchImpl);
+		const result = await client.get("/api/v1/deployments/missing", { notFoundOk: true });
+		expect(result).toBeNull();
+	});
+
+	test("notFoundOk: non-404 4xx still throws", async () => {
+		const { fetchImpl } = recordingFetch([() => new Response("forbidden", { status: 403 })]);
+		const client = new CloudClient(baseCloudConfig, fetchImpl);
+		await expect(client.get("/api/v1/deployments/secret", { notFoundOk: true })).rejects.toThrow(McpError);
+	});
+
 	test("defaultOrgId is exposed for billing tools to consume", () => {
 		const client = new CloudClient(baseCloudConfig);
 		expect(client.defaultOrgId).toBe("org-1");

@@ -23,27 +23,99 @@ function makeHandler(fetchImpl: FetchLike) {
 }
 
 describe("elasticsearch_cloud_get_plan_activity", () => {
-	test("defaults ref_id to main-elasticsearch", async () => {
-		let url = "";
+	test("uses ECH get_deployment endpoint with show_plans and show_plan_logs", async () => {
+		let capturedUrl = "";
 		const handler = makeHandler(async (u) => {
-			url = String(u);
-			return new Response(JSON.stringify({ current: { plan_attempt_log: [] } }), { status: 200 });
+			capturedUrl = String(u);
+			return new Response(
+				JSON.stringify({
+					resources: { elasticsearch: [{ ref_id: "main-elasticsearch", info: { plan_info: {} } }] },
+				}),
+				{ status: 200 },
+			);
 		});
 		await handler({ deployment_id: "abc" });
-		expect(url).toBe(
-			"https://api.elastic-cloud.com/api/v1/deployments/abc/elasticsearch/main-elasticsearch/plan/activity",
-		);
+		const url = new URL(capturedUrl);
+		expect(url.pathname).toBe("/api/v1/deployments/abc");
+		expect(url.searchParams.get("show_plans")).toBe("true");
+		expect(url.searchParams.get("show_plan_logs")).toBe("true");
 	});
 
-	test("respects an explicit ref_id when provided", async () => {
-		let url = "";
-		const handler = makeHandler(async (u) => {
-			url = String(u);
-			return new Response("{}", { status: 200 });
-		});
-		await handler({ deployment_id: "abc", ref_id: "secondary-cluster" });
-		expect(url).toBe(
-			"https://api.elastic-cloud.com/api/v1/deployments/abc/elasticsearch/secondary-cluster/plan/activity",
+	test("returns no_plan_in_progress when pending is absent", async () => {
+		const handler = makeHandler(
+			async () =>
+				new Response(
+					JSON.stringify({
+						resources: { elasticsearch: [{ ref_id: "main-elasticsearch", info: { plan_info: {} } }] },
+					}),
+					{ status: 200 },
+				),
 		);
+		const result = await handler({ deployment_id: "abc" });
+		const parsed = JSON.parse(result.content[0]?.text ?? "{}") as {
+			status: string;
+			deployment_id: string;
+			ref_id: string;
+		};
+		expect(parsed.status).toBe("no_plan_in_progress");
+		expect(parsed.deployment_id).toBe("abc");
+		expect(parsed.ref_id).toBe("main-elasticsearch");
+	});
+
+	test("returns plan_in_progress with the pending payload when a plan is running", async () => {
+		const pending = {
+			plan_attempt_id: "999",
+			plan_attempt_log: [{ step_id: "rolling-restart", status: "in_progress" }],
+		};
+		const handler = makeHandler(
+			async () =>
+				new Response(
+					JSON.stringify({
+						resources: { elasticsearch: [{ ref_id: "main-elasticsearch", info: { plan_info: { pending } } }] },
+					}),
+					{ status: 200 },
+				),
+		);
+		const result = await handler({ deployment_id: "abc" });
+		const parsed = JSON.parse(result.content[0]?.text ?? "{}") as {
+			status: string;
+			pending: { plan_attempt_id: string };
+		};
+		expect(parsed.status).toBe("plan_in_progress");
+		expect(parsed.pending.plan_attempt_id).toBe("999");
+	});
+
+	test("returns deployment_not_found when the deployment 404s", async () => {
+		const handler = makeHandler(async () => new Response("not found", { status: 404 }));
+		const result = await handler({ deployment_id: "missing" });
+		const parsed = JSON.parse(result.content[0]?.text ?? "{}") as { status: string; deployment_id: string };
+		expect(parsed.status).toBe("deployment_not_found");
+		expect(parsed.deployment_id).toBe("missing");
+	});
+
+	test("respects an explicit ref_id when multiple elasticsearch resources are present", async () => {
+		const handler = makeHandler(
+			async () =>
+				new Response(
+					JSON.stringify({
+						resources: {
+							elasticsearch: [
+								{ ref_id: "main-elasticsearch", info: { plan_info: {} } },
+								{ ref_id: "secondary-cluster", info: { plan_info: { pending: { plan_attempt_id: "42" } } } },
+							],
+						},
+					}),
+					{ status: 200 },
+				),
+		);
+		const result = await handler({ deployment_id: "abc", ref_id: "secondary-cluster" });
+		const parsed = JSON.parse(result.content[0]?.text ?? "{}") as {
+			status: string;
+			ref_id: string;
+			pending: { plan_attempt_id: string };
+		};
+		expect(parsed.status).toBe("plan_in_progress");
+		expect(parsed.ref_id).toBe("secondary-cluster");
+		expect(parsed.pending.plan_attempt_id).toBe("42");
 	});
 });
