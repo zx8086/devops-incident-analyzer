@@ -189,7 +189,10 @@ interface CallLog {
 	pathname: string;
 }
 
-function makeFetch(handlers: Record<string, (u: URL) => unknown | null>, log: CallLog[]): FetchLike {
+function makeFetch(
+	handlers: Record<string, (u: URL) => { status?: number; body?: unknown } | unknown | null>,
+	log: CallLog[],
+): FetchLike {
 	return async (u) => {
 		const url = new URL(String(u));
 		log.push({ url: String(u), pathname: url.pathname });
@@ -199,6 +202,17 @@ function makeFetch(handlers: Record<string, (u: URL) => unknown | null>, log: Ca
 			if (url.pathname.startsWith(prefix)) {
 				const body = handlers[prefix]?.(url);
 				if (body === null) return new Response("", { status: 404 });
+				// Allow handlers to return { status, body } for non-200 responses.
+				if (
+					body !== undefined &&
+					body !== null &&
+					typeof body === "object" &&
+					"status" in (body as object) &&
+					"body" in (body as object)
+				) {
+					const wrapped = body as { status: number; body: unknown };
+					return new Response(JSON.stringify(wrapped.body ?? {}), { status: wrapped.status });
+				}
 				return new Response(JSON.stringify(body), { status: 200 });
 			}
 		}
@@ -215,15 +229,24 @@ function makeHandler(cfg: ElasticCloudConfig, fetchImpl: FetchLike) {
 }
 
 interface ResultEnvelope {
+	region: string;
+	target_template_region: string;
+	warnings: string[];
 	current_profile: { elasticsearch_topology: Tier[]; total_gb_ram_zones: number };
 	target_profile: { elasticsearch_topology: Tier[]; total_gb_ram_zones: number; topology_warnings: string[] };
 	cost_estimate: {
 		rate_per_gb_ram_hour: number | null;
 		rate_source: string;
 		current_monthly_ecu: number | null;
+		current_monthly_ecu_partial: number;
+		current_monthly_ecu_complete: boolean;
 		target_monthly_ecu: number | null;
+		target_monthly_ecu_partial: number;
+		target_monthly_ecu_complete: boolean;
 		delta_monthly_ecu: number | null;
-		unmatched_tier_ics: string[];
+		unmatched_current_ics: string[];
+		unmatched_target_ics: string[];
+		diagnostics: { billing_status: string };
 		note: string;
 	};
 	compatibility: { same_profile: boolean; note: string };
@@ -267,7 +290,6 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		expect(billingCalls.length).toBe(1);
 		expect(billingCalls[0]?.pathname.endsWith("/items")).toBe(false);
 		expect(billingCalls[0]?.pathname).toBe(`/api/v2/billing/organizations/${ORG_ID}/costs/instances`);
-		// The deployment ID must NEVER appear in a billing URL path segment
 		for (const c of billingCalls) expect(c.pathname).not.toContain(DEPLOYMENT_ID);
 	});
 
@@ -281,7 +303,6 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		expect(hot?.rate_per_gb_ram_hour).toBeCloseTo(HOT_RATE_PER_GB_RAM_HOUR, 6);
 		expect(hot?.rate_source).toContain("billing API: per-IC rate");
 		expect(hot?.monthly_ecu).not.toBeNull();
-		// Headline rate is the GB-RAM-zone-weighted average across current topology
 		expect(typeof result.cost_estimate.rate_per_gb_ram_hour).toBe("number");
 	});
 
@@ -303,7 +324,6 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		const result = parseResult(
 			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
 		);
-		// No tier should price at the APM or Kibana rate
 		const apmPerGbRamHour = APM_HOURLY / (4 * 3); // ~0.0675
 		for (const t of result.current_profile.elasticsearch_topology) {
 			expect(t.rate_per_gb_ram_hour).not.toBe(apmPerGbRamHour);
@@ -330,8 +350,8 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
 		);
 		const hot = result.target_profile.elasticsearch_topology.find((t) => t.instance_configuration_id === HOT_IC);
-		expect(hot?.size_gb_ram).toBe(16); // current actual, NOT 8 (template default)
-		expect(hot?.zone_count).toBe(3); // current actual, NOT 2 (template default)
+		expect(hot?.size_gb_ram).toBe(16);
+		expect(hot?.zone_count).toBe(3);
 	});
 
 	test("SIO-823: tier absent from target appears in topology_warnings", async () => {
@@ -347,13 +367,11 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		const result = parseResult(
 			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
 		);
-		// Target carries the same sizes as current (projection), so target ECU equals current ECU.
 		expect(result.cost_estimate.target_monthly_ecu).toBe(result.cost_estimate.current_monthly_ecu);
 		expect(result.cost_estimate.delta_monthly_ecu).toBe(0);
 	});
 
 	test("env-var fallback prices tiers whose IC is absent from billing", async () => {
-		// Drop the cold tier from billing so its IC has no per-IC rate.
 		const noColdBilling = {
 			...billingInstancesFixture,
 			instances: [
@@ -376,7 +394,12 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		const cold = result.current_profile.elasticsearch_topology.find((t) => t.instance_configuration_id === COLD_IC);
 		expect(cold?.rate_per_gb_ram_hour).toBeCloseTo(0.05, 6);
 		expect(cold?.rate_source).toBe("EC_PRICE_PER_GB_RAM_HOUR env var");
-		expect(result.cost_estimate.unmatched_tier_ics).toContain(COLD_IC);
+		// SIO-824 D7: cold IC appears in unmatched_current_ics (current uses cold). Target also
+		// inherits the cold tier via projection (since target template lacks cold the current
+		// tier is kept verbatim), so cold ends up in unmatched_target_ics too — but the lists
+		// are now separately addressable.
+		expect(result.cost_estimate.unmatched_current_ics).toContain(COLD_IC);
+		expect(result.cost_estimate.unmatched_target_ics).toContain(COLD_IC);
 	});
 
 	test("pure env-var path: no org_id, no billing calls, every tier prices at scalar rate", async () => {
@@ -391,6 +414,8 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		}
 		expect(log.filter((c) => c.pathname.startsWith("/api/v2/billing/")).length).toBe(0);
 		expect(result.cost_estimate.rate_source).toBe("EC_PRICE_PER_GB_RAM_HOUR env var");
+		// SIO-824 D2: when no org_id is configured the billing_status surfaces the reason.
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("no_org_id");
 	});
 
 	test("unavailable path: no org_id, no fallback, returns null cost with valid envelope", async () => {
@@ -403,8 +428,9 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		expect(result.cost_estimate.target_monthly_ecu).toBeNull();
 		expect(result.cost_estimate.delta_monthly_ecu).toBeNull();
 		expect(result.cost_estimate.rate_per_gb_ram_hour).toBeNull();
-		// Per-tier rate fields are still null but tiers exist
 		expect(result.current_profile.elasticsearch_topology.length).toBe(3);
+		// SIO-824 D2: billing_status surfaces "no_org_id" in the unavailable path.
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("no_org_id");
 	});
 
 	test("billing 404 / empty row: graceful degradation with env-var fallback", async () => {
@@ -421,6 +447,8 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		for (const t of result.current_profile.elasticsearch_topology) {
 			expect(t.rate_per_gb_ram_hour).toBeCloseTo(0.05, 6);
 		}
+		// SIO-824 D2: empty billing instances surface as "empty" status.
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("empty");
 	});
 
 	test("same_profile short-circuit: target equals current when template ids match", async () => {
@@ -429,7 +457,6 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: CURRENT_TEMPLATE, region: REGION }),
 		);
 		expect(result.compatibility.same_profile).toBe(true);
-		// Current template has empty cluster_topology, so every current tier is unmatched -> warnings for all 3
 		expect(result.target_profile.topology_warnings.length).toBe(3);
 		expect(result.target_profile.total_gb_ram_zones).toBe(result.current_profile.total_gb_ram_zones);
 	});
@@ -450,8 +477,6 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 	});
 
 	test("billing SKU with .N size-class suffix matches bare-family topology IC", async () => {
-		// Live observation: deployment topology uses `aws.es.master.c5d` while billing
-		// SKU is `aws.es.master.c5d.2`. The matcher must normalise both forms.
 		const masterSuffixedSku = `Cloud-Enterprise_aws.es.master.c5d.2_${REGION}_4096_3`;
 		const billing = {
 			...billingInstancesFixture,
@@ -492,6 +517,325 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 			handler({ deployment_id: "", target_template_id: TARGET_TEMPLATE, region: REGION }),
 		).rejects.toBeInstanceOf(McpError);
 	});
+
+	// ----- SIO-824 D1 + D6: autoscaled-down tiers no longer poison the total -----
+
+	test("SIO-824 D1: tier with size 0 contributes 0 and does not null the total", async () => {
+		// Mirrors eu-cld-monitor / eu-onboarding: hot tier sized, every other tier autoscaled down.
+		const autoscalingDeployment = {
+			id: DEPLOYMENT_ID,
+			name: "autoscaling-deployment",
+			resources: {
+				elasticsearch: [
+					{
+						id: ES_RESOURCE_ID,
+						region: REGION,
+						info: {
+							plan_info: {
+								current: {
+									plan: {
+										deployment_template: { id: CURRENT_TEMPLATE },
+										cluster_topology: [
+											{
+												id: "hot_content",
+												instance_configuration_id: HOT_IC,
+												size: { value: 16384, resource: "memory" },
+												zone_count: 3,
+											},
+											// Autoscaled-down tiers: rate may or may not exist in billing, but size 0
+											// means we're not paying — these must contribute 0, not null.
+											{
+												id: "master",
+												instance_configuration_id: MASTER_IC,
+												size: { value: 0, resource: "memory" },
+												zone_count: 3,
+											},
+											{
+												id: "coordinating",
+												instance_configuration_id: "aws.coordinating.m5d",
+												size: { value: 0, resource: "memory" },
+												zone_count: 2,
+											},
+											{
+												id: "warm",
+												instance_configuration_id: "aws.es.datawarm.d3",
+												size: { value: 0, resource: "memory" },
+												zone_count: 2,
+											},
+										],
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+		};
+		const handlers = { ...defaultHandlers, [`/api/v1/deployments/${DEPLOYMENT_ID}`]: () => autoscalingDeployment };
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+
+		// Total is a finite number (not null) because the only sized tier was priced.
+		expect(result.cost_estimate.current_monthly_ecu).not.toBeNull();
+		expect(result.cost_estimate.current_monthly_ecu_complete).toBe(true);
+		expect(result.cost_estimate.current_monthly_ecu).toBeCloseTo(
+			16 * 3 * HOT_RATE_PER_GB_RAM_HOUR * HOURS_PER_MONTH,
+			1,
+		);
+
+		// Autoscaled-down tiers price at 0 with a clear source label.
+		const master = result.current_profile.elasticsearch_topology.find((t) => t.topology_id === "master");
+		expect(master?.monthly_ecu).toBe(0);
+		expect(master?.rate_source).toBe("size 0 (autoscaled down)");
+		const coord = result.current_profile.elasticsearch_topology.find((t) => t.topology_id === "coordinating");
+		expect(coord?.monthly_ecu).toBe(0);
+		expect(coord?.rate_source).toBe("size 0 (autoscaled down)");
+	});
+
+	test("SIO-824 D6: target with sized but unmatched tier surfaces *_partial and *_complete=false", async () => {
+		// Build a deployment whose target topology adds a new tier (frozen) with size > 0
+		// but no IC in the billing rate map — target should produce a non-null partial
+		// but null full total.
+		const targetWithFrozen = {
+			id: TARGET_TEMPLATE,
+			name: "CPU Optimized",
+			deployment_template: {
+				resources: {
+					elasticsearch: [
+						{
+							plan: {
+								cluster_topology: [
+									{
+										id: "hot_content",
+										instance_configuration_id: HOT_IC,
+										size: { value: 8192, resource: "memory" },
+										zone_count: 2,
+									},
+									{
+										id: "frozen",
+										instance_configuration_id: "aws.es.datafrozen.unknown",
+										size: { value: 4096, resource: "memory" },
+										zone_count: 2,
+									},
+								],
+							},
+						},
+					],
+				},
+			},
+		};
+		// Project-mode: the projection layer keeps the deployment's current tiers (which
+		// all have rates). To exercise D6 we need a *target-only* unrated sized tier, so
+		// we add it to current too with no billing entry and no env-var fallback.
+		const currentWithUnrated = {
+			...deploymentFixture,
+			resources: {
+				elasticsearch: [
+					{
+						...deploymentFixture.resources.elasticsearch[0],
+						info: {
+							plan_info: {
+								current: {
+									plan: {
+										deployment_template: { id: CURRENT_TEMPLATE },
+										cluster_topology: [
+											{
+												id: "hot_content",
+												instance_configuration_id: HOT_IC,
+												size: { value: 16384, resource: "memory" },
+												zone_count: 3,
+											},
+											{
+												id: "frozen",
+												instance_configuration_id: "aws.es.datafrozen.unknown",
+												size: { value: 8192, resource: "memory" },
+												zone_count: 2,
+											},
+										],
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+		};
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/${DEPLOYMENT_ID}`]: () => currentWithUnrated,
+			[`/api/v1/deployments/templates/${TARGET_TEMPLATE}`]: () => targetWithFrozen,
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+
+		// Full total is null (frozen tier sized but unrated).
+		expect(result.cost_estimate.current_monthly_ecu).toBeNull();
+		expect(result.cost_estimate.current_monthly_ecu_complete).toBe(false);
+		// Partial is the hot tier's contribution.
+		expect(result.cost_estimate.current_monthly_ecu_partial).toBeGreaterThan(0);
+		expect(result.cost_estimate.current_monthly_ecu_partial).toBeCloseTo(
+			16 * 3 * HOT_RATE_PER_GB_RAM_HOUR * HOURS_PER_MONTH,
+			1,
+		);
+		// Target is also partial — same shape.
+		expect(result.cost_estimate.target_monthly_ecu).toBeNull();
+		expect(result.cost_estimate.target_monthly_ecu_complete).toBe(false);
+		expect(result.cost_estimate.target_monthly_ecu_partial).toBeGreaterThan(0);
+	});
+
+	// ----- SIO-824 D2: billing_status surfaces 403 / no_match / network errors -----
+
+	test("SIO-824 D2: wrong org_id (403) surfaces in diagnostics.billing_status", async () => {
+		const wrongOrg = "9999999999";
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v2/billing/organizations/${wrongOrg}/costs/instances`]: () => ({
+				status: 403,
+				body: { error: "Forbidden" },
+			}),
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({
+				deployment_id: DEPLOYMENT_ID,
+				target_template_id: TARGET_TEMPLATE,
+				region: REGION,
+				org_id: wrongOrg,
+			}),
+		);
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("error:403");
+		// No rates -> rate_source is "unavailable" (no env-var fallback configured).
+		expect(result.cost_estimate.rate_source).toBe("unavailable");
+		expect(result.cost_estimate.current_monthly_ecu).toBeNull();
+	});
+
+	test("SIO-824 D2: matching org_id with no row for this resource surfaces 'no_match'", async () => {
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v2/billing/organizations/${ORG_ID}/costs/instances`]: () => ({
+				total_ecu: 100,
+				instances: [{ id: "some-other-resource", product_line_items: [] }],
+			}),
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("no_match");
+	});
+
+	test("SIO-824 D2: happy-path billing call sets billing_status='ok'", async () => {
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(defaultHandlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		expect(result.cost_estimate.diagnostics.billing_status).toBe("ok");
+	});
+
+	// ----- SIO-824 D3: region echo reflects deployment truth -----
+
+	test("SIO-824 D3: deployment-region mismatch labels true region, surfaces warning, echoes user region", async () => {
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(defaultHandlers, []));
+		// Deployment lives in aws-eu-central-1; caller asks aws-us-east-2.
+		const result = parseResult(
+			await handler({
+				deployment_id: DEPLOYMENT_ID,
+				target_template_id: TARGET_TEMPLATE,
+				region: "aws-us-east-2",
+			}),
+		);
+		expect(result.region).toBe(REGION); // deployment truth
+		expect(result.target_template_region).toBe("aws-us-east-2"); // user input
+		expect(result.warnings.length).toBe(1);
+		expect(result.warnings[0]).toContain("does not match deployment region");
+	});
+
+	test("SIO-824 D3: matching region produces no warning", async () => {
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(defaultHandlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		expect(result.region).toBe(REGION);
+		expect(result.target_template_region).toBe(REGION);
+		expect(result.warnings.length).toBe(0);
+	});
+
+	// ----- SIO-824 D4: unknown deployment_id surfaces a human-readable error -----
+
+	test("SIO-824 D4: 403 on deployment fetch rephrases as 'not found or not accessible'", async () => {
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/${DEPLOYMENT_ID}`]: () => ({
+				status: 403,
+				body: { error: "Forbidden" },
+			}),
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		try {
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION });
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const mcp = err as McpError;
+			expect(mcp.message).toContain("not found or not accessible");
+			expect(mcp.message).toContain(DEPLOYMENT_ID);
+		}
+	});
+
+	test("SIO-824 D4: 404 on deployment fetch rephrases as 'not found or not accessible'", async () => {
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/${DEPLOYMENT_ID}`]: () => null, // 404
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		try {
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION });
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const mcp = err as McpError;
+			expect(mcp.message).toContain("not found or not accessible");
+		}
+	});
+
+	// ----- SIO-824 D5: Zod rejects bare cloud region -----
+
+	test("SIO-824 D5: bare 'eu-central-1' (no aws-/gcp-/azure- prefix) is rejected by Zod", async () => {
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(defaultHandlers, []));
+		try {
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: "eu-central-1" });
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const mcp = err as McpError;
+			expect(mcp.message).toContain("Validation failed");
+			const issues = (mcp.data as { issues?: Array<{ message?: string; path?: string[] }> } | undefined)?.issues ?? [];
+			const regionIssue = issues.find((i) => i.path?.includes("region"));
+			expect(regionIssue?.message).toContain("aws-");
+		}
+	});
+
+	test("SIO-824 D5: gcp- prefixed region passes validation", async () => {
+		const gcpRegion = "gcp-europe-west1";
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/${DEPLOYMENT_ID}`]: () => ({
+				...deploymentFixture,
+				resources: {
+					elasticsearch: [{ ...deploymentFixture.resources.elasticsearch[0], region: gcpRegion }],
+				},
+			}),
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		// Should not throw the Zod refinement error (may still fail later for other reasons).
+		await expect(
+			handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: gcpRegion }),
+		).resolves.toBeDefined();
+	});
 });
 
 // Live test: skipped unless ELASTIC_CLOUD_LIVE_TESTS=1 and EC_API_KEY / EC_DEFAULT_ORG_ID
@@ -501,7 +845,6 @@ const LIVE =
 	process.env.ELASTIC_CLOUD_LIVE_TESTS === "1" && !!process.env.EC_API_KEY && !!process.env.EC_DEFAULT_ORG_ID;
 
 describe.skipIf(!LIVE)("elasticsearch_cloud_simulate_hardware_profile_change (live)", () => {
-	// eu-b2b deployment in org 2461430096; aws-eu-central-1; aws-cpu-optimized as the target.
 	const LIVE_DEPLOYMENT = process.env.ELASTIC_CLOUD_LIVE_DEPLOYMENT ?? "02655c3733ea471999d9cec39a17df32";
 	const LIVE_REGION = process.env.ELASTIC_CLOUD_LIVE_REGION ?? "aws-eu-central-1";
 	const LIVE_TARGET = process.env.ELASTIC_CLOUD_LIVE_TARGET_TEMPLATE ?? "aws-cpu-optimized";
@@ -527,17 +870,14 @@ describe.skipIf(!LIVE)("elasticsearch_cloud_simulate_hardware_profile_change (li
 		expect(typeof result.cost_estimate.rate_per_gb_ram_hour).toBe("number");
 		expect((result.cost_estimate.rate_per_gb_ram_hour ?? 0) > 0).toBe(true);
 		expect(result.cost_estimate.rate_source.startsWith("billing API")).toBe(true);
-		// Every tier with billing match should have a positive rate
 		const matched = result.current_profile.elasticsearch_topology.filter((t) =>
 			t.rate_source.startsWith("billing API"),
 		);
 		expect(matched.length).toBeGreaterThan(0);
 		for (const t of matched) expect((t.rate_per_gb_ram_hour ?? 0) > 0).toBe(true);
-		// Per-IC pricing engaged: at least one tier's rate differs from headline rate
 		const headline = result.cost_estimate.rate_per_gb_ram_hour ?? 0;
 		const distinct = matched.some((t) => Math.abs((t.rate_per_gb_ram_hour ?? 0) - headline) > 1e-6);
 		expect(distinct).toBe(true);
-		// Target projection populated for matched tiers
 		for (const t of result.target_profile.elasticsearch_topology) {
 			expect(t.size_gb_ram).toBeGreaterThan(0);
 		}
