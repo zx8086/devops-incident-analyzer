@@ -1,6 +1,8 @@
 // tests/unit/tools/cloud/simulate_hardware_profile_change.test.ts
 
 import { describe, expect, test } from "bun:test";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CloudClient, type FetchLike } from "../../../../src/clients/cloudClient.js";
@@ -237,6 +239,7 @@ interface ResultEnvelope {
 	cost_estimate: {
 		rate_per_gb_ram_hour: number | null;
 		rate_source: string;
+		rate_source_confidence: "billed_actual" | "mixed" | "fallback_only" | "unavailable";
 		current_monthly_ecu: number | null;
 		current_monthly_ecu_priced_tiers_subtotal: number;
 		current_monthly_ecu_priced_tier_topology_ids: string[];
@@ -1076,6 +1079,171 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		expect(hot?.rate_per_gb_ram_hour).toBeCloseTo(HOT_RATE_PER_GB_RAM_HOUR, 6);
 		expect(hot?.rate_source).toContain("billing API: per-IC rate");
 		expect(hot?.rate_source).not.toContain("org-wide");
+	});
+
+	// ----- SIO-826: operator rate catalog (EC_RATE_CATALOG_PATH) -----
+
+	// Catalog test fixtures: written to tmpdir per-test to mirror real operator setup.
+	const ORPHAN_HOT_IC = "aws.es.datahot.m6gd"; // not in this deployment, not in any sibling
+	const ORPHAN_HOT_RATE = 0.0594; // operator-supplied catalog rate
+
+	const armTargetTemplateOrphanHot = {
+		id: TARGET_ARM,
+		name: "General Purpose ARM",
+		deployment_template: {
+			resources: {
+				elasticsearch: [
+					{
+						plan: {
+							cluster_topology: [
+								{
+									id: "hot_content",
+									instance_configuration_id: ORPHAN_HOT_IC,
+									size: { value: 8192, resource: "memory" },
+									zone_count: 2,
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	};
+
+	function writeCatalogFile(payload: unknown): string {
+		const tmp = `${tmpdir()}/sio826-catalog-${Math.random().toString(36).slice(2)}.json`;
+		writeFileSync(tmp, typeof payload === "string" ? payload : JSON.stringify(payload), "utf8");
+		return tmp;
+	}
+
+	test("SIO-826: catalog hit prices an IC that no deployment in the org runs (delta non-null)", async () => {
+		const catalogPath = writeCatalogFile({
+			$schema: "EC_RATE_CATALOG v1",
+			refreshed: "2026-05-22",
+			rates: { [REGION]: { [ORPHAN_HOT_IC]: ORPHAN_HOT_RATE } },
+		});
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/templates/${TARGET_ARM}`]: () => armTargetTemplateOrphanHot,
+		};
+		const handler = makeHandler(
+			{ ...baseCfg, defaultOrgId: ORG_ID, rateCatalogPath: catalogPath },
+			makeFetch(handlers, []),
+		);
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_ARM, region: REGION }),
+		);
+
+		// Reproducer assertion: the orphan IC now has a rate, so the headline numbers exist.
+		expect(result.cost_estimate.target_monthly_ecu).not.toBeNull();
+		expect(result.cost_estimate.delta_monthly_ecu).not.toBeNull();
+		expect(result.cost_estimate.target_monthly_ecu_complete).toBe(true);
+		expect(result.cost_estimate.unmatched_target_ics).toEqual([]);
+
+		// Hot tier is priced from the catalog with the expected provenance label.
+		const targetHot = result.target_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === ORPHAN_HOT_IC,
+		);
+		expect(targetHot?.rate_per_gb_ram_hour).toBeCloseTo(ORPHAN_HOT_RATE, 6);
+		expect(targetHot?.rate_source).toContain("list price (catalog");
+		expect(targetHot?.rate_source).toContain("refreshed 2026-05-22");
+
+		// Confidence rolls up to mixed because current uses billed-actual + target uses catalog.
+		expect(result.cost_estimate.rate_source_confidence).toBe("mixed");
+
+		unlinkSync(catalogPath);
+	});
+
+	test("SIO-826: catalog does NOT override billed-actual rates (deployment billing wins)", async () => {
+		// Catalog has a decoy rate 100x off for an IC the deployment already runs.
+		const catalogPath = writeCatalogFile({
+			$schema: "EC_RATE_CATALOG v1",
+			refreshed: "2026-05-22",
+			rates: { [REGION]: { [HOT_IC]: HOT_RATE_PER_GB_RAM_HOUR * 100 } },
+		});
+		const handler = makeHandler(
+			{ ...baseCfg, defaultOrgId: ORG_ID, rateCatalogPath: catalogPath },
+			makeFetch(defaultHandlers, []),
+		);
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		const hot = result.current_profile.elasticsearch_topology.find((t) => t.instance_configuration_id === HOT_IC);
+		// Deployment's own billed rate wins; catalog decoy ignored.
+		expect(hot?.rate_per_gb_ram_hour).toBeCloseTo(HOT_RATE_PER_GB_RAM_HOUR, 6);
+		expect(hot?.rate_source).toContain("billing API: per-IC rate");
+		expect(hot?.rate_source).not.toContain("catalog");
+		// All tiers from this deployment's billing → confidence is billed_actual.
+		expect(result.cost_estimate.rate_source_confidence).toBe("billed_actual");
+
+		unlinkSync(catalogPath);
+	});
+
+	test("SIO-826: malformed catalog file degrades gracefully (no throw, no rates)", async () => {
+		// Three flavours of broken: non-existent path, invalid JSON, wrong shape.
+		const nonexistent = `${tmpdir()}/sio826-does-not-exist-${Math.random().toString(36).slice(2)}.json`;
+		const invalidJson = writeCatalogFile("{ not json");
+		const wrongShape = writeCatalogFile({ rates: "not an object" });
+
+		for (const path of [nonexistent, invalidJson, wrongShape]) {
+			const handler = makeHandler(
+				{ ...baseCfg, defaultOrgId: ORG_ID, rateCatalogPath: path },
+				makeFetch(defaultHandlers, []),
+			);
+			// Constructor + handler invocation must not throw — server stays up.
+			const result = parseResult(
+				await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+			);
+			// Catalog ignored → tool behaves as if EC_RATE_CATALOG_PATH was unset.
+			expect(result.cost_estimate.current_monthly_ecu).not.toBeNull();
+			expect(result.cost_estimate.rate_source_confidence).toBe("billed_actual");
+			for (const tier of result.current_profile.elasticsearch_topology) {
+				expect(tier.rate_source).not.toContain("catalog");
+			}
+		}
+
+		unlinkSync(invalidJson);
+		unlinkSync(wrongShape);
+	});
+
+	test("SIO-826: confidence flag matrix — billed_actual / mixed / fallback_only", async () => {
+		// (a) all-billing-happy-path → billed_actual.
+		const handlerBilled = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(defaultHandlers, []));
+		const resultBilled = parseResult(
+			await handlerBilled({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		expect(resultBilled.cost_estimate.rate_source_confidence).toBe("billed_actual");
+
+		// (b) catalog covers one tier, billing covers the rest → mixed.
+		const catalogPath = writeCatalogFile({
+			$schema: "EC_RATE_CATALOG v1",
+			refreshed: "2026-05-22",
+			rates: { [REGION]: { [ORPHAN_HOT_IC]: ORPHAN_HOT_RATE } },
+		});
+		const mixedHandlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/templates/${TARGET_ARM}`]: () => armTargetTemplateOrphanHot,
+		};
+		const handlerMixed = makeHandler(
+			{ ...baseCfg, defaultOrgId: ORG_ID, rateCatalogPath: catalogPath },
+			makeFetch(mixedHandlers, []),
+		);
+		const resultMixed = parseResult(
+			await handlerMixed({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_ARM, region: REGION }),
+		);
+		expect(resultMixed.cost_estimate.rate_source_confidence).toBe("mixed");
+
+		// (c) no billing source at all (no org_id) but env-var scalar prices every tier → fallback_only.
+		const handlerEnvOnly = makeHandler(
+			{ ...baseCfg, pricePerGbRamHour: 0.05 }, // no defaultOrgId
+			makeFetch(defaultHandlers, []),
+		);
+		const resultEnvOnly = parseResult(
+			await handlerEnvOnly({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		expect(resultEnvOnly.cost_estimate.rate_source_confidence).toBe("fallback_only");
+
+		unlinkSync(catalogPath);
 	});
 });
 

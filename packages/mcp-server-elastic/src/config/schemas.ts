@@ -145,6 +145,11 @@ export const ElasticCloudConfigSchema = z.object({
 	// EC_PRICE_PER_GB_RAM_HOUR: opt-in for hardware profile cost simulation. When absent,
 	// simulate_hardware_profile_change returns null cost estimates with an explanatory note.
 	pricePerGbRamHour: z.number().min(0).optional(),
+	// SIO-826: optional path to an operator-supplied rate catalog JSON file. Used by
+	// simulate_hardware_profile_change as the layer between sibling-deployment rates
+	// (SIO-825) and the EC_PRICE_PER_GB_RAM_HOUR scalar. Closes the case where no
+	// deployment in the org has ever run the target IC. Empty by default.
+	rateCatalogPath: z.string().optional(),
 });
 
 export type ElasticCloudConfig = z.infer<typeof ElasticCloudConfigSchema>;
