@@ -238,10 +238,12 @@ interface ResultEnvelope {
 		rate_per_gb_ram_hour: number | null;
 		rate_source: string;
 		current_monthly_ecu: number | null;
-		current_monthly_ecu_partial: number;
+		current_monthly_ecu_priced_tiers_subtotal: number;
+		current_monthly_ecu_priced_tier_topology_ids: string[];
 		current_monthly_ecu_complete: boolean;
 		target_monthly_ecu: number | null;
-		target_monthly_ecu_partial: number;
+		target_monthly_ecu_priced_tiers_subtotal: number;
+		target_monthly_ecu_priced_tier_topology_ids: string[];
 		target_monthly_ecu_complete: boolean;
 		delta_monthly_ecu: number | null;
 		unmatched_current_ics: string[];
@@ -594,7 +596,7 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		expect(coord?.rate_source).toBe("size 0 (autoscaled down)");
 	});
 
-	test("SIO-824 D6: target with sized but unmatched tier surfaces *_partial and *_complete=false", async () => {
+	test("SIO-824 D6 / SIO-825: target with sized but unmatched tier surfaces *_priced_tiers_subtotal + *_complete=false", async () => {
 		// Build a deployment whose target topology adds a new tier (frozen) with size > 0
 		// but no IC in the billing rate map — target should produce a non-null partial
 		// but null full total.
@@ -675,16 +677,19 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		// Full total is null (frozen tier sized but unrated).
 		expect(result.cost_estimate.current_monthly_ecu).toBeNull();
 		expect(result.cost_estimate.current_monthly_ecu_complete).toBe(false);
-		// Partial is the hot tier's contribution.
-		expect(result.cost_estimate.current_monthly_ecu_partial).toBeGreaterThan(0);
-		expect(result.cost_estimate.current_monthly_ecu_partial).toBeCloseTo(
+		// SIO-825: priced-tiers subtotal is the hot tier's contribution; topology IDs spell out
+		// which tiers were included so the subtotal can't be misread as the full target cost.
+		expect(result.cost_estimate.current_monthly_ecu_priced_tiers_subtotal).toBeGreaterThan(0);
+		expect(result.cost_estimate.current_monthly_ecu_priced_tiers_subtotal).toBeCloseTo(
 			16 * 3 * HOT_RATE_PER_GB_RAM_HOUR * HOURS_PER_MONTH,
 			1,
 		);
+		expect(result.cost_estimate.current_monthly_ecu_priced_tier_topology_ids).toEqual(["hot_content"]);
 		// Target is also partial — same shape.
 		expect(result.cost_estimate.target_monthly_ecu).toBeNull();
 		expect(result.cost_estimate.target_monthly_ecu_complete).toBe(false);
-		expect(result.cost_estimate.target_monthly_ecu_partial).toBeGreaterThan(0);
+		expect(result.cost_estimate.target_monthly_ecu_priced_tiers_subtotal).toBeGreaterThan(0);
+		expect(result.cost_estimate.target_monthly_ecu_priced_tier_topology_ids).toEqual(["hot_content"]);
 	});
 
 	// ----- SIO-824 D2: billing_status surfaces 403 / no_match / network errors -----
@@ -835,6 +840,242 @@ describe("elasticsearch_cloud_simulate_hardware_profile_change", () => {
 		await expect(
 			handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: gcpRegion }),
 		).resolves.toBeDefined();
+	});
+
+	// ----- SIO-825: cross-profile target ICs borrow rates from sibling deployments -----
+
+	// Mirrors the ticket reproducer: a target profile introduces ICs the deployment has
+	// never run (e.g. aws.es.datahot.m6gd when migrating from i3-based storage-optimized).
+	// Without the sibling-borrow path, target_monthly_ecu and delta_monthly_ecu come back
+	// null and the simulator is unusable for cross-profile migrations.
+	const TARGET_ARM = "aws-general-purpose-arm";
+	const HOT_ARM_IC = "aws.es.datahot.m6gd"; // target-only IC — absent from this deployment's billing
+	const MASTER_ARM_IC = "aws.es.master.c6gd"; // target-only IC — absent from this deployment's billing
+	const HOT_ARM_HOURLY = 2.4; // sibling-deployment rate (sized 16 GB × 3 = 48 GB-RAM-zones)
+	const MASTER_ARM_HOURLY = 0.9; // sibling-deployment rate (sized 4 GB × 3 = 12 GB-RAM-zones)
+	const HOT_ARM_RATE_PER_GB_RAM_HOUR = HOT_ARM_HOURLY / (16 * 3);
+	const MASTER_ARM_RATE_PER_GB_RAM_HOUR = MASTER_ARM_HOURLY / (4 * 3);
+
+	const armTargetTemplateFixture = {
+		id: TARGET_ARM,
+		name: "General Purpose ARM",
+		deployment_template: {
+			resources: {
+				elasticsearch: [
+					{
+						plan: {
+							cluster_topology: [
+								{
+									id: "hot_content",
+									instance_configuration_id: HOT_ARM_IC,
+									size: { value: 8192, resource: "memory" },
+									zone_count: 2,
+								},
+								{
+									id: "master",
+									instance_configuration_id: MASTER_ARM_IC,
+									size: { value: 1024, resource: "memory" },
+									zone_count: 3,
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	};
+
+	// Billing fixture with two rows: the simulated deployment (our existing ES_RESOURCE_ID
+	// with i3-based ICs) AND a sibling deployment in the same region running m6gd ICs.
+	// The sibling rates are what the target-tier resolution must fall back to.
+	const SIBLING_RESOURCE_ID = "es-resource-sibling-arm";
+	const billingInstancesWithSiblingFixture = {
+		total_ecu: 22000,
+		instances: [
+			...billingInstancesFixture.instances,
+			{
+				id: SIBLING_RESOURCE_ID,
+				name: "arm-deployment",
+				type: "deployment",
+				total_ecu: 9876,
+				product_line_items: [
+					{
+						name: "Cloud Enterprise, AWS eu-central-1, aws.es.datahot.m6gd, 16GB, 3AZ",
+						sku: `Cloud-Enterprise_${HOT_ARM_IC}_${REGION}_16384_3`,
+						type: "capacity",
+						unit: "hour",
+						quantity: { value: 720, formatted_value: "720 hours" },
+						rate: { value: HOT_ARM_HOURLY, formatted_value: `${HOT_ARM_HOURLY} per hour` },
+						kind: "elasticsearch",
+						total_ecu: HOT_ARM_HOURLY * 720,
+					},
+					{
+						name: "Cloud Enterprise, AWS eu-central-1, aws.es.master.c6gd, 4GB, 3AZ",
+						sku: `Cloud-Enterprise_${MASTER_ARM_IC}_${REGION}_4096_3`,
+						type: "capacity",
+						unit: "hour",
+						quantity: { value: 720, formatted_value: "720 hours" },
+						rate: { value: MASTER_ARM_HOURLY, formatted_value: `${MASTER_ARM_HOURLY} per hour` },
+						kind: "elasticsearch",
+						total_ecu: MASTER_ARM_HOURLY * 720,
+					},
+				],
+			},
+		],
+	};
+
+	test("SIO-825: cross-profile simulate prices target ICs from sibling deployments — delta is non-null", async () => {
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/templates/${TARGET_ARM}`]: () => armTargetTemplateFixture,
+			[`/api/v2/billing/organizations/${ORG_ID}/costs/instances`]: () => billingInstancesWithSiblingFixture,
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_ARM, region: REGION }),
+		);
+
+		// Reproducer assertion: target total + delta are now non-null (used to be null).
+		expect(result.cost_estimate.target_monthly_ecu).not.toBeNull();
+		expect(result.cost_estimate.delta_monthly_ecu).not.toBeNull();
+		expect(result.cost_estimate.target_monthly_ecu_complete).toBe(true);
+
+		// Hot tier in target topology uses the sibling deployment's rate, not the current i3 rate.
+		const targetHot = result.target_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === HOT_ARM_IC,
+		);
+		expect(targetHot?.rate_per_gb_ram_hour).toBeCloseTo(HOT_ARM_RATE_PER_GB_RAM_HOUR, 6);
+		expect(targetHot?.rate_source).toContain("org-wide");
+		expect(targetHot?.rate_source).toContain("sibling deployments");
+
+		// Master tier likewise picks up the sibling's c6gd rate.
+		const targetMaster = result.target_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === MASTER_ARM_IC,
+		);
+		expect(targetMaster?.rate_per_gb_ram_hour).toBeCloseTo(MASTER_ARM_RATE_PER_GB_RAM_HOUR, 6);
+		expect(targetMaster?.rate_source).toContain("org-wide");
+	});
+
+	test("SIO-825: per-tier rate_source distinguishes deployment-billed vs sibling-borrowed", async () => {
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/templates/${TARGET_ARM}`]: () => armTargetTemplateFixture,
+			[`/api/v2/billing/organizations/${ORG_ID}/costs/instances`]: () => billingInstancesWithSiblingFixture,
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_ARM, region: REGION }),
+		);
+
+		// Current topology still uses this deployment's own billed rates.
+		const currentHot = result.current_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === HOT_IC,
+		);
+		expect(currentHot?.rate_source).toContain("billing API: per-IC rate");
+		expect(currentHot?.rate_source).not.toContain("org-wide");
+
+		// Target hot uses the sibling rate and is labelled distinctly.
+		const targetHot = result.target_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === HOT_ARM_IC,
+		);
+		expect(targetHot?.rate_source).toContain("org-wide per-IC rate");
+		expect(targetHot?.rate_source).toContain(REGION);
+
+		// Headline rate_source reflects the mixed sourcing.
+		expect(result.cost_estimate.rate_source).toContain("sibling-deployment");
+	});
+
+	test("SIO-825: sibling rates from a different region MUST NOT contribute (rate isolation)", async () => {
+		// Sibling deployment is in aws-us-east-1 but our simulated deployment is in
+		// aws-eu-central-1. Cross-region borrow would silently mis-price by a wide margin.
+		const otherRegion = "aws-us-east-1";
+		const crossRegionSiblingFixture = {
+			total_ecu: 22000,
+			instances: [
+				...billingInstancesFixture.instances,
+				{
+					id: SIBLING_RESOURCE_ID,
+					name: "arm-deployment-us",
+					type: "deployment",
+					total_ecu: 9876,
+					product_line_items: [
+						{
+							name: "Cloud Enterprise, AWS us-east-1, aws.es.datahot.m6gd, 16GB, 3AZ",
+							sku: `Cloud-Enterprise_${HOT_ARM_IC}_${otherRegion}_16384_3`,
+							type: "capacity",
+							unit: "hour",
+							quantity: { value: 720, formatted_value: "720 hours" },
+							rate: { value: HOT_ARM_HOURLY, formatted_value: `${HOT_ARM_HOURLY} per hour` },
+							kind: "elasticsearch",
+							total_ecu: HOT_ARM_HOURLY * 720,
+						},
+					],
+				},
+			],
+		};
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v1/deployments/templates/${TARGET_ARM}`]: () => armTargetTemplateFixture,
+			[`/api/v2/billing/organizations/${ORG_ID}/costs/instances`]: () => crossRegionSiblingFixture,
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_ARM, region: REGION }),
+		);
+
+		// The target hot tier finds no rate from any source — sibling is in another region,
+		// no env-var fallback configured, no entry in this deployment's billing.
+		const targetHot = result.target_profile.elasticsearch_topology.find(
+			(t) => t.instance_configuration_id === HOT_ARM_IC,
+		);
+		expect(targetHot?.rate_per_gb_ram_hour).toBeNull();
+		expect(targetHot?.rate_source).toBe("unavailable");
+		expect(result.cost_estimate.unmatched_target_ics).toContain(HOT_ARM_IC);
+		// Without the env-var fallback the full target total is null — partial still surfaces.
+		expect(result.cost_estimate.target_monthly_ecu).toBeNull();
+		expect(result.cost_estimate.target_monthly_ecu_complete).toBe(false);
+	});
+
+	test("SIO-825: when this deployment's billing has the rate, sibling map is not consulted (no rate_source drift)", async () => {
+		// Sibling row exists with a wildly different rate for an IC that our deployment
+		// ALREADY runs. We must keep using the deployment's own rate, not the sibling's.
+		const conflictingSiblingFixture = {
+			total_ecu: 22000,
+			instances: [
+				...billingInstancesFixture.instances,
+				{
+					id: SIBLING_RESOURCE_ID,
+					name: "sibling-cheap",
+					type: "deployment",
+					total_ecu: 1234,
+					product_line_items: [
+						{
+							name: "sibling priced HOT_IC much cheaper",
+							sku: `Cloud-Enterprise_${HOT_IC}_${REGION}_16384_3`,
+							type: "capacity",
+							unit: "hour",
+							quantity: { value: 720, formatted_value: "720 hours" },
+							rate: { value: HOT_HOURLY / 10, formatted_value: "decoy" },
+							kind: "elasticsearch",
+							total_ecu: (HOT_HOURLY / 10) * 720,
+						},
+					],
+				},
+			],
+		};
+		const handlers = {
+			...defaultHandlers,
+			[`/api/v2/billing/organizations/${ORG_ID}/costs/instances`]: () => conflictingSiblingFixture,
+		};
+		const handler = makeHandler({ ...baseCfg, defaultOrgId: ORG_ID }, makeFetch(handlers, []));
+		const result = parseResult(
+			await handler({ deployment_id: DEPLOYMENT_ID, target_template_id: TARGET_TEMPLATE, region: REGION }),
+		);
+		const hot = result.current_profile.elasticsearch_topology.find((t) => t.instance_configuration_id === HOT_IC);
+		// Deployment's own rate wins — not the sibling's decoy.
+		expect(hot?.rate_per_gb_ram_hour).toBeCloseTo(HOT_RATE_PER_GB_RAM_HOUR, 6);
+		expect(hot?.rate_source).toContain("billing API: per-IC rate");
+		expect(hot?.rate_source).not.toContain("org-wide");
 	});
 });
 
