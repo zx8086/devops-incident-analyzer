@@ -18,9 +18,12 @@ import { registerCloudCancelPendingPlanTool } from "./tools/cloud/cancel_pending
 import { registerCloudGetAccountTool } from "./tools/cloud/get_account.js";
 import { registerCloudGetDeploymentTool } from "./tools/cloud/get_deployment.js";
 import { registerCloudGetEsResourceTool } from "./tools/cloud/get_es_resource.js";
+import { registerCloudGetHardwareProfileTool } from "./tools/cloud/get_hardware_profile.js";
 import { registerCloudGetPlanActivityTool } from "./tools/cloud/get_plan_activity.js";
 import { registerCloudGetPlanHistoryTool } from "./tools/cloud/get_plan_history.js";
 import { registerCloudListDeploymentsTool } from "./tools/cloud/list_deployments.js";
+import { registerCloudListHardwareProfilesTool } from "./tools/cloud/list_hardware_profiles.js";
+import { registerCloudSimulateHardwareProfileChangeTool } from "./tools/cloud/simulate_hardware_profile_change.js";
 import { registerAllTools } from "./tools/index.js";
 import { logger } from "./utils/logger.js";
 import { initializeReadOnlyManager } from "./utils/readOnlyMode.js";
@@ -265,13 +268,16 @@ function registerCloudAndBillingTools(server: McpServer, cloudClient: CloudClien
 	registerCloudGetPlanHistoryTool(server, cloudClient);
 	registerCloudGetAccountTool(server, cloudClient);
 	registerCloudCancelPendingPlanTool(server, cloudClient);
+	registerCloudListHardwareProfilesTool(server, cloudClient);
+	registerCloudGetHardwareProfileTool(server, cloudClient);
+	registerCloudSimulateHardwareProfileChangeTool(server, cloudClient);
 	registerBillingGetOrgCostsTool(server, cloudClient);
 	registerBillingGetDeploymentCostsTool(server, cloudClient);
 	registerBillingGetOrgChartsTool(server, cloudClient);
 	registerBillingListInstancesTool(server, cloudClient);
 	registerBillingGetInstanceItemsTool(server, cloudClient);
 	registerBillingGetInstanceChartsTool(server, cloudClient);
-	logger.info("Registered 13 Elastic Cloud Deployment + Billing tools");
+	logger.info("Registered 16 Elastic Cloud Deployment + Billing tools");
 }
 
 // Sync -- called per-request by factory. Creates McpServer and registers tools.

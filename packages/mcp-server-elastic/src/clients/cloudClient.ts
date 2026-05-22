@@ -25,6 +25,7 @@ export class CloudClient {
 	private readonly requestTimeout: number;
 	private readonly maxRetries: number;
 	readonly defaultOrgId?: string;
+	readonly pricePerGbRamHour?: number;
 	private readonly fetchImpl: FetchLike;
 
 	constructor(config: ElasticCloudConfig, fetchImpl: FetchLike = fetch) {
@@ -33,6 +34,7 @@ export class CloudClient {
 		this.requestTimeout = config.requestTimeout;
 		this.maxRetries = config.maxRetries;
 		this.defaultOrgId = config.defaultOrgId;
+		this.pricePerGbRamHour = config.pricePerGbRamHour;
 		this.fetchImpl = fetchImpl;
 	}
 
