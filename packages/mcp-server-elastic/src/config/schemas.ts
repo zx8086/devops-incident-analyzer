@@ -142,6 +142,9 @@ export const ElasticCloudConfigSchema = z.object({
 	defaultOrgId: z.string().optional(),
 	requestTimeout: z.number().min(1000).max(60000),
 	maxRetries: z.number().min(0).max(10),
+	// EC_PRICE_PER_GB_RAM_HOUR: opt-in for hardware profile cost simulation. When absent,
+	// simulate_hardware_profile_change returns null cost estimates with an explanatory note.
+	pricePerGbRamHour: z.number().min(0).optional(),
 });
 
 export type ElasticCloudConfig = z.infer<typeof ElasticCloudConfigSchema>;

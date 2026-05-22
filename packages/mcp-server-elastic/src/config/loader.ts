@@ -163,6 +163,9 @@ function loadConfigFromEnv(): Partial<Config> {
 	// ES users see config.cloud === undefined and the cloud tools never register.
 	const cloudApiKey = parseEnvVar(Bun.env[envVarMapping.cloud.apiKey], "string") as string | undefined;
 	if (cloudApiKey) {
+		const pricePerGbRamHourRaw = parseEnvVar(Bun.env[envVarMapping.cloud.pricePerGbRamHour], "number") as
+			| number
+			| undefined;
 		const cloud: ElasticCloudConfig = {
 			apiKey: cloudApiKey,
 			endpoint:
@@ -174,6 +177,8 @@ function loadConfigFromEnv(): Partial<Config> {
 			maxRetries:
 				(parseEnvVar(Bun.env[envVarMapping.cloud.maxRetries], "number") as number | undefined) ??
 				cloudDefaults.maxRetries,
+			...(pricePerGbRamHourRaw !== undefined &&
+				!Number.isNaN(pricePerGbRamHourRaw) && { pricePerGbRamHour: pricePerGbRamHourRaw }),
 		};
 		config.cloud = cloud;
 	}

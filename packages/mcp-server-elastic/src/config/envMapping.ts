@@ -70,5 +70,6 @@ export const envVarMapping = {
 		defaultOrgId: "EC_DEFAULT_ORG_ID",
 		requestTimeout: "EC_REQUEST_TIMEOUT",
 		maxRetries: "EC_MAX_RETRIES",
+		pricePerGbRamHour: "EC_PRICE_PER_GB_RAM_HOUR",
 	},
 } as const;
