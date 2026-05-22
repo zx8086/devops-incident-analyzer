@@ -11,6 +11,9 @@ const TOOL_NAME = "elasticsearch_cloud_simulate_hardware_profile_change";
 // 730 hours/month (365 * 24 / 12)
 const HOURS_PER_MONTH = 730;
 
+// SIO-824 D5: region must include cloud-provider prefix (e.g. 'aws-eu-central-1', not 'eu-central-1').
+const REGION_PREFIX_RE = /^(aws|gcp|azure)-/;
+
 const validator = z.object({
 	deployment_id: z.string().min(1).describe("ID of the deployment to simulate the profile change for."),
 	target_template_id: z
@@ -22,6 +25,10 @@ const validator = z.object({
 	region: z
 		.string()
 		.min(1)
+		.regex(
+			REGION_PREFIX_RE,
+			"Region must start with 'aws-', 'gcp-', or 'azure-' (e.g. 'aws-eu-central-1'). Use elasticsearch_cloud_list_hardware_profiles to find valid regions.",
+		)
 		.describe("Elastic Cloud region string, e.g. 'aws-eu-central-1'. Must match the deployment's region."),
 	org_id: z
 		.string()
@@ -198,27 +205,45 @@ function buildIcRateMap(items: BillingProductLineItem[] | undefined): Map<string
 	return result;
 }
 
+// SIO-824 D2: surface billing-call HTTP status so callers can distinguish 403 (org_id
+// wrong / no access) from "no billing history in window". A 403 from the billing list
+// endpoint looks identical to an empty result otherwise.
+interface IcRateMapResult {
+	map: Map<string, number> | null;
+	// "ok": billing call succeeded and matched a row for this resource (map may still be empty if no ES line items)
+	// "no_match": call succeeded but no row matched esResourceId
+	// "empty": call succeeded but instances[] empty
+	// "error:<status>" / "error:network": call failed
+	status: string;
+}
+
 // Fetch the billing row for this ES-resource id and return its per-IC rate map.
-// Returns null when the org has no billing history for this resource in the window.
+// Returns { map: null, status: "..." } when the billing call fails or finds no row.
 async function resolveIcRateMap(
 	cloudClient: CloudClient,
 	orgId: string,
 	esResourceId: string,
 	fromStr: string,
 	toStr: string,
-): Promise<Map<string, number> | null> {
+): Promise<IcRateMapResult> {
 	try {
 		const rows = await cloudClient.get<BillingInstancesResponse>(
 			`/api/v2/billing/organizations/${encodeURIComponent(orgId)}/costs/instances`,
 			{ query: { from: fromStr, to: toStr }, notFoundOk: true },
 		);
-		if (!rows) return null;
-		const match = (rows.instances ?? []).find((r) => r.id === esResourceId);
-		if (!match) return null;
+		if (!rows) return { map: null, status: "empty" };
+		const instances = rows.instances ?? [];
+		if (instances.length === 0) return { map: null, status: "empty" };
+		const match = instances.find((r) => r.id === esResourceId);
+		if (!match) return { map: null, status: "no_match" };
 		const map = buildIcRateMap(match.product_line_items);
-		return map.size > 0 ? map : null;
-	} catch {
-		return null;
+		return { map: map.size > 0 ? map : null, status: "ok" };
+	} catch (err) {
+		if (err instanceof McpError) {
+			const data = err.data as { status?: number } | undefined;
+			if (typeof data?.status === "number") return { map: null, status: `error:${data.status}` };
+		}
+		return { map: null, status: "error:network" };
 	}
 }
 
@@ -274,7 +299,14 @@ interface PricedTier {
 
 interface PricedTopology {
 	tiers: PricedTier[];
+	// Full total: null when at least one *sized* tier could not be priced (rate missing).
+	// Autoscaled-down tiers (size_gb_ram === 0) contribute 0 and never poison the total.
 	total_monthly_ecu: number | null;
+	// Partial total: sum of priced tiers only, ignoring unpriced sized tiers.
+	// Always a finite number (>= 0). Lets callers reason about "most of the cost".
+	total_monthly_ecu_partial: number;
+	// true iff every sized tier was priced (i.e. total_monthly_ecu === total_monthly_ecu_partial).
+	total_monthly_ecu_complete: boolean;
 	total_gb_ram_zones: number;
 	unmatched_ics: string[];
 }
@@ -290,7 +322,8 @@ function priceTopology(
 ): PricedTopology {
 	const tiers: PricedTier[] = [];
 	const unmatched: string[] = [];
-	let total: number | null = 0;
+	let partial = 0;
+	let complete = true;
 	let totalGbRamZones = 0;
 	for (const t of topology) {
 		const gb = mbToGb(t.size?.value, t.size?.resource);
@@ -302,7 +335,14 @@ function priceTopology(
 		const icRate = icKey && icRateMap?.get(icKey);
 		let rate: number | null = null;
 		let source = "unavailable";
-		if (icRate && icRate > 0) {
+
+		// SIO-824 D1: a tier with size 0 (autoscaled down) is an explicit zero-cost
+		// contribution, not "unavailable" — we're not paying for it right now. Skip
+		// the rate lookup entirely so a missing rate doesn't poison the total.
+		if (gbRamZones === 0) {
+			rate = null;
+			source = "size 0 (autoscaled down)";
+		} else if (icRate && icRate > 0) {
 			rate = icRate;
 			source = `billing API: per-IC rate for ${ic}`;
 		} else if (fallbackScalarRate && fallbackScalarRate > 0) {
@@ -312,9 +352,21 @@ function priceTopology(
 		} else {
 			if (ic) unmatched.push(ic);
 		}
-		const monthly = rate !== null ? gbRamZones * rate * HOURS_PER_MONTH : null;
-		if (monthly === null) total = null;
-		else if (total !== null) total += monthly;
+
+		// Monthly ECU: explicit 0 for autoscaled-down tiers, computed value when rated,
+		// null when sized-but-unrated (which also flips total_complete to false).
+		let monthly: number | null;
+		if (gbRamZones === 0) {
+			monthly = 0;
+		} else if (rate !== null) {
+			monthly = gbRamZones * rate * HOURS_PER_MONTH;
+		} else {
+			monthly = null;
+			complete = false;
+		}
+
+		if (monthly !== null) partial += monthly;
+
 		tiers.push({
 			topology_id: t.id ?? null,
 			instance_configuration_id: ic,
@@ -328,7 +380,9 @@ function priceTopology(
 	}
 	return {
 		tiers,
-		total_monthly_ecu: total !== null ? round2(total) : null,
+		total_monthly_ecu: complete ? round2(partial) : null,
+		total_monthly_ecu_partial: round2(partial),
+		total_monthly_ecu_complete: complete,
 		total_gb_ram_zones: round2(totalGbRamZones),
 		unmatched_ics: unmatched,
 	};
@@ -336,13 +390,23 @@ function priceTopology(
 
 // ----- Cost-envelope builder -----
 
+interface CostDiagnostics {
+	billing_status: string;
+}
+
 interface CostEnvelope {
 	rate_per_gb_ram_hour: number | null;
 	rate_source: string;
 	current_monthly_ecu: number | null;
+	current_monthly_ecu_partial: number;
+	current_monthly_ecu_complete: boolean;
 	target_monthly_ecu: number | null;
+	target_monthly_ecu_partial: number;
+	target_monthly_ecu_complete: boolean;
 	delta_monthly_ecu: number | null;
-	unmatched_tier_ics: string[];
+	unmatched_current_ics: string[];
+	unmatched_target_ics: string[];
+	diagnostics: CostDiagnostics;
 	note: string;
 }
 
@@ -351,6 +415,7 @@ function buildCostEnvelope(
 	target: PricedTopology,
 	icRateMap: Map<string, number> | null,
 	fallbackScalarRate: number | undefined,
+	billingStatus: string,
 ): CostEnvelope {
 	// Weighted-average headline rate across the current topology (preserves the scalar
 	// field that existing agent consumers may still read). Returns null when no tier priced.
@@ -371,8 +436,6 @@ function buildCostEnvelope(
 	else if (usedFallback) source = "EC_PRICE_PER_GB_RAM_HOUR env var";
 	else source = "unavailable";
 
-	const unmatched = Array.from(new Set([...current.unmatched_ics, ...target.unmatched_ics]));
-
 	const delta =
 		current.total_monthly_ecu !== null && target.total_monthly_ecu !== null
 			? round2(target.total_monthly_ecu - current.total_monthly_ecu)
@@ -380,18 +443,47 @@ function buildCostEnvelope(
 
 	const note =
 		current.total_monthly_ecu === null
-			? "Could not determine rate. Set EC_PRICE_PER_GB_RAM_HOUR as a fallback, or ensure the deployment has billing history in the last 30 days and org_id is provided."
-			: "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. Headline rate is the GB-RAM-zone-weighted average across the current topology. Excludes snapshot storage, data transfer, and non-Elasticsearch tiers. Verify realised spend with elasticsearch_billing_get_deployment_costs after any plan change.";
+			? "Some sized tiers could not be priced. See *_partial fields for the priced subset, and unmatched_current_ics / unmatched_target_ics for ICs lacking a billing match. Set EC_PRICE_PER_GB_RAM_HOUR as a fallback or ensure the deployment has billing history in the last 30 days."
+			: "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. Autoscaled-down tiers (size 0) contribute 0. Headline rate is the GB-RAM-zone-weighted average across the current topology. Excludes snapshot storage, data transfer, and non-Elasticsearch tiers. Verify realised spend with elasticsearch_billing_get_deployment_costs after any plan change.";
 
 	return {
 		rate_per_gb_ram_hour: headlineRate !== null ? Math.round(headlineRate * 1e6) / 1e6 : null,
 		rate_source: source,
 		current_monthly_ecu: current.total_monthly_ecu,
+		current_monthly_ecu_partial: current.total_monthly_ecu_partial,
+		current_monthly_ecu_complete: current.total_monthly_ecu_complete,
 		target_monthly_ecu: target.total_monthly_ecu,
+		target_monthly_ecu_partial: target.total_monthly_ecu_partial,
+		target_monthly_ecu_complete: target.total_monthly_ecu_complete,
 		delta_monthly_ecu: delta,
-		unmatched_tier_ics: unmatched,
+		unmatched_current_ics: current.unmatched_ics,
+		unmatched_target_ics: target.unmatched_ics,
+		diagnostics: { billing_status: billingStatus },
 		note,
 	};
+}
+
+// SIO-824 D4: map deployment-fetch 403/404 to a human-readable McpError. Elastic Cloud
+// returns 403 for unknown deployment_ids (not 404), and the raw "Forbidden" message
+// reads like an auth problem to users.
+async function fetchDeployment(cloudClient: CloudClient, deploymentId: string): Promise<Deployment> {
+	try {
+		return await cloudClient.get<Deployment>(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, {
+			query: { show_plans: true },
+		});
+	} catch (err) {
+		if (err instanceof McpError) {
+			const data = err.data as { status?: number } | undefined;
+			if (data?.status === 403 || data?.status === 404) {
+				throw new McpError(
+					ErrorCode.InvalidParams,
+					`[${TOOL_NAME}] Deployment '${deploymentId}' not found or not accessible with the current EC_API_KEY. Use elasticsearch_cloud_list_deployments to find valid IDs.`,
+					{ status: data.status, deployment_id: deploymentId },
+				);
+			}
+		}
+		throw err;
+	}
 }
 
 export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrationFunction = (
@@ -422,9 +514,7 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 			const toStr = toDate.toISOString();
 
 			const [deployment, targetTemplate] = await Promise.all([
-				cloudClient.get<Deployment>(`/api/v1/deployments/${encodeURIComponent(params.deployment_id)}`, {
-					query: { show_plans: true },
-				}),
+				fetchDeployment(cloudClient, params.deployment_id),
 				cloudClient.get<DeploymentTemplate>(
 					`/api/v1/deployments/templates/${encodeURIComponent(params.target_template_id)}`,
 					{ query: { region: params.region } },
@@ -433,6 +523,7 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 
 			const esResource = deployment.resources?.elasticsearch?.[0];
 			const esResourceId = esResource?.id;
+			const deploymentRegion = esResource?.region ?? null;
 			const currentPlan = esResource?.info?.plan_info?.current?.plan;
 			const currentTemplateId = currentPlan?.deployment_template?.id;
 			const currentTopology: TopologyElement[] = currentPlan?.cluster_topology ?? [];
@@ -446,14 +537,15 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 
 			// Per-IC rate map from billing (SIO-822); keyed on ES-resource ID, not deployment ID.
 			// Run in parallel with the current-template metadata fetch.
-			const [currentTemplate, icRateMap] = await Promise.all([
+			const [currentTemplate, rateResult] = await Promise.all([
 				cloudClient.get<DeploymentTemplate>(`/api/v1/deployments/templates/${encodeURIComponent(currentTemplateId)}`, {
 					query: { region: params.region },
 				}),
 				orgId && esResourceId
 					? resolveIcRateMap(cloudClient, orgId, esResourceId, fromStr, toStr)
-					: Promise.resolve(null),
+					: Promise.resolve<IcRateMapResult>({ map: null, status: orgId ? "no_resource_id" : "no_org_id" }),
 			]);
+			const icRateMap = rateResult.map;
 
 			const targetTemplateTopology: TopologyElement[] =
 				targetTemplate.deployment_template?.resources?.elasticsearch?.[0]?.plan?.cluster_topology ?? [];
@@ -470,11 +562,22 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 
 			const isSameProfile = currentTemplateId === params.target_template_id;
 
+			// SIO-824 D3: report the deployment's true region as `region`, echo the caller's
+			// region under `target_template_region`, and surface a warning when they diverge.
+			const responseWarnings: string[] = [];
+			if (deploymentRegion && deploymentRegion !== params.region) {
+				responseWarnings.push(
+					`region '${params.region}' does not match deployment region '${deploymentRegion}'; the target template was looked up in the supplied region but cost numbers reflect the deployment's actual region`,
+				);
+			}
+
 			const result = {
 				deployment_id: params.deployment_id,
 				es_resource_id: esResourceId ?? null,
 				deployment_name: deployment.name ?? null,
-				region: params.region,
+				region: deploymentRegion ?? params.region,
+				target_template_region: params.region,
+				warnings: responseWarnings,
 				current_profile: {
 					template_id: currentTemplateId,
 					name: currentTemplate.name ?? null,
@@ -489,7 +592,13 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 					topology_warnings: topologyWarnings,
 					note: "Sizes shown are the deployment's current per-tier sizes projected onto the target profile. Tiers absent from the target profile are preserved verbatim and listed in topology_warnings.",
 				},
-				cost_estimate: buildCostEnvelope(pricedCurrent, pricedTarget, icRateMap, cloudClient.pricePerGbRamHour),
+				cost_estimate: buildCostEnvelope(
+					pricedCurrent,
+					pricedTarget,
+					icRateMap,
+					cloudClient.pricePerGbRamHour,
+					rateResult.status,
+				),
 				compatibility: {
 					same_profile: isSameProfile,
 					note: isSameProfile
@@ -522,7 +631,7 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 		{
 			title: "Elastic Cloud: simulate hardware profile change",
 			description:
-				"Simulate switching a deployment to a different hardware profile (deployment template) and estimate the monthly ECU cost delta. Fetches the deployment's current plan topology and projects the per-tier sizes onto the target profile (tiers missing from the target are kept and surfaced in topology_warnings). Per-tier rates are sourced from this deployment's last-30-days billing line items, matched by instance_configuration_id (requires org_id / EC_DEFAULT_ORG_ID). Tiers without a billing match fall back to EC_PRICE_PER_GB_RAM_HOUR when set, otherwise return monthly_ecu=null with rate_source='unavailable'. This tool is read-only and does NOT apply any changes. region must use the Elastic internal format, e.g. 'aws-eu-central-1'.",
+				"Simulate switching a deployment to a different hardware profile (deployment template) and estimate the monthly ECU cost delta. Fetches the deployment's current plan topology and projects the per-tier sizes onto the target profile (tiers missing from the target are kept and surfaced in topology_warnings). Per-tier rates are sourced from this deployment's last-30-days billing line items, matched by instance_configuration_id (requires org_id / EC_DEFAULT_ORG_ID). Tiers without a billing match fall back to EC_PRICE_PER_GB_RAM_HOUR when set, otherwise return monthly_ecu=null with rate_source='unavailable'. Autoscaled-down tiers (size 0) contribute 0. *_partial fields expose the priced subset when some tiers can't be rated. cost_estimate.diagnostics.billing_status indicates whether billing was reachable (ok / empty / no_match / error:<http_status>). This tool is read-only and does NOT apply any changes. region must use the Elastic internal format, e.g. 'aws-eu-central-1'.",
 			inputSchema: validator.shape,
 		},
 		handler,
