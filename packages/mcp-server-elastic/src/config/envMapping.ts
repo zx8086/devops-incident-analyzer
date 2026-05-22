@@ -71,5 +71,6 @@ export const envVarMapping = {
 		requestTimeout: "EC_REQUEST_TIMEOUT",
 		maxRetries: "EC_MAX_RETRIES",
 		pricePerGbRamHour: "EC_PRICE_PER_GB_RAM_HOUR",
+		rateCatalogPath: "EC_RATE_CATALOG_PATH",
 	},
 } as const;

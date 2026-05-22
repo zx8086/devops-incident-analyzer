@@ -166,6 +166,7 @@ function loadConfigFromEnv(): Partial<Config> {
 		const pricePerGbRamHourRaw = parseEnvVar(Bun.env[envVarMapping.cloud.pricePerGbRamHour], "number") as
 			| number
 			| undefined;
+		const rateCatalogPath = parseEnvVar(Bun.env[envVarMapping.cloud.rateCatalogPath], "string") as string | undefined;
 		const cloud: ElasticCloudConfig = {
 			apiKey: cloudApiKey,
 			endpoint:
@@ -179,6 +180,7 @@ function loadConfigFromEnv(): Partial<Config> {
 				cloudDefaults.maxRetries,
 			...(pricePerGbRamHourRaw !== undefined &&
 				!Number.isNaN(pricePerGbRamHourRaw) && { pricePerGbRamHour: pricePerGbRamHourRaw }),
+			...(rateCatalogPath ? { rateCatalogPath } : {}),
 		};
 		config.cloud = cloud;
 	}

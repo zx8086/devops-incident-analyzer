@@ -355,11 +355,21 @@ function round2(n: number): number {
 	return Math.round(n * 100) / 100;
 }
 
+// SIO-826: operator-supplied rate catalog (third rate-resolution layer). Keyed
+// "<region>::<normalized_ic>" to mirror buildIcRateMap's normalisation. Refresh date
+// is forwarded into rate_source so the per-tier provenance string carries the catalog
+// vintage and operators can audit which file produced the rate.
+interface CatalogRateSource {
+	rates: Map<string, number>;
+	refreshed: string;
+}
+
 function priceTopology(
 	topology: TopologyElement[],
 	icRateMap: Map<string, number> | null,
 	orgIcRateMap: Map<string, number> | null,
 	region: string,
+	catalog: CatalogRateSource | null,
 	fallbackScalarRate: number | undefined,
 ): PricedTopology {
 	const tiers: PricedTier[] = [];
@@ -377,6 +387,7 @@ function priceTopology(
 		const icKey = normalizeIc(ic);
 		const icRate = icKey && icRateMap?.get(icKey);
 		const orgRate = icKey && orgIcRateMap?.get(icKey);
+		const catalogRate = icKey && catalog?.rates.get(`${region}::${icKey}`);
 		let rate: number | null = null;
 		let source = "unavailable";
 
@@ -384,10 +395,13 @@ function priceTopology(
 		// contribution, not "unavailable" — we're not paying for it right now. Skip
 		// the rate lookup entirely so a missing rate doesn't poison the total.
 		// SIO-825: when the deployment's own billing has no rate for an IC, fall back
-		// to the org-wide map (sibling deployments in the same region) before the
-		// scalar env var. Sibling rates are billed actuals, not list prices, so they
-		// produce believable cross-profile cost estimates without requiring the
-		// deployment to have already run the target IC.
+		// to the org-wide map (sibling deployments in the same region). Sibling rates
+		// are billed actuals, not list prices, so they produce believable cross-profile
+		// cost estimates without requiring the deployment to have already run the target IC.
+		// SIO-826: when no deployment in the org has ever run the IC, fall back to the
+		// operator-supplied catalog (EC_RATE_CATALOG_PATH). These are list prices, not
+		// billed actuals — rate_source_confidence on the envelope downgrades to "mixed"
+		// or "fallback_only" so callers can react accordingly.
 		if (gbRamZones === 0) {
 			rate = null;
 			source = "size 0 (autoscaled down)";
@@ -397,6 +411,9 @@ function priceTopology(
 		} else if (orgRate && orgRate > 0) {
 			rate = orgRate;
 			source = `billing API: org-wide per-IC rate for ${ic} in ${region} (sibling deployments)`;
+		} else if (catalogRate && catalogRate > 0 && catalog) {
+			rate = catalogRate;
+			source = `list price (catalog: EC_RATE_CATALOG_PATH refreshed ${catalog.refreshed})`;
 		} else if (fallbackScalarRate && fallbackScalarRate > 0) {
 			rate = fallbackScalarRate;
 			source = "EC_PRICE_PER_GB_RAM_HOUR env var";
@@ -452,9 +469,18 @@ interface CostDiagnostics {
 	billing_status: string;
 }
 
+// SIO-826: roll-up trust flag for the cost estimate. Lets agent consumers branch on
+// "is the headline number trustworthy" without parsing per-tier rate_source strings.
+//   billed_actual  -- every sized tier from this-deployment + sibling-deployment billing
+//   mixed          -- some tiers from billing, some from catalog/env-var
+//   fallback_only  -- no billing source contributed; every tier from catalog/env-var
+//   unavailable    -- at least one sized tier could not be priced from any source
+type RateSourceConfidence = "billed_actual" | "mixed" | "fallback_only" | "unavailable";
+
 interface CostEnvelope {
 	rate_per_gb_ram_hour: number | null;
 	rate_source: string;
+	rate_source_confidence: RateSourceConfidence;
 	current_monthly_ecu: number | null;
 	// SIO-825: was current_monthly_ecu_partial. Same value, clearer name — and now paired
 	// with current_monthly_ecu_priced_tier_topology_ids so callers can see exactly which
@@ -495,24 +521,54 @@ function buildCostEnvelope(
 	}
 	const headlineRate = den > 0 ? num / den : null;
 
-	// SIO-825: headline source string indicates whether the rate stack used billing,
-	// org-wide sibling rates, the env-var fallback, or none. The target topology can
-	// pull from the sibling map even when the current topology pulls from this
-	// deployment's own billing, so we inspect both topologies' tier sources.
-	const allTierSources = [...current.tiers, ...target.tiers].map((t) => t.rate_source);
+	// SIO-825 + SIO-826: headline source string + roll-up confidence enum both derive
+	// from per-tier rate_source strings. The target topology can pull from a different
+	// source than the current topology (target uses sibling-borrow + catalog; current
+	// is all this-deployment billing), so we inspect every sized tier across both.
+	const allTierSources = [...current.tiers, ...target.tiers]
+		.filter((t) => t.monthly_gb_ram_zones > 0)
+		.map((t) => t.rate_source);
 	const usedDeploymentBilling = allTierSources.some((s) => s.startsWith("billing API: per-IC rate"));
 	const usedOrgBilling = allTierSources.some((s) => s.startsWith("billing API: org-wide"));
-	const usedFallback = fallbackScalarRate !== undefined && fallbackScalarRate > 0;
+	const usedCatalog = allTierSources.some((s) => s.startsWith("list price (catalog"));
+	const usedScalarEnv = allTierSources.some((s) => s === "EC_PRICE_PER_GB_RAM_HOUR env var");
+	const fallbackConfigured = fallbackScalarRate !== undefined && fallbackScalarRate > 0;
+	const anyUnpriced = !current.total_monthly_ecu_complete || !target.total_monthly_ecu_complete;
+	const billingContributed = usedDeploymentBilling || usedOrgBilling;
+	const fallbackContributed = usedCatalog || usedScalarEnv;
+
 	let source: string;
-	if (usedDeploymentBilling && usedOrgBilling)
+	if (usedDeploymentBilling && usedOrgBilling && usedCatalog)
+		source =
+			"billing API (last 30 days): per-IC rates from this deployment + sibling deployments, with operator rate catalog for ICs absent from any deployment in the org";
+	else if (usedDeploymentBilling && usedCatalog)
+		source =
+			"billing API (last 30 days): per-IC rates from this deployment, with operator rate catalog for target ICs absent from any deployment in the org";
+	else if (usedOrgBilling && usedCatalog)
+		source =
+			"billing API + operator rate catalog: sibling-deployment billed rates plus list-price catalog entries (this deployment has no matching billing history)";
+	else if (usedDeploymentBilling && usedOrgBilling)
 		source =
 			"billing API (last 30 days): per-IC rates from this deployment, with sibling-deployment rates for target ICs absent from this deployment's history";
 	else if (usedDeploymentBilling) source = "billing API (last 30 days): per-IC rates derived from instance line items";
 	else if (usedOrgBilling)
 		source =
 			"billing API (last 30 days): org-wide per-IC rates from sibling deployments (this deployment has no matching billing history)";
-	else if (usedFallback) source = "EC_PRICE_PER_GB_RAM_HOUR env var";
+	else if (usedCatalog) source = "operator rate catalog (EC_RATE_CATALOG_PATH): list prices, not billed actuals";
+	else if (fallbackConfigured) source = "EC_PRICE_PER_GB_RAM_HOUR env var";
 	else source = "unavailable";
+
+	// SIO-826: confidence rolls up the per-tier source mix into a single enum so agent
+	// prompts can gate on it without parsing strings. "unavailable" wins when any sized
+	// tier is unpriced, regardless of what the priced ones used.
+	let confidence: RateSourceConfidence;
+	if (anyUnpriced) confidence = "unavailable";
+	else if (billingContributed && fallbackContributed) confidence = "mixed";
+	else if (billingContributed) confidence = "billed_actual";
+	else if (fallbackContributed) confidence = "fallback_only";
+	// Pathological: every tier was size 0 (autoscaled-down) so we never priced anything
+	// but the total is a finite 0. Treat as billed_actual — the cost statement is true.
+	else confidence = "billed_actual";
 
 	const delta =
 		current.total_monthly_ecu !== null && target.total_monthly_ecu !== null
@@ -521,8 +577,12 @@ function buildCostEnvelope(
 
 	const note =
 		current.total_monthly_ecu === null || target.total_monthly_ecu === null
-			? "Some sized tiers could not be priced. See *_priced_tiers_subtotal (with priced_tier_topology_ids) for the priced subset, and unmatched_current_ics / unmatched_target_ics for ICs lacking any rate. SIO-825: target ICs absent from this deployment's billing fall back to org-wide rates from sibling deployments in the same region; set EC_PRICE_PER_GB_RAM_HOUR as a last-resort fallback or run the target IC briefly in a sibling deployment to populate the org-wide map."
-			: "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. Autoscaled-down tiers (size 0) contribute 0. Headline rate is the GB-RAM-zone-weighted average across the current topology. Target ICs absent from this deployment's billing are priced from org-wide sibling-deployment rates in the same region (SIO-825). Excludes snapshot storage, data transfer, and non-Elasticsearch tiers. Verify realised spend with elasticsearch_billing_get_deployment_costs after any plan change.";
+			? "Some sized tiers could not be priced. See *_priced_tiers_subtotal (with priced_tier_topology_ids) for the priced subset, and unmatched_current_ics / unmatched_target_ics for ICs lacking any rate. SIO-825/SIO-826: rate resolution tries this deployment's billing, then sibling-deployment billing in the same region, then the operator rate catalog (EC_RATE_CATALOG_PATH), then EC_PRICE_PER_GB_RAM_HOUR. To close remaining gaps either populate the catalog file for the missing ICs or run the IC briefly in any deployment to populate billing."
+			: confidence === "billed_actual"
+				? "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. Autoscaled-down tiers (size 0) contribute 0. Headline rate is the GB-RAM-zone-weighted average across the current topology. Every priced tier sourced from billed-actual rates (this deployment and/or sibling deployments in the same region). Excludes snapshot storage, data transfer, and non-Elasticsearch tiers. Verify realised spend with elasticsearch_billing_get_deployment_costs after any plan change."
+				: confidence === "mixed"
+					? "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. Headline mixes billed-actual rates with list-price catalog / EC_PRICE_PER_GB_RAM_HOUR fallback entries — see per-tier rate_source for provenance. Treat the delta as indicative, not contractual, until every tier has a billed rate. Excludes snapshot storage, data transfer, and non-Elasticsearch tiers."
+					: "Per-tier ECU = size_gb × zones × per-IC rate × 730 hours. No billed-actual rates contributed; the entire headline is list-price catalog and/or EC_PRICE_PER_GB_RAM_HOUR. Treat as a planning estimate only.";
 
 	// SIO-825: `*_partial` was easy to misread as "the full target cost minus a small
 	// rounding gap" when in fact it could omit the largest tiers. Rename to
@@ -530,6 +590,7 @@ function buildCostEnvelope(
 	return {
 		rate_per_gb_ram_hour: headlineRate !== null ? Math.round(headlineRate * 1e6) / 1e6 : null,
 		rate_source: source,
+		rate_source_confidence: confidence,
 		current_monthly_ecu: current.total_monthly_ecu,
 		current_monthly_ecu_priced_tiers_subtotal: current.total_monthly_ecu_partial,
 		current_monthly_ecu_priced_tier_topology_ids: current.priced_tier_topology_ids,
@@ -648,11 +709,18 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 				targetTemplateTopology,
 			);
 
+			// SIO-826: surface the operator rate catalog (if EC_RATE_CATALOG_PATH was set
+			// + loaded successfully at CloudClient construction time) as a tertiary rate
+			// source for ICs absent from billing entirely.
+			const catalog: CatalogRateSource | null = cloudClient.rateCatalog
+				? { rates: cloudClient.rateCatalog.rates, refreshed: cloudClient.rateCatalog.refreshed }
+				: null;
 			const pricedCurrent = priceTopology(
 				currentTopology,
 				icRateMap,
 				orgIcRateMap,
 				billingRegion,
+				catalog,
 				cloudClient.pricePerGbRamHour,
 			);
 			const pricedTarget = priceTopology(
@@ -660,6 +728,7 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 				icRateMap,
 				orgIcRateMap,
 				billingRegion,
+				catalog,
 				cloudClient.pricePerGbRamHour,
 			);
 
@@ -728,7 +797,7 @@ export const registerCloudSimulateHardwareProfileChangeTool: CloudToolRegistrati
 		{
 			title: "Elastic Cloud: simulate hardware profile change",
 			description:
-				"Simulate switching a deployment to a different hardware profile (deployment template) and estimate the monthly ECU cost delta. Fetches the deployment's current plan topology and projects the per-tier sizes onto the target profile (tiers missing from the target are kept and surfaced in topology_warnings). Per-tier rates resolve in three layers (SIO-825): (1) this deployment's last-30-days billing line items, matched by instance_configuration_id; (2) org-wide rates from sibling deployments in the same region (so target ICs the deployment has never run can still be priced); (3) EC_PRICE_PER_GB_RAM_HOUR when set. Tiers with no rate from any source return monthly_ecu=null with rate_source='unavailable'. Per-tier rate_source labels distinguish billed-actual rates from the deployment, sibling-deployment rates, and env-var fallback. Autoscaled-down tiers (size 0) contribute 0. *_priced_tiers_subtotal + *_priced_tier_topology_ids expose the priced subset (and which tiers are included) when some tiers can't be rated. cost_estimate.diagnostics.billing_status indicates whether billing was reachable (ok / empty / no_match / error:<http_status>). This tool is read-only and does NOT apply any changes. region must use the Elastic internal format, e.g. 'aws-eu-central-1'.",
+				"Simulate switching a deployment to a different hardware profile (deployment template) and estimate the monthly ECU cost delta. Fetches the deployment's current plan topology and projects the per-tier sizes onto the target profile (tiers missing from the target are kept and surfaced in topology_warnings). Per-tier rates resolve in four layers: (1) this deployment's last-30-days billing line items, matched by instance_configuration_id; (2) org-wide rates from sibling deployments in the same region (SIO-825 — so target ICs the deployment has never run can still be priced if any sibling runs them); (3) operator-supplied rate catalog from EC_RATE_CATALOG_PATH (SIO-826 — list prices for ICs absent from billing entirely); (4) EC_PRICE_PER_GB_RAM_HOUR scalar when set. Tiers with no rate from any source return monthly_ecu=null with rate_source='unavailable'. Per-tier rate_source labels distinguish billed-actual from this deployment, sibling-deployment, catalog, and env-var fallback. cost_estimate.rate_source_confidence rolls these up to billed_actual / mixed / fallback_only / unavailable so callers can react without parsing strings. Autoscaled-down tiers (size 0) contribute 0. *_priced_tiers_subtotal + *_priced_tier_topology_ids expose the priced subset (and which tiers are included) when some tiers can't be rated. cost_estimate.diagnostics.billing_status indicates whether billing was reachable (ok / empty / no_match / error:<http_status>). This tool is read-only and does NOT apply any changes. region must use the Elastic internal format, e.g. 'aws-eu-central-1'.",
 			inputSchema: validator.shape,
 		},
 		handler,
