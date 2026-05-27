@@ -1,16 +1,14 @@
 // packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
 // Standalone probe: boots the SigV4 proxy from AWS_AGENTCORE_* env, then
-// (1) initializes MCP, (2) lists tools, (3) calls aws_sts_get_caller_identity
-// to verify the runtime assumes arn:aws:iam::762715229080:role/DevOpsAgentReadOnly.
+// (1) initializes MCP, (2) lists tools, (3) calls aws_list_estates to confirm
+// the runtime's AWS_ESTATES env was parsed, (4) calls aws_cloudwatch_describe_alarms
+// against the first configured estate to exercise the full
+// SigV4 -> proxy -> runtime -> AssumeRole -> service-call path.
 //
-// Run: bun run packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
-// Or:  bun --env-file=.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
+// Run: bun --env-file=../../.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
+// (from the repo root: bun --env-file=.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts)
 
-import {
-	buildIdentityCard,
-	loadProxyConfigFromEnv,
-	startAgentCoreProxy,
-} from "@devops-agent/shared";
+import { buildIdentityCard, loadProxyConfigFromEnv, startAgentCoreProxy } from "@devops-agent/shared";
 
 const PREFIX = "AWS";
 
@@ -36,6 +34,12 @@ async function postMcp(port: number, body: object): Promise<unknown> {
 	return JSON.parse(text);
 }
 
+function extractTextContent(rpcResponse: unknown): string | undefined {
+	const content = (rpcResponse as { result?: { content?: { type: string; text?: string }[] } }).result?.content;
+	if (!Array.isArray(content)) return undefined;
+	return content.find((c) => c.type === "text")?.text;
+}
+
 async function main() {
 	console.log(`[smoke] loading ${PREFIX}_AGENTCORE_* env...`);
 	const config = loadProxyConfigFromEnv(PREFIX);
@@ -55,7 +59,7 @@ async function main() {
 	console.log("[smoke] proxy up.\n");
 
 	try {
-		console.log("[smoke] step 1/3: initialize");
+		console.log("[smoke] step 1/4: initialize");
 		const init = await postMcp(config.port, {
 			jsonrpc: "2.0",
 			id: 1,
@@ -68,44 +72,61 @@ async function main() {
 		});
 		console.log("[smoke]   ->", JSON.stringify(init).slice(0, 300));
 
-		console.log("\n[smoke] step 2/3: tools/list");
+		console.log("\n[smoke] step 2/4: tools/list");
 		const tools = await postMcp(config.port, {
 			jsonrpc: "2.0",
 			id: 2,
 			method: "tools/list",
 		});
-		const toolCount = Array.isArray((tools as { result?: { tools?: unknown[] } }).result?.tools)
-			? (tools as { result: { tools: unknown[] } }).result.tools.length
-			: "unknown";
-		console.log(`[smoke]   tool count: ${toolCount}`);
-		const stsTool = (tools as { result?: { tools?: { name: string }[] } }).result?.tools?.find(
-			(t) => t.name === "aws_sts_get_caller_identity",
+		const toolList = (tools as { result?: { tools?: { name: string }[] } }).result?.tools ?? [];
+		console.log(`[smoke]   tool count: ${toolList.length}`);
+		console.log(`[smoke]   aws_list_estates present: ${toolList.some((t) => t.name === "aws_list_estates")}`);
+		console.log(
+			`[smoke]   aws_cloudwatch_describe_alarms present: ${toolList.some((t) => t.name === "aws_cloudwatch_describe_alarms")}`,
 		);
-		console.log(`[smoke]   aws_sts_get_caller_identity present: ${Boolean(stsTool)}`);
 
-		console.log("\n[smoke] step 3/3: tools/call aws_sts_get_caller_identity");
-		const callerId = await postMcp(config.port, {
+		console.log("\n[smoke] step 3/4: tools/call aws_list_estates");
+		const estatesRpc = await postMcp(config.port, {
 			jsonrpc: "2.0",
 			id: 3,
 			method: "tools/call",
-			params: { name: "aws_sts_get_caller_identity", arguments: {} },
+			params: { name: "aws_list_estates", arguments: {} },
 		});
-		console.log("[smoke]   raw response:");
-		console.log(JSON.stringify(callerId, null, 2));
+		const estatesText = extractTextContent(estatesRpc);
+		console.log("[smoke]   ->", estatesText ?? JSON.stringify(estatesRpc).slice(0, 200));
 
-		const content = (callerId as { result?: { content?: { type: string; text?: string }[] } })
-			.result?.content;
-		if (Array.isArray(content)) {
-			const textBlock = content.find((c) => c.type === "text");
-			if (textBlock?.text) {
-				console.log("\n[smoke] caller identity text:");
-				console.log(textBlock.text);
-				if (textBlock.text.includes("DevOpsAgentReadOnly")) {
-					console.log("\n[smoke] PASS: assumed-role chain reached DevOpsAgentReadOnly");
-				} else {
-					console.log("\n[smoke] WARN: response does not mention DevOpsAgentReadOnly");
-				}
+		// Try to parse the returned JSON to pick an estate ID for step 4.
+		let firstEstate: string | undefined;
+		if (estatesText) {
+			try {
+				const parsed = JSON.parse(estatesText) as { estates?: string[] };
+				firstEstate = parsed.estates?.[0];
+			} catch {
+				/* tool may have wrapped in markdown; skip step 4 */
 			}
+		}
+
+		if (!firstEstate) {
+			console.log("\n[smoke] step 4/4: SKIPPED (couldn't parse first estate from aws_list_estates)");
+			return;
+		}
+
+		console.log(`\n[smoke] step 4/4: tools/call aws_cloudwatch_describe_alarms (estate=${firstEstate})`);
+		const alarmsRpc = await postMcp(config.port, {
+			jsonrpc: "2.0",
+			id: 4,
+			method: "tools/call",
+			params: {
+				name: "aws_cloudwatch_describe_alarms",
+				arguments: { estate: firstEstate, MaxRecords: 1 },
+			},
+		});
+		const alarmsText = extractTextContent(alarmsRpc);
+		console.log("[smoke]   ->", alarmsText?.slice(0, 400) ?? JSON.stringify(alarmsRpc).slice(0, 400));
+		if (alarmsText?.includes("_error")) {
+			console.log("\n[smoke] FAIL: tool returned a structured error -- check AssumeRole/IAM");
+		} else {
+			console.log(`\n[smoke] PASS: end-to-end SigV4 -> proxy -> runtime -> AssumeRole(${firstEstate}) -> CloudWatch worked`);
 		}
 	} finally {
 		console.log("\n[smoke] stopping proxy...");

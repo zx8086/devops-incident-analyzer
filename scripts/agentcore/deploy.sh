@@ -142,7 +142,11 @@ case "${MCP_SERVER}" in
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
   couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
-  aws)      echo "  AWS:          role=${AWS_ASSUMED_ROLE_ARN:-DevOpsAgentReadOnly (default)}, externalId=set" ;;
+  aws)
+    AWS_ESTATE_COUNT=$(echo "${AWS_ESTATES:-{}}" | jq -er 'length' 2>/dev/null || echo "0")
+    AWS_ESTATE_IDS=$(echo "${AWS_ESTATES:-{}}" | jq -er 'keys | join(",")' 2>/dev/null || echo "(none)")
+    echo "  AWS:          ${AWS_ESTATE_COUNT} estate(s) configured: ${AWS_ESTATE_IDS}"
+    ;;
 esac
 if [ -n "${AGENTCORE_SUBNETS}" ]; then
   echo "  Network:      VPC (subnets=${AGENTCORE_SUBNETS}, sgs=${AGENTCORE_SECURITY_GROUPS})"
@@ -280,18 +284,29 @@ if [ "${MCP_SERVER}" = "kafka" ] && [ "${MSK_AUTH_MODE}" != "none" ]; then
     }'
 fi
 
-# AWS: grant sts:AssumeRole on DevOpsAgentReadOnly. The trust policy on
-# DevOpsAgentReadOnly already names this execution role as the only permitted
-# principal; this statement is the matching permission side of the contract.
-# Always required: the runtime must assume DevOpsAgentReadOnly to call AWS APIs.
+# AWS: grant sts:AssumeRole on every estate's DevOpsAgentReadOnly. SIO-828
+# introduced AWS_ESTATES (JSON map) so one runtime can serve N target accounts.
+# Each estate's trust policy in its own account must list this runtime's
+# execution role as the trusted Principal; the deploy script prints a reminder
+# after IAM update (it can't auto-patch trust policies in other accounts).
+# Single statement with N resources stays well under IAM's 10KB inline-policy
+# limit even with dozens of estates.
 if [ "${MCP_SERVER}" = "aws" ]; then
-  ASSUMED_ROLE_ARN="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
+  if [ -z "${AWS_ESTATES:-}" ]; then
+    echo "ERROR: AWS_ESTATES is required for the aws server type." >&2
+    echo "  Example: AWS_ESTATES='{\"prod\":{\"assumedRoleArn\":\"arn:aws:iam::ACCT:role/DevOpsAgentReadOnly\",\"externalId\":\"id\"}}'" >&2
+    exit 1
+  fi
+  ESTATE_ARN_LIST=$(echo "${AWS_ESTATES}" | jq -ec '[.[].assumedRoleArn] | unique') || {
+    echo "ERROR: AWS_ESTATES is not valid JSON or missing assumedRoleArn fields." >&2
+    exit 1
+  }
   POLICY_STATEMENTS="${POLICY_STATEMENTS}"',
     {
-      "Sid": "AssumeDevOpsAgentReadOnly",
+      "Sid": "AssumeEstateReadOnlyRoles",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
-      "Resource": "'"${ASSUMED_ROLE_ARN}"'"
+      "Resource": '"${ESTATE_ARN_LIST}"'
     }'
 fi
 
@@ -317,6 +332,19 @@ aws iam attach-role-policy \
 
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 echo "  IAM role ready: ${ROLE_ARN}"
+
+# SIO-828: cross-account trust policies live in the *target* accounts, not in
+# this script's account. Print a reminder so operators don't ship a runtime that
+# boot-validates correctly in this account but fails sts:AssumeRole at first
+# call against a target. The boot-time estate validator inside the runtime
+# (estate-validator.ts) will fail the deploy loudly if a trust policy is wrong.
+if [ "${MCP_SERVER}" = "aws" ]; then
+  echo ""
+  echo "  Reminder: each estate's DevOpsAgentReadOnly trust policy must include:"
+  echo "    Principal: ${ROLE_ARN}"
+  echo "  Estates configured:"
+  echo "${AWS_ESTATES}" | jq -r 'to_entries[] | "    - \(.key) (\(.value.assumedRoleArn))"'
+fi
 
 echo "  Waiting for IAM role propagation..."
 sleep 10
@@ -423,10 +451,10 @@ case "${MCP_SERVER}" in
     fi
     ;;
   aws)
-    AWS_ASSUMED_ROLE_ARN_RESOLVED="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
-    AWS_EXTERNAL_ID_RESOLVED="${AWS_EXTERNAL_ID:-aws-mcp-readonly-2026}"
-    ENV_VARS="${ENV_VARS},AWS_ASSUMED_ROLE_ARN=${AWS_ASSUMED_ROLE_ARN_RESOLVED}"
-    ENV_VARS="${ENV_VARS},AWS_EXTERNAL_ID=${AWS_EXTERNAL_ID_RESOLVED}"
+    # SIO-828: pass the AWS_ESTATES JSON blob verbatim. The runtime parses it
+    # via Zod (packages/mcp-server-aws/src/config/schemas.ts) and runs the
+    # boot-time estate validator before serving any requests.
+    ENV_VARS="${ENV_VARS},AWS_ESTATES=${AWS_ESTATES}"
     ;;
 esac
 

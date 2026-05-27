@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config/index.ts";
 import { buildAssumedCredsProvider } from "./services/credentials.ts";
+import { validateEstates } from "./services/estate-validator.ts";
 import { initializeTracing } from "./telemetry/tracing.ts";
 import { registerAllTools } from "./tools/register.ts";
 import { setDefaultCapBytes } from "./tools/wrap.ts";
@@ -79,6 +80,50 @@ if (import.meta.main) {
 					},
 					"Starting AWS MCP Server",
 				);
+
+				// SIO-828: validate each estate's AssumeRole chain before serving any
+				// requests. Fail-closed on any failure -- a partially-working runtime
+				// (prod-OK, dev-FAILED) would make the agent fan-out silently skip
+				// dev with "no results" errors that take hours to diagnose.
+				// Escape hatch SKIP_ESTATE_VALIDATION is honored ONLY when the
+				// transport mode isn't agentcore (where boot-time validation is
+				// non-negotiable).
+				if (config.skipEstateValidation && config.transport.mode !== "agentcore") {
+					logger.warn(
+						{ transport: config.transport.mode },
+						"SKIP_ESTATE_VALIDATION=true -- skipping boot-time estate validation (dev only)",
+					);
+				} else {
+					const results = await validateEstates(config.aws);
+					const failed = results.filter((r) => !r.ok);
+					for (const r of results) {
+						if (r.ok) {
+							logger.info(
+								{ estate: r.estate, assumedArn: r.assumedArn, durationMs: r.durationMs },
+								"Estate validation OK",
+							);
+						} else {
+							logger.error(
+								{ estate: r.estate, error: r.error, durationMs: r.durationMs },
+								"Estate validation FAILED",
+							);
+						}
+					}
+					if (failed.length > 0) {
+						const summary = failed.map((r) => `  - ${r.estate}: ${r.error}`).join("\n");
+						throw new Error(
+							`Refusing to start: ${failed.length}/${results.length} estate(s) failed STS:AssumeRole check.\n${summary}\n` +
+								"Check that each estate's DevOpsAgentReadOnly trust policy lists the runtime's execution role as a Principal.",
+						);
+					}
+					logger.info(
+						{
+							estateCount: results.length,
+							slowestMs: Math.max(...results.map((r) => r.durationMs)),
+						},
+						"All estates validated",
+					);
+				}
 
 				return { config };
 			},
