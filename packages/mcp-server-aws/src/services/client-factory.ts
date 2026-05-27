@@ -16,90 +16,101 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { SFNClient } from "@aws-sdk/client-sfn";
 import { SNSClient } from "@aws-sdk/client-sns";
 import { SQSClient } from "@aws-sdk/client-sqs";
+import { STSClient } from "@aws-sdk/client-sts";
 import { XRayClient } from "@aws-sdk/client-xray";
 import type { AwsConfig } from "../config/schemas.ts";
 import { buildAssumedCredsProvider } from "./credentials.ts";
 
-// Module-level singleton cache. One client per service per process.
-// Each client carries its own credential cache via fromTemporaryCredentials,
-// so reusing the client keeps the cache warm.
+// Module-level singleton cache keyed by `${service}:${estate}`. One client per
+// (service, estate) pair per process. Each client carries its own credential
+// cache via fromTemporaryCredentials, so reusing the client keeps the cache warm.
 const clients = new Map<string, unknown>();
 
-// Config is captured at first call; subsequent calls with different configs are
-// ignored. Single-config-per-process is enforced at bootstrap (SIO-758).
-function lazyClient<T>(key: string, ctor: () => T): T {
+function resolveEstate(config: AwsConfig, estate: string) {
+	const estateConfig = config.estates[estate];
+	if (!estateConfig) {
+		throw new Error(`Unknown estate "${estate}". Known: ${Object.keys(config.estates).join(", ")}`);
+	}
+	return estateConfig;
+}
+
+function commonConfig(config: AwsConfig, estate: string) {
+	const estateConfig = resolveEstate(config, estate);
+	return {
+		region: config.region,
+		credentials: buildAssumedCredsProvider(estateConfig, config.region),
+		maxAttempts: 3,
+	};
+}
+
+function lazyClient<T>(service: string, estate: string, ctor: () => T): T {
+	const key = `${service}:${estate}`;
 	if (!clients.has(key)) {
 		clients.set(key, ctor());
 	}
 	return clients.get(key) as T;
 }
 
-function commonConfig(config: AwsConfig) {
-	return {
-		region: config.region,
-		credentials: buildAssumedCredsProvider(config),
-		maxAttempts: 3,
-	};
+export function getCloudFormationClient(config: AwsConfig, estate: string): CloudFormationClient {
+	return lazyClient("cloudformation", estate, () => new CloudFormationClient(commonConfig(config, estate)));
 }
-
-export function getCloudFormationClient(config: AwsConfig): CloudFormationClient {
-	return lazyClient("cloudformation", () => new CloudFormationClient(commonConfig(config)));
+export function getCloudWatchClient(config: AwsConfig, estate: string): CloudWatchClient {
+	return lazyClient("cloudwatch", estate, () => new CloudWatchClient(commonConfig(config, estate)));
 }
-export function getCloudWatchClient(config: AwsConfig): CloudWatchClient {
-	return lazyClient("cloudwatch", () => new CloudWatchClient(commonConfig(config)));
+export function getCloudWatchLogsClient(config: AwsConfig, estate: string): CloudWatchLogsClient {
+	return lazyClient("logs", estate, () => new CloudWatchLogsClient(commonConfig(config, estate)));
 }
-export function getCloudWatchLogsClient(config: AwsConfig): CloudWatchLogsClient {
-	return lazyClient("logs", () => new CloudWatchLogsClient(commonConfig(config)));
+export function getConfigServiceClient(config: AwsConfig, estate: string): ConfigServiceClient {
+	return lazyClient("config", estate, () => new ConfigServiceClient(commonConfig(config, estate)));
 }
-export function getConfigServiceClient(config: AwsConfig): ConfigServiceClient {
-	return lazyClient("config", () => new ConfigServiceClient(commonConfig(config)));
+export function getDynamoDbClient(config: AwsConfig, estate: string): DynamoDBClient {
+	return lazyClient("dynamodb", estate, () => new DynamoDBClient(commonConfig(config, estate)));
 }
-export function getDynamoDbClient(config: AwsConfig): DynamoDBClient {
-	return lazyClient("dynamodb", () => new DynamoDBClient(commonConfig(config)));
+export function getEc2Client(config: AwsConfig, estate: string): EC2Client {
+	return lazyClient("ec2", estate, () => new EC2Client(commonConfig(config, estate)));
 }
-export function getEc2Client(config: AwsConfig): EC2Client {
-	return lazyClient("ec2", () => new EC2Client(commonConfig(config)));
+export function getEcsClient(config: AwsConfig, estate: string): ECSClient {
+	return lazyClient("ecs", estate, () => new ECSClient(commonConfig(config, estate)));
 }
-export function getEcsClient(config: AwsConfig): ECSClient {
-	return lazyClient("ecs", () => new ECSClient(commonConfig(config)));
+export function getElastiCacheClient(config: AwsConfig, estate: string): ElastiCacheClient {
+	return lazyClient("elasticache", estate, () => new ElastiCacheClient(commonConfig(config, estate)));
 }
-export function getElastiCacheClient(config: AwsConfig): ElastiCacheClient {
-	return lazyClient("elasticache", () => new ElastiCacheClient(commonConfig(config)));
-}
-export function getEventBridgeClient(config: AwsConfig): EventBridgeClient {
-	return lazyClient("eventbridge", () => new EventBridgeClient(commonConfig(config)));
+export function getEventBridgeClient(config: AwsConfig, estate: string): EventBridgeClient {
+	return lazyClient("eventbridge", estate, () => new EventBridgeClient(commonConfig(config, estate)));
 }
 // AWS Health API requires the us-east-1 endpoint regardless of which region the
 // agent is deployed in. Override the region here, not in callers.
-export function getHealthClient(config: AwsConfig): HealthClient {
-	return lazyClient("health", () => new HealthClient({ ...commonConfig(config), region: "us-east-1" }));
+export function getHealthClient(config: AwsConfig, estate: string): HealthClient {
+	return lazyClient("health", estate, () => new HealthClient({ ...commonConfig(config, estate), region: "us-east-1" }));
 }
-export function getLambdaClient(config: AwsConfig): LambdaClient {
-	return lazyClient("lambda", () => new LambdaClient(commonConfig(config)));
+export function getLambdaClient(config: AwsConfig, estate: string): LambdaClient {
+	return lazyClient("lambda", estate, () => new LambdaClient(commonConfig(config, estate)));
 }
-export function getRdsClient(config: AwsConfig): RDSClient {
-	return lazyClient("rds", () => new RDSClient(commonConfig(config)));
+export function getRdsClient(config: AwsConfig, estate: string): RDSClient {
+	return lazyClient("rds", estate, () => new RDSClient(commonConfig(config, estate)));
 }
-export function getResourceGroupsTaggingClient(config: AwsConfig): ResourceGroupsTaggingAPIClient {
-	return lazyClient("tags", () => new ResourceGroupsTaggingAPIClient(commonConfig(config)));
+export function getResourceGroupsTaggingClient(config: AwsConfig, estate: string): ResourceGroupsTaggingAPIClient {
+	return lazyClient("tags", estate, () => new ResourceGroupsTaggingAPIClient(commonConfig(config, estate)));
 }
-export function getS3Client(config: AwsConfig): S3Client {
-	return lazyClient("s3", () => new S3Client(commonConfig(config)));
+export function getS3Client(config: AwsConfig, estate: string): S3Client {
+	return lazyClient("s3", estate, () => new S3Client(commonConfig(config, estate)));
 }
-export function getSfnClient(config: AwsConfig): SFNClient {
-	return lazyClient("sfn", () => new SFNClient(commonConfig(config)));
+export function getSfnClient(config: AwsConfig, estate: string): SFNClient {
+	return lazyClient("sfn", estate, () => new SFNClient(commonConfig(config, estate)));
 }
-export function getSnsClient(config: AwsConfig): SNSClient {
-	return lazyClient("sns", () => new SNSClient(commonConfig(config)));
+export function getSnsClient(config: AwsConfig, estate: string): SNSClient {
+	return lazyClient("sns", estate, () => new SNSClient(commonConfig(config, estate)));
 }
-export function getSqsClient(config: AwsConfig): SQSClient {
-	return lazyClient("sqs", () => new SQSClient(commonConfig(config)));
+export function getSqsClient(config: AwsConfig, estate: string): SQSClient {
+	return lazyClient("sqs", estate, () => new SQSClient(commonConfig(config, estate)));
 }
-export function getXrayClient(config: AwsConfig): XRayClient {
-	return lazyClient("xray", () => new XRayClient(commonConfig(config)));
+export function getStsClient(config: AwsConfig, estate: string): STSClient {
+	return lazyClient("sts", estate, () => new STSClient(commonConfig(config, estate)));
+}
+export function getXrayClient(config: AwsConfig, estate: string): XRayClient {
+	return lazyClient("xray", estate, () => new XRayClient(commonConfig(config, estate)));
 }
 
-// Test-only: reset the singleton cache.
 export function _resetClientsForTests(): void {
 	clients.clear();
 }

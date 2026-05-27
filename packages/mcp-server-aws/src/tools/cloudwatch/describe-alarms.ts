@@ -3,6 +3,7 @@ import { DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeAlarmsSchema = z.object({
@@ -13,14 +14,14 @@ export const describeAlarmsSchema = z.object({
 	NextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type DescribeAlarmsParams = z.infer<typeof describeAlarmsSchema>;
+export type DescribeAlarmsParams = WithEstate<z.infer<typeof describeAlarmsSchema>>;
 
 export function describeAlarms(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_cloudwatch_describe_alarms",
 		listField: "MetricAlarms",
 		fn: async (params: DescribeAlarmsParams) => {
-			const client = getCloudWatchClient(config);
+			const client = getCloudWatchClient(config, params.estate);
 			return client.send(
 				new DescribeAlarmsCommand({
 					AlarmNames: params.AlarmNames,

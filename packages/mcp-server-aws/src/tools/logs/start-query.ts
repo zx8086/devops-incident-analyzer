@@ -3,6 +3,7 @@ import { StartQueryCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchLogsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapBlobTool } from "../wrap.ts";
 
 export const startQueryObjectSchema = z.object({
@@ -27,13 +28,13 @@ export const startQuerySchema = startQueryObjectSchema.refine(
 	"Provide exactly one of logGroupNames or logGroupIdentifiers",
 );
 
-export type StartQueryParams = z.infer<typeof startQueryObjectSchema>;
+export type StartQueryParams = WithEstate<z.infer<typeof startQueryObjectSchema>>;
 
 export function startQuery(config: AwsConfig) {
 	return wrapBlobTool({
 		name: "aws_logs_start_query",
 		fn: async (params: StartQueryParams) => {
-			const client = getCloudWatchLogsClient(config);
+			const client = getCloudWatchLogsClient(config, params.estate);
 			return client.send(
 				new StartQueryCommand({
 					logGroupNames: params.logGroupNames,

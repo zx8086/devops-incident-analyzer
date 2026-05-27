@@ -39,9 +39,15 @@ import { getTraceSummaries } from "../tools/xray/get-trace-summaries.ts";
 
 const config: AwsConfig = {
 	region: "eu-central-1",
-	assumedRoleArn: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
-	externalId: "aws-mcp-readonly-2026",
+	estates: {
+		prod: {
+			assumedRoleArn: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
+			externalId: "aws-mcp-readonly-2026",
+		},
+	},
 };
+
+const E = "prod"; // canonical estate id for handler() calls below
 
 afterEach(() => _resetClientsForTests());
 
@@ -51,7 +57,7 @@ describe("ec2 integration", () => {
 		ec2Mock.on(DescribeVpcsCommand).resolves({ Vpcs: [{ VpcId: "vpc-1", CidrBlock: "10.0.0.0/16" }] });
 
 		const handler = describeVpcs(config);
-		const result = (await handler({})) as { Vpcs: unknown[] };
+		const result = (await handler({ estate: E })) as { Vpcs: unknown[] };
 		expect(result.Vpcs).toHaveLength(1);
 	});
 });
@@ -64,7 +70,7 @@ describe("ecs integration", () => {
 		});
 
 		const handler = describeTasks(config);
-		const result = (await handler({ cluster: "my-cluster", tasks: ["abc123"] })) as { tasks: unknown[] };
+		const result = (await handler({ estate: E, cluster: "my-cluster", tasks: ["abc123"] })) as { tasks: unknown[] };
 		expect(result.tasks).toHaveLength(1);
 	});
 });
@@ -77,7 +83,7 @@ describe("lambda integration", () => {
 		});
 
 		const handler = listFunctions(config);
-		const result = (await handler({})) as { Functions: unknown[] };
+		const result = (await handler({ estate: E })) as { Functions: unknown[] };
 		expect(result.Functions).toHaveLength(1);
 	});
 });
@@ -90,7 +96,7 @@ describe("cloudwatch integration", () => {
 		});
 
 		const handler = describeAlarms(config);
-		const result = (await handler({})) as { MetricAlarms: unknown[] };
+		const result = (await handler({ estate: E })) as { MetricAlarms: unknown[] };
 		expect(result.MetricAlarms).toHaveLength(1);
 	});
 });
@@ -103,7 +109,7 @@ describe("logs integration", () => {
 		});
 
 		const handler = describeLogGroups(config);
-		const result = (await handler({})) as { logGroups: unknown[] };
+		const result = (await handler({ estate: E })) as { logGroups: unknown[] };
 		expect(result.logGroups).toHaveLength(1);
 	});
 });
@@ -116,7 +122,11 @@ describe("xray integration", () => {
 		});
 
 		const handler = getTraceSummaries(config);
-		const result = (await handler({ StartTime: "2026-01-01T00:00:00Z", EndTime: "2026-01-01T01:00:00Z" })) as {
+		const result = (await handler({
+			estate: E,
+			StartTime: "2026-01-01T00:00:00Z",
+			EndTime: "2026-01-01T01:00:00Z",
+		})) as {
 			TraceSummaries: unknown[];
 		};
 		expect(result.TraceSummaries).toHaveLength(1);
@@ -131,7 +141,7 @@ describe("health integration", () => {
 		});
 
 		const handler = describeEvents(config);
-		const result = (await handler({})) as { events: unknown[] };
+		const result = (await handler({ estate: E })) as { events: unknown[] };
 		expect(result.events).toHaveLength(1);
 	});
 });
@@ -144,7 +154,7 @@ describe("cloudformation integration", () => {
 		});
 
 		const handler = listStacks(config);
-		const result = (await handler({})) as { StackSummaries: unknown[] };
+		const result = (await handler({ estate: E })) as { StackSummaries: unknown[] };
 		expect(result.StackSummaries).toHaveLength(1);
 	});
 });
@@ -157,7 +167,7 @@ describe("rds integration", () => {
 		});
 
 		const handler = describeDbInstances(config);
-		const result = (await handler({})) as { DBInstances: unknown[] };
+		const result = (await handler({ estate: E })) as { DBInstances: unknown[] };
 		expect(result.DBInstances).toHaveLength(1);
 	});
 });
@@ -170,7 +180,7 @@ describe("dynamodb integration", () => {
 		});
 
 		const handler = listTables(config);
-		const result = (await handler({})) as { TableNames: unknown[] };
+		const result = (await handler({ estate: E })) as { TableNames: unknown[] };
 		expect(result.TableNames).toHaveLength(2);
 	});
 });
@@ -183,7 +193,7 @@ describe("s3 integration", () => {
 		});
 
 		const handler = listBuckets(config);
-		const result = (await handler({})) as { Buckets: unknown[] };
+		const result = (await handler({ estate: E })) as { Buckets: unknown[] };
 		expect(result.Buckets).toHaveLength(1);
 	});
 });
@@ -196,7 +206,7 @@ describe("elasticache integration", () => {
 		});
 
 		const handler = describeCacheClusters(config);
-		const result = (await handler({})) as { CacheClusters: unknown[] };
+		const result = (await handler({ estate: E })) as { CacheClusters: unknown[] };
 		expect(result.CacheClusters).toHaveLength(1);
 	});
 });
@@ -209,7 +219,7 @@ describe("messaging integration", () => {
 		});
 
 		const handler = listTopics(config);
-		const result = (await handler({})) as { Topics: unknown[] };
+		const result = (await handler({ estate: E })) as { Topics: unknown[] };
 		expect(result.Topics).toHaveLength(1);
 	});
 });
@@ -222,7 +232,7 @@ describe("config integration", () => {
 		});
 
 		const handler = describeConfigRules(config);
-		const result = (await handler({})) as { ConfigRules: unknown[] };
+		const result = (await handler({ estate: E })) as { ConfigRules: unknown[] };
 		expect(result.ConfigRules).toHaveLength(1);
 	});
 });
@@ -237,7 +247,7 @@ describe("tags integration", () => {
 		});
 
 		const handler = getResources(config);
-		const result = (await handler({})) as { ResourceTagMappingList: unknown[] };
+		const result = (await handler({ estate: E })) as { ResourceTagMappingList: unknown[] };
 		expect(result.ResourceTagMappingList).toHaveLength(1);
 	});
 });

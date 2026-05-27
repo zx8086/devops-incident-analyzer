@@ -3,6 +3,7 @@ import { GetServiceGraphCommand } from "@aws-sdk/client-xray";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getXrayClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapBlobTool } from "../wrap.ts";
 
 export const getServiceGraphSchema = z.object({
@@ -10,13 +11,13 @@ export const getServiceGraphSchema = z.object({
 	EndTime: z.string().describe("ISO 8601 end time for the service graph"),
 });
 
-export type GetServiceGraphParams = z.infer<typeof getServiceGraphSchema>;
+export type GetServiceGraphParams = WithEstate<z.infer<typeof getServiceGraphSchema>>;
 
 export function getServiceGraph(config: AwsConfig) {
 	return wrapBlobTool({
 		name: "aws_xray_get_service_graph",
 		fn: async (params: GetServiceGraphParams) => {
-			const client = getXrayClient(config);
+			const client = getXrayClient(config, params.estate);
 			return client.send(
 				new GetServiceGraphCommand({
 					StartTime: new Date(params.StartTime),

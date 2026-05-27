@@ -3,6 +3,7 @@ import { DescribeSecurityGroupsCommand } from "@aws-sdk/client-ec2";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEc2Client } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeSecurityGroupsSchema = z.object({
@@ -12,14 +13,14 @@ export const describeSecurityGroupsSchema = z.object({
 	nextToken: z.string().optional(),
 });
 
-export type DescribeSecurityGroupsParams = z.infer<typeof describeSecurityGroupsSchema>;
+export type DescribeSecurityGroupsParams = WithEstate<z.infer<typeof describeSecurityGroupsSchema>>;
 
 export function describeSecurityGroups(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_ec2_describe_security_groups",
 		listField: "SecurityGroups",
 		fn: async (params: DescribeSecurityGroupsParams) => {
-			const client = getEc2Client(config);
+			const client = getEc2Client(config, params.estate);
 			return client.send(
 				new DescribeSecurityGroupsCommand({
 					GroupIds: params.groupIds,

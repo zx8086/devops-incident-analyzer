@@ -22,6 +22,21 @@ function currentElasticDeployment(): string | undefined {
 	return deploymentStorage.getStore()?.deploymentId;
 }
 
+// SIO-828: AWS estates carry per-fan-out context too, but via tool *args* (estate
+// is a required Zod-enum field on every AWS tool), not headers. The sub-agent
+// enters a withAwsEstate scope before invoking its tools, and getToolsForDataSource
+// wraps each AWS tool so .invoke(args) injects estate from ALS and the schema
+// shown to the LLM omits the field entirely. LLM never sees or chooses it.
+const awsEstateStorage = new AsyncLocalStorage<{ estate: string }>();
+
+export function withAwsEstate<T>(estate: string, fn: () => Promise<T>): Promise<T> {
+	return awsEstateStorage.run({ estate }, fn);
+}
+
+export function currentAwsEstate(): string | undefined {
+	return awsEstateStorage.getStore()?.estate;
+}
+
 export interface McpClientConfig {
 	elasticUrl?: string;
 	kafkaUrl?: string;
@@ -297,7 +312,19 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 	const serverName = DATASOURCE_TO_MCP_SERVER[dataSourceId];
 	if (!serverName) return allTools;
 
-	return toolsByServer.get(serverName) ?? [];
+	const raw = toolsByServer.get(serverName) ?? [];
+
+	// SIO-828: hide the `estate` arg from the LLM and inject it from ALS at call time.
+	// The aws_list_estates introspection tool has no `estate` arg; the wrapper's
+	// schema-strip is idempotent for it (delete on missing key is a no-op).
+	if (dataSourceId === "aws") {
+		// Lazy import avoids a cycle (the wrapper imports currentAwsEstate from here).
+		const { wrapAwsToolsWithEstate } =
+			require("./aws-tool-estate-wrapper.ts") as typeof import("./aws-tool-estate-wrapper.ts");
+		return wrapAwsToolsWithEstate(raw);
+	}
+
+	return raw;
 }
 
 export function getAllTools(): StructuredToolInterface[] {

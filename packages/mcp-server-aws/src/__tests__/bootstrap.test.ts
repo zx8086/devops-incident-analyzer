@@ -7,8 +7,12 @@ import { createTransport } from "../transport/index.ts";
 
 const awsConfig: AwsConfig = {
 	region: "eu-central-1",
-	assumedRoleArn: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
-	externalId: "aws-mcp-readonly-2026",
+	estates: {
+		prod: {
+			assumedRoleArn: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
+			externalId: "aws-mcp-readonly-2026",
+		},
+	},
 };
 
 const PORT = 19085; // ephemeral test port to avoid collision

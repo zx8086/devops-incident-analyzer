@@ -58,11 +58,17 @@
 #   KONNECT_ACCESS_TOKEN    - Kong Konnect API access token
 #   KONNECT_REGION          - Konnect region (us|eu|au|me|in)
 #
-# AWS-specific:
-#   AWS_ASSUMED_ROLE_ARN    - DevOpsAgentReadOnly role to assume in the runtime
-#                             (default: arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly)
-#   AWS_EXTERNAL_ID         - STS ExternalId required by the assumed role's trust
-#                             policy (default: aws-mcp-readonly-2026)
+# AWS-specific (SIO-828, multi-estate):
+#   EXECUTION_ROLE_ARN      - REQUIRED. Pre-existing IAM role in this account
+#                             (e.g. arn:aws:iam::399987695868:role/DevOpsAgentCoreRole)
+#                             that the runtime will assume. Must already carry the
+#                             inline DevOpsAgentCoreAssumePolicy covering every
+#                             estate's assumedRoleArn. This script does NOT
+#                             create or modify IAM roles for MCP_SERVER=aws.
+#   AWS_ESTATES             - REQUIRED. JSON map of estate-id -> {assumedRoleArn, externalId}.
+#                             Passed verbatim into the runtime container env.
+#                             Example single estate:
+#                               {"prod":{"assumedRoleArn":"arn:aws:iam::ACCT:role/DevOpsAgentReadOnly","externalId":"id"}}
 
 set -euo pipefail
 
@@ -142,7 +148,11 @@ case "${MCP_SERVER}" in
   elastic)  echo "  Elastic:      ${ELASTICSEARCH_URL:-not set}" ;;
   couchbase) echo "  Couchbase:    ${CB_HOSTNAME:-not set}" ;;
   konnect)  echo "  Konnect:      region=${KONNECT_REGION:-us}" ;;
-  aws)      echo "  AWS:          role=${AWS_ASSUMED_ROLE_ARN:-DevOpsAgentReadOnly (default)}, externalId=set" ;;
+  aws)
+    AWS_ESTATE_COUNT=$(echo "${AWS_ESTATES:-{}}" | jq -er 'length' 2>/dev/null || echo "0")
+    AWS_ESTATE_IDS=$(echo "${AWS_ESTATES:-{}}" | jq -er 'keys | join(",")' 2>/dev/null || echo "(none)")
+    echo "  AWS:          ${AWS_ESTATE_COUNT} estate(s) configured: ${AWS_ESTATE_IDS}"
+    ;;
 esac
 if [ -n "${AGENTCORE_SUBNETS}" ]; then
   echo "  Network:      VPC (subnets=${AGENTCORE_SUBNETS}, sgs=${AGENTCORE_SECURITY_GROUPS})"
@@ -151,6 +161,28 @@ else
 fi
 echo "================================================================"
 echo ""
+
+# -- Preflight (SIO-828): fail fast before any image build/push when the AWS
+# server type is missing required env. The IAM-role-existence check below in
+# Step 3 still runs; this just catches the cheap-to-detect failures earlier.
+if [ "${MCP_SERVER}" = "aws" ]; then
+  if [ -z "${EXECUTION_ROLE_ARN:-}" ]; then
+    echo "ERROR: EXECUTION_ROLE_ARN is required for the aws server type." >&2
+    echo "  Example: EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole" >&2
+    exit 1
+  fi
+  if [ -z "${AWS_ESTATES:-}" ]; then
+    echo "ERROR: AWS_ESTATES is required for the aws server type." >&2
+    echo "  Example: AWS_ESTATES='{\"prod\":{\"assumedRoleArn\":\"arn:aws:iam::ACCT:role/DevOpsAgentReadOnly\",\"externalId\":\"id\"}}'" >&2
+    exit 1
+  fi
+  ESTATE_COUNT=$(echo "${AWS_ESTATES}" | jq -er 'length') || {
+    echo "ERROR: AWS_ESTATES is not valid JSON." >&2
+    exit 1
+  }
+  echo "Preflight OK: AWS_ESTATES has ${ESTATE_COUNT} estate(s); EXECUTION_ROLE_ARN present"
+  echo ""
+fi
 
 # -- Step 1: Create ECR repository (if not exists) --
 echo "[1/5] Creating ECR repository..."
@@ -185,11 +217,36 @@ docker tag "${ECR_REPO}:${IMAGE_TAG}" "${ECR_URI}:${IMAGE_TAG}"
 docker push "${ECR_URI}:${IMAGE_TAG}"
 echo "  Image pushed: ${ECR_URI}:${IMAGE_TAG}"
 
-# -- Step 3: Create IAM execution role --
+# -- Step 3: IAM execution role --
 echo ""
-echo "[3/5] Creating IAM role..."
+echo "[3/5] Resolving IAM execution role..."
 
-TRUST_POLICY=$(cat <<EOF
+# SIO-828: for MCP_SERVER=aws, the execution role (DevOpsAgentCoreRole) is an
+# account-setup prerequisite owned outside this script. We consume its ARN via
+# EXECUTION_ROLE_ARN env and pre-flight that it exists. No iam:CreateRole /
+# PutRolePolicy / AttachRolePolicy calls; cross-account trust policies and the
+# inline DevOpsAgentCoreAssumePolicy are managed in a separate provisioning
+# workflow (see docs/runbooks/aws-estate-onboarding.md).
+if [ "${MCP_SERVER}" = "aws" ]; then
+  # EXECUTION_ROLE_ARN presence already checked in preflight at the top of this script.
+  EXEC_ROLE_NAME=$(echo "${EXECUTION_ROLE_ARN}" | awk -F/ '{print $NF}')
+  CANONICAL_ROLE_ARN=$(aws iam get-role --role-name "${EXEC_ROLE_NAME}" --query 'Role.Arn' --output text 2>/dev/null || true)
+  if [ -z "${CANONICAL_ROLE_ARN}" ] || [ "${CANONICAL_ROLE_ARN}" = "None" ]; then
+    echo "ERROR: execution role '${EXEC_ROLE_NAME}' does not exist in account ${ACCOUNT_ID}." >&2
+    echo "  Create it per docs/runbooks/aws-estate-onboarding.md before running this script." >&2
+    exit 1
+  fi
+  if [ "${CANONICAL_ROLE_ARN}" != "${EXECUTION_ROLE_ARN}" ]; then
+    echo "ERROR: EXECUTION_ROLE_ARN account/path mismatch." >&2
+    echo "  Provided: ${EXECUTION_ROLE_ARN}" >&2
+    echo "  Actual:   ${CANONICAL_ROLE_ARN}" >&2
+    echo "  The role name resolves in this account but to a different ARN; check your env." >&2
+    exit 1
+  fi
+  echo "  IAM role verified: ${CANONICAL_ROLE_ARN}"
+  ROLE_ARN="${EXECUTION_ROLE_ARN}"
+else
+  TRUST_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -210,21 +267,27 @@ TRUST_POLICY=$(cat <<EOF
 EOF
 )
 
-if ! aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
-  aws iam create-role \
-    --role-name "${ROLE_NAME}" \
-    --assume-role-policy-document "${TRUST_POLICY}" \
-    --description "AgentCore Runtime role for ${MCP_SERVER} MCP server"
-  echo "  IAM role created: ${ROLE_NAME}"
-else
-  echo "  IAM role exists: ${ROLE_NAME}"
-  aws iam update-assume-role-policy \
-    --role-name "${ROLE_NAME}" \
-    --policy-document "${TRUST_POLICY}"
+  if ! aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
+    aws iam create-role \
+      --role-name "${ROLE_NAME}" \
+      --assume-role-policy-document "${TRUST_POLICY}" \
+      --description "AgentCore Runtime role for ${MCP_SERVER} MCP server"
+    echo "  IAM role created: ${ROLE_NAME}"
+  else
+    echo "  IAM role exists: ${ROLE_NAME}"
+    aws iam update-assume-role-policy \
+      --role-name "${ROLE_NAME}" \
+      --policy-document "${TRUST_POLICY}"
+  fi
 fi
 
-# Build permissions policy based on server type
-POLICY_STATEMENTS='[
+# SIO-828: skip policy build/attach for MCP_SERVER=aws. The execution role
+# (DevOpsAgentCoreRole) carries its own inline policy (DevOpsAgentCoreAssumePolicy)
+# provisioned outside this script. We DO perform a coverage check below to warn
+# if AWS_ESTATES references an ARN that isn't covered by the inline policy.
+if [ "${MCP_SERVER}" != "aws" ]; then
+  # Build permissions policy based on server type
+  POLICY_STATEMENTS='[
     {
       "Sid": "CloudWatchLogs",
       "Effect": "Allow",
@@ -280,52 +343,60 @@ if [ "${MCP_SERVER}" = "kafka" ] && [ "${MSK_AUTH_MODE}" != "none" ]; then
     }'
 fi
 
-# AWS: grant sts:AssumeRole on DevOpsAgentReadOnly. The trust policy on
-# DevOpsAgentReadOnly already names this execution role as the only permitted
-# principal; this statement is the matching permission side of the contract.
-# Always required: the runtime must assume DevOpsAgentReadOnly to call AWS APIs.
+  POLICY_DOCUMENT='{"Version":"2012-10-17","Statement":'"${POLICY_STATEMENTS}"']}'
+
+  POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${ROLE_NAME}-policy"
+  if ! aws iam get-policy --policy-arn "${POLICY_ARN}" >/dev/null 2>&1; then
+    aws iam create-policy \
+      --policy-name "${ROLE_NAME}-policy" \
+      --policy-document "${POLICY_DOCUMENT}"
+    echo "  Policy created: ${ROLE_NAME}-policy"
+  else
+    aws iam create-policy-version \
+      --policy-arn "${POLICY_ARN}" \
+      --policy-document "${POLICY_DOCUMENT}" \
+      --set-as-default
+    echo "  Policy updated: ${ROLE_NAME}-policy"
+  fi
+
+  aws iam attach-role-policy \
+    --role-name "${ROLE_NAME}" \
+    --policy-arn "${POLICY_ARN}" 2>/dev/null || true
+
+  ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+  echo "  IAM role ready: ${ROLE_ARN}"
+
+  echo "  Waiting for IAM role propagation..."
+  sleep 10
+fi
+
+# SIO-828: coverage check against DevOpsAgentCoreAssumePolicy. AWS_ESTATES
+# presence + JSON validity already verified in the preflight at the top of this
+# script; here we just scan the inline policy attached to the (already-resolved)
+# execution role and warn if any estate ARN is missing. Warn-don't-fail so the
+# deploy proceeds while IAM admins update the policy.
 if [ "${MCP_SERVER}" = "aws" ]; then
-  ASSUMED_ROLE_ARN="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
-  POLICY_STATEMENTS="${POLICY_STATEMENTS}"',
-    {
-      "Sid": "AssumeDevOpsAgentReadOnly",
-      "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": "'"${ASSUMED_ROLE_ARN}"'"
-    }'
+  POLICY_RESOURCES_JSON=$(aws iam get-role-policy \
+    --role-name "${EXEC_ROLE_NAME}" \
+    --policy-name "DevOpsAgentCoreAssumePolicy" \
+    --query 'PolicyDocument.Statement' --output json 2>/dev/null || echo "[]")
+  for arn in $(echo "${AWS_ESTATES}" | jq -r '.[].assumedRoleArn'); do
+    if ! echo "${POLICY_RESOURCES_JSON}" | jq -e --arg a "${arn}" 'tostring | contains($a)' >/dev/null; then
+      echo "  WARNING: ${arn} not found in DevOpsAgentCoreAssumePolicy on ${EXEC_ROLE_NAME}" >&2
+      echo "           sts:AssumeRole for this estate will fail until the inline policy is updated." >&2
+    fi
+  done
 fi
-
-POLICY_DOCUMENT='{"Version":"2012-10-17","Statement":'"${POLICY_STATEMENTS}"']}'
-
-POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${ROLE_NAME}-policy"
-if ! aws iam get-policy --policy-arn "${POLICY_ARN}" >/dev/null 2>&1; then
-  aws iam create-policy \
-    --policy-name "${ROLE_NAME}-policy" \
-    --policy-document "${POLICY_DOCUMENT}"
-  echo "  Policy created: ${ROLE_NAME}-policy"
-else
-  aws iam create-policy-version \
-    --policy-arn "${POLICY_ARN}" \
-    --policy-document "${POLICY_DOCUMENT}" \
-    --set-as-default
-  echo "  Policy updated: ${ROLE_NAME}-policy"
-fi
-
-aws iam attach-role-policy \
-  --role-name "${ROLE_NAME}" \
-  --policy-arn "${POLICY_ARN}" 2>/dev/null || true
-
-ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
-echo "  IAM role ready: ${ROLE_ARN}"
-
-echo "  Waiting for IAM role propagation..."
-sleep 10
 
 # -- Step 4: Create AgentCore Runtime --
 echo ""
 echo "[4/5] Creating AgentCore Runtime..."
 
 # Build environment variables based on server type
+# SIO-828: AgentCore transport + port are the Zod schema defaults (4-pillar:
+# defaults must produce a working production deployment). deploy.sh does not
+# need to inject them; only the deployment-specific values like AWS_REGION
+# and (for the aws server) AWS_ESTATES go here.
 ENV_VARS="AWS_REGION=${AWS_REGION}"
 case "${MCP_SERVER}" in
   kafka)
@@ -423,10 +494,10 @@ case "${MCP_SERVER}" in
     fi
     ;;
   aws)
-    AWS_ASSUMED_ROLE_ARN_RESOLVED="${AWS_ASSUMED_ROLE_ARN:-arn:aws:iam::${ACCOUNT_ID}:role/DevOpsAgentReadOnly}"
-    AWS_EXTERNAL_ID_RESOLVED="${AWS_EXTERNAL_ID:-aws-mcp-readonly-2026}"
-    ENV_VARS="${ENV_VARS},AWS_ASSUMED_ROLE_ARN=${AWS_ASSUMED_ROLE_ARN_RESOLVED}"
-    ENV_VARS="${ENV_VARS},AWS_EXTERNAL_ID=${AWS_EXTERNAL_ID_RESOLVED}"
+    # SIO-828: pass the AWS_ESTATES JSON blob verbatim. The runtime parses it
+    # via Zod (packages/mcp-server-aws/src/config/schemas.ts) and runs the
+    # boot-time estate validator before serving any requests.
+    ENV_VARS="${ENV_VARS},AWS_ESTATES=${AWS_ESTATES}"
     ;;
 esac
 

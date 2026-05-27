@@ -3,6 +3,7 @@ import { ListDiscoveredResourcesCommand, type ResourceType } from "@aws-sdk/clie
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getConfigServiceClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const listDiscoveredResourcesSchema = z.object({
@@ -10,14 +11,14 @@ export const listDiscoveredResourcesSchema = z.object({
 	nextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type ListDiscoveredResourcesParams = z.infer<typeof listDiscoveredResourcesSchema>;
+export type ListDiscoveredResourcesParams = WithEstate<z.infer<typeof listDiscoveredResourcesSchema>>;
 
 export function listDiscoveredResources(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_config_list_discovered_resources",
 		listField: "resourceIdentifiers",
 		fn: async (params: ListDiscoveredResourcesParams) => {
-			const client = getConfigServiceClient(config);
+			const client = getConfigServiceClient(config, params.estate);
 			return client.send(
 				new ListDiscoveredResourcesCommand({
 					resourceType: params.resourceType as ResourceType,

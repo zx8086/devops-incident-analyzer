@@ -2,15 +2,15 @@
 	"Version": "2012-10-17",
 	"Statement": [
 		{
-			"Sid": "AllowAgentCoreExecutionRoleToAssume",
+			"Sid": "TrustAgentCoreInSharedServices",
 			"Effect": "Allow",
 			"Principal": {
-				"AWS": "arn:aws:iam::356994971776:role/aws-mcp-server-agentcore-role"
+				"AWS": "arn:aws:iam::399987695868:role/DevOpsAgentCoreRole"
 			},
 			"Action": "sts:AssumeRole",
 			"Condition": {
 				"StringEquals": {
-					"sts:ExternalId": "aws-mcp-readonly-2026"
+					"sts:ExternalId": "devops-agent-prod-access"
 				}
 			}
 		}

@@ -4,12 +4,7 @@
 		{
 			"Sid": "IdentityAndAccountDiscovery",
 			"Effect": "Allow",
-			"Action": [
-				"sts:GetCallerIdentity",
-				"organizations:DescribeOrganization",
-				"organizations:ListAccounts",
-				"account:ListRegions"
-			],
+			"Action": ["sts:GetCallerIdentity"],
 			"Resource": "*"
 		},
 		{
@@ -22,13 +17,6 @@
 				"ec2:DescribeSubnets",
 				"ec2:DescribeRouteTables",
 				"ec2:DescribeSecurityGroups",
-				"ec2:DescribeNetworkAcls",
-				"ec2:DescribeInternetGateways",
-				"ec2:DescribeNatGateways",
-				"ec2:DescribeVpcEndpoints",
-				"ec2:DescribeVpcPeeringConnections",
-				"ec2:DescribeTransitGateways",
-				"ec2:DescribeTransitGatewayAttachments",
 				"ec2:DescribeNetworkInterfaces",
 				"ec2:DescribeAddresses",
 				"elasticloadbalancing:DescribeLoadBalancers",
@@ -48,7 +36,6 @@
 				"ec2:DescribeImages",
 				"autoscaling:DescribeAutoScalingGroups",
 				"autoscaling:DescribeAutoScalingInstances",
-				"autoscaling:DescribePolicies",
 				"ecs:ListClusters",
 				"ecs:DescribeClusters",
 				"ecs:ListServices",
@@ -61,13 +48,7 @@
 				"eks:DescribeCluster",
 				"lambda:ListFunctions",
 				"lambda:GetFunctionConfiguration",
-				"lambda:GetPolicy",
-				"lambda:ListEventSourceMappings",
-				"apigateway:GET",
-				"apigatewayv2:GetApis",
-				"apigatewayv2:GetStages",
-				"apigatewayv2:GetRoutes",
-				"apigatewayv2:GetIntegrations"
+				"lambda:ListEventSourceMappings"
 			],
 			"Resource": "*"
 		},
@@ -77,24 +58,17 @@
 			"Action": [
 				"rds:DescribeDBInstances",
 				"rds:DescribeDBClusters",
-				"rds:DescribeDBSubnetGroups",
-				"rds:DescribeDBParameters",
-				"rds:DescribeDBClusterParameters",
 				"dynamodb:ListTables",
 				"dynamodb:DescribeTable",
-				"dynamodb:ListGlobalTables",
 				"elasticache:DescribeCacheClusters",
 				"elasticache:DescribeReplicationGroups",
 				"s3:ListAllMyBuckets",
 				"s3:GetBucketLocation",
 				"s3:GetBucketVersioning",
 				"s3:GetBucketEncryption",
-				"s3:GetBucketPolicyStatus",
 				"s3:GetBucketPublicAccessBlock",
-				"s3:GetBucketLogging",
 				"s3:GetBucketTagging",
-				"s3:GetBucketNotification",
-				"s3:ListBucket"
+				"s3:GetBucketPolicyStatus"
 			],
 			"Resource": "*"
 		},
@@ -111,9 +85,7 @@
 				"events:DescribeRule",
 				"events:ListTargetsByRule",
 				"states:ListStateMachines",
-				"states:DescribeStateMachine",
-				"states:ListExecutions",
-				"states:DescribeExecution"
+				"states:DescribeStateMachine"
 			],
 			"Resource": "*"
 		},
@@ -132,15 +104,11 @@
 			"Resource": "*"
 		},
 		{
-			"Sid": "LogsListUnscoped",
-			"Effect": "Allow",
-			"Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams"],
-			"Resource": "*"
-		},
-		{
 			"Sid": "LogsReadLimitedByName",
 			"Effect": "Allow",
 			"Action": [
+				"logs:DescribeLogGroups",
+				"logs:DescribeLogStreams",
 				"logs:GetLogEvents",
 				"logs:FilterLogEvents",
 				"logs:StartQuery",
@@ -152,42 +120,30 @@
 				"arn:aws:logs:*:*:log-group:/ecs/*",
 				"arn:aws:logs:*:*:log-group:/app/*",
 				"arn:aws:logs:*:*:log-group:/platform/*",
-				"arn:aws:logs:*:*:log-group:/prod/*"
+				"arn:aws:logs:*:*:log-group:/prod/*",
+				"arn:aws:logs:*:*:log-group:/bedrock/*"
 			]
 		},
 		{
 			"Sid": "TracingAndServiceMapRead",
 			"Effect": "Allow",
-			"Action": [
-				"xray:GetServiceGraph",
-				"xray:GetTraceSummaries",
-				"xray:BatchGetTraces",
-				"xray:GetGroups",
-				"xray:GetGroup",
-				"xray:GetInsightSummaries",
-				"xray:GetInsight"
-			],
+			"Action": ["xray:GetServiceGraph", "xray:GetTraceSummaries", "xray:BatchGetTraces", "xray:GetGroups"],
 			"Resource": "*"
 		},
 		{
-			"Sid": "AwsHealthRead",
-			"Effect": "Allow",
-			"Action": ["health:DescribeEvents", "health:DescribeEventDetails", "health:DescribeAffectedEntities"],
-			"Resource": "*"
-		},
-		{
-			"Sid": "ConfigInventoryReadOptional",
+			"Sid": "AwsHealthAndConfigRead",
 			"Effect": "Allow",
 			"Action": [
+				"health:DescribeEvents",
+				"health:DescribeEventDetails",
 				"config:DescribeConfigRules",
 				"config:DescribeComplianceByConfigRule",
-				"config:GetResourceConfigHistory",
 				"config:ListDiscoveredResources"
 			],
 			"Resource": "*"
 		},
 		{
-			"Sid": "CloudFormationAndDeploymentContextRead",
+			"Sid": "CloudFormationAndDeploymentContext",
 			"Effect": "Allow",
 			"Action": [
 				"cloudformation:ListStacks",

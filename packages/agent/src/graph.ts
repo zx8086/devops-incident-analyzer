@@ -6,6 +6,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { END, Send, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
+import { awsEstateRouter } from "./aws-estate-router.ts";
 import { classify } from "./classifier.ts";
 import { checkConfidence } from "./confidence-gate.ts";
 import {
@@ -99,6 +100,11 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// supervisor fan-out. Fast-path returns {} when overlap is non-zero so
 		// the happy path cost is negligible.
 		.addNode("detectTopicShift", traceNode("detectTopicShift", detectTopicShift))
+		// SIO-828: AWS estate router classifies the prompt into a subset of
+		// configured estates (dev/staging/prod). Runs after entity extraction so
+		// it can read targetDataSources, and before topic-shift/supervise so
+		// awsTargetEstates is populated when the AWS sub-agent fans out.
+		.addNode("awsEstateRouter", traceNode("awsEstateRouter", awsEstateRouter))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -120,7 +126,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// node either returns {} (no overlap problem) and we continue to the
 		// supervisor fan-out, OR it interrupts the graph for user input. The
 		// supervise function itself is unchanged; we just inserted a checkpoint.
-		.addEdge("entityExtractor", "detectTopicShift")
+		// SIO-828: insert awsEstateRouter between entityExtractor and topic-shift
+		// so awsTargetEstates is populated before the supervisor fans out.
+		.addEdge("entityExtractor", "awsEstateRouter")
+		.addEdge("awsEstateRouter", "detectTopicShift")
 		.addConditionalEdges("detectTopicShift", supervise)
 
 		// Sub-agent results flow to alignment

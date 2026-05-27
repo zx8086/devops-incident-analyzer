@@ -3,6 +3,7 @@ import { DescribeLogGroupsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchLogsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeLogGroupsSchema = z.object({
@@ -12,14 +13,14 @@ export const describeLogGroupsSchema = z.object({
 	nextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type DescribeLogGroupsParams = z.infer<typeof describeLogGroupsSchema>;
+export type DescribeLogGroupsParams = WithEstate<z.infer<typeof describeLogGroupsSchema>>;
 
 export function describeLogGroups(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_logs_describe_log_groups",
 		listField: "logGroups",
 		fn: async (params: DescribeLogGroupsParams) => {
-			const client = getCloudWatchLogsClient(config);
+			const client = getCloudWatchLogsClient(config, params.estate);
 			return client.send(
 				new DescribeLogGroupsCommand({
 					logGroupNamePrefix: params.logGroupNamePrefix,

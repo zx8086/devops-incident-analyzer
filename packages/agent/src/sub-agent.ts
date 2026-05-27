@@ -9,7 +9,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
-import { getToolsForDataSource, withElasticDeployment } from "./mcp-bridge.ts";
+import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
@@ -550,6 +550,23 @@ export async function queryDataSource(
 				? state.retryDeployments
 				: state.targetDeployments
 			: [];
+
+	// SIO-828: AWS fan-out is by estate, populated by awsEstateRouter. Mirrors the
+	// elastic pattern but uses tool-arg injection (withAwsEstate ALS) instead of
+	// HTTP headers. Empty awsTargetEstates falls through to a non-fan-out path
+	// that errors at the tool wrapper -- expected only when AWS isn't in
+	// selectedDataSources but the supervisor dispatched anyway (bug, not silent).
+	if (dataSourceId === "aws" && state.awsTargetEstates.length > 0) {
+		log.info({ estates: state.awsTargetEstates }, "AWS sub-agent fanning out across estates");
+		const results = await Promise.all(
+			state.awsTargetEstates.map((estate) =>
+				withAwsEstate(estate, () =>
+					runSubAgent(state, dataSourceId, agentName, isRetry, log, config, { deploymentId: `estate:${estate}` }),
+				),
+			),
+		);
+		return { dataSourceResults: results };
+	}
 
 	if (deployments.length === 0) {
 		const result = await runSubAgent(state, dataSourceId, agentName, isRetry, log, config);

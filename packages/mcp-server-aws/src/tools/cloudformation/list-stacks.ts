@@ -3,6 +3,7 @@ import { ListStacksCommand, type StackStatus } from "@aws-sdk/client-cloudformat
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudFormationClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const listStacksSchema = z.object({
@@ -13,14 +14,14 @@ export const listStacksSchema = z.object({
 	NextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type ListStacksParams = z.infer<typeof listStacksSchema>;
+export type ListStacksParams = WithEstate<z.infer<typeof listStacksSchema>>;
 
 export function listStacks(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_cloudformation_list_stacks",
 		listField: "StackSummaries",
 		fn: async (params: ListStacksParams) => {
-			const client = getCloudFormationClient(config);
+			const client = getCloudFormationClient(config, params.estate);
 			return client.send(
 				new ListStacksCommand({
 					StackStatusFilter: params.StackStatusFilter as StackStatus[] | undefined,

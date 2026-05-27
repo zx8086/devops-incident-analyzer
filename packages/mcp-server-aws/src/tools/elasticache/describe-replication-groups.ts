@@ -3,6 +3,7 @@ import { DescribeReplicationGroupsCommand } from "@aws-sdk/client-elasticache";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getElastiCacheClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeReplicationGroupsSchema = z.object({
@@ -11,14 +12,14 @@ export const describeReplicationGroupsSchema = z.object({
 	Marker: z.string().optional().describe("Pagination marker from a previous response"),
 });
 
-export type DescribeReplicationGroupsParams = z.infer<typeof describeReplicationGroupsSchema>;
+export type DescribeReplicationGroupsParams = WithEstate<z.infer<typeof describeReplicationGroupsSchema>>;
 
 export function describeReplicationGroups(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_elasticache_describe_replication_groups",
 		listField: "ReplicationGroups",
 		fn: async (params: DescribeReplicationGroupsParams) => {
-			const client = getElastiCacheClient(config);
+			const client = getElastiCacheClient(config, params.estate);
 			return client.send(
 				new DescribeReplicationGroupsCommand({
 					ReplicationGroupId: params.ReplicationGroupId,

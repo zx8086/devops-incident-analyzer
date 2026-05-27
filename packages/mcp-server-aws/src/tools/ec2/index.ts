@@ -1,33 +1,38 @@
 // src/tools/ec2/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
+import { withEstate } from "../estate-schema.ts";
 import { toMcp } from "../wrap.ts";
-import { describeInstances, describeInstancesSchema } from "./describe-instances.ts";
-import { describeSecurityGroups, describeSecurityGroupsSchema } from "./describe-security-groups.ts";
-import { describeVpcs, describeVpcsSchema } from "./describe-vpcs.ts";
+import { type DescribeInstancesParams, describeInstances, describeInstancesSchema } from "./describe-instances.ts";
+import {
+	type DescribeSecurityGroupsParams,
+	describeSecurityGroups,
+	describeSecurityGroupsSchema,
+} from "./describe-security-groups.ts";
+import { type DescribeVpcsParams, describeVpcs, describeVpcsSchema } from "./describe-vpcs.ts";
 
 export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 	const vpcs = describeVpcs(config);
 	server.tool(
 		"aws_ec2_describe_vpcs",
 		"List or describe VPCs. Returns Vpcs[] with CidrBlock, State, Tags. Truncates if many VPCs.",
-		describeVpcsSchema.shape,
-		async (params) => toMcp(await vpcs(params)),
+		withEstate(config, describeVpcsSchema.shape),
+		async (params) => toMcp(await vpcs(params as DescribeVpcsParams)),
 	);
 
 	const instances = describeInstances(config);
 	server.tool(
 		"aws_ec2_describe_instances",
 		"List or describe EC2 instances. Returns Reservations[] each containing Instances[] with state, type, IP, tags.",
-		describeInstancesSchema.shape,
-		async (params) => toMcp(await instances(params)),
+		withEstate(config, describeInstancesSchema.shape),
+		async (params) => toMcp(await instances(params as DescribeInstancesParams)),
 	);
 
 	const secGroups = describeSecurityGroups(config);
 	server.tool(
 		"aws_ec2_describe_security_groups",
 		"List or describe EC2 security groups with ingress/egress rules.",
-		describeSecurityGroupsSchema.shape,
-		async (params) => toMcp(await secGroups(params)),
+		withEstate(config, describeSecurityGroupsSchema.shape),
+		async (params) => toMcp(await secGroups(params as DescribeSecurityGroupsParams)),
 	);
 }

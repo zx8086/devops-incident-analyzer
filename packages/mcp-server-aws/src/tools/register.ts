@@ -10,6 +10,7 @@ import { registerEcsTools } from "./ecs/index.ts";
 import { registerElastiCacheTools } from "./elasticache/index.ts";
 import { registerHealthTools } from "./health/index.ts";
 import { registerLambdaTools } from "./lambda/index.ts";
+import { registerListEstatesTool } from "./list-estates.ts";
 import { registerLogsTools } from "./logs/index.ts";
 import { registerMessagingTools } from "./messaging/index.ts";
 import { registerRdsTools } from "./rds/index.ts";
@@ -18,6 +19,7 @@ import { registerTagsTools } from "./tags/index.ts";
 import { registerXrayTools } from "./xray/index.ts";
 
 export function registerAllTools(server: McpServer, config: AwsConfig): void {
+	registerListEstatesTool(server, config);
 	registerCloudFormationTools(server, config);
 	registerCloudWatchTools(server, config);
 	registerConfigTools(server, config);

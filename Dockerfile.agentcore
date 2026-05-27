@@ -55,11 +55,12 @@ COPY --chown=65532:65532 packages/shared/ packages/shared/
 COPY --chown=65532:65532 packages/${MCP_SERVER_PACKAGE}/ packages/${MCP_SERVER_PACKAGE}/
 
 # Bake the entrypoint path at build time so CMD uses exec form (no shell needed).
-# The unified index.ts reads MCP_TRANSPORT from env -- no separate entrypoint needed.
+# SIO-828: per-deployment env (MCP_TRANSPORT, MCP_PORT, MCP_HOST) is NOT baked
+# here -- the image is environment-agnostic. deploy.sh injects MCP_TRANSPORT=agentcore
+# and MCP_PORT=8000 via --environment-variables for the AgentCore runtime path;
+# MCP_HOST defaults to 0.0.0.0 in the Zod schema. The unified index.ts reads
+# MCP_TRANSPORT from env at boot.
 ENV ENTRYPOINT_PATH=packages/${MCP_SERVER_PACKAGE}/src/index.ts
-ENV MCP_TRANSPORT=agentcore
-ENV MCP_PORT=8000
-ENV MCP_HOST=0.0.0.0
 
 USER 65532:65532
 

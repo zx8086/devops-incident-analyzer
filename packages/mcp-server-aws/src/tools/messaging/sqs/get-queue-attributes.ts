@@ -3,6 +3,7 @@ import { GetQueueAttributesCommand, type QueueAttributeName } from "@aws-sdk/cli
 import { z } from "zod";
 import type { AwsConfig } from "../../../config/schemas.ts";
 import { getSqsClient } from "../../../services/client-factory.ts";
+import type { WithEstate } from "../../estate-schema.ts";
 import { wrapBlobTool } from "../../wrap.ts";
 
 export const getQueueAttributesSchema = z.object({
@@ -13,13 +14,13 @@ export const getQueueAttributesSchema = z.object({
 		.describe("List of attribute names to retrieve (e.g. All, ApproximateNumberOfMessages)"),
 });
 
-export type GetQueueAttributesParams = z.infer<typeof getQueueAttributesSchema>;
+export type GetQueueAttributesParams = WithEstate<z.infer<typeof getQueueAttributesSchema>>;
 
 export function getQueueAttributes(config: AwsConfig) {
 	return wrapBlobTool({
 		name: "aws_sqs_get_queue_attributes",
 		fn: async (params: GetQueueAttributesParams) => {
-			const client = getSqsClient(config);
+			const client = getSqsClient(config, params.estate);
 			return client.send(
 				new GetQueueAttributesCommand({
 					QueueUrl: params.QueueUrl,

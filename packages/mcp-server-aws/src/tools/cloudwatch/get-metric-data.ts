@@ -3,6 +3,7 @@ import { GetMetricDataCommand } from "@aws-sdk/client-cloudwatch";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapBlobTool } from "../wrap.ts";
 
 export const getMetricDataSchema = z.object({
@@ -13,13 +14,13 @@ export const getMetricDataSchema = z.object({
 	EndTime: z.string().describe("ISO 8601 end time for the metric data range"),
 });
 
-export type GetMetricDataParams = z.infer<typeof getMetricDataSchema>;
+export type GetMetricDataParams = WithEstate<z.infer<typeof getMetricDataSchema>>;
 
 export function getMetricData(config: AwsConfig) {
 	return wrapBlobTool({
 		name: "aws_cloudwatch_get_metric_data",
 		fn: async (params: GetMetricDataParams) => {
-			const client = getCloudWatchClient(config);
+			const client = getCloudWatchClient(config, params.estate);
 			return client.send(
 				new GetMetricDataCommand({
 					// biome-ignore lint/suspicious/noExplicitAny: SIO-758 - SDK MetricDataQuery shape is complex; pass through from validated unknown

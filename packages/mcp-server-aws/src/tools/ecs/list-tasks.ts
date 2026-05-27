@@ -3,6 +3,7 @@ import { ListTasksCommand } from "@aws-sdk/client-ecs";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEcsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const listTasksSchema = z.object({
@@ -13,14 +14,14 @@ export const listTasksSchema = z.object({
 	nextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type ListTasksParams = z.infer<typeof listTasksSchema>;
+export type ListTasksParams = WithEstate<z.infer<typeof listTasksSchema>>;
 
 export function listTasks(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_ecs_list_tasks",
 		listField: "taskArns",
 		fn: async (params: ListTasksParams) => {
-			const client = getEcsClient(config);
+			const client = getEcsClient(config, params.estate);
 			return client.send(
 				new ListTasksCommand({
 					cluster: params.cluster,

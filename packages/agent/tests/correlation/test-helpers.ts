@@ -9,6 +9,8 @@ export function baseState(): AgentStateType {
 		queryComplexity: "complex",
 		targetDataSources: [],
 		targetDeployments: [],
+		retryDeployments: [],
+		awsTargetEstates: [],
 		dataSourceResults: [],
 		currentDataSource: "",
 		extractedEntities: { dataSources: [] },

@@ -3,6 +3,7 @@ import { ListFunctionsCommand } from "@aws-sdk/client-lambda";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getLambdaClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const listFunctionsSchema = z.object({
@@ -10,14 +11,14 @@ export const listFunctionsSchema = z.object({
 	Marker: z.string().optional().describe("Pagination marker from a previous response"),
 });
 
-export type ListFunctionsParams = z.infer<typeof listFunctionsSchema>;
+export type ListFunctionsParams = WithEstate<z.infer<typeof listFunctionsSchema>>;
 
 export function listFunctions(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_lambda_list_functions",
 		listField: "Functions",
 		fn: async (params: ListFunctionsParams) => {
-			const client = getLambdaClient(config);
+			const client = getLambdaClient(config, params.estate);
 			return client.send(
 				new ListFunctionsCommand({
 					MaxItems: params.MaxItems,
