@@ -195,8 +195,17 @@ else
       SMOKE_ENV_ARGS=(-e KAFKA_PROVIDER=local -e LOCAL_BOOTSTRAP_SERVERS=localhost:9092)
       ;;
     mcp-server-aws)
-      # AWS MCP boots without creds; tool calls would fail but /ping doesn't need them.
-      SMOKE_ENV_ARGS=(-e AWS_REGION=eu-central-1)
+      # SIO-828: AWS MCP requires AWS_ESTATES (Zod min-1 estate) at boot or the
+      # container exits before opening port 8000. Pass a minimal stub estate so
+      # the schema parse succeeds. The boot-time STS:AssumeRole validator runs
+      # against this stub ARN -- it WILL fail with AccessDenied (no real creds),
+      # but the validator is warn-and-continue (4-pillar), so the runtime still
+      # boots and /ping returns 200. Tool calls would also fail; /ping doesn't
+      # need them.
+      SMOKE_ENV_ARGS=(
+        -e AWS_REGION=eu-central-1
+        -e 'AWS_ESTATES={"smoke-test":{"assumedRoleArn":"arn:aws:iam::000000000000:role/SmokeTestStub","externalId":"smoke-test"}}'
+      )
       ;;
   esac
 
@@ -206,17 +215,27 @@ else
     "$BUILD_TAG")
 
   echo "  Container started: ${CONTAINER_ID:0:12}"
-  echo "  Waiting for startup..."
-  sleep 3
+  echo "  Waiting for startup (poll /ping up to 15s)..."
 
-  PING_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${SMOKE_PORT}/ping" 2>/dev/null || echo "000")
+  # SIO-828: poll /ping with a deadline instead of a fixed sleep. AWS MCP boot
+  # now includes a per-estate STS:AssumeRole validation (~1-5s per estate) so a
+  # flat sleep 3 was too short. 15s deadline covers all server types comfortably.
+  PING_STATUS="000"
+  for _i in $(seq 1 15); do
+    PING_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${SMOKE_PORT}/ping" 2>/dev/null || echo "000")
+    if [ "$PING_STATUS" = "200" ]; then
+      break
+    fi
+    sleep 1
+  done
 
   if [ "$PING_STATUS" = "200" ]; then
     echo "  Smoke test passed: /ping returned 200"
   else
-    echo "  WARNING: /ping returned ${PING_STATUS} (expected 200)"
-    echo "  The container may still work in production -- local Kafka broker is not available."
-    echo "  Continuing..."
+    echo "  WARNING: /ping returned ${PING_STATUS} after 15s (expected 200)"
+    echo "  Container logs (first 30 lines):"
+    docker logs "$CONTAINER_ID" 2>&1 | head -30 | sed 's/^/    /'
+    echo "  The container may still work in production. Continuing..."
   fi
 
   # Clean up
