@@ -162,6 +162,28 @@ fi
 echo "================================================================"
 echo ""
 
+# -- Preflight (SIO-828): fail fast before any image build/push when the AWS
+# server type is missing required env. The IAM-role-existence check below in
+# Step 3 still runs; this just catches the cheap-to-detect failures earlier.
+if [ "${MCP_SERVER}" = "aws" ]; then
+  if [ -z "${EXECUTION_ROLE_ARN:-}" ]; then
+    echo "ERROR: EXECUTION_ROLE_ARN is required for the aws server type." >&2
+    echo "  Example: EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole" >&2
+    exit 1
+  fi
+  if [ -z "${AWS_ESTATES:-}" ]; then
+    echo "ERROR: AWS_ESTATES is required for the aws server type." >&2
+    echo "  Example: AWS_ESTATES='{\"prod\":{\"assumedRoleArn\":\"arn:aws:iam::ACCT:role/DevOpsAgentReadOnly\",\"externalId\":\"id\"}}'" >&2
+    exit 1
+  fi
+  ESTATE_COUNT=$(echo "${AWS_ESTATES}" | jq -er 'length') || {
+    echo "ERROR: AWS_ESTATES is not valid JSON." >&2
+    exit 1
+  }
+  echo "Preflight OK: AWS_ESTATES has ${ESTATE_COUNT} estate(s); EXECUTION_ROLE_ARN present"
+  echo ""
+fi
+
 # -- Step 1: Create ECR repository (if not exists) --
 echo "[1/5] Creating ECR repository..."
 if ! aws ecr describe-repositories \
@@ -206,18 +228,22 @@ echo "[3/5] Resolving IAM execution role..."
 # inline DevOpsAgentCoreAssumePolicy are managed in a separate provisioning
 # workflow (see docs/runbooks/aws-estate-onboarding.md).
 if [ "${MCP_SERVER}" = "aws" ]; then
-  if [ -z "${EXECUTION_ROLE_ARN:-}" ]; then
-    echo "ERROR: EXECUTION_ROLE_ARN is required for the aws server type." >&2
-    echo "  Example: EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole" >&2
-    exit 1
-  fi
+  # EXECUTION_ROLE_ARN presence already checked in preflight at the top of this script.
   EXEC_ROLE_NAME=$(echo "${EXECUTION_ROLE_ARN}" | awk -F/ '{print $NF}')
-  if ! aws iam get-role --role-name "${EXEC_ROLE_NAME}" >/dev/null 2>&1; then
+  CANONICAL_ROLE_ARN=$(aws iam get-role --role-name "${EXEC_ROLE_NAME}" --query 'Role.Arn' --output text 2>/dev/null || true)
+  if [ -z "${CANONICAL_ROLE_ARN}" ] || [ "${CANONICAL_ROLE_ARN}" = "None" ]; then
     echo "ERROR: execution role '${EXEC_ROLE_NAME}' does not exist in account ${ACCOUNT_ID}." >&2
     echo "  Create it per docs/runbooks/aws-estate-onboarding.md before running this script." >&2
     exit 1
   fi
-  echo "  IAM role exists: ${EXECUTION_ROLE_ARN}"
+  if [ "${CANONICAL_ROLE_ARN}" != "${EXECUTION_ROLE_ARN}" ]; then
+    echo "ERROR: EXECUTION_ROLE_ARN account/path mismatch." >&2
+    echo "  Provided: ${EXECUTION_ROLE_ARN}" >&2
+    echo "  Actual:   ${CANONICAL_ROLE_ARN}" >&2
+    echo "  The role name resolves in this account but to a different ARN; check your env." >&2
+    exit 1
+  fi
+  echo "  IAM role verified: ${CANONICAL_ROLE_ARN}"
   ROLE_ARN="${EXECUTION_ROLE_ARN}"
 else
   TRUST_POLICY=$(cat <<EOF
@@ -344,25 +370,12 @@ fi
   sleep 10
 fi
 
-# SIO-828: AWS_ESTATES validation + coverage check. Runs for MCP_SERVER=aws.
-# We don't write IAM here -- DevOpsAgentCoreAssumePolicy is provisioned outside
-# this script. We scan its Resource list and warn if AWS_ESTATES introduces an
-# ARN the inline policy doesn't cover, so operators see the mismatch before
-# tool calls start failing with AccessDenied.
+# SIO-828: coverage check against DevOpsAgentCoreAssumePolicy. AWS_ESTATES
+# presence + JSON validity already verified in the preflight at the top of this
+# script; here we just scan the inline policy attached to the (already-resolved)
+# execution role and warn if any estate ARN is missing. Warn-don't-fail so the
+# deploy proceeds while IAM admins update the policy.
 if [ "${MCP_SERVER}" = "aws" ]; then
-  if [ -z "${AWS_ESTATES:-}" ]; then
-    echo "ERROR: AWS_ESTATES is required for the aws server type." >&2
-    echo "  Example: AWS_ESTATES='{\"prod\":{\"assumedRoleArn\":\"arn:aws:iam::ACCT:role/DevOpsAgentReadOnly\",\"externalId\":\"id\"}}'" >&2
-    exit 1
-  fi
-  ESTATE_COUNT=$(echo "${AWS_ESTATES}" | jq -er 'length') || {
-    echo "ERROR: AWS_ESTATES is not valid JSON." >&2
-    exit 1
-  }
-  echo "  AWS_ESTATES valid: ${ESTATE_COUNT} estate(s) configured"
-
-  # Coverage check against DevOpsAgentCoreAssumePolicy. Warn (don't fail) so the
-  # deploy can proceed even when the policy is still being updated by IAM admins.
   POLICY_RESOURCES_JSON=$(aws iam get-role-policy \
     --role-name "${EXEC_ROLE_NAME}" \
     --policy-name "DevOpsAgentCoreAssumePolicy" \

@@ -23,7 +23,10 @@ export interface EstateValidationResult {
 let lastValidationResults: EstateValidationResult[] = [];
 
 export function getEstateHealth(): EstateValidationResult[] {
-	return lastValidationResults;
+	// Defensive copy: callers (aws_list_estates tool, tests) must not be able to
+	// mutate the process-lifetime cache. Items are flat objects, so shallow
+	// copy per element is enough.
+	return lastValidationResults.map((r) => ({ ...r }));
 }
 
 export function _resetEstateHealthForTests(): void {

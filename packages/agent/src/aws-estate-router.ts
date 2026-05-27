@@ -22,6 +22,12 @@ export function _resetEstateCacheForTests(): void {
 	cachedEstateIds = undefined;
 }
 
+// AWS_ESTATES must be a JSON object (not an array or primitive). The runtime's
+// full schema is in mcp-server-aws; here we only need the top-level shape +
+// keys, so a minimal record schema is enough to reject arrays / strings / nulls
+// that would otherwise pass `JSON.parse` and silently return [] or [..indices..].
+const EstatesEnvSchema = z.record(z.string(), z.unknown());
+
 function loadConfiguredEstates(): string[] {
 	if (cachedEstateIds !== undefined) return cachedEstateIds;
 	const raw = process.env.AWS_ESTATES;
@@ -29,16 +35,27 @@ function loadConfiguredEstates(): string[] {
 		cachedEstateIds = [];
 		return cachedEstateIds;
 	}
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(raw) as Record<string, unknown>;
-		cachedEstateIds = Object.keys(parsed);
+		parsed = JSON.parse(raw);
 	} catch (err) {
 		logger.warn(
 			{ error: err instanceof Error ? err.message : String(err) },
 			"AWS_ESTATES env is set but not valid JSON; treating as zero estates",
 		);
 		cachedEstateIds = [];
+		return cachedEstateIds;
 	}
+	const validation = EstatesEnvSchema.safeParse(parsed);
+	if (!validation.success) {
+		logger.warn(
+			{ error: validation.error.message },
+			"AWS_ESTATES env did not validate as a JSON object; treating as zero estates",
+		);
+		cachedEstateIds = [];
+		return cachedEstateIds;
+	}
+	cachedEstateIds = Object.keys(validation.data);
 	return cachedEstateIds;
 }
 
@@ -79,7 +96,7 @@ Rules:
 		{ maxRetries: 2, baseDelayMs: 500, label: "awsEstateRouter:llm" },
 	);
 
-	const text = String(response.content);
+	const text = extractTextFromContent(response.content);
 	const jsonMatch = text.match(/\{[\s\S]*\}/);
 	if (!jsonMatch) {
 		logger.warn({ rawResponse: text.slice(0, 200) }, "Router returned no JSON; defaulting to ambiguous");

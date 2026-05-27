@@ -1,12 +1,4 @@
 // packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
-// Standalone probe: boots the SigV4 proxy from AWS_AGENTCORE_* env, then
-// (1) initializes MCP, (2) lists tools, (3) calls aws_list_estates to confirm
-// the runtime's AWS_ESTATES env was parsed, (4) calls aws_cloudwatch_describe_alarms
-// against the first configured estate to exercise the full
-// SigV4 -> proxy -> runtime -> AssumeRole -> service-call path.
-//
-// Run: bun --env-file=../../.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
-// (from the repo root: bun --env-file=.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts)
 
 import { buildIdentityCard, loadProxyConfigFromEnv, startAgentCoreProxy } from "@devops-agent/shared";
 

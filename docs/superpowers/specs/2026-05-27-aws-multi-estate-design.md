@@ -42,7 +42,7 @@ The AgentCore execution role `DevOpsAgentCoreRole` in `eu-shared-services-prd` i
 
 ## Architecture
 
-```
+```text
 .env / AgentCore env
     AWS_ESTATES (JSON map)
         |
@@ -266,7 +266,7 @@ Zero-arg tool returning `{ estates: string[] }`. Used by:
 
 ### Position in pipeline
 
-```
+```text
 ... -> entityExtractor -> awsEstateRouter -> [fan-out: elastic, kafka, capella, konnect, gitlab, aws] -> align -> ...
 ```
 
@@ -347,7 +347,9 @@ Env knob `AWS_MAX_FANOUT_ESTATES` (default unlimited) lets ops cap blast radius 
 
 ## Section 5 — Deployment Script (`scripts/agentcore/deploy.sh`)
 
-`deploy.sh` is a thin packager: it builds the Docker image, pushes to ECR, and updates the AgentCore runtime's `--environment-variables` and `--role-arn`. It does **NOT** create or modify IAM roles. The execution role `DevOpsAgentCoreRole` (in account `399987695868`) is an account-setup prerequisite created and owned outside the deploy script — its ARN is consumed via `EXECUTION_ROLE_ARN` env, and its inline `DevOpsAgentCoreAssumePolicy` (covering all six estate ARNs + ECR + CloudWatch Logs) is managed manually per the implementation guide.
+For **`MCP_SERVER=aws`**, `deploy.sh` is a thin packager: it builds the Docker image, pushes to ECR, and updates the AgentCore runtime's `--environment-variables` and `--role-arn`. It does **NOT** create or modify IAM roles in this path. The execution role `DevOpsAgentCoreRole` (in the AgentCore account, e.g. `399987695868`) is an account-setup prerequisite owned outside the deploy script — its ARN is consumed via `EXECUTION_ROLE_ARN` env, and its inline `DevOpsAgentCoreAssumePolicy` (covering all estate ARNs + ECR + CloudWatch Logs) is managed manually per the implementation guide.
+
+For **other server types** (`kafka`, `elastic`, `couchbase`, `konnect`), the existing behavior is unchanged: `deploy.sh` still auto-creates a per-server execution role and attaches a generated permissions policy. The "no IAM writes" scope of SIO-828 applies only to the AWS server flow.
 
 ### Required env when deploying the aws server type
 
@@ -418,7 +420,7 @@ aws bedrock-agentcore-control update-agent-runtime \
 ### Details
 
 - **`jq` is a hard prerequisite** for parsing `AWS_ESTATES`.
-- **No IAM writes from deploy.sh.** All `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy` calls are removed.
+- **No IAM writes from deploy.sh for `MCP_SERVER=aws`.** All `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy` calls are skipped in the AWS branch; the script consumes the pre-existing `EXECUTION_ROLE_ARN` and its inline `DevOpsAgentCoreAssumePolicy`. Other server types (`kafka`, `elastic`, `couchbase`, `konnect`) retain the legacy auto-create behavior.
 - **Pre-flight policy check** is a warning, not a hard fail — lets the deploy proceed (consistent with the 4-pillar boot pattern) while making the misconfiguration visible.
 - **Quoting** verified by `scripts/agentcore/test-env-construction.sh`.
 - **No trust-policy reminder** in the deploy output — trust policies are owned by the monitored accounts' teams and have a separate provisioning workflow documented in `docs/runbooks/aws-estate-onboarding.md`.

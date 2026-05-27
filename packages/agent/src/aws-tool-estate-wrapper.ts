@@ -1,8 +1,4 @@
-// agent/src/aws-tool-estate-wrapper.ts
-// SIO-828: AWS tools require an `estate` arg at the MCP boundary, but the
-// supervisor pins estate per fan-out branch -- the LLM should not choose it.
-// This wrapper hides `estate` from the schema shown to the LLM and re-injects
-// it at .invoke() time from AsyncLocalStorage (set by withAwsEstate).
+// packages/agent/src/aws-tool-estate-wrapper.ts
 
 import { getLogger } from "@devops-agent/observability";
 import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
