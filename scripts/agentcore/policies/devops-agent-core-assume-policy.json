@@ -1,0 +1,36 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "CloudWatchLogs",
+			"Effect": "Allow",
+			"Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+			"Resource": "arn:aws:logs:*:399987695868:log-group:/aws/bedrock-agentcore/*"
+		},
+		{
+			"Sid": "ECRPull",
+			"Effect": "Allow",
+			"Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:GetAuthorizationToken"],
+			"Resource": "*"
+		},
+		{
+			"Sid": "AssumeDevOpsAgentReadOnlyWildcard",
+			"Effect": "Allow",
+			"Action": "sts:AssumeRole",
+			"Resource": "arn:aws:iam::*:role/DevOpsAgentReadOnly"
+		},
+		{
+			"Sid": "ExplicitAccountAssumeRoles",
+			"Effect": "Allow",
+			"Action": "sts:AssumeRole",
+			"Resource": [
+				"arn:aws:iam::762715229080:role/DevOpsAgentReadOnly",
+				"arn:aws:iam::523422062084:role/DevOpsAgentReadOnly",
+				"arn:aws:iam::654654584630:role/DevOpsAgentReadOnly",
+				"arn:aws:iam::178531813197:role/DevOpsAgentReadOnly",
+				"arn:aws:iam::105329690220:role/DevOpsAgentReadOnly",
+				"arn:aws:iam::728412486223:role/DevOpsAgentReadOnly"
+			]
+		}
+	]
+}
