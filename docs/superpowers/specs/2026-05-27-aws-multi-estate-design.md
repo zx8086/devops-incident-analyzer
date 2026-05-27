@@ -1,20 +1,20 @@
 # AWS MCP — Multi-Estate Support (one runtime, N target accounts)
 
-**Date:** 2026-05-27
-**Status:** Design — pending Linear ticket
+**Date:** 2026-05-27 (revised 2026-05-27 for boot-validator + role-creation corrections)
+**Status:** Design — pending Linear ticket SIO-828
 **Author:** brainstorming session with Simon
 **Related code:** `packages/mcp-server-aws/`, `packages/agent/src/`, `scripts/agentcore/deploy.sh`
 
 ## Problem
 
-The AWS MCP runtime today supports exactly one assumed-role ARN (`AWS_ASSUMED_ROLE_ARN`) baked into its env at deploy time. Switching target estates (dev / staging / prod) requires redeploying the runtime or running parallel runtimes — expensive in IAM hygiene, ECR storage, CloudWatch log groups, and cold-start cost. Users need to ask "show me prod CloudWatch alarms" and "compare staging RDS" in the same conversation without infrastructure churn.
+The AWS MCP runtime today supports exactly one assumed-role ARN (`AWS_ASSUMED_ROLE_ARN`) baked into its env at deploy time. Switching target estates (dev / staging / prod) requires redeploying the runtime or running parallel runtimes — expensive in IAM hygiene, ECR storage, CloudWatch log groups, and cold-start cost. Users need to ask "show me prod CloudWatch alarms in eu-oit-prd" and "compare RDS metrics across eu-b2b-ecom-prd and eu-b2becom-v2-prd" in the same conversation without infrastructure churn.
 
 ## Goals
 
 - Single `aws_mcp_server` AgentCore runtime per AWS account, hosting N estates simultaneously.
 - Estate is chosen by a routing node in the agent pipeline, not by the LLM at tool-call time.
 - Ambiguous user prompts fan out to all configured estates.
-- Misconfigured estates fail loudly at deploy/boot, not at first user request.
+- Misconfigured estates are **visible** at boot via structured warnings and an `aws_list_estates` health field — but the runtime always starts (4-pillar pattern).
 - Onboarding a new estate is a one-line env change + one redeploy + one trust-policy update.
 
 ## Non-goals
@@ -24,6 +24,21 @@ The AWS MCP runtime today supports exactly one assumed-role ARN (`AWS_ASSUMED_RO
 - Estate aliases (e.g. `production` → `prod`).
 - UI changes in `apps/web` for estate picking.
 - Backward-compatibility shim for `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID`.
+- IAM role creation by `deploy.sh` (execution role is an account-setup prerequisite; deploy.sh consumes its ARN via env).
+
+## Account Architecture
+
+| Role | Account ID | Account Name |
+|---|---|---|
+| AgentCore runtime host (execution role lives here) | `399987695868` | `eu-shared-services-prd` |
+| Monitored estate `eu-oit-prd` | `762715229080` | `eu-oit-prd` |
+| Monitored estate `eu-ediservices-prd` | `523422062084` | `eu-ediservices-prd` |
+| Monitored estate `eu-mendix-platform-prd` | `654654584630` | `eu-mendix-platform-prd` |
+| Monitored estate `eu-b2becom-v2-prd` | `178531813197` | `eu-b2becom-v2-prd` |
+| Monitored estate `eu-b2b-ecom-prd` | `105329690220` | `eu-b2b-ecom-prd` |
+| Monitored estate `eu-b2bonboarding-prd` | `728412486223` | `eu-b2bonboarding-prd` |
+
+The AgentCore execution role `DevOpsAgentCoreRole` in `eu-shared-services-prd` is created **once, manually**, as part of account setup. It is the trusted principal in all six monitored accounts' `DevOpsAgentReadOnly` trust policies. Its ARN is passed to the AgentCore runtime via `EXECUTION_ROLE_ARN` env — `deploy.sh` does NOT create or modify this role.
 
 ## Architecture
 
@@ -36,10 +51,10 @@ mcp-server-aws (single runtime)
     ConfigSchema -> { estates: Record<id, {assumedRoleArn, externalId}> }
         |
         v
-    estate-validator (boot)  -- fails closed if any estate's sts:AssumeRole fails
+    estate-validator (boot)  -- warns per-estate; runtime always starts (4-pillar)
         |
         v
-    MCP server ready
+    MCP server ready -- aws_list_estates reports per-estate health
         ^
         |  every tool: required `estate` enum arg, injected by supervisor
         |
@@ -332,72 +347,96 @@ Env knob `AWS_MAX_FANOUT_ESTATES` (default unlimited) lets ops cap blast radius 
 
 ## Section 5 — Deployment Script (`scripts/agentcore/deploy.sh`)
 
-`deploy.sh` reads `AWS_ESTATES` JSON and patches the runtime execution role's inline policy to allow `sts:AssumeRole` on every estate's target ARN. The leaf-role trust policy (in the target account) is documented in a printed reminder but not automated — the script only has credentials for the runtime's account.
+`deploy.sh` is a thin packager: it builds the Docker image, pushes to ECR, and updates the AgentCore runtime's `--environment-variables` and `--role-arn`. It does **NOT** create or modify IAM roles. The execution role `DevOpsAgentCoreRole` (in account `399987695868`) is an account-setup prerequisite created and owned outside the deploy script — its ARN is consumed via `EXECUTION_ROLE_ARN` env, and its inline `DevOpsAgentCoreAssumePolicy` (covering all six estate ARNs + ECR + CloudWatch Logs) is managed manually per the implementation guide.
 
-### Key changes (around current lines 286-330 and 425-461)
+### Required env when deploying the aws server type
 
 ```bash
-if [ "${SERVER}" = "aws" ]; then
+# Runtime image build + push (unchanged from other servers)
+MCP_SERVER=aws
+AWS_REGION=eu-central-1
+
+# NEW: pre-created execution role ARN (the script no longer creates roles)
+EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole
+
+# NEW: estate map, passed verbatim into the runtime container env
+AWS_ESTATES='{"eu-oit-prd":{"assumedRoleArn":"arn:aws:iam::762715229080:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}, ...}'
+```
+
+### Key changes inside `deploy.sh` (vs. pre-SIO-828)
+
+1. **Remove the IAM-role-creation block entirely.** The previous Step 3 (`Creating IAM role...`, `put-role-policy AgentCoreAssumeEstateRoles`, `attach-role-policy`, and the 10s wait for IAM propagation) is deleted. The script now requires `EXECUTION_ROLE_ARN` to be set and passes it through unchanged.
+
+2. **Validate `EXECUTION_ROLE_ARN` exists in the target account** before image build. Cheap pre-flight check via `aws iam get-role`; loud failure if the role hasn't been provisioned.
+
+3. **AWS_ESTATES validation only** (no IAM writes):
+
+```bash
+if [ "${MCP_SERVER}" = "aws" ]; then
   if [ -z "${AWS_ESTATES:-}" ]; then
-    echo "ERROR: AWS_ESTATES is required for aws server type" >&2
+    echo "ERROR: AWS_ESTATES is required for the aws server type." >&2
     exit 1
   fi
-
-  ESTATE_ARNS=$(echo "${AWS_ESTATES}" | jq -er '[.[].assumedRoleArn] | unique | .[]' 2>/dev/null) || {
-    echo "ERROR: AWS_ESTATES is not valid JSON or missing assumedRoleArn fields" >&2
+  ESTATE_COUNT=$(echo "${AWS_ESTATES}" | jq -er 'length') || {
+    echo "ERROR: AWS_ESTATES is not valid JSON" >&2
     exit 1
   }
-  RESOURCE_LIST=$(echo "${ESTATE_ARNS}" | jq -R . | jq -sc .)
-
-  ASSUME_ROLE_POLICY=$(cat <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": ${RESOURCE_LIST}
-    }
-  ]
-}
-EOF
-)
-
-  aws iam put-role-policy \
+  # Sanity-check the assumed roles are present in the execution role's inline policy.
+  # Surface a warning if any estate ARN is NOT covered by DevOpsAgentCoreAssumePolicy
+  # so operators know to update the policy manually before traffic hits.
+  POLICY_RESOURCES=$(aws iam get-role-policy \
     --role-name "${EXECUTION_ROLE_NAME}" \
-    --policy-name "AgentCoreAssumeEstateRoles" \
-    --policy-document "${ASSUME_ROLE_POLICY}" \
-    --region "${AWS_REGION}"
-
-  echo "  IAM updated: execution role can assume $(echo "${ESTATE_ARNS}" | wc -l | tr -d ' ') estate role(s)"
+    --policy-name "DevOpsAgentCoreAssumePolicy" \
+    --query 'PolicyDocument.Statement[].Resource' --output json 2>/dev/null || echo "[]")
+  for arn in $(echo "${AWS_ESTATES}" | jq -r '.[].assumedRoleArn'); do
+    if ! echo "${POLICY_RESOURCES}" | jq -e --arg a "${arn}" 'tostring | contains($a)' >/dev/null; then
+      echo "  WARNING: ${arn} not found in DevOpsAgentCoreAssumePolicy; sts:AssumeRole will fail at runtime." >&2
+    fi
+  done
 fi
+```
 
-# In ENV_VARS construction (around line 428-429), replace the two-line
-# ASSUMED_ROLE_ARN_RESOLVED / EXTERNAL_ID_RESOLVED block with:
+4. **ENV_VARS line** (replaces the two-line legacy block):
+
+```bash
 ENV_VARS="${ENV_VARS},AWS_ESTATES=${AWS_ESTATES}"
+```
+
+5. **Runtime update uses the pre-existing role ARN:**
+
+```bash
+aws bedrock-agentcore-control update-agent-runtime \
+  --agent-runtime-id "${EXISTING_RUNTIME}" \
+  --agent-runtime-artifact "containerConfiguration={containerUri=${ECR_URI}:${IMAGE_TAG}}" \
+  --role-arn "${EXECUTION_ROLE_ARN}" \
+  --network-configuration "${NETWORK_CONFIG}" \
+  --protocol-configuration "serverProtocol=MCP" \
+  --environment-variables "${ENV_VARS}" \
+  --region "${AWS_REGION}"
 ```
 
 ### Details
 
-- **`jq` is a hard prerequisite.** Documented in `scripts/agentcore/README.md`; fail with clear message if missing.
-- **Inline policy, not managed.** Lifecycles with the role; can't drift.
-- **Single statement with N resources.** Stays under IAM's 10KB inline-policy limit.
-- **Quoting** verified by a new shell test `scripts/agentcore/test-env-construction.sh`.
-- **Trust-policy reminder** printed on success:
-
-```
-Reminder: each estate's DevOpsAgentReadOnly trust policy must include:
-  Principal: arn:aws:iam::<runtime-account>:role/<EXECUTION_ROLE_NAME>
-Estates configured:
-  - prod (arn:aws:iam::333333333333:role/DevOpsAgentReadOnly)
-  - dev  (arn:aws:iam::111111111111:role/DevOpsAgentReadOnly)
-```
+- **`jq` is a hard prerequisite** for parsing `AWS_ESTATES`.
+- **No IAM writes from deploy.sh.** All `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy` calls are removed.
+- **Pre-flight policy check** is a warning, not a hard fail — lets the deploy proceed (consistent with the 4-pillar boot pattern) while making the misconfiguration visible.
+- **Quoting** verified by `scripts/agentcore/test-env-construction.sh`.
+- **No trust-policy reminder** in the deploy output — trust policies are owned by the monitored accounts' teams and have a separate provisioning workflow documented in `docs/runbooks/aws-estate-onboarding.md`.
 
 ---
 
-## Section 6 — Boot-time Estate Validation
+## Section 6 — Boot-time Estate Validation (warn-and-continue, 4-pillar)
 
-The runtime calls `sts:AssumeRole` (via `STSClient.GetCallerIdentity` through each estate's credential provider) for every configured estate during boot. Any failure → process exits with non-zero code and a structured error log line naming the failed estate(s).
+The runtime calls `sts:AssumeRole` (via `STSClient.GetCallerIdentity` through each estate's credential provider) for every configured estate during boot. **Failures do NOT block startup.** Each result is logged, stored in a module-level health map, and surfaced through the `aws_list_estates` MCP tool so operators see broken estates without grepping logs. Per-tool calls against a broken estate still surface the real `iam-permission-missing` / `assume-role-denied` error at call time — the validator gives an earlier signal, not a different one.
+
+### Why warn-and-continue (4-pillar)
+
+The 4-pillar pattern (config / runtime / telemetry / signal-handling) requires the runtime to boot regardless of downstream-dependency state so that:
+
+- **Operators can probe the runtime** (`/health`, `/identity`, `aws_list_estates`) even when some estates are broken.
+- **A single bad estate doesn't take down 5 good ones.** Multi-estate is multi-tenant; partial degradation must not cascade to total outage.
+- **Trust-policy fixes don't require a redeploy.** When an account team fixes their trust policy, the next per-estate STS call inside a tool invocation succeeds — no AgentCore container restart needed.
+- **Observability flows are upstream of correctness.** OTEL + LangSmith traces depend on the runtime being alive to emit them.
 
 ### New file `packages/mcp-server-aws/src/services/estate-validator.ts`
 
@@ -408,100 +447,166 @@ export interface EstateValidationResult {
   assumedArn?: string;
   error?: string;
   durationMs: number;
+  validatedAt: string;  // ISO timestamp -- aws_list_estates surfaces this
+}
+
+// Process-lifetime health map. The bootstrap populates this; aws_list_estates reads it.
+let lastValidationResults: EstateValidationResult[] = [];
+export function getEstateHealth(): EstateValidationResult[] {
+  return lastValidationResults;
 }
 
 export async function validateEstates(config: AwsConfig): Promise<EstateValidationResult[]> {
   const entries = Object.entries(config.estates);
-  return Promise.all(
+  const results = await Promise.all(
     entries.map(async ([estate, estateConfig]) => {
       const started = Date.now();
       try {
         const provider = buildAssumedCredsProvider(estateConfig, config.region);
-        const sts = new STSClient({ region: config.region, credentials: provider });
+        const sts = new STSClient({ region: config.region, credentials: provider, maxAttempts: 1 });
         const res = await sts.send(new GetCallerIdentityCommand({}));
-        return { estate, ok: true, assumedArn: res.Arn, durationMs: Date.now() - started };
+        return {
+          estate,
+          ok: true,
+          assumedArn: res.Arn,
+          durationMs: Date.now() - started,
+          validatedAt: new Date().toISOString(),
+        };
       } catch (err) {
         return {
           estate,
           ok: false,
           error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
           durationMs: Date.now() - started,
+          validatedAt: new Date().toISOString(),
         };
       }
     }),
   );
+  lastValidationResults = results;
+  return results;
 }
 ```
 
 ### Bootstrap wiring (`packages/mcp-server-aws/src/index.ts`)
 
 ```ts
+// Boot validator: runs once, never throws, populates the health map.
 const results = await validateEstates(config.aws);
 const failed = results.filter((r) => !r.ok);
+const ok = results.filter((r) => r.ok);
 
-for (const r of results) {
-  if (r.ok) {
-    logger.info({ estate: r.estate, assumedArn: r.assumedArn, durationMs: r.durationMs },
-      "Estate validation OK");
-  } else {
-    logger.error({ estate: r.estate, error: r.error, durationMs: r.durationMs },
-      "Estate validation FAILED");
-  }
+for (const r of ok) {
+  logger.info({ estate: r.estate, assumedArn: r.assumedArn, durationMs: r.durationMs },
+    "Estate validation OK");
+}
+for (const r of failed) {
+  logger.warn(
+    { estate: r.estate, error: r.error, durationMs: r.durationMs },
+    "Estate validation FAILED -- runtime will still start; tool calls against this estate will surface AccessDenied",
+  );
 }
 
 if (failed.length > 0) {
-  const summary = failed.map((r) => `  - ${r.estate}: ${r.error}`).join("\n");
-  throw new Error(
-    `Refusing to start: ${failed.length}/${results.length} estate(s) failed STS:AssumeRole check.\n${summary}\n` +
-    `Check that each estate's DevOpsAgentReadOnly trust policy lists the runtime's execution role as a Principal.`
+  // Single prominent banner line summarising the degraded state. Operators see
+  // this at boot and can correlate with aws_list_estates afterwards.
+  logger.warn(
+    {
+      degradedEstateCount: failed.length,
+      totalEstateCount: results.length,
+      degradedEstates: failed.map((r) => r.estate),
+    },
+    `Starting with ${failed.length}/${results.length} estate(s) DEGRADED -- see aws_list_estates for per-estate status`,
   );
+} else {
+  logger.info(
+    { estateCount: results.length, slowestMs: Math.max(...results.map((r) => r.durationMs)) },
+    "All estates validated OK",
+  );
+}
+
+// IMPORTANT: do NOT throw. The runtime starts regardless.
+```
+
+### `aws_list_estates` enriched output
+
+The introspection tool reports per-estate health in addition to the ID list:
+
+```ts
+{
+  "estates": ["eu-oit-prd", "eu-ediservices-prd", ...],
+  "health": [
+    {
+      "estate": "eu-oit-prd",
+      "ok": true,
+      "assumedArn": "arn:aws:sts::762715229080:assumed-role/DevOpsAgentReadOnly/aws-mcp-server",
+      "validatedAt": "2026-05-27T13:42:11.234Z"
+    },
+    {
+      "estate": "eu-ediservices-prd",
+      "ok": false,
+      "error": "AccessDenied: User: arn:aws:sts::399987695868:assumed-role/... is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::523422062084:role/DevOpsAgentReadOnly",
+      "validatedAt": "2026-05-27T13:42:11.456Z"
+    }
+  ]
 }
 ```
 
+The agent's `awsEstateRouter` can use this to skip dispatching to known-degraded estates (saves a round-trip when the user said "all" but one estate is broken). Optional — not in v1.
+
 ### Cost
 
-300-600ms for 3 estates in parallel (`Promise.all`, scales as O(slowest) not O(sum)). Acceptable inside AgentCore cold-start.
-
-### Why fail-closed
-
-Partial success (prod-OK, dev-FAILED) would make the fan-out router silently skip dev estates with errors that look like "no results". Hard stop at boot is loud, recoverable, and matches the deploy script's posture.
+300-600ms for 6 estates in parallel (`Promise.all`, scales as O(slowest) not O(sum)). Acceptable inside AgentCore cold-start.
 
 ### Test coverage
 
 - All-OK case via `aws-sdk-client-mock`
-- Mixed-success case
-- Empty-estates case (guarded though unreachable due to Zod minimum-1)
-- Bootstrap integration test asserting `process.exit(1)` on any failure
+- Mixed-success case (boot succeeds, health map reports 1 failed)
+- All-failed case (boot still succeeds, health map reports all failed, prominent banner logged)
+- `aws_list_estates` returns the health map alongside the ID list
+- `getEstateHealth()` is stable between calls (process-lifetime cache)
 
-### Escape hatch
+### Re-validation
 
-`SKIP_ESTATE_VALIDATION=true` honored ONLY when `MCP_TRANSPORT !== "agentcore"`. Logged at WARN when active.
+V1 does NOT re-run the validator after boot. If a trust policy is fixed mid-life, the next per-tool `STSClient.send` inside the affected client picks it up (the SDK's credential provider re-AssumeRoles on cache miss). For an explicit refresh, operators redeploy or restart the runtime.
+
+### No escape hatch needed
+
+The previous `SKIP_ESTATE_VALIDATION` flag is removed. Boot is always validated; validation never throws.
 
 ---
 
 ## Section 7 — Migration, Local Dev, Backout
 
-### `.env` migration (one-time edit)
+### Prerequisite: execution role + monitored-account roles must exist
 
-Replace lines 71-72 of today's `.env`:
+Before any deploy, the AWS account topology must be in place (per the implementation guide and account architecture above):
+
+1. **In `399987695868` (`eu-shared-services-prd`):** `DevOpsAgentCoreRole` IAM role exists with inline policy `DevOpsAgentCoreAssumePolicy` covering all 6 estate ARNs + ECR + CloudWatch Logs.
+2. **In each of the 6 monitored accounts:** `DevOpsAgentReadOnly` IAM role exists with trust policy naming `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` as `Principal` and `sts:ExternalId` condition `devops-agent-prod-access`.
+
+The deploy script (Section 5) no longer creates or modifies these roles — it consumes the execution role ARN via env.
+
+### `.env` migration (one-time edit)
 
 ```diff
 - AWS_ASSUMED_ROLE_ARN=arn:aws:iam::762715229080:role/DevOpsAgentReadOnly
 - AWS_EXTERNAL_ID=devops-agent-prod-access
-+ AWS_ESTATES='{"prod":{"assumedRoleArn":"arn:aws:iam::762715229080:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}}'
++ EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole
++ AWS_ESTATES='{"eu-oit-prd":{"assumedRoleArn":"arn:aws:iam::762715229080:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"},"eu-ediservices-prd":{"assumedRoleArn":"arn:aws:iam::523422062084:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"},"eu-mendix-platform-prd":{"assumedRoleArn":"arn:aws:iam::654654584630:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"},"eu-b2becom-v2-prd":{"assumedRoleArn":"arn:aws:iam::178531813197:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"},"eu-b2b-ecom-prd":{"assumedRoleArn":"arn:aws:iam::105329690220:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"},"eu-b2bonboarding-prd":{"assumedRoleArn":"arn:aws:iam::728412486223:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}}'
 ```
 
-The SigV4 proxy block (lines 64-68) is untouched — multi-estate is entirely runtime-side.
+The SigV4 proxy block (`AWS_AGENTCORE_*`) is untouched — multi-estate is entirely a runtime-side + execution-role concern.
 
 ### Local dev
 
-- `bun --env-file=.env packages/mcp-server-aws/src/index.ts` works as today; validator runs first.
-- `.env.example` updated with single-estate `AWS_ESTATES` plus inline multi-estate comment.
-- Smoke-test script gains an `aws_list_estates` round-trip step between initialize and tools/call.
+- `bun --env-file=.env packages/mcp-server-aws/src/index.ts` works as today; validator runs first but never throws.
+- `.env.example` updated with single + multi-estate JSON examples plus the 6-account real-world block.
+- Smoke-test script's `aws_list_estates` step now also asserts the `health` array is present and reports each estate's status.
 
 ### Backout
 
-Single PR, 8 commits (one per design section). Backout = `git revert -m 1 <merge-sha>` + redeploy (~5 min). The inline `AgentCoreAssumeEstateRoles` policy is overwritten on every deploy; rollback redeploys the singleton-shape policy automatically. `.env` reverts to the old two-line pair documented in this spec.
+Single PR, 8 commits (one per design section). Backout = `git revert -m 1 <merge-sha>` + redeploy (~5 min). Because the deploy script no longer mutates IAM, there is no IAM-side cleanup — revert is purely image + runtime env. `.env` reverts to the old two-line pair documented above.
 
 ---
 
@@ -509,11 +614,14 @@ Single PR, 8 commits (one per design section). Backout = `git revert -m 1 <merge
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Leaf-role trust policy missing the runtime execution role principal | High at first deploy of each new estate | Boot-time validator (Section 6); deploy-script reminder (Section 5) |
+| Leaf-role trust policy missing the runtime execution role principal | High at first deploy of each new estate | Boot-time validator warns at startup + `aws_list_estates` reports per-estate health; first tool call surfaces structured `assume-role-denied` error |
+| `EXECUTION_ROLE_ARN` not pre-created in `399987695868` | Medium | deploy.sh pre-flight `aws iam get-role` check fails the deploy loudly with the exact role name + account expected |
+| Estate listed in `AWS_ESTATES` but not in `DevOpsAgentCoreAssumePolicy` Resource list | Medium | deploy.sh per-estate scan against the inline policy emits a warning naming the missing ARN; tool calls would fail with `sts:AssumeRole AccessDenied` until the policy is updated |
 | AgentCore `--environment-variables` mangling JSON quoting | Medium | `scripts/agentcore/test-env-construction.sh`; verify first deploy via `aws bedrock-agentcore-control get-agent-runtime` |
 | LLM router picks wrong estate → over-fan-out | Medium | "Be conservative" prompt; per-decision logging; `AWS_MAX_FANOUT_ESTATES` cap |
-| Per-tool `estate` arg confuses sub-agent LLM | Low | Supervisor injects via `extraToolArgs`; sub-agent LLM never sees the field |
+| Per-tool `estate` arg confuses sub-agent LLM | Low | Supervisor injects via ALS; sub-agent LLM never sees the field |
 | 39-file PR too large to review | Medium | Mechanical-edit nature; PR description highlights pattern; reviewer spot-checks 3 files |
+| Runtime boots with all estates degraded → silent total failure | Low | Single banner log line at boot summarising N/M degraded; `aws_list_estates` health always queryable; per-tool errors are structured + actionable |
 
 ---
 
@@ -535,10 +643,10 @@ Single PR, 8 commits (one per design section). Backout = `git revert -m 1 <merge
 3. All 39 AWS tool files accept required `estate` enum arg; helper `estateSchemaFor(config)` builds enum dynamically.
 4. `awsEstateRouter` node in `packages/agent` populates `awsTargetEstates`; fan-out emits one Send per estate with `estateContext`.
 5. `align` / `aggregate` / findings extractor key by `aws:<estate>`.
-6. `deploy.sh` auto-patches inline IAM policy `AgentCoreAssumeEstateRoles` from `AWS_ESTATES`; prints trust-policy reminder.
-7. Runtime boot calls `STSClient.GetCallerIdentity` per estate in parallel; refuses to start on any failure.
-8. `aws_list_estates` MCP tool returns configured estate IDs.
-9. `.env.example` updated; migration documented in PR description.
+6. `deploy.sh` consumes `EXECUTION_ROLE_ARN` from env (does NOT create IAM roles); pre-flights with `aws iam get-role`; warns on any estate ARN missing from `DevOpsAgentCoreAssumePolicy`.
+7. Runtime boot calls `STSClient.GetCallerIdentity` per estate in parallel; results stored in process-lifetime health map; **runtime always starts** with a banner log line when any estate is degraded (4-pillar pattern).
+8. `aws_list_estates` MCP tool returns configured estate IDs **plus per-estate health** (ok / error / assumedArn / validatedAt).
+9. `.env.example` updated with `EXECUTION_ROLE_ARN` + 6-estate `AWS_ESTATES` example; migration documented in PR description.
 10. `bun run typecheck && bun run lint && bun run test` pass.
 
 ---
