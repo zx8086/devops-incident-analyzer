@@ -84,6 +84,15 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-828: AWS estates to fan out to. Populated by awsEstateRouter from the
+	// user's prompt. Empty + aws not selected = no AWS fan-out. Empty + aws
+	// selected = router decided "ambiguous" and the AWS sub-agent fans out to
+	// all configured estates (resolved at fan-out time, not stored here).
+	awsTargetEstates: Annotation<string[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+
 	// SIO-559: append reducer -- appends new results, empty array resets
 	dataSourceResults: Annotation<DataSourceResult[]>({
 		reducer: (prev, next) => {

@@ -35,7 +35,8 @@ export type LlmRole =
 	| "mitigateMonitor"
 	| "mitigateEscalate"
 	| "actionProposal"
-	| "runbookSelector";
+	| "runbookSelector"
+	| "awsEstateRouter";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -56,6 +57,7 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	mitigateEscalate: { temperature: 0.2 },
 	actionProposal: { temperature: 0, maxTokens: 512 },
 	runbookSelector: { temperature: 0, maxTokens: 512 },
+	awsEstateRouter: { temperature: 0, maxTokens: 256 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -78,6 +80,7 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	mitigateEscalate: 60_000,
 	actionProposal: 60_000,
 	runbookSelector: 0,
+	awsEstateRouter: 30_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
