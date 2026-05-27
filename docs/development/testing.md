@@ -118,7 +118,7 @@ describe("manifest-loader", () => {
 
 ### agent
 
-The LangGraph agent package tests cover the 13-node pipeline (incl. SIO-681 correlation enforcement). Because tests should not require running MCP servers, MCP dependencies are mocked.
+The LangGraph agent package tests cover the 20-node pipeline (incl. correlation enforcement, typed findings, AWS estate router, mitigation branch split). Because tests should not require running MCP servers, MCP dependencies are mocked.
 
 - **Graph compilation** -- StateGraph builds and compiles without error
 - **Node functions** -- classify, entityExtractor, supervise, align, aggregate, validate
@@ -259,7 +259,7 @@ bun run lint          # Check only
 bun run lint:fix      # Auto-fix
 ```
 
-Biome rules enforce: import ordering, no unused variables, consistent formatting, and no `any` types. As of SIO-673, `noExplicitAny` is set to **error** (not warn) in `biome.json`, so `: any`, `as any`, `Record<string, any>`, etc. fail CI. The typed-alternatives table in `CLAUDE.md` (under "TypeScript strict mode, never use `any`") lists the canonical replacements (`z.infer`, `RequestHandlerExtra`, `unknown` with narrowing, `estypes.<Response>`, etc.); a `biome-ignore lint/suspicious/noExplicitAny` comment requires a one-line ticket reference.
+Biome rules enforce: import ordering, no unused variables, consistent formatting, and no `any` types. As of, `noExplicitAny` is set to **error** (not warn) in `biome.json`, so `: any`, `as any`, `Record<string, any>`, etc. fail CI. The typed-alternatives table in `CLAUDE.md` (under "TypeScript strict mode, never use `any`") lists the canonical replacements (`z.infer`, `RequestHandlerExtra`, `unknown` with narrowing, `estypes.<Response>`, etc.); a `biome-ignore lint/suspicious/noExplicitAny` comment requires a one-line ticket reference.
 
 ---
 
@@ -287,7 +287,7 @@ test("loads all 6 tool definitions", () => {
 
 ## Agent Eval (LangSmith final_response)
 
-End-to-end regression for the full 13-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
+End-to-end regression for the full 20-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
 
 ```bash
 # 1. Sanity-check infra (free, fast). Probes :9080-:9085.
@@ -320,4 +320,4 @@ Prerequisites: AWS Bedrock creds, `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGS
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial version |
-| 2026-05-09 | Added Agent Eval section (SIO-680/682) |
+| 2026-05-09 | Added Agent Eval section (/682) |

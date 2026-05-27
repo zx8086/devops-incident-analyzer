@@ -1,7 +1,7 @@
 # AWS Bedrock AgentCore Deployment
 
 > **Targets:** Bun 1.3.9+ | AWS Bedrock AgentCore | Docker
-> **Last updated:** 2026-05-08
+> **Last updated:** 2026-05-28
 
 Guide for deploying MCP servers to AWS Bedrock AgentCore Runtime. Covers the container contract, parameterized Dockerfile, IAM policies, deployment steps, and local testing. Each MCP server is deployed as an independent AgentCore Runtime behind a shared AgentCore Gateway that the agent discovers tools through.
 
@@ -15,9 +15,9 @@ AgentCore Runtime hosts MCP servers inside isolated microVMs. Each server runs a
 - `GET /health` -- Readiness probe with detailed status
 - `POST /mcp` -- Streamable HTTP for MCP protocol messages
 
-The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all six MCP servers through one connection.
+The AgentCore Gateway aggregates multiple Runtime instances behind a single endpoint, allowing the agent to discover all tools across all seven MCP servers through one connection.
 
-Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the six servers using a build argument.
+Each MCP server is deployed independently. The parameterized `Dockerfile.agentcore` at the repository root builds any of the seven servers using a build argument.
 
 ---
 
@@ -43,7 +43,7 @@ Each MCP server is deployed independently. The parameterized `Dockerfile.agentco
 |                                                   |
 | Single MCP endpoint for agent tool discovery      |
 | Aggregates: elastic + kafka + couchbase + konnect |
-|           + gitlab + atlassian                  |
+|           + gitlab + atlassian + aws            |
 +---------------------------------------------------+
           |
           v
@@ -61,7 +61,7 @@ Each microVM receives its own IAM role with permissions scoped to the specific d
 
 ## Parameterized Dockerfile
 
-The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the six MCP servers using the `MCP_SERVER_PACKAGE` build argument.
+The repository contains a single `Dockerfile.agentcore` at the project root. It builds any of the seven MCP servers using the `MCP_SERVER_PACKAGE` build argument.
 
 ### Build Argument
 
@@ -155,7 +155,7 @@ docker build \
   .
 ```
 
-Build commands for all six servers:
+Build commands for all seven servers:
 
 ```bash
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-elastic -t elastic-mcp-agentcore .
@@ -164,6 +164,7 @@ docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-c
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-konnect -t konnect-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-gitlab -t gitlab-mcp-agentcore .
 docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-atlassian -t atlassian-mcp-agentcore .
+docker build -f Dockerfile.agentcore --build-arg MCP_SERVER_PACKAGE=mcp-server-aws -t aws-mcp-agentcore .
 ```
 
 ### Step 2: Push to ECR
@@ -399,11 +400,11 @@ The `MCP_SERVER` env var selects which server to deploy. The script is idempoten
 | `MSK_CLUSTER_ARN` | No | -- | Forwarded to the runtime for broker discovery and `kafka_get_cluster_info`. |
 | `MSK_BOOTSTRAP_BROKERS` | No | -- | Forwarded to the runtime. When set, the runtime skips `GetBootstrapBrokers`. |
 | `KSQL_ENABLED` / `KSQL_ENDPOINT` / `KSQL_API_KEY` / `KSQL_API_SECRET` | No | -- | Forwarded if set. Enables 7 ksqlDB tools when reachable. |
-| `SCHEMA_REGISTRY_ENABLED` / `SCHEMA_REGISTRY_URL` / `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` | No | -- | Forwarded if set. Enables 8 SR read tools when reachable; the 7 SIO-682 SR write/destructive tools also require `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`. |
-| `CONNECT_ENABLED` / `CONNECT_URL` / `CONNECT_API_KEY` / `CONNECT_API_SECRET` | No | -- | Forwarded if set. Enables 4 Connect read tools; the 5 SIO-682 Connect write/destructive tools also require the gates. |
-| `RESTPROXY_ENABLED` / `RESTPROXY_URL` / `RESTPROXY_API_KEY` / `RESTPROXY_API_SECRET` | No | -- | SIO-682. Forwarded if set. Enables 3 REST Proxy reads + 6 writes (writes gated by `KAFKA_ALLOW_WRITES`). REST Proxy lives on a separate ALB from SR/Connect/ksqlDB; reachability does NOT depend on cross-VPC connectivity. |
+| `SCHEMA_REGISTRY_ENABLED` / `SCHEMA_REGISTRY_URL` / `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` | No | -- | Forwarded if set. Enables 8 SR read tools when reachable; the 7 SR write/destructive tools also require `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`. |
+| `CONNECT_ENABLED` / `CONNECT_URL` / `CONNECT_API_KEY` / `CONNECT_API_SECRET` | No | -- | Forwarded if set. Enables 4 Connect read tools; the 5 Connect write/destructive tools also require the gates. |
+| `RESTPROXY_ENABLED` / `RESTPROXY_URL` / `RESTPROXY_API_KEY` / `RESTPROXY_API_SECRET` | No | -- |. Forwarded if set. Enables 3 REST Proxy reads + 6 writes (writes gated by `KAFKA_ALLOW_WRITES`). REST Proxy lives on a separate ALB from SR/Connect/ksqlDB; reachability does NOT depend on cross-VPC connectivity. |
 
-**Important — `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE`:** as of SIO-682, `deploy.sh` does NOT forward these flags. To enable the 21 write/destructive tools (5 Connect + 7 SR + 9 REST Proxy of which 6 require writes) on an existing AgentCore runtime, set them as runtime environment variables directly via the AWS console or `aws bedrock-agentcore-control update-agent-runtime --environment-variables ...`. Note: `update-agent-runtime --environment-variables` REPLACES the full env set, so include all existing vars when adding the gates manually.
+**Important — `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE`:** as of, `deploy.sh` does NOT forward these flags. To enable the 21 write/destructive tools (5 Connect + 7 SR + 9 REST Proxy of which 6 require writes) on an existing AgentCore runtime, set them as runtime environment variables directly via the AWS console or `aws bedrock-agentcore-control update-agent-runtime --environment-variables ...`. Note: `update-agent-runtime --environment-variables` REPLACES the full env set, so include all existing vars when adding the gates manually.
 
 ### test-local.sh
 
@@ -510,12 +511,81 @@ It checks `/ping`, `/health`, `/mcp` initialize response (verifies server name m
 
 ---
 
+## AWS Multi-Estate Deployment
+
+The AWS MCP server is unique among the seven datasources: a **single AgentCore runtime serves N target AWS accounts ("estates")** via cross-account `sts:AssumeRole`. The runtime and the agent's `awsEstateRouter` graph node together ensure the LLM never sees per-account credentials — it only sees public estate identifiers (e.g. `prod`, `staging`, `sandbox`).
+
+For account-by-account onboarding (creating the read-only role on each target account, registering the ExternalId, validating the trust policy), follow the dedicated runbook: [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md).
+
+### Architecture
+
+```
++-----------------------------------------------+
+| AgentCore Runtime (one microVM, in account A) |
+|   - mcp-server-aws                            |
+|   - EXECUTION_ROLE_ARN: DevOpsAgentCoreRole   |
+|     with inline DevOpsAgentCoreAssumePolicy   |
+|     (sts:AssumeRole on every target role)     |
++--------------------+--------------------------+
+                     |
+        sts:AssumeRole + ExternalId per estate
+                     |
+        +------------+------------+------------+
+        v            v            v            v
+   account B    account C    account D    account E
+   (estate-1)   (estate-2)   (estate-3)   (estate-4)
+     role:DevOpsAgentReadOnly (trust policy includes
+     account A's role + ExternalId condition)
+```
+
+The runtime calls `AssumeRole` per estate at boot. Per-estate failures do **not** block startup — the runtime always boots and exposes the `aws_list_estates` MCP tool, which reports per-estate health to the agent. Tool calls against a degraded estate surface `AccessDenied` at call time.
+
+### Deployment prerequisites
+
+| Prerequisite | Where |
+|--------------|-------|
+| `DevOpsAgentCoreRole` (execution role on the runtime account) with inline `DevOpsAgentCoreAssumePolicy` | Provisioned manually per [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). The deploy script pre-flights this with `iam:GetRole` and fails fast if missing. |
+| `DevOpsAgentReadOnly` (target role on each estate account) with the read-only inline policy + trust policy including the runtime account + ExternalId condition | See `scripts/agentcore/policies/devops-agent-readonly-policy.json` and `devops-agent-readonly-trust-policy.json` |
+| `EXECUTION_ROLE_ARN` env var pointing at the runtime account's role | `.env` |
+| `AWS_ESTATES` JSON env var with one entry per target account | `.env` |
+
+### Deploying the AWS MCP runtime
+
+```bash
+EXECUTION_ROLE_ARN=arn:aws:iam::<runtime-account>:role/DevOpsAgentCoreRole \
+MCP_SERVER=aws \
+./scripts/agentcore/deploy.sh
+```
+
+The script:
+
+1. Pre-flights `EXECUTION_ROLE_ARN` (`iam:GetRole`).
+2. Builds the container with `MCP_SERVER_PACKAGE=mcp-server-aws` build arg.
+3. Pushes to the production ECR repo via `scripts/agentcore/push-to-production-ecr.sh` (smoke-tested by's `scripts/agentcore/smoke-test-agentcore.ts`).
+4. Creates or updates the AgentCore runtime, attaches `EXECUTION_ROLE_ARN`, and sets `AWS_ESTATES` as a runtime environment variable.
+5. Returns the runtime ARN; copy it into `AWS_AGENTCORE_RUNTIME_ARN` for the agent's `.env`.
+
+### Local verification before deploy
+
+Use `scripts/agentcore/test-env-construction.sh` to render the env block the deploy script will pass to AgentCore without actually deploying. This catches `AWS_ESTATES` JSON-escaping mistakes before they reach the runtime.
+
+### Adding a new estate
+
+A new estate is a new entry in `AWS_ESTATES` plus a new target role on the new AWS account. The runtime does **not** need a code change or rebuild — only a redeploy of the env block (or a runtime update). Onboarding steps are in [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md).
+
+### Migrating from single-estate (legacy `AWS_ASSUMED_ROLE_ARN` + `AWS_EXTERNAL_ID`)
+
+Pre-multi-estate deployments used a single `AWS_ASSUMED_ROLE_ARN` + `AWS_EXTERNAL_ID` pair. Move them into a single-entry `AWS_ESTATES` map. See `.env.example` lines 141-159 for the canonical migration example.
+
+---
+
 ## See Also
 
 - [Docker Reference](docker-reference.md) -- Dockerfile patterns and build commands for all images
 - [Local Development](local-development.md) -- running services without AgentCore
-- [Environment Variables](../configuration/environment-variables.md) -- all configuration variables
+- [Environment Variables](../configuration/environment-variables.md) -- all configuration variables (see "AWS MCP — Multi-Estate")
 - [MCP Server Configuration](../configuration/mcp-server-configuration.md) -- transport modes including AgentCore
+- [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md) -- step-by-step procedure for adding a new AWS account
 
 ---
 
@@ -525,4 +595,5 @@ It checks `/ping`, `/health`, `/mcp` initialize response (verifies server name m
 |------|--------|
 | 2026-04-07 | Updated to cover all 4 MCP servers with per-server env vars, build examples, and parameterized scripts |
 | 2026-04-23 | Added GitLab and Atlassian build examples, env vars, IAM policies, deploy.sh and test-local.sh entries (now 6 servers total) |
+| 2026-05-28 | docs drift sweep: added AWS MCP (7th server total) and a new "AWS Multi-Estate Deployment" section covering one-runtime-N-estates architecture, `EXECUTION_ROLE_ARN` prerequisite, `AWS_ESTATES` JSON wiring, deploy.sh flags, smoke-test reference, env-construction pre-flight, and legacy single-estate migration. Linked to `docs/runbooks/aws-estate-onboarding.md`. |
 | 2026-04-04 | Initial AgentCore deployment guide created (Phase 3: Configuration + Deployment), migrated from docs/agentbedrockcore/ |

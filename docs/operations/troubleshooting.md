@@ -77,9 +77,9 @@ CONNECT_ENABLED=true
 RESTPROXY_ENABLED=true
 ```
 
-For SIO-682 write/destructive tools (5 Connect + 7 SR + 6 REST Proxy writes that need it), the per-server `*_ENABLED` flag is necessary but not sufficient — the gates `KAFKA_ALLOW_WRITES=true` and (for destructive operations) `KAFKA_ALLOW_DESTRUCTIVE=true` must also be set, or those tools are silently omitted from `tools/list`.
+For write/destructive tools (5 Connect + 7 SR + 6 REST Proxy writes that need it), the per-server `*_ENABLED` flag is necessary but not sufficient — the gates `KAFKA_ALLOW_WRITES=true` and (for destructive operations) `KAFKA_ALLOW_DESTRUCTIVE=true` must also be set, or those tools are silently omitted from `tools/list`.
 
-### Kafka MCP Optional Service Reachability (SIO-684)
+### Kafka MCP Optional Service Reachability
 
 When `SCHEMA_REGISTRY_ENABLED`, `KSQL_ENABLED`, `CONNECT_ENABLED`, or `RESTPROXY_ENABLED` is true, the Kafka MCP server probes each enabled endpoint at startup with a 5s timeout (`GET /subjects`, `GET /info`, `GET /`, `GET /topics` respectively). The server boots regardless of probe outcome — tools stay registered so partial reachability is supported — but each probe emits one log line:
 
@@ -88,7 +88,7 @@ info: schema-registry reachable          { component, url }
 error: ksqldb unreachable - tools registered but calls will fail   { component, url, error }
 ```
 
-If the probe is missing for an `*_ENABLED=true` service, the server is older than SIO-684. If you see the `error` line, the underlying tool calls (e.g. `ksql_get_server_info`) will fail with the same error string in their MCP response, and each failed call now emits a `Tool call error` log line in addition to returning `isError: true` to the agent. This is the loud signal — quiet `info "Tool call completed"` lines no longer mask connectivity failures.
+If the probe is missing for an `*_ENABLED=true` service, the server is older than. If you see the `error` line, the underlying tool calls (e.g. `ksql_get_server_info`) will fail with the same error string in their MCP response, and each failed call now emits a `Tool call error` log line in addition to returning `isError: true` to the agent. This is the loud signal — quiet `info "Tool call completed"` lines no longer mask connectivity failures.
 
 A common cause on AgentCore deployments is a missing cross-account network path between the AgentCore VPC and the Confluent (or self-hosted) endpoints. Probe failures are the first place to look in CloudWatch.
 
@@ -185,28 +185,28 @@ The classify node determines query complexity. If it always returns "simple":
 - Verify the entity extractor is detecting datasource signals (service names, topic names, cluster references)
 - Test with an explicitly complex query: "Compare Kafka consumer lag with Elasticsearch error rates for the order-service in the last hour"
 
-### Confidence Capped at 0.59 (SIO-681 / SIO-707 / SIO-709 / SIO-712)
+### Confidence Capped at 0.59
 
 **Symptoms:** Final report ships with `confidenceScore <= 0.59`. One or more of: a non-empty `degradedRules` array, a `## Gaps` section with several bullets, a `WARNING: unresolved cross-source contradiction` banner at the top of the report.
 
-The cap value is `0.59` (was `0.6` before SIO-712) so a capped run is strictly below the 0.6 HITL gate (`checkConfidence` uses `<`). Any of the inputs below independently caps confidence — `degradedRules` may be empty even when the cap fires.
+The cap value is `0.59` (was `0.6` before) so a capped run is strictly below the 0.6 HITL gate (`checkConfidence` uses `<`). Any of the inputs below independently caps confidence — `degradedRules` may be empty even when the cap fires.
 
 The degradation can mean any of:
 - **Degraded correlation rule.** The required sub-agent (typically elastic-agent) was unreachable during the re-fan-out, or it ran but produced no findings covering the triggered service. Each `degradedRules` entry has `{ ruleId, agent, services, reason }`.
-- **Tool-error rate >= 15%** (SIO-707, tightened by SIO-709). Aggregated sub-agent tool-call failures crossed the 15% threshold (was 25% before SIO-709). Check sub-agent transcripts for serialized MCP-tool errors.
-- **`## Gaps` section with >= 2 bullets** (SIO-709). The aggregator's own self-reported gap list crossed the threshold. This is independent of `degradedRules` and fires even when every sub-agent succeeded.
-- **`skipCoverageCheck` rule degraded** (SIO-712). A signal-as-trigger rule like `gitlab-deploy-vs-datastore-runtime` fired and the contradiction wasn't resolvable from already-collected data. The report carries a `WARNING: unresolved cross-source contradiction` banner. There is no sub-agent to retry — the cap *is* the action.
+- **Tool-error rate >= 15%** (threshold tightened from 25%). Aggregated sub-agent tool-call failures crossed the 15% threshold. Check sub-agent transcripts for serialized MCP-tool errors.
+- **`## Gaps` section with >= 2 bullets**. The aggregator's own self-reported gap list crossed the threshold. This is independent of `degradedRules` and fires even when every sub-agent succeeded.
+- **`skipCoverageCheck` rule degraded**. A signal-as-trigger rule like `gitlab-deploy-vs-datastore-runtime` fired and the contradiction wasn't resolvable from already-collected data. The report carries a `WARNING: unresolved cross-source contradiction` banner. There is no sub-agent to retry — the cap *is* the action.
 - **Predicate fail-open.** A correlation rule's trigger predicate threw and was logged as fail-open (rule auto-satisfied; check logs for `predicate error`). One bad rule cannot break the pipeline.
 
 To recover: ensure the targeted sub-agent's MCP server is reachable, then retry the query. The rule engine's idempotency makes the next pass a clean no-op if the first pass succeeded. For tool-error or Gaps-section caps, retrying does not help by itself — investigate the underlying tool failures or gap reasons surfaced in the report.
 
 See `docs/architecture/agent-pipeline.md` "enforceCorrelations" section for the rule list, the `skipCoverageCheck` routing, and the confidence-cap inputs.
 
-### Elasticsearch Search Times Out at ~30 Seconds (SIO-708)
+### Elasticsearch Search Times Out at ~30 Seconds
 
 **Symptoms:** `elasticsearch_search` returns a transport timeout after ~30 s. Multiple parallel aggregation-heavy searches against the same index pattern all hit the ceiling within a few ms of each other. Sequential reruns of the same query shape complete in 5–7 s.
 
-This is contention at the Elasticsearch SDK or server layer, not query infeasibility. SIO-708 added a per-call timeout (`searchRequestOptions.ts`) for `elasticsearch_search`, defaulting to 60 s with 0 retries, and lifted the shared client's `requestTimeout` schema cap from 60 s to 120 s.
+This is contention at the Elasticsearch SDK or server layer, not query infeasibility. added a per-call timeout (`searchRequestOptions.ts`) for `elasticsearch_search`, defaulting to 60 s with 0 retries, and lifted the shared client's `requestTimeout` schema cap from 60 s to 120 s.
 
 To raise the per-call ceiling for heavy aggregations:
 
@@ -377,6 +377,23 @@ Required IAM permissions depend on the MCP server:
 | Elasticsearch | Managed via Elastic Cloud API keys (not IAM) |
 | Couchbase | Managed via Capella API keys (not IAM) |
 | Konnect | Managed via Konnect access tokens (not IAM) |
+| AWS MCP | Execution role on runtime account needs `sts:AssumeRole` on every target role; each target role needs the read-only inline policy. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
+
+### AWS Multi-Estate Failure Modes
+
+**Symptom: `aws_list_estates` returns one or more estates with `status: degraded`.**
+
+`AssumeRole` failed at boot for that estate. The runtime still boots (4-pillar pattern), but tool calls against the degraded estate will surface `AccessDenied` at call time. Inspect the runtime CloudWatch logs (OTEL stream — see [reference_agentcore_logs_via_otel](../../CLAUDE.md) memory note: the `/aws/bedrock-agentcore/*` log group is intentionally empty) for the underlying STS error.
+
+Common causes:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `AccessDenied: not authorized to perform: sts:AssumeRole on resource: arn:...:role/DevOpsAgentReadOnly` | Trust policy on target role doesn't include the runtime account's role | Update `devops-agent-readonly-trust-policy.json` on the target account |
+| `AccessDenied: ExternalId does not match the expected value` | `AWS_ESTATES[<id>].externalId` in `.env` differs from the `sts:ExternalId` condition in the trust policy | Align the two; the value in the trust policy is the source of truth |
+| Estate not found at runtime (`aws_list_estates` doesn't return it) | `AWS_ESTATES` JSON didn't parse, or estate ID has uppercase/whitespace | Validate JSON locally; estate IDs must be lowercase alphanumeric with optional hyphens. Use `scripts/agentcore/test-env-construction.sh` to render the env before redeploying. |
+| `EC2 / S3 / Lambda` tool call returns `UnauthorizedOperation` or bare `AccessDenied` | Target role's inline policy missing the action | Review `scripts/agentcore/policies/devops-agent-readonly-policy.json`; S3 raises bare `AccessDenied` (no Exception suffix) — see reference |
+| `EXECUTION_ROLE_ARN does not exist` from `scripts/agentcore/deploy.sh` | The execution role wasn't pre-provisioned on the runtime account | Provision it per [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md); the deploy script intentionally fails fast |
 
 ---
 

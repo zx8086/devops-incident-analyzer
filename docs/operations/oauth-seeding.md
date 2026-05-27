@@ -2,7 +2,7 @@
 
 GitLab and Atlassian MCP both authenticate via OAuth 2.0 Dynamic Client Registration. The first time the proxy connects to a remote MCP endpoint it has no tokens, so the SDK requests authorization and the provider opens a browser. Once tokens land on disk at `~/.mcp-auth/<namespace>/<sanitized-mcp-url>.json` (mode 0o600), subsequent connects use the saved access token and refresh transparently when it expires.
 
-In non-interactive contexts -- the LangSmith eval pipeline, AgentCore deployments, headless CI runs -- there is no human to click the browser popup. SIO-685 was filed because that mismatch caused a popup loop: the popup fired, nobody clicked it, the token exchange never completed, the next request re-ran the full authorize flow, and so on.
+In non-interactive contexts -- the LangSmith eval pipeline, AgentCore deployments, headless CI runs -- there is no human to click the browser popup. was filed because that mismatch caused a popup loop: the popup fired, nobody clicked it, the token exchange never completed, the next request re-ran the full authorize flow, and so on.
 
 This guide covers seeding tokens once interactively so headless contexts can run cleanly.
 
@@ -44,7 +44,7 @@ cat ~/.mcp-auth/gitlab/https___gitlab.com.json | jq '.tokens | keys'
 # Expect: ["access_token","expires_in","refresh_token","scope","token_type"]
 
 cat ~/.mcp-auth/gitlab/https___gitlab.com.json | jq '.clientInformation.token_endpoint_auth_method'
-# Expect: "none"   (public client per RFC 8252; SIO-685)
+# Expect: "none"   (public client per RFC 8252;)
 
 stat -f "%OLp" ~/.mcp-auth/gitlab/https___gitlab.com.json
 # Expect: 600
@@ -79,9 +79,9 @@ bun run oauth:seed:gitlab
 
 | Symptom | Likely cause | Fix |
 |--------|-------------|----|
-| Browser popup fires every request | Tokens are present on disk but `clientInformation.token_endpoint_auth_method` mismatches the current code (e.g. legacy `client_secret_post` row from before SIO-685) | The base provider's stale-registration auto-discard handles this on next connect; if it doesn't, `rm ~/.mcp-auth/<service>/*.json` and re-seed |
+| Browser popup fires every request | Tokens are present on disk but `clientInformation.token_endpoint_auth_method` mismatches the current code (e.g. legacy `client_secret_post` row from before) | The base provider's stale-registration auto-discard handles this on next connect; if it doesn't, `rm ~/.mcp-auth/<service>/*.json` and re-seed |
 | `OAuthRequiresInteractiveAuthError` thrown from `redirectToAuthorization` | `MCP_OAUTH_HEADLESS=true` is set OR stdout is not a TTY (e.g. running under `tee`, `screen` without TTY) | Run the seed CLI directly in a real terminal -- it unsets the env. If running under `tee`, redirect after the seed completes |
-| Token exchange fails silently after the popup is clicked (file ends up with `clientInformation` + `codeVerifier` but no `tokens`) | DCR registered a public client but the provider sent `token_endpoint_auth_method: "client_secret_post"` (the SIO-685 root cause). Should not occur on current code | Confirm `clientMetadata.token_endpoint_auth_method === "none"` for the failing namespace; rebuild and re-seed |
+| Token exchange fails silently after the popup is clicked (file ends up with `clientInformation` + `codeVerifier` but no `tokens`) | DCR registered a public client but the provider sent `token_endpoint_auth_method: "client_secret_post"` (the root cause). Should not occur on current code | Confirm `clientMetadata.token_endpoint_auth_method === "none"` for the failing namespace; rebuild and re-seed |
 | `EADDRINUSE :9184` | Another seed CLI or MCP server is already listening on the callback port | Kill it (`lsof -i :9184` then `kill <pid>`) and re-seed; or override `GITLAB_OAUTH_CALLBACK_PORT` to a free port |
 
 ## Where this is implemented

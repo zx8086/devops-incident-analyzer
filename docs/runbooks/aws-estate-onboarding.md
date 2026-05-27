@@ -1,10 +1,6 @@
 # AWS Estate Onboarding (IAM Setup)
 
-**Audience:** IAM admins provisioning the AgentCore execution role + per-account `DevOpsAgentReadOnly` roles before the AWS MCP server is deployed.
-
-**Scope:** Set up cross-account read-only access for the AWS MCP runtime (SIO-828 multi-estate). Same model as the Kafka MCP server, except the AWS runtime additionally assumes a per-estate role in each monitored account to query AWS APIs on its behalf.
-
-**Source of truth for ARNs:** the JSON files in [`scripts/agentcore/policies/`](../../scripts/agentcore/policies/). Keep this runbook and those files in lock-step.
+**Scope:** Set up cross-account read-only access for the AWS MCP runtime. Same model as the Kafka MCP server, except the AWS runtime additionally assumes a per-estate role in each monitored account to query AWS APIs on its behalf.
 
 ---
 
@@ -57,13 +53,11 @@ The shared `ExternalId` value is `devops-agent-prod-access`. The trust policy in
 }
 ```
 
-Source: [`scripts/agentcore/policies/devops-agent-core-role-trust-policy.json`](../../scripts/agentcore/policies/devops-agent-core-role-trust-policy.json).
-
 ```bash
 aws iam create-role \
   --role-name DevOpsAgentCoreRole \
-  --assume-role-policy-document file://scripts/agentcore/policies/devops-agent-core-role-trust-policy.json \
-  --description "AgentCore runtime execution role for AWS MCP server (SIO-828)"
+  --assume-role-policy-document file://devops-agent-core-role-trust-policy.json \
+  --description "AgentCore runtime execution role for AWS MCP server"
 ```
 
 ### 1.2 Attach the inline permissions policy
@@ -77,7 +71,6 @@ Covers four things the runtime needs:
 3. **Wildcard AssumeRole on `DevOpsAgentReadOnly`** — convenience grant for any account that follows the naming convention. Onboarding a new monitored account doesn't require updating this policy.
 4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity for the current 6 monitored accounts.
 
-Source: [`scripts/agentcore/policies/devops-agent-core-assume-policy.json`](../../scripts/agentcore/policies/devops-agent-core-assume-policy.json).
 
 ```json
 {
@@ -130,18 +123,8 @@ Source: [`scripts/agentcore/policies/devops-agent-core-assume-policy.json`](../.
 aws iam put-role-policy \
   --role-name DevOpsAgentCoreRole \
   --policy-name DevOpsAgentCoreAssumePolicy \
-  --policy-document file://scripts/agentcore/policies/devops-agent-core-assume-policy.json
+  --policy-document file://devops-agent-core-assume-policy.json
 ```
-
-### 1.3 Use this role for the AgentCore runtime
-
-When deploying the AWS MCP server via `scripts/agentcore/deploy.sh`, set:
-
-```bash
-EXECUTION_ROLE_ARN=arn:aws:iam::399987695868:role/DevOpsAgentCoreRole
-```
-
-The deploy script pre-flights this role via `iam:GetRole` and refuses to proceed if it doesn't exist in the current account. It does NOT modify the role or its policies — that's owned by this runbook.
 
 ---
 
@@ -155,7 +138,6 @@ Repeat the steps below in **each** of the 6 monitored accounts. The role name, t
 
 Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentReadOnly` when it presents the matching `ExternalId`.
 
-Source: [`scripts/agentcore/policies/devops-agent-readonly-trust-policy.json`](../../scripts/agentcore/policies/devops-agent-readonly-trust-policy.json).
 
 ```json
 {
@@ -178,9 +160,7 @@ Source: [`scripts/agentcore/policies/devops-agent-readonly-trust-policy.json`](.
 
 ### 2.2 Permissions policy
 
-Read-only access across the AWS services the MCP server exposes (all 39 tools shipped in SIO-828). Includes the 4 extra actions surfaced during review: `s3:GetBucketPolicyStatus`, `states:ListStateMachines`, `states:DescribeStateMachine`, `config:ListDiscoveredResources`.
-
-Source: [`scripts/agentcore/policies/devops-agent-readonly-policy.json`](../../scripts/agentcore/policies/devops-agent-readonly-policy.json).
+Read-only access across the AWS services the MCP server exposes (all 39 tools shipped in). Includes the 4 extra actions surfaced during review: `s3:GetBucketPolicyStatus`, `states:ListStateMachines`, `states:DescribeStateMachine`, `config:ListDiscoveredResources`.
 
 ```json
 {
@@ -359,14 +339,14 @@ From a session authenticated **as the target monitored account** (not the AgentC
 # Create the role with the trust policy
 aws iam create-role \
   --role-name DevOpsAgentReadOnly \
-  --assume-role-policy-document file://scripts/agentcore/policies/devops-agent-readonly-trust-policy.json \
-  --description "Read-only access for the AWS MCP runtime in eu-shared-services-prd (SIO-828)"
+  --assume-role-policy-document file://devops-agent-readonly-trust-policy.json \
+  --description "Read-only access for the AWS MCP runtime in eu-shared-services-prd"
 
 # Attach the inline permissions policy
 aws iam put-role-policy \
   --role-name DevOpsAgentReadOnly \
   --policy-name DevOpsAgentReadOnlyPolicy \
-  --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json
+  --policy-document file://devops-agent-readonly-policy.json
 ```
 
 ### 2.4 Per-account checklist
@@ -384,7 +364,7 @@ For each of the 6 accounts:
 
 ## Part 3 — Verification
 
-### 3.1 Manual `AssumeRole` from the AgentCore account
+### Manual `AssumeRole` from the AgentCore account
 
 Run from a session authenticated as `DevOpsAgentCoreRole` in `399987695868` (e.g. by assuming the role with the AWS CLI):
 
@@ -405,16 +385,6 @@ A successful call returns `Credentials.AccessKeyId`, `SecretAccessKey`, `Session
 | `AccessDenied: ExternalId condition` | The target's trust policy expects a different ExternalId than `devops-agent-prod-access` |
 | `NoSuchEntity` | The target role hasn't been created yet (skip to Part 2 for that account) |
 
-### 3.2 Runtime smoke test
-
-After Parts 1 and 2 are complete in all accounts, deploy the AWS MCP runtime (see SIO-828 design spec) and run the smoke-test:
-
-```bash
-bun --env-file=.env packages/mcp-server-aws/scripts/smoke-test-agentcore.ts
-```
-
-This exercises the full path: SigV4 → AgentCore → runtime → `STSClient.AssumeRole` per estate → `CloudWatch.DescribeAlarms`. The script's `aws_list_estates` step reports per-estate health from the boot-time validator's cache — any estate that reports `ok: false` here has a misconfigured trust policy or missing IAM permission.
-
 ---
 
 ## Onboarding a new estate later
@@ -423,16 +393,6 @@ When a new monitored account is added:
 
 1. **In the new account:** repeat Part 2 (create `DevOpsAgentReadOnly` with the trust + permissions JSON files unchanged — they're parameter-free).
 2. **In the AgentCore account:** update `DevOpsAgentCoreAssumePolicy`'s `ExplicitAccountAssumeRoles` statement to include the new ARN. The wildcard statement (`arn:aws:iam::*:role/DevOpsAgentReadOnly`) already covers it, but the explicit list is kept for audit clarity. Use `aws iam put-role-policy` (overwrites the inline policy atomically).
-3. **In the runtime's env:** add the new estate to `AWS_ESTATES` and run `MCP_SERVER=aws ./scripts/agentcore/deploy.sh`. The deploy script's coverage check warns if the new estate ARN isn't yet in the inline policy.
-4. **Verify:** run the manual `sts:assume-role` check for the new account.
+3. **Verify:** run the manual `sts:assume-role` check for the new account.
 
 ---
-
-## Related references
-
-- **SIO-828 design spec:** `docs/superpowers/specs/2026-05-27-aws-multi-estate-design.md`
-- **Deploy script:** `scripts/agentcore/deploy.sh` (consumes `EXECUTION_ROLE_ARN` for `MCP_SERVER=aws`)
-- **Policy JSON sources:** `scripts/agentcore/policies/`
-- **Boot-time validator:** `packages/mcp-server-aws/src/services/estate-validator.ts`
-- **AWS MCP runtime config:** `packages/mcp-server-aws/src/config/schemas.ts`
-- **Troubleshooting runbook (for the agent, not operators):** `agents/incident-analyzer/knowledge/runbooks/aws-iam-permission-troubleshooting.md`

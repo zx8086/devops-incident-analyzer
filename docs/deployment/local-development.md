@@ -104,7 +104,7 @@ docker exec kafka /opt/kafka/bin/kafka-topics.sh \
 
 ## Option 1: Docker Compose
 
-Docker Compose starts all seven services (six MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
+Docker Compose starts all eight services (seven MCP servers + web frontend) with a single command. Health checks ensure the web frontend waits for all MCP servers to be ready before starting.
 
 ### Starting
 
@@ -128,9 +128,10 @@ docker compose up -d
 | Konnect MCP | `konnect-mcp` | 9083 | `http://localhost:9083/health` |
 | GitLab MCP | `gitlab-mcp` | 9084 | `http://localhost:9084/health` |
 | Atlassian MCP | `atlassian-mcp` | 9085 | `http://localhost:9085/health` |
+| AWS MCP (SigV4 proxy) | `aws-mcp` | 3001 | `http://localhost:3001/health` (proxy to AgentCore in non-local environments) |
 | Web Frontend | `agent-web` | 5173 | `http://localhost:5173` |
 
-All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all six MCP servers to report healthy before starting. Health checks use:
+All MCP servers expose health checks. The `agent-web` service has `depends_on` conditions that wait for all seven MCP servers to report healthy before starting. Health checks use:
 
 ```bash
 bun --eval "fetch('http://localhost:PORT/health').then(r => { if (!r.ok) process.exit(1) })"
@@ -238,7 +239,7 @@ ATLASSIAN_MCP_URL=http://localhost:9085
 ATLASSIAN_UPSTREAM_MCP_URL=https://mcp.atlassian.com/v1/mcp
 ```
 
-SIO-766: `ATLASSIAN_MCP_URL` is the local proxy the agent connects to (consistent with every other datasource). `ATLASSIAN_UPSTREAM_MCP_URL` is the Atlassian Cloud Rovo endpoint the local proxy forwards to — set in the mcp-server-atlassian package's config.
+`ATLASSIAN_MCP_URL` is the local proxy the agent connects to (consistent with every other datasource). `ATLASSIAN_UPSTREAM_MCP_URL` is the Atlassian Cloud Rovo endpoint the local proxy forwards to — set in the mcp-server-atlassian package's config.
 
 ---
 

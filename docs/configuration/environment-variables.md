@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-05-10
+> **Last updated:** 2026-05-28
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -40,6 +40,44 @@ The agent uses Bedrock for Claude model inference. Ensure your IAM user has `bed
 
 ---
 
+## AWS MCP — Multi-Estate
+
+The AWS MCP server (`packages/mcp-server-aws`) serves N target AWS accounts ("estates") from a single runtime. The agent's `awsEstateRouter` node expands a single AWS dispatch into one `Send` per configured estate, and the runtime calls `sts:AssumeRole` per-estate at boot.
+
+### Estate registry
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AWS_ESTATES` | Yes (for AWS datasource) | -- | One-line JSON map: `{ "<estate-id>": { "assumedRoleArn": "...", "externalId": "..." }, ... }`. Estate IDs must be lowercase alphanumeric with optional hyphens. The `externalId` is required by the trust policy on each target account's role (confused-deputy protection). See `.env.example` for canonical multi-estate format. |
+| `AWS_DEFAULT_ESTATE` | No | First key in `AWS_ESTATES` | Default estate when a tool call omits the `estate` argument. |
+
+Per-estate `AssumeRole` failures do **not** block startup (4-pillar pattern): the runtime always boots and reports per-estate health via the `aws_list_estates` MCP tool. Calls against a degraded estate surface `AccessDenied` at call time.
+
+### AgentCore runtime
+
+The AWS MCP server runs in AWS Bedrock AgentCore Runtime in production; locally it runs behind a SigV4-signed proxy.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent connects to. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. |
+| `AWS_AGENTCORE_RUNTIME_ARN` | Yes (production) | -- | `arn:aws:bedrock-agentcore:<region>:<account>:runtime/aws_mcp_server-XXXXX`. Set by `scripts/agentcore/deploy.sh` output. |
+| `AWS_AGENTCORE_REGION` | Yes (production) | -- | Region of the AgentCore runtime (commonly `eu-central-1`). |
+| `AWS_AGENTCORE_PROXY_PORT` | No | `3001` | Local port the SigV4 proxy listens on. Must match `AWS_MCP_URL`. |
+| `AWS_AGENTCORE_AWS_PROFILE` | No | -- | AWS CLI profile used by the local proxy to sign requests. Mutually exclusive with explicit creds below. |
+| `AWS_AGENTCORE_AWS_ACCESS_KEY_ID` / `AWS_AGENTCORE_AWS_SECRET_ACCESS_KEY` | No | -- | Explicit creds for the proxy when no profile is configured. |
+
+### AgentCore deployment
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `EXECUTION_ROLE_ARN` | Yes (for `scripts/agentcore/deploy.sh MCP_SERVER=aws`) | -- | Pre-existing IAM role in the AgentCore account that carries the inline `DevOpsAgentCoreAssumePolicy`. The deploy script pre-flights with `iam:GetRole`; it does **not** create the role. Provisioning is documented in [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
+
+**Migration from legacy singletons:** `AWS_ASSUMED_ROLE_ARN` and `AWS_EXTERNAL_ID` are removed. Move them into `AWS_ESTATES`. The generic `AGENTCORE_*` vars (without server prefix) are also no longer honored — use `AWS_AGENTCORE_*` (and `KAFKA_AGENTCORE_*` for Kafka, etc.) per.
+
+See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md) for the full account-onboarding procedure (IAM role + trust policy + ExternalId + deploy).
+
+---
+
 ## LangSmith
 
 LangSmith provides tracing, feedback collection, and evaluation for the agent pipeline and individual MCP servers.
@@ -55,7 +93,8 @@ LangSmith provides tracing, feedback collection, and evaluation for the agent pi
 | `KONNECT_LANGSMITH_PROJECT` | No | `konnect-mcp-server` | LangSmith project for Kong Konnect MCP server traces |
 | `GITLAB_LANGSMITH_PROJECT` | No | `gitlab-mcp-server` | LangSmith project for GitLab MCP server traces |
 | `ATLASSIAN_LANGSMITH_PROJECT` | No | `atlassian-mcp-server` | LangSmith project for Atlassian MCP server traces |
-| `OPENAI_API_KEY` | Yes (for `eval:agent` only) | -- | gpt-4o-mini API key used by the `response_quality` LLM judge in the LangSmith eval pipeline (`packages/agent/src/eval/`). Not required for normal agent operation; only needed when running `bun run eval:agent`. SIO-680/682. |
+| `AWS_LANGSMITH_PROJECT` | No | `aws-mcp-server` | LangSmith project for AWS MCP server traces |
+| `OPENAI_API_KEY` | Yes (for `eval:agent` only) | -- | gpt-4o-mini API key used by the `response_quality` LLM judge in the LangSmith eval pipeline (`packages/agent/src/eval/`). Not required for normal agent operation; only needed when running `bun run eval:agent`./682. |
 
 Each MCP server writes traces to its own LangSmith project. This allows per-server dashboards while the main agent project captures the orchestration layer. Set `LANGSMITH_TRACING=false` to disable all tracing (useful for local development without a LangSmith account).
 
@@ -72,7 +111,7 @@ Deployments are defined by a comma-separated list of deployment IDs. Each deploy
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ELASTIC_DEPLOYMENTS` | Yes | -- | Comma-separated deployment IDs (e.g., `eu-cld,us-cld`) |
-| `ELASTIC_DEFAULT_DEPLOYMENT` | No | First ID in `ELASTIC_DEPLOYMENTS` | Deployment used when a tool call omits the `deployment` arg and no `x-elastic-deployment` HTTP header is present (SIO-675). Must match an ID in `ELASTIC_DEPLOYMENTS`. |
+| `ELASTIC_DEFAULT_DEPLOYMENT` | No | First ID in `ELASTIC_DEPLOYMENTS` | Deployment used when a tool call omits the `deployment` arg and no `x-elastic-deployment` HTTP header is present. Must match an ID in `ELASTIC_DEPLOYMENTS`. |
 
 For each deployment ID (referred to as `{ID}` below), provide one of two authentication methods:
 
@@ -103,16 +142,16 @@ ELASTIC_US_CLD_API_KEY=your-us-cld-api-key
 
 If `ELASTIC_DEPLOYMENTS` is unset, the server falls back to legacy single-deployment mode using `ES_URL`, `ES_API_KEY`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CA_CERT`.
 
-### Per-Call Search Timeout (SIO-708)
+### Per-Call Search Timeout
 
 The `elasticsearch_search` tool uses a separate per-call timeout from the shared client `requestTimeout`. Defaults are conservative for heavy aggregations on multi-billion-doc indices. See [Troubleshooting > Elasticsearch Search Times Out at ~30 Seconds](../operations/troubleshooting.md#elasticsearch-search-times-out-at-30-seconds-sio-708) for the failure mode this addresses.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` | No | `60000` | Per-call transport timeout for `elasticsearch_search`, in ms. Independent of the shared client `requestTimeout` (also raised — schema cap is now 120 000 ms, was 60 000 before SIO-708). |
+| `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` | No | `60000` | Per-call transport timeout for `elasticsearch_search`, in ms. Independent of the shared client `requestTimeout` (also raised — schema cap is now 120 000 ms, was 60 000 before). |
 | `ELASTIC_SEARCH_MAX_RETRIES` | No | `0` | Per-call retry count for `elasticsearch_search`. Default `0` so transient transport errors fail fast rather than stacking 30 s timeouts. |
 
-### Elastic Cloud Deployment + Billing API (SIO-674)
+### Elastic Cloud Deployment + Billing API
 
 These variables enable the 7 organization-scoped tools (`elasticsearch_cloud_*` and `elasticsearch_billing_*`) that talk to `https://api.elastic-cloud.com`. They are **independent** of the per-deployment cluster API keys above and use a separate Elastic Cloud organization API key. When `EC_API_KEY` is unset, those 7 tools simply do not register and the server boots normally for self-hosted users.
 
@@ -170,7 +209,7 @@ Either `MSK_BOOTSTRAP_BROKERS` or `MSK_CLUSTER_ARN` must be set when `KAFKA_PROV
 
 ### Feature Gates
 
-Feature gates control which tool categories are available. All default to `false` for safety. After SIO-682, `KAFKA_ALLOW_WRITES` and `KAFKA_ALLOW_DESTRUCTIVE` gate not just core Kafka writes but also Confluent Connect, Schema Registry, and REST Proxy write/destructive tools registered through the same MCP server.
+Feature gates control which tool categories are available. All default to `false` for safety. After, `KAFKA_ALLOW_WRITES` and `KAFKA_ALLOW_DESTRUCTIVE` gate not just core Kafka writes but also Confluent Connect, Schema Registry, and REST Proxy write/destructive tools registered through the same MCP server.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -184,11 +223,11 @@ Setting `KAFKA_ALLOW_DESTRUCTIVE=true` requires `KAFKA_ALLOW_WRITES=true` as wel
 
 Tool count grows with the gating and which Confluent components are enabled. Bare `KAFKA_PROVIDER=msk` registers 15 tools; full Confluent stack (`SCHEMA_REGISTRY_ENABLED + KSQL_ENABLED + CONNECT_ENABLED + RESTPROXY_ENABLED + KAFKA_ALLOW_WRITES + KAFKA_ALLOW_DESTRUCTIVE`) registers 55. See `packages/mcp-server-kafka/tests/tools/full-stack-tools.test.ts` for the asserted-correct formula.
 
-### Tool Timeouts (SIO-710)
+### Tool Timeouts
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KAFKA_TOOL_TIMEOUT_MS` | No | `30000` | Per-tool admin RPC timeout in ms, mapped to the `@platformatic/kafka` library option `timeout` (the library's own default is 5 000 ms, which trips on first-call MSK warmup). Provider-supplied timeouts still win — for example, the MSK provider's 60 s override is preserved on top of this value. The pre-SIO-710 config option `requestTimeout` was a no-op (the underlying schema is `additionalProperties: false`); it has been renamed to `timeout` to match the library and is now correctly threaded through. |
+| `KAFKA_TOOL_TIMEOUT_MS` | No | `30000` | Per-tool admin RPC timeout in ms, mapped to the `@platformatic/kafka` library option `timeout` (the library's own default is 5 000 ms, which trips on first-call MSK warmup). Provider-supplied timeouts still win — for example, the MSK provider's 60 s override is preserved on top of this value. The pre- config option `requestTimeout` was a no-op (the underlying schema is `additionalProperties: false`); it has been renamed to `timeout` to match the library and is now correctly threaded through. |
 
 ### Confluent Connect
 
@@ -199,7 +238,7 @@ Tool count grows with the gating and which Confluent components are enabled. Bar
 | `CONNECT_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth Connect deployments. Set for Confluent Cloud. |
 | `CONNECT_API_SECRET` | No | -- | Basic auth secret paired with `CONNECT_API_KEY`. |
 
-### Confluent REST Proxy (SIO-682)
+### Confluent REST Proxy
 
 REST Proxy v2 integration provides HTTP-fronted produce/consume in addition to the broker-level kafka tools. Useful when AgentCore can reach an HTTP endpoint but not the broker port directly. PVH's REST Proxy lives on a public ALB (separate from the internal ALB used by ksqlDB / Schema Registry / Connect).
 
@@ -216,7 +255,7 @@ The 3 metadata reads (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SCHEMA_REGISTRY_ENABLED` | No | `false` | Register Schema Registry tools (8 reads always-on; 7 SIO-682 writes/destructives additionally gated below) |
+| `SCHEMA_REGISTRY_ENABLED` | No | `false` | Register Schema Registry tools (8 reads always-on; 7 writes/destructives additionally gated below) |
 | `SCHEMA_REGISTRY_URL` | Conditional | `http://localhost:8081` | Required when `SCHEMA_REGISTRY_ENABLED=true`. SR base URL. |
 | `SCHEMA_REGISTRY_API_KEY` | No | -- | Basic auth key. Leave empty for self-hosted no-auth deployments. |
 | `SCHEMA_REGISTRY_API_SECRET` | No | -- | Basic auth secret paired with `SCHEMA_REGISTRY_API_KEY`. |
@@ -314,8 +353,8 @@ Settings for the LangGraph supervisor agent, including model selection and state
 | `AGENT_LLM_HAIKU_MODEL` | No | `claude-haiku-4-5` | Fast model for classifier and entity extractor nodes |
 | `AGENT_LLM_REGION` | No | `eu-west-1` | AWS region for Bedrock model inference |
 | `AGENT_CHECKPOINTER_TYPE` | No | `memory` | State persistence backend: `memory` or `sqlite` |
-| `GRAPH_TIMEOUT_MS` | No | `720000` | Graph-level abort signal in ms (SIO-697). Overrides the `runtime.timeout` value in `agents/incident-analyzer/agent.yaml` when set. Default `720000` (12 min) gives a 5-source dispatch plus one alignment retry full runway instead of aborting the in-flight retry sub-agent. |
-| `SUB_AGENT_TIMEOUT_MS` | No | `360000` | Per-sub-agent `AbortSignal.timeout` in ms (SIO-697). Replaces the previously hardcoded 300 000. Caps any single sub-agent ReAct loop. Tightening this is useful when you want the alignment retry to start sooner; loosening it helps deep-discovery agents that legitimately need more than 6 minutes. |
+| `GRAPH_TIMEOUT_MS` | No | `720000` | Graph-level abort signal in ms. Overrides the `runtime.timeout` value in `agents/incident-analyzer/agent.yaml` when set. Default `720000` (12 min) gives a 5-source dispatch plus one alignment retry full runway instead of aborting the in-flight retry sub-agent. |
+| `SUB_AGENT_TIMEOUT_MS` | No | `360000` | Per-sub-agent `AbortSignal.timeout` in ms. Replaces the previously hardcoded 300 000. Caps any single sub-agent ReAct loop. Tightening this is useful when you want the alignment retry to start sooner; loosening it helps deep-discovery agents that legitimately need more than 6 minutes. |
 
 The agent uses two model tiers. The primary model handles complex reasoning tasks (supervision, aggregation, validation). The fast model handles classification and entity extraction where latency matters more than depth. Both models are accessed through AWS Bedrock.
 
@@ -335,6 +374,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
 | `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
+| `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate-sio-828) for the full AgentCore configuration. |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
@@ -367,8 +407,9 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 |------|--------|
 | 2026-04-04 | Initial environment variables reference created (Phase 3: Configuration + Deployment) |
 | 2026-04-09 | Fixed MCP server URL port defaults to match standardized ports (9080-9083) |
-| 2026-04-13 | Added GitLab MCP server env vars (SIO-647), added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |
+| 2026-04-13 | Added GitLab MCP server env vars, added GITLAB_MCP_URL and GITLAB_LANGSMITH_PROJECT |
 | 2026-04-23 | Added Atlassian MCP server env vars (ATLASSIAN_SITE_NAME, ATLASSIAN_MCP_URL upstream, ATLASSIAN_MCP_URL_LOCAL, ATLASSIAN_OAUTH_CALLBACK_PORT, ATLASSIAN_READ_ONLY, ATLASSIAN_INCIDENT_PROJECTS, ATLASSIAN_TIMEOUT, ATLASSIAN_MCP_PORT, ATLASSIAN_LANGSMITH_PROJECT) |
-| 2026-05-08 | SIO-682: added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
-| 2026-05-10 | SIO-708 / SIO-710 / SIO-697 post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
-| 2026-05-16 | SIO-766: collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |
+| 2026-05-08 | added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
+| 2026-05-10 | post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
+| 2026-05-16 | collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |
+| 2026-05-28 | docs drift sweep: added new "AWS MCP — Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for ��826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |
