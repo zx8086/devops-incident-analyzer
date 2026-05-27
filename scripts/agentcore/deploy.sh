@@ -393,7 +393,13 @@ echo ""
 echo "[4/5] Creating AgentCore Runtime..."
 
 # Build environment variables based on server type
-ENV_VARS="AWS_REGION=${AWS_REGION}"
+# SIO-828: AgentCore deployment env. Previously baked into Dockerfile.agentcore
+# (violating 4-pillar -- per-deployment values belonged in config, not the
+# image). The Zod schema now carries the library defaults (stdio / 9085); the
+# deploy script supplies the AgentCore overrides explicitly so the same image
+# can run under any transport.
+ENV_VARS="MCP_TRANSPORT=agentcore,MCP_PORT=8000"
+ENV_VARS="${ENV_VARS},AWS_REGION=${AWS_REGION}"
 case "${MCP_SERVER}" in
   kafka)
     ENV_VARS="${ENV_VARS},KAFKA_PROVIDER=${KAFKA_PROVIDER}"
