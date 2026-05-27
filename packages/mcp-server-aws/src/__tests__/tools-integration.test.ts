@@ -122,7 +122,11 @@ describe("xray integration", () => {
 		});
 
 		const handler = getTraceSummaries(config);
-		const result = (await handler({ estate: E, StartTime: "2026-01-01T00:00:00Z", EndTime: "2026-01-01T01:00:00Z" })) as {
+		const result = (await handler({
+			estate: E,
+			StartTime: "2026-01-01T00:00:00Z",
+			EndTime: "2026-01-01T01:00:00Z",
+		})) as {
 			TraceSummaries: unknown[];
 		};
 		expect(result.TraceSummaries).toHaveLength(1);

@@ -6,6 +6,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { END, Send, StateGraph } from "@langchain/langgraph";
 import { aggregate } from "./aggregator.ts";
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
+import { awsEstateRouter } from "./aws-estate-router.ts";
 import { classify } from "./classifier.ts";
 import { checkConfidence } from "./confidence-gate.ts";
 import {
@@ -14,7 +15,6 @@ import {
 	enforceCorrelationsRouter,
 } from "./correlation/enforce-node.ts";
 import { extractEntities } from "./entity-extractor.ts";
-import { awsEstateRouter } from "./aws-estate-router.ts";
 import { extractFindings } from "./extract-findings.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { initializeLangSmith } from "./langsmith.ts";

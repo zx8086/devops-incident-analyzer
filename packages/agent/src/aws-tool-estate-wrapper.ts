@@ -5,7 +5,7 @@
 // it at .invoke() time from AsyncLocalStorage (set by withAwsEstate).
 
 import { getLogger } from "@devops-agent/observability";
-import { type StructuredToolInterface, tool as createTool } from "@langchain/core/tools";
+import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import { currentAwsEstate } from "./mcp-bridge.ts";
 

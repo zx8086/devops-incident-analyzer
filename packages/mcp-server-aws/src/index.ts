@@ -103,10 +103,7 @@ if (import.meta.main) {
 								"Estate validation OK",
 							);
 						} else {
-							logger.error(
-								{ estate: r.estate, error: r.error, durationMs: r.durationMs },
-								"Estate validation FAILED",
-							);
+							logger.error({ estate: r.estate, error: r.error, durationMs: r.durationMs }, "Estate validation FAILED");
 						}
 					}
 					if (failed.length > 0) {

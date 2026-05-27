@@ -1,12 +1,12 @@
 // src/tools/ecs/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeServices, type DescribeServicesParams, describeServicesSchema } from "./describe-services.ts";
-import { describeTasks, type DescribeTasksParams, describeTasksSchema } from "./describe-tasks.ts";
-import { listClusters, type ListClustersParams, listClustersSchema } from "./list-clusters.ts";
-import { listTasks, type ListTasksParams, listTasksSchema } from "./list-tasks.ts";
+import { toMcp } from "../wrap.ts";
+import { type DescribeServicesParams, describeServices, describeServicesSchema } from "./describe-services.ts";
+import { type DescribeTasksParams, describeTasks, describeTasksSchema } from "./describe-tasks.ts";
+import { type ListClustersParams, listClusters, listClustersSchema } from "./list-clusters.ts";
+import { type ListTasksParams, listTasks, listTasksSchema } from "./list-tasks.ts";
 
 export function registerEcsTools(server: McpServer, config: AwsConfig): void {
 	const clusters = listClusters(config);

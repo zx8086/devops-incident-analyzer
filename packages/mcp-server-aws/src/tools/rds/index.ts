@@ -1,10 +1,14 @@
 // src/tools/rds/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeDbClusters, type DescribeDbClustersParams, describeDbClustersSchema } from "./describe-db-clusters.ts";
-import { describeDbInstances, type DescribeDbInstancesParams, describeDbInstancesSchema } from "./describe-db-instances.ts";
+import { toMcp } from "../wrap.ts";
+import { type DescribeDbClustersParams, describeDbClusters, describeDbClustersSchema } from "./describe-db-clusters.ts";
+import {
+	type DescribeDbInstancesParams,
+	describeDbInstances,
+	describeDbInstancesSchema,
+} from "./describe-db-instances.ts";
 
 export function registerRdsTools(server: McpServer, config: AwsConfig): void {
 	const dbInstances = describeDbInstances(config);

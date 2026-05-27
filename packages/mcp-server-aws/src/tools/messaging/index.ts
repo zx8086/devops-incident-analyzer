@@ -1,20 +1,35 @@
 // src/tools/messaging/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeRule, type DescribeRuleParams, describeRuleSchema } from "./eventbridge/describe-rule.ts";
-import { listRules, type ListRulesParams, listRulesSchema } from "./eventbridge/list-rules.ts";
-import { getTopicAttributes, type GetTopicAttributesParams, getTopicAttributesSchema } from "./sns/get-topic-attributes.ts";
-import { listTopics, type ListTopicsParams, listTopicsSchema } from "./sns/list-topics.ts";
-import { getQueueAttributes, type GetQueueAttributesParams, getQueueAttributesSchema } from "./sqs/get-queue-attributes.ts";
-import { listQueues, type ListQueuesParams, listQueuesSchema } from "./sqs/list-queues.ts";
-import { listStateMachines, type ListStateMachinesParams, listStateMachinesSchema } from "./stepfunctions/list-state-machines.ts";
+import { toMcp } from "../wrap.ts";
+import { type DescribeRuleParams, describeRule, describeRuleSchema } from "./eventbridge/describe-rule.ts";
+import { type ListRulesParams, listRules, listRulesSchema } from "./eventbridge/list-rules.ts";
+import {
+	type GetTopicAttributesParams,
+	getTopicAttributes,
+	getTopicAttributesSchema,
+} from "./sns/get-topic-attributes.ts";
+import { type ListTopicsParams, listTopics, listTopicsSchema } from "./sns/list-topics.ts";
+import {
+	type GetQueueAttributesParams,
+	getQueueAttributes,
+	getQueueAttributesSchema,
+} from "./sqs/get-queue-attributes.ts";
+import { type ListQueuesParams, listQueues, listQueuesSchema } from "./sqs/list-queues.ts";
+import {
+	type ListStateMachinesParams,
+	listStateMachines,
+	listStateMachinesSchema,
+} from "./stepfunctions/list-state-machines.ts";
 
 export function registerMessagingTools(server: McpServer, config: AwsConfig): void {
 	const topics = listTopics(config);
-	server.tool("aws_sns_list_topics", "List SNS topic ARNs in the account.", withEstate(config, listTopicsSchema.shape), async (params) =>
-		toMcp(await topics(params as ListTopicsParams)),
+	server.tool(
+		"aws_sns_list_topics",
+		"List SNS topic ARNs in the account.",
+		withEstate(config, listTopicsSchema.shape),
+		async (params) => toMcp(await topics(params as ListTopicsParams)),
 	);
 
 	const topicAttributes = getTopicAttributes(config);

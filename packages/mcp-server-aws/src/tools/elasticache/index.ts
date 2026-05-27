@@ -1,10 +1,18 @@
 // src/tools/elasticache/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeCacheClusters, type DescribeCacheClustersParams, describeCacheClustersSchema } from "./describe-cache-clusters.ts";
-import { describeReplicationGroups, type DescribeReplicationGroupsParams, describeReplicationGroupsSchema } from "./describe-replication-groups.ts";
+import { toMcp } from "../wrap.ts";
+import {
+	type DescribeCacheClustersParams,
+	describeCacheClusters,
+	describeCacheClustersSchema,
+} from "./describe-cache-clusters.ts";
+import {
+	type DescribeReplicationGroupsParams,
+	describeReplicationGroups,
+	describeReplicationGroupsSchema,
+} from "./describe-replication-groups.ts";
 
 export function registerElastiCacheTools(server: McpServer, config: AwsConfig): void {
 	const cacheClusters = describeCacheClusters(config);

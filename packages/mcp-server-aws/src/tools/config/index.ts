@@ -1,10 +1,18 @@
 // src/tools/config/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeConfigRules, type DescribeConfigRulesParams, describeConfigRulesSchema } from "./describe-config-rules.ts";
-import { listDiscoveredResources, type ListDiscoveredResourcesParams, listDiscoveredResourcesSchema } from "./list-discovered-resources.ts";
+import { toMcp } from "../wrap.ts";
+import {
+	type DescribeConfigRulesParams,
+	describeConfigRules,
+	describeConfigRulesSchema,
+} from "./describe-config-rules.ts";
+import {
+	type ListDiscoveredResourcesParams,
+	listDiscoveredResources,
+	listDiscoveredResourcesSchema,
+} from "./list-discovered-resources.ts";
 
 export function registerConfigTools(server: McpServer, config: AwsConfig): void {
 	const configRules = describeConfigRules(config);

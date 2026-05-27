@@ -3,8 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { withEstate } from "../estate-schema.ts";
 import { toMcp } from "../wrap.ts";
-import { describeAlarms, type DescribeAlarmsParams, describeAlarmsSchema } from "./describe-alarms.ts";
-import { getMetricData, type GetMetricDataParams, getMetricDataSchema } from "./get-metric-data.ts";
+import { type DescribeAlarmsParams, describeAlarms, describeAlarmsSchema } from "./describe-alarms.ts";
+import { type GetMetricDataParams, getMetricData, getMetricDataSchema } from "./get-metric-data.ts";
 
 export function registerCloudWatchTools(server: McpServer, config: AwsConfig): void {
 	const metricData = getMetricData(config);

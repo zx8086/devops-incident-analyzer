@@ -1,10 +1,10 @@
 // src/tools/xray/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { getServiceGraph, type GetServiceGraphParams, getServiceGraphSchema } from "./get-service-graph.ts";
-import { getTraceSummaries, type GetTraceSummariesParams, getTraceSummariesSchema } from "./get-trace-summaries.ts";
+import { toMcp } from "../wrap.ts";
+import { type GetServiceGraphParams, getServiceGraph, getServiceGraphSchema } from "./get-service-graph.ts";
+import { type GetTraceSummariesParams, getTraceSummaries, getTraceSummariesSchema } from "./get-trace-summaries.ts";
 
 export function registerXrayTools(server: McpServer, config: AwsConfig): void {
 	const serviceGraph = getServiceGraph(config);

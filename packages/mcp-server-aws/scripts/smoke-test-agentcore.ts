@@ -126,7 +126,9 @@ async function main() {
 		if (alarmsText?.includes("_error")) {
 			console.log("\n[smoke] FAIL: tool returned a structured error -- check AssumeRole/IAM");
 		} else {
-			console.log(`\n[smoke] PASS: end-to-end SigV4 -> proxy -> runtime -> AssumeRole(${firstEstate}) -> CloudWatch worked`);
+			console.log(
+				`\n[smoke] PASS: end-to-end SigV4 -> proxy -> runtime -> AssumeRole(${firstEstate}) -> CloudWatch worked`,
+			);
 		}
 	} finally {
 		console.log("\n[smoke] stopping proxy...");

@@ -1,11 +1,15 @@
 // src/tools/cloudformation/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeStackEvents, type DescribeStackEventsParams, describeStackEventsSchema } from "./describe-stack-events.ts";
-import { describeStacks, type DescribeStacksParams, describeStacksSchema } from "./describe-stacks.ts";
-import { listStacks, type ListStacksParams, listStacksSchema } from "./list-stacks.ts";
+import { toMcp } from "../wrap.ts";
+import {
+	type DescribeStackEventsParams,
+	describeStackEvents,
+	describeStackEventsSchema,
+} from "./describe-stack-events.ts";
+import { type DescribeStacksParams, describeStacks, describeStacksSchema } from "./describe-stacks.ts";
+import { type ListStacksParams, listStacks, listStacksSchema } from "./list-stacks.ts";
 
 export function registerCloudFormationTools(server: McpServer, config: AwsConfig): void {
 	const stacks = listStacks(config);

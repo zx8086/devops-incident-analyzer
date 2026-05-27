@@ -1,11 +1,15 @@
 // src/tools/ec2/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { describeInstances, type DescribeInstancesParams, describeInstancesSchema } from "./describe-instances.ts";
-import { describeSecurityGroups, type DescribeSecurityGroupsParams, describeSecurityGroupsSchema } from "./describe-security-groups.ts";
-import { describeVpcs, type DescribeVpcsParams, describeVpcsSchema } from "./describe-vpcs.ts";
+import { toMcp } from "../wrap.ts";
+import { type DescribeInstancesParams, describeInstances, describeInstancesSchema } from "./describe-instances.ts";
+import {
+	type DescribeSecurityGroupsParams,
+	describeSecurityGroups,
+	describeSecurityGroupsSchema,
+} from "./describe-security-groups.ts";
+import { type DescribeVpcsParams, describeVpcs, describeVpcsSchema } from "./describe-vpcs.ts";
 
 export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 	const vpcs = describeVpcs(config);

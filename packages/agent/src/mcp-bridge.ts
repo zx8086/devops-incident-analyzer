@@ -319,7 +319,8 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 	// schema-strip is idempotent for it (delete on missing key is a no-op).
 	if (dataSourceId === "aws") {
 		// Lazy import avoids a cycle (the wrapper imports currentAwsEstate from here).
-		const { wrapAwsToolsWithEstate } = require("./aws-tool-estate-wrapper.ts") as typeof import("./aws-tool-estate-wrapper.ts");
+		const { wrapAwsToolsWithEstate } =
+			require("./aws-tool-estate-wrapper.ts") as typeof import("./aws-tool-estate-wrapper.ts");
 		return wrapAwsToolsWithEstate(raw);
 	}
 

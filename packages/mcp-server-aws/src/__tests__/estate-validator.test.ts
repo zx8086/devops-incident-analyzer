@@ -17,10 +17,7 @@ function makeConfig(estateCount: number): AwsConfig {
 	for (let i = 0; i < estateCount; i++) {
 		const id = ["dev", "staging", "prod"][i] ?? `extra${i}`;
 		estates[id] = {
-			assumedRoleArn: `arn:aws:iam::${`${i}`.repeat(12)}:role/DevOpsAgentReadOnly`.replace(
-				/0{12}/,
-				"123456789012",
-			),
+			assumedRoleArn: `arn:aws:iam::${`${i}`.repeat(12)}:role/DevOpsAgentReadOnly`.replace(/0{12}/, "123456789012"),
 			externalId: `id-${id}`,
 		};
 	}

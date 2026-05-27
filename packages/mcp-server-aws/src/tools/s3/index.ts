@@ -1,11 +1,15 @@
 // src/tools/s3/index.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
-import { toMcp } from "../wrap.ts";
 import { withEstate } from "../estate-schema.ts";
-import { getBucketLocation, type GetBucketLocationParams, getBucketLocationSchema } from "./get-bucket-location.ts";
-import { getBucketPolicyStatus, type GetBucketPolicyStatusParams, getBucketPolicyStatusSchema } from "./get-bucket-policy-status.ts";
-import { listBuckets, type ListBucketsParams, listBucketsSchema } from "./list-buckets.ts";
+import { toMcp } from "../wrap.ts";
+import { type GetBucketLocationParams, getBucketLocation, getBucketLocationSchema } from "./get-bucket-location.ts";
+import {
+	type GetBucketPolicyStatusParams,
+	getBucketPolicyStatus,
+	getBucketPolicyStatusSchema,
+} from "./get-bucket-policy-status.ts";
+import { type ListBucketsParams, listBuckets, listBucketsSchema } from "./list-buckets.ts";
 
 export function registerS3Tools(server: McpServer, config: AwsConfig): void {
 	const buckets = listBuckets(config);
