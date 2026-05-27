@@ -81,44 +81,36 @@ if (import.meta.main) {
 					"Starting AWS MCP Server",
 				);
 
-				// SIO-828: validate each estate's AssumeRole chain before serving any
-				// requests. Fail-closed on any failure -- a partially-working runtime
-				// (prod-OK, dev-FAILED) would make the agent fan-out silently skip
-				// dev with "no results" errors that take hours to diagnose.
-				// Escape hatch SKIP_ESTATE_VALIDATION is honored ONLY when the
-				// transport mode isn't agentcore (where boot-time validation is
-				// non-negotiable).
-				if (config.skipEstateValidation && config.transport.mode !== "agentcore") {
+				// SIO-828: validate each estate's AssumeRole chain at boot. 4-pillar
+				// pattern -- the runtime always starts; partial degradation is
+				// reported, never enforced. Failed estates surface AccessDenied at
+				// first tool call (existing behavior) and a prominent banner log
+				// line here. Health map is queryable via aws_list_estates.
+				const results = await validateEstates(config.aws);
+				const failed = results.filter((r) => !r.ok);
+				const ok = results.filter((r) => r.ok);
+				for (const r of ok) {
+					logger.info({ estate: r.estate, assumedArn: r.assumedArn, durationMs: r.durationMs }, "Estate validation OK");
+				}
+				for (const r of failed) {
 					logger.warn(
-						{ transport: config.transport.mode },
-						"SKIP_ESTATE_VALIDATION=true -- skipping boot-time estate validation (dev only)",
+						{ estate: r.estate, error: r.error, durationMs: r.durationMs },
+						"Estate validation FAILED -- runtime will still start; tool calls against this estate will surface AccessDenied",
+					);
+				}
+				if (failed.length > 0) {
+					logger.warn(
+						{
+							degradedEstateCount: failed.length,
+							totalEstateCount: results.length,
+							degradedEstates: failed.map((r) => r.estate),
+						},
+						`Starting with ${failed.length}/${results.length} estate(s) DEGRADED -- see aws_list_estates for per-estate status`,
 					);
 				} else {
-					const results = await validateEstates(config.aws);
-					const failed = results.filter((r) => !r.ok);
-					for (const r of results) {
-						if (r.ok) {
-							logger.info(
-								{ estate: r.estate, assumedArn: r.assumedArn, durationMs: r.durationMs },
-								"Estate validation OK",
-							);
-						} else {
-							logger.error({ estate: r.estate, error: r.error, durationMs: r.durationMs }, "Estate validation FAILED");
-						}
-					}
-					if (failed.length > 0) {
-						const summary = failed.map((r) => `  - ${r.estate}: ${r.error}`).join("\n");
-						throw new Error(
-							`Refusing to start: ${failed.length}/${results.length} estate(s) failed STS:AssumeRole check.\n${summary}\n` +
-								"Check that each estate's DevOpsAgentReadOnly trust policy lists the runtime's execution role as a Principal.",
-						);
-					}
 					logger.info(
-						{
-							estateCount: results.length,
-							slowestMs: Math.max(...results.map((r) => r.durationMs)),
-						},
-						"All estates validated",
+						{ estateCount: results.length, slowestMs: Math.max(...results.map((r) => r.durationMs)) },
+						"All estates validated OK",
 					);
 				}
 
@@ -133,14 +125,14 @@ if (import.meta.main) {
 
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 			createTransport: (serverFactory, ds, identityCard) => {
-				// SIO-780 + SIO-828: STS GetCallerIdentity probe validates the
-				// assumed-role chain. With multiple estates configured, we probe each
-				// in turn so any misconfigured estate surfaces in the readiness
-				// component the same way a single-estate failure used to.
-				// maxAttempts: 1 keeps each call inside the 5s default withTimeout
-				// window. The boot-time estate validator (estate-validator.ts) runs
-				// before this and would already have refused start on any failure;
-				// this probe is the runtime/transport-level signal for liveness.
+				// SIO-780 + SIO-828: per-estate STS GetCallerIdentity probe. Each
+				// probe registers as a separate readiness component (sts:<estate>)
+				// so /ready surfaces partial degradation explicitly instead of
+				// collapsing to a single boolean. maxAttempts: 1 keeps each call
+				// inside the 5s default withTimeout window. The boot-time validator
+				// (estate-validator.ts) has already logged + populated the health
+				// map; this probe is the transport-level liveness signal that runs
+				// on every /ready hit.
 				const estateProbes: Record<string, () => Promise<void>> = {};
 				for (const [estateId, estateConfig] of Object.entries(ds.config.aws.estates)) {
 					const stsClient = new STSClient({

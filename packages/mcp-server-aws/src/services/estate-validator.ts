@@ -1,8 +1,10 @@
 // src/services/estate-validator.ts
 // SIO-828: boot-time STS validation. For each configured estate, call
-// sts:GetCallerIdentity through the per-estate AssumeRole provider so any
-// misconfigured trust policy fails the deploy loudly instead of surfacing as
-// "tool returned no results" hours later.
+// sts:GetCallerIdentity through the per-estate AssumeRole provider. Results go
+// into a process-lifetime health map exposed via aws_list_estates. The runtime
+// always starts -- partial degradation is reported, not enforced (4-pillar
+// pattern). Per-tool calls against a broken estate surface AccessDenied at
+// call time; the validator just gives an earlier signal.
 
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import type { AwsConfig } from "../config/schemas.ts";
@@ -14,12 +16,23 @@ export interface EstateValidationResult {
 	assumedArn?: string;
 	error?: string;
 	durationMs: number;
+	validatedAt: string;
+}
+
+// Process-lifetime health map. The bootstrap populates this; aws_list_estates reads it.
+let lastValidationResults: EstateValidationResult[] = [];
+
+export function getEstateHealth(): EstateValidationResult[] {
+	return lastValidationResults;
+}
+
+export function _resetEstateHealthForTests(): void {
+	lastValidationResults = [];
 }
 
 export async function validateEstates(config: AwsConfig): Promise<EstateValidationResult[]> {
 	const entries = Object.entries(config.estates);
-	// Run in parallel: O(slowest) not O(sum). Three estates ~ 300-600ms total.
-	return Promise.all(
+	const results = await Promise.all(
 		entries.map(async ([estate, estateConfig]) => {
 			const started = Date.now();
 			try {
@@ -34,6 +47,7 @@ export async function validateEstates(config: AwsConfig): Promise<EstateValidati
 					ok: true,
 					assumedArn: res.Arn,
 					durationMs: Date.now() - started,
+					validatedAt: new Date().toISOString(),
 				};
 			} catch (err) {
 				return {
@@ -41,8 +55,11 @@ export async function validateEstates(config: AwsConfig): Promise<EstateValidati
 					ok: false,
 					error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
 					durationMs: Date.now() - started,
+					validatedAt: new Date().toISOString(),
 				};
 			}
 		}),
 	);
+	lastValidationResults = results;
+	return results;
 }

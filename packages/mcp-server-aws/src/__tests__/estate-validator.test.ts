@@ -3,14 +3,17 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { mockClient } from "aws-sdk-client-mock";
 import type { AwsConfig } from "../config/schemas.ts";
-import { validateEstates } from "../services/estate-validator.ts";
+import { _resetEstateHealthForTests, getEstateHealth, validateEstates } from "../services/estate-validator.ts";
 
 // aws-sdk-client-mock + STSClient cross a smithy@4.13/4.14 boundary in this
 // workspace; the runtime mock works fine, only the type signature collides.
 // Cast through unknown to keep biome's noExplicitAny rule happy.
 const stsMock = mockClient(STSClient as unknown as Parameters<typeof mockClient>[0]);
 
-afterEach(() => stsMock.reset());
+afterEach(() => {
+	stsMock.reset();
+	_resetEstateHealthForTests();
+});
 
 function makeConfig(estateCount: number): AwsConfig {
 	const estates: AwsConfig["estates"] = {};
@@ -77,5 +80,50 @@ describe("validateEstates", () => {
 		const results = await validateEstates(makeConfig(1));
 		expect(typeof results[0]?.durationMs).toBe("number");
 		expect(results[0]?.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	test("validatedAt is an ISO timestamp on every result", async () => {
+		stsMock.on(GetCallerIdentityCommand as never).resolves({
+			Arn: "arn:aws:sts::123456789012:assumed-role/DevOpsAgentReadOnly/aws-mcp-server",
+		} as never);
+
+		const results = await validateEstates(makeConfig(2));
+		for (const r of results) {
+			expect(r.validatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+		}
+	});
+});
+
+describe("getEstateHealth (process-lifetime cache)", () => {
+	test("returns empty array before any validateEstates call", () => {
+		expect(getEstateHealth()).toEqual([]);
+	});
+
+	test("returns the latest validateEstates results", async () => {
+		stsMock.on(GetCallerIdentityCommand as never).resolves({
+			Arn: "arn:aws:sts::123456789012:assumed-role/DevOpsAgentReadOnly/aws-mcp-server",
+		} as never);
+
+		await validateEstates(makeConfig(2));
+		const health = getEstateHealth();
+		expect(health).toHaveLength(2);
+		expect(health.every((r) => r.ok)).toBe(true);
+	});
+
+	test("a second validateEstates call overwrites the cache", async () => {
+		stsMock.on(GetCallerIdentityCommand as never).resolves({
+			Arn: "arn:aws:sts::123456789012:assumed-role/DevOpsAgentReadOnly/aws-mcp-server",
+		} as never);
+
+		await validateEstates(makeConfig(3));
+		expect(getEstateHealth()).toHaveLength(3);
+
+		stsMock.reset();
+		stsMock.on(GetCallerIdentityCommand as never).rejects(new Error("X"));
+
+		await validateEstates(makeConfig(1));
+		const health = getEstateHealth();
+		expect(health).toHaveLength(1);
+		expect(health[0]?.ok).toBe(false);
 	});
 });

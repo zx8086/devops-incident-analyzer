@@ -27,7 +27,6 @@ export const ConfigSchema = z.preprocess(
 			TRANSPORT_HOST: env.MCP_HOST ?? env.TRANSPORT_HOST ?? "0.0.0.0",
 			TRANSPORT_PATH: env.TRANSPORT_PATH ?? "/mcp",
 			SUBAGENT_TOOL_RESULT_CAP_BYTES: env.SUBAGENT_TOOL_RESULT_CAP_BYTES,
-			SKIP_ESTATE_VALIDATION: env.SKIP_ESTATE_VALIDATION,
 		};
 	},
 	z
@@ -58,10 +57,6 @@ export const ConfigSchema = z.preprocess(
 			TRANSPORT_HOST: z.string(),
 			TRANSPORT_PATH: z.string(),
 			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(32000),
-			SKIP_ESTATE_VALIDATION: z
-				.string()
-				.optional()
-				.transform((v) => v === "true" || v === "1"),
 		})
 		.transform((raw) => ({
 			aws: {
@@ -76,7 +71,6 @@ export const ConfigSchema = z.preprocess(
 				path: raw.TRANSPORT_PATH,
 			},
 			toolResultCapBytes: raw.SUBAGENT_TOOL_RESULT_CAP_BYTES,
-			skipEstateValidation: raw.SKIP_ESTATE_VALIDATION,
 		})),
 );
 
