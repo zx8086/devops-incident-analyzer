@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 5 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent, gitlab-agent) that query existing MCP servers (210+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, and GitLab. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
+Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestrates 7 specialist sub-agents (elastic-agent, kafka-agent, capella-agent, konnect-agent, gitlab-agent, atlassian-agent, aws-agent) that query existing MCP servers (210+ tools total) to correlate incidents across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, and AWS. Bun workspace monorepo with gitagent declarative agent definitions (YAML/Markdown) bridged to LangGraph TypeScript.
 
 ## Current State
 
-Fully implemented monorepo with 10 packages, 5 MCP servers, a 14-node LangGraph pipeline (SIO-681 added `correlationFetch` + `enforceCorrelationsAggregate` between aggregate and checkConfidence; SIO-764 added `extractFindings` after aggregate), gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo with 10 packages, 7 MCP servers, a 20-node LangGraph pipeline (SIO-681 added `correlationFetch` + `enforceCorrelationsAggregate` between aggregate and checkConfidence; SIO-764 added `extractFindings` after aggregate; SIO-828 added `awsEstateRouter` between entityExtractor and the fan-out; `detectTopicShift` runs on follow-up turns; mitigation is split into `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` + `aggregateMitigation`), gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
@@ -17,15 +17,17 @@ Fully implemented monorepo with 10 packages, 5 MCP servers, a 14-node LangGraph 
 ```
 agents/                    Gitagent YAML/Markdown definitions
   incident-analyzer/       Orchestrator: agent.yaml, SOUL.md, RULES.md, tools/, skills/
-    agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/, gitlab-agent/
+    agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/, gitlab-agent/, atlassian-agent/, aws-agent/
 packages/
   gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
-  agent/                   LangGraph supervisor + 14-node pipeline (incl. SIO-681 correlation enforcement, SIO-764 findings extraction)
-  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 69 tools)
+  agent/                   LangGraph supervisor + 20-node pipeline (incl. SIO-681 correlation enforcement, SIO-764 findings extraction, SIO-828 AWS estate router, mitigation split into investigate/monitor/escalate, detectTopicShift)
+  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, ~93 tools: 77 cluster + 16 conditional cloud/billing on EC_API_KEY)
   mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
   mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
   mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
   mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
+  mcp-server-atlassian/    Atlassian MCP server (Jira + Confluence proxy via Rovo OAuth 2.1)
+  mcp-server-aws/          AWS MCP server (multi-estate via cross-account AssumeRole; CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.)
   shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy
   checkpointer/            LangGraph state persistence (memory + bun:sqlite)
   observability/           OpenTelemetry + LangSmith, Pino logging
@@ -33,17 +35,19 @@ apps/
   web/                     SvelteKit frontend (Svelte 5 runes, Tailwind, SSE streaming)
 ```
 
-### Agent Pipeline (14-node LangGraph StateGraph)
+### Agent Pipeline (20-node LangGraph StateGraph)
 
 ```
 START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
-  -> [selectRunbooks] -> entityExtractor -> fan-out [elastic, kafka, capella, konnect, gitlab]
+  -> [selectRunbooks] -> entityExtractor -> [awsEstateRouter ->] fan-out [elastic, kafka, capella, konnect, gitlab, atlassian, aws]
   -> align -> aggregate -> extractFindings -> {enforceCorrelationsRouter}
   -> [correlationFetch ->] enforceCorrelationsAggregate
-  -> checkConfidence -> validate -> proposeMitigation -> followUp -> END
+  -> checkConfidence -> validate -> {mitigationRouter}
+  -> {proposeInvestigate | proposeMonitor | proposeEscalate} -> aggregateMitigation
+  -> followUp -> [detectTopicShift on follow-up turns] -> END
 ```
 
-The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list. SIO-764 added the `extractFindings` node immediately after `aggregate`; it reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (`kafkaFindings`) onto the `DataSourceResult` for the rule engine to consume.
+The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list. SIO-764 added the `extractFindings` node immediately after `aggregate`; it reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (`kafkaFindings`) onto the `DataSourceResult` for the rule engine to consume. SIO-828 added `awsEstateRouter` between `entityExtractor` and the fan-out; when AWS is in `dataSources`, it expands a single AWS dispatch into one Send per target estate (cross-account AssumeRole) so the LLM never sees per-account credentials. Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 20.
 
 ### Sub-Agents (named by MCP server)
 

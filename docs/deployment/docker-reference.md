@@ -49,7 +49,7 @@ Local development images include all dependencies (not just production) and moun
 
 ## AgentCore Production Image
 
-The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the six MCP servers.
+The `Dockerfile.agentcore` at the repository root builds production images for AWS Bedrock AgentCore deployment. It is parameterized -- a single Dockerfile builds any of the seven MCP servers.
 
 ### Build Commands
 
@@ -155,7 +155,7 @@ CMD ["bun", "run", "${ENTRYPOINT_PATH}"]
 
 This ensures graceful shutdown when the container orchestrator sends `SIGTERM` during scaling, updates, or termination.
 
-#### Drain behavior on SIGTERM (SIO-727)
+#### Drain behavior on SIGTERM
 
 On `SIGTERM`, the kafka MCP server:
 
@@ -168,7 +168,7 @@ Tunables:
 
 | Env var | Default | Effect |
 |---------|---------|--------|
-| `SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Max ms to wait for in-flight requests on SIGTERM. `0` short-circuits to immediate force-close (pre-SIO-727 parity). |
+| `SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Max ms to wait for in-flight requests on SIGTERM. `0` short-circuits to immediate force-close (pre- parity). |
 
 Operators with shorter grace periods can lower this; operators running long-poll tools (e.g. heavy `kafka_consume_messages` workloads) can raise it.
 

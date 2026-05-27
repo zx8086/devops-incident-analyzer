@@ -176,7 +176,7 @@ Run a smoke query end-to-end with an incident that should match your new runbook
 
 Runbooks reference MCP tool names directly in prose (for example, `capella_get_longest_running_queries` or `kafka_get_consumer_group_lag`). These names correspond to entries in `agents/incident-analyzer/tools/*.yaml` `action_tool_map` blocks, which in turn correspond to the real tool names exposed by each MCP server.
 
-**As of SIO-641, this binding is enforced statically by `bun test`.**
+**As of, this binding is enforced statically by `bun test`.**
 
 The validator lives at `packages/gitagent-bridge/src/runbook-validator.test.ts`. It runs on every `bun test` invocation and fails if any runbook cites a tool name that is not present in the union of `action_tool_map` entries across the agent's `tools/*.yaml` files. It also fails if the prose backticks and the `## All Tools Used Are Read-Only` tail section disagree within a single runbook.
 
@@ -235,7 +235,7 @@ Sub-agents (e.g., `kafka-agent`, `capella-agent`) can have their own `knowledge/
 
 Sub-agent runbooks are subject to a **strict authority rule**: a sub-agent runbook may only cite tool names that exist in the intersection of (the parent agent's tool facades) AND (the sub-agent's declared `tools:` list from its `agent.yaml`). A `kafka-agent` runbook citing `elasticsearch_search` fails validation because the kafka sub-agent cannot actually call elasticsearch tools at runtime.
 
-The SIO-642 extension of the runbook tool-name validator (SIO-641) enforces this rule statically. See `docs/superpowers/specs/2026-04-10-scoped-subagent-runbooks-design.md` for the full policy: when to author a sub-agent runbook, relationship to orchestrator runbooks (independent, duplication allowed, no cross-referencing), directory structure, and the authoring conventions.
+The extension of the runbook tool-name validator enforces this rule statically. See `docs/superpowers/specs/2026-04-10-scoped-subagent-runbooks-design.md` for the full policy: when to author a sub-agent runbook, relationship to orchestrator runbooks (independent, duplication allowed, no cross-referencing), directory structure, and the authoring conventions.
 
 **No sub-agent runbooks exist in this repository today.** The capability is documented and validated; seeding is deferred until a concrete need emerges.
 

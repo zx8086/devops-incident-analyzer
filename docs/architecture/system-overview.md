@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-04-23
 
-The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, and Atlassian (Jira/Confluence) ticket and runbook metadata. A LangGraph supervisor orchestrates six specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
+The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, Atlassian (Jira/Confluence) ticket and runbook metadata, and AWS infrastructure (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.) across multiple accounts. A LangGraph supervisor orchestrates seven specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
 ---
 
@@ -82,7 +82,7 @@ This separation means agent personality (SOUL.md), constraints (RULES.md), skill
 
 The supervisor does not execute sub-agents sequentially. It uses LangGraph's `Send` API to dispatch parallel executions of the `queryDataSource` node, one per target datasource. Each Send carries its own `currentDataSource` state, which scopes the sub-agent's MCP tool access to a single server.
 
-This fan-out pattern provides natural parallelism: all six datasource queries run concurrently, and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
+This fan-out pattern provides natural parallelism: all seven datasource queries run concurrently (AWS additionally expands into one Send per configured estate via the `awsEstateRouter` node,), and the alignment node waits for all results before proceeding. If a datasource server is unavailable, only that sub-agent fails -- the others complete independently.
 
 ### MCP as Tool Integration Layer
 
@@ -117,17 +117,18 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 13-node LangGraph StateGraph: classify, normalize, selectRunbooks, extract, fan-out, align, aggregate, enforceCorrelations (SIO-681: correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, proposeMitigation, followUp |
+| Agent Orchestrator | `packages/agent` | 20-node LangGraph StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, fan-out (queryDataSource), align, aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | ~84 tools (~77 cluster + 7 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, and Elastic Cloud deployment + billing |
-| Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + 15 optional (schema registry + ksqlDB) for cluster info, topic management, consumer groups, message consumption |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | ~93 tools (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
 | Couchbase MCP | `packages/mcp-server-couchbase` | ~15 tools for cluster health, bucket management, N1QL queries, index analysis, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
+| AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, metrics, alarms), EC2, ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
 | Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 9 components, Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
@@ -272,17 +273,24 @@ elastic kafka capella konnect gitlab atlassian
 
 1. **classify** -- Routes query as simple (greetings, help) or complex (infrastructure investigation). Uses regex patterns first, falls back to LLM.
 2. **normalize** -- Extracts a structured `NormalizedIncident` (severity, time window, affected services, metrics) from the user's query for downstream nodes.
-3. **selectRunbooks** (optional, SIO-640) -- Picks 0-2 runbooks from the catalog via trigger grammar pre-filter then LLM selection. Enabled when `knowledge/index.yaml` has a `runbook_selection` block.
+3. **selectRunbooks** (optional,) -- Picks 0-2 runbooks from the catalog via trigger grammar pre-filter then LLM selection. Enabled when `knowledge/index.yaml` has a `runbook_selection` block.
 4. **responder** -- Handles simple queries from general knowledge without querying datasources.
 5. **entityExtractor** -- Extracts services, time windows, severity, and target datasources from the query.
-6. **supervisor** -- Creates `Send` messages for parallel sub-agent dispatch. Validates agent names, checks MCP tool availability, skips datasources with no connected tools.
-7. **queryDataSource** -- Runs a ReAct agent with datasource-scoped MCP tools. Uses Claude Haiku for fast tool calling.
+6. **awsEstateRouter** -- When AWS is in target datasources, expands a single AWS dispatch into one Send per configured estate (cross-account AssumeRole). LLM never sees per-account credentials. Skipped when AWS is not targeted.
+7. **queryDataSource** -- Runs a ReAct agent with datasource-scoped MCP tools. Uses Claude Haiku for fast tool calling. Dispatched via `Send` messages from the supervisor edge, one per datasource (and per AWS estate when applicable).
 8. **align** -- Checks that all targeted datasources returned results. Retries missing or transiently-failed datasources (max 2 alignment retries). Non-retryable errors (auth, session) are skipped.
 9. **aggregate** -- Correlates findings into a unified incident report with timeline, confidence score, and per-datasource attribution.
-10. **checkConfidence** -- HITL gate: escalates to human approval when confidence < 0.6, errors are detected, or a production mutation is attempted.
-11. **validate** -- Anti-hallucination check. Verifies answer length, datasource references, and timestamp authenticity. Failed validation retries aggregation (max 2 retries).
-12. **proposeMitigation** -- Generates actionable mitigation steps based on the validated incident report.
-13. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
+10. **extractFindings** -- Reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (e.g. `kafkaFindings`, `elasticFindings`, `awsFindings`) onto the `DataSourceResult` for the rule engine to consume.
+11. **correlationFetch** (conditional) -- Dispatches additional sub-agent Sends to satisfy unmet correlation rules (e.g. kafka-significant-lag requires a matching elastic finding).
+12. **enforceCorrelationsAggregate** -- Re-evaluates correlation rules after fetches; caps `confidenceCap` at 0.6 when rules remain degraded.
+13. **checkConfidence** -- HITL gate: escalates to human approval when confidence < 0.6, errors are detected, or a production mutation is attempted.
+14. **validate** -- Anti-hallucination check. Verifies answer length, datasource references, and timestamp authenticity. Failed validation retries aggregation (max 2 retries).
+15. **proposeInvestigate / proposeMonitor / proposeEscalate** -- Mitigation router selects one of three strategies based on confidence, severity, and rule-engine state. Each generates strategy-specific actionable steps in parallel.
+16. **aggregateMitigation** -- Joins the chosen mitigation strategy back onto the main path.
+17. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
+18. **detectTopicShift** -- On follow-up turns, detects whether the new question is a topic shift (warranting a fresh classify) or a continuation (carrying forward prior findings).
+
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 20 — counting `proposeInvestigate`, `proposeMonitor`, `proposeEscalate` separately gives the 20 distinct registered nodes (18 numbered groups above, with item 15 spanning three).
 
 ---
 
@@ -316,6 +324,7 @@ elastic kafka capella konnect gitlab atlassian
 | GitLab MCP Server | 9084 | Streamable HTTP (MCP) |
 | Atlassian MCP Server | 9085 | Streamable HTTP (MCP) |
 | Atlassian OAuth Callback | 9185 | HTTP (OAuth 2.0 redirect) |
+| AWS MCP (SigV4 proxy) | 3001 | HTTP (SigV4-signed proxy to AgentCore runtime) |
 
 Each MCP server exposes two HTTP endpoints:
 - `POST /mcp` -- MCP protocol messages (tool calls, tool results)
@@ -344,3 +353,4 @@ The system enforces several security boundaries:
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-13 | Added GitLab as 5th datasource/MCP server, updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation) |
 | 2026-04-23 | Added Atlassian (Jira/Confluence) as 6th datasource/MCP server (port 9085, OAuth callback 9185) |
+| 2026-05-28 | added AWS as 7th datasource/MCP server (multi-estate via cross-account AssumeRole, AgentCore SigV4 proxy on port 3001, `awsEstateRouter` pre-fan-out node); updated pipeline from 13 to 20 nodes (extractFindings, mitigation split into investigate/monitor/escalate + aggregateMitigation, detectTopicShift); refreshed Elastic tool count from ~84 to ~93 after the cloud/billing additions |

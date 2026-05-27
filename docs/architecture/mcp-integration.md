@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-04-23
 
-The agent connects to six MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, and Atlassian (Jira/Confluence). The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability.
+The agent connects to seven MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian (Jira/Confluence), and AWS. The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability. AWS additionally fans out per-estate via the `awsEstateRouter` graph node — one logical MCP connection serves N target AWS accounts via cross-account `AssumeRole`.
 
 ---
 
@@ -87,7 +87,7 @@ If a server is unreachable at startup:
 
 ### Streamable HTTP Transport
 
-All six MCP servers use Streamable HTTP transport (SIO-595). The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
+All seven MCP servers use Streamable HTTP transport. The AWS MCP server is additionally fronted by a local SigV4-signed proxy (port 3001) when the runtime is deployed in AgentCore. The transport endpoint is always `<baseUrl>/mcp`. Each server also exposes:
 - `GET /health` -- health check endpoint for periodic polling
 - The standard MCP protocol messages over HTTP POST to `/mcp`
 
@@ -101,12 +101,13 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~84 (~77 cluster + 7 conditional cloud/billing) |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~93 (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
 | `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
 | `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL` | proxy + custom |
+| `aws` | `aws-mcp` | `AWS_MCP_URL` | ~40 read-only AWS tools + `aws_list_estates`. Multi-estate via cross-account `AssumeRole`. |
 
 The mapping is defined in `mcp-bridge.ts`:
 
@@ -204,11 +205,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (~84 tools)
+### Elasticsearch MCP (~93 tools)
 
-**Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology + billing).
+**Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
-**Tool count:** ~77 cluster tools always; +7 cloud/billing tools registered conditionally on `EC_API_KEY`.
+**Tool count:** 77 cluster tools always; +16 cloud/billing tools registered conditionally on `EC_API_KEY` (��826).
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation
@@ -217,9 +218,9 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Document operations: get, multi-get (read-only)
 - Snapshot: repository listing, snapshot status
 - Monitoring: node stats, hot threads, pending tasks
-- **Elastic Cloud + Billing (conditional, `EC_API_KEY`, SIO-674):** `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_org_charts`, `elasticsearch_billing_get_deployment_costs` -- all hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing after SIO-678) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys.
+- **Elastic Cloud + Billing (conditional, `EC_API_KEY`,):** `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_org_charts`, `elasticsearch_billing_get_deployment_costs` -- all hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing after) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys.
 
-**Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=eu-cld,us-cld`. Per-deployment environment variables provide URL and API key (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, etc.; hyphens become underscores). Cluster tools accept a per-call `deployment` arg (SIO-675) with fallback chain: explicit arg -> `x-elastic-deployment` HTTP header -> `ELASTIC_DEFAULT_DEPLOYMENT` -> first ID in `ELASTIC_DEPLOYMENTS`. See `packages/mcp-server-elastic/src/tools/index.ts:302-391`.
+**Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=eu-cld,us-cld`. Per-deployment environment variables provide URL and API key (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, etc.; hyphens become underscores). Cluster tools accept a per-call `deployment` arg with fallback chain: explicit arg -> `x-elastic-deployment` HTTP header -> `ELASTIC_DEFAULT_DEPLOYMENT` -> first ID in `ELASTIC_DEPLOYMENTS`. See `packages/mcp-server-elastic/src/tools/index.ts:302-391`.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -229,12 +230,12 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Tool categories:**
 - Kafka core (15, always): broker list, cluster info, topics list/describe, partition details, consumer groups list/describe/lag, message consume, plus write/destructive (`kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config`, `kafka_delete_topic`, `kafka_reset_consumer_group_offsets`) gated by `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`.
-- Schema Registry (`SCHEMA_REGISTRY_ENABLED=true`): 8 reads (list/get subjects, schemas, versions, configs). With write gates: 3 writes (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`) and 4 destructives (soft/hard delete subject + version) — SIO-682.
+- Schema Registry (`SCHEMA_REGISTRY_ENABLED=true`): 8 reads (list/get subjects, schemas, versions, configs). With write gates: 3 writes (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`) and 4 destructives (soft/hard delete subject + version) —.
 - ksqlDB (`KSQL_ENABLED=true`): 7 tools (list streams/tables/queries, execute statement, server info, etc.).
-- Connect (`CONNECT_ENABLED=true`): 4 reads (cluster info, list connectors, get connector status, get task status). With write gates: 3 writes (`connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`) and 2 destructives (`connect_restart_connector_task`, `connect_delete_connector`) — SIO-682.
-- REST Proxy (`RESTPROXY_ENABLED=true`): 3 metadata reads (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy_get_partitions`). With `KAFKA_ALLOW_WRITES`: 6 writes (`restproxy_produce`, `restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer`) — SIO-682.
+- Connect (`CONNECT_ENABLED=true`): 4 reads (cluster info, list connectors, get connector status, get task status). With write gates: 3 writes (`connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`) and 2 destructives (`connect_restart_connector_task`, `connect_delete_connector`) —.
+- REST Proxy (`RESTPROXY_ENABLED=true`): 3 metadata reads (`restproxy_list_topics`, `restproxy_get_topic`, `restproxy_get_partitions`). With `KAFKA_ALLOW_WRITES`: 6 writes (`restproxy_produce`, `restproxy_create_consumer`, `restproxy_subscribe`, `restproxy_consume`, `restproxy_commit_offsets`, `restproxy_delete_consumer`) —.
 
-**Services:** `KafkaService` (kafka-core), `SchemaRegistryService`, `KsqlService`, `ConnectService`, and `RestProxyService` (the latter introduced in SIO-682). Each service's tools register only when its own `*_ENABLED` flag is set.
+**Services:** `KafkaService` (kafka-core), `SchemaRegistryService`, `KsqlService`, `ConnectService`, and `RestProxyService` (the latter introduced in). Each service's tools register only when its own `*_ENABLED` flag is set.
 
 **Configuration:** Provider-based selection via `KAFKA_PROVIDER=local|msk|confluent`. Feature gates `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` control write operations across kafka-core, Connect, SR, and REST Proxy in a unified way.
 
@@ -255,7 +256,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Configuration:** Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD`. The incident analyzer restricts N1QL to SELECT queries via the compliance layer.
 
-**Tool response shape (SIO-664):** the 10 `queryAnalysis` tools return `effectiveLimit` (the LIMIT actually applied after server-side capping) and `actualCount` (rows returned) so the agent can detect truncation. SIO-667 + SIO-668 parameterized all SQL++ in these tools to prevent injection — user-supplied bucket/scope/collection identifiers are now bound parameters rather than string-interpolated.
+**Tool response shape:** the 10 `queryAnalysis` tools return `effectiveLimit` (the LIMIT actually applied after server-side capping) and `actualCount` (rows returned) so the agent can detect truncation. parameterized all SQL++ in these tools to prevent injection — user-supplied bucket/scope/collection identifiers are now bound parameters rather than string-interpolated.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -276,7 +277,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Configuration:** Token-based authentication via `KONNECT_ACCESS_TOKEN` with region selection via `KONNECT_REGION=us|eu|au|me|in`.
 
-**Tool response shape (SIO-663):** the 15 list tools return observed pagination metadata (`offset`, `nextOffset`, `totalCount`) extracted from the Konnect API response so the agent can decide whether to paginate without an extra HEAD-style call. `nextOffset` is `null` when the page is the last one. Per-tool handlers are now typed via `z.infer<typeof validator>` (SIO-670) and the read-only check is applied once at the bootstrap chokepoint (SIO-671) rather than per tool.
+**Tool response shape:** the 15 list tools return observed pagination metadata (`offset`, `nextOffset`, `totalCount`) extracted from the Konnect API response so the agent can decide whether to paginate without an extra HEAD-style call. `nextOffset` is `null` when the page is the last one. Per-tool handlers are now typed via `z.infer<typeof validator>` and the read-only check is applied once at the bootstrap chokepoint rather than per tool.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -293,7 +294,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Search: global search, labels, semantic code search with deferred retry for embedding readiness (via proxy)
 - Code analysis: file content, blame, commit diff, commit listing, repository tree (custom REST tools)
 
-**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope) for the custom code-analysis tools. The proxy connection to `/api/v4/mcp` uses OAuth 2.0 Dynamic Client Registration as a public client (RFC 8252, `token_endpoint_auth_method: "none"`) with PKCE; this is what GitLab DCR actually issues for unverified MCP clients (SIO-685). Scope is pinned to `mcp` (GitLab MR !208967 default). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Callback port on `GITLAB_OAUTH_CALLBACK_PORT` (default 9184). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping. See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
+**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope) for the custom code-analysis tools. The proxy connection to `/api/v4/mcp` uses OAuth 2.0 Dynamic Client Registration as a public client (RFC 8252, `token_endpoint_auth_method: "none"`) with PKCE; this is what GitLab DCR actually issues for unverified MCP clients. Scope is pinned to `mcp` (GitLab MR !208967 default). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Callback port on `GITLAB_OAUTH_CALLBACK_PORT` (default 9184). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping. See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
@@ -318,7 +319,7 @@ GitLab and Atlassian MCP both use OAuth 2.0 Dynamic Client Registration through 
 
 **On-disk state:** `~/.mcp-auth/<namespace>/<sanitized-mcp-url>.json` (mode 0o600, dir 0o700). Each file holds `clientInformation` (the DCR registration), `tokens` (access + refresh), and a transient `codeVerifier` cleared after the token exchange completes. Filenames are byte-stable across releases (regression-tested in `packages/shared/src/__tests__/oauth/base-provider.test.ts`).
 
-**Stale-registration migration:** if a persisted `clientInformation` was saved with a different `token_endpoint_auth_method` than the current code expects (e.g. legacy GitLab registrations stored as `client_secret_post` before SIO-685), the base provider auto-discards the registration and re-registers via DCR. No manual `rm` required.
+**Stale-registration migration:** if a persisted `clientInformation` was saved with a different `token_endpoint_auth_method` than the current code expects (e.g. legacy GitLab registrations stored as `client_secret_post` before), the base provider auto-discards the registration and re-registers via DCR. No manual `rm` required.
 
 **Headless mode:** set `MCP_OAUTH_HEADLESS=true` in non-interactive contexts (eval pipeline, AgentCore deployments, CI). The provider throws a typed `OAuthRequiresInteractiveAuthError` instead of opening a browser, which the agent's alignment node classifies as a non-retryable auth error. Headless is also auto-detected when `process.stdout.isTTY === false`. To seed tokens once interactively, run `bun run oauth:seed:gitlab` or `bun run oauth:seed:atlassian` -- the seed CLI explicitly unsets `MCP_OAUTH_HEADLESS` so it always opens the browser. See `docs/operations/oauth-seeding.md` for the full procedure.
 
@@ -367,5 +368,5 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | 2026-04-04 | Initial document created from codebase analysis |
 | 2026-04-13 | Added GitLab MCP as 5th server (proxy + custom tools, OAuth, deferred retry) |
 | 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |
-| 2026-05-07 | Documented Elastic Cloud + Billing tool family (SIO-674) and per-call `deployment` arg fallback chain (SIO-675); updated tool count from ~78 to ~84 |
-| 2026-05-09 | Extracted shared OAuth provider base (SIO-685); GitLab MCP switched to public-client + PKCE (`auth_method: "none"`, `scope: "mcp"`); added `MCP_OAUTH_HEADLESS` env, `bun run oauth:seed:<service>` CLIs, stale-registration auto-discard, file-mode 0o600 enforcement |
+| 2026-05-07 | Documented Elastic Cloud + Billing tool family and per-call `deployment` arg fallback chain; updated tool count from ~78 to ~84 |
+| 2026-05-09 | Extracted shared OAuth provider base; GitLab MCP switched to public-client + PKCE (`auth_method: "none"`, `scope: "mcp"`); added `MCP_OAUTH_HEADLESS` env, `bun run oauth:seed:<service>` CLIs, stale-registration auto-discard, file-mode 0o600 enforcement |

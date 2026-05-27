@@ -239,7 +239,7 @@ Each MCP server traces to its own LangSmith project for isolation:
 
 ### Agent Eval Experiments
 
-The on-demand `bun run eval:agent` pipeline (`packages/agent/src/eval/`) runs the full 13-node graph against the `devops-incident-eval` LangSmith dataset and writes its results as a LangSmith experiment named `agent-eval-<git-sha>`. Each query produces three evaluator scores -- `datasources_covered` and `confidence_threshold` (deterministic) plus `response_quality` (gpt-4o-mini judge) -- visible in the dataset's "Experiments" tab.
+The on-demand `bun run eval:agent` pipeline (`packages/agent/src/eval/`) runs the full 20-node graph against the `devops-incident-eval` LangSmith dataset and writes its results as a LangSmith experiment named `agent-eval-<git-sha>`. Each query produces three evaluator scores -- `datasources_covered` and `confidence_threshold` (deterministic) plus `response_quality` (gpt-4o-mini judge) -- visible in the dataset's "Experiments" tab.
 
 The git-sha-tagged experiment prefix lets you compare runs across commits: filter the experiment list by prefix pattern to see whether a description tweak or graph change moved any score. Per-example breakdowns include the full agent trace, so node-level drift is debuggable from the same UI.
 
@@ -354,7 +354,7 @@ Each MCP server in HTTP transport mode exposes health endpoints. AgentCore mode 
 | `/ready` | `{ ready, components, errors?, cachedAt }` (200 or 503) | Enabled upstreams are reachable | `readinessProbe` |
 | `/ping` | `pong` | Lightweight liveness probe (AgentCore transport only) | n/a |
 
-`/ready` (SIO-726, kafka MCP) probes the kafka broker via `clientManager.withAdmin(a => a.metadata({}))` plus any enabled HTTP-backed Confluent services (REST Proxy, Schema Registry, Kafka Connect, ksqlDB) via each service's `probeReachability()`. Results are cached for 30 seconds with a thundering-herd guard, so k8s/AgentCore liveness loops don't fan out to upstreams on every request. Components configured but disabled (e.g. `KSQL_ENABLED=false`) appear as `"disabled"` in the response and do not fail the probe.
+`/ready` (kafka MCP) probes the kafka broker via `clientManager.withAdmin(a => a.metadata({}))` plus any enabled HTTP-backed Confluent services (REST Proxy, Schema Registry, Kafka Connect, ksqlDB) via each service's `probeReachability()`. Results are cached for 30 seconds with a thundering-herd guard, so k8s/AgentCore liveness loops don't fan out to upstreams on every request. Components configured but disabled (e.g. `KSQL_ENABLED=false`) appear as `"disabled"` in the response and do not fail the probe.
 
 When any enabled component is unreachable, `/ready` returns HTTP 503 with the component map and a per-component error message; otherwise it returns 200. `/ready` returns HTTP 404 when no readiness probe is wired (stdio mode).
 

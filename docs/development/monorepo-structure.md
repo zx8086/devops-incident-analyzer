@@ -46,13 +46,14 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 13-node pipeline (SIO-681 correlation enforcement)
-    mcp-server-elastic/          Elasticsearch MCP server (~84 tools: ~77 cluster + 7 conditional cloud/billing)
+    agent/                       LangGraph supervisor and 20-node pipeline ( correlation enforcement, typed findings, AWS estate router, mitigation branch split)
+    mcp-server-elastic/          Elasticsearch MCP server (~93 tools: 77 cluster + 16 conditional cloud/billing on EC_API_KEY)
     mcp-server-kafka/            Kafka MCP server (15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
     mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
     mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
     mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
-    mcp-server-atlassian/        Atlassian MCP server (Jira/Confluence proxy + custom)
+    mcp-server-atlassian/        Atlassian MCP server (Jira + Confluence Rovo OAuth 2.1 proxy + incident filters)
+    mcp-server-aws/              AWS MCP server (~40 read-only tools across CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray + multi-estate via cross-account AssumeRole)
   apps/
     web/                         SvelteKit frontend
   docs/
@@ -118,7 +119,7 @@ Key relationships:
 - **web** depends on **agent** for the LangGraph pipeline and SSE streaming
 - **agent** depends on **gitagent-bridge** (YAML manifest loading), **checkpointer** (state persistence), **observability** (tracing and logging), and **shared** (types and schemas)
 - **gitagent-bridge** reads from the `agents/` directory at runtime
-- All six MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
+- All seven MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
 - MCP servers are independent of each other and of the **agent** package -- the agent connects to them over the network via `@langchain/mcp-adapters`
 
 ---
@@ -189,7 +190,7 @@ Source: `packages/gitagent-bridge/src/`
 
 ### @devops-agent/agent
 
-LangGraph supervisor with a 13-node StateGraph pipeline. This is the core orchestration package that processes incident queries.
+LangGraph supervisor with a 20-node StateGraph pipeline. This is the core orchestration package that processes incident queries. See [Agent Pipeline](../architecture/agent-pipeline.md) for the canonical reference; the table below is a summary.
 
 | Node | Responsibility |
 |------|----------------|
@@ -197,26 +198,31 @@ LangGraph supervisor with a 13-node StateGraph pipeline. This is the core orches
 | `normalize` | Extracts structured NormalizedIncident (severity, time window, affected services) |
 | `selectRunbooks` | Optional: picks 0-2 runbooks from catalog via trigger grammar pre-filter then LLM |
 | `entityExtractor` | Extracts entities: service names, time ranges, error codes, cluster IDs |
-| `supervisor` | Plans which sub-agents to invoke based on extracted entities |
-| `queryDataSource` | Fan-out: dispatches queries to selected MCP server sub-agents in parallel |
+| `awsEstateRouter` | When AWS is targeted, expands a single AWS dispatch into one Send per configured estate (cross-account AssumeRole) |
+| `queryDataSource` | Fan-out: dispatches queries to selected MCP server sub-agents (and per-estate AWS agents) in parallel |
 | `align` | Aligns timelines and correlates events across data sources |
 | `aggregate` | Merges sub-agent responses into a unified incident narrative |
-| `correlationFetch` (SIO-681) | Re-fans-out to a sub-agent when a correlation rule fires but its required sibling data is missing |
-| `enforceCorrelationsAggregate` (SIO-681) | Re-evaluates rules; on still-degraded rules, populates `degradedRules` and caps `confidenceCap` at 0.6 |
+| `extractFindings` | Derives per-domain typed findings from each sub-agent's `toolOutputs[]` |
+| `correlationFetch` | Re-fans-out to a sub-agent when a correlation rule fires but its required sibling data is missing |
+| `enforceCorrelationsAggregate` | Re-evaluates rules; on still-degraded rules, populates `degradedRules` and caps `confidenceCap` at 0.59 |
 | `checkConfidence` | HITL gate: escalates to human when confidence < 0.6 or errors detected |
 | `validate` | Checks response completeness, flags gaps, suggests follow-ups |
-| `proposeMitigation` | Generates actionable remediation steps from validated report |
+| `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` | Mitigation branches: parallel strategy generation chosen by a router based on confidence + rule state |
+| `aggregateMitigation` | Joins the three mitigation branches back onto the main path |
 | `followUp` | Generates contextual follow-up questions for the user |
+| `detectTopicShift` | On follow-up turns, decides whether to re-classify or carry context forward |
 
 Pipeline flow:
 
 ```
 START -> classify -> [simple: responder -> followUp -> END]
                   -> [complex: normalize -> [selectRunbooks] -> entityExtractor
-                     -> supervisor -> queryDataSource -> align -> aggregate
-                     -> {enforceCorrelationsRouter}
+                     -> [awsEstateRouter ->] queryDataSource -> align -> aggregate
+                     -> extractFindings -> {enforceCorrelationsRouter}
                      -> [correlationFetch ->] enforceCorrelationsAggregate
-                     -> checkConfidence -> validate -> proposeMitigation -> followUp -> END]
+                     -> checkConfidence -> validate
+                     -> {proposeInvestigate | proposeMonitor | proposeEscalate}
+                     -> aggregateMitigation -> followUp -> [detectTopicShift] -> END]
 ```
 
 The agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. It does not import MCP server code directly.
@@ -227,12 +233,12 @@ Source: `packages/agent/src/`
 
 ### @devops-agent/mcp-server-elastic
 
-Elasticsearch MCP server with ~84 tools for querying and managing Elasticsearch deployments. The base set is ~77 cluster tools (search, index, ILM, watcher, etc.) and an additional 7 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (SIO-674).
+Elasticsearch MCP server with ~93 tools for querying and managing Elasticsearch deployments. The base set is 77 cluster tools (search, index, ILM, watcher, etc.) and an additional 16 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (��826).
 
 | Capability | Details |
 |------------|---------|
-| Tools | ~84 tools: ~77 cluster (index management, search, aggregations, cluster health, templates, ILM, watcher) + 7 conditional cloud/billing (`EC_API_KEY`) |
-| Multi-deployment | `ELASTIC_DEPLOYMENTS=eu-cld,us-cld` with per-deployment URL and API key; cluster tools accept a per-call `deployment` arg (SIO-675) |
+| Tools | ~93 tools: 77 cluster (index management, search, aggregations, cluster health, templates, ILM, watcher) + 16 conditional cloud/billing (`EC_API_KEY`) covering deployment audit, plan history, hardware-profile simulation with `rate_source_confidence`, and per-instance billing |
+| Multi-deployment | `ELASTIC_DEPLOYMENTS=eu-cld,us-cld` with per-deployment URL and API key; cluster tools accept a per-call `deployment` arg |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9080 (default) |
 
@@ -354,7 +360,7 @@ Source: `apps/web/src/`
 
 ### agents/incident-analyzer/
 
-Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and six sub-agents are defined here.
+Declarative agent definitions that the gitagent-bridge package compiles into LangGraph configuration at runtime. The orchestrator agent and seven sub-agents are defined here.
 
 ```
 agents/incident-analyzer/
@@ -363,7 +369,7 @@ agents/incident-analyzer/
   RULES.md               Behavioral constraints: no destructive actions, cite sources
   agents/
     elastic-agent/       Elasticsearch specialist
-      agent.yaml         Tools: ~84 ES tools via MCP port 9080 (~77 cluster + 7 conditional cloud/billing)
+      agent.yaml         Tools: ~93 ES tools via MCP port 9080 (77 cluster + 16 conditional cloud/billing on EC_API_KEY)
       SOUL.md            Persona: log and metric analysis expert
     kafka-agent/         Kafka specialist
       agent.yaml         Tools: 15-55 Kafka tools via MCP port 9081 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy)
@@ -380,6 +386,9 @@ agents/incident-analyzer/
     atlassian-agent/     Atlassian (Jira/Confluence) specialist
       agent.yaml         Tools: proxy + custom Atlassian tools via MCP port 9085
       SOUL.md            Persona: incident ticket and runbook-page analyst
+    aws-agent/           AWS specialist (multi-estate)
+      agent.yaml         Tools: ~40 read-only AWS tools + aws_list_estates via AWS_MCP_URL (port 3001 SigV4 proxy in dev; AgentCore runtime in prod)
+      SOUL.md            Persona: cloud infrastructure and cross-account audit analyst
   tools/                 Shared tool definitions (YAML)
   skills/                Multi-step skill definitions (Markdown)
   compliance/            Compliance rules and audit templates
