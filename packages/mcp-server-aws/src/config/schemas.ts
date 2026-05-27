@@ -22,7 +22,12 @@ export const ConfigSchema = z.preprocess(
 			AWS_REGION: env.AWS_REGION,
 			AWS_ESTATES: env.AWS_ESTATES,
 			AWS_MCP_LOG_LEVEL: env.AWS_MCP_LOG_LEVEL ?? "info",
-			TRANSPORT_MODE: env.MCP_TRANSPORT ?? env.TRANSPORT_MODE ?? "stdio",
+			// SIO-828: 4-pillar -- defaults must produce a working deployment.
+			// The production target for this image is AgentCore, so the schema
+			// default is `agentcore` + port 8000. Local CLI usage explicitly sets
+			// MCP_TRANSPORT=stdio. Loading the tarball into AgentCore with only
+			// AWS_REGION + AWS_ESTATES set produces a working runtime.
+			TRANSPORT_MODE: env.MCP_TRANSPORT ?? env.TRANSPORT_MODE ?? "agentcore",
 			TRANSPORT_PORT: env.MCP_PORT ?? env.TRANSPORT_PORT,
 			TRANSPORT_HOST: env.MCP_HOST ?? env.TRANSPORT_HOST ?? "0.0.0.0",
 			TRANSPORT_PATH: env.TRANSPORT_PATH ?? "/mcp",
@@ -53,7 +58,10 @@ export const ConfigSchema = z.preprocess(
 				),
 			AWS_MCP_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]),
 			TRANSPORT_MODE: z.enum(["stdio", "http", "both", "agentcore"]),
-			TRANSPORT_PORT: numericString(9085),
+			// SIO-828: 8000 is the AgentCore-required port and the production
+			// default for this image. HTTP-mode local dev that needs a different
+			// port sets MCP_PORT explicitly.
+			TRANSPORT_PORT: numericString(8000),
 			TRANSPORT_HOST: z.string(),
 			TRANSPORT_PATH: z.string(),
 			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(32000),

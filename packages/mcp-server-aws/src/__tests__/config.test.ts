@@ -77,9 +77,13 @@ describe("ConfigSchema", () => {
 		expect(result.success).toBe(false);
 	});
 
-	test("uses default port 9085 when TRANSPORT_PORT is missing", () => {
+	test("defaults to agentcore transport on port 8000 when MCP_TRANSPORT/MCP_PORT are missing", () => {
+		// SIO-828: 4-pillar -- schema defaults produce a working production
+		// deployment. The image targets AgentCore, so the default mode is
+		// agentcore and the default port is the AgentCore-required 8000.
 		const result = ConfigSchema.parse(validEnv);
-		expect(result.transport.port).toBe(9085);
+		expect(result.transport.mode).toBe("agentcore");
+		expect(result.transport.port).toBe(8000);
 	});
 
 	test("respects SUBAGENT_TOOL_RESULT_CAP_BYTES override", () => {
