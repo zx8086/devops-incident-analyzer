@@ -3,6 +3,7 @@ import { DescribeCacheClustersCommand } from "@aws-sdk/client-elasticache";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getElastiCacheClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeCacheClustersSchema = z.object({
@@ -11,14 +12,14 @@ export const describeCacheClustersSchema = z.object({
 	Marker: z.string().optional().describe("Pagination marker from a previous response"),
 });
 
-export type DescribeCacheClustersParams = z.infer<typeof describeCacheClustersSchema>;
+export type DescribeCacheClustersParams = WithEstate<z.infer<typeof describeCacheClustersSchema>>;
 
 export function describeCacheClusters(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_elasticache_describe_cache_clusters",
 		listField: "CacheClusters",
 		fn: async (params: DescribeCacheClustersParams) => {
-			const client = getElastiCacheClient(config);
+			const client = getElastiCacheClient(config, params.estate);
 			return client.send(
 				new DescribeCacheClustersCommand({
 					CacheClusterId: params.CacheClusterId,

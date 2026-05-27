@@ -58,7 +58,10 @@ if (import.meta.main) {
 			role: "aws-mcp",
 			version: pkg.version,
 			identityFingerprint: (ds) =>
-				canonicalizeUpstream({ region: ds.config.aws.region, externalId: ds.config.aws.externalId }),
+				canonicalizeUpstream({
+					region: ds.config.aws.region,
+					estates: Object.keys(ds.config.aws.estates).sort().join(","),
+				}),
 
 			initDatasource: async () => {
 				const config = loadConfig();
@@ -72,7 +75,7 @@ if (import.meta.main) {
 						version: runtimeInfo.version,
 						region: config.aws.region,
 						transport: config.transport.mode,
-						assumedRole: config.aws.assumedRoleArn,
+						estates: Object.keys(config.aws.estates),
 					},
 					"Starting AWS MCP Server",
 				);
@@ -88,21 +91,26 @@ if (import.meta.main) {
 
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 			createTransport: (serverFactory, ds, identityCard) => {
-				// SIO-780: STS GetCallerIdentity probe validates the assumed-role
-				// credential chain that every tool client uses. maxAttempts: 1 keeps
-				// the call inside the 5s default withTimeout window during AWS hiccups.
-				const stsClient = new STSClient({
-					region: ds.config.aws.region,
-					credentials: buildAssumedCredsProvider(ds.config.aws),
-					maxAttempts: 1,
-				});
-				const awsProbe = createReadinessProbe({
-					components: {
-						sts: async () => {
-							await stsClient.send(new GetCallerIdentityCommand({}));
-						},
-					},
-				});
+				// SIO-780 + SIO-828: STS GetCallerIdentity probe validates the
+				// assumed-role chain. With multiple estates configured, we probe each
+				// in turn so any misconfigured estate surfaces in the readiness
+				// component the same way a single-estate failure used to.
+				// maxAttempts: 1 keeps each call inside the 5s default withTimeout
+				// window. The boot-time estate validator (estate-validator.ts) runs
+				// before this and would already have refused start on any failure;
+				// this probe is the runtime/transport-level signal for liveness.
+				const estateProbes: Record<string, () => Promise<void>> = {};
+				for (const [estateId, estateConfig] of Object.entries(ds.config.aws.estates)) {
+					const stsClient = new STSClient({
+						region: ds.config.aws.region,
+						credentials: buildAssumedCredsProvider(estateConfig, ds.config.aws.region),
+						maxAttempts: 1,
+					});
+					estateProbes[`sts:${estateId}`] = async () => {
+						await stsClient.send(new GetCallerIdentityCommand({}));
+					};
+				}
+				const awsProbe = createReadinessProbe({ components: estateProbes });
 				// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
 				return createTransport(ds.config.transport, serverFactory!, awsProbe, identityCard);
 			},

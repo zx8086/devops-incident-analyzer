@@ -3,6 +3,7 @@ import { DescribeDBClustersCommand } from "@aws-sdk/client-rds";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getRdsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeDbClustersSchema = z.object({
@@ -11,14 +12,14 @@ export const describeDbClustersSchema = z.object({
 	Marker: z.string().optional().describe("Pagination marker from a previous response"),
 });
 
-export type DescribeDbClustersParams = z.infer<typeof describeDbClustersSchema>;
+export type DescribeDbClustersParams = WithEstate<z.infer<typeof describeDbClustersSchema>>;
 
 export function describeDbClusters(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_rds_describe_db_clusters",
 		listField: "DBClusters",
 		fn: async (params: DescribeDbClustersParams) => {
-			const client = getRdsClient(config);
+			const client = getRdsClient(config, params.estate);
 			return client.send(
 				new DescribeDBClustersCommand({
 					DBClusterIdentifier: params.DBClusterIdentifier,

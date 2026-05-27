@@ -3,6 +3,7 @@ import { DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEc2Client } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeInstancesSchema = z.object({
@@ -11,14 +12,14 @@ export const describeInstancesSchema = z.object({
 	nextToken: z.string().optional(),
 });
 
-export type DescribeInstancesParams = z.infer<typeof describeInstancesSchema>;
+export type DescribeInstancesParams = WithEstate<z.infer<typeof describeInstancesSchema>>;
 
 export function describeInstances(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_ec2_describe_instances",
 		listField: "Reservations",
 		fn: async (params: DescribeInstancesParams) => {
-			const client = getEc2Client(config);
+			const client = getEc2Client(config, params.estate);
 			return client.send(
 				new DescribeInstancesCommand({
 					InstanceIds: params.instanceIds,

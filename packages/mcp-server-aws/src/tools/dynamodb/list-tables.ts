@@ -3,6 +3,7 @@ import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getDynamoDbClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const listTablesSchema = z.object({
@@ -13,14 +14,14 @@ export const listTablesSchema = z.object({
 	Limit: z.number().int().optional().describe("Max tables per page (1-100)"),
 });
 
-export type ListTablesParams = z.infer<typeof listTablesSchema>;
+export type ListTablesParams = WithEstate<z.infer<typeof listTablesSchema>>;
 
 export function listTables(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_dynamodb_list_tables",
 		listField: "TableNames",
 		fn: async (params: ListTablesParams) => {
-			const client = getDynamoDbClient(config);
+			const client = getDynamoDbClient(config, params.estate);
 			return client.send(
 				new ListTablesCommand({
 					ExclusiveStartTableName: params.ExclusiveStartTableName,

@@ -5,13 +5,34 @@ import { _resetConfigCacheForTests, ConfigSchema, getConfig, loadConfig } from "
 describe("ConfigSchema", () => {
 	const validEnv = {
 		AWS_REGION: "eu-central-1",
-		AWS_ASSUMED_ROLE_ARN: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
-		AWS_EXTERNAL_ID: "aws-mcp-readonly-2026",
+		AWS_ESTATES: JSON.stringify({
+			prod: {
+				assumedRoleArn: "arn:aws:iam::356994971776:role/DevOpsAgentReadOnly",
+				externalId: "aws-mcp-readonly-2026",
+			},
+		}),
 	};
 
 	test("accepts complete env with all required fields", () => {
 		const result = ConfigSchema.safeParse(validEnv);
 		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(Object.keys(result.data.aws.estates)).toEqual(["prod"]);
+		}
+	});
+
+	test("accepts multiple estates", () => {
+		const result = ConfigSchema.safeParse({
+			...validEnv,
+			AWS_ESTATES: JSON.stringify({
+				dev: { assumedRoleArn: "arn:aws:iam::111111111111:role/Foo", externalId: "id-dev" },
+				prod: { assumedRoleArn: "arn:aws:iam::222222222222:role/Foo", externalId: "id-prod" },
+			}),
+		});
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(Object.keys(result.data.aws.estates).sort()).toEqual(["dev", "prod"]);
+		}
 	});
 
 	test("rejects when AWS_REGION is missing", () => {
@@ -20,10 +41,38 @@ describe("ConfigSchema", () => {
 		expect(result.success).toBe(false);
 	});
 
-	test("rejects malformed role ARN", () => {
+	test("rejects when AWS_ESTATES is missing", () => {
+		const { AWS_ESTATES: _, ...rest } = validEnv;
+		const result = ConfigSchema.safeParse(rest);
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects when AWS_ESTATES is not valid JSON", () => {
+		const result = ConfigSchema.safeParse({ ...validEnv, AWS_ESTATES: "{not-json" });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects when AWS_ESTATES is empty object", () => {
+		const result = ConfigSchema.safeParse({ ...validEnv, AWS_ESTATES: "{}" });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects malformed role ARN inside estate", () => {
 		const result = ConfigSchema.safeParse({
 			...validEnv,
-			AWS_ASSUMED_ROLE_ARN: "not-an-arn",
+			AWS_ESTATES: JSON.stringify({
+				prod: { assumedRoleArn: "not-an-arn", externalId: "id" },
+			}),
+		});
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects estate ID with invalid characters", () => {
+		const result = ConfigSchema.safeParse({
+			...validEnv,
+			AWS_ESTATES: JSON.stringify({
+				Prod_Bad: { assumedRoleArn: "arn:aws:iam::111111111111:role/X", externalId: "id" },
+			}),
 		});
 		expect(result.success).toBe(false);
 	});

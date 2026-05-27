@@ -3,6 +3,7 @@ import { GetResourcesCommand } from "@aws-sdk/client-resource-groups-tagging-api
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getResourceGroupsTaggingClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const getResourcesSchema = z.object({
@@ -14,14 +15,14 @@ export const getResourcesSchema = z.object({
 	PaginationToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type GetResourcesParams = z.infer<typeof getResourcesSchema>;
+export type GetResourcesParams = WithEstate<z.infer<typeof getResourcesSchema>>;
 
 export function getResources(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_resourcegroupstagging_get_resources",
 		listField: "ResourceTagMappingList",
 		fn: async (params: GetResourcesParams) => {
-			const client = getResourceGroupsTaggingClient(config);
+			const client = getResourceGroupsTaggingClient(config, params.estate);
 			return client.send(
 				new GetResourcesCommand({
 					// biome-ignore lint/suspicious/noExplicitAny: SIO-758 - TagFilter shape is complex; pass through from validated unknown

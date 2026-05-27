@@ -3,6 +3,7 @@ import { DescribeVpcsCommand } from "@aws-sdk/client-ec2";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEc2Client } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeVpcsSchema = z.object({
@@ -11,14 +12,14 @@ export const describeVpcsSchema = z.object({
 	nextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type DescribeVpcsParams = z.infer<typeof describeVpcsSchema>;
+export type DescribeVpcsParams = WithEstate<z.infer<typeof describeVpcsSchema>>;
 
 export function describeVpcs(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_ec2_describe_vpcs",
 		listField: "Vpcs",
 		fn: async (params: DescribeVpcsParams) => {
-			const client = getEc2Client(config);
+			const client = getEc2Client(config, params.estate);
 			return client.send(
 				new DescribeVpcsCommand({
 					VpcIds: params.vpcIds,

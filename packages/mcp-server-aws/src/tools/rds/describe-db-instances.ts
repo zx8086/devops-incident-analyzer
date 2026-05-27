@@ -3,6 +3,7 @@ import { DescribeDBInstancesCommand } from "@aws-sdk/client-rds";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getRdsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeDbInstancesSchema = z.object({
@@ -11,14 +12,14 @@ export const describeDbInstancesSchema = z.object({
 	Marker: z.string().optional().describe("Pagination marker from a previous response"),
 });
 
-export type DescribeDbInstancesParams = z.infer<typeof describeDbInstancesSchema>;
+export type DescribeDbInstancesParams = WithEstate<z.infer<typeof describeDbInstancesSchema>>;
 
 export function describeDbInstances(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_rds_describe_db_instances",
 		listField: "DBInstances",
 		fn: async (params: DescribeDbInstancesParams) => {
-			const client = getRdsClient(config);
+			const client = getRdsClient(config, params.estate);
 			return client.send(
 				new DescribeDBInstancesCommand({
 					DBInstanceIdentifier: params.DBInstanceIdentifier,

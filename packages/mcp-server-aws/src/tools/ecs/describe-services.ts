@@ -3,6 +3,7 @@ import { DescribeServicesCommand } from "@aws-sdk/client-ecs";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEcsClient } from "../../services/client-factory.ts";
+import type { WithEstate } from "../estate-schema.ts";
 import { wrapListTool } from "../wrap.ts";
 
 export const describeServicesSchema = z.object({
@@ -11,14 +12,14 @@ export const describeServicesSchema = z.object({
 	include: z.array(z.string()).optional().describe("Optional list of additional data to include (e.g. TAGS)"),
 });
 
-export type DescribeServicesParams = z.infer<typeof describeServicesSchema>;
+export type DescribeServicesParams = WithEstate<z.infer<typeof describeServicesSchema>>;
 
 export function describeServices(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_ecs_describe_services",
 		listField: "services",
 		fn: async (params: DescribeServicesParams) => {
-			const client = getEcsClient(config);
+			const client = getEcsClient(config, params.estate);
 			return client.send(
 				new DescribeServicesCommand({
 					cluster: params.cluster,

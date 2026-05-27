@@ -3,6 +3,7 @@ import { ListStateMachinesCommand } from "@aws-sdk/client-sfn";
 import { z } from "zod";
 import type { AwsConfig } from "../../../config/schemas.ts";
 import { getSfnClient } from "../../../services/client-factory.ts";
+import type { WithEstate } from "../../estate-schema.ts";
 import { wrapListTool } from "../../wrap.ts";
 
 export const listStateMachinesSchema = z.object({
@@ -10,14 +11,14 @@ export const listStateMachinesSchema = z.object({
 	nextToken: z.string().optional().describe("Pagination token from a previous response"),
 });
 
-export type ListStateMachinesParams = z.infer<typeof listStateMachinesSchema>;
+export type ListStateMachinesParams = WithEstate<z.infer<typeof listStateMachinesSchema>>;
 
 export function listStateMachines(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_stepfunctions_list_state_machines",
 		listField: "stateMachines",
 		fn: async (params: ListStateMachinesParams) => {
-			const client = getSfnClient(config);
+			const client = getSfnClient(config, params.estate);
 			return client.send(
 				new ListStateMachinesCommand({
 					maxResults: params.maxResults,

@@ -3,6 +3,7 @@ import { DescribeRuleCommand } from "@aws-sdk/client-eventbridge";
 import { z } from "zod";
 import type { AwsConfig } from "../../../config/schemas.ts";
 import { getEventBridgeClient } from "../../../services/client-factory.ts";
+import type { WithEstate } from "../../estate-schema.ts";
 import { wrapBlobTool } from "../../wrap.ts";
 
 export const describeRuleSchema = z.object({
@@ -10,13 +11,13 @@ export const describeRuleSchema = z.object({
 	EventBusName: z.string().optional().describe("Event bus name or ARN (omit for default event bus)"),
 });
 
-export type DescribeRuleParams = z.infer<typeof describeRuleSchema>;
+export type DescribeRuleParams = WithEstate<z.infer<typeof describeRuleSchema>>;
 
 export function describeRule(config: AwsConfig) {
 	return wrapBlobTool({
 		name: "aws_eventbridge_describe_rule",
 		fn: async (params: DescribeRuleParams) => {
-			const client = getEventBridgeClient(config);
+			const client = getEventBridgeClient(config, params.estate);
 			return client.send(
 				new DescribeRuleCommand({
 					Name: params.Name,
