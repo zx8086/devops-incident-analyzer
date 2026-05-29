@@ -22,6 +22,7 @@ input_schema:
         - diagnostics
         - cloud_deployment
         - billing
+        - transform_management
       description: Type of Elasticsearch operation to perform
     service_name:
       type: string
@@ -176,6 +177,18 @@ tool_mapping:
       - elasticsearch_billing_get_org_costs
       - elasticsearch_billing_get_deployment_costs
       - elasticsearch_billing_get_org_charts
+    # SIO-830: Elasticsearch _transform/* API tools (data transforms lifecycle).
+    transform_management:
+      - elasticsearch_get_transform
+      - elasticsearch_get_transform_stats
+      - elasticsearch_list_transforms
+      - elasticsearch_start_transform
+      - elasticsearch_stop_transform
+      - elasticsearch_put_transform
+      - elasticsearch_update_transform
+      - elasticsearch_delete_transform
+      - elasticsearch_preview_transform
+      - elasticsearch_get_transform_notifications
   action_descriptions:
     search: >-
       when querying logs by service, time window, and search terms (the primary log-search
@@ -197,3 +210,8 @@ tool_mapping:
     diagnostics: when running cluster-wide diagnostic commands (allocation explain, hot threads, pending tasks) for deep troubleshooting
     cloud_deployment: when listing or describing Elastic Cloud deployments via the v1 cloud API (metadata only -- region, plan, version, capacity; for cost or spend data use `billing` instead)
     billing: when checking Elastic Cloud organization or deployment billing/cost data via the v2 billing API (read-only cost reporting)
+    transform_management: >-
+      when creating, inspecting, starting, stopping, updating, previewing, or deleting an
+      Elasticsearch `_transform` (pivot or latest aggregation). Includes `_stats` polling for
+      checkpoint progress and indexer state, and reading the `.transform-notifications-*` audit
+      log. Use this action for transform lifecycle work and dormancy/split-brain investigations.

@@ -132,6 +132,17 @@ import { registerStopTool } from "./ilm/stop.js";
 // Field Mapping Tools (Get Field Mapping, Clear SQL Cursor)
 import { registerClearSqlCursorTool } from "./mapping/clear_sql_cursor.js";
 import { registerGetFieldMappingTool } from "./mapping/get_field_mapping.js";
+// SIO-830: Transform tools.
+import { registerDeleteTransformTool } from "./transform/delete_transform.js";
+import { registerGetTransformTool } from "./transform/get_transform.js";
+import { registerGetTransformNotificationsTool } from "./transform/get_transform_notifications.js";
+import { registerGetTransformStatsTool } from "./transform/get_transform_stats.js";
+import { registerListTransformsTool } from "./transform/list_transforms.js";
+import { registerPreviewTransformTool } from "./transform/preview_transform.js";
+import { registerPutTransformTool } from "./transform/put_transform.js";
+import { registerStartTransformTool } from "./transform/start_transform.js";
+import { registerStopTransformTool } from "./transform/stop_transform.js";
+import { registerUpdateTransformTool } from "./transform/update_transform.js";
 
 // // Enrich Tools (Get Policy, Put Policy, Delete Policy, Execute Policy, Stats)
 // import { registerEnrichDeletePolicyTool } from "./enrich/delete_policy.js";
@@ -202,7 +213,7 @@ interface ToolInfo {
 // false positives on legitimate read params).
 // SIO-674: Cloud / billing tools are read-only in V1 and listed alongside cluster tools.
 // SIO-675 derives CLUSTER_TOOL_NAMES from this set by excluding the cloud/billing names.
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_search",
 	"elasticsearch_list_indices",
 	"elasticsearch_get_mappings",
@@ -237,6 +248,12 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_ilm_get_lifecycle",
 	"elasticsearch_ilm_explain_lifecycle",
 	"elasticsearch_ilm_get_status",
+	// SIO-830: Transform read tools.
+	"elasticsearch_get_transform",
+	"elasticsearch_get_transform_stats",
+	"elasticsearch_list_transforms",
+	"elasticsearch_preview_transform",
+	"elasticsearch_get_transform_notifications",
 	"elasticsearch_list_tasks",
 	"elasticsearch_tasks_get_task",
 	"elasticsearch_field_usage_stats",
@@ -477,6 +494,18 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerRetryTool(server, esClient);
 	registerStartTool(server, esClient);
 	registerStopTool(server, esClient);
+
+	// SIO-830: Register Transform Tools.
+	registerGetTransformTool(server, esClient);
+	registerGetTransformStatsTool(server, esClient);
+	registerListTransformsTool(server, esClient);
+	registerStartTransformTool(server, esClient);
+	registerStopTransformTool(server, esClient);
+	registerPutTransformTool(server, esClient);
+	registerUpdateTransformTool(server, esClient);
+	registerDeleteTransformTool(server, esClient);
+	registerPreviewTransformTool(server, esClient);
+	registerGetTransformNotificationsTool(server, esClient);
 
 	// // Register Enrich Tools
 	// registerEnrichGetPolicyTool(server, esClient);
