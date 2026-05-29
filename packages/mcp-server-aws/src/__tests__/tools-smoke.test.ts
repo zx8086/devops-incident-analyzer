@@ -17,6 +17,7 @@ import { describeVpcsSchema } from "../tools/ec2/describe-vpcs.ts";
 import { describeServicesSchema } from "../tools/ecs/describe-services.ts";
 import { describeTasksSchema } from "../tools/ecs/describe-tasks.ts";
 import { listClustersSchema } from "../tools/ecs/list-clusters.ts";
+import { listServicesSchema } from "../tools/ecs/list-services.ts";
 import { listTasksSchema } from "../tools/ecs/list-tasks.ts";
 import { describeCacheClustersSchema } from "../tools/elasticache/describe-cache-clusters.ts";
 import { describeReplicationGroupsSchema } from "../tools/elasticache/describe-replication-groups.ts";
@@ -75,6 +76,18 @@ describe("ecs tool param schemas", () => {
 	});
 	test("describeServices rejects missing services array", () => {
 		expect(describeServicesSchema.safeParse({ cluster: "my-cluster" }).success).toBe(false);
+	});
+	test("listServices accepts required cluster", () => {
+		expect(listServicesSchema.safeParse({ cluster: "my-cluster" }).success).toBe(true);
+	});
+	test("listServices rejects missing cluster", () => {
+		expect(listServicesSchema.safeParse({}).success).toBe(false);
+	});
+	test("listServices accepts launchType filter", () => {
+		expect(listServicesSchema.safeParse({ cluster: "my-cluster", launchType: "FARGATE" }).success).toBe(true);
+	});
+	test("listServices rejects invalid launchType", () => {
+		expect(listServicesSchema.safeParse({ cluster: "my-cluster", launchType: "INVALID" }).success).toBe(false);
 	});
 	test("describeTasks accepts required fields", () => {
 		expect(describeTasksSchema.safeParse({ cluster: "my-cluster", tasks: ["task-id-1"] }).success).toBe(true);

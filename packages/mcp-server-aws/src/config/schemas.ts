@@ -13,6 +13,9 @@ const EstateSchema = z.object({
 		.regex(roleArnRegex, "Must be a valid IAM role ARN")
 		.describe("Target role to assume for this estate"),
 	externalId: z.string().min(1).describe("STS ExternalId required by the role's trust policy"),
+	// SIO-832: optional per-estate region override. When absent, the global AWS_REGION is used.
+	// Required for estates whose workloads live outside the default region (e.g. eu-b2bonboarding-prd in eu-west-1).
+	region: z.string().min(1).optional().describe("Optional region override; falls back to AWS_REGION"),
 });
 
 export const ConfigSchema = z.preprocess(
@@ -64,7 +67,7 @@ export const ConfigSchema = z.preprocess(
 			TRANSPORT_PORT: numericString(8000),
 			TRANSPORT_HOST: z.string(),
 			TRANSPORT_PATH: z.string(),
-			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(32000),
+			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(65536),
 		})
 		.transform((raw) => ({
 			aws: {

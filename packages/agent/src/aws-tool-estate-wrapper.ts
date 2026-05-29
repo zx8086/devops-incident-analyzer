@@ -7,21 +7,58 @@ import { currentAwsEstate } from "./mcp-bridge.ts";
 
 const logger = getLogger("aws-tool-estate-wrapper");
 
-function stripEstateFromShape(schema: z.ZodTypeAny): z.ZodObject<z.ZodRawShape> {
-	// MCP tools always come back as objects at the top level. If it's not, fall
-	// back to a passthrough.
-	if (!(schema instanceof z.ZodObject)) {
-		logger.warn({ schemaType: schema?.constructor?.name }, "AWS tool schema is not ZodObject, skipping estate strip");
-		return z.object({}).passthrough();
-	}
+// SIO-832: MultiServerMCPClient hands tool schemas back as raw JSON Schema objects,
+// not Zod instances. The previous `instanceof z.ZodObject` check failed silently on
+// every AWS tool, leaving `estate` visible to the LLM and defeating SIO-828's design.
+// This duck-types both shapes and strips `estate` from each before re-registering.
+
+type JsonSchemaObject = {
+	type?: string;
+	properties?: Record<string, unknown>;
+	required?: string[];
+	[key: string]: unknown;
+};
+
+function isJsonSchemaObject(schema: unknown): schema is JsonSchemaObject {
+	if (schema === null || typeof schema !== "object") return false;
+	const s = schema as JsonSchemaObject;
+	// JSON Schema for an object tool always has properties; type may be omitted by some emitters.
+	return s.properties !== undefined && typeof s.properties === "object";
+}
+
+function stripEstateFromJsonSchema(schema: JsonSchemaObject): JsonSchemaObject {
+	const { estate: _dropped, ...remainingProperties } = (schema.properties ?? {}) as Record<string, unknown>;
+	const remainingRequired = Array.isArray(schema.required) ? schema.required.filter((k) => k !== "estate") : undefined;
+	const next: JsonSchemaObject = { ...schema, properties: remainingProperties };
+	if (remainingRequired !== undefined) next.required = remainingRequired;
+	return next;
+}
+
+function stripEstateFromZodObject(schema: z.ZodObject<z.ZodRawShape>): z.ZodObject<z.ZodRawShape> {
 	const shape = { ...(schema.shape as z.ZodRawShape) };
 	delete shape.estate;
 	return z.object(shape);
 }
 
+type StrippedSchema = z.ZodObject<z.ZodRawShape> | JsonSchemaObject;
+
+function stripEstate(schema: unknown): StrippedSchema {
+	if (schema instanceof z.ZodObject) {
+		return stripEstateFromZodObject(schema);
+	}
+	if (isJsonSchemaObject(schema)) {
+		return stripEstateFromJsonSchema(schema);
+	}
+	logger.warn(
+		{ schemaType: (schema as { constructor?: { name?: string } })?.constructor?.name },
+		"AWS tool schema is neither ZodObject nor JSON Schema; falling back to empty passthrough",
+	);
+	return z.object({}).passthrough();
+}
+
 export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): StructuredToolInterface[] {
 	return awsTools.map((original) => {
-		const strippedSchema = stripEstateFromShape(original.schema as z.ZodTypeAny);
+		const strippedSchema = stripEstate(original.schema);
 
 		return createTool(
 			async (args: unknown) => {
@@ -40,7 +77,8 @@ export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): Str
 			{
 				name: original.name,
 				description: original.description ?? `${original.name} tool`,
-				schema: strippedSchema,
+				// biome-ignore lint/suspicious/noExplicitAny: SIO-832 - createTool's union of Zod/JsonSchema7Type is too tight to satisfy with a runtime-branched schema
+				schema: strippedSchema as any,
 			},
 		) as unknown as StructuredToolInterface;
 	});

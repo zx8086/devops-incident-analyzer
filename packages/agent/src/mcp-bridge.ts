@@ -6,6 +6,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
+import { wrapAwsToolsWithEstate } from "./aws-tool-estate-wrapper.ts";
 
 const logger = getLogger("mcp-bridge");
 
@@ -318,9 +319,6 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 	// The aws_list_estates introspection tool has no `estate` arg; the wrapper's
 	// schema-strip is idempotent for it (delete on missing key is a no-op).
 	if (dataSourceId === "aws") {
-		// Lazy import avoids a cycle (the wrapper imports currentAwsEstate from here).
-		const { wrapAwsToolsWithEstate } =
-			require("./aws-tool-estate-wrapper.ts") as typeof import("./aws-tool-estate-wrapper.ts");
 		return wrapAwsToolsWithEstate(raw);
 	}
 
