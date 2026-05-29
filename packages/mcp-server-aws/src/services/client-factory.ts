@@ -36,9 +36,13 @@ function resolveEstate(config: AwsConfig, estate: string) {
 
 function commonConfig(config: AwsConfig, estate: string) {
 	const estateConfig = resolveEstate(config, estate);
+	// SIO-832: per-estate region override. eu-b2bonboarding-prd workloads live in
+	// eu-west-1 while other estates use the default. STS AssumeRole is region-agnostic
+	// so the creds provider also gets the per-estate region for consistent endpoint.
+	const region = estateConfig.region ?? config.region;
 	return {
-		region: config.region,
-		credentials: buildAssumedCredsProvider(estateConfig, config.region),
+		region,
+		credentials: buildAssumedCredsProvider(estateConfig, region),
 		maxAttempts: 3,
 	};
 }

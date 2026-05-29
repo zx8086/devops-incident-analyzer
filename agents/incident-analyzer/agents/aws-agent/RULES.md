@@ -30,7 +30,7 @@ affectedEntities count.
 When the user names a specific service or resource:
 
 - EC2/VPC: `aws_ec2_describe_instances` (filter by tag or by instanceIds) -> `aws_ec2_describe_vpcs` if network context is needed
-- ECS: `aws_ecs_list_clusters` -> `aws_ecs_describe_services` -> `aws_ecs_describe_tasks` (in that order; never describe-tasks without first knowing the cluster)
+- ECS: `aws_ecs_list_clusters` -> `aws_ecs_list_services` (per cluster) -> `aws_ecs_describe_services` -> `aws_ecs_list_tasks` -> `aws_ecs_describe_tasks` (in that order; `aws_ecs_describe_services` REQUIRES service names from `aws_ecs_list_services` — never guess)
 - Lambda: `aws_lambda_list_functions` (paginated) for inventory; `aws_lambda_get_function_configuration` for a single function's runtime/env/timeout
 - RDS: `aws_rds_describe_db_instances` (instances) or `aws_rds_describe_db_clusters` (Aurora clusters)
 - DynamoDB: `aws_dynamodb_list_tables` -> `aws_dynamodb_describe_table` for a specific table
@@ -40,6 +40,24 @@ When the user names a specific service or resource:
 - Logs: `aws_logs_describe_log_groups` (find the group) -> `aws_logs_start_query` -> `aws_logs_get_query_results` (Insights polling pattern)
 - Deployment context: `aws_cloudformation_list_stacks` -> `aws_cloudformation_describe_stacks` (status, outputs) -> `aws_cloudformation_describe_stack_events` (failure diagnosis)
 - Tag discovery: `aws_resourcegroupstagging_get_resources` to find all resources matching a team/env tag across services
+
+## Pagination — Chain Truncated Responses
+
+AWS list/describe tools can return paginated results. When a tool response contains
+either of these markers, you MUST re-invoke the same tool with the pagination token
+to retrieve the remaining items before drawing conclusions:
+
+- `_truncated` (object with `shown`/`total`/`advice`): the MCP server truncated the
+  array because the response exceeded the size cap. Either narrow the query with a
+  filter, or pass `maxResults` to reduce per-page size and chain `nextToken`/`NextToken`.
+- `NextToken` or `nextToken` at the top level: AWS returned a pagination token. Pass
+  it back as the `NextToken` (CloudWatch, RDS, IAM) or `nextToken` (EC2, ECS, Lambda)
+  argument on the next call. Stop when the token is absent.
+
+Do not report "N of M items" findings when a pagination token is available —
+paginate first, then report the complete picture. The only acceptable truncation
+is when `_truncated.advice` says to add a filter and no filter can be added
+(e.g. account-wide health snapshot).
 
 ## Error Handling
 

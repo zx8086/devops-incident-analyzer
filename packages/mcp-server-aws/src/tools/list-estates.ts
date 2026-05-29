@@ -15,11 +15,16 @@ const schema = z.object({});
 export function registerListEstatesTool(server: McpServer, config: AwsConfig): void {
 	server.tool(
 		"aws_list_estates",
-		"List the AWS estates this runtime is configured to query, plus the latest per-estate health snapshot from boot-time STS:AssumeRole validation.",
+		"List the AWS estates this runtime is configured to query, plus the latest per-estate health snapshot from boot-time STS:AssumeRole validation. Each estate entry includes its effective region (per-estate override or AWS_REGION default).",
 		schema.shape,
 		async () =>
 			toMcp({
-				estates: Object.keys(config.estates),
+				// SIO-832: surface effective region per estate so the LLM and operators can see
+				// at a glance where each estate's tool calls will be routed.
+				estates: Object.entries(config.estates).map(([id, est]) => ({
+					id,
+					region: est.region ?? config.region,
+				})),
 				health: getEstateHealth(),
 			}),
 	);

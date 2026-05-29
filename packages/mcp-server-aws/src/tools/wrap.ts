@@ -114,7 +114,11 @@ interface WrapListArgs<TResponse, TParams> {
 	capBytes?: number;
 }
 
-const FALLBACK_CAP_BYTES = 32_000;
+// SIO-832: 64KB matches the agent-side cap in sub-agent-truncate-tool-output.ts.
+// 32KB was truncating CloudWatch alarm and EC2 instance responses in production
+// estates with large counts (28/50 alarms in eu-oit-prd, 14/17 instances in
+// eu-mendix-platform-prd). Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
+const FALLBACK_CAP_BYTES = 65_536;
 const TRUNCATION_OVERHEAD_BYTES = 200;
 
 // Mutable default so the bootstrap can apply SUBAGENT_TOOL_RESULT_CAP_BYTES once
