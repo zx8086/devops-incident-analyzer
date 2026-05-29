@@ -43,13 +43,26 @@ export const previewTransformValidator = z
 	})
 	.refine(
 		(v) => {
-			if (v.transformId) return !v.pivot && !v.latest && !v.source;
+			if (v.transformId) {
+				// Per ES API contract: when transformId is supplied, no body fields are allowed.
+				return (
+					!v.source &&
+					!v.dest &&
+					!v.pivot &&
+					!v.latest &&
+					v.description === undefined &&
+					v.frequency === undefined &&
+					!v.sync &&
+					!v.settings &&
+					!v.retention_policy
+				);
+			}
 			return Boolean(v.pivot) !== Boolean(v.latest);
 		},
 		{
 			message:
-				"When previewing a new config, exactly one of `pivot` or `latest` must be set; when previewing an existing transform, do not pass body fields.",
-			path: ["pivot"],
+				"When previewing an existing `transformId`, do not pass any body fields (source/dest/pivot/latest/description/frequency/sync/settings/retention_policy). When previewing a new config, exactly one of `pivot` or `latest` must be set.",
+			path: ["transformId"],
 		},
 	);
 

@@ -30,10 +30,10 @@ export const putTransformValidator = z
 			.min(1, "transformId cannot be empty")
 			.max(64, "transformId must be <= 64 characters")
 			.regex(
-				/^[a-z0-9][a-z0-9_-]*[a-z0-9]$/,
+				/^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/,
 				"transformId must be lowercase alphanumeric/`-`/`_`, start/end alphanumeric",
 			)
-			.describe("Transform id. Lowercase alphanumeric + `-` + `_`. Must start and end with alphanumeric. <= 64 chars."),
+			.describe("Transform id. Lowercase alphanumeric + `-` + `_`. Must start and end with alphanumeric. 1-64 chars."),
 		source: sourceSchema.describe("Source configuration."),
 		dest: destSchema.describe("Destination configuration."),
 		pivot: z
@@ -58,7 +58,8 @@ export const putTransformValidator = z
 				dates_as_epoch_millis: z.boolean().optional(),
 				align_checkpoints: z.boolean().optional(),
 				deduce_mappings: z.boolean().optional(),
-				num_failure_retries: z.number().int().min(0).optional(),
+				// ES allows -1 (retry indefinitely) through 100.
+				num_failure_retries: z.number().int().min(-1).max(100).optional(),
 			})
 			.passthrough()
 			.optional()

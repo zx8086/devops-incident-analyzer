@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAllTools } from "../../../src/tools/index.js";
+import { READ_ONLY_TOOLS, registerAllTools } from "../../../src/tools/index.js";
 
 const EXPECTED_TRANSFORM_TOOLS = [
 	"elasticsearch_get_transform",
@@ -44,8 +44,37 @@ describe("SIO-830: transform tool registration", () => {
 		expect(transformCount).toBe(10);
 	});
 
-	test("transform read tools are in READ_ONLY_TOOLS (no security wrapper)", () => {
-		// Indirect verification: descriptions for read tools must not say WRITE/DESTRUCTIVE.
+	test("transform read tools are in READ_ONLY_TOOLS (skips security-validation wrapper)", () => {
+		// Authoritative check: READ_ONLY_TOOLS membership is what actually controls
+		// whether withSecurityValidation runs (see tools/index.ts shouldValidate).
+		const readOnlyTransformTools = [
+			"elasticsearch_get_transform",
+			"elasticsearch_get_transform_stats",
+			"elasticsearch_list_transforms",
+			"elasticsearch_preview_transform",
+			"elasticsearch_get_transform_notifications",
+		];
+
+		for (const name of readOnlyTransformTools) {
+			expect(READ_ONLY_TOOLS.has(name)).toBe(true);
+		}
+	});
+
+	test("transform write/destructive tools are NOT in READ_ONLY_TOOLS", () => {
+		const writeTransformTools = [
+			"elasticsearch_start_transform",
+			"elasticsearch_stop_transform",
+			"elasticsearch_put_transform",
+			"elasticsearch_update_transform",
+			"elasticsearch_delete_transform",
+		];
+
+		for (const name of writeTransformTools) {
+			expect(READ_ONLY_TOOLS.has(name)).toBe(false);
+		}
+	});
+
+	test("transform read tool descriptions do not claim WRITE/DESTRUCTIVE (description-rot canary)", () => {
 		const server = new McpServer({ name: "test-server", version: "0.0.0" });
 		const fakeClient = {} as Parameters<typeof registerAllTools>[1];
 		const registered = registerAllTools(server, fakeClient);

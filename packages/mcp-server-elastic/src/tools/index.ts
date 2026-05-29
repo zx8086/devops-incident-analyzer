@@ -213,7 +213,7 @@ interface ToolInfo {
 // false positives on legitimate read params).
 // SIO-674: Cloud / billing tools are read-only in V1 and listed alongside cluster tools.
 // SIO-675 derives CLUSTER_TOOL_NAMES from this set by excluding the cloud/billing names.
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_search",
 	"elasticsearch_list_indices",
 	"elasticsearch_get_mappings",

@@ -77,6 +77,28 @@ describe("putTransformValidator", () => {
 		expect(() => putTransformValidator.parse({ ...validPivot, transformId: "-bad" })).toThrow();
 	});
 
+	test("accepts single-character transformId (ES doc has no minimum length)", () => {
+		expect(() => putTransformValidator.parse({ ...validPivot, transformId: "a" })).not.toThrow();
+		expect(() => putTransformValidator.parse({ ...validPivot, transformId: "1" })).not.toThrow();
+	});
+
+	test("rejects single-character non-alphanumeric transformId", () => {
+		expect(() => putTransformValidator.parse({ ...validPivot, transformId: "-" })).toThrow();
+		expect(() => putTransformValidator.parse({ ...validPivot, transformId: "_" })).toThrow();
+	});
+
+	test("accepts settings.num_failure_retries=-1 (ES: retry indefinitely)", () => {
+		expect(() => putTransformValidator.parse({ ...validPivot, settings: { num_failure_retries: -1 } })).not.toThrow();
+	});
+
+	test("rejects settings.num_failure_retries > 100 (ES cap)", () => {
+		expect(() => putTransformValidator.parse({ ...validPivot, settings: { num_failure_retries: 101 } })).toThrow();
+	});
+
+	test("rejects settings.num_failure_retries < -1", () => {
+		expect(() => putTransformValidator.parse({ ...validPivot, settings: { num_failure_retries: -2 } })).toThrow();
+	});
+
 	test("accepts array of source indices", () => {
 		expect(() => putTransformValidator.parse({ ...validPivot, source: { index: ["a", "b", "c"] } })).not.toThrow();
 	});
@@ -194,6 +216,31 @@ describe("updateTransformValidator", () => {
 	test("rejects empty transformId", () => {
 		expect(() => updateTransformValidator.parse({ transformId: "" })).toThrow();
 	});
+
+	test("rejects source object without index (must be present when source provided)", () => {
+		expect(() =>
+			updateTransformValidator.parse({ transformId: "x", source: { query: { match_all: {} } } as never }),
+		).toThrow();
+	});
+
+	test("accepts source.index alongside source.query", () => {
+		expect(() =>
+			updateTransformValidator.parse({ transformId: "x", source: { index: "s", query: { match_all: {} } } }),
+		).not.toThrow();
+	});
+
+	test("accepts settings.num_failure_retries=-1 / 100; rejects 101 and -2", () => {
+		expect(() =>
+			updateTransformValidator.parse({ transformId: "x", settings: { num_failure_retries: -1 } }),
+		).not.toThrow();
+		expect(() =>
+			updateTransformValidator.parse({ transformId: "x", settings: { num_failure_retries: 100 } }),
+		).not.toThrow();
+		expect(() =>
+			updateTransformValidator.parse({ transformId: "x", settings: { num_failure_retries: 101 } }),
+		).toThrow();
+		expect(() => updateTransformValidator.parse({ transformId: "x", settings: { num_failure_retries: -2 } })).toThrow();
+	});
 });
 
 describe("previewTransformValidator", () => {
@@ -216,6 +263,22 @@ describe("previewTransformValidator", () => {
 
 	test("rejects mixing transformId with body fields", () => {
 		expect(() => previewTransformValidator.parse({ transformId: "x", source: { index: "s" }, pivot: {} })).toThrow();
+	});
+
+	test("rejects mixing transformId with only dest", () => {
+		expect(() => previewTransformValidator.parse({ transformId: "x", dest: { index: "d" } })).toThrow();
+	});
+
+	test("rejects mixing transformId with only description", () => {
+		expect(() => previewTransformValidator.parse({ transformId: "x", description: "hi" })).toThrow();
+	});
+
+	test("rejects mixing transformId with only frequency", () => {
+		expect(() => previewTransformValidator.parse({ transformId: "x", frequency: "1m" })).toThrow();
+	});
+
+	test("rejects mixing transformId with only settings", () => {
+		expect(() => previewTransformValidator.parse({ transformId: "x", settings: { foo: 1 } })).toThrow();
 	});
 
 	test("rejects new config with neither pivot nor latest", () => {

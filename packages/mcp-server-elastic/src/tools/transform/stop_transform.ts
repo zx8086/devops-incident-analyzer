@@ -39,7 +39,7 @@ type StopTransformParams = z.infer<typeof stopTransformValidator>;
 function createStopTransformMcpError(
 	error: Error | string,
 	context: {
-		type: "validation" | "execution" | "not_found" | "permission" | "state_conflict";
+		type: "validation" | "execution" | "not_found" | "permission" | "state_conflict" | "timeout";
 		details?: unknown;
 	},
 ): McpError {
@@ -50,6 +50,7 @@ function createStopTransformMcpError(
 		not_found: ErrorCode.InvalidRequest,
 		permission: ErrorCode.InvalidRequest,
 		state_conflict: ErrorCode.InvalidRequest,
+		timeout: ErrorCode.InvalidRequest,
 	};
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_stop_transform] ${message}`, context.details);
 }
@@ -121,6 +122,15 @@ export const registerStopTransformTool: ToolRegistrationFunction = (server: McpS
 						type: "not_found",
 						details: { transformId: params?.transformId },
 					});
+				}
+				if (error.message.includes("Timeout") || error.message.includes("408")) {
+					throw createStopTransformMcpError(
+						`Synchronous stop timeout for '${params?.transformId ?? "<unset>"}'. The transform continues moving to STOPPED in the background — poll \`elasticsearch_get_transform_stats\` to confirm. Pass a longer \`timeout\` (e.g. \`5m\`) on retry.`,
+						{
+							type: "timeout",
+							details: { transformId: params?.transformId, providedTimeout: params?.timeout },
+						},
+					);
 				}
 			}
 			throw createStopTransformMcpError(error instanceof Error ? error.message : String(error), {

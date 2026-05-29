@@ -8,9 +8,11 @@ import { logger } from "../../utils/logger.js";
 import { withSecurityValidation } from "../../utils/securityEnhancer.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
+// When `source` is provided in an update body, `index` MUST be set; the SDK rejects
+// a bare {query} update because internally it merges over the existing source verbatim.
 const sourceSchema = z
 	.object({
-		index: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+		index: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
 		query: z.record(z.string(), z.unknown()).optional(),
 		runtime_mappings: z.record(z.string(), z.unknown()).optional(),
 	})
@@ -41,7 +43,8 @@ export const updateTransformValidator = z.object({
 			dates_as_epoch_millis: z.boolean().optional(),
 			align_checkpoints: z.boolean().optional(),
 			deduce_mappings: z.boolean().optional(),
-			num_failure_retries: z.number().int().min(0).optional(),
+			// ES allows -1 (retry indefinitely) through 100.
+			num_failure_retries: z.number().int().min(-1).max(100).optional(),
 		})
 		.passthrough()
 		.optional()
