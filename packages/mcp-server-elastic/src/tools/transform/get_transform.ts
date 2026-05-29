@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
+import { renderSummaryLine, summarizeTransform } from "./summary.js";
 
 export const getTransformValidator = z.object({
 	transformId: z
@@ -16,7 +17,23 @@ export const getTransformValidator = z.object({
 	from: z.number().int().min(0).optional().describe("Skip the first N transforms."),
 	size: z.number().int().min(1).max(1000).optional().describe("Max transforms to return. Range 1-1000."),
 	excludeGenerated: z.boolean().optional().describe("Exclude fields added automatically by ES (for clean re-import)."),
+	summary: z
+		.boolean()
+		.optional()
+		.describe(
+			"Force summary or full output. When omitted, the tool picks based on the request shape: full body for a single non-wildcard `transformId` (drill-in), summary otherwise (wildcards / `_all` / multi-id).",
+		),
 });
+
+// Smart default: full body when the caller is drilling into a single specific transform;
+// summary otherwise. Treat `_all`, `*`, wildcards, and comma lists as "multi" — those are
+// inventory-style requests where the full body per row would blow the chat buffer.
+export function isSingleSpecificId(transformId: string | undefined): boolean {
+	if (!transformId) return false;
+	if (transformId === "_all" || transformId === "*") return false;
+	if (transformId.includes("*") || transformId.includes(",")) return false;
+	return true;
+}
 
 type GetTransformParams = z.infer<typeof getTransformValidator>;
 
@@ -57,19 +74,18 @@ export const registerGetTransformTool: ToolRegistrationFunction = (server: McpSe
 				logger.warn({ duration, transformId: params.transformId }, "Slow transform op: get_transform");
 			}
 
-			const human = [
-				`**Transforms (count: ${result.count})**`,
-				...result.transforms.map((t) => {
-					const sourceIdx = Array.isArray(t.source.index) ? t.source.index.join(",") : t.source.index;
-					const mode = "pivot" in t && t.pivot ? "pivot" : "latest";
-					return `- \`${t.id}\` (${mode}) source=${sourceIdx} dest=${t.dest.index} freq=${t.frequency ?? "default"}`;
-				}),
-			].join("\n");
+			const summaryMode = params.summary ?? !isSingleSpecificId(params.transformId);
+			const summaries = result.transforms.map(summarizeTransform);
+			const headline = `**Transforms (count: ${result.count})** — ${summaryMode ? "summary" : "full"} mode`;
+			const human = [headline, ...summaries.map(renderSummaryLine)].join("\n");
 
 			return {
 				content: [
 					{ type: "text", text: human },
-					{ type: "text", text: JSON.stringify(result, null, 2) },
+					{
+						type: "text",
+						text: JSON.stringify(summaryMode ? { count: result.count, transforms: summaries } : result, null, 2),
+					},
 				],
 			};
 		} catch (error) {
@@ -106,7 +122,7 @@ export const registerGetTransformTool: ToolRegistrationFunction = (server: McpSe
 		{
 			title: "Get Transform",
 			description:
-				"Get the configuration of one or more Elasticsearch transforms (`GET _transform/{id}`). Supports wildcards and `_all`. Read-only. Returns `{ count, transforms: [...] }`. For run-state and checkpoint progress use `elasticsearch_get_transform_stats`.",
+				"Get the configuration of one or more Elasticsearch transforms (`GET _transform/{id}`). Supports wildcards and `_all`. Read-only. Smart default: full body when drilling into a single specific id, compact summary otherwise. Pass `summary: true|false` to force. For run-state and checkpoint progress use `elasticsearch_get_transform_stats`.",
 			inputSchema: getTransformValidator.shape,
 		},
 		handler,
