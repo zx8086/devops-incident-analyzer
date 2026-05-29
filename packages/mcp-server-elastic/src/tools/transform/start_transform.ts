@@ -14,7 +14,7 @@ export const startTransformValidator = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Period to wait for synchronous start. ES default is `30s`; raise to `5m` to avoid misleading 408 timeouts.",
+			"Period to wait for synchronous start. This tool defaults to `5m` (overriding the ES default of `30s`, which often returns 408 even when the start succeeds asynchronously). Pass an explicit value to override.",
 		),
 	fromTimestamp: z
 		.string()
@@ -52,9 +52,12 @@ export const registerStartTransformTool: ToolRegistrationFunction = (server: Mcp
 		try {
 			params = startTransformValidator.parse(args);
 
+			// SIO-831: Default to 5m (overrides ES's 30s default) to avoid the misleading-408
+			// footgun where a successful asynchronous start returns a timeout error.
+			const effectiveTimeout = params.timeout ?? "5m";
 			const result = await esClient.transform.startTransform({
 				transform_id: params.transformId,
-				timeout: params.timeout,
+				timeout: effectiveTimeout,
 				from: params.fromTimestamp,
 			});
 
@@ -136,7 +139,7 @@ export const registerStartTransformTool: ToolRegistrationFunction = (server: Mcp
 		{
 			title: "Start Transform",
 			description:
-				'Start an Elasticsearch transform (`POST _transform/{id}/_start`). WRITE OPERATION. The ES default synchronous wait is 30s; a 408 timeout does NOT mean the start failed — the transform may still be starting in the background. Always poll `elasticsearch_get_transform_stats` after starting. Pass `timeout: "5m"` to extend the synchronous wait. Use `fromTimestamp` to backfill continuous transforms.',
+				"Start an Elasticsearch transform (`POST _transform/{id}/_start`). WRITE OPERATION. This tool defaults `timeout` to `5m` (the ES default is 30s, which often returns a misleading 408 even when the start succeeds asynchronously). On a 408, the transform may still be starting in the background — poll `elasticsearch_get_transform_stats` to confirm. Use `fromTimestamp` to backfill continuous transforms.",
 			inputSchema: startTransformValidator.shape,
 		},
 		secureHandler,

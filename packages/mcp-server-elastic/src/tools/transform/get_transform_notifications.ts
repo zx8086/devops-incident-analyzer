@@ -21,6 +21,12 @@ export const getTransformNotificationsValidator = z.object({
 		.optional()
 		.describe("Max notifications to return. Range 1-1000 (default 50)."),
 	from: z.number().int().min(0).optional().describe("Skip the first N notifications (pagination offset)."),
+	since: z
+		.string()
+		.optional()
+		.describe(
+			'Time bound on `timestamp` (default `now-24h`). Accepts any ES date-math expression: `now-1h`, `now-7d`, ISO timestamp, etc. Pass an explicit older value like `now-30d` for historical sweeps; pass `""` to disable.',
+		),
 });
 
 type GetTransformNotificationsParams = z.infer<typeof getTransformNotificationsValidator>;
@@ -60,6 +66,12 @@ export const registerGetTransformNotificationsTool: ToolRegistrationFunction = (
 			}
 			if (params.level) {
 				filters.push({ term: { level: params.level } });
+			}
+			// SIO-831: Default time bound so callers don't accidentally pull months of history.
+			// Empty string opts out (caller explicitly wants all-time).
+			const since = params.since ?? "now-24h";
+			if (since !== "") {
+				filters.push({ range: { timestamp: { gte: since } } });
 			}
 
 			const result = await esClient.search({
@@ -124,7 +136,7 @@ export const registerGetTransformNotificationsTool: ToolRegistrationFunction = (
 		{
 			title: "Get Transform Notifications",
 			description:
-				"Read the transform audit log (`.transform-notifications-*`). Typed wrapper over `elasticsearch_search` with fixed index pattern, `timestamp:desc` sort, and optional `transform_id` / `level` filters. Read-only. Use to investigate why a transform stopped, failed, or emitted warnings.",
+				'Read the transform audit log (`.transform-notifications-*`). Typed wrapper over `elasticsearch_search` with fixed index pattern, `timestamp:desc` sort, and optional `transform_id` / `level` / `since` filters. Defaults to `since: "now-24h"` so investigations of recent events don\'t pull months of audit history. Pass `since: ""` to disable the time bound. Read-only.',
 			inputSchema: getTransformNotificationsValidator.shape,
 		},
 		handler,

@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { deleteTransformValidator } from "../../../src/tools/transform/delete_transform.js";
-import { getTransformValidator } from "../../../src/tools/transform/get_transform.js";
+import { getTransformValidator, isSingleSpecificId } from "../../../src/tools/transform/get_transform.js";
 import { getTransformNotificationsValidator } from "../../../src/tools/transform/get_transform_notifications.js";
 import { getTransformStatsValidator } from "../../../src/tools/transform/get_transform_stats.js";
 import { listTransformsValidator } from "../../../src/tools/transform/list_transforms.js";
@@ -180,6 +180,25 @@ describe("getTransformValidator", () => {
 	test("rejects negative from", () => {
 		expect(() => getTransformValidator.parse({ from: -1 })).toThrow();
 	});
+
+	test("SIO-831: accepts summary override", () => {
+		expect(() => getTransformValidator.parse({ summary: true })).not.toThrow();
+		expect(() => getTransformValidator.parse({ summary: false })).not.toThrow();
+	});
+});
+
+describe("SIO-831: get_transform smart default (isSingleSpecificId)", () => {
+	test("treats a single concrete id as drill-in (full mode)", () => {
+		expect(isSingleSpecificId("mulesoft-v8")).toBe(true);
+	});
+
+	test("treats _all / * / wildcards / comma lists as inventory (summary mode)", () => {
+		expect(isSingleSpecificId("_all")).toBe(false);
+		expect(isSingleSpecificId("*")).toBe(false);
+		expect(isSingleSpecificId("mulesoft-*")).toBe(false);
+		expect(isSingleSpecificId("a,b,c")).toBe(false);
+		expect(isSingleSpecificId(undefined)).toBe(false);
+	});
 });
 
 describe("getTransformStatsValidator", () => {
@@ -190,6 +209,24 @@ describe("getTransformStatsValidator", () => {
 	test("accepts _all", () => {
 		expect(() => getTransformStatsValidator.parse({ transformId: "_all" })).not.toThrow();
 	});
+
+	test("SIO-831: accepts verbose flag", () => {
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", verbose: true })).not.toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", verbose: false })).not.toThrow();
+	});
+
+	test("SIO-831: accepts ES duration for stalledAfter", () => {
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "24h" })).not.toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "30m" })).not.toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "7d" })).not.toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "500ms" })).not.toThrow();
+	});
+
+	test("SIO-831: rejects non-ES-duration stalledAfter", () => {
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "1 day" })).toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "1y" })).toThrow();
+		expect(() => getTransformStatsValidator.parse({ transformId: "_all", stalledAfter: "" })).toThrow();
+	});
 });
 
 describe("listTransformsValidator", () => {
@@ -199,6 +236,11 @@ describe("listTransformsValidator", () => {
 
 	test("rejects size > 1000", () => {
 		expect(() => listTransformsValidator.parse({ size: 1500 })).toThrow();
+	});
+
+	test("SIO-831: accepts summary: true | false", () => {
+		expect(() => listTransformsValidator.parse({ summary: true })).not.toThrow();
+		expect(() => listTransformsValidator.parse({ summary: false })).not.toThrow();
 	});
 });
 
@@ -301,5 +343,15 @@ describe("getTransformNotificationsValidator", () => {
 
 	test("rejects size > 1000", () => {
 		expect(() => getTransformNotificationsValidator.parse({ size: 1500 })).toThrow();
+	});
+
+	test("SIO-831: accepts since date-math and ISO timestamp", () => {
+		expect(() => getTransformNotificationsValidator.parse({ since: "now-1h" })).not.toThrow();
+		expect(() => getTransformNotificationsValidator.parse({ since: "now-7d" })).not.toThrow();
+		expect(() => getTransformNotificationsValidator.parse({ since: "2026-05-01T00:00:00Z" })).not.toThrow();
+	});
+
+	test("SIO-831: accepts empty string to disable time bound", () => {
+		expect(() => getTransformNotificationsValidator.parse({ since: "" })).not.toThrow();
 	});
 });
