@@ -69,7 +69,7 @@ Covers four things the runtime needs:
 1. **CloudWatch Logs** — emit runtime logs to `/aws/bedrock-agentcore/*` in account 399987695868.
 2. **ECR Pull** — pull the runtime container image from the AgentCore account's ECR.
 3. **Wildcard AssumeRole on `DevOpsAgentReadOnly`** — convenience grant for any account that follows the naming convention. Onboarding a new monitored account doesn't require updating this policy.
-4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity for the current 6 monitored accounts.
+4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity for the monitored accounts. This includes `399987695868` itself (SIO-837): the host/shared-services account is queried like any other estate via a **same-account AssumeRole** into its own `DevOpsAgentReadOnly` role. No credential-less special case.
 
 
 ```json
@@ -112,7 +112,8 @@ Covers four things the runtime needs:
         "arn:aws:iam::654654584630:role/DevOpsAgentReadOnly",
         "arn:aws:iam::178531813197:role/DevOpsAgentReadOnly",
         "arn:aws:iam::105329690220:role/DevOpsAgentReadOnly",
-        "arn:aws:iam::728412486223:role/DevOpsAgentReadOnly"
+        "arn:aws:iam::728412486223:role/DevOpsAgentReadOnly",
+        "arn:aws:iam::399987695868:role/DevOpsAgentReadOnly"
       ]
     }
   ]
@@ -394,5 +395,13 @@ When a new monitored account is added:
 1. **In the new account:** repeat Part 2 (create `DevOpsAgentReadOnly` with the trust + permissions JSON files unchanged — they're parameter-free).
 2. **In the AgentCore account:** update `DevOpsAgentCoreAssumePolicy`'s `ExplicitAccountAssumeRoles` statement to include the new ARN. The wildcard statement (`arn:aws:iam::*:role/DevOpsAgentReadOnly`) already covers it, but the explicit list is kept for audit clarity. Use `aws iam put-role-policy` (overwrites the inline policy atomically).
 3. **Verify:** run the manual `sts:assume-role` check for the new account.
+
+### Host / shared-services account (SIO-837)
+
+The AgentCore host account `399987695868` (`eu-shared-services-prd`) is onboarded the **same way** — it is simply an estate that happens to be the same account the runtime runs in:
+
+1. **In `399987695868`:** create `DevOpsAgentReadOnly` with the unchanged trust + permissions JSON files. The trust policy already names `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` as the principal, so the same-account assume works without modification. ExternalId is `devops-agent-prod-access`, identical to every other estate.
+2. **Execution-role policy:** `arn:aws:iam::399987695868:role/DevOpsAgentReadOnly` is already in the `ExplicitAccountAssumeRoles` list (and the wildcard covers it).
+3. **`AWS_ESTATES`:** add a normal entry — `"eu-shared-services-prd":{"assumedRoleArn":"arn:aws:iam::399987695868:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}`. No credential-less / ambient-credential special case; the MCP server treats it like any other estate.
 
 ---
