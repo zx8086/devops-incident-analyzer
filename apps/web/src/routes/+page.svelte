@@ -1,6 +1,7 @@
 <script lang="ts">
 // apps/web/src/routes/+page.svelte
 import { onDestroy, onMount } from "svelte";
+import AwsEstateSelector from "$lib/components/AwsEstateSelector.svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
@@ -85,6 +86,10 @@ function handleSuggestionClick(suggestion: string) {
 
   {#if agentStore.selectedDataSources.includes("elastic")}
     <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />
+  {/if}
+
+  {#if agentStore.selectedDataSources.includes("aws")}
+    <AwsEstateSelector estates={agentStore.availableAwsEstates} bind:selected={agentStore.selectedAwsEstates} />
   {/if}
 
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">

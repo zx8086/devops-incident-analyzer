@@ -93,6 +93,14 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-836: AWS estates the user explicitly selected in the UI. When non-empty,
+	// awsEstateRouter uses these verbatim and skips the LLM classifier. Empty =
+	// no UI selection, router decides (LLM explicit or ambiguous->all).
+	uiAwsEstates: Annotation<string[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+
 	// SIO-559: append reducer -- appends new results, empty array resets
 	dataSourceResults: Annotation<DataSourceResult[]>({
 		reducer: (prev, next) => {

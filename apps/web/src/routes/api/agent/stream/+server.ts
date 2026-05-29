@@ -23,6 +23,8 @@ const StreamRequestSchema = z.object({
 	dataSources: z.array(z.string()).optional(),
 	// SIO-649: Elastic deployment IDs to fan out to. Undefined = legacy single-deployment behavior.
 	targetDeployments: z.array(z.string()).optional(),
+	// SIO-836: AWS estate IDs the user explicitly selected. Empty/undefined = LLM router decides.
+	uiAwsEstates: z.array(z.string()).optional(),
 	attachments: z.array(AttachmentBlockSchema).max(10).optional(),
 	isFollowUp: z.boolean().optional(),
 	dataSourceContext: DataSourceContextSchema.optional(),
@@ -77,6 +79,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									runId,
 									dataSources: body.dataSources,
 									targetDeployments: body.targetDeployments,
+									uiAwsEstates: body.uiAwsEstates,
 									isFollowUp: body.isFollowUp,
 									dataSourceContext: body.dataSourceContext,
 									attachmentContentBlocks: processedAttachments?.contentBlocks,
