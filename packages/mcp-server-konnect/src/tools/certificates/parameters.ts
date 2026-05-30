@@ -3,7 +3,8 @@ import { CommonSchemas } from "../../utils/validation.js";
 
 export const listCertificatesParameters = z.object({
 	controlPlaneId: CommonSchemas.uuid.describe("Control Plane ID (obtainable from list-control-planes tool)"),
-	size: CommonSchemas.pageSize,
+	// SIO-839: canonical page-size name `pageSize` (was `size`).
+	pageSize: CommonSchemas.pageSize,
 	offset: CommonSchemas.offset,
 });
 

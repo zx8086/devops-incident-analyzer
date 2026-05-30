@@ -336,7 +336,7 @@ List all services associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of services to return (1-1000, default: 100)
+  - pageSize: Number - Number of services to return (1-1000, default: 100)
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
@@ -363,7 +363,7 @@ List all routes associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of routes to return (1-1000, default: 100)
+  - pageSize: Number - Number of routes to return (1-1000, default: 100)
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
@@ -389,7 +389,7 @@ List all consumers associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of consumers to return (1-1000, default: 100)
+  - pageSize: Number - Number of consumers to return (1-1000, default: 100)
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:
@@ -409,7 +409,7 @@ List all plugins associated with a control plane.
 
 INPUT:
   - controlPlaneId: String - ID of the control plane
-  - size: Number - Number of plugins to return (1-1000, default: 100)
+  - pageSize: Number - Number of plugins to return (1-1000, default: 100)
   - offset: String (optional) - Pagination offset token from previous response
 
 OUTPUT:

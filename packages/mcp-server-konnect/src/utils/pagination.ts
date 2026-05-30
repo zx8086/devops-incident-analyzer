@@ -3,7 +3,32 @@
  * Implements cursor-based pagination per MCP Specification 2025-06-18
  */
 
+import type { ListTruncationMarker } from "@devops-agent/shared";
 import type { MCPTool } from "../tools/registry.js";
+
+// SIO-839: build the shared-shaped truncation marker for a Kong resource list. Konnect
+// delegates pagination to Kong (no in-memory slice), so this only signals "more exists,
+// here is how to fetch it" -- it never drops data. Emitted only when Kong capped the page.
+// `total` falls back to the shown count when Kong did not report a real total; the advice
+// makes clear the cap came from Kong, not a precise total. `cursor` is Kong's offset token
+// (offset-based tools); omit it for page-number tools and steer the model to `pageNumber`.
+export function buildKongTruncationMarker(args: {
+	capped: boolean;
+	shown: number;
+	total?: number;
+	cursor?: string;
+	advice?: string;
+}): ListTruncationMarker | undefined {
+	if (!args.capped) return undefined;
+	return {
+		shown: args.shown,
+		total: args.total ?? args.shown,
+		advice:
+			args.advice ??
+			"Kong capped this page at 100 rows. Page with the returned offset to fetch more (this signals more data exists; nothing was dropped).",
+		...(args.cursor ? { cursor: args.cursor } : {}),
+	};
+}
 
 export interface PaginationCursor {
 	offset: number;

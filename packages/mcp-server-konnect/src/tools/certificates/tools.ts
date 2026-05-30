@@ -18,7 +18,7 @@ export const certificatesTools = (): MCPTool[] => [
 		parameters: parameters.listCertificatesParameters,
 		category: "certificates",
 		handler: async (args: ListCertificatesArgs, { api }) =>
-			certificatesOps.listCertificates(api, args.controlPlaneId, args.size, args.offset),
+			certificatesOps.listCertificates(api, args.controlPlaneId, args.pageSize, args.offset),
 	},
 	{
 		method: "get_certificate",
