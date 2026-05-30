@@ -1,4 +1,9 @@
 // src/tools/types.ts
+import type { BlobTruncationMarker, ListTruncationMarker } from "@devops-agent/shared";
+
+// SIO-833: canonical truncation markers live in @devops-agent/shared; re-exported here so
+// existing AWS-side imports keep resolving against one shared envelope shape.
+export type { BlobTruncationMarker, ListTruncationMarker };
 
 export type ToolErrorKind =
 	| "assume-role-denied"
@@ -18,17 +23,6 @@ export interface ToolError {
 	awsRequestId?: string;
 	httpStatusCode?: number;
 	advice?: string;
-}
-
-export interface ListTruncationMarker {
-	shown: number;
-	total: number;
-	advice: string;
-}
-
-export interface BlobTruncationMarker {
-	atBytes: number;
-	advice: string;
 }
 
 export type ToolResult<TResponse> =

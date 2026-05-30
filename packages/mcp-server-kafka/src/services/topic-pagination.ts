@@ -1,5 +1,7 @@
 // src/services/topic-pagination.ts
 
+import { sliceArray } from "@devops-agent/shared";
+
 export interface SliceTopicsOptions {
 	filter?: string;
 	prefix?: string;
@@ -16,7 +18,8 @@ export interface PagedTopicNames {
 
 // SIO-735: shared paging slice used by kafka_list_topics, kafka_get_cluster_info,
 // and restproxy_list_topics. Sort first so 'offset' is stable across calls
-// (Kafka Admin and REST Proxy give no order guarantee).
+// (Kafka Admin and REST Proxy give no order guarantee). SIO-833: paging math delegated
+// to the shared sliceArray so every server slices identically.
 export function sliceTopics(raw: string[], options: SliceTopicsOptions): PagedTopicNames {
 	const { filter, prefix, limit, offset } = options;
 	const sorted = [...raw].sort();
@@ -28,9 +31,7 @@ export function sliceTopics(raw: string[], options: SliceTopicsOptions): PagedTo
 		matching = matching.filter((t) => regex.test(t));
 	}
 
-	const total = matching.length;
-	const page = matching.slice(offset, offset + limit);
-	const truncated = offset + page.length < total;
+	const { items: topics, total, truncated } = sliceArray(matching, { limit, offset });
 
 	let hint: string | undefined;
 	if (offset >= total && total > 0) {
@@ -40,7 +41,7 @@ export function sliceTopics(raw: string[], options: SliceTopicsOptions): PagedTo
 	}
 
 	return {
-		topics: page,
+		topics,
 		total,
 		truncated,
 		...(hint ? { hint } : {}),

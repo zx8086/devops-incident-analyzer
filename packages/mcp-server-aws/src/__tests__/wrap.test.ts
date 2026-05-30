@@ -183,8 +183,8 @@ describe("mapAwsError", () => {
 });
 
 describe("setDefaultCapBytes", () => {
-	// Restore the fallback default after this block so other tests see the 64KB cap (SIO-832).
-	afterAll(() => setDefaultCapBytes(65_536));
+	// Restore the shared default after this block so other tests see the 128KB cap (SIO-833).
+	afterAll(() => setDefaultCapBytes(131_072));
 
 	test("applies to wrappers created without an explicit capBytes", async () => {
 		setDefaultCapBytes(200);

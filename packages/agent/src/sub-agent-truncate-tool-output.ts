@@ -1,5 +1,7 @@
 // packages/agent/src/sub-agent-truncate-tool-output.ts
 
+import { DEFAULT_TOOL_RESULT_CAP_BYTES } from "@devops-agent/shared";
+
 const HITS_KEEP = 3;
 const NODES_KEEP = 5;
 const ARRAY_KEEP_DEFAULT = 20;
@@ -9,7 +11,8 @@ const ROWS_KEEP = 20;
 const BYTE_BUDGET_DIVISOR = 4;
 const ARRAY_INLINE_SAMPLE = 5;
 const MARKER_BYTE_RESERVE = 256;
-const DEFAULT_CAP_BYTES = 65_536;
+// SIO-833: sourced from @devops-agent/shared so the agent and AWS MCP caps move in lockstep.
+const DEFAULT_CAP_BYTES = DEFAULT_TOOL_RESULT_CAP_BYTES;
 
 export type TruncationStrategy =
 	| "json-hits"
@@ -28,7 +31,7 @@ export interface TruncationResult {
 	strategy: TruncationStrategy;
 }
 
-// SIO-688: cap defaults to 65,536 when env unset/invalid; explicit "0" disables.
+// SIO-688: cap defaults to the shared DEFAULT_TOOL_RESULT_CAP_BYTES when env unset/invalid; explicit "0" disables.
 export function getSubAgentToolCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
 	const raw = env.SUBAGENT_TOOL_RESULT_CAP_BYTES;
 	if (raw == null || raw === "") return DEFAULT_CAP_BYTES;

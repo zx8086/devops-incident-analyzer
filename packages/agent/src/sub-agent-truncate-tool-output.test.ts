@@ -35,16 +35,16 @@ function bigNodesPayload(): string {
 }
 
 describe("getSubAgentToolCapBytes", () => {
-	test("returns default 65536 when env var is missing", () => {
-		expect(getSubAgentToolCapBytes({})).toBe(65_536);
+	test("returns default 131072 when env var is missing", () => {
+		expect(getSubAgentToolCapBytes({})).toBe(131_072);
 	});
 
-	test("returns default 65536 when env var is empty string", () => {
-		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "" })).toBe(65_536);
+	test("returns default 131072 when env var is empty string", () => {
+		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "" })).toBe(131_072);
 	});
 
-	test("returns default 65536 when env var is non-numeric", () => {
-		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "abc" })).toBe(65_536);
+	test("returns default 131072 when env var is non-numeric", () => {
+		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "abc" })).toBe(131_072);
 	});
 
 	test("returns null when env var is explicitly 0 (disabled)", () => {
@@ -52,7 +52,7 @@ describe("getSubAgentToolCapBytes", () => {
 	});
 
 	test("returns default when env var is negative", () => {
-		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "-100" })).toBe(65_536);
+		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "-100" })).toBe(131_072);
 	});
 
 	test("returns floored integer for valid positive override", () => {

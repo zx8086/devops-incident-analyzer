@@ -1,4 +1,5 @@
 // src/config/schemas.ts
+import { DEFAULT_TOOL_RESULT_CAP_BYTES } from "@devops-agent/shared";
 import { z } from "zod";
 
 const roleArnRegex = /^arn:aws:iam::\d{12}:role\/[A-Za-z0-9+=,.@_/-]+$/;
@@ -67,7 +68,7 @@ export const ConfigSchema = z.preprocess(
 			TRANSPORT_PORT: numericString(8000),
 			TRANSPORT_HOST: z.string(),
 			TRANSPORT_PATH: z.string(),
-			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(65536),
+			SUBAGENT_TOOL_RESULT_CAP_BYTES: numericString(DEFAULT_TOOL_RESULT_CAP_BYTES),
 		})
 		.transform((raw) => ({
 			aws: {

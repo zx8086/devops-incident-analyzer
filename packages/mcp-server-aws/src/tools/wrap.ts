@@ -1,4 +1,5 @@
 // src/tools/wrap.ts
+import { DEFAULT_TOOL_RESULT_CAP_BYTES, TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
 import { logger } from "../utils/logger.ts";
 import type { ToolError, ToolErrorKind } from "./types.ts";
 
@@ -114,17 +115,14 @@ interface WrapListArgs<TResponse, TParams> {
 	capBytes?: number;
 }
 
-// SIO-832: 64KB matches the agent-side cap in sub-agent-truncate-tool-output.ts.
-// 32KB was truncating CloudWatch alarm and EC2 instance responses in production
-// estates with large counts (28/50 alarms in eu-oit-prd, 14/17 instances in
-// eu-mendix-platform-prd). Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
-const FALLBACK_CAP_BYTES = 65_536;
-const TRUNCATION_OVERHEAD_BYTES = 200;
+// SIO-833: cap + overhead live in @devops-agent/shared so this server and the agent-side
+// truncator (packages/agent/src/sub-agent-truncate-tool-output.ts) share one source of truth
+// and cannot drift. Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
 
 // Mutable default so the bootstrap can apply SUBAGENT_TOOL_RESULT_CAP_BYTES once
 // at startup without threading the value through every family factory.
 // Per-call `capBytes` on wrap*Tool args still wins.
-let defaultCapBytes = FALLBACK_CAP_BYTES;
+let defaultCapBytes = DEFAULT_TOOL_RESULT_CAP_BYTES;
 
 export function setDefaultCapBytes(n: number): void {
 	if (Number.isFinite(n) && n > 0) defaultCapBytes = n;
