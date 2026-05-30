@@ -142,6 +142,15 @@ export async function awsEstateRouter(
 		return { awsTargetEstates: [] };
 	}
 
+	// SIO-836: UI selection wins over the LLM classifier. Filter to known estates so a
+	// stale selection (estate removed from AWS_ESTATES) is silently dropped, not failed.
+	// All-unknown selection falls through to the classifier (today's behavior).
+	const uiSelected = state.uiAwsEstates.filter((id) => available.includes(id));
+	if (uiSelected.length > 0) {
+		logger.info({ awsTargetEstates: uiSelected, available }, "awsEstateRouter using UI selection");
+		return { awsTargetEstates: uiSelected };
+	}
+
 	const lastMessage = state.messages.at(-1);
 	const prompt = lastMessage ? extractTextFromContent(lastMessage.content) : "";
 	if (!prompt) {

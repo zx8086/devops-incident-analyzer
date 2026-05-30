@@ -74,6 +74,8 @@ export async function invokeAgent(
 		dataSources?: string[];
 		// SIO-649: Specific Elastic deployment IDs to query; the sub-agent fans out across them.
 		targetDeployments?: string[];
+		// SIO-836: AWS estate IDs the user explicitly selected; awsEstateRouter prefers these over the LLM classifier.
+		uiAwsEstates?: string[];
 		isFollowUp?: boolean;
 		dataSourceContext?: DataSourceContext;
 		attachmentContentBlocks?: MessageContentComplex[];
@@ -109,6 +111,7 @@ export async function invokeAgent(
 			messages: langchainMessages,
 			targetDataSources: options.dataSources ?? [],
 			targetDeployments: options.targetDeployments ?? [],
+			uiAwsEstates: options.uiAwsEstates ?? [],
 			isFollowUp: options.isFollowUp ?? false,
 			requestId,
 			attachmentMeta: options.attachmentMeta ?? [],

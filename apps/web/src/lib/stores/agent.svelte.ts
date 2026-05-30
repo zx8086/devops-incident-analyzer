@@ -51,6 +51,9 @@ function createAgentStore() {
 	// SIO-649: Available is populated from GET /api/deployments on mount; selected defaults to all.
 	let availableElasticDeployments = $state<string[]>([]);
 	let selectedElasticDeployments = $state<string[]>([]);
+	// SIO-836: Available is populated from GET /api/aws/estates on mount; selected defaults to all.
+	let availableAwsEstates = $state<{ id: string; region: string }[]>([]);
+	let selectedAwsEstates = $state<string[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -93,6 +96,11 @@ function createAgentStore() {
 			// SIO-649: Only send targetDeployments when Elastic is actually in scope. Empty array is
 			// valid (means "use default deployment") and distinct from undefined (multi-deployment off).
 			const includeDeployments = selectedDataSources.includes("elastic") && availableElasticDeployments.length > 0;
+			// SIO-836: Only send uiAwsEstates when AWS is in scope. Filter to known estate ids so a
+			// stale selection (estate removed from AWS_ESTATES) is dropped. Empty selection routes to
+			// the LLM router, matching Elastic's "empty = let backend decide" semantics.
+			const knownEstateIds = new Set(availableAwsEstates.map((e) => e.id));
+			const includeAwsEstates = selectedDataSources.includes("aws") && availableAwsEstates.length > 0;
 			const response = await fetch("/api/agent/stream", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -101,6 +109,7 @@ function createAgentStore() {
 					threadId: threadId || undefined,
 					dataSources: selectedDataSources,
 					...(includeDeployments && { targetDeployments: selectedElasticDeployments }),
+					...(includeAwsEstates && { uiAwsEstates: selectedAwsEstates.filter((id) => knownEstateIds.has(id)) }),
 					...(attachmentsToSend && { attachments: attachmentsToSend }),
 					...(followUpContext?.isFollowUp && { isFollowUp: true }),
 					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
@@ -260,6 +269,16 @@ function createAgentStore() {
 			availableElasticDeployments = [];
 			selectedElasticDeployments = [];
 		}
+		// SIO-836: Best-effort AWS estate list fetch. A failure here just hides the sub-selector.
+		try {
+			const res = await fetch("/api/aws/estates");
+			const data: { estates?: { id: string; region: string }[] } = await res.json();
+			availableAwsEstates = data.estates ?? [];
+			selectedAwsEstates = availableAwsEstates.map((e) => e.id);
+		} catch {
+			availableAwsEstates = [];
+			selectedAwsEstates = [];
+		}
 		startHealthPolling();
 	}
 
@@ -409,6 +428,15 @@ function createAgentStore() {
 		},
 		set selectedElasticDeployments(v: string[]) {
 			selectedElasticDeployments = v;
+		},
+		get availableAwsEstates() {
+			return availableAwsEstates;
+		},
+		get selectedAwsEstates() {
+			return selectedAwsEstates;
+		},
+		set selectedAwsEstates(v: string[]) {
+			selectedAwsEstates = v;
 		},
 		get activeNodes() {
 			return activeNodes;

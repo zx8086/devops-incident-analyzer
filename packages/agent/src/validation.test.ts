@@ -25,6 +25,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		targetDataSources: [] as string[],
 		targetDeployments: [] as string[],
 		awsTargetEstates: [] as string[],
+		uiAwsEstates: [] as string[],
 		retryDeployments: [] as string[],
 		dataSourceResults: [] as DataSourceResult[],
 		currentDataSource: "",
