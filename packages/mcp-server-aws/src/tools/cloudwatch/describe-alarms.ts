@@ -32,5 +32,18 @@ export function describeAlarms(config: AwsConfig) {
 				}),
 			);
 		},
+		// SIO-833: project EVERY alarm to the fields the findings extractor reads
+		// (packages/agent/src/correlation/extractors/aws.ts). When the full MetricAlarms list
+		// is byte-truncated, this keeps the AWSFindingsCard count complete (fixes the 28/50 gap).
+		// Scalar-only projection stays a few KB even for hundreds of alarms.
+		summarize: (response) =>
+			(response.MetricAlarms ?? []).map((a) => ({
+				AlarmName: a.AlarmName,
+				StateValue: a.StateValue,
+				StateReason: a.StateReason,
+				MetricName: a.MetricName,
+				Namespace: a.Namespace,
+				StateUpdatedTimestamp: a.StateUpdatedTimestamp,
+			})),
 	});
 }

@@ -17,6 +17,9 @@ const MetricAlarmSchema = z.object({
 
 const DescribeAlarmsResponseSchema = z.object({
 	MetricAlarms: z.array(z.unknown()).optional(),
+	// SIO-833: complete projected alarm list attached by wrapListTool when MetricAlarms was
+	// byte-truncated server-side. Prefer it so findings stay complete (28/50 -> 50/50).
+	_summary: z.array(z.unknown()).optional(),
 });
 
 export function extractAwsFindings(outputs: ToolOutput[]): AwsFindings {
@@ -25,7 +28,8 @@ export function extractAwsFindings(outputs: ToolOutput[]): AwsFindings {
 		if (o.toolName !== "aws_cloudwatch_describe_alarms") continue;
 		const envelope = DescribeAlarmsResponseSchema.safeParse(o.rawJson);
 		if (!envelope.success) continue;
-		for (const raw of envelope.data.MetricAlarms ?? []) {
+		const source = envelope.data._summary ?? envelope.data.MetricAlarms ?? [];
+		for (const raw of source) {
 			const parsed = MetricAlarmSchema.safeParse(raw);
 			if (!parsed.success) continue;
 			alarms.push({

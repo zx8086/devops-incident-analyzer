@@ -40,6 +40,39 @@ describe("wrapListTool", () => {
 		expect(result.count).toBe(50);
 	});
 
+	test("attaches _summary with the COMPLETE projected list when truncating (SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i, payload: "x".repeat(200) })) }),
+			capBytes: 2000,
+			summarize: (r) => r.items.map((it) => ({ id: it.id })),
+		});
+		const result = (await wrapped({})) as {
+			items: unknown[];
+			_truncated: { total: number; advice: string };
+			_summary: Array<{ id: number }>;
+		};
+		expect(result.items.length).toBeLessThan(50);
+		expect(result._truncated.total).toBe(50);
+		// _summary is complete even though the heavy items[] was truncated.
+		expect(result._summary).toHaveLength(50);
+		expect(result._truncated.advice).toContain("_summary");
+	});
+
+	test("omits _summary when under cap (no truncation)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: [{ id: 1 }] }),
+			capBytes: 1_000_000,
+			summarize: (r) => r.items.map((it) => ({ id: it.id })),
+		});
+		const result = await wrapped({});
+		expect(result).not.toHaveProperty("_summary");
+		expect(result).toEqual({ items: [{ id: 1 }] });
+	});
+
 	test("maps AccessDeniedException to _error.kind=iam-permission-missing", async () => {
 		const err = Object.assign(new Error("User is not authorized to perform: rds:DescribeDBInstances"), {
 			name: "AccessDeniedException",

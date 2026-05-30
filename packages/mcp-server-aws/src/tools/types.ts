@@ -26,6 +26,6 @@ export interface ToolError {
 }
 
 export type ToolResult<TResponse> =
-	| (TResponse & { _truncated?: ListTruncationMarker })
+	| (TResponse & { _truncated?: ListTruncationMarker; _summary?: unknown })
 	| { _raw: string; _truncated: BlobTruncationMarker }
 	| { _error: ToolError };

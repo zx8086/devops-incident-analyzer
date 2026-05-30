@@ -84,4 +84,24 @@ describe("extractAwsFindings", () => {
 		]);
 		expect(findings.alarms?.map((a) => a.name)).toEqual(["a", "b"]);
 	});
+
+	test("prefers _summary (complete) over byte-truncated MetricAlarms (SIO-833)", () => {
+		const findings = extractAwsFindings([
+			{
+				toolName: "aws_cloudwatch_describe_alarms",
+				rawJson: {
+					// Server truncated the heavy list to one item...
+					MetricAlarms: [{ AlarmName: "shown-1", StateValue: "ALARM" }],
+					_truncated: { shown: 1, total: 3, advice: "truncated" },
+					// ...but attached the complete projected set as _summary.
+					_summary: [
+						{ AlarmName: "shown-1", StateValue: "ALARM" },
+						{ AlarmName: "dropped-2", StateValue: "OK" },
+						{ AlarmName: "dropped-3", StateValue: "INSUFFICIENT_DATA" },
+					],
+				},
+			},
+		]);
+		expect(findings.alarms?.map((a) => a.name)).toEqual(["shown-1", "dropped-2", "dropped-3"]);
+	});
 });

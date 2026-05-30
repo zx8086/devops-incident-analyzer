@@ -113,6 +113,20 @@ interface WrapListArgs<TResponse, TParams> {
 	listField: keyof TResponse;
 	fn: (params: TParams) => Promise<TResponse>;
 	capBytes?: number;
+	// SIO-833: when truncation fires, attach a compact projection of the COMPLETE
+	// pre-slice response as `_summary` so typed-finding extractors stay complete even
+	// though the full list is truncated for the model's context. Must stay small
+	// (scalar fields only) so it never re-trips the cap.
+	summarize?: (response: TResponse) => unknown;
+}
+
+function trySummarize<T>(name: string, fn: (r: T) => unknown, response: T): unknown {
+	try {
+		return fn(response);
+	} catch (err) {
+		logger.warn({ tool: name, err: String(err) }, "wrapListTool summarize projection failed; omitting _summary");
+		return undefined;
+	}
 }
 
 // SIO-833: cap + overhead live in @devops-agent/shared so this server and the agent-side
@@ -163,14 +177,22 @@ export function wrapListTool<TResponse, TParams>(
 		}
 
 		const shown = lo;
+		const summary = args.summarize ? trySummarize(args.name, args.summarize, response) : undefined;
+		// SIO-833: stay neutral on the token question -- wrapListTool is generic and cannot
+		// know the per-tool token field, and a real NextToken/nextToken/Marker can co-occur
+		// with byte-truncation. RULES.md tells the model to check for a token first (Case A)
+		// before treating this as a no-token byte-truncation (Case B).
+		const baseAdvice = `Response truncated to fit the size cap. If the response has a top-level NextToken/nextToken/Marker, chain it to fetch more; otherwise re-invoking unchanged returns the same result -- add a filter or pass a smaller maxResults (which yields a pagination token) to retrieve the remaining ${total} items.`;
 		const truncated = {
 			...response,
 			[args.listField]: list.slice(0, shown),
 			_truncated: {
 				shown,
 				total,
-				advice: `Response truncated. Add a filter or narrower time window to fit more of ${total} items.`,
+				advice:
+					summary === undefined ? baseAdvice : `Complete items for counts and coverage are in _summary. ${baseAdvice}`,
 			},
+			...(summary === undefined ? {} : { _summary: summary }),
 		};
 		return truncated as TResponse;
 	};
