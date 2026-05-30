@@ -40,6 +40,31 @@ describe("wrapListTool", () => {
 		expect(result.count).toBe(50);
 	});
 
+	test("surfaces a real continuation token as _truncated.cursor (Case A, SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			// Marker (RDS/Lambda style), not nextToken -- exercises the multi-name probe.
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i })), Marker: "page2" }),
+			capBytes: 200,
+		});
+		const result = (await wrapped({})) as unknown as { _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBe("page2");
+		expect(result._truncated.advice).toContain("Case A");
+	});
+
+	test("omits cursor and flags Case B when byte-truncated with no token (SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i, payload: "p".repeat(50) })) }),
+			capBytes: 300,
+		});
+		const result = (await wrapped({})) as { items: unknown[]; _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBeUndefined();
+		expect(result._truncated.advice).toContain("Case B");
+	});
+
 	test("attaches _summary with the COMPLETE projected list when truncating (SIO-833)", async () => {
 		const wrapped = wrapListTool({
 			name: "test",

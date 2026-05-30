@@ -129,6 +129,22 @@ function trySummarize<T>(name: string, fn: (r: T) => unknown, response: T): unkn
 	}
 }
 
+// SIO-833: AWS continuation-token field names across services. wrapListTool probes these so
+// it can surface a real token as the machine-readable _truncated.cursor (Case A) and
+// distinguish it from a no-token byte-truncation (Case B), instead of relying on the model
+// to scan the raw response.
+const TOKEN_FIELDS = ["NextToken", "nextToken", "Marker", "PaginationToken"] as const;
+
+function findContinuationToken(response: unknown): string | undefined {
+	if (!response || typeof response !== "object") return undefined;
+	const obj = response as Record<string, unknown>;
+	for (const field of TOKEN_FIELDS) {
+		const value = obj[field];
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return undefined;
+}
+
 // SIO-833: cap + overhead live in @devops-agent/shared so this server and the agent-side
 // truncator (packages/agent/src/sub-agent-truncate-tool-output.ts) share one source of truth
 // and cannot drift. Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
@@ -178,17 +194,21 @@ export function wrapListTool<TResponse, TParams>(
 
 		const shown = lo;
 		const summary = args.summarize ? trySummarize(args.name, args.summarize, response) : undefined;
-		// SIO-833: stay neutral on the token question -- wrapListTool is generic and cannot
-		// know the per-tool token field, and a real NextToken/nextToken/Marker can co-occur
-		// with byte-truncation. RULES.md tells the model to check for a token first (Case A)
-		// before treating this as a no-token byte-truncation (Case B).
-		const baseAdvice = `Response truncated to fit the size cap. If the response has a top-level NextToken/nextToken/Marker, chain it to fetch more; otherwise re-invoking unchanged returns the same result -- add a filter or pass a smaller maxResults (which yields a pagination token) to retrieve the remaining ${total} items.`;
+		// SIO-833: surface a real continuation token as a machine-readable cursor so the model
+		// can tell Case A (chainable) from Case B (byte-truncated, no token) without scanning
+		// the raw response. A real token can co-occur with byte-truncation.
+		const cursor = findContinuationToken(response);
+		const baseAdvice =
+			cursor === undefined
+				? "Byte-truncated to fit the size cap with no pagination token (Case B): re-invoking unchanged returns the same result -- add a filter or pass a smaller maxResults to obtain a token, then chain."
+				: "More pages available (Case A): pass _truncated.cursor back as this tool's pagination argument (NextToken/nextToken/Marker) to fetch the next page.";
 		const truncated = {
 			...response,
 			[args.listField]: list.slice(0, shown),
 			_truncated: {
 				shown,
 				total,
+				...(cursor === undefined ? {} : { cursor }),
 				advice:
 					summary === undefined ? baseAdvice : `Complete items for counts and coverage are in _summary. ${baseAdvice}`,
 			},

@@ -31,9 +31,10 @@ Before drawing ANY conclusion about counts, completeness, or "all X", inspect ev
 list/describe result. Check for a top-level continuation token FIRST, then for a
 `_truncated` marker -- checking in that order is what prevents an infinite loop.
 
-Case A -- the response has a top-level continuation token (`NextToken`, `nextToken`,
-`Marker`, or `PaginationToken`): AWS has more pages. Re-invoke the SAME tool with the
-SAME args plus the token value, passed in the tool's pagination input argument:
+Case A -- there are more pages. The simplest signal is `_truncated.cursor`: when present,
+that value IS the continuation token (equivalently, the response has a top-level
+`NextToken`, `nextToken`, `Marker`, or `PaginationToken`). Re-invoke the SAME tool with the
+SAME args plus that token value, passed in the tool's pagination input argument:
 
 - `nextToken`: `aws_ec2_*`, `aws_ecs_list_*`, `aws_config_list_discovered_resources`,
   `aws_messaging_sfn_list_state_machines`, `aws_logs_describe_log_groups`,
@@ -48,8 +49,9 @@ The response field and the input argument can differ in case (e.g. EC2 returns
 `NextToken` but the input arg is `nextToken`) -- match by meaning. Accumulate items
 across pages and stop when the response has no token.
 
-Case B -- a `_truncated` marker is present but there is NO continuation token: the MCP
-server byte-truncated a single oversized page. Re-invoking unchanged returns the
+Case B -- a `_truncated` marker is present but there is NO continuation token (no
+`_truncated.cursor`, no top-level token): the MCP server byte-truncated a single oversized
+page. Re-invoking unchanged returns the
 identical payload (a loop) -- do NOT do that. Instead add or tighten a filter
 (`StateValue`, `AlarmNamePrefix`, an instance/tag filter, a time window) OR pass a
 smaller `maxResults`/`MaxRecords`/`MaxItems` so the next page fits the cap and comes
