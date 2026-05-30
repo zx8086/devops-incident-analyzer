@@ -26,7 +26,7 @@ export function resolveBedrockConfig(
 
 	return {
 		model: bedrockId,
-		region: process.env.AWS_REGION ?? "eu-west-1",
+		region: process.env.AWS_REGION ?? "eu-central-1",
 		temperature: modelConfig?.constraints?.temperature ?? defaults.temperature ?? 0,
 		maxTokens: modelConfig?.constraints?.max_tokens ?? defaults.maxTokens ?? 4096,
 	};
@@ -46,7 +46,7 @@ export function resolveFallbackConfig(
 		if (bedrockId) {
 			return {
 				model: bedrockId,
-				region: process.env.AWS_REGION ?? "eu-west-1",
+				region: process.env.AWS_REGION ?? "eu-central-1",
 				temperature: modelConfig?.constraints?.temperature ?? defaults.temperature ?? 0,
 				maxTokens: modelConfig?.constraints?.max_tokens ?? defaults.maxTokens ?? 4096,
 			};
