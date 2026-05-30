@@ -2,17 +2,19 @@
 
 **Scope:** Set up cross-account read-only access for the AWS MCP runtime. Same model as the Kafka MCP server, except the AWS runtime additionally assumes a per-estate role in each monitored account to query AWS APIs on its behalf.
 
+The AgentCore host account is **also a monitored target**: `DevOpsAgentReadOnly` is created in `399987695868` as well, and the explicit assume-role list on `DevOpsAgentCoreRole` includes the host ARN. **7 accounts total (1 host + 6 estates), 7 monitored targets** — the host monitors itself via a same-account `sts:AssumeRole`, which keeps the runtime code path uniform across all estates.
+
 ---
 
 ## Account Architecture
 
-### AgentCore Account (runtime host)
+### AgentCore Account (runtime host — and self-monitored target)
 
 | Name | Account ID |
 |---|---|
 | `eu-shared-services-prd` | `399987695868` |
 
-### Monitored Accounts (read-only targets)
+### Monitored Accounts (read-only targets — 6 external + 1 self)
 
 | Name | Account ID |
 |---|---|
@@ -22,20 +24,25 @@
 | `eu-b2becom-v2-prd` | `178531813197` |
 | `eu-b2b-ecom-prd` | `105329690220` |
 | `eu-b2bonboarding-prd` | `728412486223` |
+| `eu-shared-services-prd` (self) | `399987695868` |
 
 ### Trust + ExternalId
 
-The shared `ExternalId` value is `devops-agent-prod-access`. The trust policy in every monitored account names `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` as the only allowed `Principal`, gated by that ExternalId.
+The shared `ExternalId` value is `devops-agent-prod-access`. The trust policy in every monitored account (including the host) names `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` as the only allowed `Principal`, gated by that ExternalId. The self-loop (host monitoring itself) is a same-account `sts:AssumeRole` with the same ExternalId gating — IAM allows this and it keeps the runtime code path uniform across all 7 estates.
 
 ---
 
 ## Part 1 — AgentCore Account (`399987695868`)
 
-### 1.1 Create the execution role
+`DevOpsAgentCoreRole` already exists in this account. Part 1 **tightens its trust** and **adds the host self-ARN to its assume-role policy** — it does not recreate the role.
+
+### 1.1 Verify and tighten the execution-role trust
 
 **Role name:** `DevOpsAgentCoreRole`
 
-**Trust policy** (who can assume the role) — Bedrock AgentCore service, scoped by `aws:SourceAccount`:
+The role's trust must scope the Bedrock AgentCore service principal by `aws:SourceAccount`. An existing role may be missing this condition; `update-assume-role-policy` corrects it in place.
+
+**Trust policy:**
 
 ```json
 {
@@ -54,23 +61,24 @@ The shared `ExternalId` value is `devops-agent-prod-access`. The trust policy in
 ```
 
 ```bash
-aws iam create-role \
+# Tightens trust on the existing role — does not recreate it.
+aws iam update-assume-role-policy \
   --role-name DevOpsAgentCoreRole \
-  --assume-role-policy-document file://devops-agent-core-role-trust-policy.json \
-  --description "AgentCore runtime execution role for AWS MCP server"
+  --policy-document file://scripts/agentcore/policies/devops-agent-core-role-trust-policy.json
 ```
 
-### 1.2 Attach the inline permissions policy
+### 1.2 Update the assume-role permissions policy (add host ARN)
 
-**Policy name:** `DevOpsAgentCoreAssumePolicy` (inline on the role above)
+**Policy name:** `DevOpsAgentCoreAssumePolicy`
+
+> **Managed vs inline.** This policy is deployed as a **customer-managed** policy (`arn:aws:iam::399987695868:policy/DevOpsAgentCoreAssumePolicy`), not as an inline role policy. Update it with `create-policy-version --set-as-default` so the managed policy stays the single source of truth. Do **not** add a same-named inline policy alongside it — that leaves two policies of the same name attached and is ambiguous. (If you must use the inline path, detach the managed policy afterwards — see the alternative below.)
 
 Covers four things the runtime needs:
 
 1. **CloudWatch Logs** — emit runtime logs to `/aws/bedrock-agentcore/*` in account 399987695868.
 2. **ECR Pull** — pull the runtime container image from the AgentCore account's ECR.
 3. **Wildcard AssumeRole on `DevOpsAgentReadOnly`** — convenience grant for any account that follows the naming convention. Onboarding a new monitored account doesn't require updating this policy.
-4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity for the monitored accounts. This includes `399987695868` itself (SIO-837): the host/shared-services account is queried like any other estate via a **same-account AssumeRole** into its own `DevOpsAgentReadOnly` role. No credential-less special case.
-
+4. **Explicit per-account AssumeRole list** — defense-in-depth and audit clarity. Lists **7 ARNs**: the 6 external estates plus the host self-loop `399987695868`.
 
 ```json
 {
@@ -120,25 +128,44 @@ Covers four things the runtime needs:
 }
 ```
 
+**Apply — preferred path (update the managed policy in place):**
+
+```bash
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::399987695868:policy/DevOpsAgentCoreAssumePolicy \
+  --policy-document file://scripts/agentcore/policies/devops-agent-core-assume-policy.json \
+  --set-as-default
+
+# If you hit the 5-version cap, list and delete the oldest non-default version first:
+aws iam list-policy-versions \
+  --policy-arn arn:aws:iam::399987695868:policy/DevOpsAgentCoreAssumePolicy
+```
+
+**Alternative — inline (creates a name collision with the managed policy; requires a detach afterwards):**
+
 ```bash
 aws iam put-role-policy \
   --role-name DevOpsAgentCoreRole \
   --policy-name DevOpsAgentCoreAssumePolicy \
-  --policy-document file://devops-agent-core-assume-policy.json
+  --policy-document file://scripts/agentcore/policies/devops-agent-core-assume-policy.json
+
+# Then remove the now-duplicate managed policy so only one remains attached:
+aws iam detach-role-policy \
+  --role-name DevOpsAgentCoreRole \
+  --policy-arn arn:aws:iam::399987695868:policy/DevOpsAgentCoreAssumePolicy
 ```
 
 ---
 
-## Part 2 — Each Monitored Account (× 6)
+## Part 2 — Each Monitored Account (× 7)
 
-Repeat the steps below in **each** of the 6 monitored accounts. The role name, trust policy, and permissions policy are identical across all 6.
+Repeat the steps below in **each** of the 7 target accounts (6 external + 1 self). The role name, trust policy, and permissions policy are identical across all 7. For the host self-loop, "the target account" is still `399987695868`.
 
 **Role name:** `DevOpsAgentReadOnly`
 
 ### 2.1 Trust policy
 
-Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentReadOnly` when it presents the matching `ExternalId`.
-
+Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentReadOnly` when it presents the matching `ExternalId`. For the host self-loop this is a same-account assume — IAM permits it and the trust JSON is unchanged.
 
 ```json
 {
@@ -161,7 +188,9 @@ Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentRe
 
 ### 2.2 Permissions policy
 
-Read-only access across the AWS services the MCP server exposes (all 39 tools shipped in). Includes the 4 extra actions surfaced during review: `s3:GetBucketPolicyStatus`, `states:ListStateMachines`, `states:DescribeStateMachine`, `config:ListDiscoveredResources`.
+Read-only access across the AWS services the MCP server exposes (all 39 tools shipped in SIO-828). Includes the 4 extra actions surfaced during review: `s3:GetBucketPolicyStatus`, `states:ListStateMachines`, `states:DescribeStateMachine`, `config:ListDiscoveredResources`.
+
+> **Keep in sync with new tools.** Whenever the AWS MCP server gains tools that call new AWS APIs, this policy must grow to match. SIO-841 (governance/security-baseline tools — CloudTrail, Security Hub, GuardDuty) is the next such change: when it lands it will add actions like `cloudtrail:LookupEvents`, `securityhub:GetFindings`, and `guardduty:ListFindings` here, and re-running `setup-aws-readonly-role.sh` (or `create-policy-version`) is required across all 7 accounts.
 
 ```json
 {
@@ -334,25 +363,31 @@ Read-only access across the AWS services the MCP server exposes (all 39 tools sh
 
 ### 2.3 Apply via CLI
 
-From a session authenticated **as the target monitored account** (not the AgentCore account):
+From a session authenticated **as the target account** (for the host self-loop, that's still `399987695868`):
 
 ```bash
 # Create the role with the trust policy
 aws iam create-role \
   --role-name DevOpsAgentReadOnly \
-  --assume-role-policy-document file://devops-agent-readonly-trust-policy.json \
+  --assume-role-policy-document file://scripts/agentcore/policies/devops-agent-readonly-trust-policy.json \
   --description "Read-only access for the AWS MCP runtime in eu-shared-services-prd"
 
 # Attach the inline permissions policy
 aws iam put-role-policy \
   --role-name DevOpsAgentReadOnly \
   --policy-name DevOpsAgentReadOnlyPolicy \
-  --policy-document file://devops-agent-readonly-policy.json
+  --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json
+```
+
+Or use the idempotent wrapper, which handles create-or-update for both the trust and permissions policies:
+
+```bash
+./scripts/agentcore/setup-aws-readonly-role.sh
 ```
 
 ### 2.4 Per-account checklist
 
-For each of the 6 accounts:
+For each of the 7 accounts:
 
 - [ ] `762715229080` (eu-oit-prd) — role created, trust + permissions attached
 - [ ] `523422062084` (eu-ediservices-prd) — role created, trust + permissions attached
@@ -360,86 +395,68 @@ For each of the 6 accounts:
 - [ ] `178531813197` (eu-b2becom-v2-prd) — role created, trust + permissions attached
 - [ ] `105329690220` (eu-b2b-ecom-prd) — role created, trust + permissions attached
 - [ ] `728412486223` (eu-b2bonboarding-prd) — role created, trust + permissions attached
+- [ ] `399987695868` (eu-shared-services-prd — self-loop) — role created, trust + permissions attached
 
 ---
 
 ## Part 3 — Verification
 
-### Manual `AssumeRole` from the AgentCore account
+### Verify the assume chain
 
-Run from a session authenticated as `DevOpsAgentCoreRole` in `399987695868` (e.g. by assuming the role with the AWS CLI):
+Every `DevOpsAgentReadOnly` target trusts **only** `DevOpsAgentCoreRole` as its Principal. An SSO admin session therefore **cannot** directly `assume-role` into a target — the trust will reject it. Verify one of two ways.
+
+**Simulate (no STS call, no role-chaining — works from your SSO session):**
 
 ```bash
-# Replace <ACCOUNT_ID> with each monitored account ID and confirm success for all 6.
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::399987695868:role/DevOpsAgentCoreRole \
+  --action-names sts:AssumeRole \
+  --resource-arns \
+    arn:aws:iam::762715229080:role/DevOpsAgentReadOnly \
+    arn:aws:iam::523422062084:role/DevOpsAgentReadOnly \
+    arn:aws:iam::654654584630:role/DevOpsAgentReadOnly \
+    arn:aws:iam::178531813197:role/DevOpsAgentReadOnly \
+    arn:aws:iam::105329690220:role/DevOpsAgentReadOnly \
+    arn:aws:iam::728412486223:role/DevOpsAgentReadOnly \
+    arn:aws:iam::399987695868:role/DevOpsAgentReadOnly
+```
+
+**End-to-end (from inside the AgentCore runtime — the actual chain):**
+
+```bash
+# Inside the AgentCore runtime container, with DevOpsAgentCoreRole attached.
+# Replace <ACCOUNT_ID> with each target and confirm success for all 7.
 aws sts assume-role \
   --role-arn arn:aws:iam::<ACCOUNT_ID>:role/DevOpsAgentReadOnly \
   --role-session-name devops-agent-onboarding-check \
   --external-id devops-agent-prod-access
 ```
 
-A successful call returns `Credentials.AccessKeyId`, `SecretAccessKey`, `SessionToken`, and `Expiration`. Any failure is one of:
+A successful `assume-role` returns `Credentials.AccessKeyId`, `SecretAccessKey`, `SessionToken`, and `Expiration`. Common failures:
 
 | Error | Meaning |
 |---|---|
-| `AccessDenied` on the source role | The AgentCore role's `DevOpsAgentCoreAssumePolicy` is missing this target ARN |
-| `AccessDenied` on the target role | The target's trust policy doesn't list the AgentCore role as a Principal |
+| `AccessDenied` on the source role | `DevOpsAgentCoreAssumePolicy` is missing this target ARN — re-apply Part 1.2 |
+| `AccessDenied` on the target role | The target's trust policy doesn't list `DevOpsAgentCoreRole` as a Principal |
 | `AccessDenied: ExternalId condition` | The target's trust policy expects a different ExternalId than `devops-agent-prod-access` |
-| `NoSuchEntity` | The target role hasn't been created yet (skip to Part 2 for that account) |
+| `NoSuchEntity` | The target role hasn't been created yet — see Part 2 for that account |
 
 ---
 
-## Onboarding a new estate later
+## Part 4 — Update the AgentCore runtime `AWS_ESTATES`
 
-When a new monitored account is added:
+Once Parts 1-3 are green, update the `aws_mcp_server` AgentCore runtime to include the host estate in `AWS_ESTATES`. Edit via the Bedrock AgentCore console or the `update-agent-runtime` CLI. Add this entry to the existing JSON map (the value is a **full replace** — paste all estates, not just the new one):
 
-1. **In the new account:** repeat Part 2 (create `DevOpsAgentReadOnly` with the trust + permissions JSON files unchanged — they're parameter-free).
-2. **In the AgentCore account:** update `DevOpsAgentCoreAssumePolicy`'s `ExplicitAccountAssumeRoles` statement to include the new ARN. The wildcard statement (`arn:aws:iam::*:role/DevOpsAgentReadOnly`) already covers it, but the explicit list is kept for audit clarity. Use `aws iam put-role-policy` (overwrites the inline policy atomically).
-3. **Verify:** run the manual `sts:assume-role` check for the new account.
-
-### Host / shared-services account (SIO-837)
-
-The AgentCore host account `399987695868` (`eu-shared-services-prd`) is onboarded the **same way** — it is simply an estate that happens to be the same account the runtime runs in:
-
-1. **In `399987695868`:** create `DevOpsAgentReadOnly` with the unchanged trust + permissions JSON files. The trust policy already names `arn:aws:iam::399987695868:role/DevOpsAgentCoreRole` as the principal, so the same-account assume works without modification. ExternalId is `devops-agent-prod-access`, identical to every other estate.
-2. **Execution-role policy:** `arn:aws:iam::399987695868:role/DevOpsAgentReadOnly` is already in the `ExplicitAccountAssumeRoles` list (and the wildcard covers it).
-3. **`AWS_ESTATES`:** add a normal entry — `"eu-shared-services-prd":{"assumedRoleArn":"arn:aws:iam::399987695868:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}`. No credential-less / ambient-credential special case; the MCP server treats it like any other estate.
-
-#### Provisioning commands (run with credentials for account `399987695868`)
-
-```bash
-# Step 1 -- create DevOpsAgentReadOnly in the host account (idempotent).
-# Defaults already match what the host estate needs: trust = DevOpsAgentCoreRole
-# principal + ExternalId devops-agent-prod-access; read-only permissions attached.
-./scripts/agentcore/setup-aws-readonly-role.sh
-
-# Step 2 -- refresh the execution role's inline assume policy so the explicit
-# host ARN from the repo is live. Functionally optional (the wildcard
-# AssumeDevOpsAgentReadOnly statement already covers it) but keeps the deployed
-# policy in sync. put-role-policy overwrites the inline policy atomically.
-aws iam put-role-policy \
-  --role-name DevOpsAgentCoreRole \
-  --policy-name DevOpsAgentCoreAssumePolicy \
-  --policy-document file://scripts/agentcore/policies/devops-agent-core-assume-policy.json
-
-# Step 3 -- verify the assume chain works before touching the runtime.
-# A successful response confirms trust + assume-permission are correct.
-aws sts assume-role \
-  --role-arn arn:aws:iam::399987695868:role/DevOpsAgentReadOnly \
-  --role-session-name host-estate-test \
-  --external-id devops-agent-prod-access
+```json
+"eu-shared-services-prd": {
+  "assumedRoleArn": "arn:aws:iam::399987695868:role/DevOpsAgentReadOnly",
+  "externalId": "devops-agent-prod-access"
+}
 ```
 
-After Steps 1-3 succeed, set `AWS_ESTATES` (with the host entry) on the AgentCore runtime via the console (see "Updating `AWS_ESTATES` on the AgentCore runtime" below), then confirm `aws_list_estates` shows `eu-shared-services-prd` as `ok: true`.
+> **Region (SIO-835).** `eu-central-1` is the single home region for all estates; SIO-835 removed the former `eu-west-1` override on `eu-b2bonboarding-prd`. Estate entries therefore omit a `region` field and inherit the runtime's `AWS_REGION`. Only add a per-estate `"region": "<id>"` key if an estate's workloads genuinely live elsewhere — do not re-introduce one speculatively.
 
-> **Ordering matters.** Do Steps 1-2 *before* adding the host entry to the runtime's `AWS_ESTATES`. If the runtime gets the estate before the role exists, the host estate boots DEGRADED (boot-time STS validation fails) until the role is in place.
-
----
-
-## Updating `AWS_ESTATES` on the AgentCore runtime (console)
-
-The deployed runtime carries its **own** copy of `AWS_ESTATES`, set on the AgentCore runtime — it does **not** read the repo `.env` and is **not** baked into the container image. The image is built/exported as a tarball (`scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball`) and loaded into AgentCore via the AWS console; runtime env vars are set there too.
-
-The AWS MCP runtime has exactly **two** environment variables:
+The deployed runtime carries its **own** copy of `AWS_ESTATES`, set on the AgentCore runtime — it does **not** read the repo `.env` and is **not** baked into the container image. The AWS MCP runtime has exactly **two** environment variables:
 
 | Variable | Value |
 |---|---|
@@ -448,14 +465,21 @@ The AWS MCP runtime has exactly **two** environment variables:
 
 Everything else (transport mode `agentcore`, port 8000, log level, tool-result cap) comes from the Zod schema defaults compiled into the image — not env. Per-estate AWS access is **not** in env either; it comes from the execution role assuming each `DevOpsAgentReadOnly`.
 
-To add or change an estate (e.g. the SIO-837 host estate):
+> **Estate-only changes need no new image.** Adding/editing an estate is a config + IAM change only — re-export and reload the tarball only when the MCP server **code** changes.
 
-1. **Bedrock AgentCore console** -> the AWS MCP runtime -> **Environment variables**.
-2. Edit **`AWS_ESTATES`** -> paste the complete JSON map (all estates, not just the new one — this value is a full replace). Leave `AWS_REGION` unchanged.
-3. Save; the runtime restarts with the new value.
+> **Ordering matters.** Do Parts 1-2 *before* adding the host entry to the runtime's `AWS_ESTATES`. If the runtime gets the estate before the role exists, the host estate boots DEGRADED (boot-time STS validation fails) until the role is in place.
 
-> **Estate-only changes need no new image.** Adding/editing an estate is a config + IAM change only — re-export and reload the tarball only when the MCP server **code** changes. SIO-837 added no code, so the existing image stands; only the `AWS_ESTATES` env value changes.
+Saving creates a new runtime version. **Verify:** wait for the runtime status to return to `READY`, then call `aws_list_estates` — `eu-shared-services-prd` should show `ok: true` with an `assumed-role/DevOpsAgentReadOnly/...` caller ARN.
 
-**Verify:** call `aws_list_estates` after restart — the new estate should show `ok: true` with an `assumed-role/DevOpsAgentReadOnly/...` caller ARN.
+---
+
+## Onboarding a new estate later
+
+When a new monitored account is added:
+
+1. **In the new account:** repeat Part 2 (create `DevOpsAgentReadOnly` with the trust + permissions JSON files unchanged — they're parameter-free), or run `./scripts/agentcore/setup-aws-readonly-role.sh` from a session in that account.
+2. **In the AgentCore account:** update `DevOpsAgentCoreAssumePolicy`'s `ExplicitAccountAssumeRoles` statement to include the new ARN. The wildcard (`arn:aws:iam::*:role/DevOpsAgentReadOnly`) already covers it, but the explicit list is kept for audit clarity. Use `aws iam create-policy-version --set-as-default` (preferred) — see Part 1.2.
+3. **Update the runtime:** add the new estate to `AWS_ESTATES` on the `aws_mcp_server` runtime (Part 4).
+4. **Verify:** run `simulate-principal-policy` for the new ARN (Part 3), then end-to-end via the runtime.
 
 ---
