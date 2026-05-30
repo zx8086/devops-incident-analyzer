@@ -47,3 +47,7 @@ export { classifyToolError, queryDataSource } from "./sub-agent.ts";
 export { supervise } from "./supervisor.ts";
 export { withRetry } from "./tool-retry.ts";
 export { shouldRetryValidation, validate } from "./validator.ts";
+export { proposeWikiUpdate, type WikiFileProposal, type WikiUpdateInput } from "./wiki/ingest.ts";
+export { formatWikiLint, lintWiki, type WikiLintInput, type WikiLintIssue, type WikiLintResult } from "./wiki/lint.ts";
+export { extractWikiLinks, parseWikiPage, type WikiPage } from "./wiki/page.ts";
+export { buildWikiSection, selectWikiPages, type WikiFocus } from "./wiki/reader.ts";

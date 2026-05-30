@@ -9,6 +9,7 @@ import {
 } from "@devops-agent/gitagent-bridge";
 import { readLiveMemory } from "./memory-writer.ts";
 import { getAgentsDir } from "./paths.ts";
+import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
 
 // SIO-845: cap how many key-decisions tail entries are inlined into the prompt
 // so durable memory growth does not blow the context budget.
@@ -75,6 +76,16 @@ export function buildLiveMemorySection(): string {
 //   runbookFilter [names]   -> filter to just these runbook filenames
 export interface OrchestratorPromptOptions {
 	runbookFilter?: string[];
+	// SIO-847: when provided, the relevant compiled wiki pages (and the index)
+	// are inlined into the prompt. Omit for an index-only / no-wiki prompt.
+	wikiFocus?: WikiFocus;
+}
+
+// SIO-847: the wiki section depends on the current turn's focus, so it is built
+// per call rather than cached. Empty when no wiki content is relevant/present.
+function wikiSectionFor(options: OrchestratorPromptOptions): string {
+	const focus = options.wikiFocus ?? { services: [], datasources: [] };
+	return buildWikiSection(focus, getAgent());
 }
 
 export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {}): string {
@@ -82,7 +93,7 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 	const filter = options.runbookFilter;
 
 	if (filter === undefined) {
-		return buildSystemPrompt(agent) + buildComplianceBoundary() + buildLiveMemorySection();
+		return buildSystemPrompt(agent) + buildComplianceBoundary() + buildLiveMemorySection() + wikiSectionFor(options);
 	}
 
 	// Filter the knowledge array to remove non-selected runbooks. Other
@@ -96,7 +107,9 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 	});
 
 	const filteredAgent = { ...agent, knowledge: filteredKnowledge };
-	return buildSystemPrompt(filteredAgent) + buildComplianceBoundary() + buildLiveMemorySection();
+	return (
+		buildSystemPrompt(filteredAgent) + buildComplianceBoundary() + buildLiveMemorySection() + wikiSectionFor(options)
+	);
 }
 
 export function buildSubAgentPrompt(agentName: string): string {

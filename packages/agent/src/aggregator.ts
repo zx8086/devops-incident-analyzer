@@ -74,7 +74,14 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	//   []        -> filter to zero runbooks (selector chose none)
 	//   [names]   -> filter to just these
 	const runbookFilter = state.selectedRunbooks ?? undefined;
-	const systemPrompt = buildOrchestratorPrompt({ runbookFilter });
+	// SIO-847: surface relevant compiled wiki pages by the current focus. Fall
+	// back to the extracted datasources/affected services when no focus anchor
+	// has been established yet.
+	const wikiFocus = {
+		services: state.investigationFocus?.services ?? state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [],
+		datasources: state.investigationFocus?.datasources ?? state.targetDataSources,
+	};
+	const systemPrompt = buildOrchestratorPrompt({ runbookFilter, wikiFocus });
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 	const userQuery = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
