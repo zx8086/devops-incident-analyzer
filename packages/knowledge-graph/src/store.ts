@@ -42,8 +42,19 @@ export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
 // through a variable specifier so this package typechecks and unit-tests WITHOUT
 // the native module present, and so its real types never conflict if installed.
 
+interface LbugQueryResult {
+	getAll(): Promise<GraphRow[]>;
+}
+interface LbugPreparedStatement {
+	isSuccess?(): boolean;
+}
+// lbug's query(statement, progressCallback?) does NOT take params; parameterized
+// queries go through prepare() + execute(prepared, params). The store uses the
+// param-less query() for DDL and prepare/execute for everything with bindings.
 interface LbugConnection {
-	query(cypher: string, params?: Record<string, unknown>): Promise<{ getAll(): Promise<GraphRow[]> }>;
+	query(cypher: string): Promise<LbugQueryResult>;
+	prepare(cypher: string): Promise<LbugPreparedStatement>;
+	execute(prepared: LbugPreparedStatement, params: Record<string, unknown>): Promise<LbugQueryResult>;
 }
 interface LbugDatabase {
 	close?(): Promise<void> | void;
@@ -98,7 +109,14 @@ export class LadybugStore implements GraphStore {
 
 	async run<T extends GraphRow = GraphRow>(cypher: string, params?: Record<string, unknown>): Promise<T[]> {
 		const conn = await this.connection();
-		const result = await conn.query(cypher, params);
+		// Bindings require prepare()+execute(); param-less statements (DDL, simple
+		// reads) use query() directly. Both return a result with getAll().
+		if (params && Object.keys(params).length > 0) {
+			const prepared = await conn.prepare(cypher);
+			const result = await conn.execute(prepared, params);
+			return (await result.getAll()) as T[];
+		}
+		const result = await conn.query(cypher);
 		return (await result.getAll()) as T[];
 	}
 

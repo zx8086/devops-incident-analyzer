@@ -19,5 +19,8 @@
 		"bun-types": "catalog:dev",
 		"typescript": "catalog:dev"
 	},
-	"private": true
+	"private": true,
+	"optionalDependencies": {
+		"lbug": "^0.14.3"
+	}
 }
