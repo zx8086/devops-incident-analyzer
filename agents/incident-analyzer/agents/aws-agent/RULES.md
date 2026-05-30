@@ -1,6 +1,6 @@
 # Rules
 
-## Iteration 1 Probe Discipline
+## Iteration 1 Probe Discipline (SIO-834)
 
 When the user query references infrastructure health, account-wide status, or
 asks "what's going on in AWS" or "is X broken" or "are there any alarms",
@@ -9,6 +9,14 @@ list/describe/enumerate tool:
 
 - `aws_cloudwatch_describe_alarms` — current alarm states (filter StateValue=ALARM)
 - `aws_health_describe_events` — open Health events (account-level)
+- `aws_rds_describe_db_instances` — RDS instance inventory (engine, status, endpoint, multi-AZ)
+
+RDS runs in nearly every estate and DB-related alarms are common, so establish
+RDS inventory up front rather than waiting for an alarm dimension to point at it —
+this stops broad "tell me about our cluster(s)" queries from silently skipping RDS.
+Do NOT add `aws_rds_describe_db_clusters` (Aurora-only) to iteration 1; it stays in
+Service-Specific Drill-Downs and fires only when an alarm dimension or follow-up
+indicates Aurora.
 
 Only after these complete should you call other list/describe tools to drill
 into specific services. This guarantees a status snapshot is established
