@@ -1,5 +1,11 @@
 // agent/src/correlation/rules.ts
-import type { CouchbaseSlowQuery, GitLabMergedRequest, ToolError } from "@devops-agent/shared";
+import type {
+	AwsCloudWatchAlarm,
+	AwsFindings,
+	CouchbaseSlowQuery,
+	GitLabMergedRequest,
+	ToolError,
+} from "@devops-agent/shared";
 import type { AgentName, AgentStateType } from "../state";
 
 export interface CorrelationRule {
@@ -29,6 +35,32 @@ function getKafkaData(state: AgentStateType): {
 	// SIO-764: read the structured sibling populated by extractFindings; result.data
 	// stays as the prose summary for aggregator/UI.
 	return result.kafkaFindings ?? {};
+}
+
+// SIO-842: read the structured awsFindings sibling (populated by extractFindings from
+// aws_cloudwatch_describe_alarms) instead of regex-matching the prose summary. Mirrors
+// getKafkaData. result.data stays prose for the aggregator/UI.
+function getAwsFindings(state: AgentStateType): AwsFindings {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
+	if (!result || result.status !== "success") return {};
+	return result.awsFindings ?? {};
+}
+
+// SIO-842: an alarm is Kafka/MSK-relevant if its name, metric, or namespace names
+// Kafka/MSK. Per-alarm (unlike the old prose regex, which matched "Kafka" anywhere in
+// the whole blob and so fired on unrelated alarms).
+function isKafkaAlarm(a: AwsCloudWatchAlarm): boolean {
+	return /\b(MSK|Kafka)\b/i.test(`${a.name} ${a.metricName ?? ""} ${a.namespace ?? ""}`);
+}
+
+// SIO-842: an alarm is in-scope for the incident if any established focus service is
+// referenced by its name/metric/namespace. With no established focus we fall back to
+// "all" (matching collectFocusServices' show-all semantics in extract-findings.ts), so
+// recall is preserved on first-turn / unfocused investigations.
+function alarmReferencesFocus(a: AwsCloudWatchAlarm, focusServices: string[]): boolean {
+	if (focusServices.length === 0) return true;
+	const haystack = `${a.name} ${a.metricName ?? ""} ${a.namespace ?? ""}`.toLowerCase();
+	return focusServices.some((svc) => svc.length > 0 && haystack.includes(svc.toLowerCase()));
 }
 
 // SIO-717: read the result-level toolErrors (populated by sub-agent.ts) and
@@ -374,19 +406,19 @@ export const correlationRules: CorrelationRule[] = [
 		// whose name or metric references Kafka/MSK. Consumer-lag spikes on the
 		// MSK side often anchor the alarm; fan out to kafka-agent for a lag
 		// snapshot before the report concludes.
+		// SIO-842: migrated from prose regex to typed awsFindings.alarms[], scoped to
+		// the investigation focus so it no longer fires on any Kafka-named alarm
+		// anywhere in the account (the old kafkaContext was unscoped).
 		name: "aws-cloudwatch-anomaly-needs-kafka-lag",
 		description:
 			"AWS sub-agent reported a CloudWatch alarm in ALARM state referencing Kafka/MSK; correlate with kafka-agent consumer-group lag.",
 		trigger: (state) => {
-			const { prose } = getAwsResultSignals(state);
-			if (!prose) return null;
-			// Both signals must coexist in the same prose blob: ALARM state AND a
-			// Kafka-related keyword. Either alone is too noisy (alarms exist for
-			// every service; Kafka is named in lots of contexts).
-			const alarmStated = /\bStateValue\b.*\bALARM\b/i.test(prose) || /\balarm.*\bin\s+ALARM\b/i.test(prose);
-			const kafkaContext = /\b(MSK|Kafka|kafka|consumer\s+lag|broker)\b/.test(prose);
-			if (!alarmStated || !kafkaContext) return null;
-			return { context: { signal: "aws-cloudwatch-alarm-kafka" } };
+			const focusServices = state.investigationFocus?.services ?? [];
+			const scopedAlarms = (getAwsFindings(state).alarms ?? []).filter(
+				(a) => a.state === "ALARM" && isKafkaAlarm(a) && alarmReferencesFocus(a, focusServices),
+			);
+			if (scopedAlarms.length === 0) return null;
+			return { context: { signal: "aws-cloudwatch-alarm-kafka", alarms: scopedAlarms } };
 		},
 		requiredAgent: "kafka-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
