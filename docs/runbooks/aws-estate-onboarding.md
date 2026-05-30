@@ -405,3 +405,28 @@ The AgentCore host account `399987695868` (`eu-shared-services-prd`) is onboarde
 3. **`AWS_ESTATES`:** add a normal entry — `"eu-shared-services-prd":{"assumedRoleArn":"arn:aws:iam::399987695868:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}`. No credential-less / ambient-credential special case; the MCP server treats it like any other estate.
 
 ---
+
+## Updating `AWS_ESTATES` on the AgentCore runtime (console)
+
+The deployed runtime carries its **own** copy of `AWS_ESTATES`, set on the AgentCore runtime — it does **not** read the repo `.env` and is **not** baked into the container image. The image is built/exported as a tarball (`scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball`) and loaded into AgentCore via the AWS console; runtime env vars are set there too.
+
+The AWS MCP runtime has exactly **two** environment variables:
+
+| Variable | Value |
+|---|---|
+| `AWS_REGION` | `eu-central-1` |
+| `AWS_ESTATES` | the full estate JSON map |
+
+Everything else (transport mode `agentcore`, port 8000, log level, tool-result cap) comes from the Zod schema defaults compiled into the image — not env. Per-estate AWS access is **not** in env either; it comes from the execution role assuming each `DevOpsAgentReadOnly`.
+
+To add or change an estate (e.g. the SIO-837 host estate):
+
+1. **Bedrock AgentCore console** -> the AWS MCP runtime -> **Environment variables**.
+2. Edit **`AWS_ESTATES`** -> paste the complete JSON map (all estates, not just the new one — this value is a full replace). Leave `AWS_REGION` unchanged.
+3. Save; the runtime restarts with the new value.
+
+> **Estate-only changes need no new image.** Adding/editing an estate is a config + IAM change only — re-export and reload the tarball only when the MCP server **code** changes. SIO-837 added no code, so the existing image stands; only the `AWS_ESTATES` env value changes.
+
+**Verify:** call `aws_list_estates` after restart — the new estate should show `ok: true` with an `assumed-role/DevOpsAgentReadOnly/...` caller ARN.
+
+---
