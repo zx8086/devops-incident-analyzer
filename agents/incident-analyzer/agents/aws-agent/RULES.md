@@ -25,6 +25,55 @@ If `aws_health_describe_events` returns open events with status `open` or
 the report, listing eventTypeCategory, eventTypeCode, region, and
 affectedEntities count.
 
+## Iteration 1+ Pagination Enforcement
+
+Before drawing ANY conclusion about counts, completeness, or "all X", inspect every
+list/describe result. Check for a top-level continuation token FIRST, then for a
+`_truncated` marker -- checking in that order is what prevents an infinite loop.
+
+Case A -- there are more pages. The simplest signal is `_truncated.cursor`: when present,
+that value IS the continuation token (equivalently, the response has a top-level
+`NextToken`, `nextToken`, `Marker`, `NextMarker`, or `PaginationToken`). Re-invoke the SAME
+tool with the SAME args plus that token value, passed in the tool's pagination input argument:
+
+- `nextToken`: `aws_ec2_*`, `aws_ecs_list_*`, `aws_config_list_discovered_resources`,
+  `aws_messaging_sfn_list_state_machines`, `aws_logs_describe_log_groups`,
+  `aws_health_describe_events`
+- `NextToken`: `aws_cloudwatch_describe_alarms`, `aws_cloudformation_*`,
+  `aws_config_describe_config_rules`, `aws_messaging_sns_list_topics`
+- `Marker`: `aws_rds_describe_db_*`, `aws_elasticache_describe_*`,
+  `aws_lambda_list_functions` (Lambda's response names the token `NextMarker`; pass it back as `Marker`)
+- `PaginationToken`: `aws_resourcegroupstagging_get_resources`
+
+The response field and the input argument can differ in case OR name (e.g. EC2 returns
+`NextToken` but the input arg is `nextToken`; Lambda returns `NextMarker` but the input arg
+is `Marker`) -- match by meaning. Accumulate items across pages and stop when the response
+has no token.
+
+Case B -- a `_truncated` marker is present but there is NO continuation token (no
+`_truncated.cursor`, no top-level token): the MCP server byte-truncated a single oversized
+page. Re-invoking unchanged returns the
+identical payload (a loop) -- do NOT do that. Instead add or tighten a filter
+(`StateValue`, `AlarmNamePrefix`, an instance/tag filter, a time window) OR pass a
+smaller `maxResults`/`MaxRecords`/`MaxItems` so the next page fits the cap and comes
+back with a token, then chain it per Case A. If the result carries a `_summary` field,
+it already holds the COMPLETE set of items -- use it for counts and coverage instead of
+reporting a partial number.
+
+Worked examples:
+
+- `aws_cloudwatch_describe_alarms` returns 28 alarms and `NextToken: "abc"` -> Case A:
+  call again with `NextToken: "abc"`, merge, repeat until no token.
+- `aws_ec2_describe_instances` returns `Reservations` and `NextToken: "xyz"` -> Case A:
+  call again with `nextToken: "xyz"` (the input arg is camelCase here).
+- `aws_ec2_describe_instances` returns `_truncated {shown: 7, total: 17}` and no token
+  -> Case B: re-call with a smaller `maxResults` to obtain a token then chain, or filter
+  by tag if a subset is enough.
+
+The ONLY acceptable partial report is Case B where no filter applies and the tool has no
+page-size argument (e.g. an account-wide snapshot). Then state the truncation explicitly
+and quote `_truncated.shown` and `_truncated.total`.
+
 ## Service-Specific Drill-Downs
 
 When the user names a specific service or resource:
@@ -40,24 +89,6 @@ When the user names a specific service or resource:
 - Logs: `aws_logs_describe_log_groups` (find the group) -> `aws_logs_start_query` -> `aws_logs_get_query_results` (Insights polling pattern)
 - Deployment context: `aws_cloudformation_list_stacks` -> `aws_cloudformation_describe_stacks` (status, outputs) -> `aws_cloudformation_describe_stack_events` (failure diagnosis)
 - Tag discovery: `aws_resourcegroupstagging_get_resources` to find all resources matching a team/env tag across services
-
-## Pagination — Chain Truncated Responses
-
-AWS list/describe tools can return paginated results. When a tool response contains
-either of these markers, you MUST re-invoke the same tool with the pagination token
-to retrieve the remaining items before drawing conclusions:
-
-- `_truncated` (object with `shown`/`total`/`advice`): the MCP server truncated the
-  array because the response exceeded the size cap. Either narrow the query with a
-  filter, or pass `maxResults` to reduce per-page size and chain `nextToken`/`NextToken`.
-- `NextToken` or `nextToken` at the top level: AWS returned a pagination token. Pass
-  it back as the `NextToken` (CloudWatch, RDS, IAM) or `nextToken` (EC2, ECS, Lambda)
-  argument on the next call. Stop when the token is absent.
-
-Do not report "N of M items" findings when a pagination token is available —
-paginate first, then report the complete picture. The only acceptable truncation
-is when `_truncated.advice` says to add a filter and no filter can be added
-(e.g. account-wide health snapshot).
 
 ## Error Handling
 

@@ -9,6 +9,7 @@ import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildOrchestratorPrompt } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 interface AggregatorLogSink {
 	info: (...args: unknown[]) => unknown;
@@ -27,6 +28,44 @@ const logger: AggregatorLogSink = {
 // SIO-691: test seam mirroring _setAlignmentLoggerForTesting. Pass null to reset.
 export function _setAggregatorLoggerForTesting(sink: AggregatorLogSink | null): void {
 	currentLogger = sink ?? defaultLogger;
+}
+
+// SIO-833: bound the aggregate prompt so AWS estate fan-out (one DataSourceResult per
+// estate) can't scale the LLM input linearly. Each result's `data` is reduced with the
+// shared JSON-aware truncator before it enters the prompt. Findings are unaffected:
+// extractFindings reads toolOutputs (not r.data) and runs AFTER aggregate.
+const AGGREGATE_RESULT_CAP_BYTES_DEFAULT = 32_768;
+const AGGREGATE_TOTAL_CAP_BYTES_DEFAULT = 262_144;
+const AGGREGATE_RESULT_CAP_FLOOR = 4_096;
+
+function readCapEnv(raw: string | undefined, def: number): number | null {
+	// Mirrors getSubAgentToolCapBytes: unset/invalid -> default, explicit "0" -> disabled.
+	if (raw == null || raw === "") return def;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed)) return def;
+	if (parsed === 0) return null;
+	if (parsed < 0) return def;
+	return Math.floor(parsed);
+}
+
+export function getAggregateResultCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
+	return readCapEnv(env.AGGREGATE_RESULT_CAP_BYTES, AGGREGATE_RESULT_CAP_BYTES_DEFAULT);
+}
+
+export function getAggregateTotalCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
+	return readCapEnv(env.AGGREGATE_TOTAL_CAP_BYTES, AGGREGATE_TOTAL_CAP_BYTES_DEFAULT);
+}
+
+// Per-result byte budget: at most the per-result cap, and at most a fair slice of the
+// total budget so N-estate fan-out stays bounded regardless of estate count (never below
+// a usable floor). Returns null when per-result capping is disabled (AGGREGATE_RESULT_CAP_BYTES=0).
+export function aggregateResultBudget(resultCount: number, env: NodeJS.ProcessEnv = process.env): number | null {
+	const per = getAggregateResultCapBytes(env);
+	if (per == null) return null;
+	const total = getAggregateTotalCapBytes(env);
+	if (total == null) return per;
+	const fairShare = Math.floor(total / Math.max(1, resultCount));
+	return Math.max(AGGREGATE_RESULT_CAP_FLOOR, Math.min(per, fairShare));
 }
 
 function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): BaseMessage[] {
@@ -220,10 +259,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	// SIO-833: per-result byte budget bounds the prompt under AWS estate fan-out.
+	const perResultCap = aggregateResultBudget(results.length);
 	const resultsBlock = results
 		.map((r) => {
 			const status = r.status === "success" ? "OK" : `ERROR: ${r.error ?? "unknown"}`;
-			const data = r.status === "success" ? String(r.data) : "No data";
+			const rawData = r.status === "success" ? String(r.data) : "No data";
+			const data = perResultCap == null ? rawData : truncateToolOutput(rawData, perResultCap).content;
 			// SIO-649: include deploymentId so the LLM distinguishes per-deployment results
 			// when the elastic sub-agent fans out across multiple deployments
 			const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;

@@ -32,9 +32,17 @@ mock.module("@langchain/aws", () => ({
 
 mock.module("@devops-agent/shared", () => ({
 	redactPiiContent: (s: string) => s,
+	// SIO-833: aggregator transitively loads sub-agent-truncate-tool-output.ts, which reads
+	// this constant from shared at module init; provide it so the mock namespace is complete.
+	DEFAULT_TOOL_RESULT_CAP_BYTES: 131_072,
 }));
 
-import { _setAggregatorLoggerForTesting, aggregate, extractGapsBulletCount } from "./aggregator.ts";
+import {
+	_setAggregatorLoggerForTesting,
+	aggregate,
+	aggregateResultBudget,
+	extractGapsBulletCount,
+} from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
 function getSystemPromptText(): string {
@@ -563,5 +571,66 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-750 continuation-aware prompt", () 
 		const prompt = getUserPromptText();
 		expect(prompt).not.toContain("CONTINUING");
 		expect(prompt).not.toContain("do not repeat the full prior report");
+	});
+});
+
+// SIO-833: per-result byte budget that bounds the aggregate prompt under estate fan-out.
+describe("aggregateResultBudget (SIO-833)", () => {
+	test("uses the per-result cap when there are few results", () => {
+		expect(aggregateResultBudget(1, {})).toBe(32_768);
+	});
+
+	test("fair-shares the total budget across many results", () => {
+		// floor(262144 / 10) = 26214, which is below the 32768 per-result cap.
+		expect(aggregateResultBudget(10, {})).toBe(26_214);
+	});
+
+	test("never drops below the floor even with very many results", () => {
+		expect(aggregateResultBudget(1000, {})).toBe(4_096);
+	});
+
+	test("explicit AGGREGATE_RESULT_CAP_BYTES=0 disables capping", () => {
+		expect(aggregateResultBudget(5, { AGGREGATE_RESULT_CAP_BYTES: "0" })).toBeNull();
+	});
+
+	test("respects an explicit per-result override", () => {
+		expect(aggregateResultBudget(1, { AGGREGATE_RESULT_CAP_BYTES: "8192" })).toBe(8_192);
+	});
+});
+
+describe.skipIf(!hasRunbooks)("aggregate per-result data cap (SIO-833)", () => {
+	test("truncates an oversized result's data before it enters the prompt", async () => {
+		lastInvokeMessages = null;
+		const huge = "x".repeat(100_000);
+		await aggregate(
+			makeState({
+				targetDataSources: ["aws"],
+				dataSourceResults: [
+					{
+						dataSourceId: "aws",
+						deploymentId: "estate:prod",
+						status: "success",
+						data: huge,
+						duration: 10,
+						toolErrors: [],
+					},
+				],
+			}),
+		);
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("[truncated,");
+		expect(prompt.length).toBeLessThan(60_000); // far below the original 100KB
+	});
+
+	test("leaves a small result's data unchanged", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				dataSourceResults: [
+					{ dataSourceId: "elastic", status: "success", data: "small result body", duration: 10, toolErrors: [] },
+				],
+			}),
+		);
+		expect(getUserPromptText()).toContain("small result body");
 	});
 });

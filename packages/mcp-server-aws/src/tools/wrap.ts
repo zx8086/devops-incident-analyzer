@@ -1,4 +1,5 @@
 // src/tools/wrap.ts
+import { DEFAULT_TOOL_RESULT_CAP_BYTES, TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
 import { logger } from "../utils/logger.ts";
 import type { ToolError, ToolErrorKind } from "./types.ts";
 
@@ -112,19 +113,49 @@ interface WrapListArgs<TResponse, TParams> {
 	listField: keyof TResponse;
 	fn: (params: TParams) => Promise<TResponse>;
 	capBytes?: number;
+	// SIO-833: when truncation fires, attach a compact projection of the COMPLETE
+	// pre-slice response as `_summary` so typed-finding extractors stay complete even
+	// though the full list is truncated for the model's context. Must stay small
+	// (scalar fields only) so it never re-trips the cap.
+	summarize?: (response: TResponse) => unknown;
 }
 
-// SIO-832: 64KB matches the agent-side cap in sub-agent-truncate-tool-output.ts.
-// 32KB was truncating CloudWatch alarm and EC2 instance responses in production
-// estates with large counts (28/50 alarms in eu-oit-prd, 14/17 instances in
-// eu-mendix-platform-prd). Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
-const FALLBACK_CAP_BYTES = 65_536;
-const TRUNCATION_OVERHEAD_BYTES = 200;
+function trySummarize<T>(name: string, fn: (r: T) => unknown, response: T): unknown {
+	try {
+		return fn(response);
+	} catch (err) {
+		logger.warn({ tool: name, err: String(err) }, "wrapListTool summarize projection failed; omitting _summary");
+		return undefined;
+	}
+}
+
+// SIO-833: AWS continuation-token field names across services. wrapListTool probes these so
+// it can surface a real token as the machine-readable _truncated.cursor (Case A) and
+// distinguish it from a no-token byte-truncation (Case B), instead of relying on the model
+// to scan the raw response.
+// NextMarker is Lambda's response token (the input arg is Marker -- a name difference, not
+// just case), so it must be probed here or aws_lambda_list_functions is misclassified as a
+// no-token Case B byte-truncation when it is actually a chainable Case A page.
+const TOKEN_FIELDS = ["NextToken", "nextToken", "Marker", "NextMarker", "PaginationToken"] as const;
+
+function findContinuationToken(response: unknown): string | undefined {
+	if (!response || typeof response !== "object") return undefined;
+	const obj = response as Record<string, unknown>;
+	for (const field of TOKEN_FIELDS) {
+		const value = obj[field];
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return undefined;
+}
+
+// SIO-833: cap + overhead live in @devops-agent/shared so this server and the agent-side
+// truncator (packages/agent/src/sub-agent-truncate-tool-output.ts) share one source of truth
+// and cannot drift. Bootstrap can still override via SUBAGENT_TOOL_RESULT_CAP_BYTES.
 
 // Mutable default so the bootstrap can apply SUBAGENT_TOOL_RESULT_CAP_BYTES once
 // at startup without threading the value through every family factory.
 // Per-call `capBytes` on wrap*Tool args still wins.
-let defaultCapBytes = FALLBACK_CAP_BYTES;
+let defaultCapBytes = DEFAULT_TOOL_RESULT_CAP_BYTES;
 
 export function setDefaultCapBytes(n: number): void {
 	if (Number.isFinite(n) && n > 0) defaultCapBytes = n;
@@ -152,6 +183,13 @@ export function wrapListTool<TResponse, TParams>(
 		const full = JSON.stringify(response);
 		if (full.length <= cap) return response;
 
+		// Compute _summary before bisecting so its serialized bytes are reserved in the budget.
+		// _summary is appended to the final object, so a large one that isn't accounted for here
+		// can push the wrapped result back over cap; the agent-side truncator would then byte-slice
+		// the tail _summary away, defeating the findings-completeness guarantee it exists for.
+		const summary = args.summarize ? trySummarize(args.name, args.summarize, response) : undefined;
+		const reserve = TRUNCATION_OVERHEAD_BYTES + (summary === undefined ? 0 : JSON.stringify(summary).length);
+
 		// Need to truncate the list. Bisect to find the max items that fit.
 		const total = list.length;
 		let lo = 0;
@@ -159,20 +197,31 @@ export function wrapListTool<TResponse, TParams>(
 		while (lo < hi) {
 			const mid = Math.ceil((lo + hi) / 2);
 			const candidate = { ...response, [args.listField]: list.slice(0, mid) };
-			const size = JSON.stringify(candidate).length + TRUNCATION_OVERHEAD_BYTES;
+			const size = JSON.stringify(candidate).length + reserve;
 			if (size <= cap) lo = mid;
 			else hi = mid - 1;
 		}
 
 		const shown = lo;
+		// SIO-833: surface a real continuation token as a machine-readable cursor so the model
+		// can tell Case A (chainable) from Case B (byte-truncated, no token) without scanning
+		// the raw response. A real token can co-occur with byte-truncation.
+		const cursor = findContinuationToken(response);
+		const baseAdvice =
+			cursor === undefined
+				? "Byte-truncated to fit the size cap with no pagination token (Case B): re-invoking unchanged returns the same result -- add a filter or pass a smaller maxResults to obtain a token, then chain."
+				: "More pages available (Case A): pass _truncated.cursor back as this tool's pagination argument (NextToken/nextToken/Marker) to fetch the next page.";
 		const truncated = {
 			...response,
 			[args.listField]: list.slice(0, shown),
 			_truncated: {
 				shown,
 				total,
-				advice: `Response truncated. Add a filter or narrower time window to fit more of ${total} items.`,
+				...(cursor === undefined ? {} : { cursor }),
+				advice:
+					summary === undefined ? baseAdvice : `Complete items for counts and coverage are in _summary. ${baseAdvice}`,
 			},
+			...(summary === undefined ? {} : { _summary: summary }),
 		};
 		return truncated as TResponse;
 	};

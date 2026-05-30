@@ -1,5 +1,7 @@
 // src/__tests__/wrap.test.ts
+
 import { afterAll, describe, expect, test } from "bun:test";
+import { TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
 import { mapAwsError, setDefaultCapBytes, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
 
 describe("wrapListTool", () => {
@@ -38,6 +40,99 @@ describe("wrapListTool", () => {
 		const result = (await wrapped({})) as { nextToken: string; count: number };
 		expect(result.nextToken).toBe("abc");
 		expect(result.count).toBe(50);
+	});
+
+	test("surfaces a real continuation token as _truncated.cursor (Case A, SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			// Marker (RDS/Lambda style), not nextToken -- exercises the multi-name probe.
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i })), Marker: "page2" }),
+			capBytes: 200,
+		});
+		const result = (await wrapped({})) as unknown as { _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBe("page2");
+		expect(result._truncated.advice).toContain("Case A");
+	});
+
+	test("omits cursor and flags Case B when byte-truncated with no token (SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i, payload: "p".repeat(50) })) }),
+			capBytes: 300,
+		});
+		const result = (await wrapped({})) as { items: unknown[]; _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBeUndefined();
+		expect(result._truncated.advice).toContain("Case B");
+	});
+
+	test("attaches _summary with the COMPLETE projected list when truncating (SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: Array.from({ length: 50 }, (_, i) => ({ id: i, payload: "x".repeat(200) })) }),
+			capBytes: 2000,
+			summarize: (r) => r.items.map((it) => ({ id: it.id })),
+		});
+		const result = (await wrapped({})) as {
+			items: unknown[];
+			_truncated: { total: number; advice: string };
+			_summary: Array<{ id: number }>;
+		};
+		expect(result.items.length).toBeLessThan(50);
+		expect(result._truncated.total).toBe(50);
+		// _summary is complete even though the heavy items[] was truncated.
+		expect(result._summary).toHaveLength(50);
+		expect(result._truncated.advice).toContain("_summary");
+	});
+
+	test("surfaces Lambda's NextMarker as _truncated.cursor (Case A, SIO-833)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "Functions",
+			// aws_lambda_list_functions returns its continuation token as NextMarker (a name
+			// difference from the Marker input arg) -- must still be detected as a Case A cursor.
+			fn: async () => ({ Functions: Array.from({ length: 50 }, (_, i) => ({ id: i })), NextMarker: "page2" }),
+			capBytes: 200,
+		});
+		const result = (await wrapped({})) as unknown as { _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBe("page2");
+		expect(result._truncated.advice).toContain("Case A");
+	});
+
+	test("reserves _summary bytes so the wrapped result stays within cap (SIO-833)", async () => {
+		const cap = 6000;
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			// Heavy list forces truncation; the _summary projects every original item, so it is
+			// several KB. Without budgeting it, the final object would exceed cap by ~that much and
+			// the agent-side truncator could byte-slice the tail _summary off.
+			fn: async () => ({ items: Array.from({ length: 80 }, (_, i) => ({ id: i, payload: "x".repeat(120) })) }),
+			capBytes: cap,
+			summarize: (r) => r.items.map((it) => ({ id: it.id, p: "s".repeat(30) })),
+		});
+		const result = (await wrapped({})) as { items: unknown[]; _summary: unknown[] };
+		// _summary stays COMPLETE (all 80) even though items[] is truncated...
+		expect(result.items.length).toBeLessThan(80);
+		expect(result._summary).toHaveLength(80);
+		// ...and the whole wrapped payload now respects the cap (only the small _truncated marker,
+		// not the multi-KB _summary, is unaccounted for). Pre-fix this was ~_summary bytes over.
+		expect(JSON.stringify(result).length).toBeLessThanOrEqual(cap + TRUNCATION_OVERHEAD_BYTES);
+	});
+
+	test("omits _summary when under cap (no truncation)", async () => {
+		const wrapped = wrapListTool({
+			name: "test",
+			listField: "items",
+			fn: async () => ({ items: [{ id: 1 }] }),
+			capBytes: 1_000_000,
+			summarize: (r) => r.items.map((it) => ({ id: it.id })),
+		});
+		const result = await wrapped({});
+		expect(result).not.toHaveProperty("_summary");
+		expect(result).toEqual({ items: [{ id: 1 }] });
 	});
 
 	test("maps AccessDeniedException to _error.kind=iam-permission-missing", async () => {
@@ -183,8 +278,8 @@ describe("mapAwsError", () => {
 });
 
 describe("setDefaultCapBytes", () => {
-	// Restore the fallback default after this block so other tests see the 64KB cap (SIO-832).
-	afterAll(() => setDefaultCapBytes(65_536));
+	// Restore the shared default after this block so other tests see the 128KB cap (SIO-833).
+	afterAll(() => setDefaultCapBytes(131_072));
 
 	test("applies to wrappers created without an explicit capBytes", async () => {
 		setDefaultCapBytes(200);
