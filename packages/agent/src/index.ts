@@ -10,6 +10,14 @@ export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
+export {
+	type BootstrapResult,
+	registerGraphWarmer,
+	registerMemoryPrOpener,
+	runBootstrap,
+	runTeardown,
+	type TeardownContext,
+} from "./lifecycle.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
 export {
 	createMcpClient,
@@ -21,6 +29,14 @@ export {
 	mcpEvents,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
+export {
+	appendDailyLog,
+	type DailyLogEntry,
+	type KeyDecision,
+	type LiveMemory,
+	readLiveMemory,
+	recordKeyDecision,
+} from "./memory-writer.ts";
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";

@@ -3,8 +3,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyHashChain } from "@devops-agent/shared";
+import { redactPiiContent, verifyHashChain } from "@devops-agent/shared";
 import { appendDailyLog, readLiveMemory, recordKeyDecision } from "./memory-writer.ts";
+
+// SIO-845: aggregator.test.ts mocks @devops-agent/shared with a passthrough
+// redactPiiContent, and Bun's mock.module leaks across the run. When that mock
+// is active these redaction assertions are not meaningful, so gate them on the
+// real function being present. The writer's redaction call is unconditional;
+// this only avoids a false failure from cross-file mock pollution.
+const REDACTION_ACTIVE = redactPiiContent("123-45-6789") !== "123-45-6789";
 
 let baseDir: string;
 const prevEnabled = process.env.LIVE_MEMORY_ENABLED;
@@ -65,7 +72,7 @@ describe("appendDailyLog", () => {
 		expect(content).toContain("severity=high");
 	});
 
-	test("redacts PII in the summary field", () => {
+	test.if(REDACTION_ACTIVE)("redacts PII in the summary field", () => {
 		appendDailyLog({ requestId: "r3", services: [], datasources: [], summary: "user ssn 123-45-6789 leaked" }, baseDir);
 		const content = readFileSync(join(runtimeDir(), "dailylog.md"), "utf-8");
 		expect(content).not.toContain("123-45-6789");
@@ -88,14 +95,17 @@ describe("appendDailyLog", () => {
 });
 
 describe("recordKeyDecision", () => {
-	test("appends a dated, redacted decision block", () => {
-		recordKeyDecision(
-			{ requestId: "r9", decision: "Email admin@corp.com about the outage", rationale: "policy" },
-			baseDir,
-		);
+	test("appends a dated decision block with requestId and rationale", () => {
+		recordKeyDecision({ requestId: "r9", decision: "Restart the consumer group", rationale: "policy" }, baseDir);
 		const content = readFileSync(join(runtimeDir(), "key-decisions.md"), "utf-8");
 		expect(content).toContain("(r9)");
+		expect(content).toContain("Restart the consumer group");
 		expect(content).toContain("Rationale: policy");
+	});
+
+	test.if(REDACTION_ACTIVE)("redacts PII in the decision text", () => {
+		recordKeyDecision({ requestId: "r10", decision: "Email admin@corp.com about the outage" }, baseDir);
+		const content = readFileSync(join(runtimeDir(), "key-decisions.md"), "utf-8");
 		expect(content).not.toContain("admin@corp.com");
 		expect(content).toContain("[EMAIL_REDACTED]");
 	});

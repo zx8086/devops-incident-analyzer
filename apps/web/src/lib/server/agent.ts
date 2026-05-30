@@ -1,5 +1,5 @@
 // apps/web/src/lib/server/agent.ts
-import { buildGraph, createMcpClient, getAgent } from "@devops-agent/agent";
+import { buildGraph, createMcpClient, getAgent, runBootstrap, runTeardown } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
@@ -35,6 +35,34 @@ function getGraphTimeoutMs(): number {
 
 let mcpReady: Promise<void> | null = null;
 let graphPromise: ReturnType<typeof buildGraph> | null = null;
+
+// SIO-846: agent-session bootstrap runs once per thread, lazily on first
+// invoke. Mirrors the mcpReady/graphPromise run-once memoization above. Distinct
+// from MCP-server process bootstrap (createMcpApplication) which is per-process.
+const bootstrappedThreads = new Set<string>();
+
+async function sessionBootstrap(threadId: string): Promise<void> {
+	if (bootstrappedThreads.has(threadId)) return;
+	bootstrappedThreads.add(threadId);
+	try {
+		await runBootstrap();
+	} catch {
+		// Bootstrap is best-effort; a failure must not block the investigation.
+		// runBootstrap already logs its own step failures.
+	}
+}
+
+// SIO-846: explicit session-end seam. Called by the teardown endpoint (on
+// "end session"/beforeunload) and the idle-TTL sweep. Clears the run-once guard
+// so a future turn on the same threadId re-bootstraps.
+export async function sessionTeardown(threadId: string): Promise<void> {
+	bootstrappedThreads.delete(threadId);
+	try {
+		await runTeardown();
+	} catch {
+		// Teardown is best-effort; never surface to the user. runTeardown logs.
+	}
+}
 
 function getMcpConfig() {
 	return {
@@ -87,6 +115,9 @@ export async function invokeAgent(
 ) {
 	// SIO-637: Kill switch prevents new graph invocations
 	if (isKillSwitchActive()) throw new KillSwitchError();
+
+	// SIO-846: run agent-session bootstrap once per thread before the first turn.
+	await sessionBootstrap(options.threadId);
 
 	const { HumanMessage } = await import("@langchain/core/messages");
 	const graph = await getGraph();

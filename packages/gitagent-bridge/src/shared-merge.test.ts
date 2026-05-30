@@ -76,8 +76,9 @@ describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 		// SIO-845: memory/runtime/ seeded -> memory layout is loaded
 		expect(agent.memory).toBeDefined();
 		expect(agent.memory?.runtime.context).toContain("Live Context");
-		// hooks/ not yet created in the repo -> undefined (disabled)
-		expect(agent.hooks).toBeUndefined();
+		// SIO-846: hooks/hooks.yaml seeded -> hooks config is loaded
+		expect(agent.hooks).toBeDefined();
+		expect(agent.hooks?.bootstrap?.steps).toContain("load_live_memory");
 		// sharedSkills always present
 		expect(agent.sharedSkills instanceof Map).toBe(true);
 	});
@@ -86,8 +87,8 @@ describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const elastic = agent.subAgents.get("elastic-agent");
 		expect(elastic).toBeDefined();
+		// hooks/memory are root-only even though the root now has them
 		expect(elastic?.hooks).toBeUndefined();
-		// memory is root-only even though the root now has it
 		expect(elastic?.memory).toBeUndefined();
 		expect(elastic?.workflows.size).toBe(0);
 		// but shared merge still runs for sub-agents
