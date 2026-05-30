@@ -50,6 +50,7 @@
       "dependencies": {
         "@devops-agent/checkpointer": "workspace:*",
         "@devops-agent/gitagent-bridge": "workspace:*",
+        "@devops-agent/knowledge-graph": "workspace:*",
         "@devops-agent/memory-pr": "workspace:*",
         "@devops-agent/observability": "workspace:*",
         "@devops-agent/shared": "workspace:*",
@@ -89,6 +90,19 @@
       "version": "0.1.0",
       "dependencies": {
         "yaml": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
+    "packages/knowledge-graph": {
+      "name": "@devops-agent/knowledge-graph",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/observability": "workspace:*",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -548,6 +562,8 @@
     "@devops-agent/checkpointer": ["@devops-agent/checkpointer@workspace:packages/checkpointer"],
 
     "@devops-agent/gitagent-bridge": ["@devops-agent/gitagent-bridge@workspace:packages/gitagent-bridge"],
+
+    "@devops-agent/knowledge-graph": ["@devops-agent/knowledge-graph@workspace:packages/knowledge-graph"],
 
     "@devops-agent/mcp-server-atlassian": ["@devops-agent/mcp-server-atlassian@workspace:packages/mcp-server-atlassian"],
 

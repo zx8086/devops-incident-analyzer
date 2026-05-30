@@ -79,6 +79,9 @@ export interface OrchestratorPromptOptions {
 	// SIO-847: when provided, the relevant compiled wiki pages (and the index)
 	// are inlined into the prompt. Omit for an index-only / no-wiki prompt.
 	wikiFocus?: WikiFocus;
+	// SIO-850: prior-knowledge context from the knowledge graph (state.graphContext).
+	// Already-rendered string; inlined verbatim. Empty when the graph is disabled.
+	graphContext?: string;
 }
 
 // SIO-847: the wiki section depends on the current turn's focus, so it is built
@@ -92,8 +95,16 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 	const agent = getAgent();
 	const filter = options.runbookFilter;
 
+	const graphSection = options.graphContext?.trim() ? options.graphContext : "";
+
 	if (filter === undefined) {
-		return buildSystemPrompt(agent) + buildComplianceBoundary() + buildLiveMemorySection() + wikiSectionFor(options);
+		return (
+			buildSystemPrompt(agent) +
+			buildComplianceBoundary() +
+			buildLiveMemorySection() +
+			wikiSectionFor(options) +
+			graphSection
+		);
 	}
 
 	// Filter the knowledge array to remove non-selected runbooks. Other
@@ -108,7 +119,11 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 
 	const filteredAgent = { ...agent, knowledge: filteredKnowledge };
 	return (
-		buildSystemPrompt(filteredAgent) + buildComplianceBoundary() + buildLiveMemorySection() + wikiSectionFor(options)
+		buildSystemPrompt(filteredAgent) +
+		buildComplianceBoundary() +
+		buildLiveMemorySection() +
+		wikiSectionFor(options) +
+		graphSection
 	);
 }
 

@@ -3,6 +3,7 @@ import {
 	buildGraph,
 	createMcpClient,
 	getAgent,
+	installGraphWarmer,
 	installMemoryPromotion,
 	runBootstrap,
 	runTeardown,
@@ -12,10 +13,11 @@ import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
 
-// SIO-849: wire the lifecycle teardown's open_memory_pr step to the memory-pr
-// flush once, at module load. No-op until proposals are queued and
-// MEMORY_PR_ENABLED is set.
+// SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
+// (warm_knowledge_graph) seams once, at module load. Both no-op until their
+// feature flag is set.
 installMemoryPromotion();
+installGraphWarmer();
 
 // SIO-751: Command is imported lazily inside resumeAgent() because eager import
 // pulls in @langchain/langgraph's transformer modules which fail to resolve

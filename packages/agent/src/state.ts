@@ -171,6 +171,14 @@ export const AgentState = Annotation.Root({
 		default: () => "",
 	}),
 
+	// SIO-850: compact prior-knowledge context from the knowledge graph
+	// (dependencies + similar incidents), produced by the graphEnrich node and
+	// inlined into the aggregator prompt. Empty when the graph is disabled.
+	graphContext: Annotation<string>({
+		reducer: (_, next) => next,
+		default: () => "",
+	}),
+
 	dataSourceContext: Annotation<DataSourceContext | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,

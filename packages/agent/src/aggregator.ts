@@ -81,7 +81,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 		services: state.investigationFocus?.services ?? state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [],
 		datasources: state.investigationFocus?.datasources ?? state.targetDataSources,
 	};
-	const systemPrompt = buildOrchestratorPrompt({ runbookFilter, wikiFocus });
+	const systemPrompt = buildOrchestratorPrompt({ runbookFilter, wikiFocus, graphContext: state.graphContext });
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 	const userQuery = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";

@@ -10,6 +10,7 @@ export { checkConfidence } from "./confidence-gate.ts";
 export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
+export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEntities } from "./graph-knowledge.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {
 	type BootstrapResult,
