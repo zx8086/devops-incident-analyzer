@@ -3,6 +3,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import { z } from "zod";
 import type { KongApi } from "../../api/kong-api.js";
 import { createContextLogger } from "../../utils/logger.js";
+import { buildKongTruncationMarker } from "../../utils/pagination.js";
 import { extractDeploymentContext, generateTags } from "../../utils/simple-elicitation.js";
 
 const log = createContextLogger("tools");
@@ -10,27 +11,35 @@ const log = createContextLogger("tools");
 /**
  * List services for a specific control plane
  */
-export async function listServices(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+export async function listServices(api: KongApi, controlPlaneId: string, pageSize = 100, offset?: string) {
 	log.debug({ controlPlaneId }, "Listing services");
-	const result = await api.listServices(controlPlaneId, size, offset);
+	const result = await api.listServices(controlPlaneId, pageSize, offset);
 
 	// SIO-663: derive applied-pagination metadata from observed result, not request.
-	// Kong silently caps `size` at 100 upstream; echoing the requested value misled callers.
+	// Kong silently caps `pageSize` at 100 upstream; echoing the requested value misled callers.
 	const actualCount = result.data.length;
-	const effectiveSize = Math.min(size, actualCount);
-	const capped = size > actualCount && actualCount === 100;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+	// SIO-839: shared-shaped marker alongside the existing capped flag (signalling only).
+	const truncation = buildKongTruncationMarker({
+		capped,
+		shown: actualCount,
+		total: result.total,
+		cursor: result.offset ?? undefined,
+	});
 
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			requestedSize: size,
-			effectiveSize,
+			requestedPageSize: pageSize,
+			effectivePageSize,
 			actualCount,
 			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
+			...(truncation ? { truncation } : {}),
 		},
 		services: result.data.map((service) => ({
 			serviceId: service.id,
@@ -330,26 +339,34 @@ export async function deleteService(api: KongApi, controlPlaneId: string, servic
 /**
  * List routes for a specific control plane
  */
-export async function listRoutes(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+export async function listRoutes(api: KongApi, controlPlaneId: string, pageSize = 100, offset?: string) {
 	log.debug({ controlPlaneId }, "Listing routes");
-	const result = await api.listRoutes(controlPlaneId, size, offset);
+	const result = await api.listRoutes(controlPlaneId, pageSize, offset);
 
-	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
 	const actualCount = result.data.length;
-	const effectiveSize = Math.min(size, actualCount);
-	const capped = size > actualCount && actualCount === 100;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+	// SIO-839: shared-shaped marker alongside the existing capped flag (signalling only).
+	const truncation = buildKongTruncationMarker({
+		capped,
+		shown: actualCount,
+		total: result.total,
+		cursor: result.offset ?? undefined,
+	});
 
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			requestedSize: size,
-			effectiveSize,
+			requestedPageSize: pageSize,
+			effectivePageSize,
 			actualCount,
 			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
+			...(truncation ? { truncation } : {}),
 		},
 		routes: result.data.map((route) => ({
 			routeId: route.id,
@@ -637,26 +654,34 @@ export async function deleteRoute(api: KongApi, controlPlaneId: string, routeId:
 /**
  * List consumers for a specific control plane
  */
-export async function listConsumers(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+export async function listConsumers(api: KongApi, controlPlaneId: string, pageSize = 100, offset?: string) {
 	log.debug({ controlPlaneId }, "Listing consumers");
-	const result = await api.listConsumers(controlPlaneId, size, offset);
+	const result = await api.listConsumers(controlPlaneId, pageSize, offset);
 
-	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
 	const actualCount = result.data.length;
-	const effectiveSize = Math.min(size, actualCount);
-	const capped = size > actualCount && actualCount === 100;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+	// SIO-839: shared-shaped marker alongside the existing capped flag (signalling only).
+	const truncation = buildKongTruncationMarker({
+		capped,
+		shown: actualCount,
+		total: result.total,
+		cursor: result.offset ?? undefined,
+	});
 
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			requestedSize: size,
-			effectiveSize,
+			requestedPageSize: pageSize,
+			effectivePageSize,
 			actualCount,
 			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
+			...(truncation ? { truncation } : {}),
 		},
 		consumers: result.data.map((consumer) => ({
 			consumerId: consumer.id,
@@ -887,26 +912,34 @@ export async function deleteConsumer(api: KongApi, controlPlaneId: string, consu
 /**
  * List plugins for a specific control plane
  */
-export async function listPlugins(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+export async function listPlugins(api: KongApi, controlPlaneId: string, pageSize = 100, offset?: string) {
 	log.debug({ controlPlaneId }, "Listing plugins");
-	const result = await api.listPlugins(controlPlaneId, size, offset);
+	const result = await api.listPlugins(controlPlaneId, pageSize, offset);
 
-	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+	// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
 	const actualCount = result.data.length;
-	const effectiveSize = Math.min(size, actualCount);
-	const capped = size > actualCount && actualCount === 100;
+	const effectivePageSize = Math.min(pageSize, actualCount);
+	const capped = pageSize > actualCount && actualCount === 100;
+	// SIO-839: shared-shaped marker alongside the existing capped flag (signalling only).
+	const truncation = buildKongTruncationMarker({
+		capped,
+		shown: actualCount,
+		total: result.total,
+		cursor: result.offset ?? undefined,
+	});
 
 	// Transform the response to have consistent field names
 	return {
 		metadata: {
 			controlPlaneId: controlPlaneId,
-			requestedSize: size,
-			effectiveSize,
+			requestedPageSize: pageSize,
+			effectivePageSize,
 			actualCount,
 			capped,
 			offset: offset || null,
 			nextOffset: result.offset,
 			totalCount: result.total,
+			...(truncation ? { truncation } : {}),
 		},
 		plugins: result.data.map((plugin) => ({
 			pluginId: plugin.id,

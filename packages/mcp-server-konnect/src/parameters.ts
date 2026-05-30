@@ -51,14 +51,15 @@ export const getConsumerRequestsParameters = () =>
 export const listServicesParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z
+		// SIO-839: canonical page-size name `pageSize` (was `size`) — aligns all Konnect list tools.
+		pageSize: z
 			.number()
 			.int()
 			.min(1)
 			.max(1000)
 			.default(100)
 			.describe(
-				"Number of services to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+				"Number of services to return. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
 			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
@@ -66,14 +67,15 @@ export const listServicesParameters = () =>
 export const listRoutesParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z
+		// SIO-839: canonical page-size name `pageSize` (was `size`).
+		pageSize: z
 			.number()
 			.int()
 			.min(1)
 			.max(1000)
 			.default(100)
 			.describe(
-				"Number of routes to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+				"Number of routes to return. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
 			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
@@ -81,14 +83,15 @@ export const listRoutesParameters = () =>
 export const listConsumersParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z
+		// SIO-839: canonical page-size name `pageSize` (was `size`).
+		pageSize: z
 			.number()
 			.int()
 			.min(1)
 			.max(1000)
 			.default(100)
 			.describe(
-				"Number of consumers to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+				"Number of consumers to return. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
 			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});
@@ -96,14 +99,15 @@ export const listConsumersParameters = () =>
 export const listPluginsParameters = () =>
 	z.object({
 		controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-		size: z
+		// SIO-839: canonical page-size name `pageSize` (was `size`).
+		pageSize: z
 			.number()
 			.int()
 			.min(1)
 			.max(1000)
 			.default(100)
 			.describe(
-				"Number of plugins to return. Note: Kong silently caps `size` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
+				"Number of plugins to return. Note: Kong silently caps `pageSize` at 100 upstream; values above 100 yield 100 rows. Check `metadata.capped` in the response.",
 			),
 		offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 	});

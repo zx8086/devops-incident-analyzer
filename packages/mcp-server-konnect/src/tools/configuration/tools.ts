@@ -37,7 +37,7 @@ export const configurationTools = (): MCPTool[] => [
 		parameters: parameters.listServicesParameters,
 		category: "configuration",
 		handler: async (args: ListServicesArgs, { api }) =>
-			configurationOps.listServices(api, args.controlPlaneId, args.size, args.offset),
+			configurationOps.listServices(api, args.controlPlaneId, args.pageSize, args.offset),
 	},
 	{
 		method: "list_routes",
@@ -46,7 +46,7 @@ export const configurationTools = (): MCPTool[] => [
 		parameters: parameters.listRoutesParameters,
 		category: "configuration",
 		handler: async (args: ListRoutesArgs, { api }) =>
-			configurationOps.listRoutes(api, args.controlPlaneId, args.size, args.offset),
+			configurationOps.listRoutes(api, args.controlPlaneId, args.pageSize, args.offset),
 	},
 	{
 		method: "list_consumers",
@@ -55,7 +55,7 @@ export const configurationTools = (): MCPTool[] => [
 		parameters: parameters.listConsumersParameters,
 		category: "configuration",
 		handler: async (args: ListConsumersArgs, { api }) =>
-			configurationOps.listConsumers(api, args.controlPlaneId, args.size, args.offset),
+			configurationOps.listConsumers(api, args.controlPlaneId, args.pageSize, args.offset),
 	},
 	{
 		method: "list_plugins",
@@ -64,7 +64,7 @@ export const configurationTools = (): MCPTool[] => [
 		parameters: parameters.listPluginsParameters,
 		category: "configuration",
 		handler: async (args: ListPluginsArgs, { api }) =>
-			configurationOps.listPlugins(api, args.controlPlaneId, args.size, args.offset),
+			configurationOps.listPlugins(api, args.controlPlaneId, args.pageSize, args.offset),
 	},
 
 	{

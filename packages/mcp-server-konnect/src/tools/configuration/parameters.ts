@@ -185,27 +185,28 @@ export const listPluginSchemasParameters = z.object({
 	controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
 });
 
+// SIO-839: canonical page-size name `pageSize` (was `size`) — aligns all Konnect list tools.
 export const listServicesParameters = z.object({
 	controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-	size: z.number().int().min(1).max(1000).default(100).describe("Number of services to return"),
+	pageSize: z.number().int().min(1).max(1000).default(100).describe("Number of services to return"),
 	offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 });
 
 export const listRoutesParameters = z.object({
 	controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-	size: z.number().int().min(1).max(1000).default(100).describe("Number of routes to return"),
+	pageSize: z.number().int().min(1).max(1000).default(100).describe("Number of routes to return"),
 	offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 });
 
 export const listConsumersParameters = z.object({
 	controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-	size: z.number().int().min(1).max(1000).default(100).describe("Number of consumers to return"),
+	pageSize: z.number().int().min(1).max(1000).default(100).describe("Number of consumers to return"),
 	offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 });
 
 export const listPluginsParameters = z.object({
 	controlPlaneId: z.string().describe("Control Plane ID (obtainable from list-control-planes tool)"),
-	size: z.number().int().min(1).max(1000).default(100).describe("Number of plugins to return"),
+	pageSize: z.number().int().min(1).max(1000).default(100).describe("Number of plugins to return"),
 	offset: z.string().optional().describe("Offset token for pagination (from previous response)"),
 });
 

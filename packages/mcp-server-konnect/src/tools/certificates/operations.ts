@@ -2,6 +2,7 @@
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { createContextLogger } from "../../utils/logger.js";
+import { buildKongTruncationMarker } from "../../utils/pagination.js";
 import { validateCertificate, validatePrivateKey } from "../../utils/validation.js";
 
 const log = createContextLogger("certificates");
@@ -9,7 +10,7 @@ const log = createContextLogger("certificates");
 /**
  * List certificates for a specific control plane with health analysis
  */
-export async function listCertificates(api: KongApi, controlPlaneId: string, size = 100, offset?: string) {
+export async function listCertificates(api: KongApi, controlPlaneId: string, pageSize = 100, offset?: string) {
 	log.debug({ controlPlaneId }, "Listing certificates");
 	return withErrorContext(
 		"list_certificates",
@@ -17,12 +18,19 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 		undefined,
 		controlPlaneId,
 	)(async () => {
-		const result = await api.listCertificates(controlPlaneId, size, offset);
+		const result = await api.listCertificates(controlPlaneId, pageSize, offset);
 
-		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `size` at 100.
+		// SIO-663: applied-pagination metadata derived from observed result; Kong caps `pageSize` at 100.
 		const actualCount = result.data.length;
-		const effectiveSize = Math.min(size, actualCount);
-		const capped = size > actualCount && actualCount === 100;
+		const effectivePageSize = Math.min(pageSize, actualCount);
+		const capped = pageSize > actualCount && actualCount === 100;
+		// SIO-839: shared-shaped marker alongside the existing capped flag (signalling only).
+		const truncation = buildKongTruncationMarker({
+			capped,
+			shown: actualCount,
+			total: result.total,
+			cursor: result.offset ?? undefined,
+		});
 
 		// Analyze certificate health (expiration dates, etc.)
 		const now = new Date();
@@ -32,13 +40,14 @@ export async function listCertificates(api: KongApi, controlPlaneId: string, siz
 		return {
 			metadata: {
 				controlPlaneId: controlPlaneId,
-				requestedSize: size,
-				effectiveSize,
+				requestedPageSize: pageSize,
+				effectivePageSize,
 				actualCount,
 				capped,
 				offset: offset || null,
 				nextOffset: result.offset,
 				totalCount: result.total,
+				...(truncation ? { truncation } : {}),
 			},
 			certificates: result.data.map((cert) => {
 				// Parse certificate to extract expiration date

@@ -2,6 +2,7 @@
 import type { KongApi } from "../../api/kong-api.js";
 import { withErrorContext } from "../../utils/error-handling.js";
 import { createContextLogger } from "../../utils/logger.js";
+import { buildKongTruncationMarker } from "../../utils/pagination.js";
 
 const log = createContextLogger("tools");
 
@@ -37,6 +38,13 @@ export async function listControlPlanes(
 		const actualCount = result.data.length;
 		const effectivePageSize = Math.min(pageSize, actualCount);
 		const capped = pageSize > actualCount && actualCount === 100;
+		// SIO-839: page-number tool -> no opaque cursor; steer the model to pageNumber.
+		const truncation = buildKongTruncationMarker({
+			capped,
+			shown: actualCount,
+			total: result.meta.total_count,
+			advice: "Kong capped this page at 100 rows. Request the next pageNumber to fetch more (nothing was dropped).",
+		});
 
 		// Transform the response to have consistent field names
 		return {
@@ -48,6 +56,7 @@ export async function listControlPlanes(
 				pageNumber: pageNumber || 1,
 				totalPages: result.meta.page_count,
 				totalCount: result.meta.total_count,
+				...(truncation ? { truncation } : {}),
 				filters: {
 					name: filterName || null,
 					clusterType: filterClusterType || null,
@@ -144,6 +153,14 @@ export async function listControlPlaneGroupMemberships(
 		const actualCount = result.data.length;
 		const effectivePageSize = Math.min(pageSize, actualCount);
 		const capped = pageSize > actualCount && actualCount === 100;
+		// SIO-839: this tool is cursor-based (pageAfter); surface next_page.after as the cursor.
+		const truncation = buildKongTruncationMarker({
+			capped,
+			shown: actualCount,
+			total: result.meta?.total_count,
+			cursor: result.meta?.next_page?.after ?? undefined,
+			advice: "Kong capped this page at 100 rows. Pass the returned nextPageAfter as pageAfter to fetch more.",
+		});
 
 		// Transform the response to have consistent field names
 		return {
@@ -156,6 +173,7 @@ export async function listControlPlaneGroupMemberships(
 				pageAfter: pageAfter || null,
 				nextPageAfter: result.meta?.next_page?.after || null,
 				totalCount: result.meta?.total_count || 0,
+				...(truncation ? { truncation } : {}),
 			},
 			members: result.data.map((member) => ({
 				controlPlaneId: member.id,
