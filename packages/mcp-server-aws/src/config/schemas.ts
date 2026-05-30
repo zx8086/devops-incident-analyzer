@@ -15,7 +15,9 @@ const EstateSchema = z.object({
 		.describe("Target role to assume for this estate"),
 	externalId: z.string().min(1).describe("STS ExternalId required by the role's trust policy"),
 	// SIO-832: optional per-estate region override. When absent, the global AWS_REGION is used.
-	// Required for estates whose workloads live outside the default region (e.g. eu-b2bonboarding-prd in eu-west-1).
+	// For estates whose workloads live outside the default region. (SIO-835: no estate
+	// currently needs this — eu-b2bonboarding-prd was wrongly pinned to eu-west-1 and now
+	// falls back to the eu-central-1 default like every other estate.)
 	region: z.string().min(1).optional().describe("Optional region override; falls back to AWS_REGION"),
 });
 
