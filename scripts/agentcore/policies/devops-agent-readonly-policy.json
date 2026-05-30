@@ -138,7 +138,8 @@
 				"health:DescribeEventDetails",
 				"config:DescribeConfigRules",
 				"config:DescribeComplianceByConfigRule",
-				"config:ListDiscoveredResources"
+				"config:ListDiscoveredResources",
+				"config:GetDiscoveredResourceCounts"
 			],
 			"Resource": "*"
 		},

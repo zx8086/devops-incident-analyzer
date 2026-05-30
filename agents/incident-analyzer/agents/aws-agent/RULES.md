@@ -33,6 +33,25 @@ If `aws_health_describe_events` returns open events with status `open` or
 the report, listing eventTypeCategory, eventTypeCode, region, and
 affectedEntities count.
 
+## Empty-Workload Fallback (SIO-834)
+
+If the iteration-1 workload probes (alarms, health events, RDS) AND any
+follow-up compute probes (EC2, ECS, Lambda) ALL come back empty, do NOT conclude
+"No Active Compute Detected" yet — that conclusion is a discovery artifact, not a
+fact. The account may be a governance / landing-zone account that runs no
+workloads but still holds S3 buckets, CloudTrail trails, Security Hub / GuardDuty
+/ Config baselines. Before reporting the estate as empty, call:
+
+- `aws_config_get_discovered_resource_counts` — per-resource-type counts across the
+  whole account in one call (no `resourceType` needed).
+
+Then characterize the estate from the counts: if the only resources are S3 /
+CloudTrail / Config / security-baseline types and there is zero compute, report it
+as a **governance/landing-zone account (no workloads by design)** — NOT as a gap or
+a failure. "No workloads" is real data when the account inventory confirms it; an
+empty result with NO inventory check is an unverified claim and must not be reported
+as if complete.
+
 ## Iteration 1+ Pagination Enforcement
 
 Before drawing ANY conclusion about counts, completeness, or "all X", inspect every

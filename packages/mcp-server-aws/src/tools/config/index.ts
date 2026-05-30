@@ -9,6 +9,11 @@ import {
 	describeConfigRulesSchema,
 } from "./describe-config-rules.ts";
 import {
+	type GetDiscoveredResourceCountsParams,
+	getDiscoveredResourceCounts,
+	getDiscoveredResourceCountsSchema,
+} from "./get-discovered-resource-counts.ts";
+import {
 	type ListDiscoveredResourcesParams,
 	listDiscoveredResources,
 	listDiscoveredResourcesSchema,
@@ -29,5 +34,13 @@ export function registerConfigTools(server: McpServer, config: AwsConfig): void 
 		"List resources of a given type discovered by AWS Config (e.g. AWS::EC2::Instance).",
 		withEstate(config, listDiscoveredResourcesSchema.shape),
 		async (params) => toMcp(await discoveredResources(params as ListDiscoveredResourcesParams)),
+	);
+
+	const resourceCounts = getDiscoveredResourceCounts(config);
+	server.tool(
+		"aws_config_get_discovered_resource_counts",
+		"Get per-resource-type counts across the whole account in one call (no resourceType needed). Use to confirm an estate is alive and characterize a governance/landing-zone account when workload probes return empty.",
+		withEstate(config, getDiscoveredResourceCountsSchema.shape),
+		async (params) => toMcp(await resourceCounts(params as GetDiscoveredResourceCountsParams)),
 	);
 }
