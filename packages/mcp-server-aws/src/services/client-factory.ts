@@ -1,5 +1,6 @@
 // src/services/client-factory.ts
 import { CloudFormationClient } from "@aws-sdk/client-cloudformation";
+import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
 import { ConfigServiceClient } from "@aws-sdk/client-config-service";
@@ -8,11 +9,13 @@ import { EC2Client } from "@aws-sdk/client-ec2";
 import { ECSClient } from "@aws-sdk/client-ecs";
 import { ElastiCacheClient } from "@aws-sdk/client-elasticache";
 import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
+import { GuardDutyClient } from "@aws-sdk/client-guardduty";
 import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { ResourceGroupsTaggingAPIClient } from "@aws-sdk/client-resource-groups-tagging-api";
 import { S3Client } from "@aws-sdk/client-s3";
+import { SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { SFNClient } from "@aws-sdk/client-sfn";
 import { SNSClient } from "@aws-sdk/client-sns";
 import { SQSClient } from "@aws-sdk/client-sqs";
@@ -64,6 +67,9 @@ export function getCloudWatchClient(config: AwsConfig, estate: string): CloudWat
 export function getCloudWatchLogsClient(config: AwsConfig, estate: string): CloudWatchLogsClient {
 	return lazyClient("logs", estate, () => new CloudWatchLogsClient(commonConfig(config, estate)));
 }
+export function getCloudTrailClient(config: AwsConfig, estate: string): CloudTrailClient {
+	return lazyClient("cloudtrail", estate, () => new CloudTrailClient(commonConfig(config, estate)));
+}
 export function getConfigServiceClient(config: AwsConfig, estate: string): ConfigServiceClient {
 	return lazyClient("config", estate, () => new ConfigServiceClient(commonConfig(config, estate)));
 }
@@ -82,6 +88,9 @@ export function getElastiCacheClient(config: AwsConfig, estate: string): ElastiC
 export function getEventBridgeClient(config: AwsConfig, estate: string): EventBridgeClient {
 	return lazyClient("eventbridge", estate, () => new EventBridgeClient(commonConfig(config, estate)));
 }
+export function getGuardDutyClient(config: AwsConfig, estate: string): GuardDutyClient {
+	return lazyClient("guardduty", estate, () => new GuardDutyClient(commonConfig(config, estate)));
+}
 // AWS Health API requires the us-east-1 endpoint regardless of which region the
 // agent is deployed in. Override the region here, not in callers.
 export function getHealthClient(config: AwsConfig, estate: string): HealthClient {
@@ -98,6 +107,9 @@ export function getResourceGroupsTaggingClient(config: AwsConfig, estate: string
 }
 export function getS3Client(config: AwsConfig, estate: string): S3Client {
 	return lazyClient("s3", estate, () => new S3Client(commonConfig(config, estate)));
+}
+export function getSecurityHubClient(config: AwsConfig, estate: string): SecurityHubClient {
+	return lazyClient("securityhub", estate, () => new SecurityHubClient(commonConfig(config, estate)));
 }
 export function getSfnClient(config: AwsConfig, estate: string): SFNClient {
 	return lazyClient("sfn", estate, () => new SFNClient(commonConfig(config, estate)));

@@ -188,9 +188,9 @@ Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentRe
 
 ### 2.2 Permissions policy
 
-Read-only access across the AWS services the MCP server exposes (all 39 tools shipped in SIO-828). Includes the 4 extra actions surfaced during review: `s3:GetBucketPolicyStatus`, `states:ListStateMachines`, `states:DescribeStateMachine`, `config:ListDiscoveredResources`.
+Read-only access across the AWS services the MCP server exposes (**52 tools** as of SIO-841). History: SIO-828 shipped 39; later work (RDS probe, Config resource counts, etc.) brought it to 42; SIO-841 added the 10 CloudTrail / Security Hub / GuardDuty read tools.
 
-> **Keep in sync with new tools.** Whenever the AWS MCP server gains tools that call new AWS APIs, this policy must grow to match. SIO-841 (governance/security-baseline tools — CloudTrail, Security Hub, GuardDuty) is the next such change: when it lands it will add actions like `cloudtrail:LookupEvents`, `securityhub:GetFindings`, and `guardduty:ListFindings` here, and re-running `setup-aws-readonly-role.sh` (or `create-policy-version`) is required across all 7 accounts.
+> **Keep in sync with new tools.** Whenever the AWS MCP server gains tools that call new AWS APIs, this policy must grow to match. **SIO-841 (governance/security-baseline tools — CloudTrail, Security Hub, GuardDuty) has landed** and added the `SecurityAndAuditRead` Sid below with these actions: `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `cloudtrail:ListTrails`, `securityhub:GetFindings`, `securityhub:DescribeHub`, `securityhub:GetEnabledStandards`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `guardduty:ListFindings`, `guardduty:GetFindings`. Re-running `setup-aws-readonly-role.sh` (or `create-policy-version`) is required across all 7 accounts — see §2.5.
 
 ```json
 {
@@ -338,7 +338,8 @@ Read-only access across the AWS services the MCP server exposes (all 39 tools sh
         "health:DescribeEventDetails",
         "config:DescribeConfigRules",
         "config:DescribeComplianceByConfigRule",
-        "config:ListDiscoveredResources"
+        "config:ListDiscoveredResources",
+        "config:GetDiscoveredResourceCounts"
       ],
       "Resource": "*"
     },
@@ -354,6 +355,23 @@ Read-only access across the AWS services the MCP server exposes (all 39 tools sh
         "tag:GetResources",
         "tag:GetTagKeys",
         "tag:GetTagValues"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SecurityAndAuditRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:ListTrails",
+        "securityhub:GetFindings",
+        "securityhub:DescribeHub",
+        "securityhub:GetEnabledStandards",
+        "guardduty:ListDetectors",
+        "guardduty:GetDetector",
+        "guardduty:ListFindings",
+        "guardduty:GetFindings"
       ],
       "Resource": "*"
     }
@@ -396,6 +414,36 @@ For each of the 7 accounts:
 - [ ] `105329690220` (eu-b2b-ecom-prd) — role created, trust + permissions attached
 - [ ] `728412486223` (eu-b2bonboarding-prd) — role created, trust + permissions attached
 - [ ] `399987695868` (eu-shared-services-prd — self-loop) — role created, trust + permissions attached
+
+### 2.5 SIO-841 re-apply (governance/security-baseline tools)
+
+SIO-841 added the `SecurityAndAuditRead` Sid (CloudTrail / Security Hub / GuardDuty read actions) to `scripts/agentcore/policies/devops-agent-readonly-policy.json`. The policy is **identical in every estate**, so it must be re-applied to all 7 `DevOpsAgentReadOnly` roles. `setup-aws-readonly-role.sh` is idempotent (`create-policy-version --set-as-default`, trims old versions), so re-running it from a session authenticated **as each account** updates the policy in place:
+
+```bash
+# from a session authenticated as the target account
+./scripts/agentcore/setup-aws-readonly-role.sh
+```
+
+Re-apply checklist (the policy now carries `SecurityAndAuditRead`):
+
+- [ ] `762715229080` (eu-oit-prd) — `SecurityAndAuditRead` applied
+- [ ] `523422062084` (eu-ediservices-prd) — `SecurityAndAuditRead` applied
+- [ ] `654654584630` (eu-mendix-platform-prd) — `SecurityAndAuditRead` applied
+- [ ] `178531813197` (eu-b2becom-v2-prd) — `SecurityAndAuditRead` applied
+- [ ] `105329690220` (eu-b2b-ecom-prd) — `SecurityAndAuditRead` applied
+- [ ] `728412486223` (eu-b2bonboarding-prd) — `SecurityAndAuditRead` applied
+- [ ] `399987695868` (eu-shared-services-prd — self-loop) — `SecurityAndAuditRead` applied
+
+**Image rebuild is also required for SIO-841** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` tools only exist in a freshly built image. Re-export the tarball and load it into the AgentCore runtime via the console:
+
+```bash
+./scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball
+# then: load the resulting .tar.gz into the AgentCore runtime (console)
+```
+
+IAM apply (the checklist above) is account-side and does **not** need an image; the image rebuild is needed because the tool surface grew. Both must be done for the new tools to work end-to-end.
+
+- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 tool code)
 
 ---
 
