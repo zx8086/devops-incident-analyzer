@@ -1,7 +1,10 @@
 // gitagent-bridge/src/manifest-loader.ts
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parse } from "yaml";
+import { type HooksConfig, loadHooks } from "./hooks.ts";
+import { type LoadedMemory, loadMemoryLayout } from "./memory.ts";
+import { mergeShared } from "./shared-merge.ts";
 import {
 	type AgentManifest,
 	AgentManifestSchema,
@@ -12,6 +15,7 @@ import {
 	type ToolDefinition,
 	ToolDefinitionSchema,
 } from "./types.ts";
+import { loadWorkflows, type WorkflowDef } from "./workflow.ts";
 
 export interface KnowledgeEntry {
 	category: string;
@@ -32,9 +36,29 @@ export interface LoadedAgent {
 	// Presence of this field gates whether the runbook selector node is wired
 	// into the graph.
 	runbookSelection?: RunbookSelectionConfig;
+	// SIO-843: gitagent dynamic-pattern asset trees. hooks/memory/workflows are
+	// root-only (sub-agents leave them undefined/empty). sharedSkills/sharedContext
+	// are merged from agents/shared for every agent (local overrides shared).
+	hooks?: HooksConfig;
+	memory?: LoadedMemory;
+	workflows: Map<string, WorkflowDef>;
+	sharedSkills: Map<string, string>;
+	sharedContext?: string;
 }
 
-export function loadAgent(agentDir: string): LoadedAgent {
+// SIO-843: Internal recursion options. Lifecycle asset trees (hooks/memory/
+// workflows) load only for the root agent; the shared root is resolved once at
+// the top-level call (agents/shared) and threaded down so nested sub-agents
+// merge against the same monorepo-shared directory, not a per-agent sibling.
+interface LoadAgentOptions {
+	root: boolean;
+	sharedRoot: string;
+}
+
+export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedAgent {
+	const root = options?.root ?? true;
+	const sharedRoot = options?.sharedRoot ?? resolve(agentDir, "..", "shared");
+
 	const yamlContent = readFileSync(join(agentDir, "agent.yaml"), "utf-8");
 	const rawManifest = parse(yamlContent);
 	const manifest = AgentManifestSchema.parse(rawManifest);
@@ -69,13 +93,42 @@ export function loadAgent(agentDir: string): LoadedAgent {
 		for (const subAgentName of Object.keys(manifest.agents)) {
 			const subAgentDir = join(agentsDir, subAgentName);
 			if (existsSync(join(subAgentDir, "agent.yaml"))) {
-				subAgents.set(subAgentName, loadAgent(subAgentDir));
+				subAgents.set(subAgentName, loadAgent(subAgentDir, { root: false, sharedRoot }));
 			}
 		}
 	}
 
 	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir);
-	return { manifest, soul, rules, tools, skills, subAgents, knowledge, runbookSelection };
+
+	// SIO-843: lifecycle asset trees are root-only.
+	const hooks = root ? loadHooks(agentDir) : undefined;
+	const memory = root ? loadMemoryLayout(agentDir) : undefined;
+	const workflows = root ? loadWorkflows(agentDir) : new Map<string, WorkflowDef>();
+
+	const base: LoadedAgent = {
+		manifest,
+		soul,
+		rules,
+		tools,
+		skills,
+		subAgents,
+		knowledge,
+		runbookSelection,
+		hooks,
+		memory,
+		workflows,
+		sharedSkills: new Map(),
+	};
+
+	// SIO-843 / EPIC 5: merge shared skills + context for every agent. Shared
+	// tools are appended (local override by name); shared skills fill gaps only.
+	const merged = mergeShared(sharedRoot, base);
+	return {
+		...base,
+		tools: merged.tools,
+		sharedSkills: merged.sharedSkills,
+		sharedContext: merged.sharedContext,
+	};
 }
 
 function loadKnowledge(agentDir: string): {
