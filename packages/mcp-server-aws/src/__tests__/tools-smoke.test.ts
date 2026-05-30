@@ -5,6 +5,9 @@ import { describe, expect, test } from "bun:test";
 import { describeStackEventsSchema } from "../tools/cloudformation/describe-stack-events.ts";
 import { describeStacksSchema } from "../tools/cloudformation/describe-stacks.ts";
 import { listStacksSchema } from "../tools/cloudformation/list-stacks.ts";
+import { describeTrailsSchema } from "../tools/cloudtrail/describe-trails.ts";
+import { getTrailStatusSchema } from "../tools/cloudtrail/get-trail-status.ts";
+import { listTrailsSchema } from "../tools/cloudtrail/list-trails.ts";
 import { describeAlarmsSchema } from "../tools/cloudwatch/describe-alarms.ts";
 import { getMetricDataSchema } from "../tools/cloudwatch/get-metric-data.ts";
 import { describeConfigRulesSchema } from "../tools/config/describe-config-rules.ts";
@@ -22,6 +25,10 @@ import { listServicesSchema } from "../tools/ecs/list-services.ts";
 import { listTasksSchema } from "../tools/ecs/list-tasks.ts";
 import { describeCacheClustersSchema } from "../tools/elasticache/describe-cache-clusters.ts";
 import { describeReplicationGroupsSchema } from "../tools/elasticache/describe-replication-groups.ts";
+import { getDetectorSchema } from "../tools/guardduty/get-detector.ts";
+import { getFindingsSchema as guardDutyGetFindingsSchema } from "../tools/guardduty/get-findings.ts";
+import { listDetectorsSchema } from "../tools/guardduty/list-detectors.ts";
+import { listFindingsSchema as guardDutyListFindingsSchema } from "../tools/guardduty/list-findings.ts";
 import { describeEventsSchema } from "../tools/health/describe-events.ts";
 import { getFunctionConfigurationSchema } from "../tools/lambda/get-function-configuration.ts";
 import { listFunctionsSchema } from "../tools/lambda/list-functions.ts";
@@ -40,6 +47,9 @@ import { describeDbInstancesSchema } from "../tools/rds/describe-db-instances.ts
 import { getBucketLocationSchema } from "../tools/s3/get-bucket-location.ts";
 import { getBucketPolicyStatusSchema } from "../tools/s3/get-bucket-policy-status.ts";
 import { listBucketsSchema } from "../tools/s3/list-buckets.ts";
+import { describeHubSchema } from "../tools/securityhub/describe-hub.ts";
+import { getEnabledStandardsSchema } from "../tools/securityhub/get-enabled-standards.ts";
+import { getFindingsSchema as securityHubGetFindingsSchema } from "../tools/securityhub/get-findings.ts";
 import { getResourcesSchema } from "../tools/tags/get-resources.ts";
 import { getServiceGraphSchema } from "../tools/xray/get-service-graph.ts";
 import { getTraceSummariesSchema } from "../tools/xray/get-trace-summaries.ts";
@@ -379,5 +389,59 @@ describe("tags tool param schemas", () => {
 	});
 	test("getResources rejects non-array TagFilters", () => {
 		expect(getResourcesSchema.safeParse({ TagFilters: "env=prod" }).success).toBe(false);
+	});
+});
+
+describe("cloudtrail tool param schemas", () => {
+	test("describeTrails accepts empty input", () => {
+		expect(describeTrailsSchema.safeParse({}).success).toBe(true);
+	});
+	test("describeTrails rejects non-array trailNameList", () => {
+		expect(describeTrailsSchema.safeParse({ trailNameList: "org-trail" }).success).toBe(false);
+	});
+	test("getTrailStatus requires Name", () => {
+		expect(getTrailStatusSchema.safeParse({}).success).toBe(false);
+		expect(getTrailStatusSchema.safeParse({ Name: "org-trail" }).success).toBe(true);
+	});
+	test("listTrails accepts empty input", () => {
+		expect(listTrailsSchema.safeParse({}).success).toBe(true);
+	});
+});
+
+describe("securityhub tool param schemas", () => {
+	test("getFindings accepts empty input (all severities)", () => {
+		expect(securityHubGetFindingsSchema.safeParse({}).success).toBe(true);
+	});
+	test("getFindings accepts known severity labels", () => {
+		expect(securityHubGetFindingsSchema.safeParse({ severityLabels: ["CRITICAL", "HIGH"] }).success).toBe(true);
+	});
+	test("getFindings rejects unknown severity labels", () => {
+		expect(securityHubGetFindingsSchema.safeParse({ severityLabels: ["SEVERE"] }).success).toBe(false);
+	});
+	test("describeHub accepts empty input", () => {
+		expect(describeHubSchema.safeParse({}).success).toBe(true);
+	});
+	test("getEnabledStandards accepts empty input", () => {
+		expect(getEnabledStandardsSchema.safeParse({}).success).toBe(true);
+	});
+});
+
+describe("guardduty tool param schemas", () => {
+	test("listDetectors accepts empty input", () => {
+		expect(listDetectorsSchema.safeParse({}).success).toBe(true);
+	});
+	test("getDetector requires DetectorId", () => {
+		expect(getDetectorSchema.safeParse({}).success).toBe(false);
+		expect(getDetectorSchema.safeParse({ DetectorId: "det-1" }).success).toBe(true);
+	});
+	test("listFindings requires DetectorId and bounds minSeverity to 0-10", () => {
+		expect(guardDutyListFindingsSchema.safeParse({}).success).toBe(false);
+		expect(guardDutyListFindingsSchema.safeParse({ DetectorId: "det-1", minSeverity: 7 }).success).toBe(true);
+		expect(guardDutyListFindingsSchema.safeParse({ DetectorId: "det-1", minSeverity: 11 }).success).toBe(false);
+	});
+	test("getFindings requires DetectorId and a non-empty FindingIds array", () => {
+		expect(guardDutyGetFindingsSchema.safeParse({ DetectorId: "det-1" }).success).toBe(false);
+		expect(guardDutyGetFindingsSchema.safeParse({ DetectorId: "det-1", FindingIds: [] }).success).toBe(false);
+		expect(guardDutyGetFindingsSchema.safeParse({ DetectorId: "det-1", FindingIds: ["f-1"] }).success).toBe(true);
 	});
 });

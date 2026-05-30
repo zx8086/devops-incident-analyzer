@@ -52,6 +52,17 @@ a failure. "No workloads" is real data when the account inventory confirms it; a
 empty result with NO inventory check is an unverified claim and must not be reported
 as if complete.
 
+When the counts show non-zero baseline resources AND the query asks about that
+baseline (audit logging, security posture, threat detection), drill into the real
+tools instead of stopping at counts:
+
+- `AWS::CloudTrail::Trail > 0` and the query is about audit logging -> `aws_cloudtrail_describe_trails` then `aws_cloudtrail_get_trail_status` (is it actually logging?).
+- `AWS::SecurityHub::Hub` present and the query is about security posture -> `aws_securityhub_describe_hub` -> `aws_securityhub_get_enabled_standards` -> `aws_securityhub_get_findings` (severity-filtered).
+- `AWS::GuardDuty::Detector` present and the query is about threats -> `aws_guardduty_list_detectors` -> `aws_guardduty_get_detector` -> `aws_guardduty_list_findings` -> `aws_guardduty_get_findings`.
+
+Counts characterize the account; these tools answer the actual question. Don't report
+counts-only when the query demands trail status, finding severities, or detector state.
+
 ## Iteration 1+ Pagination Enforcement
 
 Before drawing ANY conclusion about counts, completeness, or "all X", inspect every
@@ -116,6 +127,9 @@ When the user names a specific service or resource:
 - Logs: `aws_logs_describe_log_groups` (find the group) -> `aws_logs_start_query` -> `aws_logs_get_query_results` (Insights polling pattern)
 - Deployment context: `aws_cloudformation_list_stacks` -> `aws_cloudformation_describe_stacks` (status, outputs) -> `aws_cloudformation_describe_stack_events` (failure diagnosis)
 - Tag discovery: `aws_resourcegroupstagging_get_resources` to find all resources matching a team/env tag across services
+- CloudTrail: `aws_cloudtrail_describe_trails` (trail config: multi-region, S3 target, KMS) or `aws_cloudtrail_list_trails` (cross-region enumeration) -> `aws_cloudtrail_get_trail_status` (is the trail actually logging? `IsLogging`, `LatestDeliveryError`). Use for "was CloudTrail disabled / is audit logging broken" questions.
+- Security Hub: `aws_securityhub_describe_hub` (is Security Hub enabled?) -> `aws_securityhub_get_enabled_standards` (CIS / AWS Foundational / PCI) -> `aws_securityhub_get_findings` (filter by `severityLabels`, e.g. CRITICAL/HIGH)
+- GuardDuty: `aws_guardduty_list_detectors` -> `aws_guardduty_get_detector` (enabled? data sources) -> `aws_guardduty_list_findings` (filter by `minSeverity`) -> `aws_guardduty_get_findings` (in that order; `aws_guardduty_get_findings` REQUIRES the IDs from `aws_guardduty_list_findings` — never guess them)
 
 ## Error Handling
 

@@ -4,6 +4,7 @@
 // response flows through the wrapper correctly.
 import { afterEach, describe, expect, test } from "bun:test";
 import { CloudFormationClient, ListStacksCommand } from "@aws-sdk/client-cloudformation";
+import { CloudTrailClient, DescribeTrailsCommand, GetTrailStatusCommand } from "@aws-sdk/client-cloudtrail";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient, DescribeLogGroupsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import {
@@ -15,17 +16,35 @@ import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DescribeVpcsCommand, EC2Client } from "@aws-sdk/client-ec2";
 import { DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
 import { DescribeCacheClustersCommand, ElastiCacheClient } from "@aws-sdk/client-elasticache";
+import {
+	GetDetectorCommand,
+	GuardDutyClient,
+	type Finding as GuardDutyFinding,
+	GetFindingsCommand as GuardDutyGetFindingsCommand,
+	ListDetectorsCommand,
+	ListFindingsCommand,
+} from "@aws-sdk/client-guardduty";
 import { DescribeEventsCommand, HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient, ListFunctionsCommand } from "@aws-sdk/client-lambda";
 import { DescribeDBInstancesCommand, RDSClient } from "@aws-sdk/client-rds";
 import { GetResourcesCommand, ResourceGroupsTaggingAPIClient } from "@aws-sdk/client-resource-groups-tagging-api";
 import { ListBucketsCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+	type AwsSecurityFinding,
+	DescribeHubCommand,
+	GetEnabledStandardsCommand,
+	SecurityHubClient,
+	GetFindingsCommand as SecurityHubGetFindingsCommand,
+	type StandardsSubscription,
+} from "@aws-sdk/client-securityhub";
 import { ListTopicsCommand, SNSClient } from "@aws-sdk/client-sns";
 import { GetTraceSummariesCommand, XRayClient } from "@aws-sdk/client-xray";
 import { mockClient } from "aws-sdk-client-mock";
 import type { AwsConfig } from "../config/schemas.ts";
 import { _resetClientsForTests } from "../services/client-factory.ts";
 import { listStacks } from "../tools/cloudformation/list-stacks.ts";
+import { describeTrails } from "../tools/cloudtrail/describe-trails.ts";
+import { getTrailStatus } from "../tools/cloudtrail/get-trail-status.ts";
 import { describeAlarms } from "../tools/cloudwatch/describe-alarms.ts";
 import { describeConfigRules } from "../tools/config/describe-config-rules.ts";
 import { getDiscoveredResourceCounts } from "../tools/config/get-discovered-resource-counts.ts";
@@ -33,12 +52,19 @@ import { listTables } from "../tools/dynamodb/list-tables.ts";
 import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
 import { describeCacheClusters } from "../tools/elasticache/describe-cache-clusters.ts";
+import { getDetector } from "../tools/guardduty/get-detector.ts";
+import { getFindings as guardDutyGetFindings } from "../tools/guardduty/get-findings.ts";
+import { listDetectors } from "../tools/guardduty/list-detectors.ts";
+import { listFindings as guardDutyListFindings } from "../tools/guardduty/list-findings.ts";
 import { describeEvents } from "../tools/health/describe-events.ts";
 import { listFunctions } from "../tools/lambda/list-functions.ts";
 import { describeLogGroups } from "../tools/logs/describe-log-groups.ts";
 import { listTopics } from "../tools/messaging/sns/list-topics.ts";
 import { describeDbInstances } from "../tools/rds/describe-db-instances.ts";
 import { listBuckets } from "../tools/s3/list-buckets.ts";
+import { describeHub } from "../tools/securityhub/describe-hub.ts";
+import { getEnabledStandards } from "../tools/securityhub/get-enabled-standards.ts";
+import { getFindings as securityHubGetFindings } from "../tools/securityhub/get-findings.ts";
 import { getResources } from "../tools/tags/get-resources.ts";
 import { getTraceSummaries } from "../tools/xray/get-trace-summaries.ts";
 
@@ -269,5 +295,114 @@ describe("tags integration", () => {
 		const handler = getResources(config);
 		const result = (await handler({ estate: E })) as { ResourceTagMappingList: unknown[] };
 		expect(result.ResourceTagMappingList).toHaveLength(1);
+	});
+});
+
+describe("cloudtrail integration", () => {
+	test("describeTrails returns trailList array from SDK response", async () => {
+		const ctMock = mockClient(CloudTrailClient);
+		ctMock.on(DescribeTrailsCommand).resolves({
+			trailList: [{ Name: "org-trail", IsMultiRegionTrail: true, S3BucketName: "audit-logs" }],
+		});
+
+		const handler = describeTrails(config);
+		const result = (await handler({ estate: E })) as { trailList: unknown[] };
+		expect(result.trailList).toHaveLength(1);
+	});
+
+	test("getTrailStatus returns the single status object from SDK response", async () => {
+		const ctMock = mockClient(CloudTrailClient);
+		ctMock.on(GetTrailStatusCommand).resolves({ IsLogging: true, LatestDeliveryTime: new Date(0) });
+
+		const handler = getTrailStatus(config);
+		const result = (await handler({ estate: E, Name: "org-trail" })) as { IsLogging: boolean };
+		expect(result.IsLogging).toBe(true);
+	});
+});
+
+describe("securityhub integration", () => {
+	test("getFindings returns Findings array and filters by severity", async () => {
+		const shMock = mockClient(SecurityHubClient);
+		// Mocked SDK rows are partial; cast satisfies the strict AwsSecurityFinding[] type.
+		shMock.on(SecurityHubGetFindingsCommand).resolves({
+			Findings: [
+				{ Id: "f-1", Severity: { Label: "CRITICAL" }, Title: "Public bucket" },
+			] as unknown as AwsSecurityFinding[],
+		});
+
+		const handler = securityHubGetFindings(config);
+		const result = (await handler({ estate: E, severityLabels: ["CRITICAL"] })) as { Findings: unknown[] };
+		expect(result.Findings).toHaveLength(1);
+		// Severity filter is translated into a SeverityLabel EQUALS filter on the command.
+		const call = shMock.commandCalls(SecurityHubGetFindingsCommand)[0];
+		expect(call?.args[0].input.Filters?.SeverityLabel?.[0]).toEqual({ Value: "CRITICAL", Comparison: "EQUALS" });
+	});
+
+	test("describeHub returns the single hub config object", async () => {
+		const shMock = mockClient(SecurityHubClient);
+		shMock.on(DescribeHubCommand).resolves({ HubArn: "arn:aws:securityhub:eu-west-1:1:hub/default" });
+
+		const handler = describeHub(config);
+		const result = (await handler({ estate: E })) as { HubArn: string };
+		expect(result.HubArn).toContain("hub/default");
+	});
+
+	test("getEnabledStandards returns StandardsSubscriptions array", async () => {
+		const shMock = mockClient(SecurityHubClient);
+		shMock.on(GetEnabledStandardsCommand).resolves({
+			StandardsSubscriptions: [
+				{ StandardsSubscriptionArn: "arn:...:subscription/cis", StandardsStatus: "READY" },
+			] as unknown as StandardsSubscription[],
+		});
+
+		const handler = getEnabledStandards(config);
+		const result = (await handler({ estate: E })) as { StandardsSubscriptions: unknown[] };
+		expect(result.StandardsSubscriptions).toHaveLength(1);
+	});
+});
+
+describe("guardduty integration", () => {
+	test("listDetectors returns DetectorIds array", async () => {
+		const gdMock = mockClient(GuardDutyClient);
+		gdMock.on(ListDetectorsCommand).resolves({ DetectorIds: ["det-1"] });
+
+		const handler = listDetectors(config);
+		const result = (await handler({ estate: E })) as { DetectorIds: unknown[] };
+		expect(result.DetectorIds).toHaveLength(1);
+	});
+
+	test("getDetector returns the single detector object", async () => {
+		const gdMock = mockClient(GuardDutyClient);
+		gdMock.on(GetDetectorCommand).resolves({ Status: "ENABLED", FindingPublishingFrequency: "SIX_HOURS" });
+
+		const handler = getDetector(config);
+		const result = (await handler({ estate: E, DetectorId: "det-1" })) as { Status: string };
+		expect(result.Status).toBe("ENABLED");
+	});
+
+	test("list -> get findings chain threads FindingIds through", async () => {
+		const gdMock = mockClient(GuardDutyClient);
+		gdMock.on(ListFindingsCommand).resolves({ FindingIds: ["find-a", "find-b"] });
+		gdMock.on(GuardDutyGetFindingsCommand).resolves({
+			Findings: [
+				{ Id: "find-a", Severity: 8, Type: "Recon:EC2/Portscan", Title: "Port scan" },
+				{ Id: "find-b", Severity: 5, Type: "UnauthorizedAccess:EC2/SSHBruteForce", Title: "SSH brute force" },
+			] as unknown as GuardDutyFinding[],
+		});
+
+		const listHandler = guardDutyListFindings(config);
+		const ids = (await listHandler({ estate: E, DetectorId: "det-1", minSeverity: 4 })) as { FindingIds: string[] };
+		expect(ids.FindingIds).toHaveLength(2);
+		// minSeverity is translated into a severity GreaterThanOrEqual criterion.
+		const listCall = gdMock.commandCalls(ListFindingsCommand)[0];
+		expect(listCall?.args[0].input.FindingCriteria?.Criterion?.severity?.GreaterThanOrEqual).toBe(4);
+
+		const getHandler = guardDutyGetFindings(config);
+		const hydrated = (await getHandler({ estate: E, DetectorId: "det-1", FindingIds: ids.FindingIds })) as {
+			Findings: unknown[];
+		};
+		expect(hydrated.Findings).toHaveLength(2);
+		const getCall = gdMock.commandCalls(GuardDutyGetFindingsCommand)[0];
+		expect(getCall?.args[0].input.FindingIds).toEqual(["find-a", "find-b"]);
 	});
 });

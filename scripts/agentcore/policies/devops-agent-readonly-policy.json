@@ -157,6 +157,23 @@
 				"tag:GetTagValues"
 			],
 			"Resource": "*"
+		},
+		{
+			"Sid": "SecurityAndAuditRead",
+			"Effect": "Allow",
+			"Action": [
+				"cloudtrail:DescribeTrails",
+				"cloudtrail:GetTrailStatus",
+				"cloudtrail:ListTrails",
+				"securityhub:GetFindings",
+				"securityhub:DescribeHub",
+				"securityhub:GetEnabledStandards",
+				"guardduty:ListDetectors",
+				"guardduty:GetDetector",
+				"guardduty:ListFindings",
+				"guardduty:GetFindings"
+			],
+			"Resource": "*"
 		}
 	]
 }

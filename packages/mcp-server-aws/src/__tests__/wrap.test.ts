@@ -151,6 +151,36 @@ describe("wrapListTool", () => {
 		expect(result._error.kind).toBe("iam-permission-missing");
 		expect(result._error.action).toBe("rds:DescribeDBInstances");
 	});
+
+	// SIO-841: the security-findings projection (Id/Severity/Type) must survive truncation
+	// so the model still sees complete severity coverage when the heavy Findings[] is sliced.
+	test("preserves a complete findings severity projection in _summary when truncating", async () => {
+		const wrapped = wrapListTool({
+			name: "aws_guardduty_get_findings",
+			listField: "Findings",
+			fn: async () => ({
+				Findings: Array.from({ length: 40 }, (_, i) => ({
+					Id: `find-${i}`,
+					Severity: i % 10,
+					Type: "Recon:EC2/Portscan",
+					Title: "x".repeat(300),
+				})),
+			}),
+			capBytes: 2000,
+			summarize: (r: { Findings: Array<{ Id: string; Severity: number; Type: string }> }) =>
+				r.Findings.map((f) => ({ Id: f.Id, Severity: f.Severity, Type: f.Type })),
+		});
+		const result = (await wrapped({})) as {
+			Findings: unknown[];
+			_truncated: { total: number };
+			_summary: Array<{ Id: string; Severity: number }>;
+		};
+		expect(result.Findings.length).toBeLessThan(40);
+		expect(result._truncated.total).toBe(40);
+		expect(result._summary).toHaveLength(40);
+		// Severity is preserved for every finding even though the bodies were dropped.
+		expect(result._summary.every((s) => typeof s.Severity === "number")).toBe(true);
+	});
 });
 
 describe("wrapBlobTool", () => {
