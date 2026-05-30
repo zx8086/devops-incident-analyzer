@@ -108,6 +108,15 @@ function logError(name: string, _err: unknown, mapped: ToolError, durationMs: nu
 	);
 }
 
+// SIO-838: resolve a canonical pagination alias (limit/cursor) against a tool's SDK-specific
+// param (MaxRecords/NextToken/Marker/...). The SDK-named value wins when both are supplied so
+// existing call patterns are never overridden; uses ?? (not ||) so a legitimate 0 page-size or
+// empty token is respected. Aliases exist so the sub-agent can paginate every list tool uniformly
+// and walk all pages -- it is about complete retrieval, never dropping data.
+export function preferSdkParam<T>(sdkValue: T | undefined, aliasValue: T | undefined): T | undefined {
+	return sdkValue ?? aliasValue;
+}
+
 interface WrapListArgs<TResponse, TParams> {
 	name: string;
 	listField: keyof TResponse;

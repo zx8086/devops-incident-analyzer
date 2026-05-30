@@ -4,14 +4,20 @@ import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getEcsClient } from "../../services/client-factory.ts";
 import type { WithEstate } from "../estate-schema.ts";
-import { wrapListTool } from "../wrap.ts";
+import { preferSdkParam, wrapListTool } from "../wrap.ts";
 
 export const listServicesSchema = z.object({
 	cluster: z.string().describe("Short name or full ARN of the cluster"),
-	maxResults: z.number().int().min(1).max(100).optional().describe("Max results per page (1-100)"),
-	nextToken: z.string().optional().describe("Pagination token from a previous response"),
+	maxResults: z.number().int().min(1).max(100).optional().describe("Max results per page (1-100). Alias: limit."),
+	nextToken: z.string().optional().describe("Pagination token from a previous response. Alias: cursor."),
 	launchType: z.enum(["EC2", "FARGATE", "EXTERNAL"]).optional().describe("Filter by service launch type"),
 	schedulingStrategy: z.enum(["REPLICA", "DAEMON"]).optional().describe("Filter by scheduling strategy"),
+	// SIO-838: canonical pagination aliases (map to maxResults/nextToken below; SDK param wins).
+	limit: z.number().int().min(1).max(100).optional().describe("Canonical page-size alias (-> maxResults)."),
+	cursor: z
+		.string()
+		.optional()
+		.describe("Canonical pagination-token alias (-> nextToken). Pass _truncated.cursor here."),
 });
 
 export type ListServicesParams = WithEstate<z.infer<typeof listServicesSchema>>;
@@ -25,8 +31,8 @@ export function listServices(config: AwsConfig) {
 			return client.send(
 				new ListServicesCommand({
 					cluster: params.cluster,
-					maxResults: params.maxResults,
-					nextToken: params.nextToken,
+					maxResults: preferSdkParam(params.maxResults, params.limit),
+					nextToken: preferSdkParam(params.nextToken, params.cursor),
 					launchType: params.launchType,
 					schedulingStrategy: params.schedulingStrategy,
 				}),

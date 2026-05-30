@@ -4,11 +4,16 @@ import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getConfigServiceClient } from "../../services/client-factory.ts";
 import type { WithEstate } from "../estate-schema.ts";
-import { wrapListTool } from "../wrap.ts";
+import { preferSdkParam, wrapListTool } from "../wrap.ts";
 
 export const describeConfigRulesSchema = z.object({
 	ConfigRuleNames: z.array(z.string()).optional().describe("Filter by rule names (omit to list all)"),
-	NextToken: z.string().optional().describe("Pagination token from a previous response"),
+	NextToken: z.string().optional().describe("Pagination token from a previous response. Alias: cursor."),
+	// SIO-838: canonical pagination alias (map to NextToken below; SDK param wins).
+	cursor: z
+		.string()
+		.optional()
+		.describe("Canonical pagination-token alias (-> NextToken). Pass _truncated.cursor here."),
 });
 
 export type DescribeConfigRulesParams = WithEstate<z.infer<typeof describeConfigRulesSchema>>;
@@ -22,7 +27,7 @@ export function describeConfigRules(config: AwsConfig) {
 			return client.send(
 				new DescribeConfigRulesCommand({
 					ConfigRuleNames: params.ConfigRuleNames,
-					NextToken: params.NextToken,
+					NextToken: preferSdkParam(params.NextToken, params.cursor),
 				}),
 			);
 		},

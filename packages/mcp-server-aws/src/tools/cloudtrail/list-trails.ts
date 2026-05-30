@@ -4,10 +4,15 @@ import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudTrailClient } from "../../services/client-factory.ts";
 import type { WithEstate } from "../estate-schema.ts";
-import { wrapListTool } from "../wrap.ts";
+import { preferSdkParam, wrapListTool } from "../wrap.ts";
 
 export const listTrailsSchema = z.object({
-	NextToken: z.string().optional().describe("Pagination token from a previous response"),
+	NextToken: z.string().optional().describe("Pagination token from a previous response. Alias: cursor."),
+	// SIO-838: canonical pagination alias (map to NextToken below; SDK param wins).
+	cursor: z
+		.string()
+		.optional()
+		.describe("Canonical pagination-token alias (-> NextToken). Pass _truncated.cursor here."),
 });
 
 export type ListTrailsParams = WithEstate<z.infer<typeof listTrailsSchema>>;
@@ -18,7 +23,7 @@ export function listTrails(config: AwsConfig) {
 		listField: "Trails",
 		fn: async (params: ListTrailsParams) => {
 			const client = getCloudTrailClient(config, params.estate);
-			return client.send(new ListTrailsCommand({ NextToken: params.NextToken }));
+			return client.send(new ListTrailsCommand({ NextToken: preferSdkParam(params.NextToken, params.cursor) }));
 		},
 	});
 }

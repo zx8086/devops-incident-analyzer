@@ -88,13 +88,23 @@ The response field and the input argument can differ in case OR name (e.g. EC2 r
 is `Marker`) -- match by meaning. Accumulate items across pages and stop when the response
 has no token.
 
+PREFERRED: every list tool also accepts the canonical alias `cursor` for the continuation
+token and `limit` for the page size, regardless of the SDK name above. Pass
+`_truncated.cursor` straight back as `cursor` and you do not need to know whether the tool's
+native arg is `NextToken`, `nextToken`, or `Marker`. The table above remains authoritative as
+a fallback and for reading the response field. Two exceptions: `aws_logs_describe_log_groups`
+already names its page-size arg `limit` natively (so there is no separate alias), and
+`aws_dynamodb_list_tables` has no `cursor` alias -- its continuation arg is the table name
+`ExclusiveStartTableName`, which you pass as the last table name from the previous page.
+
 Case B -- a `_truncated` marker is present but there is NO continuation token (no
 `_truncated.cursor`, no top-level token): the MCP server byte-truncated a single oversized
 page. Re-invoking unchanged returns the
 identical payload (a loop) -- do NOT do that. Instead add or tighten a filter
 (`StateValue`, `AlarmNamePrefix`, an instance/tag filter, a time window) OR pass a
-smaller `maxResults`/`MaxRecords`/`MaxItems` so the next page fits the cap and comes
-back with a token, then chain it per Case A. If the result carries a `_summary` field,
+smaller page size (the canonical `limit`, or the SDK names `maxResults`/`MaxRecords`/`MaxItems`)
+so the next page fits the cap and comes back with a token, then chain it per Case A. If the
+result carries a `_summary` field,
 it already holds the COMPLETE set of items -- use it for counts and coverage instead of
 reporting a partial number.
 
