@@ -404,6 +404,35 @@ The AgentCore host account `399987695868` (`eu-shared-services-prd`) is onboarde
 2. **Execution-role policy:** `arn:aws:iam::399987695868:role/DevOpsAgentReadOnly` is already in the `ExplicitAccountAssumeRoles` list (and the wildcard covers it).
 3. **`AWS_ESTATES`:** add a normal entry — `"eu-shared-services-prd":{"assumedRoleArn":"arn:aws:iam::399987695868:role/DevOpsAgentReadOnly","externalId":"devops-agent-prod-access"}`. No credential-less / ambient-credential special case; the MCP server treats it like any other estate.
 
+#### Provisioning commands (run with credentials for account `399987695868`)
+
+```bash
+# Step 1 -- create DevOpsAgentReadOnly in the host account (idempotent).
+# Defaults already match what the host estate needs: trust = DevOpsAgentCoreRole
+# principal + ExternalId devops-agent-prod-access; read-only permissions attached.
+./scripts/agentcore/setup-aws-readonly-role.sh
+
+# Step 2 -- refresh the execution role's inline assume policy so the explicit
+# host ARN from the repo is live. Functionally optional (the wildcard
+# AssumeDevOpsAgentReadOnly statement already covers it) but keeps the deployed
+# policy in sync. put-role-policy overwrites the inline policy atomically.
+aws iam put-role-policy \
+  --role-name DevOpsAgentCoreRole \
+  --policy-name DevOpsAgentCoreAssumePolicy \
+  --policy-document file://scripts/agentcore/policies/devops-agent-core-assume-policy.json
+
+# Step 3 -- verify the assume chain works before touching the runtime.
+# A successful response confirms trust + assume-permission are correct.
+aws sts assume-role \
+  --role-arn arn:aws:iam::399987695868:role/DevOpsAgentReadOnly \
+  --role-session-name host-estate-test \
+  --external-id devops-agent-prod-access
+```
+
+After Steps 1-3 succeed, set `AWS_ESTATES` (with the host entry) on the AgentCore runtime via the console (see "Updating `AWS_ESTATES` on the AgentCore runtime" below), then confirm `aws_list_estates` shows `eu-shared-services-prd` as `ok: true`.
+
+> **Ordering matters.** Do Steps 1-2 *before* adding the host entry to the runtime's `AWS_ESTATES`. If the runtime gets the estate before the role exists, the host estate boots DEGRADED (boot-time STS validation fails) until the role is in place.
+
 ---
 
 ## Updating `AWS_ESTATES` on the AgentCore runtime (console)
