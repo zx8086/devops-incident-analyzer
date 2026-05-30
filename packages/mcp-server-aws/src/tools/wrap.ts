@@ -133,7 +133,10 @@ function trySummarize<T>(name: string, fn: (r: T) => unknown, response: T): unkn
 // it can surface a real token as the machine-readable _truncated.cursor (Case A) and
 // distinguish it from a no-token byte-truncation (Case B), instead of relying on the model
 // to scan the raw response.
-const TOKEN_FIELDS = ["NextToken", "nextToken", "Marker", "PaginationToken"] as const;
+// NextMarker is Lambda's response token (the input arg is Marker -- a name difference, not
+// just case), so it must be probed here or aws_lambda_list_functions is misclassified as a
+// no-token Case B byte-truncation when it is actually a chainable Case A page.
+const TOKEN_FIELDS = ["NextToken", "nextToken", "Marker", "NextMarker", "PaginationToken"] as const;
 
 function findContinuationToken(response: unknown): string | undefined {
 	if (!response || typeof response !== "object") return undefined;
@@ -180,6 +183,13 @@ export function wrapListTool<TResponse, TParams>(
 		const full = JSON.stringify(response);
 		if (full.length <= cap) return response;
 
+		// Compute _summary before bisecting so its serialized bytes are reserved in the budget.
+		// _summary is appended to the final object, so a large one that isn't accounted for here
+		// can push the wrapped result back over cap; the agent-side truncator would then byte-slice
+		// the tail _summary away, defeating the findings-completeness guarantee it exists for.
+		const summary = args.summarize ? trySummarize(args.name, args.summarize, response) : undefined;
+		const reserve = TRUNCATION_OVERHEAD_BYTES + (summary === undefined ? 0 : JSON.stringify(summary).length);
+
 		// Need to truncate the list. Bisect to find the max items that fit.
 		const total = list.length;
 		let lo = 0;
@@ -187,13 +197,12 @@ export function wrapListTool<TResponse, TParams>(
 		while (lo < hi) {
 			const mid = Math.ceil((lo + hi) / 2);
 			const candidate = { ...response, [args.listField]: list.slice(0, mid) };
-			const size = JSON.stringify(candidate).length + TRUNCATION_OVERHEAD_BYTES;
+			const size = JSON.stringify(candidate).length + reserve;
 			if (size <= cap) lo = mid;
 			else hi = mid - 1;
 		}
 
 		const shown = lo;
-		const summary = args.summarize ? trySummarize(args.name, args.summarize, response) : undefined;
 		// SIO-833: surface a real continuation token as a machine-readable cursor so the model
 		// can tell Case A (chainable) from Case B (byte-truncated, no token) without scanning
 		// the raw response. A real token can co-occur with byte-truncation.

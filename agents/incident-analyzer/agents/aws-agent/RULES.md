@@ -33,8 +33,8 @@ list/describe result. Check for a top-level continuation token FIRST, then for a
 
 Case A -- there are more pages. The simplest signal is `_truncated.cursor`: when present,
 that value IS the continuation token (equivalently, the response has a top-level
-`NextToken`, `nextToken`, `Marker`, or `PaginationToken`). Re-invoke the SAME tool with the
-SAME args plus that token value, passed in the tool's pagination input argument:
+`NextToken`, `nextToken`, `Marker`, `NextMarker`, or `PaginationToken`). Re-invoke the SAME
+tool with the SAME args plus that token value, passed in the tool's pagination input argument:
 
 - `nextToken`: `aws_ec2_*`, `aws_ecs_list_*`, `aws_config_list_discovered_resources`,
   `aws_messaging_sfn_list_state_machines`, `aws_logs_describe_log_groups`,
@@ -42,12 +42,13 @@ SAME args plus that token value, passed in the tool's pagination input argument:
 - `NextToken`: `aws_cloudwatch_describe_alarms`, `aws_cloudformation_*`,
   `aws_config_describe_config_rules`, `aws_messaging_sns_list_topics`
 - `Marker`: `aws_rds_describe_db_*`, `aws_elasticache_describe_*`,
-  `aws_lambda_list_functions`
+  `aws_lambda_list_functions` (Lambda's response names the token `NextMarker`; pass it back as `Marker`)
 - `PaginationToken`: `aws_resourcegroupstagging_get_resources`
 
-The response field and the input argument can differ in case (e.g. EC2 returns
-`NextToken` but the input arg is `nextToken`) -- match by meaning. Accumulate items
-across pages and stop when the response has no token.
+The response field and the input argument can differ in case OR name (e.g. EC2 returns
+`NextToken` but the input arg is `nextToken`; Lambda returns `NextMarker` but the input arg
+is `Marker`) -- match by meaning. Accumulate items across pages and stop when the response
+has no token.
 
 Case B -- a `_truncated` marker is present but there is NO continuation token (no
 `_truncated.cursor`, no top-level token): the MCP server byte-truncated a single oversized
