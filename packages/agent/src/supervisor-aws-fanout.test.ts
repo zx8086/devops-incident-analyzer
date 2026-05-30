@@ -64,6 +64,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		skippedDataSources: [] as string[],
 		isFollowUp: false,
 		finalAnswer: "",
+		graphContext: "",
 		dataSourceContext: undefined,
 		investigationFocus: undefined,
 		pendingTopicShiftPrompt: undefined,

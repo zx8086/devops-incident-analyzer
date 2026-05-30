@@ -7,7 +7,13 @@ import {
 	requiresApproval,
 	type ToolDefinition,
 } from "@devops-agent/gitagent-bridge";
+import { readLiveMemory } from "./memory-writer.ts";
 import { getAgentsDir } from "./paths.ts";
+import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
+
+// SIO-845: cap how many key-decisions tail entries are inlined into the prompt
+// so durable memory growth does not blow the context budget.
+const MAX_KEY_DECISION_CHARS = 4000;
 
 let cachedAgent: LoadedAgent | null = null;
 
@@ -42,20 +48,63 @@ function buildComplianceBoundary(): string {
 	].join("\n");
 }
 
+// SIO-845: Build the live-memory section appended to the orchestrator prompt.
+// Inlines durable context.md plus the tail of key-decisions.md (bounded). Empty
+// string when live memory is disabled/absent so the happy path is unchanged.
+export function buildLiveMemorySection(): string {
+	const memory = readLiveMemory();
+	const sections: string[] = [];
+
+	if (memory.context?.trim()) {
+		sections.push(memory.context.trim());
+	}
+
+	if (memory.keyDecisions?.trim()) {
+		// Inline only the tail so the prompt stays bounded as decisions accumulate.
+		const full = memory.keyDecisions.trim();
+		const tail = full.length > MAX_KEY_DECISION_CHARS ? `...\n${full.slice(-MAX_KEY_DECISION_CHARS)}` : full;
+		sections.push(`### Recent Key Decisions\n\n${tail}`);
+	}
+
+	if (sections.length === 0) return "";
+	return ["\n\n---\n\n## Live Memory", ...sections].join("\n\n");
+}
+
 // SIO-640: runbook filter semantics for the orchestrator prompt.
 //   runbookFilter undefined -> no filter (current behavior; all runbooks present)
 //   runbookFilter []        -> filter to zero runbooks (suppress all; other categories unchanged)
 //   runbookFilter [names]   -> filter to just these runbook filenames
 export interface OrchestratorPromptOptions {
 	runbookFilter?: string[];
+	// SIO-847: when provided, the relevant compiled wiki pages (and the index)
+	// are inlined into the prompt. Omit for an index-only / no-wiki prompt.
+	wikiFocus?: WikiFocus;
+	// SIO-850: prior-knowledge context from the knowledge graph (state.graphContext).
+	// Already-rendered string; inlined verbatim. Empty when the graph is disabled.
+	graphContext?: string;
+}
+
+// SIO-847: the wiki section depends on the current turn's focus, so it is built
+// per call rather than cached. Empty when no wiki content is relevant/present.
+function wikiSectionFor(options: OrchestratorPromptOptions): string {
+	const focus = options.wikiFocus ?? { services: [], datasources: [] };
+	return buildWikiSection(focus, getAgent());
 }
 
 export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {}): string {
 	const agent = getAgent();
 	const filter = options.runbookFilter;
 
+	const graphSection = options.graphContext?.trim() ? options.graphContext : "";
+
 	if (filter === undefined) {
-		return buildSystemPrompt(agent) + buildComplianceBoundary();
+		return (
+			buildSystemPrompt(agent) +
+			buildComplianceBoundary() +
+			buildLiveMemorySection() +
+			wikiSectionFor(options) +
+			graphSection
+		);
 	}
 
 	// Filter the knowledge array to remove non-selected runbooks. Other
@@ -69,7 +118,13 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 	});
 
 	const filteredAgent = { ...agent, knowledge: filteredKnowledge };
-	return buildSystemPrompt(filteredAgent) + buildComplianceBoundary();
+	return (
+		buildSystemPrompt(filteredAgent) +
+		buildComplianceBoundary() +
+		buildLiveMemorySection() +
+		wikiSectionFor(options) +
+		graphSection
+	);
 }
 
 export function buildSubAgentPrompt(agentName: string): string {

@@ -14,6 +14,8 @@
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",
 		"@devops-agent/gitagent-bridge": "workspace:*",
+		"@devops-agent/knowledge-graph": "workspace:*",
+		"@devops-agent/memory-pr": "workspace:*",
 		"@devops-agent/observability": "workspace:*",
 		"@devops-agent/shared": "workspace:*",
 		"@langchain/aws": "catalog:",
@@ -26,6 +28,7 @@
 		"langsmith": "^0.6.3",
 		"mammoth": "^1.8.0",
 		"openai": "^6.37.0",
+		"yaml": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

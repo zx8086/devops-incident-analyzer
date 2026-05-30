@@ -68,6 +68,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		skippedDataSources: [],
 		isFollowUp: false,
 		finalAnswer: "",
+		graphContext: "",
 		dataSourceContext: undefined,
 		requestId: "test",
 		attachmentMeta: [],

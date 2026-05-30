@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { appendDailyLog } from "./memory-writer.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:follow-up-generator");
@@ -54,6 +55,27 @@ function extractToolNamesFromResults(state: AgentStateType): string[] {
 		.flatMap((r) => r.toolOutputs?.map((t) => t.toolName) ?? []);
 }
 
+// SIO-845: append a one-line breadcrumb to memory/runtime/dailylog.md per
+// completed investigation. No-op when live memory is disabled; never throws
+// (a memory write must never break answer delivery).
+function recordDailyLog(state: AgentStateType): void {
+	try {
+		const datasources = [...new Set(state.dataSourceResults.map((r) => r.dataSourceId))].filter(
+			(d): d is string => typeof d === "string" && d.length > 0,
+		);
+		const services = (state.normalizedIncident.affectedServices ?? []).map((s) => s.name);
+		appendDailyLog({
+			requestId: state.requestId,
+			services,
+			severity: state.normalizedIncident.severity,
+			confidence: state.confidenceScore || undefined,
+			datasources,
+		});
+	} catch (error) {
+		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "dailylog append failed; ignoring");
+	}
+}
+
 function parseSuggestions(content: string): string[] | null {
 	const match = content.match(/\[[\s\S]*\]/);
 	if (!match) return null;
@@ -77,6 +99,10 @@ export async function generateSuggestions(
 	state: AgentStateType,
 	config?: RunnableConfig,
 ): Promise<Partial<AgentStateType>> {
+	// SIO-845: terminal node on both simple and complex paths -- the natural
+	// place to record a per-investigation breadcrumb to live memory.
+	recordDailyLog(state);
+
 	const toolsUsed = extractToolNamesFromResults(state);
 	const responseText = state.finalAnswer;
 

@@ -128,12 +128,17 @@ describe("skill-loader", () => {
 		expect(prompt).not.toContain("Skill: aggregate-findings");
 	});
 
-	test("handles sub-agent with no skills", () => {
+	test("handles sub-agent with no agent-local skills", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
+		// The elastic sub-agent declares no skills of its own.
+		expect(elastic.skills.size).toBe(0);
 		const prompt = buildSystemPrompt(elastic);
 		expect(prompt).toContain("Elasticsearch specialist");
-		expect(prompt).not.toContain("Skill:");
+		// SIO-844: monorepo-shared skills now flow into sub-agents, so the only
+		// "Skill:" heading present is the shared cite-sources skill, not an
+		// agent-local one.
+		expect(prompt).not.toContain("Skill: normalize-incident");
 	});
 
 	test("includes knowledge base in system prompt", () => {

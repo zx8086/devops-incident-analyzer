@@ -1,47 +1,55 @@
 name: incident-triage
 version: 0.1.0
-description: Standard incident triage workflow
+description: >
+  Standard incident triage. Augments (does not replace) the LangGraph pipeline:
+  the heavy analysis runs as a single graph step, with deterministic wiki/memory
+  steps chained around it.
+
+triggers:
+  - type: manual
 
 steps:
-  - name: normalize
-    skill: normalize-incident
-    description: Parse and structure the incoming incident
+  # Pull the relevant compiled wiki pages for the incident context.
+  - name: pre_wiki
+    skill: wiki-query
+    description: Select relevant wiki pages before analysis
+    outputs:
+      - pages
 
-  - name: classify
-    node: classifier
-    description: Determine if query is simple or complex
+  # Run the entire compiled incident-analysis graph as one capability. The graph
+  # owns intra-analysis routing (entity extraction, fan-out, correlation,
+  # mitigation); the workflow does not re-implement it.
+  - name: triage
+    graph: true
+    description: Run the full incident-analysis graph
+    depends_on:
+      - pre_wiki
+    with:
+      wiki: ${{ steps.pre_wiki.outputs.pages }}
+    outputs:
+      - report
+      - confidence
 
-  - name: extract_entities
-    node: entity-extractor
-    description: Extract services, time windows, severity
-    depends_on: [classify]
+  # Compile the finished investigation into a wiki-page update proposal.
+  - name: post_wiki
+    skill: wiki-ingest
+    description: Propose a wiki update from the investigation report
+    depends_on:
+      - triage
+    with:
+      report: ${{ steps.triage.outputs.report }}
+    outputs:
+      - proposal
 
-  - name: route_to_agents
-    node: supervisor
-    description: Fan-out to relevant datasource agents
-    depends_on: [extract_entities]
+  # Open a review PR for the durable learning. Tolerant: a failure here must not
+  # fail the triage that already produced a report.
+  - name: learn
+    tool: memory-pr
+    description: Open a human-review PR for the wiki/memory update
+    depends_on:
+      - post_wiki
+    with:
+      proposal: ${{ steps.post_wiki.outputs.proposal }}
+    error_handling: continue
 
-  - name: query_datasources
-    node: sub-agents
-    description: Parallel queries to elastic/kafka/capella/konnect agents
-    depends_on: [route_to_agents]
-
-  - name: align_results
-    node: alignment
-    description: Check cross-datasource consistency
-    depends_on: [query_datasources]
-
-  - name: aggregate
-    skill: aggregate-findings
-    description: Correlate findings into unified report
-    depends_on: [align_results]
-
-  - name: validate
-    node: validator
-    description: Anti-hallucination check
-    depends_on: [aggregate]
-
-  - name: propose
-    skill: propose-mitigation
-    description: Suggest safe remediation steps
-    depends_on: [validate]
+error_handling: best_effort

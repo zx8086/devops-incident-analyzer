@@ -39,6 +39,9 @@ mock.module("@devops-agent/agent", () => ({
 	}),
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
+	// SIO-846: agent.ts now runs session bootstrap/teardown via these.
+	runBootstrap: mock(() => Promise.resolve({ stepsRun: [] })),
+	runTeardown: mock(() => Promise.resolve([])),
 	// SIO-780: datasources route test runs later and imports these from the same
 	// @devops-agent/agent module; include them here so the cached namespace has
 	// the symbols when the cross-test mock pollution kicks in.

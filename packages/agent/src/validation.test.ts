@@ -40,6 +40,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		skippedDataSources: [] as string[],
 		isFollowUp: false,
 		finalAnswer: "",
+		graphContext: "",
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],

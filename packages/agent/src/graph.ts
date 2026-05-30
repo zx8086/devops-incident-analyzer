@@ -1,6 +1,7 @@
 // agent/src/graph.ts
 
 import { createCheckpointer } from "@devops-agent/checkpointer";
+import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { getLogger, traceSpan } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { END, Send, StateGraph } from "@langchain/langgraph";
@@ -17,6 +18,7 @@ import {
 import { extractEntities } from "./entity-extractor.ts";
 import { extractFindings } from "./extract-findings.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
+import { graphEnrich, recordGraphEntities } from "./graph-knowledge.ts";
 import { initializeLangSmith } from "./langsmith.ts";
 import { aggregateMitigation } from "./mitigation.ts";
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
@@ -77,6 +79,16 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 			: "Runbook selector node disabled (no runbook_selection config)",
 	);
 
+	// SIO-850: same opt-in idiom as the runbook selector. When the knowledge
+	// graph is enabled, route entityExtractor -> recordEntities -> graphEnrich ->
+	// awsEstateRouter so the aggregator prompt carries graph context. When
+	// disabled, the nodes are registered but unreachable (no edge points at them).
+	const knowledgeGraphEnabled = isKnowledgeGraphEnabled();
+	graphLogger.info(
+		{ knowledgeGraphEnabled },
+		knowledgeGraphEnabled ? "Knowledge graph nodes enabled" : "Knowledge graph nodes disabled",
+	);
+
 	const graph = new StateGraph(AgentState)
 		.addNode("classify", traceNode("classify", classify))
 		.addNode("normalize", traceNode("normalize", normalizeIncident))
@@ -105,6 +117,9 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// it can read targetDataSources, and before topic-shift/supervise so
 		// awsTargetEstates is populated when the AWS sub-agent fans out.
 		.addNode("awsEstateRouter", traceNode("awsEstateRouter", awsEstateRouter))
+		// SIO-850: knowledge-graph nodes (opt-in; unreachable when disabled).
+		.addNode("recordEntities", traceNode("recordEntities", recordGraphEntities))
+		.addNode("graphEnrich", traceNode("graphEnrich", graphEnrich))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -128,7 +143,12 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// supervise function itself is unchanged; we just inserted a checkpoint.
 		// SIO-828: insert awsEstateRouter between entityExtractor and topic-shift
 		// so awsTargetEstates is populated before the supervisor fans out.
-		.addEdge("entityExtractor", "awsEstateRouter")
+		// SIO-850: when the knowledge graph is enabled, entityExtractor ->
+		// recordEntities -> graphEnrich -> awsEstateRouter; otherwise the direct
+		// entityExtractor -> awsEstateRouter edge is preserved.
+		.addEdge("entityExtractor", knowledgeGraphEnabled ? "recordEntities" : "awsEstateRouter")
+		.addEdge("recordEntities", "graphEnrich")
+		.addEdge("graphEnrich", "awsEstateRouter")
 		.addEdge("awsEstateRouter", "detectTopicShift")
 		.addConditionalEdges("detectTopicShift", supervise)
 

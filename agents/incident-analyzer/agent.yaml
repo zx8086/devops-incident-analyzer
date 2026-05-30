@@ -23,6 +23,9 @@ skills:
   - normalize-incident
   - aggregate-findings
   - propose-mitigation
+  - wiki-ingest
+  - wiki-query
+  - wiki-lint
 
 tools:
   - elastic-logs
