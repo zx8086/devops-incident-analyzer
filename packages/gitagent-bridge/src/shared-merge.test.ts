@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
 import { mergeShared } from "./shared-merge.ts";
+import { buildSystemPrompt } from "./skill-loader.ts";
 
 function baseAgent(skills: Map<string, string>): LoadedAgent {
 	return {
@@ -88,5 +89,27 @@ describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 		expect(elastic?.workflows.size).toBe(0);
 		// but shared merge still runs for sub-agents
 		expect(elastic?.sharedSkills instanceof Map).toBe(true);
+	});
+});
+
+// SIO-844: the real agents/shared/ content (context.md + cite-sources skill)
+describe("loadAgent: SIO-844 shared content flows into prompts", () => {
+	test("root agent picks up the shared cite-sources skill and context", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		expect(agent.sharedSkills.has("cite-sources")).toBe(true);
+		expect(agent.sharedContext).toContain("Shared Context");
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Shared Context");
+		expect(prompt).toContain("Skill: cite-sources");
+		// shared context renders once
+		expect(prompt.split("## Shared Context").length - 1).toBe(1);
+	});
+
+	test("sub-agents also receive the shared cite-sources skill", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const kafka = agent.subAgents.get("kafka-agent");
+		expect(kafka?.sharedSkills.has("cite-sources")).toBe(true);
+		const prompt = buildSystemPrompt(kafka as LoadedAgent);
+		expect(prompt).toContain("Skill: cite-sources");
 	});
 });
