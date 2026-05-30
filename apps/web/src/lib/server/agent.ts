@@ -1,9 +1,21 @@
 // apps/web/src/lib/server/agent.ts
-import { buildGraph, createMcpClient, getAgent, runBootstrap, runTeardown } from "@devops-agent/agent";
+import {
+	buildGraph,
+	createMcpClient,
+	getAgent,
+	installMemoryPromotion,
+	runBootstrap,
+	runTeardown,
+} from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { MessageContentComplex } from "@langchain/core/messages";
+
+// SIO-849: wire the lifecycle teardown's open_memory_pr step to the memory-pr
+// flush once, at module load. No-op until proposals are queued and
+// MEMORY_PR_ENABLED is set.
+installMemoryPromotion();
 
 // SIO-751: Command is imported lazily inside resumeAgent() because eager import
 // pulls in @langchain/langgraph's transformer modules which fail to resolve

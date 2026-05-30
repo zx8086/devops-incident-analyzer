@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",
 		"@devops-agent/gitagent-bridge": "workspace:*",
+		"@devops-agent/memory-pr": "workspace:*",
 		"@devops-agent/observability": "workspace:*",
 		"@devops-agent/shared": "workspace:*",
 		"@langchain/aws": "catalog:",

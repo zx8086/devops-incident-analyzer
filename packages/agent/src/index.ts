@@ -1,5 +1,6 @@
 // agent/src/index.ts
 
+export type { MemoryPrProposal, OpenMemoryPrResult } from "@devops-agent/memory-pr";
 export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
@@ -29,6 +30,13 @@ export {
 	mcpEvents,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
+export {
+	flushMemoryProposals,
+	installMemoryPromotion,
+	pendingMemoryProposalCount,
+	promoteToMemory,
+	queueMemoryProposal,
+} from "./memory-promotion.ts";
 export {
 	appendDailyLog,
 	type DailyLogEntry,
