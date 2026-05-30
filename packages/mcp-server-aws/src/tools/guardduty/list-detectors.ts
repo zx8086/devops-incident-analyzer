@@ -4,10 +4,15 @@ import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getGuardDutyClient } from "../../services/client-factory.ts";
 import type { WithEstate } from "../estate-schema.ts";
-import { wrapListTool } from "../wrap.ts";
+import { preferSdkParam, wrapListTool } from "../wrap.ts";
 
 export const listDetectorsSchema = z.object({
-	NextToken: z.string().optional().describe("Pagination token from a previous response"),
+	NextToken: z.string().optional().describe("Pagination token from a previous response. Alias: cursor."),
+	// SIO-838: canonical pagination alias (map to NextToken below; SDK param wins).
+	cursor: z
+		.string()
+		.optional()
+		.describe("Canonical pagination-token alias (-> NextToken). Pass _truncated.cursor here."),
 });
 
 export type ListDetectorsParams = WithEstate<z.infer<typeof listDetectorsSchema>>;
@@ -20,7 +25,7 @@ export function listDetectors(config: AwsConfig) {
 		listField: "DetectorIds",
 		fn: async (params: ListDetectorsParams) => {
 			const client = getGuardDutyClient(config, params.estate);
-			return client.send(new ListDetectorsCommand({ NextToken: params.NextToken }));
+			return client.send(new ListDetectorsCommand({ NextToken: preferSdkParam(params.NextToken, params.cursor) }));
 		},
 	});
 }

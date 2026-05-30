@@ -406,3 +406,48 @@ describe("guardduty integration", () => {
 		expect(getCall?.args[0].input.FindingIds).toEqual(["find-a", "find-b"]);
 	});
 });
+
+// SIO-838: the canonical limit/cursor aliases must reach each tool's SDK param, and the
+// SDK-named param must win when both are supplied (so existing call patterns never break).
+// Representative coverage across the token-name families: NextToken (cloudwatch), Marker (rds),
+// and the DynamoDB limit-only special case.
+describe("pagination alias wiring (SIO-838)", () => {
+	test("cloudwatch describe-alarms: cursor->NextToken, limit->MaxRecords", async () => {
+		const cwMock = mockClient(CloudWatchClient);
+		cwMock.on(DescribeAlarmsCommand).resolves({ MetricAlarms: [] });
+		const handler = describeAlarms(config);
+		await handler({ estate: E, cursor: "tok-1", limit: 25 });
+		const call = cwMock.commandCalls(DescribeAlarmsCommand)[0];
+		expect(call?.args[0].input.NextToken).toBe("tok-1");
+		expect(call?.args[0].input.MaxRecords).toBe(25);
+	});
+
+	test("cloudwatch describe-alarms: SDK-named NextToken/MaxRecords win over aliases", async () => {
+		const cwMock = mockClient(CloudWatchClient);
+		cwMock.on(DescribeAlarmsCommand).resolves({ MetricAlarms: [] });
+		const handler = describeAlarms(config);
+		await handler({ estate: E, NextToken: "sdk-tok", cursor: "alias-tok", MaxRecords: 10, limit: 99 });
+		const call = cwMock.commandCalls(DescribeAlarmsCommand)[0];
+		expect(call?.args[0].input.NextToken).toBe("sdk-tok");
+		expect(call?.args[0].input.MaxRecords).toBe(10);
+	});
+
+	test("rds describe-db-instances: cursor maps to Marker (not NextToken)", async () => {
+		const rdsMock = mockClient(RDSClient);
+		rdsMock.on(DescribeDBInstancesCommand).resolves({ DBInstances: [] });
+		const handler = describeDbInstances(config);
+		await handler({ estate: E, cursor: "marker-1", limit: 30 });
+		const call = rdsMock.commandCalls(DescribeDBInstancesCommand)[0];
+		expect(call?.args[0].input.Marker).toBe("marker-1");
+		expect(call?.args[0].input.MaxRecords).toBe(30);
+	});
+
+	test("dynamodb list-tables: limit->Limit, with no cursor alias", async () => {
+		const ddbMock = mockClient(DynamoDBClient);
+		ddbMock.on(ListTablesCommand).resolves({ TableNames: [] });
+		const handler = listTables(config);
+		await handler({ estate: E, limit: 40 });
+		const call = ddbMock.commandCalls(ListTablesCommand)[0];
+		expect(call?.args[0].input.Limit).toBe(40);
+	});
+});

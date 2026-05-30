@@ -4,14 +4,20 @@ import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchClient } from "../../services/client-factory.ts";
 import type { WithEstate } from "../estate-schema.ts";
-import { wrapListTool } from "../wrap.ts";
+import { preferSdkParam, wrapListTool } from "../wrap.ts";
 
 export const describeAlarmsSchema = z.object({
 	AlarmNames: z.array(z.string()).optional().describe("List of alarm names to filter (omit to list all)"),
 	AlarmNamePrefix: z.string().optional().describe("Filter alarms whose name starts with this prefix"),
 	StateValue: z.string().optional().describe("Filter by alarm state: OK | ALARM | INSUFFICIENT_DATA"),
-	MaxRecords: z.number().int().optional().describe("Max results per page (1-100)"),
-	NextToken: z.string().optional().describe("Pagination token from a previous response"),
+	MaxRecords: z.number().int().optional().describe("Max results per page (1-100). Alias: limit."),
+	NextToken: z.string().optional().describe("Pagination token from a previous response. Alias: cursor."),
+	// SIO-838: canonical pagination aliases (map to MaxRecords/NextToken below; SDK param wins).
+	limit: z.number().int().optional().describe("Canonical page-size alias (-> MaxRecords)."),
+	cursor: z
+		.string()
+		.optional()
+		.describe("Canonical pagination-token alias (-> NextToken). Pass _truncated.cursor here."),
 });
 
 export type DescribeAlarmsParams = WithEstate<z.infer<typeof describeAlarmsSchema>>;
@@ -27,8 +33,8 @@ export function describeAlarms(config: AwsConfig) {
 					AlarmNames: params.AlarmNames,
 					AlarmNamePrefix: params.AlarmNamePrefix,
 					StateValue: params.StateValue as "OK" | "ALARM" | "INSUFFICIENT_DATA" | undefined,
-					MaxRecords: params.MaxRecords,
-					NextToken: params.NextToken,
+					MaxRecords: preferSdkParam(params.MaxRecords, params.limit),
+					NextToken: preferSdkParam(params.NextToken, params.cursor),
 				}),
 			);
 		},

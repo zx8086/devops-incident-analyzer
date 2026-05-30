@@ -54,6 +54,39 @@ import { getResourcesSchema } from "../tools/tags/get-resources.ts";
 import { getServiceGraphSchema } from "../tools/xray/get-service-graph.ts";
 import { getTraceSummariesSchema } from "../tools/xray/get-trace-summaries.ts";
 
+// SIO-838: canonical limit/cursor aliases are additive and accepted on every list tool
+// (cursor on token-bearing tools, limit on page-size-bearing tools). limit inherits the
+// SDK page-size param's constraints. DynamoDB has limit but intentionally no cursor.
+describe("pagination alias schemas (SIO-838)", () => {
+	test("both-alias tools accept limit and cursor", () => {
+		expect(describeInstancesSchema.safeParse({ limit: 50, cursor: "tok" }).success).toBe(true);
+		expect(describeAlarmsSchema.safeParse({ limit: 25, cursor: "tok" }).success).toBe(true);
+		expect(listFunctionsSchema.safeParse({ limit: 25, cursor: "mark" }).success).toBe(true);
+		expect(describeDbInstancesSchema.safeParse({ limit: 25, cursor: "mark" }).success).toBe(true);
+	});
+
+	test("limit alias inherits the SDK page-size constraints", () => {
+		// EC2 maxResults is 5-1000, so limit below 5 must be rejected.
+		expect(describeInstancesSchema.safeParse({ limit: 1 }).success).toBe(false);
+		// GuardDuty MaxResults is 1-50, so limit above 50 must be rejected.
+		expect(guardDutyListFindingsSchema.safeParse({ DetectorId: "d", limit: 100 }).success).toBe(false);
+	});
+
+	test("token-only tools accept cursor", () => {
+		expect(listTopicsSchema.safeParse({ cursor: "tok" }).success).toBe(true);
+		expect(listStacksSchema.safeParse({ cursor: "tok" }).success).toBe(true);
+		expect(listDetectorsSchema.safeParse({ cursor: "tok" }).success).toBe(true);
+	});
+
+	test("dynamodb list-tables accepts limit but has no cursor alias", () => {
+		expect(listTablesSchema.safeParse({ limit: 40 }).success).toBe(true);
+		// cursor is not a declared field; Zod strips unknown keys by default, so parsing
+		// still succeeds but cursor must NOT appear in the parsed output.
+		const parsed = listTablesSchema.parse({ cursor: "should-be-stripped" }) as Record<string, unknown>;
+		expect(parsed.cursor).toBeUndefined();
+	});
+});
+
 describe("ec2 tool param schemas", () => {
 	test("describeVpcs accepts empty input", () => {
 		expect(describeVpcsSchema.safeParse({}).success).toBe(true);

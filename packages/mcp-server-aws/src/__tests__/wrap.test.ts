@@ -2,7 +2,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
-import { mapAwsError, setDefaultCapBytes, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
+import { mapAwsError, preferSdkParam, setDefaultCapBytes, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
 
 describe("wrapListTool", () => {
 	test("returns response unchanged when under cap", async () => {
@@ -180,6 +180,30 @@ describe("wrapListTool", () => {
 		expect(result._summary).toHaveLength(40);
 		// Severity is preserved for every finding even though the bodies were dropped.
 		expect(result._summary.every((s) => typeof s.Severity === "number")).toBe(true);
+	});
+});
+
+// SIO-838: canonical limit/cursor aliases resolve to each tool's SDK param via preferSdkParam.
+// The SDK-named value always wins so existing call patterns are never overridden.
+describe("preferSdkParam", () => {
+	test("SDK-named value wins when both are supplied", () => {
+		expect(preferSdkParam("sdk", "alias")).toBe("sdk");
+		expect(preferSdkParam(50, 10)).toBe(50);
+	});
+
+	test("falls back to the alias when the SDK param is undefined", () => {
+		expect(preferSdkParam(undefined, "alias")).toBe("alias");
+		expect(preferSdkParam(undefined, 10)).toBe(10);
+	});
+
+	test("returns undefined when neither is set", () => {
+		expect(preferSdkParam<string>(undefined, undefined)).toBeUndefined();
+	});
+
+	test("treats 0 and empty string as present (not falsy-coalesced)", () => {
+		// Uses ?? not || so a legitimately-zero SDK page size or empty token is respected.
+		expect(preferSdkParam(0, 100)).toBe(0);
+		expect(preferSdkParam("", "alias")).toBe("");
 	});
 });
 
