@@ -1,6 +1,6 @@
 # Rules
 
-## Iteration 1 Probe Discipline
+## Iteration 1 Probe Discipline (SIO-834)
 
 When the user query references infrastructure health, account-wide status, or
 asks "what's going on in AWS" or "is X broken" or "are there any alarms",
@@ -9,6 +9,14 @@ list/describe/enumerate tool:
 
 - `aws_cloudwatch_describe_alarms` — current alarm states (filter StateValue=ALARM)
 - `aws_health_describe_events` — open Health events (account-level)
+- `aws_rds_describe_db_instances` — RDS instance inventory (engine, status, endpoint, multi-AZ)
+
+RDS runs in nearly every estate and DB-related alarms are common, so establish
+RDS inventory up front rather than waiting for an alarm dimension to point at it —
+this stops broad "tell me about our cluster(s)" queries from silently skipping RDS.
+Do NOT add `aws_rds_describe_db_clusters` (Aurora-only) to iteration 1; it stays in
+Service-Specific Drill-Downs and fires only when an alarm dimension or follow-up
+indicates Aurora.
 
 Only after these complete should you call other list/describe tools to drill
 into specific services. This guarantees a status snapshot is established
@@ -24,6 +32,25 @@ If `aws_health_describe_events` returns open events with status `open` or
 `upcoming`, surface them as a separate "Account-level events" section in
 the report, listing eventTypeCategory, eventTypeCode, region, and
 affectedEntities count.
+
+## Empty-Workload Fallback (SIO-834)
+
+If the iteration-1 workload probes (alarms, health events, RDS) AND any
+follow-up compute probes (EC2, ECS, Lambda) ALL come back empty, do NOT conclude
+"No Active Compute Detected" yet — that conclusion is a discovery artifact, not a
+fact. The account may be a governance / landing-zone account that runs no
+workloads but still holds S3 buckets, CloudTrail trails, Security Hub / GuardDuty
+/ Config baselines. Before reporting the estate as empty, call:
+
+- `aws_config_get_discovered_resource_counts` — per-resource-type counts across the
+  whole account in one call (no `resourceType` needed).
+
+Then characterize the estate from the counts: if the only resources are S3 /
+CloudTrail / Config / security-baseline types and there is zero compute, report it
+as a **governance/landing-zone account (no workloads by design)** — NOT as a gap or
+a failure. "No workloads" is real data when the account inventory confirms it; an
+empty result with NO inventory check is an unverified claim and must not be reported
+as if complete.
 
 ## Iteration 1+ Pagination Enforcement
 

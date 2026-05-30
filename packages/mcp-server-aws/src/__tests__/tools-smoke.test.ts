@@ -8,6 +8,7 @@ import { listStacksSchema } from "../tools/cloudformation/list-stacks.ts";
 import { describeAlarmsSchema } from "../tools/cloudwatch/describe-alarms.ts";
 import { getMetricDataSchema } from "../tools/cloudwatch/get-metric-data.ts";
 import { describeConfigRulesSchema } from "../tools/config/describe-config-rules.ts";
+import { getDiscoveredResourceCountsSchema } from "../tools/config/get-discovered-resource-counts.ts";
 import { listDiscoveredResourcesSchema } from "../tools/config/list-discovered-resources.ts";
 import { describeTableSchema } from "../tools/dynamodb/describe-table.ts";
 import { listTablesSchema } from "../tools/dynamodb/list-tables.ts";
@@ -361,6 +362,14 @@ describe("config tool param schemas", () => {
 	});
 	test("listDiscoveredResources rejects missing resourceType", () => {
 		expect(listDiscoveredResourcesSchema.safeParse({}).success).toBe(false);
+	});
+	// SIO-834: unlike listDiscoveredResources, resourceType is OPTIONAL here so the tool can
+	// inventory the whole account in one call.
+	test("getDiscoveredResourceCounts accepts empty input", () => {
+		expect(getDiscoveredResourceCountsSchema.safeParse({}).success).toBe(true);
+	});
+	test("getDiscoveredResourceCounts accepts an optional resourceType filter", () => {
+		expect(getDiscoveredResourceCountsSchema.safeParse({ resourceType: "AWS::S3::Bucket" }).success).toBe(true);
 	});
 });
 

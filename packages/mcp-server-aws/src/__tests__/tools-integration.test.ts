@@ -6,7 +6,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { CloudFormationClient, ListStacksCommand } from "@aws-sdk/client-cloudformation";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient, DescribeLogGroupsCommand } from "@aws-sdk/client-cloudwatch-logs";
-import { ConfigServiceClient, DescribeConfigRulesCommand } from "@aws-sdk/client-config-service";
+import {
+	ConfigServiceClient,
+	DescribeConfigRulesCommand,
+	GetDiscoveredResourceCountsCommand,
+} from "@aws-sdk/client-config-service";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DescribeVpcsCommand, EC2Client } from "@aws-sdk/client-ec2";
 import { DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
@@ -24,6 +28,7 @@ import { _resetClientsForTests } from "../services/client-factory.ts";
 import { listStacks } from "../tools/cloudformation/list-stacks.ts";
 import { describeAlarms } from "../tools/cloudwatch/describe-alarms.ts";
 import { describeConfigRules } from "../tools/config/describe-config-rules.ts";
+import { getDiscoveredResourceCounts } from "../tools/config/get-discovered-resource-counts.ts";
 import { listTables } from "../tools/dynamodb/list-tables.ts";
 import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
@@ -234,6 +239,21 @@ describe("config integration", () => {
 		const handler = describeConfigRules(config);
 		const result = (await handler({ estate: E })) as { ConfigRules: unknown[] };
 		expect(result.ConfigRules).toHaveLength(1);
+	});
+
+	test("getDiscoveredResourceCounts returns resourceCounts array from SDK response", async () => {
+		const configMock = mockClient(ConfigServiceClient);
+		configMock.on(GetDiscoveredResourceCountsCommand).resolves({
+			totalDiscoveredResources: 2,
+			resourceCounts: [
+				{ resourceType: "AWS::S3::Bucket", count: 2 },
+				{ resourceType: "AWS::CloudTrail::Trail", count: 3 },
+			],
+		});
+
+		const handler = getDiscoveredResourceCounts(config);
+		const result = (await handler({ estate: E })) as { resourceCounts: unknown[] };
+		expect(result.resourceCounts).toHaveLength(2);
 	});
 });
 
