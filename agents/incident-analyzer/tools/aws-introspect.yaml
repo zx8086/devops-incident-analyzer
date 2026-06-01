@@ -1,0 +1,176 @@
+name: aws-introspect
+description: >
+  Read-only inspection of AWS infrastructure state across estates for incident
+  diagnosis: CloudWatch alarms/metrics, ECS services/tasks, EC2 instances, RDS,
+  Lambda, CloudWatch Logs Insights, X-Ray traces, Health events, GuardDuty /
+  Security Hub findings, S3, SNS/SQS, DynamoDB, ElastiCache, EventBridge, Step
+  Functions, CloudFormation, CloudTrail, Config, and resource tagging. All tools
+  are read-only (SIO-859 keeps IP/CIDR detail; the deployed IAM role denies every
+  mutation). Estate routing is injected server-side; the LLM never sees credentials.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum:
+        - cloudwatch_alarms
+        - cloudwatch_metrics
+        - ecs_state
+        - ec2_state
+        - rds_state
+        - lambda_state
+        - logs_insights
+        - xray_traces
+        - health_events
+        - security_findings
+        - storage_state
+        - messaging_state
+        - infra_inventory
+        - audit_trail
+        - list_estates
+      description: Type of AWS read-only inspection to perform
+    estate:
+      type: string
+      description: Estate id to query (injected server-side from the AWS estate router; not chosen by the LLM)
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    action: { type: string }
+    data: { type: object }
+    timestamp: { type: string }
+annotations:
+  requires_confirmation: false
+  read_only: true
+  cost: low
+
+prompt_template: >
+  Inspect read-only AWS infrastructure state for incident diagnosis, scoped to the
+  estate(s) selected for this investigation.
+  {{#if datasources}}Available data sources: {{datasources}}.{{/if}}
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all queries are logged.{{/if}}
+
+related_tools:
+  - "Use elastic-search-logs to correlate a CloudWatch alarm or ECS task failure with application error spikes"
+  - "Use kafka-introspect to check whether an ECS/MSK consumer degradation lines up with broker lag"
+  - "Use gitlab-api to correlate an alarm, task restart, or Lambda config change with a recent deploy"
+  - "Use atlassian-api to find the linked incident ticket for an alarming service"
+
+tool_mapping:
+  mcp_server: aws
+  mcp_patterns:
+    - "aws_*"
+  action_tool_map:
+    cloudwatch_alarms:
+      - aws_cloudwatch_describe_alarms
+    cloudwatch_metrics:
+      - aws_cloudwatch_get_metric_data
+    ecs_state:
+      - aws_ecs_list_clusters
+      - aws_ecs_list_services
+      - aws_ecs_describe_services
+      - aws_ecs_list_tasks
+      - aws_ecs_describe_tasks
+      - aws_ecs_describe_task_definition
+    ec2_state:
+      - aws_ec2_describe_instances
+      - aws_ec2_describe_security_groups
+      - aws_ec2_describe_vpcs
+    rds_state:
+      - aws_rds_describe_db_instances
+      - aws_rds_describe_db_clusters
+    lambda_state:
+      - aws_lambda_list_functions
+      - aws_lambda_get_function_configuration
+    logs_insights:
+      - aws_logs_describe_log_groups
+      - aws_logs_start_query
+      - aws_logs_get_query_results
+    xray_traces:
+      - aws_xray_get_service_graph
+      - aws_xray_get_trace_summaries
+    health_events:
+      - aws_health_describe_events
+    security_findings:
+      - aws_guardduty_list_detectors
+      - aws_guardduty_get_detector
+      - aws_guardduty_list_findings
+      - aws_guardduty_get_findings
+      - aws_securityhub_describe_hub
+      - aws_securityhub_get_enabled_standards
+      - aws_securityhub_get_findings
+    storage_state:
+      - aws_s3_list_buckets
+      - aws_s3_get_bucket_location
+      - aws_s3_get_bucket_policy_status
+      - aws_dynamodb_list_tables
+      - aws_dynamodb_describe_table
+      - aws_elasticache_describe_cache_clusters
+      - aws_elasticache_describe_replication_groups
+    messaging_state:
+      - aws_sns_list_topics
+      - aws_sns_get_topic_attributes
+      - aws_sqs_list_queues
+      - aws_sqs_get_queue_attributes
+      - aws_eventbridge_list_rules
+      - aws_eventbridge_describe_rule
+      - aws_stepfunctions_list_state_machines
+    infra_inventory:
+      - aws_resourcegroupstagging_get_resources
+      - aws_config_list_discovered_resources
+      - aws_config_get_discovered_resource_counts
+      - aws_config_describe_config_rules
+      - aws_cloudformation_list_stacks
+      - aws_cloudformation_describe_stacks
+      - aws_cloudformation_describe_stack_events
+    audit_trail:
+      - aws_cloudtrail_list_trails
+      - aws_cloudtrail_describe_trails
+      - aws_cloudtrail_get_trail_status
+    list_estates:
+      - aws_list_estates
+  action_descriptions:
+    cloudwatch_alarms: when triaging which CloudWatch alarms are in ALARM/INSUFFICIENT_DATA state for an estate or service
+    cloudwatch_metrics: when pulling time-series metric data (CPU, memory, latency, error count) to confirm or quantify a degradation
+    ecs_state: when an ECS service is unhealthy -- task counts, stopped-task reasons (CannotPullContainerError, OOM), service events, or task-definition config
+    ec2_state: when investigating EC2 instance health, instance state/type, security-group rules, or VPC layout behind a degraded service
+    rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
+    lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
+    logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results
+    xray_traces: when a latency or error path spans services -- the X-Ray service graph or recent trace summaries
+    health_events: when an AWS-side event (scheduled maintenance, degradation, account notice) might explain the incident
+    security_findings: when a security signal is in scope -- GuardDuty detectors/findings or Security Hub findings/standards
+    storage_state: when S3, DynamoDB, or ElastiCache state is relevant -- bucket inventory/location/policy, table config, cache cluster/replication-group health
+    messaging_state: when SNS/SQS/EventBridge/Step Functions wiring is in scope -- topics, queues, rules, state machines and their attributes
+    infra_inventory: when scoping what exists in an estate -- resource tagging, Config discovered-resource counts/rules, CloudFormation stacks and stack events
+    audit_trail: when establishing "who/what changed" -- CloudTrail trails and their logging status (not the events themselves)
+    list_estates: when confirming which estates this runtime is configured to query and their boot-time AssumeRole health
+  action_keywords:
+    cloudwatch_alarms:
+      - cloudwatch alarm
+      - alarm state
+      - in alarm
+      - triage alarms
+    logs_insights:
+      - log insights
+      - logs insights
+      - log group
+      - cloudwatch logs
+    ecs_state:
+      - ecs
+      - fargate
+      - task definition
+      - stopped task
+    health_events:
+      - aws health
+      - phd
+      - scheduled maintenance
+    security_findings:
+      - guardduty
+      - security hub
+      - securityhub
+    list_estates:
+      - which estates
+      - list estates
+      - configured estates

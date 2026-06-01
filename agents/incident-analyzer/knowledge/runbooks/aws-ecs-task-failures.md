@@ -90,4 +90,4 @@ The Phase 5 (SIO-761) correlation rule `aws-ecs-degraded-needs-elastic-traces` f
 - Adjust task-definition memory/CPU and create a new revision
 
 ## All Tools Used Are Read-Only
-aws_ecs_list_clusters, aws_ecs_describe_services, aws_ecs_list_tasks, aws_ecs_describe_tasks, aws_logs_describe_log_groups, aws_logs_start_query, aws_logs_get_query_results, aws_ec2_describe_security_groups, elasticsearch_search
+aws_ecs_list_clusters, aws_ecs_describe_services, aws_ecs_list_tasks, aws_ecs_describe_tasks, aws_logs_describe_log_groups, aws_logs_start_query, aws_logs_get_query_results, aws_ec2_describe_security_groups
