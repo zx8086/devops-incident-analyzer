@@ -135,11 +135,14 @@ describe("correlation engine — predicate errors are caught", () => {
 });
 
 // SIO-712: deployment-vs-runtime contradiction. The styles-v3 case: GitLab MR !153
-// merged 2026-04-22 mentioning "OFFSET", Couchbase finding 2026-05-07 with
-// lastExecutionTime > merged_at on a query containing "OFFSET". Three-conjunction
-// filter: timestamp window + post-merge runtime + shared distinctive token.
-// NOTE: These tests are time-bound. The 'fires' cases assume now() is within ~30 days
-// of 2026-04-22. Tests will need date updates if they're still maintained in mid-2026.
+// merged mentioning "OFFSET", Couchbase finding with lastExecutionTime > merged_at on
+// a query containing "OFFSET". Three-conjunction filter: timestamp window (30 days) +
+// post-merge runtime + shared distinctive token.
+// SIO-862: dates are RELATIVE to now via daysAgo(). The rule only fires within
+// DEPLOY_RUNTIME_WINDOW_MS (30 days) of the merge, so the previous hardcoded 2026-04/05
+// dates rotted out of the window and the 'fires' cases stopped triggering.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const daysAgo = (n: number): string => new Date(Date.now() - n * DAY_MS).toISOString();
 describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	const foundRule = correlationRules.find((r) => r.name === "gitlab-deploy-vs-datastore-runtime");
 	if (!foundRule) {
@@ -153,8 +156,8 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("fires when GitLab MR merged_at + post-merge datastore observation + shared token", () => {
-		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const merged = daysAgo(10);
+		const observed = daysAgo(5);
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [
 				{
@@ -182,8 +185,10 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("does NOT fire when datastore observation predates the merge", () => {
-		const merged = new Date("2026-05-08T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		// Observation 10d ago, merge 5d ago: observed PREDATES the merge (both in-window),
+		// so the rule must not fire for the predate reason -- not because of the window.
+		const merged = daysAgo(5);
+		const observed = daysAgo(10);
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [{ id: 153, title: "Replace OFFSET scan", description: "fix", merged_at: merged }],
 		});
@@ -195,8 +200,8 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("does NOT fire when no distinctive token is shared", () => {
-		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const merged = daysAgo(10);
+		const observed = daysAgo(5);
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [{ id: 99, title: "Update README", description: "typo fix", merged_at: merged }],
 		});
@@ -208,8 +213,10 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("does NOT fire when MR merged > 30 days ago", () => {
-		const merged = new Date("2026-01-01T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		// Merge 45d ago is outside the 30-day DEPLOY_RUNTIME_WINDOW_MS; observation
+		// 40d ago is post-merge but the window gate must still suppress the rule.
+		const merged = daysAgo(45);
+		const observed = daysAgo(40);
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [{ id: 99, title: "Replace OFFSET scan", description: "old fix", merged_at: merged }],
 		});
@@ -221,7 +228,7 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("does NOT fire when GitLab data source is missing", () => {
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const observed = daysAgo(5);
 		const state = withCouchbaseFindings(baseState(), {
 			slowQueries: [{ statement: "OFFSET 13000", lastExecutionTime: observed }],
 		});
@@ -230,8 +237,8 @@ describe("gitlab-deploy-vs-datastore-runtime correlation rule", () => {
 	});
 
 	test("ignores stopwords when computing distinctive-token overlap", () => {
-		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		const merged = daysAgo(10);
+		const observed = daysAgo(5);
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [{ id: 99, title: "Update with the from", description: "stopwords only", merged_at: merged }],
 		});

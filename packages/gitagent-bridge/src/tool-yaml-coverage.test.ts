@@ -30,13 +30,13 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		]);
 	});
 
-	test("covers all 60 unique MCP tool names across the action map (SIO-742 adds 5 health-check tools)", () => {
+	test("covers all 61 unique MCP tool names across the action map (SIO-742 +5 health-check, SIO-770 +kafka_list_dlq_topics)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
 		if (!kafka) return;
 		const tools = getAllActionToolNames(kafka);
-		expect(tools.length).toBe(60);
+		expect(tools.length).toBe(61);
 	});
 
 	test("includes the SIO-680 Connect read tools under connect_status (SIO-742 prepends connect_health_check)", () => {

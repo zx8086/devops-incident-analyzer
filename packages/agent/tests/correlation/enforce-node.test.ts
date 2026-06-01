@@ -192,8 +192,13 @@ describe("correlationFetch — delegates to queryDataSource", () => {
 
 describe("enforceCorrelationsRouter skip-coverage routing", () => {
 	test("routes skipCoverageCheck rules directly to enforceCorrelationsAggregate without a fetch", () => {
-		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		// SIO-862: dates must be RELATIVE to now -- the rule only fires within
+		// DEPLOY_RUNTIME_WINDOW_MS (30 days) of the merge, so hardcoded 2026-04/05
+		// dates aged out of the window and the rule stopped triggering. merged 10d
+		// ago, observed 5d ago (post-merge, inside the window) keeps this stable.
+		const DAY_MS = 24 * 60 * 60 * 1000;
+		const merged = new Date(Date.now() - 10 * DAY_MS).toISOString();
+		const observed = new Date(Date.now() - 5 * DAY_MS).toISOString();
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [
 				{
@@ -225,8 +230,13 @@ describe("enforceCorrelationsRouter skip-coverage routing", () => {
 
 describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () => {
 	test("prepends WARNING banner to finalAnswer when a skipCoverageCheck rule degrades", async () => {
-		const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-		const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+		// SIO-862: dates must be RELATIVE to now -- the rule only fires within
+		// DEPLOY_RUNTIME_WINDOW_MS (30 days) of the merge, so hardcoded 2026-04/05
+		// dates aged out of the window and the rule stopped triggering. merged 10d
+		// ago, observed 5d ago (post-merge, inside the window) keeps this stable.
+		const DAY_MS = 24 * 60 * 60 * 1000;
+		const merged = new Date(Date.now() - 10 * DAY_MS).toISOString();
+		const observed = new Date(Date.now() - 5 * DAY_MS).toISOString();
 		const stateWithGitLab = withGitLabFindings(baseState(), {
 			mergedRequests: [
 				{
@@ -296,6 +306,11 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 		};
 		const result = await enforceCorrelationsAggregate(state);
 		expect(result.confidenceCap).toBe(0.59);
-		expect(result.finalAnswer).toBeUndefined();
+		// SIO-860: a non-skipCoverageCheck degradation no longer leaves finalAnswer
+		// untouched -- the printed confidence is rewritten to the capped value so the
+		// report prose matches the HITL gate. The WARNING contradiction banner is still
+		// withheld (that's reserved for skipCoverageCheck rules).
+		expect(result.finalAnswer).toBe("# Report\n\nConfidence: 0.59");
+		expect(result.finalAnswer).not.toContain("WARNING: unresolved cross-source contradiction");
 	});
 });

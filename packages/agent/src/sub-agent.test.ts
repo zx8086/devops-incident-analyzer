@@ -128,10 +128,12 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 		expect(errors[0]?.category).toBe("auth");
 	});
 
-	test("redacts IPv4 addresses from tool error messages", () => {
+	// SIO-861: IPv4 is deliberately NOT redacted -- this is an internal infra tool and
+	// broker/host IPs are diagnostic, not PII. The message is preserved verbatim.
+	test("preserves IPv4 addresses in tool error messages", () => {
 		const errors = extractToolErrors([toolMsg("ECONNREFUSED to broker 10.0.42.7:9092 after 30s timeout")]);
 		expect(errors).toHaveLength(1);
-		expect(errors[0]?.message).not.toContain("10.0.42.7");
+		expect(errors[0]?.message).toContain("10.0.42.7");
 		expect(errors[0]?.category).toBe("transient");
 	});
 
@@ -143,15 +145,20 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 		expect(errors).toHaveLength(0);
 	});
 
-	test("preserves toolName, category, retryable while redacting message", () => {
+	test("preserves toolName, category, retryable while redacting email but keeping IPs", () => {
 		const errors = extractToolErrors([
-			toolMsg("ECONNRESET while polling broker 10.0.1.5:9092", "kafka_get_consumer_group_lag"),
+			toolMsg(
+				"ECONNRESET for user simon.owusu@example.com while polling broker 10.0.1.5:9092",
+				"kafka_get_consumer_group_lag",
+			),
 		]);
 		expect(errors).toHaveLength(1);
 		expect(errors[0]?.toolName).toBe("kafka_get_consumer_group_lag");
 		expect(errors[0]?.category).toBe("transient");
 		expect(errors[0]?.retryable).toBe(true);
-		expect(errors[0]?.message).not.toContain("10.0.1.5");
+		// SIO-861: email still redacted, IPv4 preserved verbatim.
+		expect(errors[0]?.message).not.toContain("simon.owusu@example.com");
+		expect(errors[0]?.message).toContain("10.0.1.5");
 	});
 });
 
