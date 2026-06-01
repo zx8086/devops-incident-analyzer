@@ -42,6 +42,7 @@ import {
 	aggregate,
 	aggregateResultBudget,
 	extractGapsBulletCount,
+	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
@@ -292,6 +293,10 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 
 		expect(result.confidenceScore).toBe(0.59);
 		expect(result.confidenceCap).toBe(0.59);
+		// SIO-860: the printed confidence must match the capped gate value, not the
+		// LLM's pre-cap 0.9, so the HITL banner never contradicts the report prose.
+		expect(result.finalAnswer).toContain("Confidence: 0.59");
+		expect(result.finalAnswer).not.toContain("Confidence: 0.9");
 		const warnCall = captured.find(
 			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
 		);
@@ -448,6 +453,9 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", (
 		const result = await aggregate(makeState({}));
 		expect(result.confidenceScore).toBe(0.59);
 		expect(result.confidenceCap).toBe(0.59);
+		// SIO-860: prose confidence rewritten to the capped value (was 0.71).
+		expect(result.finalAnswer).toContain("Confidence: 0.59");
+		expect(result.finalAnswer).not.toContain("Confidence: 0.71");
 	});
 
 	test("does NOT cap when Gaps section has only 1 bullet", async () => {
@@ -455,6 +463,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", (
 		const result = await aggregate(makeState({}));
 		expect(result.confidenceScore).toBe(0.9);
 		expect(result.confidenceCap).toBeUndefined();
+		// SIO-860: no cap triggered, so the LLM's printed confidence is left untouched.
+		expect(result.finalAnswer).toContain("Confidence: 0.9");
 	});
 
 	test("does NOT cap when no Gaps section exists", async () => {
@@ -462,6 +472,36 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", (
 		const result = await aggregate(makeState({}));
 		expect(result.confidenceScore).toBe(0.9);
 		expect(result.confidenceCap).toBeUndefined();
+	});
+});
+
+// SIO-860: the printed confidence and the gate's confidenceScore must derive from
+// one value. rewriteConfidenceInAnswer rewrites the dedicated confidence line to the
+// capped score so the report prose never contradicts the low_confidence banner.
+describe("rewriteConfidenceInAnswer (SIO-860)", () => {
+	test("rewrites a strict Confidence line to the capped score", () => {
+		const answer = "# Report\n\n## Findings\n- a\n\nConfidence: 0.9";
+		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe("# Report\n\n## Findings\n- a\n\nConfidence: 0.59");
+	});
+
+	test("rewrites a bold/markdown Confidence line and preserves surrounding markup", () => {
+		const answer = "**Confidence:** 0.92\n";
+		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe("**Confidence:** 0.59\n");
+	});
+
+	test("rewrites a 'Confidence Score:' variant", () => {
+		const answer = "Confidence Score: 0.88";
+		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe("Confidence Score: 0.59");
+	});
+
+	test("rewrites only the confidence line, not coincidental numbers in prose", () => {
+		const answer = "We are confident the 0.9 ratio is fine.\n\nConfidence: 0.9";
+		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe("We are confident the 0.9 ratio is fine.\n\nConfidence: 0.59");
+	});
+
+	test("leaves the answer unchanged when no confidence line is present", () => {
+		const answer = "# Report\n\n## Findings\n- a";
+		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe(answer);
 	});
 });
 

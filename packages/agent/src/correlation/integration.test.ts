@@ -32,7 +32,62 @@ mock.module("../prompt-context.ts", () => ({
 	getToolDefinitionForDataSource: () => undefined,
 }));
 
-import { enforceCorrelationsRouter } from "./enforce-node.ts";
+import { enforceCorrelationsAggregate, enforceCorrelationsRouter } from "./enforce-node.ts";
+
+function makeDegradingState(finalAnswer: string, confidenceScore: number) {
+	// A pending correlation for a rule that stays unsatisfied (no elastic findings
+	// cover the triggered AWS entity), so enforceCorrelationsAggregate caps confidence.
+	return {
+		messages: [],
+		dataSourceResults: [
+			{
+				dataSourceId: "aws",
+				status: "success",
+				data: "ECS service backend: 0 of 5 tasks running.",
+				toolErrors: [],
+			},
+		],
+		extractedEntities: { dataSources: [{ id: "aws", mentionedAs: "explicit" as const }] },
+		confidenceCap: undefined,
+		degradedRules: [],
+		pendingCorrelations: [
+			{
+				ruleName: "aws-ecs-degraded-needs-elastic-traces",
+				requiredAgent: "elastic-agent" as const,
+				triggerContext: { service: "backend" },
+			},
+		],
+		targetDataSources: [] as string[],
+		retryCount: 0,
+		alignmentRetries: 0,
+		skippedDataSources: [] as string[],
+		isFollowUp: false,
+		finalAnswer,
+		requestId: "test-sio860",
+		attachmentMeta: [],
+		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		mitigationFragments: [],
+		confidenceScore,
+		lowConfidence: false,
+		pendingActions: [],
+		actionResults: [],
+		selectedRunbooks: null,
+		partialFailures: [],
+	} as never;
+}
+
+describe("enforceCorrelationsAggregate confidence rewrite (SIO-860)", () => {
+	test("rewrites the printed confidence to the capped value when a rule degrades", async () => {
+		const state = makeDegradingState("# Report\n\n## Findings\n- a\n\nConfidence: 0.9", 0.9);
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.finalAnswer).toContain("Confidence: 0.59");
+		expect(result.finalAnswer).not.toContain("Confidence: 0.9");
+	});
+});
 
 describe("Phase 5 correlation rules — pipeline integration", () => {
 	test("aws-agent ECS-degraded prose dispatches elastic-agent Send", () => {
