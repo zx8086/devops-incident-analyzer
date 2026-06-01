@@ -32,11 +32,13 @@ const PII_PATTERNS: readonly PiiPattern[] = [
 			/(?:\+?1[-.\s])?(?:\(\d{3}\)\s?\d{3}[-.\s]?\d{4}|\b\d{3}[-.\s]\d{3}[-.\s]?\d{4}\b|\b\d{3}[-.\s]?\d{3}[-.\s]\d{4}\b)/g,
 		replacement: "[PHONE_REDACTED]",
 	},
-	{
-		name: "ipv4",
-		regex: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
-		replacement: "[IP_REDACTED]",
-	},
+	// SIO-861: IPv4 is deliberately NOT redacted. This is an internal infra tool
+	// whose reports are about internal infrastructure -- IPs and CIDRs (e.g. an ECS
+	// task subnet 10.34.50.0/23, a security-group source range) are core diagnostic
+	// data, not the external PII the redactor exists to protect. Redacting them
+	// destroyed the network-diagnostic value of incident reports and rendered
+	// escalations like "add 10.34.50.0/23 to the SG rule" un-actionable. SSN, credit
+	// card, email, and phone are still redacted above.
 ];
 
 // Corporate / directory domains where email addresses are already public to the

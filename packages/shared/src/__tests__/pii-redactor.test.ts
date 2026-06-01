@@ -7,8 +7,17 @@ describe("redactPiiContent", () => {
 		expect(redactPiiContent("contact user@example.com for help")).toBe("contact [EMAIL_REDACTED] for help");
 	});
 
-	test("redacts IPv4 addresses", () => {
-		expect(redactPiiContent("server at 192.168.1.100 is down")).toBe("server at [IP_REDACTED] is down");
+	// SIO-861: IPs/CIDRs are internal-infra diagnostic data, not external PII -- they
+	// must pass through verbatim so incident reports stay actionable.
+	test("preserves IPv4 addresses verbatim", () => {
+		expect(redactPiiContent("server at 192.168.1.100 is down")).toBe("server at 192.168.1.100 is down");
+		expect(redactPiiContent("task IPs 10.34.51.110 and 10.34.51.152")).toBe(
+			"task IPs 10.34.51.110 and 10.34.51.152",
+		);
+	});
+
+	test("preserves CIDR notation verbatim", () => {
+		expect(redactPiiContent("subnet 10.34.50.0/23 not authorized")).toBe("subnet 10.34.50.0/23 not authorized");
 	});
 
 	test("redacts US phone numbers", () => {
@@ -29,10 +38,11 @@ describe("redactPiiContent", () => {
 		const input = "User user@corp.com from 10.0.0.5 called 555-867-5309";
 		const result = redactPiiContent(input);
 		expect(result).toContain("[EMAIL_REDACTED]");
-		expect(result).toContain("[IP_REDACTED]");
 		expect(result).toContain("[PHONE_REDACTED]");
 		expect(result).not.toContain("user@corp.com");
-		expect(result).not.toContain("10.0.0.5");
+		// SIO-861: the IP is infra data and stays verbatim while email/phone are redacted.
+		expect(result).toContain("10.0.0.5");
+		expect(result).not.toContain("[IP_REDACTED]");
 	});
 
 	test("does not redact UUIDs", () => {
@@ -112,7 +122,7 @@ describe("redactPiiContent with PII_REDACTION_ALLOWED_DOMAINS", () => {
 		const input = "ops@pvh.com escalated from 192.168.1.5 -- SSN 123-45-6789";
 		const result = redactPiiContent(input);
 		expect(result).toContain("ops@pvh.com");
-		expect(result).toContain("[IP_REDACTED]");
+		expect(result).toContain("192.168.1.5"); // SIO-861: IP preserved
 		expect(result).toContain("[SSN_REDACTED]");
 	});
 
