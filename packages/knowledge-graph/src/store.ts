@@ -68,7 +68,9 @@ async function loadLbug(): Promise<LbugModule> {
 	const specifier: string = "lbug";
 	// Non-literal specifier -> TS does not statically resolve the module, so this
 	// compiles without lbug installed. Resolved at runtime only when enabled.
-	const mod = (await import(specifier)) as unknown as LbugModule;
+	// @vite-ignore: the non-literal specifier is intentional; suppress Vite's
+	// "dynamic import cannot be analyzed" SSR warning (lbug is an optional dep).
+	const mod = (await import(/* @vite-ignore */ specifier)) as unknown as LbugModule;
 	return mod;
 }
 
