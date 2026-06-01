@@ -4,6 +4,11 @@ import type { AwsConfig } from "../../config/schemas.ts";
 import { withEstate } from "../estate-schema.ts";
 import { toMcp } from "../wrap.ts";
 import { type DescribeServicesParams, describeServices, describeServicesSchema } from "./describe-services.ts";
+import {
+	type DescribeTaskDefinitionParams,
+	describeTaskDefinition,
+	describeTaskDefinitionSchema,
+} from "./describe-task-definition.ts";
 import { type DescribeTasksParams, describeTasks, describeTasksSchema } from "./describe-tasks.ts";
 import { type ListClustersParams, listClusters, listClustersSchema } from "./list-clusters.ts";
 import { type ListServicesParams, listServices, listServicesSchema } from "./list-services.ts";
@@ -40,6 +45,14 @@ export function registerEcsTools(server: McpServer, config: AwsConfig): void {
 		"Describe one or more ECS tasks. Returns task state, container statuses, last status, started/stopped times.",
 		withEstate(config, describeTasksSchema.shape),
 		async (params) => toMcp(await tasks(params as DescribeTasksParams)),
+	);
+
+	const taskDef = describeTaskDefinition(config);
+	server.tool(
+		"aws_ecs_describe_task_definition",
+		"Describe an ECS task definition (family:revision or ARN, from a service's taskDefinition field). Returns containerDefinitions including environment variables and secrets references — use to confirm which datastore (RDS endpoint, etc.) a service connects to when correlating a service incident to its backend.",
+		withEstate(config, describeTaskDefinitionSchema.shape),
+		async (params) => toMcp(await taskDef(params as DescribeTaskDefinitionParams)),
 	);
 
 	const taskList = listTasks(config);
