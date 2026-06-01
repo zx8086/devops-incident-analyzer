@@ -24,6 +24,9 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/agent/package.json packages/agent/
 COPY packages/checkpointer/package.json packages/checkpointer/
 COPY packages/gitagent-bridge/package.json packages/gitagent-bridge/
+COPY packages/knowledge-graph/package.json packages/knowledge-graph/
+COPY packages/memory-pr/package.json packages/memory-pr/
+COPY packages/skillflow/package.json packages/skillflow/
 COPY packages/mcp-server-aws/package.json packages/mcp-server-aws/
 COPY packages/mcp-server-atlassian/package.json packages/mcp-server-atlassian/
 COPY packages/mcp-server-couchbase/package.json packages/mcp-server-couchbase/
