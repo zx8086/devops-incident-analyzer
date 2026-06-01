@@ -635,3 +635,65 @@ describe.skipIf(!hasRunbooks)("aggregate per-result data cap (SIO-833)", () => {
 		expect(getUserPromptText()).toContain("small result body");
 	});
 });
+
+// SIO-856: the aggregator must scope AWS claims to the estate(s) actually assessed
+// (state.awsTargetEstates), not the full configured set that aws_list_estates returns.
+describe.skipIf(!hasRunbooks)("aggregator: AWS estate scope guidance", () => {
+	const awsResult = {
+		dataSourceId: "aws",
+		status: "success" as const,
+		data: "estates: [7 configured, all STS OK]",
+		duration: 100,
+		deploymentId: "estate:eu-shared-services-prd",
+		toolErrors: [],
+	};
+
+	test("single assessed estate -> prompt names it and forbids generalizing to other accounts", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				targetDataSources: ["aws"],
+				awsTargetEstates: ["eu-shared-services-prd"],
+				dataSourceResults: [awsResult],
+			}),
+		);
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("AWS ESTATE SCOPE");
+		expect(prompt).toContain("eu-shared-services-prd");
+		// must instruct against the observed hallucination
+		expect(prompt).toContain("Do NOT claim health, coverage, or status for any other AWS account");
+		expect(prompt.toLowerCase()).toContain("aws_list_estates");
+	});
+
+	test("multiple assessed estates -> guidance lists all of them", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				targetDataSources: ["aws"],
+				awsTargetEstates: ["eu-oit-prd", "eu-shared-services-prd"],
+				dataSourceResults: [
+					{ ...awsResult, deploymentId: "estate:eu-oit-prd" },
+					{ ...awsResult, deploymentId: "estate:eu-shared-services-prd" },
+				],
+			}),
+		);
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("AWS ESTATE SCOPE");
+		expect(prompt).toContain("eu-oit-prd");
+		expect(prompt).toContain("eu-shared-services-prd");
+	});
+
+	test("no AWS estates -> no estate-scope guidance injected", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				targetDataSources: ["elastic"],
+				awsTargetEstates: [],
+				dataSourceResults: [
+					{ dataSourceId: "elastic", status: "success", data: "elastic body", duration: 10, toolErrors: [] },
+				],
+			}),
+		);
+		expect(getUserPromptText()).not.toContain("AWS ESTATE SCOPE");
+	});
+});
