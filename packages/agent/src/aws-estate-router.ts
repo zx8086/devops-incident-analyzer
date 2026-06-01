@@ -7,25 +7,107 @@ import { getLogger } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { getToolsForDataSource } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
+import { normalizeToolContent } from "./sub-agent.ts";
 import { withRetry } from "./tool-retry.ts";
 
-const logger = getLogger("agent:awsEstateRouter");
+interface RouterLogSink {
+	info: (...args: unknown[]) => unknown;
+	warn: (...args: unknown[]) => unknown;
+}
+
+const defaultLogger: RouterLogSink = getLogger("agent:awsEstateRouter") as unknown as RouterLogSink;
+let currentLogger: RouterLogSink = defaultLogger;
+const logger: RouterLogSink = {
+	info: (...args) => currentLogger.info(...args),
+	warn: (...args) => currentLogger.warn(...args),
+};
+
+// SIO-854: test seam so the drift WARN can be asserted. Pass null to reset.
+export function _setAwsEstateRouterLoggerForTesting(sink: RouterLogSink | null): void {
+	currentLogger = sink ?? defaultLogger;
+}
 
 // Read AWS_ESTATES once at module load. The agent process and the AWS MCP runtime
 // share the same .env file in local dev; in AgentCore deployment the agent gets
 // AWS_ESTATES via its own env injection (see deploy.sh, Section 5 of design).
 //
-// SIO-854: this trusts the agent's own AWS_ESTATES and never reconciles against the
-// server's actual estate list (aws_list_estates). If the two drift, the agent
-// dispatches to an estate the server rejects and only finds out at query time
-// (a clear "Unknown estate" error since SIO-853, but still runtime, not startup).
-// Follow-up reconciles the lists at boot and WARNs on divergence.
+// SIO-854: the agent's AWS_ESTATES is reconciled against the server's actual estate
+// list (aws_list_estates) on the first AWS-in-scope dispatch (reconcileEstatesWithServer
+// below). Divergence is surfaced as a single WARN and server-unknown estates are dropped
+// from `available`, so drift no longer first manifests as a per-query runtime "Unknown
+// estate" error (the clearer-but-still-late SIO-853 failure mode).
 let cachedEstateIds: string[] | undefined;
 
 export function _resetEstateCacheForTests(): void {
 	cachedEstateIds = undefined;
+}
+
+// SIO-854: cached result of the one-shot server reconciliation. `undefined` = not yet
+// run; once set it holds the server's estate-id list (or null when the server list
+// could not be fetched, in which case we fall back to the agent's configured estates).
+let cachedServerEstateIds: string[] | null | undefined;
+
+export function _resetEstateReconcileForTests(): void {
+	cachedServerEstateIds = undefined;
+}
+
+const ListEstatesResponseSchema = z.object({
+	estates: z.array(z.object({ id: z.string() })),
+});
+
+// Call aws_list_estates once and reconcile against the agent's configured estates.
+// WARNs on divergence (estates present on only one side) and returns `configured`
+// filtered to the server's set. Non-fatal: if the tool is absent or errors, the
+// agent's configured estates are returned unchanged.
+async function reconcileEstatesWithServer(configured: string[]): Promise<string[]> {
+	if (cachedServerEstateIds === undefined) {
+		cachedServerEstateIds = await fetchServerEstateIds();
+		if (cachedServerEstateIds !== null) {
+			const serverSet = new Set(cachedServerEstateIds);
+			const agentSet = new Set(configured);
+			const onlyInAgent = configured.filter((id) => !serverSet.has(id));
+			const onlyInServer = cachedServerEstateIds.filter((id) => !agentSet.has(id));
+			if (onlyInAgent.length > 0 || onlyInServer.length > 0) {
+				logger.warn(
+					{ onlyInAgent, onlyInServer, agentEstates: configured, serverEstates: cachedServerEstateIds },
+					"AWS estate config drift between agent and server",
+				);
+			}
+		}
+	}
+	if (cachedServerEstateIds === null) return configured;
+	const serverSet = new Set(cachedServerEstateIds);
+	return configured.filter((id) => serverSet.has(id));
+}
+
+async function fetchServerEstateIds(): Promise<string[] | null> {
+	const tool = getToolsForDataSource("aws").find((t) => t.name === "aws_list_estates");
+	if (!tool) {
+		logger.warn("aws_list_estates tool unavailable; skipping estate drift reconciliation");
+		return null;
+	}
+	try {
+		const raw = await tool.invoke({});
+		const parsed = JSON.parse(normalizeToolContent(raw));
+		const validation = ListEstatesResponseSchema.safeParse(parsed);
+		if (!validation.success) {
+			logger.warn(
+				{ error: validation.error.message },
+				"aws_list_estates returned an unexpected shape; skipping drift check",
+			);
+			return null;
+		}
+		return validation.data.estates.map((e) => e.id);
+	} catch (err) {
+		logger.warn(
+			{ error: err instanceof Error ? err.message : String(err) },
+			"aws_list_estates call failed; skipping estate drift reconciliation",
+		);
+		return null;
+	}
 }
 
 // AWS_ESTATES must be a JSON object (not an array or primitive). The runtime's
@@ -142,9 +224,18 @@ export async function awsEstateRouter(
 		return { awsTargetEstates: [] };
 	}
 
-	const available = loadConfiguredEstates();
-	if (available.length === 0) {
+	const configured = loadConfiguredEstates();
+	if (configured.length === 0) {
 		logger.warn("AWS in scope but no estates configured (AWS_ESTATES missing/empty)");
+		return { awsTargetEstates: [] };
+	}
+
+	// SIO-854: reconcile against the server's source of truth once. Drops estates the
+	// server doesn't know and WARNs on any divergence, so drift surfaces here rather
+	// than as a per-query "Unknown estate" failure downstream.
+	const available = await reconcileEstatesWithServer(configured);
+	if (available.length === 0) {
+		logger.warn({ configured }, "AWS in scope but no configured estate is known to the server; routing to none");
 		return { awsTargetEstates: [] };
 	}
 
