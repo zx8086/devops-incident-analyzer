@@ -13,10 +13,19 @@ describe("Configuration System", () => {
 		// Store original environment
 		originalEnv = { ...process.env };
 
-		// Clear environment for clean test state
+		// Clear environment for clean test state. SIO-865: the loader reads Bun.env,
+		// which reflects the repo .env that Bun auto-loads -- so a developer's .env
+		// (e.g. KONNECT_REGION=eu) leaked into the "defaults when missing" test and
+		// made it pass in CI (no .env) but fail locally. Clear every config var the
+		// tests assert defaults for so they are deterministic regardless of .env.
 		delete process.env.KONNECT_ACCESS_TOKEN;
+		delete process.env.KONNECT_REGION;
+		delete process.env.KONNECT_TIMEOUT;
+		delete process.env.KONNECT_RETRY_ATTEMPTS;
+		delete process.env.KONNECT_RETRY_DELAY;
 		delete process.env.LANGSMITH_TRACING;
 		delete process.env.LANGSMITH_API_KEY;
+		delete process.env.LANGSMITH_PROJECT;
 		delete process.env.NODE_ENV;
 		delete process.env.LOG_LEVEL;
 	});
@@ -66,6 +75,18 @@ describe("Configuration System", () => {
 					preferBunEnv: true,
 					envFileAutoLoad: true,
 					debugMode: false,
+				},
+				// SIO-865: the schema gained a required `transport` section; the fixture
+				// must include it for the valid-config case to parse.
+				transport: {
+					mode: "stdio" as const,
+					port: 3000,
+					host: "127.0.0.1",
+					path: "/mcp",
+					sessionMode: "stateless" as const,
+					idleTimeout: 60,
+					apiKey: "test-key",
+					allowedOrigins: "*",
 				},
 			};
 

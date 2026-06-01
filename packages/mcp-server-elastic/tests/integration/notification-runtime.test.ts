@@ -8,8 +8,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig } from "../../src/config/index.js";
 import { createElasticsearchMcpServer } from "../../src/server.js";
+import { shouldSkipIntegrationTests } from "../utils/elasticsearch-client.js";
 
-describe("Notification Runtime Integration", () => {
+// SIO-865: createElasticsearchMcpServer connects to ES in beforeAll; gate so the
+// suite skips offline instead of timing out (matches the other integration files).
+describe.skipIf(shouldSkipIntegrationTests())("Notification Runtime Integration", () => {
 	let server: McpServer;
 
 	beforeAll(async () => {

@@ -166,7 +166,10 @@ describe("Performance Tests", () => {
 			const startTime = Date.now();
 			const queryResult = await queryHandler({
 				scope_name: "_default",
-				query: `SELECT * FROM \`default\`._default._default USE KEYS 'query_doc_99'`,
+				// SIO-865: under scope context the query must reference the collection by
+				// bare name, not the full `bucket`.scope.collection path (the handler now
+				// rejects the full path with a clear error).
+				query: `SELECT * FROM \`_default\` USE KEYS 'query_doc_99'`,
 			});
 			const queryTime = Date.now() - startTime;
 
