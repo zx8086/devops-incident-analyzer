@@ -220,6 +220,29 @@ export function extractConfidenceScore(answer: string): number {
 	return 0;
 }
 
+// SIO-860: rewrite the dedicated "Confidence:" line in the report to `score` so the
+// printed value matches the gate's confidenceScore. Without this the LLM's pre-cap
+// prose (e.g. 0.90) contradicts a capped gate value (0.59), firing a low_confidence
+// banner on a report that visibly reads 0.90. Reuses the same line-anchored regexes
+// as extractConfidenceScore so it rewrites exactly the line that was read. Only the
+// captured number is replaced; surrounding markup ("**Confidence:**") is preserved.
+// No confidence line present -> answer returned unchanged (gate still uses the number).
+export function rewriteConfidenceInAnswer(answer: string, score: number): string {
+	const formatted = String(score);
+	const replaceCapturedNumber = (match: string, captured: string): string => {
+		const idx = match.lastIndexOf(captured);
+		if (idx === -1) return match;
+		return match.slice(0, idx) + formatted + match.slice(idx + captured.length);
+	};
+	if (STRICT_CONFIDENCE_RE.test(answer)) {
+		return answer.replace(STRICT_CONFIDENCE_RE, (m, captured: string) => replaceCapturedNumber(m, captured));
+	}
+	if (LOOSE_CONFIDENCE_RE.test(answer)) {
+		return answer.replace(LOOSE_CONFIDENCE_RE, (m, captured: string) => replaceCapturedNumber(m, captured));
+	}
+	return answer;
+}
+
 // SIO-709: Count top-level bullet items under a "Gaps" heading. Triggers the 0.59
 // cap when the LLM lists >= 2 missing-data items in its own report. Indented
 // sub-bullets (>= 2 leading spaces) are excluded so a structurally rich gap with
@@ -380,13 +403,17 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped
+	// value so the report prose and the HITL gate (which reads confidenceScore) agree.
+	const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(answer, cappedScore) : answer;
+
 	logger.info(
-		{ duration: Date.now() - startTime, answerLength: answer.length, confidenceScore: cappedScore },
+		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
 		"Aggregation complete",
 	);
 	return {
-		messages: [new AIMessage({ content: answer })],
-		finalAnswer: answer,
+		messages: [new AIMessage({ content: finalAnswer })],
+		finalAnswer,
 		confidenceScore: cappedScore,
 		...(anyCapTriggered && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
 	};

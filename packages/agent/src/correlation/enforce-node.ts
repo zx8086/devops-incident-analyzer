@@ -1,6 +1,7 @@
 // agent/src/correlation/enforce-node.ts
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
+import { rewriteConfidenceInAnswer } from "../aggregator";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
@@ -128,10 +129,13 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		const ruleDef = correlationRules.find((r) => r.name === d.ruleName);
 		return ruleDef?.skipCoverageCheck === true;
 	});
-	const updatedFinalAnswer =
-		hasContradictionRule && state.finalAnswer
-			? `WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.\n\n${state.finalAnswer}`
-			: undefined;
+	// SIO-860: rewrite the printed confidence to the capped value so the report prose
+	// matches the gate's confidenceScore. Compose with (not replace) the SIO-712
+	// contradiction banner, which is prepended above the rewritten body.
+	let updatedFinalAnswer = state.finalAnswer ? rewriteConfidenceInAnswer(state.finalAnswer, cappedScore) : undefined;
+	if (hasContradictionRule && updatedFinalAnswer) {
+		updatedFinalAnswer = `WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.\n\n${updatedFinalAnswer}`;
+	}
 
 	return {
 		degradedRules: degraded,
