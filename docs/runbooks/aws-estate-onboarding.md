@@ -49,6 +49,7 @@ The role's trust must scope the Bedrock AgentCore service principal by `aws:Sour
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "AllowBedrockAgentCoreToAssume",
       "Effect": "Allow",
       "Principal": { "Service": "bedrock-agentcore.amazonaws.com" },
       "Action": "sts:AssumeRole",
