@@ -26,12 +26,13 @@ export function estateEnum(config: AwsConfig) {
 		);
 }
 
-// Merge `{ estate: <enum> }` into an existing tool schema's raw shape. The
-// resulting shape is what register*Tools passes to server.tool(name, desc, shape, fn).
-// Tool functions read params.estate (typed as string by the inferred shape).
+// Merge the estate field (a permissive z.string from estateEnum, SIO-853 -- not a
+// z.enum) into an existing tool's ZodRawShape. The resulting ZodRawShape is what
+// register*Tools passes to server.tool(name, desc, shape, fn). Tool functions read
+// params.estate as a string; resolveEstate (client-factory.ts) validates the value.
 export function withEstate(config: AwsConfig, shape: ZodRawShape): ZodRawShape {
 	// Spread shape first so a tool that accidentally declared `estate` cannot
-	// override the enforced enum. The estate field always wins.
+	// override the enforced string field. The estate field always wins.
 	return {
 		...shape,
 		estate: estateEnum(config),
