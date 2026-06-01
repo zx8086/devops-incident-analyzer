@@ -14,7 +14,7 @@ import {
 } from "@aws-sdk/client-config-service";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DescribeVpcsCommand, EC2Client } from "@aws-sdk/client-ec2";
-import { DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
+import { DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
 import { DescribeCacheClustersCommand, ElastiCacheClient } from "@aws-sdk/client-elasticache";
 import {
 	GetDetectorCommand,
@@ -50,6 +50,7 @@ import { describeConfigRules } from "../tools/config/describe-config-rules.ts";
 import { getDiscoveredResourceCounts } from "../tools/config/get-discovered-resource-counts.ts";
 import { listTables } from "../tools/dynamodb/list-tables.ts";
 import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
+import { describeTaskDefinition } from "../tools/ecs/describe-task-definition.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
 import { describeCacheClusters } from "../tools/elasticache/describe-cache-clusters.ts";
 import { getDetector } from "../tools/guardduty/get-detector.ts";
@@ -103,6 +104,32 @@ describe("ecs integration", () => {
 		const handler = describeTasks(config);
 		const result = (await handler({ estate: E, cluster: "my-cluster", tasks: ["abc123"] })) as { tasks: unknown[] };
 		expect(result.tasks).toHaveLength(1);
+	});
+
+	test("describeTaskDefinition passes taskDefinition to the SDK and returns containerDefinitions", async () => {
+		const ecsMock = mockClient(ECSClient);
+		ecsMock.on(DescribeTaskDefinitionCommand).resolves({
+			taskDefinition: {
+				family: "connectors-service",
+				revision: 42,
+				containerDefinitions: [
+					{
+						name: "app",
+						environment: [{ name: "DB_HOST", value: "eu-oit-prd-psql-db-0.xxxx.eu-central-1.rds.amazonaws.com" }],
+					},
+				],
+			},
+		});
+
+		const handler = describeTaskDefinition(config);
+		const result = (await handler({ estate: E, taskDefinition: "connectors-service:42" })) as {
+			taskDefinition: { family: string };
+		};
+		expect(result.taskDefinition.family).toBe("connectors-service");
+		expect(ecsMock.commandCalls(DescribeTaskDefinitionCommand)[0]?.args[0].input).toEqual({
+			taskDefinition: "connectors-service:42",
+			include: undefined,
+		});
 	});
 });
 

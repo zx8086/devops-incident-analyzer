@@ -42,6 +42,7 @@
 				"ecs:DescribeServices",
 				"ecs:ListTasks",
 				"ecs:DescribeTasks",
+				"ecs:DescribeTaskDefinition",
 				"ecs:ListContainerInstances",
 				"ecs:DescribeContainerInstances",
 				"eks:ListClusters",

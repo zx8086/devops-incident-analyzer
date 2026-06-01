@@ -19,6 +19,7 @@ import { describeInstancesSchema } from "../tools/ec2/describe-instances.ts";
 import { describeSecurityGroupsSchema } from "../tools/ec2/describe-security-groups.ts";
 import { describeVpcsSchema } from "../tools/ec2/describe-vpcs.ts";
 import { describeServicesSchema } from "../tools/ecs/describe-services.ts";
+import { describeTaskDefinitionSchema } from "../tools/ecs/describe-task-definition.ts";
 import { describeTasksSchema } from "../tools/ecs/describe-tasks.ts";
 import { listClustersSchema } from "../tools/ecs/list-clusters.ts";
 import { listServicesSchema } from "../tools/ecs/list-services.ts";
@@ -144,6 +145,12 @@ describe("ecs tool param schemas", () => {
 	});
 	test("listTasks rejects missing cluster", () => {
 		expect(listTasksSchema.safeParse({}).success).toBe(false);
+	});
+	test("describeTaskDefinition accepts taskDefinition", () => {
+		expect(describeTaskDefinitionSchema.safeParse({ taskDefinition: "connectors-service:42" }).success).toBe(true);
+	});
+	test("describeTaskDefinition rejects missing taskDefinition", () => {
+		expect(describeTaskDefinitionSchema.safeParse({}).success).toBe(false);
 	});
 });
 
