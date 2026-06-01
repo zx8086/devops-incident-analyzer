@@ -34,9 +34,10 @@ describe("MCP tool scoping", () => {
 });
 
 describe("gitagent prompt overlay", () => {
-	test("getToolPrompts returns prompts for all 8 tools", () => {
+	test("getToolPrompts returns prompts for all 9 tools", () => {
 		const prompts = getToolPrompts();
-		expect(prompts.size).toBe(8);
+		// SIO-863: aws-introspect added.
+		expect(prompts.size).toBe(9);
 		expect(prompts.has("elastic-search-logs")).toBe(true);
 		expect(prompts.has("kafka-introspect")).toBe(true);
 		expect(prompts.has("couchbase-cluster-health")).toBe(true);
@@ -45,6 +46,7 @@ describe("gitagent prompt overlay", () => {
 		expect(prompts.has("atlassian-api")).toBe(true);
 		expect(prompts.has("notify-slack")).toBe(true);
 		expect(prompts.has("create-ticket")).toBe(true);
+		expect(prompts.has("aws-introspect")).toBe(true);
 	});
 
 	test("getRelatedToolsMap returns hints for datasource tools", () => {

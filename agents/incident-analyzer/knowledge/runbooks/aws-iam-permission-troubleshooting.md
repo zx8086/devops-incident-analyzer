@@ -92,5 +92,7 @@ Common causes:
 - Changing the trust policy's ExternalId or expanding the allowed principal set
 - Switching from the canonical inline policy to a managed AWS policy (e.g., `ReadOnlyAccess`) — broader scope than the current 12-statement design
 
+This runbook is primarily about IAM-policy editing on the operator's side. The only agent-side tools it references are the read-only AWS tools whose IAM denial triggered the investigation; the verification step re-uses whichever of these surfaced the original failure.
+
 ## All Tools Used Are Read-Only
-This runbook describes IAM-policy editing on the operator's side. No MCP tool calls. The verification step in (6) re-uses whichever `aws_*` tool surfaced the original failure.
+aws_ecs_describe_services, aws_ecs_describe_tasks
