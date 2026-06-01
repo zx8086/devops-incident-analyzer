@@ -2,15 +2,24 @@
 import { type ZodRawShape, z } from "zod";
 import type { AwsConfig } from "../config/schemas.ts";
 
-// Build a Zod enum from the loaded estate config. Used at tool-registration
-// time so the LLM sees the actual valid estate IDs in its schema view.
+// Build the estate field from the loaded estate config. SIO-853: a plain string,
+// NOT a z.enum. The enum baked the estate-ID list into every tool schema, so any
+// drift between the agent's AWS_ESTATES and this server's (e.g. a freshly-added
+// estate the agent dispatches to but this runtime hasn't been redeployed with)
+// made EVERY estate-scoped tool reject the call with an opaque "did not match
+// expected schema" instead of one clear error. resolveEstate in client-factory.ts
+// already validates the estate at call time (`Unknown estate "x". Known: ...`),
+// so the enum added no safety -- only brittleness. This mirrors the elastic MCP's
+// `deployment` field (a string with runtime validation, not an enum). The describe
+// text still lists the current IDs for LLM/operator visibility.
 export function estateEnum(config: AwsConfig) {
 	const ids = Object.keys(config.estates);
 	if (ids.length === 0) {
 		throw new Error("No estates configured");
 	}
 	return z
-		.enum(ids as [string, ...string[]])
+		.string()
+		.min(1)
 		.describe(
 			`AWS estate to query. One of: ${ids.join(", ")}. ` +
 				"The supervisor injects this from awsTargetEstates; the sub-agent LLM does not choose.",

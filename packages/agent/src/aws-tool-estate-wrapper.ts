@@ -79,6 +79,10 @@ export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): Str
 				description: original.description ?? `${original.name} tool`,
 				// biome-ignore lint/suspicious/noExplicitAny: SIO-832 - createTool's union of Zod/JsonSchema7Type is too tight to satisfy with a runtime-branched schema
 				schema: strippedSchema as any,
+				// SIO-853: surface the exact schema-mismatch field to the LLM + logs instead of
+				// the bare "did not match expected schema". Cheap permanent diagnostic so a future
+				// estate/schema drift names the offending field rather than failing opaquely.
+				verboseParsingErrors: true,
 			},
 		) as unknown as StructuredToolInterface;
 	});
