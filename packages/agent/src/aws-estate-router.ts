@@ -16,6 +16,12 @@ const logger = getLogger("agent:awsEstateRouter");
 // Read AWS_ESTATES once at module load. The agent process and the AWS MCP runtime
 // share the same .env file in local dev; in AgentCore deployment the agent gets
 // AWS_ESTATES via its own env injection (see deploy.sh, Section 5 of design).
+//
+// SIO-854: this trusts the agent's own AWS_ESTATES and never reconciles against the
+// server's actual estate list (aws_list_estates). If the two drift, the agent
+// dispatches to an estate the server rejects and only finds out at query time
+// (a clear "Unknown estate" error since SIO-853, but still runtime, not startup).
+// Follow-up reconciles the lists at boot and WARNs on divergence.
 let cachedEstateIds: string[] | undefined;
 
 export function _resetEstateCacheForTests(): void {

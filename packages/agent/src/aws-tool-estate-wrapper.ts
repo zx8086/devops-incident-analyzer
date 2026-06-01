@@ -79,6 +79,15 @@ export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): Str
 				description: original.description ?? `${original.name} tool`,
 				// biome-ignore lint/suspicious/noExplicitAny: SIO-832 - createTool's union of Zod/JsonSchema7Type is too tight to satisfy with a runtime-branched schema
 				schema: strippedSchema as any,
+				// SIO-853: surface the exact schema-mismatch field to the LLM + logs instead of
+				// the bare "did not match expected schema". Cheap permanent diagnostic so a future
+				// estate/schema drift names the offending field rather than failing opaquely.
+				// Only AWS sets this because this wrapper is the agent's ONLY createTool call --
+				// every other datasource returns the raw MultiServerMCPClient tools (mcp-bridge.ts
+				// getToolsForDataSource), which are constructed inside @langchain/mcp-adapters where
+				// we can't pass this option. Not an inconsistency to "fix" by re-creating every
+				// other datasource's tools just to set a diagnostic flag.
+				verboseParsingErrors: true,
 			},
 		) as unknown as StructuredToolInterface;
 	});
