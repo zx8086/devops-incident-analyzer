@@ -1,0 +1,4 @@
+# SIO-865: preload test env defaults so the config module's import-time
+# validation does not hard-fail the suite offline. See tests/setup.ts.
+[test]
+preload = ["./tests/setup.ts"]

@@ -5,6 +5,15 @@
 
 import type { FlightApiTestUtils } from "./test-helpers.js";
 
+// SIO-865: the flight-api integration/portal/performance suites make real Kong
+// Konnect API calls (and even capability detection probes live endpoints), so they
+// cannot pass offline. Gate them behind an explicit opt-in: they run only when
+// RUN_LIVE_TESTS=1 AND a KONNECT_ACCESS_TOKEN is present. Default (CI / local) skips
+// them so `bun run test` is green without credentials. The flight-api.unit suite
+// (fully mocked) is NOT gated and always runs.
+export const skipLiveKonnectTests = (): boolean =>
+	!(process.env.RUN_LIVE_TESTS === "1" || process.env.RUN_LIVE_TESTS === "true") || !process.env.KONNECT_ACCESS_TOKEN;
+
 export interface TestEnvironmentCapabilities {
 	hasHybridControlPlanes: boolean;
 	hasDataPlaneNodes: boolean;

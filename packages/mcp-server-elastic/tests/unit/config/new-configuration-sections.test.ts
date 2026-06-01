@@ -150,7 +150,9 @@ describe("New Configuration Sections Validation", () => {
 		expect(langsmithMappings.apiKey).toBe("LANGSMITH_API_KEY");
 
 		expect(langsmithMappings).toHaveProperty("project");
-		expect(langsmithMappings.project).toBe("LANGSMITH_PROJECT");
+		// SIO-865: project now maps to the elastic-namespaced var with LANGSMITH_PROJECT as fallback.
+		expect(langsmithMappings.project).toBe("ELASTIC_LANGSMITH_PROJECT");
+		expect(langsmithMappings.projectFallback).toBe("LANGSMITH_PROJECT");
 	});
 
 	test("should validate configuration ranges and constraints", () => {

@@ -4,7 +4,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { safeTest, TestEnvironmentDetector } from "./test-environment.js";
+import { safeTest, skipLiveKonnectTests, TestEnvironmentDetector } from "./test-environment.js";
 import {
 	FlightApiAssertions,
 	FlightApiTestUtils,
@@ -15,7 +15,8 @@ import {
 	TEST_FIXTURES,
 } from "./test-helpers.js";
 
-describe("Flight API Integration Tests", () => {
+// SIO-865: live Kong Konnect suite; skipped unless RUN_LIVE_TESTS=1 + KONNECT_ACCESS_TOKEN.
+describe.skipIf(skipLiveKonnectTests())("Flight API Integration Tests", () => {
 	let testUtils: FlightApiTestUtils;
 	let environmentDetector: TestEnvironmentDetector;
 	let flightService: FlightTestService;
@@ -552,7 +553,8 @@ describe("Flight API Security Tests", () => {
 });
 
 // PHASE 1 EXPANSION: 20 Easy-to-Test Tools
-describe("Flight API Phase 1 Expansion Tests", () => {
+// SIO-865: live Kong Konnect suite; skipped unless RUN_LIVE_TESTS=1 + KONNECT_ACCESS_TOKEN.
+describe.skipIf(skipLiveKonnectTests())("Flight API Phase 1 Expansion Tests", () => {
 	const testUtils = new FlightApiTestUtils();
 	const environmentDetector = new TestEnvironmentDetector(testUtils);
 

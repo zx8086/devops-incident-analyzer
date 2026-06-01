@@ -8,9 +8,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { KongApi } from "../../src/api/kong-api.js";
+import { skipLiveKonnectTests } from "./test-environment.js";
 import { FlightApiTestUtils, TEST_CONFIG } from "./test-helpers.js";
 
-describe("Flight API Portal Management Tests", () => {
+// SIO-865: live Kong Konnect suite; skipped unless RUN_LIVE_TESTS=1 + KONNECT_ACCESS_TOKEN.
+describe.skipIf(skipLiveKonnectTests())("Flight API Portal Management Tests", () => {
 	let api: KongApi;
 	let testUtils: FlightApiTestUtils;
 	let createdPortalId: string;

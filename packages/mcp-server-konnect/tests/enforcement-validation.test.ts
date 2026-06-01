@@ -28,6 +28,29 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 		}
 	});
 
+	// SIO-865: processElicitationResponse now rejects unknown session IDs as a bypass
+	// guard (SECURITY VIOLATION). A real session only exists after a blocked operation,
+	// so register one by driving validateMandatoryContext with a context-less request and
+	// capturing the KongOperationBlockedError's session id. Mirrors the "Kong Operation
+	// Blocking" tests above.
+	async function registerBlockedSession(userMessage: string, operationName = "create_service"): Promise<string> {
+		try {
+			await gate.validateMandatoryContext({
+				operationName,
+				parameters: { controlPlaneId: "test-cp-123" },
+				requestContext: { userMessage, files: [], configs: [] },
+			});
+			throw new Error("expected the operation to be blocked");
+		} catch (error) {
+			if (error instanceof KongOperationBlockedError) {
+				return error.elicitationSession.sessionId;
+			}
+			const err = error as { elicitationSession?: { sessionId: string } };
+			if (err.elicitationSession?.sessionId) return err.elicitationSession.sessionId;
+			throw error;
+		}
+	}
+
 	describe("🚫 Kong Operation Blocking", () => {
 		const testContext = {
 			userMessage: "Deploy without context",
@@ -194,8 +217,8 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 	describe("INFO: Mandatory Tagging", () => {
 		it("should generate exactly 5 tags for all entities", async () => {
-			// Complete elicitation first
-			const sessionId = "tag-test-session";
+			// SIO-865: register a real blocked session before completing it.
+			const sessionId = await registerBlockedSession("Test tagging");
 			await gate.processElicitationResponse(sessionId, {
 				domain: "api",
 				environment: "production",
@@ -254,26 +277,44 @@ describe("🔒 Bulletproof Elicitation Enforcement", () => {
 
 	describe("INFO: Session Management", () => {
 		it("should track multiple concurrent sessions", async () => {
-			const sessions = ["session-1", "session-2", "session-3"];
-
-			// Create multiple sessions
-			for (const sessionId of sessions) {
-				await gate.processElicitationResponse(sessionId, {
-					domain: `domain-${sessionId}`,
+			// SIO-865: register three distinct real blocked sessions (deterministic IDs are
+			// derived per request, so vary the userMessage to get distinct sessions), then
+			// complete each and assert against the actual session IDs.
+			// Distinct operations yield distinct deterministic sessions (completing one
+			// must not satisfy another), so each concurrent session uses its own op.
+			const labels: Array<{ label: string; op: string }> = [
+				{ label: "alpha", op: "create_service" },
+				{ label: "beta", op: "create_route" },
+				{ label: "gamma", op: "create_consumer" },
+			];
+			const sessionByLabel = new Map<string, string>();
+			// Register all three blocked sessions FIRST (while context is still missing for
+			// every op), then complete them -- completing one caches validated context that
+			// could otherwise let a later op pass without blocking.
+			for (const { label, op } of labels) {
+				sessionByLabel.set(label, await registerBlockedSession(`Track concurrent ${label}`, op));
+			}
+			for (const { label } of labels) {
+				await gate.processElicitationResponse(sessionByLabel.get(label) as string, {
+					domain: `domain-${label}`,
 					environment: "development",
 					team: "platform",
 				});
 			}
 
 			const activeSessions = gate.getActiveSessions();
-			expect(activeSessions.size).toBe(3);
+			// SIO-865: the gate is a shared singleton; assert our three sessions are tracked
+			// rather than an exact global count (other state can coexist).
+			expect(activeSessions.size).toBeGreaterThanOrEqual(3);
+			expect(new Set(sessionByLabel.values()).size).toBe(3); // three distinct sessions
 
-			// Verify each session has correct context
-			for (const sessionId of sessions) {
+			// Verify each session has the correct completed context.
+			for (const { label } of labels) {
+				const sessionId = sessionByLabel.get(label) as string;
 				const context = activeSessions.get(sessionId);
 				expect(context).toBeDefined();
 				expect(context?.elicitationComplete).toBe(true);
-				expect(context?.domain).toBe(`domain-${sessionId}`);
+				expect(context?.domain).toBe(`domain-${label}`);
 			}
 		});
 	});

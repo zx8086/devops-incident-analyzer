@@ -9,8 +9,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig } from "../../src/config/index.js";
 import { createElasticsearchMcpServer } from "../../src/server.js";
 import { notificationManager } from "../../src/utils/notifications.js";
+import { shouldSkipIntegrationTests } from "../utils/elasticsearch-client.js";
 
-describe("Notification Integration Tests", () => {
+// SIO-865: createElasticsearchMcpServer connects to ES in beforeAll; gate so the
+// suite skips offline instead of timing out (matches the other integration files).
+describe.skipIf(shouldSkipIntegrationTests())("Notification Integration Tests", () => {
 	let server: McpServer | undefined;
 	const config = getConfig();
 
