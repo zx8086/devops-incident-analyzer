@@ -1,7 +1,7 @@
 // src/__tests__/wrap.test.ts
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
+import { DEFAULT_TOOL_RESULT_CAP_BYTES, TRUNCATION_OVERHEAD_BYTES } from "@devops-agent/shared";
 import { mapAwsError, preferSdkParam, setDefaultCapBytes, wrapBlobTool, wrapListTool } from "../tools/wrap.ts";
 
 describe("wrapListTool", () => {
@@ -180,6 +180,140 @@ describe("wrapListTool", () => {
 		expect(result._summary).toHaveLength(40);
 		// Severity is preserved for every finding even though the bodies were dropped.
 		expect(result._summary.every((s) => typeof s.Severity === "number")).toBe(true);
+	});
+});
+
+// SIO-840: post-merge validation of SIO-833 at the PRODUCTION 128KB cap with
+// realistic large fixtures, as an offline, CI-runnable proxy for the two live
+// replay cases (the AgentCore runtime path could not run in PR #140's CI container).
+// These exercise DEFAULT_TOOL_RESULT_CAP_BYTES (131_072), not synthetic small caps.
+describe("SIO-840 replay validation (128KB cap, realistic fixtures)", () => {
+	// Case B: aws_ec2_describe_instances for a ~17-node estate serializes to ~155KB.
+	// The wrapped result must reach the model at <=128KB (NOT re-truncated to 64KB),
+	// be flagged Case B (no continuation token), and keep a complete _summary.
+	function buildEc2DescribeFixture(nodeCount: number) {
+		// Each instance is a heavy object so nodeCount=17 lands well over the 128KB cap
+		// (mirrors the eu-mendix-platform-prd EKS-node describe shape).
+		const Reservations = Array.from({ length: nodeCount }, (_, i) => ({
+			ReservationId: `r-${i}`,
+			Instances: [
+				{
+					InstanceId: `i-${i.toString().padStart(17, "0")}`,
+					InstanceType: "m5.2xlarge",
+					State: { Code: 16, Name: "running" },
+					PrivateIpAddress: `10.34.51.${i}`,
+					Tags: Array.from({ length: 30 }, (_, t) => ({ Key: `tag-${t}`, Value: "v".repeat(400) })),
+					BlockDeviceMappings: Array.from({ length: 4 }, (_, b) => ({
+						DeviceName: `/dev/sd${b}`,
+						Ebs: { VolumeId: `vol-${i}-${b}`, Status: "attached", AttachTime: "2026-01-01T00:00:00Z" },
+					})),
+				},
+			],
+		}));
+		return { Reservations };
+	}
+
+	test("Case B: ~155KB EC2 describe reaches model at <=128KB, not re-truncated to 64KB", async () => {
+		const fixture = buildEc2DescribeFixture(17);
+		const fixtureBytes = JSON.stringify(fixture).length;
+		// Sanity: the fixture genuinely exceeds the 128KB cap so truncation is exercised.
+		expect(fixtureBytes).toBeGreaterThan(DEFAULT_TOOL_RESULT_CAP_BYTES);
+
+		const wrapped = wrapListTool({
+			name: "aws_ec2_describe_instances",
+			listField: "Reservations",
+			fn: async () => fixture,
+			// No capBytes -> uses the production DEFAULT_TOOL_RESULT_CAP_BYTES (128KB).
+			summarize: (r: { Reservations: Array<{ ReservationId: string; Instances: Array<{ InstanceId: string }> }> }) =>
+				r.Reservations.flatMap((res) => res.Instances.map((inst) => ({ InstanceId: inst.InstanceId }))),
+		});
+		const result = (await wrapped({})) as unknown as {
+			Reservations: unknown[];
+			_truncated: { shown: number; total: number; cursor?: string; advice: string };
+			_summary: Array<{ InstanceId: string }>;
+		};
+
+		// Reached the model within the 128KB budget (the SIO-833 raise), and crucially
+		// the wrapped payload is well ABOVE the old 64KB cap -- proving no re-truncation to 64KB.
+		const wrappedBytes = JSON.stringify(result).length;
+		expect(wrappedBytes).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_CAP_BYTES + TRUNCATION_OVERHEAD_BYTES);
+		expect(wrappedBytes).toBeGreaterThan(65_536);
+
+		// Consistent truncation marker.
+		expect(result._truncated.total).toBe(17);
+		expect(result._truncated.shown).toBe(result.Reservations.length);
+		expect(result._truncated.shown).toBeLessThan(result._truncated.total);
+
+		// Case B: a byte-truncation with no real continuation token -> no cursor.
+		expect(result._truncated.cursor).toBeUndefined();
+		expect(result._truncated.advice).toContain("Case B");
+
+		// _summary stays complete (all 17 instance IDs) even though Reservations[] was sliced.
+		expect(result._summary).toHaveLength(17);
+		expect(result._summary.every((s) => typeof s.InstanceId === "string")).toBe(true);
+	});
+
+	// Pagination completeness: aws_cloudwatch_describe_alarms with enough alarms to
+	// truncate the heavy MetricAlarms[] must keep the per-alarm projection COMPLETE in
+	// _summary, so the AWSFindingsCard count equals the true total (50/50, not 28/50).
+	test("_summary count equals the true alarm total when MetricAlarms[] is truncated", async () => {
+		const total = 50;
+		const fixture = {
+			MetricAlarms: Array.from({ length: total }, (_, i) => ({
+				AlarmName: `alarm-${i}`,
+				StateValue: i % 3 === 0 ? "ALARM" : "OK",
+				MetricName: "CPUUtilization",
+				Namespace: "AWS/EC2",
+				AlarmDescription: "d".repeat(600),
+				Dimensions: Array.from({ length: 8 }, (_, d) => ({ Name: `dim-${d}`, Value: "x".repeat(400) })),
+			})),
+			CompositeAlarms: [],
+		};
+		expect(JSON.stringify(fixture).length).toBeGreaterThan(DEFAULT_TOOL_RESULT_CAP_BYTES);
+
+		const wrapped = wrapListTool({
+			name: "aws_cloudwatch_describe_alarms",
+			listField: "MetricAlarms",
+			fn: async () => fixture,
+			summarize: (r: { MetricAlarms: Array<{ AlarmName: string; StateValue: string }> }) =>
+				r.MetricAlarms.map((a) => ({ AlarmName: a.AlarmName, StateValue: a.StateValue })),
+		});
+		const result = (await wrapped({})) as unknown as {
+			MetricAlarms: unknown[];
+			_truncated: { total: number };
+			_summary: Array<{ AlarmName: string; StateValue: string }>;
+		};
+
+		// Heavy list truncated, but the finding-bearing projection is complete: 50/50.
+		expect(result.MetricAlarms.length).toBeLessThan(total);
+		expect(result._truncated.total).toBe(total);
+		expect(result._summary).toHaveLength(total);
+		// The ALARM-state count (what the findings card reports) is complete, not partial.
+		const alarmCount = result._summary.filter((a) => a.StateValue === "ALARM").length;
+		const trueAlarmCount = fixture.MetricAlarms.filter((a) => a.StateValue === "ALARM").length;
+		expect(alarmCount).toBe(trueAlarmCount);
+	});
+
+	// SIO-833 Case A is exercised at small caps above; confirm a Lambda NextMarker still
+	// surfaces as a cursor at the production cap so the sub-agent chains rather than reporting partial.
+	test("Case A: Lambda NextMarker surfaces as a chainable cursor at the 128KB cap", async () => {
+		const fixture = {
+			Functions: Array.from({ length: 200 }, (_, i) => ({
+				FunctionName: `fn-${i}`,
+				Runtime: "nodejs20.x",
+				Description: "d".repeat(900),
+			})),
+			NextMarker: "page-2-token",
+		};
+		expect(JSON.stringify(fixture).length).toBeGreaterThan(DEFAULT_TOOL_RESULT_CAP_BYTES);
+		const wrapped = wrapListTool({
+			name: "aws_lambda_list_functions",
+			listField: "Functions",
+			fn: async () => fixture,
+		});
+		const result = (await wrapped({})) as unknown as { _truncated: { cursor?: string; advice: string } };
+		expect(result._truncated.cursor).toBe("page-2-token");
+		expect(result._truncated.advice).toContain("Case A");
 	});
 });
 
