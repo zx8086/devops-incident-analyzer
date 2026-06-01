@@ -21,7 +21,8 @@
 # Environment variables:
 #   AWS_REGION         - AWS region for the aws cli calls (default: eu-central-1)
 #   ROLE_NAME          - Role name (default: DevOpsAgentReadOnly)
-#   POLICY_NAME        - Managed policy name (default: DevOpsAgentReadOnlyPolicy)
+#   POLICY_NAME        - Managed policy name (default: DevOpsAgentReadOnlyPermissions,
+#                        the name the role actually has attached in every account)
 #   POLICY_FILE        - Path to the permissions policy document
 #                        (default: scripts/agentcore/policies/devops-agent-readonly-policy.json)
 #   TRUST_POLICY_FILE  - Path to the trust policy document
@@ -31,7 +32,10 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-eu-central-1}"
 ROLE_NAME="${ROLE_NAME:-DevOpsAgentReadOnly}"
-POLICY_NAME="${POLICY_NAME:-DevOpsAgentReadOnlyPolicy}"
+# SIO-858: the deployed managed policy is DevOpsAgentReadOnlyPermissions, NOT
+# DevOpsAgentReadOnlyPolicy. The old default created a stray second policy instead
+# of updating the real one in place. Override POLICY_NAME only if an account differs.
+POLICY_NAME="${POLICY_NAME:-DevOpsAgentReadOnlyPermissions}"
 POLICY_FILE="${POLICY_FILE:-scripts/agentcore/policies/devops-agent-readonly-policy.json}"
 TRUST_POLICY_FILE="${TRUST_POLICY_FILE:-scripts/agentcore/policies/devops-agent-readonly-trust-policy.json}"
 
@@ -136,6 +140,6 @@ echo "  Verify with:"
 echo "    aws sts assume-role \\"
 echo "      --role-arn ${ROLE_ARN} \\"
 echo "      --role-session-name verify-readonly \\"
-echo "      --external-id aws-mcp-readonly-2026"
+echo "      --external-id devops-agent-prod-access"
 echo ""
 echo "================================================================"

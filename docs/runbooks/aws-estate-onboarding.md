@@ -384,6 +384,8 @@ Read-only access across the AWS services the MCP server exposes (**53 tools** as
 
 From a session authenticated **as the target account** (for the host self-loop, that's still `399987695868`):
 
+> **SIO-858: the permissions policy is a MANAGED policy named `DevOpsAgentReadOnlyPermissions`** (created with `create-policy` and attached with `attach-role-policy`), NOT an inline `put-role-policy` named `DevOpsAgentReadOnlyPolicy`. Use the managed path below so re-applies update the real policy in place (via `create-policy-version --set-as-default`) instead of creating a stray second policy.
+
 ```bash
 # Create the role with the trust policy
 aws iam create-role \
@@ -391,14 +393,24 @@ aws iam create-role \
   --assume-role-policy-document file://scripts/agentcore/policies/devops-agent-readonly-trust-policy.json \
   --description "Read-only access for the AWS MCP runtime in eu-shared-services-prd"
 
-# Attach the inline permissions policy
-aws iam put-role-policy \
-  --role-name DevOpsAgentReadOnly \
-  --policy-name DevOpsAgentReadOnlyPolicy \
+# Create the managed permissions policy (first time)
+aws iam create-policy \
+  --policy-name DevOpsAgentReadOnlyPermissions \
   --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json
+
+# Attach it to the role
+aws iam attach-role-policy \
+  --role-name DevOpsAgentReadOnly \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPermissions
+
+# On a later update (e.g. a new tool added an action), push a new default version instead:
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPermissions \
+  --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json \
+  --set-as-default
 ```
 
-Or use the idempotent wrapper, which handles create-or-update for both the trust and permissions policies:
+Or use the idempotent wrapper (recommended), which handles create-or-update for both the trust and managed permissions policies and trims old versions under the 5-version cap:
 
 ```bash
 ./scripts/agentcore/setup-aws-readonly-role.sh
