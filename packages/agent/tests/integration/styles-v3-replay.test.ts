@@ -49,8 +49,12 @@ import { baseState } from "../correlation/test-helpers";
 const HITL_THRESHOLD = 0.6;
 
 function styleV3State(): AgentStateType {
-	const merged = new Date("2026-04-22T00:00:00Z").toISOString();
-	const observed = new Date("2026-05-07T13:55:00Z").toISOString();
+	// SIO-862: relative dates -- the gitlab-deploy-vs-datastore-runtime rule only fires
+	// within 30 days of the merge, so hardcoded 2026-04/05 dates aged out and the
+	// contradiction-cap assertion stopped firing. merged 10d ago, observed 5d ago.
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const merged = new Date(Date.now() - 10 * DAY_MS).toISOString();
+	const observed = new Date(Date.now() - 5 * DAY_MS).toISOString();
 	return {
 		...baseState(),
 		targetDataSources: ["elastic", "kafka", "couchbase", "gitlab"],

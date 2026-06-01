@@ -11,9 +11,7 @@ describe("redactPiiContent", () => {
 	// must pass through verbatim so incident reports stay actionable.
 	test("preserves IPv4 addresses verbatim", () => {
 		expect(redactPiiContent("server at 192.168.1.100 is down")).toBe("server at 192.168.1.100 is down");
-		expect(redactPiiContent("task IPs 10.34.51.110 and 10.34.51.152")).toBe(
-			"task IPs 10.34.51.110 and 10.34.51.152",
-		);
+		expect(redactPiiContent("task IPs 10.34.51.110 and 10.34.51.152")).toBe("task IPs 10.34.51.110 and 10.34.51.152");
 	});
 
 	test("preserves CIDR notation verbatim", () => {

@@ -55,12 +55,16 @@ describe("manifest-loader", () => {
 		expect(toolNames).toContain("create-ticket");
 	});
 
-	test("loads all 3 skills", () => {
+	test("loads all 6 skills", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		expect(agent.skills.size).toBe(3);
+		// SIO-862: 3 original incident skills + the 3 wiki-* skills (wiki-ingest/lint/query).
+		expect(agent.skills.size).toBe(6);
 		expect(agent.skills.has("normalize-incident")).toBe(true);
 		expect(agent.skills.has("aggregate-findings")).toBe(true);
 		expect(agent.skills.has("propose-mitigation")).toBe(true);
+		expect(agent.skills.has("wiki-ingest")).toBe(true);
+		expect(agent.skills.has("wiki-lint")).toBe(true);
+		expect(agent.skills.has("wiki-query")).toBe(true);
 	});
 
 	test("loads all 5 sub-agents recursively", () => {
