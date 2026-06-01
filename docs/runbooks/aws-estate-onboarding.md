@@ -188,9 +188,9 @@ Allows the AgentCore execution role (in `399987695868`) to assume `DevOpsAgentRe
 
 ### 2.2 Permissions policy
 
-Read-only access across the AWS services the MCP server exposes (**52 tools** as of SIO-841). History: SIO-828 shipped 39; later work (RDS probe, Config resource counts, etc.) brought it to 42; SIO-841 added the 10 CloudTrail / Security Hub / GuardDuty read tools.
+Read-only access across the AWS services the MCP server exposes (**53 tools** as of SIO-855). History: SIO-828 shipped 39; later work (RDS probe, Config resource counts, etc.) brought it to 42; SIO-841 added the 10 CloudTrail / Security Hub / GuardDuty read tools (52); SIO-855 added `aws_ecs_describe_task_definition` (53).
 
-> **Keep in sync with new tools.** Whenever the AWS MCP server gains tools that call new AWS APIs, this policy must grow to match. **SIO-841 (governance/security-baseline tools — CloudTrail, Security Hub, GuardDuty) has landed** and added the `SecurityAndAuditRead` Sid below with these actions: `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `cloudtrail:ListTrails`, `securityhub:GetFindings`, `securityhub:DescribeHub`, `securityhub:GetEnabledStandards`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `guardduty:ListFindings`, `guardduty:GetFindings`. Re-running `setup-aws-readonly-role.sh` (or `create-policy-version`) is required across all 7 accounts — see §2.5.
+> **Keep in sync with new tools.** Whenever the AWS MCP server gains tools that call new AWS APIs, this policy must grow to match. **SIO-841 (governance/security-baseline tools — CloudTrail, Security Hub, GuardDuty) has landed** and added the `SecurityAndAuditRead` Sid below with these actions: `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `cloudtrail:ListTrails`, `securityhub:GetFindings`, `securityhub:DescribeHub`, `securityhub:GetEnabledStandards`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `guardduty:ListFindings`, `guardduty:GetFindings`. **SIO-855 added `ecs:DescribeTaskDefinition`** to the `ComputeContainersAndServerlessRead` Sid (for the new `aws_ecs_describe_task_definition` tool). Both require re-running `setup-aws-readonly-role.sh` (or `create-policy-version`) across all 7 accounts — see §2.5.
 
 ```json
 {
@@ -237,6 +237,7 @@ Read-only access across the AWS services the MCP server exposes (**52 tools** as
         "ecs:DescribeServices",
         "ecs:ListTasks",
         "ecs:DescribeTasks",
+        "ecs:DescribeTaskDefinition",
         "ecs:ListContainerInstances",
         "ecs:DescribeContainerInstances",
         "eks:ListClusters",
@@ -434,7 +435,7 @@ Re-apply checklist (the policy now carries `SecurityAndAuditRead`):
 - [ ] `728412486223` (eu-b2bonboarding-prd) — `SecurityAndAuditRead` applied
 - [ ] `399987695868` (eu-shared-services-prd — self-loop) — `SecurityAndAuditRead` applied
 
-**Image rebuild is also required for SIO-841** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` tools only exist in a freshly built image. Re-export the tarball and load it into the AgentCore runtime via the console:
+**Image rebuild is also required for SIO-841 and SIO-855** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` (SIO-841) and `aws_ecs_describe_task_definition` (SIO-855) tools only exist in a freshly built image. Re-export the tarball and load it into the AgentCore runtime via the console:
 
 ```bash
 ./scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball
@@ -443,7 +444,28 @@ Re-apply checklist (the policy now carries `SecurityAndAuditRead`):
 
 IAM apply (the checklist above) is account-side and does **not** need an image; the image rebuild is needed because the tool surface grew. Both must be done for the new tools to work end-to-end.
 
-- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 tool code)
+- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 + SIO-855 tool code)
+
+### 2.6 SIO-855 re-apply (ECS task-definition tool)
+
+SIO-855 added `ecs:DescribeTaskDefinition` to the `ComputeContainersAndServerlessRead` Sid in `scripts/agentcore/policies/devops-agent-readonly-policy.json` (for the new `aws_ecs_describe_task_definition` tool, which reads a service's container env/secrets to confirm its datastore endpoint). The policy is **identical in every estate**, so re-apply it to all 7 `DevOpsAgentReadOnly` roles via the same idempotent wrapper:
+
+```bash
+# from a session authenticated as the target account
+./scripts/agentcore/setup-aws-readonly-role.sh
+```
+
+Re-apply checklist (the policy now carries `ecs:DescribeTaskDefinition`):
+
+- [ ] `762715229080` (eu-oit-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `523422062084` (eu-ediservices-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `654654584630` (eu-mendix-platform-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `178531813197` (eu-b2becom-v2-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `105329690220` (eu-b2b-ecom-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `728412486223` (eu-b2bonboarding-prd) — `ecs:DescribeTaskDefinition` applied
+- [ ] `399987695868` (eu-shared-services-prd — self-loop) — `ecs:DescribeTaskDefinition` applied
+
+The image rebuild noted above (SIO-841 + SIO-855) covers the new ECS tool code; this IAM re-apply is the account-side half. Both are required for `aws_ecs_describe_task_definition` to work end-to-end.
 
 ---
 
