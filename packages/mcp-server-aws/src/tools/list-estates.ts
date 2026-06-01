@@ -15,7 +15,7 @@ const schema = z.object({});
 export function registerListEstatesTool(server: McpServer, config: AwsConfig): void {
 	server.tool(
 		"aws_list_estates",
-		"List the AWS estates this runtime is configured to query, plus the latest per-estate health snapshot from boot-time STS:AssumeRole validation. Each estate entry includes its effective region (per-estate override or AWS_REGION default).",
+		"List the AWS estates this runtime is CONFIGURED to query (for routing), plus each estate's boot-time STS:AssumeRole health snapshot and effective region. NOTE: this is the configured/reachable set, NOT the estates assessed in the current investigation -- a healthy entry here only means the role assumed at boot, not that the estate was probed. Do not report 'all N accounts healthy' from this output; scope findings to the estate(s) actually queried this run.",
 		schema.shape,
 		async () =>
 			toMcp({
