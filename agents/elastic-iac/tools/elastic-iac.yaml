@@ -10,7 +10,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [read_state, read_repo, draft, plan, open_mr, review_pipeline, status]
+      enum: [read_state, read_repo, draft, propose, plan, open_mr, review_pipeline, status]
       description: Stage of the IaC maker workflow to perform
     cluster:
       type: string
@@ -78,6 +78,10 @@ tool_mapping:
     plan:
       - terraform_validate
       - terraform_plan
+    propose:
+      - gitlab_get_file_content
+      - gitlab_create_branch
+      - gitlab_commit_file
     open_mr:
       - git_push
       - gitlab_create_merge_request
@@ -94,6 +98,7 @@ tool_mapping:
     read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before drafting
     read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
     draft: when creating the working branch and writing the minimal Terraform diff (fmt + module/provider search to get it right)
+    propose: when proposing a config change via the GitLab API -- read the deployment JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
     plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
     open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
     review_pipeline: when reading an existing MR or its pipelines to report GitOps status (read-only; never merge/approve)

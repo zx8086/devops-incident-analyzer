@@ -282,6 +282,28 @@ export function guardNode(state: IacStateType): Partial<IacStateType> {
 	return { blockedReason: "" };
 }
 
+// Read-modify-write the per-deployment JSON: set the top-level `version` field to
+// the target. GitLab's commit "update" action needs the full file body, not a diff.
+// Preserves 2-space indent + a trailing newline (repo house style). Throws on
+// invalid JSON. (Pure; unit-tested.)
+export function setDeploymentVersion(json: string, version: string): { content: string; previous?: string } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const previous = typeof obj.version === "string" ? obj.version : undefined;
+	obj.version = version;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous };
+}
+
+// Resolve the per-deployment JSON path from the configured template + cluster name.
+// The template carries a literal "${cluster}" placeholder (it is config, not a JS
+// template literal), so substitute it explicitly.
+export function deploymentJsonPath(template: string, cluster: string): string {
+	return template.replace(/\$\{cluster\}/g, cluster);
+}
+
 // Pure branch slug from the request descriptor: cluster-<descriptor>-workflow.
 // For a version-upgrade the descriptor is the target version (e.g. "9-4-2").
 // (Exported for unit testing; branchName appends agent/ + the date.)
@@ -301,23 +323,96 @@ function branchName(req: IacRequest): string {
 	return `agent/${branchSlug(req)}-${date}`;
 }
 
-// Draft the minimal Terraform diff on a fresh branch (never main; never apply).
+// SIO-873: the agent owns the per-deployment JSON path -- it knows the cluster and
+// passes the resolved filePath to the MCP gitlab_* tools, which only own the repo
+// target (base URL + project). Literal "${cluster}" placeholder. The agent edits
+// JSON config only; it never runs terraform or git.
+// Read lazily via process.env (works under both Bun and the web app's Vite SSR
+// runtime, where a top-level `Bun.env` reference throws "Bun is not defined").
+function deploymentJsonTemplate(): string {
+	return process.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
+}
+
+// Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
+// base64 `content` field into the raw file text.
+function extractFileContent(toolResult: string): string {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return toolResult;
+	try {
+		const parsed: unknown = JSON.parse(toolResult.slice(jsonStart));
+		if (typeof parsed === "object" && parsed !== null && "content" in parsed) {
+			const c = (parsed as { content?: unknown; encoding?: unknown }).content;
+			if (typeof c === "string") {
+				const enc = (parsed as { encoding?: unknown }).encoding;
+				return enc === "base64" ? Buffer.from(c, "base64").toString("utf8") : c;
+			}
+		}
+	} catch {
+		// fall through
+	}
+	return toolResult;
+}
+
+// version-upgrade: propose the change as a GitLab config edit + branch + commit via
+// the API (no clone, no terraform, no local git). CI computes the plan on the MR.
+async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const version = req.version ?? "";
+	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	let updated: { content: string; previous?: string };
+	try {
+		updated = setDeploymentVersion(extractFileContent(raw), version);
+	} catch {
+		return {
+			blockedReason: `Could not read ${filePath} as JSON (got: ${raw.slice(0, 120)}).`,
+			messages: [new AIMessage(`Cannot propose the change: ${filePath} did not parse as JSON.`)],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: upgrade Elasticsearch ${updated.previous ?? "?"} -> ${version}`,
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const diff = `${filePath}\n- "version": "${updated.previous ?? "?"}"\n+ "version": "${version}"`;
+	return {
+		branch,
+		proposedFilePath: filePath,
+		previousVersion: updated.previous ?? "",
+		proposedDiff: diff,
+		precheckPassed: committed,
+	};
+}
+
+// Draft the change. version-upgrade goes through the GitOps proposer (JSON edit via
+// the GitLab API); other workflows still draft a Terraform diff locally (legacy path).
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	if (!req) return {};
+	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
+
 	const branch = branchName(req);
 	await callTool("git_create_branch", { branch });
 
 	const llm = createLlm("iacDrafter", AGENT);
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
-	const upgradeHint =
-		req.workflow === "version-upgrade"
-			? `\nThis is a version upgrade: bump the Elasticsearch version to "${req.version ?? "?"}" in the stack module (and Kibana/APM to match where the module pins them together). Do not change topology or sizing.`
-			: "";
 	const res = await llm.invoke([
 		new SystemMessage(sys),
 		new HumanMessage(
-			`Produce the minimal Terraform diff for: ${JSON.stringify(req)}.${upgradeHint}\n` +
+			`Produce the minimal Terraform diff for: ${JSON.stringify(req)}.\n` +
 				`Cluster state:\n${state.clusterState?.summary ?? "(unavailable)"}\n` +
 				"Output the unified diff only. Do not apply. Do not push to main.",
 		),
@@ -325,26 +420,41 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	return { branch, proposedDiff: String(res.content) };
 }
 
-// Run fmt/validate/plan + gl-testing pre-check and assemble the review payload.
+// Assemble the review payload. version-upgrade skips local terraform entirely -- the
+// change is already committed to a branch and CI computes the plan on the MR (deck
+// p.18). Other workflows still run terraform validate/plan locally (legacy path).
 export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	const branch = state.branch;
-	await callTool("terraform_validate", { branch });
-	const plan = await callTool("terraform_plan", { branch, cluster: req?.cluster });
-	const precheckPassed = !plan.startsWith("[") && !/error/i.test(plan);
+	const isUpgrade = req?.workflow === "version-upgrade";
+
+	let plan: string;
+	let precheckPassed: boolean;
+	if (isUpgrade) {
+		// The commit succeeded in draftChange; CI renders the authoritative plan on the MR.
+		plan = "CI computes the Terraform plan on the merge request. No local plan is run for config edits.";
+		precheckPassed = state.precheckPassed;
+	} else {
+		await callTool("terraform_validate", { branch });
+		plan = await callTool("terraform_plan", { branch, cluster: req?.cluster });
+		precheckPassed = !plan.startsWith("[") && !/error/i.test(plan);
+	}
 
 	const risks: string[] = [];
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
 	if (req?.workflow === "ilm-rollout")
 		risks.push("ILM phase change can pull frozen data in and cause force-merge load.");
-	if (req?.workflow === "version-upgrade")
+	if (isUpgrade) {
 		risks.push(
 			"Version upgrades are rolling and irreversible; confirm the target is a valid forward step and apply off-peak.",
 		);
+		risks.push("CCS/CCR: the local cluster must stay <= 1 minor ahead of every remote -- audit before merge.");
+	}
 
-	// version-upgrade descriptor is the target version; tier/resize use tier/resource.
-	const descriptor =
-		req?.workflow === "version-upgrade" ? `-> ${req?.version ?? "?"}` : (req?.tier ?? req?.resource ?? "change");
+	// version-upgrade descriptor shows the version transition; tier/resize use tier/resource.
+	const descriptor = isUpgrade
+		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
+		: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		cluster: req?.cluster ?? "",
 		branch,
@@ -370,10 +480,13 @@ export function planReviewGate(state: IacStateType): Partial<IacStateType> {
 	return { reviewDecision: decision?.decision === "approved" ? "approved" : "rejected" };
 }
 
-// Push the branch and open the MR. Never merges, never approves, never applies.
+// Open the MR. Never merges, never approves, never applies. For version-upgrade the
+// branch + commit already exist on the remote (created via the GitLab API in
+// draftChange), so there is no git_push; other workflows push the local branch first.
 export async function openMr(state: IacStateType): Promise<Partial<IacStateType>> {
 	const review = state.planReview;
-	await callTool("git_push", { branch: state.branch });
+	const isUpgrade = state.iacRequest?.workflow === "version-upgrade";
+	if (!isUpgrade) await callTool("git_push", { branch: state.branch });
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: state.branch,
 		target_branch: "main",

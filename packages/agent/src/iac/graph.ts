@@ -49,7 +49,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addEdge("readClusterState", "guard")
 		// Blocked by a mechanical safety guard -> stop before any write.
 		.addConditionalEdges("guard", (s) => (s.blockedReason ? END : "draftChange"), ["draftChange", END])
-		.addEdge("draftChange", "reviewPlan")
+		// SIO-873: the GitOps proposer (draftChange) can block too (e.g. missing token,
+		// unparseable JSON) -> stop before the review gate.
+		.addConditionalEdges("draftChange", (s) => (s.blockedReason ? END : "reviewPlan"), ["reviewPlan", END])
 		.addEdge("reviewPlan", "reviewGate")
 		// Human decision from the planReview interrupt routes to MR-open or stop.
 		.addConditionalEdges("reviewGate", (s) => (s.reviewDecision === "approved" ? "openMr" : "teardown"), [

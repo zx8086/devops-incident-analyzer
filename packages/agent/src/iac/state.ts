@@ -57,6 +57,10 @@ export const IacState = Annotation.Root({
 	clusterState: Annotation<IacClusterState | null>({ reducer: last, default: () => null }),
 	branch: Annotation<string>({ reducer: last, default: () => "" }),
 	proposedDiff: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-873: GitOps proposer (version-upgrade) — the JSON config file edited and the
+	// version it held before the bump, surfaced in the plan-review payload.
+	proposedFilePath: Annotation<string>({ reducer: last, default: () => "" }),
+	previousVersion: Annotation<string>({ reducer: last, default: () => "" }),
 	terraformPlan: Annotation<string>({ reducer: last, default: () => "" }),
 	risks: Annotation<string[]>({ reducer: last, default: () => [] }),
 	precheckPassed: Annotation<boolean>({ reducer: last, default: () => false }),
