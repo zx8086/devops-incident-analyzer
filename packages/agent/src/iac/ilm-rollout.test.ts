@@ -230,3 +230,42 @@ describe("draftChange -> proposeIlmChange", () => {
 		expect(result.retentionChange).toEqual({ from: "90d", to: "30d" });
 	});
 });
+
+describe("reviewPlan — ilm-rollout", () => {
+	const baseState = (retentionChange: { from: string; to: string } | null) => ({
+		iacRequest: {
+			workflow: "ilm-rollout" as const,
+			isProd: false,
+			cluster: "eu-cld",
+			policyName: "90-days@lifecycle",
+			phasesPatch: { delete: { min_age: retentionChange?.to ?? "120d" } },
+		},
+		branch: "agent/eu-cld-90-days-lifecycle-ilm-rollout-20260602",
+		proposedDiff: "diff",
+		precheckPassed: true,
+		retentionChange,
+	});
+
+	test("marks the review kind config-edit and skips local terraform", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await reviewPlan(baseState(null) as any);
+		expect(result.planReview?.kind).toBe("config-edit");
+		expect(result.planReview?.plan).toContain("CI computes the Terraform plan");
+	});
+
+	test("adds the always-on ILM phase-transition risk", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await reviewPlan(baseState(null) as any);
+		expect(result.risks?.some((r) => r.includes("force-merge") || r.includes("rolls over"))).toBe(true);
+	});
+
+	test("prepends a HIGH retention-reduction risk when retention is reduced", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await reviewPlan(baseState({ from: "90d", to: "30d" }) as any);
+		expect(result.risks?.[0]).toContain("Retention REDUCED 90d->30d");
+		expect(result.risks?.[0]).toContain("irrecoverable");
+	});
+});

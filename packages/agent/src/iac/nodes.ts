@@ -708,7 +708,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	const isUpgrade = req?.workflow === "version-upgrade";
 	// SIO-879: version-upgrade and tier-resize are GitOps config edits (committed via the
 	// API; CI plans on the MR). Other workflows still run terraform locally (legacy).
-	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize";
+	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize" || req?.workflow === "ilm-rollout";
 
 	let plan: string;
 	let precheckPassed: boolean;
@@ -724,8 +724,17 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 
 	const risks: string[] = [];
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
-	if (req?.workflow === "ilm-rollout")
-		risks.push("ILM phase change can pull frozen data in and cause force-merge load.");
+	if (req?.workflow === "ilm-rollout") {
+		risks.push(
+			"ILM phase change can trigger force-merge load / frozen pull-in; transitions take effect as each index rolls over, not immediately.",
+		);
+		// SIO-880: a retention REDUCTION is irreversible data loss -- surface as HIGH (first).
+		if (state.retentionChange) {
+			risks.unshift(
+				`Retention REDUCED ${state.retentionChange.from}->${state.retentionChange.to}; data deleted at apply is irrecoverable -- confirm the IR/issue reference before merge.`,
+			);
+		}
+	}
 	if (isUpgrade) {
 		risks.push(
 			"Version upgrades are rolling and irreversible; confirm the target is a valid forward step and apply off-peak.",
@@ -746,7 +755,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
 		: req?.workflow === "tier-resize"
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
-			: (req?.tier ?? req?.resource ?? "change");
+			: req?.workflow === "ilm-rollout"
+				? `${req?.policyName ?? "?"}: ${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
+				: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		kind: isConfigEdit ? "config-edit" : "terraform",
 		cluster: req?.cluster ?? "",
