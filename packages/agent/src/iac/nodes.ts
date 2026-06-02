@@ -52,6 +52,7 @@ const IntentSchema = z.object({
 	newSizeGb: z.number().nullish(),
 	newMaxGb: z.number().nullish(),
 	policyName: z.string().nullish(),
+	phasesPatch: z.record(z.string(), z.unknown()).nullish(),
 	version: z.string().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
@@ -78,6 +79,7 @@ export function parseIntentJson(raw: string): IacRequest {
 					newSizeGb: nn(p.newSizeGb),
 					newMaxGb: nn(p.newMaxGb),
 					policyName: nn(p.policyName),
+					phasesPatch: nn(p.phasesPatch) as Record<string, unknown> | undefined,
 					version: nn(p.version),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
@@ -155,6 +157,11 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
 		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
+		"For an ILM lifecycle-policy change ('set eu-b2b 30-days retention to 60 days', 'forcemerge warm to 1 " +
+		"segment on eu-cld logs'), set workflow to 'ilm-rollout', cluster to the named deployment, policyName to the " +
+		"policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', 'eu-default-lifecycle-logs-prod'), and phasesPatch " +
+		"to a nested object containing ONLY the phase fields to change (top-level keys are phases hot|warm|cold|delete; " +
+		"durations are strings like '60d'; retention is delete.min_age). " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";

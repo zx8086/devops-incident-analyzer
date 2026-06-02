@@ -1,6 +1,6 @@
 // agent/src/iac/ilm-rollout.test.ts
 import { describe, expect, test } from "bun:test";
-import { detectRetentionReduction, mergeIlmPhases } from "./nodes.ts";
+import { detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
 
 const POLICY = JSON.stringify(
 	{
@@ -83,5 +83,28 @@ describe("detectRetentionReduction", () => {
 
 	test("returns null on an unparseable duration", () => {
 		expect(detectRetentionReduction({ delete: { min_age: "90d" } }, { delete: { min_age: "forever" } })).toBeNull();
+	});
+});
+
+describe("parseIntentJson — ilm-rollout", () => {
+	test("extracts workflow/cluster/policyName/phasesPatch with no clarification", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			policyName: "30-days@lifecycle",
+			phasesPatch: { delete: { min_age: "60d" } },
+		});
+		const req = parseIntentJson(raw);
+		expect(req.workflow).toBe("ilm-rollout");
+		expect(req.cluster).toBe("eu-b2b");
+		expect(req.policyName).toBe("30-days@lifecycle");
+		expect(req.phasesPatch).toEqual({ delete: { min_age: "60d" } });
+		expect(req.clarification).toBeUndefined();
+	});
+
+	test("normalizes an explicit-null phasesPatch to undefined", () => {
+		const raw = JSON.stringify({ workflow: "ilm-rollout", cluster: "eu-b2b", policyName: "logs", phasesPatch: null });
+		const req = parseIntentJson(raw);
+		expect(req.phasesPatch).toBeUndefined();
 	});
 });

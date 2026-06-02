@@ -10,6 +10,9 @@ export interface IacRequest {
 	newSizeGb?: number;
 	newMaxGb?: number;
 	policyName?: string;
+	// SIO-880: nested phase patch for an ilm-rollout change, e.g.
+	// { warm: { forcemerge: { max_num_segments: 1 } }, delete: { min_age: "60d" } }.
+	phasesPatch?: Record<string, unknown>;
 	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
 	version?: string;
 	reason?: string;
