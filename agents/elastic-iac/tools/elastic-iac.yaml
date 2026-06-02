@@ -88,6 +88,9 @@ tool_mapping:
     review_pipeline:
       - gitlab_get_merge_request
       - gitlab_get_merge_request_pipelines
+      - gitlab_get_pipeline
+      - gitlab_get_pipeline_terraform_report
+      - gitlab_get_merge_request_approvals
     status:
       - iac_status
       - iac_list_stacks

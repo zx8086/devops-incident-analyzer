@@ -14,6 +14,7 @@ import {
 	readClusterState,
 	reviewPlan,
 	teardownIac,
+	watchPipeline,
 } from "./nodes.ts";
 import { IacState } from "./state.ts";
 
@@ -34,16 +35,19 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("reviewPlan", reviewPlan)
 		.addNode("reviewGate", planReviewGate)
 		.addNode("openMr", openMr)
+		.addNode("watchPipeline", watchPipeline)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
 		// Not connected -> surface the message and stop.
 		.addConditionalEdges("bootstrap", (s) => (s.connected ? "classifyIacIntent" : END), ["classifyIacIntent", END])
-		// SIO-870: info questions answer from reads and stop; gitops enters the maker pipeline.
-		.addConditionalEdges("classifyIacIntent", (s) => (s.intent === "gitops" ? "parseIntent" : "answerInfo"), [
-			"parseIntent",
-			"answerInfo",
-		])
+		// SIO-870 info -> answerInfo; gitops -> maker pipeline. SIO-875 pipeline-status ->
+		// re-check the thread's MR via watchPipeline (only set when an MR already exists).
+		.addConditionalEdges(
+			"classifyIacIntent",
+			(s) => (s.intent === "gitops" ? "parseIntent" : s.intent === "pipeline-status" ? "watchPipeline" : "answerInfo"),
+			["parseIntent", "answerInfo", "watchPipeline"],
+		)
 		.addEdge("answerInfo", END)
 		.addEdge("parseIntent", "readClusterState")
 		.addEdge("readClusterState", "guard")
@@ -58,7 +62,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"openMr",
 			"teardown",
 		])
-		.addEdge("openMr", "teardown")
+		// SIO-875: after opening the MR, watch the pipeline (bounded) then render.
+		.addEdge("openMr", "watchPipeline")
+		.addEdge("watchPipeline", "teardown")
 		.addEdge("teardown", END);
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
