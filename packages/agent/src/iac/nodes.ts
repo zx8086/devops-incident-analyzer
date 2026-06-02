@@ -335,6 +335,42 @@ export function setDeploymentTierSize(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousMax };
 }
 
+// SIO-880: read-modify-write an ILM lifecycle-policy JSON by deep-merging a nested phase
+// patch (top-level keys are phases: hot/warm/cold/delete). Recurses into nested objects
+// (e.g. warm.forcemerge), replaces scalars/arrays/null. Captures the pre-merge value of
+// every touched leaf into `previous` (a sparse mirror of the patch) for the diff +
+// retention check; a leaf the policy lacked records `undefined`. Preserves 2-space indent
+// + trailing newline. Throws on non-object JSON. (Pure; unit-tested.)
+export function mergeIlmPhases(
+	json: string,
+	patch: Record<string, unknown>,
+): { content: string; previous: Record<string, unknown> } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("ILM policy JSON is not an object");
+	}
+	const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+		typeof v === "object" && v !== null && !Array.isArray(v);
+
+	const previous: Record<string, unknown> = {};
+	const merge = (target: Record<string, unknown>, p: Record<string, unknown>, prev: Record<string, unknown>): void => {
+		for (const [key, value] of Object.entries(p)) {
+			const current = target[key];
+			if (isPlainObject(value)) {
+				if (!isPlainObject(current)) target[key] = {};
+				const prevChild: Record<string, unknown> = {};
+				prev[key] = prevChild;
+				merge(target[key] as Record<string, unknown>, value, prevChild);
+			} else {
+				prev[key] = current; // may be undefined if the policy lacked this leaf
+				target[key] = value;
+			}
+		}
+	};
+	merge(parsed as Record<string, unknown>, patch, previous);
+	return { content: `${JSON.stringify(parsed, null, 2)}\n`, previous };
+}
+
 // Resolve the per-deployment JSON path from the configured template + cluster name.
 // The template carries a literal "${cluster}" placeholder (it is config, not a JS
 // template literal), so substitute it explicitly.
