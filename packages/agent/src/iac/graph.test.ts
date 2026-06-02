@@ -20,4 +20,12 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("openMr");
 		expect(nodeNames).toContain("teardown");
 	});
+
+	// SIO-870: read-vs-write branch off the classifier.
+	test("graph contains the intent classifier and the info-answer node", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("classifyIacIntent");
+		expect(nodeNames).toContain("answerInfo");
+	});
 });

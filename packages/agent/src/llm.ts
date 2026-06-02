@@ -8,6 +8,9 @@ import {
 } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { ChatBedrockConverse } from "@langchain/aws";
+import type { BaseMessage } from "@langchain/core/messages";
+import type { Runnable } from "@langchain/core/runnables";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { getAgentsDir } from "./paths.ts";
 
 const logger = getLogger("agent:llm");
@@ -44,7 +47,10 @@ export type LlmRole =
 	// elastic-iac graph roles
 	| "iacPlanner"
 	| "iacDrafter"
-	| "iacReviewer";
+	| "iacReviewer"
+	// SIO-870: read-vs-write classification + read-only info answering for elastic-iac
+	| "iacClassifier"
+	| "iacReader";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -70,6 +76,8 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	iacPlanner: { temperature: 0, maxTokens: 2048 },
 	iacDrafter: { temperature: 0.1, maxTokens: 8192 },
 	iacReviewer: { temperature: 0, maxTokens: 4096 },
+	iacClassifier: { temperature: 0, maxTokens: 16 },
+	iacReader: { temperature: 0, maxTokens: 4096 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -96,6 +104,8 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	iacPlanner: 60_000,
 	iacDrafter: 120_000,
 	iacReviewer: 60_000,
+	iacClassifier: 30_000,
+	iacReader: 120_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
@@ -138,6 +148,7 @@ function buildChatModel(
 
 // SIO-621: Roles that are passed to createReactAgent need bindTools(), which
 // RunnableWithFallbacks does not implement. Only wrap invoke-only roles with fallbacks.
+// (iacReader binds tools via createLlmWithTools, which handles the fallback itself.)
 const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 
 export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatBedrockConverse {
@@ -161,6 +172,28 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 	const fallback = buildChatModel(fallbackConfig, overrides);
 	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
+}
+
+// SIO-870: createLlm cannot return a tool-bound model with a fallback because
+// RunnableWithFallbacks has no bindTools. This binds the tools to BOTH the primary
+// and the manifest fallback first, then wraps -- so a tool-calling node (answerInfo)
+// keeps fallback resilience even when the manifest's preferred model is unusable
+// (elastic-iac prefers claude-opus-4-6, which is not a valid Bedrock id here).
+export function createLlmWithTools(
+	role: LlmRole,
+	tools: StructuredToolInterface[],
+	agentName = "incident-analyzer",
+): Runnable<BaseMessage[], BaseMessage> {
+	const agent = getAgentForLlm(agentName);
+	const modelConfig = agent.manifest.model;
+	const overrides = ROLE_OVERRIDES[role];
+
+	const primary = buildChatModel(resolveBedrockConfig(modelConfig), overrides).bindTools(tools);
+	const fallbackConfig = resolveFallbackConfig(modelConfig);
+	if (!fallbackConfig) return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
+
+	const fallback = buildChatModel(fallbackConfig, overrides).bindTools(tools);
+	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
 }
 
 // SIO-739: Wrap llm.invoke with a per-role wall-clock deadline merged into

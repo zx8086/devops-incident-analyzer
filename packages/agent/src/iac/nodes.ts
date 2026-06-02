@@ -1,11 +1,11 @@
 // agent/src/iac/nodes.ts
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
-import { createLlm } from "../llm.ts";
+import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
@@ -66,6 +66,32 @@ function parseIntentJson(raw: string): IacRequest {
 	return { workflow: "other", isProd: false, clarification: "Which cluster and what change should I make?" };
 }
 
+// Map a raw classifier reply to an intent. Defaults to "info"; only an explicit
+// "gitops" mention routes to the maker pipeline. (Pure; unit-tested directly.)
+export function intentFromText(raw: string): "info" | "gitops" {
+	return raw.toLowerCase().includes("gitops") ? "gitops" : "info";
+}
+
+// Classify the request as a read-only info question vs a gitops change. Ambiguous
+// "should I…/recommend…" phrasing is biased to gitops -- that path is HITL-gated and
+// never applies, so it is the safe default (vs wrongly drafting a branch for a read).
+export async function classifyIacIntent(state: IacStateType): Promise<Partial<IacStateType>> {
+	const query = lastHumanText(state);
+	const llm = createLlm("iacClassifier", AGENT);
+	const sys =
+		"Classify the user's Elastic Cloud request into exactly one word:\n" +
+		"- 'info': a read-only question answerable by reading state (versions, topology, plan history, " +
+		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
+		"- 'gitops': a request to CHANGE infrastructure (resize, downsize, add/modify ILM, import, open an MR, " +
+		"anything that should produce a Terraform diff).\n" +
+		"Reply with ONLY the single lowercase word 'info' or 'gitops'. " +
+		"If the user asks for a recommendation or 'should I…' that implies a change, answer 'gitops'.";
+	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
+	const intent = intentFromText(String(res.content));
+	log.info({ intent, query }, "classified IaC intent");
+	return { intent };
+}
+
 // Verify the unified IaC server is connected before any user-facing action (hooks/bootstrap.md).
 export function bootstrapIac(_state: IacStateType): Partial<IacStateType> {
 	const connected = getConnectedServers().includes(IAC_SERVER);
@@ -119,12 +145,96 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	return { iacRequest: request };
 }
 
+// Read-only tools the info path may call. Binding only this subset means the LLM
+// physically cannot reach git_create_branch / gitlab_create_merge_request etc.
+const INFO_TOOL_NAMES = [
+	"elastic_cloud_list_deployment_versions",
+	"elastic_cloud_list_deployments",
+	"elastic_cloud_get_deployment",
+	"elastic_cloud_get_plan_history",
+	"elastic_get_cluster_health",
+	"elastic_get_index_template",
+	"elastic_ilm_get_lifecycle",
+] as const;
+
+function infoTools(): StructuredToolInterface[] {
+	const allowed = new Set<string>(INFO_TOOL_NAMES);
+	return getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
+}
+
+// Answer a read-only question via a bounded tool-calling loop over the read subset.
+// Never drafts, never opens an MR -- this is the terminal node for info intent.
+export async function answerInfo(state: IacStateType): Promise<Partial<IacStateType>> {
+	const query = lastHumanText(state);
+	const tools = infoTools();
+	if (tools.length === 0) {
+		return { messages: [new AIMessage("Elastic IaC read tools are unavailable; cannot answer right now.")] };
+	}
+	const llm = createLlmWithTools("iacReader", tools, AGENT);
+	const sys =
+		`${buildSystemPrompt(getAgentByName(AGENT))}\n\n` +
+		"This is a READ-ONLY question. Use the elastic read tools to answer it precisely. " +
+		"Never draft Terraform, never open an MR, never create a branch. Answer concisely with the facts.";
+	const toolNames = new Set(tools.map((t) => t.name));
+	const convo: BaseMessage[] = [new SystemMessage(sys), new HumanMessage(query)];
+
+	const MAX_STEPS = 5;
+	for (let step = 0; step < MAX_STEPS; step++) {
+		const ai = (await llm.invoke(convo)) as AIMessage;
+		convo.push(ai);
+		const calls = ai.tool_calls ?? [];
+		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		for (const call of calls) {
+			const result = toolNames.has(call.name)
+				? await callTool(call.name, (call.args ?? {}) as Record<string, unknown>)
+				: `[${call.name} is not an allowed read tool]`;
+			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
+		}
+	}
+	// Step budget exhausted: one final no-tool synthesis of what was gathered.
+	const final = await createLlm("iacReader", AGENT).invoke([
+		...convo,
+		new HumanMessage("Summarize the answer now using what you've gathered."),
+	]);
+	return { messages: [new AIMessage(String(final.content))] };
+}
+
+// Parse the "[status] {json}" body callTool returns from elastic_cloud_list_deployments
+// and resolve a human cluster name to its Elastic Cloud deployment id. Exact name match
+// wins over case-insensitive; "" when not found / unparseable. (Pure; unit-tested.)
+export function parseDeploymentId(listText: string, clusterName: string): string {
+	if (!clusterName) return "";
+	const jsonStart = listText.indexOf("{");
+	if (jsonStart < 0) return "";
+	try {
+		const parsed: unknown = JSON.parse(listText.slice(jsonStart));
+		const rows =
+			typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { deployments?: unknown }).deployments)
+				? (parsed as { deployments: Array<{ id?: string; name?: string }> }).deployments
+				: [];
+		const exact = rows.find((r) => r.name === clusterName);
+		if (exact?.id) return exact.id;
+		const ci = rows.find((r) => (r.name ?? "").toLowerCase() === clusterName.toLowerCase());
+		return ci?.id ?? "";
+	} catch {
+		return "";
+	}
+}
+
+async function resolveDeploymentId(clusterName: string): Promise<string> {
+	if (!clusterName) return "";
+	return parseDeploymentId(await callTool("elastic_cloud_list_deployments", {}), clusterName);
+}
+
 // Read live cluster state (topology, plan history, ILM, health) before drafting.
 export async function readClusterState(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	const cluster = req?.cluster ?? "";
-	const summary = await callTool("elastic_cloud_get_deployment", { cluster });
-	const alerts = await callTool("elastic_ilm_get_lifecycle", { cluster, policy: ".alerts" });
+	const deploymentId = await resolveDeploymentId(cluster);
+	const summary = deploymentId
+		? await callTool("elastic_cloud_get_deployment", { deploymentId })
+		: `[could not resolve an Elastic Cloud deployment id for cluster '${cluster}']`;
+	const alerts = await callTool("elastic_ilm_get_lifecycle", { policy: ".alerts" });
 	const alertsManaged = !alerts.startsWith("[") && alerts.toLowerCase().includes("alerts");
 	return {
 		clusterState: { cluster, summary, alertsManaged, raw: summary },

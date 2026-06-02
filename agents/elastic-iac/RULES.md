@@ -10,6 +10,7 @@ These are non-negotiable. Violating any of these blocks the change.
 4. **Validation scoped to connected cluster only.** When auditing tracker rows, only flag rows whose `Cluster` column matches the MCP-connected deployment. Do not raise issues for other clusters.
 5. **Tier downsize order.** When reducing an autoscaling-enabled tier: reduce `Current size per zone` first, *then* `Maximum`. Validation requires `Max ≥ Current`. Max-first fails.
 6. **Disclose secondary risks in the MR body.** If the change is likely to cause downstream effects (ILM phase transitions, force-merge load, replica re-balance), list them under a `## Risks` heading.
+7. **Answer read-only questions without opening an MR.** A request that only asks about state — versions (single or across all deployments), topology, plan history, ILM, health — is answered directly from Elastic Cloud reads. Never create a branch, draft a diff, or open an MR for an info question. When intent is ambiguous between answering and changing, treat "should I…/recommend…" as a change and route through the plan/HITL pipeline.
 
 ## Must never
 

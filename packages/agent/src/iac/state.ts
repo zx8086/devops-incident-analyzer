@@ -48,6 +48,9 @@ const last = <T>(_current: T, update: T): T => update;
 export const IacState = Annotation.Root({
 	...MessagesAnnotation.spec,
 	requestId: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-870: read-vs-write routing. "info" answers from Elastic Cloud reads and
+	// stops; "gitops" enters the maker/HITL/MR pipeline. Set by classifyIacIntent.
+	intent: Annotation<"info" | "gitops" | null>({ reducer: last, default: () => null }),
 	iacRequest: Annotation<IacRequest | null>({ reducer: last, default: () => null }),
 	clusterState: Annotation<IacClusterState | null>({ reducer: last, default: () => null }),
 	branch: Annotation<string>({ reducer: last, default: () => "" }),
