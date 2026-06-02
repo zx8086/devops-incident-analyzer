@@ -49,6 +49,8 @@ export function getWorkspaceRoot(): string {
 	return cachedRoot;
 }
 
-export function getAgentsDir(): string {
-	return join(getWorkspaceRoot(), "agents", "incident-analyzer");
+// Resolve an agent definition directory by name. Defaults to incident-analyzer so
+// every existing no-arg caller is unchanged; the elastic-iac graph passes "elastic-iac".
+export function getAgentsDir(name = "incident-analyzer"): string {
+	return join(getWorkspaceRoot(), "agents", name);
 }

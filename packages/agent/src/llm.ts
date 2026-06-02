@@ -12,13 +12,17 @@ import { getAgentsDir } from "./paths.ts";
 
 const logger = getLogger("agent:llm");
 
-let cachedRootAgent: ReturnType<typeof loadAgent> | null = null;
+// Per-agent manifest cache so the elastic-iac graph resolves its own model config
+// without disturbing the incident-analyzer default.
+const agentCache = new Map<string, ReturnType<typeof loadAgent>>();
 
-function getRootAgent() {
-	if (!cachedRootAgent) {
-		cachedRootAgent = loadAgent(getAgentsDir());
+function getAgentForLlm(agentName: string) {
+	let agent = agentCache.get(agentName);
+	if (!agent) {
+		agent = loadAgent(getAgentsDir(agentName));
+		agentCache.set(agentName, agent);
 	}
-	return cachedRootAgent;
+	return agent;
 }
 
 export type LlmRole =
@@ -36,7 +40,11 @@ export type LlmRole =
 	| "mitigateEscalate"
 	| "actionProposal"
 	| "runbookSelector"
-	| "awsEstateRouter";
+	| "awsEstateRouter"
+	// elastic-iac graph roles
+	| "iacPlanner"
+	| "iacDrafter"
+	| "iacReviewer";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -58,6 +66,10 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	actionProposal: { temperature: 0, maxTokens: 512 },
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 	awsEstateRouter: { temperature: 0, maxTokens: 256 },
+	// elastic-iac: deterministic intent/guard parsing; the drafter writes Terraform diffs.
+	iacPlanner: { temperature: 0, maxTokens: 2048 },
+	iacDrafter: { temperature: 0.1, maxTokens: 8192 },
+	iacReviewer: { temperature: 0, maxTokens: 4096 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -81,6 +93,9 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	actionProposal: 60_000,
 	runbookSelector: 0,
 	awsEstateRouter: 30_000,
+	iacPlanner: 60_000,
+	iacDrafter: 120_000,
+	iacReviewer: 60_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
@@ -125,8 +140,8 @@ function buildChatModel(
 // RunnableWithFallbacks does not implement. Only wrap invoke-only roles with fallbacks.
 const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 
-export function createLlm(role: LlmRole): ChatBedrockConverse {
-	const agent = getRootAgent();
+export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatBedrockConverse {
+	const agent = getAgentForLlm(agentName);
 	const isLightweight = role === "classifier";
 
 	const modelConfig = isLightweight ? agent.subAgents.get("elastic-agent")?.manifest.model : agent.manifest.model;

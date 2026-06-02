@@ -15,13 +15,23 @@ import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
 // so durable memory growth does not blow the context budget.
 const MAX_KEY_DECISION_CHARS = 4000;
 
-let cachedAgent: LoadedAgent | null = null;
+// Name-keyed registry so a second agent (elastic-iac) can be loaded alongside the
+// incident-analyzer without disturbing the existing nodes, which call getAgent().
+const agentRegistry = new Map<string, LoadedAgent>();
+
+export function getAgentByName(name: string): LoadedAgent {
+	let agent = agentRegistry.get(name);
+	if (!agent) {
+		agent = loadAgent(getAgentsDir(name));
+		agentRegistry.set(name, agent);
+	}
+	return agent;
+}
+
+const DEFAULT_AGENT = "incident-analyzer";
 
 export function getAgent(): LoadedAgent {
-	if (!cachedAgent) {
-		cachedAgent = loadAgent(getAgentsDir());
-	}
-	return cachedAgent;
+	return getAgentByName(DEFAULT_AGENT);
 }
 
 // SIO-621: Build compliance boundary section listing tools that require human approval.

@@ -11,7 +11,7 @@ describe("McpRoleMismatchError", () => {
 });
 
 describe("MCP_SERVER_TO_ROLE", () => {
-	test("maps all 7 server names to expected roles", () => {
+	test("maps all 8 server names to expected roles", () => {
 		expect(MCP_SERVER_TO_ROLE).toEqual({
 			"elastic-mcp": "elastic-mcp",
 			"kafka-mcp": "kafka-proxy",
@@ -20,6 +20,7 @@ describe("MCP_SERVER_TO_ROLE", () => {
 			"gitlab-mcp": "gitlab-mcp",
 			"atlassian-mcp": "atlassian-mcp",
 			"aws-mcp": "aws-proxy",
+			"elastic-iac-mcp": "elastic-iac-mcp",
 		});
 	});
 });
