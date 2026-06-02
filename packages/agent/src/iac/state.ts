@@ -3,13 +3,15 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
-	workflow: "tier-resize" | "ilm-rollout" | "other";
+	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "other";
 	cluster?: string;
 	tier?: string;
 	resource?: string;
 	newSizeGb?: number;
 	newMaxGb?: number;
 	policyName?: string;
+	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
+	version?: string;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;

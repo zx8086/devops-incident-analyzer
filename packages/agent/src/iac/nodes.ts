@@ -40,25 +40,48 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 	}
 }
 
+// The planner commonly emits explicit `null` for absent optional fields; z.optional()
+// rejects null and would silently fail the whole parse (-> the clarify fallback), so
+// every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
-	workflow: z.enum(["tier-resize", "ilm-rollout", "other"]).default("other"),
-	cluster: z.string().optional(),
-	tier: z.string().optional(),
-	resource: z.string().optional(),
-	newSizeGb: z.number().optional(),
-	newMaxGb: z.number().optional(),
-	policyName: z.string().optional(),
-	reason: z.string().optional(),
+	workflow: z.enum(["tier-resize", "ilm-rollout", "version-upgrade", "other"]).default("other"),
+	cluster: z.string().nullish(),
+	tier: z.string().nullish(),
+	resource: z.string().nullish(),
+	newSizeGb: z.number().nullish(),
+	newMaxGb: z.number().nullish(),
+	policyName: z.string().nullish(),
+	version: z.string().nullish(),
+	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
-	clarification: z.string().optional(),
+	clarification: z.string().nullish(),
 });
 
-function parseIntentJson(raw: string): IacRequest {
+// Extract the planner's JSON object into a validated IacRequest, falling back to a
+// safe clarify-default on malformed output. (Exported for unit testing.)
+export function parseIntentJson(raw: string): IacRequest {
 	const match = raw.match(/\{[\s\S]*\}/);
 	if (match) {
 		try {
 			const parsed = IntentSchema.safeParse(JSON.parse(match[0]));
-			if (parsed.success) return parsed.data;
+			if (parsed.success) {
+				const p = parsed.data;
+				// Normalize the planner's explicit nulls to undefined for the IacRequest shape.
+				const nn = <T>(v: T | null | undefined): T | undefined => v ?? undefined;
+				return {
+					workflow: p.workflow,
+					isProd: p.isProd,
+					cluster: nn(p.cluster),
+					tier: nn(p.tier),
+					resource: nn(p.resource),
+					newSizeGb: nn(p.newSizeGb),
+					newMaxGb: nn(p.newMaxGb),
+					policyName: nn(p.policyName),
+					version: nn(p.version),
+					reason: nn(p.reason),
+					clarification: nn(p.clarification),
+				};
+			}
 		} catch {
 			// fall through to the safe default below
 		}
@@ -117,10 +140,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'other'), cluster, tier, resource, newSizeGb, newMaxGb, " +
-		"policyName, reason, isProd (true only if the user explicitly named a production cluster), and " +
-		"clarification (a single direct question to ask ONLY when the cluster or change is ambiguous). " +
-		"Respond with ONLY the JSON object.";
+		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'other'), cluster, tier, resource, newSizeGb, " +
+		"newMaxGb, policyName, version, reason, isProd (true only if the user explicitly named a production " +
+		"cluster), and clarification. " +
+		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
+		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
+		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
+		"cluster named, or an upgrade with no concrete target version ('upgrade to latest'). Do NOT ask for " +
+		"information the user already provided. Respond with ONLY the JSON object.";
 
 	const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(query)]);
 	let request = parseIntentJson(String(res.content));
@@ -255,16 +282,23 @@ export function guardNode(state: IacStateType): Partial<IacStateType> {
 	return { blockedReason: "" };
 }
 
-function branchName(req: IacRequest): string {
-	const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-	const slug = [req.cluster, req.tier ?? req.resource, req.workflow]
+// Pure branch slug from the request descriptor: cluster-<descriptor>-workflow.
+// For a version-upgrade the descriptor is the target version (e.g. "9-4-2").
+// (Exported for unit testing; branchName appends agent/ + the date.)
+export function branchSlug(req: IacRequest): string {
+	const descriptor = req.workflow === "version-upgrade" ? req.version : (req.tier ?? req.resource);
+	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
 		.toLowerCase()
 		.replace(/[^a-z0-9-]+/g, "-")
 		.replace(/-+/g, "-")
 		.slice(0, 40);
-	return `agent/${slug}-${date}`;
+}
+
+function branchName(req: IacRequest): string {
+	const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+	return `agent/${branchSlug(req)}-${date}`;
 }
 
 // Draft the minimal Terraform diff on a fresh branch (never main; never apply).
@@ -276,10 +310,14 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 
 	const llm = createLlm("iacDrafter", AGENT);
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
+	const upgradeHint =
+		req.workflow === "version-upgrade"
+			? `\nThis is a version upgrade: bump the Elasticsearch version to "${req.version ?? "?"}" in the stack module (and Kibana/APM to match where the module pins them together). Do not change topology or sizing.`
+			: "";
 	const res = await llm.invoke([
 		new SystemMessage(sys),
 		new HumanMessage(
-			`Produce the minimal Terraform diff for: ${JSON.stringify(req)}.\n` +
+			`Produce the minimal Terraform diff for: ${JSON.stringify(req)}.${upgradeHint}\n` +
 				`Cluster state:\n${state.clusterState?.summary ?? "(unavailable)"}\n` +
 				"Output the unified diff only. Do not apply. Do not push to main.",
 		),
@@ -299,11 +337,18 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
 	if (req?.workflow === "ilm-rollout")
 		risks.push("ILM phase change can pull frozen data in and cause force-merge load.");
+	if (req?.workflow === "version-upgrade")
+		risks.push(
+			"Version upgrades are rolling and irreversible; confirm the target is a valid forward step and apply off-peak.",
+		);
 
+	// version-upgrade descriptor is the target version; tier/resize use tier/resource.
+	const descriptor =
+		req?.workflow === "version-upgrade" ? `-> ${req?.version ?? "?"}` : (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		cluster: req?.cluster ?? "",
 		branch,
-		title: `[${req?.cluster ?? "?"}] ${req?.tier ?? req?.resource ?? "change"}: ${req?.workflow}`,
+		title: `[${req?.cluster ?? "?"}] ${descriptor}: ${req?.workflow}`,
 		diff: state.proposedDiff,
 		plan,
 		risks,
