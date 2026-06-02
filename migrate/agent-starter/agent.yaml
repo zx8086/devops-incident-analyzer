@@ -1,0 +1,80 @@
+spec_version: "0.1.0"
+name: pvh-elastic-iac-agent
+version: 0.1.0
+description: >
+  Natural-language interface for PVH Elastic Cloud IaC changes.
+  Translates requests like "downsize eu-b2b warm tier to 8 GB" into
+  a validated Terraform change, a gl-testing pre-check, and a GitLab MR.
+
+model:
+  preferred: claude-opus-4-6
+  fallback: claude-sonnet-4-6
+
+# Where the truth lives. The agent reads these on bootstrap.
+repository:
+  url: https://gitlab.com/pvhcorp/dhco/observability/observability-elasticcloud-deployments-terraform
+  project_id: 71488350
+  default_branch: main
+  precheck_target: gl-testing            # always first non-eu-b2b target
+
+skills:
+  - id: resize-tier
+  - id: add-ilm-policy
+  - id: pre-check-gl-testing
+  - id: open-mr
+  - id: validate-cluster-state
+
+tools:
+  - id: gitlab
+  - id: elastic
+  - id: terraform
+  - id: bash
+
+knowledge:
+  - knowledge/iac-repo-map.md
+  - knowledge/stack-modules.md
+  - knowledge/cluster-inventory.md
+  - knowledge/conventions.md
+  - knowledge/operating-guide.md
+  - knowledge/mr-template.md
+  - knowledge/issues/
+  - knowledge/runbooks/
+  - knowledge/specs/
+  - knowledge/cost-plans/
+  - knowledge/playbook/
+  - knowledge/health-snapshots/
+  - knowledge/_archive/
+
+workflows:
+  - workflows/tier-resize.yaml
+  - workflows/ilm-rollout.yaml
+
+compliance:
+  risk_tier: medium
+  supervision:
+    human_in_the_loop: always            # agent never merges its own MRs
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+    retention_period: 1y
+  segregation_of_duties:
+    roles:
+      - id: planner
+        description: Reads cluster state, drafts the change
+        permissions: [read, plan]
+      - id: maker
+        description: Writes Terraform diff, opens MR
+        permissions: [write_branch, open_mr]
+      - id: checker
+        description: Reviews and approves MR
+        permissions: [review, approve, reject]
+      - id: executor
+        description: Triggers pipeline / apply (human-initiated)
+        permissions: [trigger_pipeline]
+    conflicts:
+      - [maker, checker]
+      - [maker, executor]
+    assignments:
+      pvh-elastic-iac-agent: [planner, maker]
+      human-reviewer: [checker, executor]
+    enforcement: strict

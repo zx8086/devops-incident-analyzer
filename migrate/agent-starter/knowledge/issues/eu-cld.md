@@ -1,0 +1,204 @@
+# Issues — eu-cld
+
+Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 66 entries.
+
+- **IR-001** — OTel Java agent on ts-app-sch capturing every DB2 SQL call; 197M → 870M docs/day peak; 73% of metrics volume
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: indices_summary top patterns show generic.otel, apm, gkpos, cisco_ftd, vsphere — no db2 destination indices observed in top 20 patterns; no DB2-related transforms; ts-app-sch volume gone — STILL CLOSED
+- **IR-002** — ts-utils-staging-blue overnight batch emitting 2.29M db.db2 docs/day 23:00–01:00 UTC
+  - Severity: P2 · Status: ESCALATE — B2C Ecom: apply -Dotel.instrumentation.jdbc.enabled=false on ts-utils-staging-blue and ts-utils-live-blue.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-003** — Staging B2C namespaces producing 64% more than production (12.3M vs 7.5M docs/hr); stg-wcs-ts-app alone 6.7M/hr
+  - Severity: P3 · Status: ESCALATE — B2C Ecom team review.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-004** — ts-app-staging-green + ts-app-sch-staging-green reporting service.environment as ecom-backend-prod
+  - Severity: P3 · Status: ESCALATE — B2C Ecom: set -Dotel.resource.attributes=service.environment=ecom-backend-staging on green.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-005** — GK PoS logs at 2.2M docs/hr with JSESSIONID (18K/10min) & INGRESSCOOKIE (25K/10min) in plain text
+  - Severity: P1 (sec) · Status: Open (verified live)
+  - Evidence: indices_summary shows .ds-logs-gkpos-eu_pos_gk_till at 453M docs across 65 indices + 47 partial-frozen indices (1.376B docs) — massive GK PoS volume STILL present; tracker OT-014 also Blocked
+- **IR-006** — Dual OTel + Kubernetes container log pipelines collecting from same pods; 100–200M docs/day duplicate
+  - Severity: 1 O · Status: Open (verified live)
+  - Evidence: Both OTel logs (partial-.ds-logs-generic.otel-default 21.4B docs) and kubernetes.state_* data streams continue to receive data — dual-pipeline still in place
+- **IR-007** — Genius.app CXF SOAP payload logging at 2.49M/hr (53M/day); full SOAP XML bodies at INFO; ‘SoapAction error’ 33.7K/hr CX
+  - Severity: ? · Status: OPEN — Genius/BO: set LoggingFeature limit=0; investigate null handler. Volume unchanged since March.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-014** — GK PoS ProcessExecutionServiceImpl.executeProcess emitting per-request INFO logs across 1,089 production tills; ~20M docs/day (~23% of gkpos dataset)
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: gkpos data stream volume still elevated (453M docs/24h in current hot indices); no log-level reduction visible
+- **IR-015** — GK PoS LoginManagerRestApi.setWorkstationStatus heartbeat INFO log every 15s per till across 1,089 tills; ~13M docs/day (~15%)
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: gkpos volume still high; depends on IR-014/IR-005 outcomes
+- **IR-016** — GK PoS IMessageProvider.messages command-channel polling INFO log; ~2.4M docs/day (~3%)
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: gkpos volume still high; app-team unactioned
+- **IR-017** — Kibana proxy TLS handshake timeout 429 on .kibana_9.2.3/_doc/space:default — intermittent, multiple upstream IPs producing same 429 over a span of hours
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: cloud_get_es_resource: coordinating tier instance_capacity=15360 MB per zone (>= target 8GB); 3 coord instances (172/173/174) at 15GB each; coordinating tier upsize completed (Kibana side not visible from ES MCP)
+- **IR-018** — Phase 1A continuation — 7 confirmed-empty kubernetes.state_* data streams in eu_dtc_stg (6) and eu_b2c_ecom_api_dev (1)
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: list_indices for .ds-metrics-kubernetes.state_*-default-* returns 15 indices (all 0 docs, dated 2026-03-22) — data streams were NOT deleted or have been recreated; doc RESOLVED conflicts with live state
+- **IR-019** — Phase 1B force-path — bulk re-attachment of EU dev/stg/test/nonprod metrics + logs streams to nonprod 30 d ILM
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: get_index_template *nonprod-retention*: 4 templates exist (logs-nonprod-retention-fleet pri 251, logs-nonprod-retention-override pri 250, metrics-nonprod-retention-fleet pri 251, traces-nonprod-retention-fleet pri 251) — all with proper descriptions routing to nonprod policies
+- **IR-020** — Phase 2A min_primary_shard_size attempt on shared ILM policies
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: Layer 2 component templates @custom not committed via IaC — IR is openly REVERTED per doc, and live retention-fleet templates show Composed_Of logs@custom,metrics@settings — single-node @custom replica fix not visible in policy or templates currently
+- **IR-021** — Stack Monitoring not enabled — zero monitoring indices
+  - Severity: P3 · Status: OPEN — recommend route to existing eu-cld-monitor deployment via Cloud Console → eu-cld → Logs and metrics → 'Send monitoring data to another deployment'. Stack Monitoring app in Kibana lights up within 10 minutes once enabled.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-022** — Cold tier System Memory at 98%
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: nodes_stats fs: hot tier (144/145/146) at 44/51/33% disk; native_memory_pressure 57-58% steady — mmap/page-cache pattern consistent with healthy steady-state
+- **IR-023** — Master heap imbalance — #102 elected master at 67% live heap vs #88 at 20% and #132 at 23–60%
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: Phase 1 cleanup partially propagated; structural shard count (5617 primary / 7921 total) still high
+- **IR-029** — 6 core policies holding indices on hot with 50GB rollover; 7,603 indices affected
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: eu-default-lifecycle-metrics-prod v8 LIVE: hot rollover max_age=14d max_primary_shard_size=50gb (NOT 2-10GB as doc claims), warm min_age=1d (matches doc); rollover floor portion of fix appears NOT in current policy
+- **IR-030** — 6 Elastic built-in ILM policies (metrics, logs, synthetics + @lifecycle pairs) configured as hot-only with no warm/cold/frozen/delete phases; metrics alone had 356 indices stuck on hot with 30-day rollover E
+  - Severity: 2 R · Status: Closed (verified live)
+  - Evidence: All 6 eu-default-lifecycle-* policies live: 5 phases (hot/warm/cold/frozen/delete) confirmed; hot 1d/2GB not literal (actual 14d/50GB on prod) but 5-phase architecture in place
+- **IR-031** — 17 data stream backing indices stuck in hot:rollover with 0 documents (25–468 days old); created infinite rollover chains
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: Top patterns in indices_summary show rolled-over hot indices (.ds-logs-* and partial-.ds-logs-* dated mostly 2026-04 and later); 5067 indices GREEN, 0 unassigned shards — rollovers/moves succeeded
+- **IR-032** — Frozen min_age 7d across policies while cold node 114 approached high-watermark S
+  - Severity: 2 R · Status: Closed (verified live)
+  - Evidence: infrastructure-observability-logs v31: frozen.min_age=5d; infrastructure-observability-metrics v31: frozen.min_age=5d — both match doc
+- **IR-033** — Cold tier high-watermark breach on all 3 cold nodes (87–91% disk, node 114 at 91.4% with ~194 GB to flood)
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: cloud plan: cold tier autoscaling_max 30720 MB RAM per zone (i3en multiplier ~74) = ~2.2 TB disk ceiling per zone; cold tier current 15 GB RAM (1.1 TB disk), within ceiling — was raised, now downsized further (OT-064)
+- **IR-034** — eu-default-lifecycle-metrics-prod (v4, 786 indices) on 2GB rollover producing ~5 rollovers/day/stream; inflates cluster state and shard count
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: eu-default-lifecycle-metrics-prod hot.max_primary_shard_size still 50gb (not 10GB) — alignment not executed
+- **IR-035** — Top 6 policies (21,300 indices combined) on 90-day retention; potential to reduce footprint on warm/cold/frozen if shorter retention meets use cases
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: infrastructure-observability-logs retention still 30d (946 indices, 203 data streams attached) — review not yet acted on; total indices 5067
+- **IR-036** — Staging/nonprod data streams retaining 90d (same as prod)
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: get_index_template: logs-nonprod-retention-fleet (14d via eu-default-lifecycle-logs-nonprod policy retention=14d), metrics-nonprod (14d), traces-nonprod (30d); priorities 250/251 confirmed
+- **IR-037** — Frozen tier 96% local cache; 70.31 TB S3; cost escalation risk
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: cloud plan: frozen zone_count=3, current size 60GB/zone (autoscaling_max 120GB/zone); 3 frozen instances total (168/169/170) — not 2/AZ; cluster downsized back to 1/AZ per OT-062
+- **IR-038** — metrics x-pack fallback policy had no delete phase; 94 indices at 30d rollover only
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: ilm summary: .monitoring-8-ilm-policy retention=3 days; logs/metrics built-in retention 90d delete present in 90-days@lifecycle policies; the 8 Apr v3 change captured
+- **IR-039** — otel-transaction-metrics-30d orphan draft policy, 2 data streams
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: otel-transaction-metrics-30d policy STILL EXISTS (v1, modified 2026-04-14) with 2 data streams attached — not deleted
+- **IR-060** — Windows metrics 652.5M docs/day across 1,285 hosts / 21,910 services
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: Reduction visible: top patterns no longer show windows perfmon as dominant; total volume distribution consistent with whitelist active
+- **IR-061** — Citrix windows.service filter failing — 4.6M/day unfiltered
+  - Severity: * PAR · Status: Open (verified live)
+  - Evidence: Cluster version 9.4.1 (ES); upgrade-related Fleet agent state per IR-079/080 still open
+- **IR-062** — Agent version fragmentation — 19 versions / 1,509 agents; 98.6% on 8.x
+  - Severity: P1/P2 · Status: PARTIAL — 98 of 363 upgraded (27%); 265 still remain on P1 versions.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-063** — Integration package drift — System v2.6.3 vs v2.13.0; Custom Logs v1.2.0 vs v2.3.1
+  - Severity: P3 · Status: OPEN — quarterly upgrade cadence required.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-064** — Deprecated Custom Logs (Deprecated) v2.4.4 on eu_pos_gk_till No
+  - Severity: ? · Status: OPEN — audit + migrate to Filestream.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-065** — Nexthink Filebeat errors — 53M docs/day duplicate file collection errors on Citrix
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: Reduction in fleet noise visible; no targeted regression detected in indices_summary top patterns
+- **IR-066** — Logstash self-logging ~37M docs/day
+  - Severity: P3 · Status: INVESTIGATION
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-067** — System metrics 105M/day; elastic_agent.* 54.2M; system.core 45.5M 60
+  - Severity: RE · Status: Closed (verified live)
+  - Evidence: Reduction in agent-self-monitoring reflected by eu-agent-selfmon-7d policy live (1 data stream attached, 7d retention)
+- **IR-068** — Deferred system metric filters for diskio (146K/hr), network (195K/hr), filesystem (85K/hr) — ~10M docs/day available
+  - Severity: P2 · Status: OPEN — Fleet UI drop_event processors (keep sda/C:, eth0/Ethernet, / and /data).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-069** — PLM image service duplicate file collection (pi_imageservice_output.log) Du
+  - Severity: ? · Status: RESOLVED Apr 14–16 — excluded on both; only c8-image-service.log remains.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-075** — system.process metrics emitting high baseline across 7 Fleet policies; contributes ~11–12M docs/day at steady state
+  - Severity: P2 · Status: RESOLVED Apr 22 — interval raised 60s→300s across the 7 policies; drop-processor filters added for consumer-noise patterns, loopback, and partition-drop processes. Verified 60.4% reduction on system.process stream within 24h; full convergence expected across the following week as agents re-sync.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-077** — 416 ingest pipelines registered cluster-wide; processor failure rates and CPU consumption indicate inefficiency: grok 22.1M failed of 59.4M (37%), lowercase 19.8M failed of 28.7M (69%), conve
+  - Severity: nts) Pip · Status: Open (verified live)
+  - Evidence: get_ingest_pipeline summary call exceeded token limit (2441 lines / 141KB) — pipeline catalogue is very large; cleanup not done
+- **IR-078** — GK PoS Fleet integration versions behind current: Windows integration v2.4.2 vs v3.3.0; System integration v1.66.1 vs v2.13.0
+  - Severity: P3 · Status: OPEN — Platform team; align to quarterly Fleet integration upgrade cycle.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-079** — Elastic Agent 9.3.3 binary upgrade fails on 10 Basic Agents Policy Windows hosts (hwv00003, hwv00008, hwv00033, hwv00061, hwv00083, hwv00192, hwv00198, hwv00219, hwv00237, hwvjg001); all stuck on 8.13.4
+  - Severity: P2 · Status: OPEN - validated 2026-05-20: all 10 still 8.13.4 / UPG_FAILED. Free C: by removing stale install dirs, then retry the upgrade.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-080** — hwv00001 carries a second Elastic Agent record (8.13.4, agent 6ae93e4f) that repeatedly fails the 9.3.3 upgrade
+  - Severity: P3 · Status: OPEN - validated 2026-05-20: the 8.13.4 record is still active. No upgrade needed; unenroll/remove the old agent ID in Fleet.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-081** — 2 GK PoS hosts (TR-A838BO01 8.17.5; HR-A100TILL01T 8.17.3) fail the 9.3.3 binary download
+  - Severity: P2 · Status: OPEN - validated 2026-05-20: both still UPG_FAILED. Restore egress to artifacts.elastic.co, then retry.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-082** — NL-A005TILL03 (8.17.0, eu_pos_gk_till_stg) earlier failed the 9.3.3 upgrade with C: drive full
+  - Severity: P3 · Status: Recovered - validated 2026-05-20: host online, no active failed-upgrade state, still on 8.17.0; 9.3.3 upgrade pending - retry.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-086** — 30 nodes, $58.13/hr vs 22-node $42/hr baseline; 2.7B docs/day vs 1.78B planned
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: cloud plan: hot_content zone_count=3, size 60GB/zone — 3 instances (144/145/146) = 3 hot nodes total at 60GB RAM each; matches further reduction beyond doc target
+- **IR-087** — ML node #123 — 1 GB RAM, 91% JVM, 19K Old GCs, active swap, 1,997h degraded; crash-looping I
+  - Severity: 2 R · Status: Closed (verified live)
+  - Evidence: cloud plan: ml tier size 4096 MB (matches doc target); 1 ML node (instance-0000000154) at 4 GB RAM; autoscaling_min 4096 set
+- **IR-088** — Warm tier 8 GB RAM nodes at 86–87% disk; force-merge risk
+  - Severity: ritical R · Status: Closed (verified live)
+  - Evidence: cloud plan: warm tier size 15360 MB (15 GB) per zone; 3 warm instances (147/153/164) each at 15 GB instance_capacity
+- **IR-089** — Cold node 114 at 91.4% disk (~194 GB to flood watermark); 115 at 89.9%; 116 at 87.9%
+  - Severity: P2→P1 · Status: Closed (verified live)
+  - Evidence: cold autoscaling_max 30720 MB RAM (~2.2 TB disk on i3en); ceiling raised then cold tier subsequently downsized — current cold usage 16-24% disk, no pressure
+- **IR-090** — Elastic Cloud plan changes consistently failing: #187–188 warm disk full (exit code 74); #189–192 ML shutdown API ‘can never complete’ with 0 shards and 0 ML jobs Warm
+  - Severity: ical RESO · Status: Closed (verified live)
+  - Evidence: Cluster GREEN, plan history shows successful current plan 2026-05-22; no carry-over plan-failure state
+- **IR-091** — Upgrade 9.3.3 → 9.4.0 DONE 6 May 2026 (eu-b2b). Built-in ILM policies (metrics, logs, synthetics + @lifecycle pairs) survived without auto-revert on this upgrade — note the previously observed always-resets behaviour from earlier upgrades was not seen on 9.3→9.4. Cold node post-resize heap 82–87% post-upgrade — within operating band but watch first 48h. eu-cld remains on 9.2.3 with the conditionally-ready note still applicable for cold node 114.
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: Cold tier nodes 158/159/160 (new node numbers) at 16-24% disk and 20-52% JVM heap, no old GC observed — well below 85% threshold
+- **IR-102** — Cold-tier ceiling raised during 21 April incident now over-capacity following frozen min_age reduction and ingestion relief; 4.34 TB provisioned → 2.17 TB target to recoup ~50% of cold-tier cost C
+  - Severity: 3 P · Status: Closed (verified live)
+  - Evidence: Cold tier subsequently downsized (per OT-064); current cold pressure low
+- **IR-105** — AutoOps event ‘The number of allowed shards per cluster is higher than the default’ open for ~8 months; cluster.max_shards_per_node override raised above default 1,000 to accommodate live shard count
+  - Severity: Overri · Status: de originally raised to relieve shard sprawl; cannot be removed until shard count drops below 1,000 per data node on every tier — removal today would reject new index creation P3 PLANNED — 6-step phased ladder produced 5 May 2026 (playbook §7.5): observe Phase 2A for 7 days, then 8000 (12 May) → 6000 (19 May) → 4000 (2 Jun) → 2000 (1 Jul) → remove (Aug+). Step 5 (full removal) requires kubernetes.state stream consolidation (§6.7) to bring frozen below 1000/node. Pre-flight checks defined; rollback to 10000 if any step causes write rejections.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-106** — Hot tier 1,602-1,692 shards/node (above 1,000 default ceiling); Frozen tier 7,386-7,387 shards/node (~2.5x the recommended ~3,000/node); contributes to AutoOps shards-per-node violations and master J
+  - Severity: Sa · Status: Open (verified live)
+  - Evidence: 2927 data streams, 5067 indices — namespace stream sprawl still present (logs-gkpos-* and partial-.ds-* patterns very large)
+- **IR-107** — Master node instance-0000000102 at 84% JVM heap peak (4 GB heap, 2,689h uptime); other masters 52-62%
+  - Severity: C · Status: Closed (verified live)
+  - Evidence: Current: 5067 indices, 7921 total shards (5617 primaries) — dramatically reduced from the 28910/26349 starting point; further reductions still possible
+- **IR-108** — Frozen tier LRU cache at 98% utilisation (4,440 GB capacity per node, ~99 GB free)
+  - Severity: Ca · Status: Closed (verified live)
+  - Evidence: fs stats: 3 frozen nodes (168/169/170) at 98% disk (100GB free of 4440GB) — this is the LRU local cache fully populated as expected (NOT S3 capacity per memory note)
+- **IR-131** — Coordinating nodes (instances 99/122/171; m6gd 8 GB x3) CPU-throttled (70k-107k cgroup throttles), load 4-6 on ~4 vCPU, with load uneven (instance-99 at 64% CPU vs lower-loaded siblings); AutoOps coordinating-load and index-queue alerts
+  - Severity: P2 · Status: OPEN - point clients at the load-balanced cluster endpoint with node sniffing off to spread load; if throttling persists, raise coordinating 8 -> 15 GB/zone (3 zones)
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-132** — Hot tier (c6gd 60 GB/zone x3, autoscale max 120 GB/zone) running JVM heap pressure only 14-16% and CPU ~40-50%, disk ~30-50%; deployment cost ~52,020 ECU/month, roughly 7x each of the other three deployments
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: cloud plan: hot autoscaling_max=122880 MB (120 GB) — NOT capped to 90; ml autoscaling_max=65536 MB (64 GB) — NOT capped to 8
+- **IR-138** — Severe over-sharding: 4,438 non-system indices / 7,195 primary shards, yet the largest non-frozen index is only 33 MB.
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: eu-default-lifecycle-metrics-prod still rollover 50gb max — floor not raised; shrink action only present on warm phase
+- **IR-144** — Security Solution empty AWS CSPM/vulnerability indices (4 indices, 0 docs)
+  - Severity: Low · Status: LEAVE unless confirmed unused.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-145** — 3 indices (storewatch-address, store-details-enriched-ts-v2, storewatch-store-details) look like orphans but are active enrich sources (366 + 818 + 818 docs)
+  - Severity: DO · Status: CUMENTED — removed from deletion candidates; fix steps updated to mark as non-deletable. Pattern added to playbook.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-153** — kubernetes.state per-namespace stream sprawl — 16 K8s state-resource subtypes × 9 PVH namespaces (eu_b2c_ecom_{dev,stg,prd,api_dev,api_stg,api_prd}, eu_dtc_{d
+  - Severity:  · Status: Open (verified live)
+  - Evidence: list_indices kubernetes.state_*: 211 indices total across many subtypes (container, cronjob, daemonset, deployment, job, namespace, node, persistentvolume, pod, replicaset, resourcequota, service, statefulset, storageclass); per-namespace data streams still being created (e.g. eu_b2c_ecom_*, eu_dtc_*)
+- **IR-154** — Heavy log datasets not on logsdb mode — 4 high-volume Fleet-managed log streams (kubernetes.container_logs ~691M docs/day, cisco_meraki.log ~353M, cisco_ftd.l
+  - Severity:  · Status: Default Fleet integration templates ship without mode: logsdb; logsdb is opt-in (introduced in 9.0). Three nonprod templates already use logsdb (logs-gkapps-nonprod, logs-java-nonprod, logs-plm-nonprod); production heavy datasets had not been migrated P3 RESOLVED 5 May 2026 — 4 priority-300 override index templates created (logs-{kubernetes.container_logs,cisco_meraki.log,cisco_ftd.log,system.syslog}-logsdb) following the override template pattern (playbook §3.14). Each composes the integration’s component templates and adds index.mode: logsdb. Effect applies on next rollover. Combined ~1.42B docs/day moving to logsdb. Estimated frozen S3 storage saving: ~10 TB at steady state.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-159** — Shard sprawl: 24,714 shards / 21,857 indices / 194B docs across 12 data nodes (~2,060 shards/node), well above healthy density; includes leftover junk such as test-* indices (0-2 docs), store-details-enriched-backup/-ts-v2 duplicates, and dated storewatch-*-20260106
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: eu-default-lifecycle-logs-nonprod retention 14d (not reduced to 7d); 291 indices + 111 data streams attached — cleanup not executed
+- **IR-161** — Namespace inconsistencies — eu_b2c_ecom_* (Fleet) vs b2c-ecom-* (pipelines); 24+ sub-namespaces; missing _prod suffixes; PLM split across 3 namespaces No nam
+  - Severity: OPEN - · Status: – standard + migration.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-162** — ‘default’ catch-all Fleet policy with 294 hosts and 8 agent versions No
+  - Severity: ? · Status: OPEN — remediate.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+
+_Regenerated 2026-06-01 via python-docx + Sev/Status repair pass._

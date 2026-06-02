@@ -1,0 +1,114 @@
+# Issues — eu-b2b
+
+Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 36 entries.
+
+- **IR-008** — pvh-services-styles-v3 trace explosion — 2K → 14–32M spans/day (~15,000×) after 12 Mar deploy
+  - Severity: P1 · Status: OPEN — app team code review; no response since 14 Apr escalation. Consider escalation tier increase.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-009** — notifications_scheduler duplicate Kafka processing; 1–35M docs/day bursts every 7–10 days M
+  - Severity: P1 · Status: OPEN — Kafka key addition pending. Currently quiet (0.2–4M/day). Next burst window expected 22–25 April.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-010** — prices_producer_v2_service per-price INFO logging; 100K–9.5M docs/day variable Sin
+  - Severity: ? · Status: OPEN — Prices team; awaiting response.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-011** — material-order_Mdx 12–18M spans/day weekday trace volume I
+  - Severity: P2 · Status: SELF-RESOLVING — dropped ~70% (now 3–10M). Confirm with Order Mgmt team.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-012** — Boomi OTel messaging span proliferation — ~47M docs/day from boomi_atom default messaging M
+  - Severity: P2 · Status: RESOLVED Apr 13 — drop pipeline removed 99.5% (9.4GB/day saved).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-013** — Boomi EDI Molecule INFO-level process logging (service.name UUID 82ade8db-6f75-…); ~2M docs/day sustained
+  - Severity: ? · Status: OPEN — Boomi team: log level reduction to WARN and add service name.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-040** — Synthetics + .fleet-actions-results retention = 365d (hot-only growth)
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: .fleet-actions-results-ilm-policy version 5 modified 2026-05-06; phases=["hot"] only (no delete phase) — matches "reverted to hot-only v5" in status_doc.
+- **IR-041** — Hot tier holds SLO indices and other historic data; stale ILM policies orphaned
+  - Severity: P3 · Status: RESOLVED 13 Apr — SLO indices moved to warm; 6 stale policies + templates deleted.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-042** — 14 orphan indices on hot tier from May 2025 (~60 GB, 11 months old, no ILM policy attached)
+  - Severity: P3 · Status: RESOLVED 20 Apr — 14 reattached via PUT index settings with index.lifecycle.name (logs×10, logs-apm.error×1, logs-apm.app×2, metrics×2) + 1 dead stream deleted (packetbeat); ILM age-counter reset fast-forwarded through retention-relevant phases. ~60 GB migrated off hot.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-043** — 19 deprecated data streams still active (aws_container_insights.prd-eu_quince, aws_eks, b2becom_v2×3, ti_abusech×4, packetbeat metrics, natgateway/rds/kafka metrics, cisa_kevs, couchbase_capellaql, notifications_webhook, notificationsservice, pvh_services_brads, plus older variants) Legacy stre
+  - Severity: RESOLVED 20 · Status: Apr — 19 streams deleted via DELETE _data_stream/ across 2 batches. Extended 6 May 2026: 23 additional dead streams cleaned up (10 AWS namespace stragglers in prd-eu_mendix*/prd-eu_product_traceability + 13 APM/metrics/synthetics dead streams). Total 42 streams deleted; combined ~92 shards freed.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-044** — APM service_transaction.60m orphan (2025.01.17-000013, 160.9 MB) unmanaged S
+  - Severity: RESOLVED 6 May 2026 · Status: — PUT _settings { index.lifecycle.name: metrics-apm.service_transaction_60m_metrics-default_policy } applied. Now Managed: yes, hot:rollover; ILM age counter resets on attach so this 16-month-old index will fast-forward through warm/cold/delete on subsequent ticks.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-045** — Path B ILM consolidation: 13 policies inconsistent (tier timings, rollover 2–50GB, frozen coverage 5/13)
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: dev-staging-logs policy shows 5-tier shape (hot/warm/cold/frozen/delete) with frozen searchable_snapshot — Path B pattern visible in ilm_get_lifecycle response.
+- **IR-046** — Rollover threshold outliers: logs-aws (2GB), metrics-apm.app_metrics (2GB), logs-apm.app (4GB), logs-apm.error (4GB) below Elastic’s 10–50 GB guidance Hi
+  - Severity: RESOLVED 6 May 2026 — Applied via MCP. · Status: CORRECTED (state differs from doc)
+  - Evidence: IR-046 status_doc cites versions 48/21/40 post-bump; current ilm_get_lifecycle alphabetical first-page does not include those policies and the name-filter parameter is silently ignored (every call returns the same first 20 of 87). Cannot positively re-confirm new max_primary_shard_size=30gb from this session. No regression evidence either.
+- **IR-047** — risk-score.risk-score-default data stream unmanaged (no ILM, 11 backing indices, ~0.2 GB)
+  - Severity: P3 · Status: JUDGEMENT CALL — confirm with Security team whether indefinite retention is intentional, then create policy or accept.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-058** — 16 ILM policies edited 2026-05-14: synthetics 90->45d, logs-apm.error_logs 60->45d, traces-apm.traces 45->30d (retention cuts); frozen phase (min_age 14d) added to 13 APM aggregate _metrics policies
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: logs-apm.error_logs-default_policy and traces-apm.traces-default_policy actively managing live backing indices (ilm_explain confirms policy attached; recent backing indices ages 2.8d / 5.96d consistent with shortened retention flow). .alerts-ilm-policy v144 + .preview.alerts-security.alerts-policy v128 both modified 2026-05-14 prove the 2026-05-14 lifecycle-policies stack apply ran.
+- **IR-059** — eu-b2b cluster went RED on 2026-05-15 — 96 unassigned primary shards across 167 data streams (APM logs/traces/metrics, AWS, Kong, Kubernetes, system, elastic_agent backing indices). Kibana reported inability to add data to 126 indices with searches returning incomplete results. Cluster self-recovered to green within ~16 h of the triggering node-recycle event.
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: Cluster GREEN, 0 unassigned shards, 0 unassigned_primary_shards. Plan history shows attempt ending 2026-05-15T17:10Z (warm replica remediation window). All warm tier traces-apm shards now carry primary+replica pairs (e.g. 001317 shards 0/1/2 each on 154+155).
+- **IR-092** — Warm nodes at 2 GB RAM, 94–99% OS memory; one node (instance-0000000143) 103,997 CPU throttle events vs peer 1,610
+  - Severity: Critical · Status: Closed (verified live)
+  - Evidence: Superseded by warm 2GB->8GB resize. Live warm nodes 154/155 at 8192 MB capacity, memory_pressure 12-19%, native_memory_pressure 59% — no longer in critical band.
+- **IR-093** — Frozen cache 91% disk, 79% LRU; single-zone frozen is fragile
+  - Severity: Medium · Status: Open (verified live)
+  - Evidence: Frozen single-zone i3en at 95.5% LRU disk fill (2171132/2273280 MB) — higher than the 91/79 captured at issue creation. Expected LRU behaviour but the "single-zone fragile" framing remains valid (zone_count=1).
+- **IR-094** — Hot node 0095 carrying 46 GB more data than peers (35–48% shard imbalance driven by traces-apm-default; 4 of 8 traces-apm shards on this node)
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: Hot disk usage 095=158 GB, 106=183 GB, 150=218 GB. Imbalance now spans 60 GB but 095 is the LIGHTEST not the heaviest — balancer has corrected. traces-apm now 3 shards/primary across all 3 hot nodes (.ds-traces-apm-default-2026.05.28-001323 etc).
+- **IR-095** — Hot tier downsizing opportunity: ~100 GB headroom gained post-cleanup; 21% utilisation
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: Override template traces-apm-override-shards exists (priority 250, number_of_shards:3, created 2026-05-06). Force-rolled backing index 2026.05.06-001233 visible as a frozen partial. New 3-shard pattern observed on all post-rollover indices.
+- **IR-120** — Cold tier parent circuit-breaker tripping at 1 GiB heap on two of three cold nodes. Tripped counts: instance-0000000122 = 2,034; instance-0000000141 = 124. Old-gen peak 99.6% of max on both. AutoOps notification 'circuit breaker tripped count is high on 71bdf337bb454d7ba192…' fired at 04:42 and 04:59 on 9 May 2026. cluster_health.status remained green throughout because shard allocation was unaffected.
+  - Severity: P1 · Status: CORRECTED (state differs from doc)
+  - Evidence: Cold nodes 141/156 now at 4096 MB RAM (~2 GB heap) after cold tier grew back to 4 GB on 2026-05-15T17:10Z. memory_pressure 23%, native_memory_pressure 67%; not the prior 99.6% old-gen peak. Status improved vs P1 framing but root-cause framing (1 GiB heap) is now stale — heap is now 2 GB.
+- **IR-122** — Cold-tier heap pressure diagnostic profile (9 May 2026). us-cld cold tier per-node search stats over ~25h uptime: query_total 21.99M / 20.32M / 22.90M (instances 169 / 194 / 170); avg query 0.5ms; query_failures 342 / 313 / 409; query_cache evictions 235,137 / 21,798 / 121,731. eu-b2b cold tier per-node search stats over ~25h: query_total 38,044 / 29,742 (instances 122 / 141); avg query time 15.25ms / 7.26ms; search_coordination/search ratio 4.0× / 2.4× indicating heavy fan-out per query; old-GC count 67 / 5; total old-GC time 116.6s / 7.5s on instance-122. fielddata = 0 on every cold node in both clusters.
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: us-cld cold now 8 GB (acted on); memory_pressure 20-21%, native 59% - upsize landed and pressure normalised
+- **IR-126** — Warm tier resize 2 GB -> 8 GB RAM applied 2026-05-14; new nodes instance-154/155 at 4 GB heap, old 2 GB nodes 129/143 retired; warm max_size raised to 15g for autoscale headroom
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: Warm tier topology 2x aws.es.datawarm.d3 instances 154/155 at instance_capacity=8192 MB, autoscaling_max=15360. Plan history shows the 2048->8192 jump and max raise to 15360 in two attempts ending 2026-05-14T14:13Z and 14:32Z. Old 129/143 no longer present.
+- **IR-127** — Version upgrade 9.4.0 -> 9.4.1 applied 2026-05-14; all 15 nodes on 9.4.1 (bundled JDK 26.0.1)
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: All 15 instances service_version=9.4.1; plan elasticsearch.version=9.4.1.
+- **IR-128** — Coordinating/ingest tier (instance-098, instance-140) - earlier sweep draft flagged an 8->4 GB downsize; WITHDRAWN on live verification
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: Coordinating tier 2x aws.es.coordinating.m5d at 15360 MB (=16 GB RAM) — matches status_doc.
+- **IR-129** — ML nodes instance-152 / instance-153 at 4 GB RAM / 2 GB heap, 0% disk - ML inventory done 2026-05-14
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: ML nodes 152/153 at 4096 MB with disk_space_used 9/19 MB out of 49152 (effectively zero). Dormant confirmed; removal still pending Security-team signoff per status_doc.
+- **IR-130** — Hot tier (095/106/150) at 28-39% disk - the register's earlier '21% utilisation, 3 nodes downsizable' figure is now stale
+  - Severity: P3 · Status: Open (verified live)
+  - Evidence: Hot disk usage now 158/183/218 GB out of 461 GB = 34%/40%/47%. Slightly above the 28-39% framing but same condition class; "re-baseline" item remains valid before any 3->2 downsize.
+- **IR-136** — Hot-tier i3 nodes instance-106 (CPU 48%, 622k cgroup throttles, index-queue-high) and instance-150 (327k throttles) CPU-throttled under indexing load
+  - Severity: P3 · Status: OPEN - if volume is expected to persist, add hot-tier CPU/headroom; otherwise monitor index-queue and slow logs
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-146** — Profiling-* empty data streams (14 total after Universal Profiling uninstall) D
+  - Severity: ow R · Status: ESOLVED 13 Apr — deleted; 112 shards freed (~3.7%).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-147** — SLO indices on hot (.slo-observability.sli-v3.2.2026-01-01, 2026-02-01)
+  - Severity: Low · Status: RESOLVED 13 Apr — moved to warm via index.routing.allocation.include._tier_preference. Extended 20 Apr for March index + 9 empty version indices cleanup (batch 5).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-148** — 6 stale ILM policies (30/180/365-days-default + @lifecycle) + templates L
+  - Severity: ow R · Status: ESOLVED 13 Apr — DELETE templates then policies.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-149** — 54 remaining empty 2025 backing indices (<1 KB each) S
+  - Severity: 3 D · Status: EFERRED — low-value housekeeping; could clean via same Batch 1 pattern when convenient.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-156** — 11 profiling-events-* indices at 0 docs remain after Universal Profiling uninstall
+  - Severity: Low · Status: OPEN - delete; frees ~11 shards. Same pattern as the 13 Apr profiling cleanup.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-157** — 252 indices on ES 8.x versions (8.12-8.18), mostly <500 MB each
+  - Severity: P3 · Status: OPEN - force-merge / reindex hygiene pass; reduces segment overhead. Pair with the 54 empty 2025 backing indices (table 6 r8).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-158** — 939 ingest pipelines; ~10% grok failure rate (606 of 6,086) and ~1.3% rename failures observed in cluster_stats
+  - Severity: P3 · Status: OPEN - audit and prune unused pipelines, fix failing patterns; reduces master-state size. Larger than eu-cld's 416-pipeline cleanup item.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-175** — Search slow-log enablement for cold-tier diagnostic capture. Need to identify the actual queries / users / dashboards / Watcher rules driving cold-tier heap pressure on both clusters. Existing diagnostics surface counter-level evidence (query_total, query_time, breaker.tripped) but not the per-query detail needed to act on it.
+  - Severity: P3 · Status: ACTIVE MONITORING 9 May 2026 — PUT */_settings applied to all open indices on both clusters with: index.search.slowlog.threshold.query.warn 2s; index.search.slowlog.threshold.query.info 500ms; index.search.slowlog.threshold.fetch.warn 1s; index.search.slowlog.include.user true. us-cld request acknowledged server-side (response timed out client-side because of ~17,022 indices in one PUT; verified applied via spot-check on RUM, checkpoint network logs, and a mulesoft index). eu-b2b acknowledged cleanly. Caveat: per-index settings — newly-rolled indices in the next 24h won't auto-inherit; for the 24h diagnostic window this is acceptable since cold-tier indices already have it. Slow-log entries land in elasticsearch.log on each node and surface in the Cloud Console Logs and metrics view; if monitoring is configured they appear in .ds-logs-elasticsearch.slowlog-* in the monitoring deployment. Filter for cold nodes: event.dataset:elasticsearch.slowlog AND elasticsearch.node.name:('instance-0000000169' OR 'instance-0000000194' OR 'instance-0000000170') for us-cld; ('instance-0000000122' OR 'instance-0000000141') for eu-b2b. Tomorrow: re-pull, group by user.name × index × query.type, decide on heap bump per the entry under Theme 5. Revert plan: PUT */_settings with all four keys set to null on each cluster.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+
+_Regenerated 2026-06-01 via python-docx + Sev/Status repair pass._

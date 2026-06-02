@@ -1,0 +1,18 @@
+id: terraform
+description: Terraform CLI access — fmt, validate, plan only. Apply is forbidden.
+mcp_server: mcp-server-terraform   # or local bash wrapper
+required_actions:
+  - terraform_fmt
+  - terraform_validate
+  - terraform_plan
+  - search_modules
+  - search_providers
+forbidden_actions:
+  - terraform_apply
+  - terraform_destroy
+  - terraform_force_unlock
+  - terraform_state_*       # state surgery is human-only
+notes: |
+  Plans are executed in the GitLab CI runner via the pipeline, not by the agent
+  directly. The agent uses `terraform_plan` only for local sanity-check of
+  module syntax before pushing. The authoritative plan is the one CI runs.

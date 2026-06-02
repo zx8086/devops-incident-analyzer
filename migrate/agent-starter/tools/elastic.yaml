@@ -1,0 +1,33 @@
+id: elastic
+description: Elastic Cloud + cluster API MCP — deployments, plans, health, ILM, transforms, indices
+mcp_server: mcp-server-elastic
+required_actions:
+  # Cloud
+  - elasticsearch_cloud_get_deployment
+  - elasticsearch_cloud_list_deployments
+  - elasticsearch_cloud_get_plan_history
+  - elasticsearch_cloud_simulate_hardware_profile_change
+  # Cluster
+  - elasticsearch_get_cluster_health
+  - elasticsearch_get_nodes_stats
+  - elasticsearch_indices_summary
+  - elasticsearch_list_indices
+  - elasticsearch_get_index_template
+  - elasticsearch_get_mappings
+  # ILM
+  - elasticsearch_ilm_get_lifecycle
+  - elasticsearch_ilm_explain_lifecycle
+  # Transforms
+  - elasticsearch_list_transforms
+  - elasticsearch_get_transform_stats
+  # Pipelines
+  - elasticsearch_get_ingest_pipeline
+  - elasticsearch_simulate_ingest_pipeline
+forbidden_actions:
+  # The agent observes; Terraform/pipeline applies
+  - elasticsearch_cloud_update_*
+  - elasticsearch_put_*
+  - elasticsearch_delete_*
+  - elasticsearch_ilm_put_lifecycle
+  - elasticsearch_ilm_delete_lifecycle
+auth: per-cluster API keys (env, not committed)

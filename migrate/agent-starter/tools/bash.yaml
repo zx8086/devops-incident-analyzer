@@ -1,0 +1,10 @@
+id: bash
+description: Sandboxed shell for git operations, file I/O, and pipeline-URL polling
+required_actions:
+  - git clone / fetch / checkout / branch / commit / push
+  - file read/write inside agent workspace only
+  - curl GET (read-only) for pipeline status polling
+forbidden_actions:
+  - git push --force, --force-with-lease to main
+  - any rm -rf outside the agent workspace
+  - any operation against ~/.ssh or shell rc files

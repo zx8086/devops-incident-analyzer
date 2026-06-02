@@ -1,0 +1,90 @@
+# Issues — ap-cld
+
+Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 28 entries.
+
+- **IR-048** — No warm tier provisioned → all 8 core policies skipped warm; hot→cold direct
+  - Severity: Critical · Status: Closed (verified live)
+  - Evidence: cloud_get_deployment plan shows cold tier 3 zones x 2048 MB (148 GB disk via i3en multiplier 74); warm tier also provisioned 3 zones x 2048 MB. Both tiers present, ap-default-lifecycle-* policies show cold+warm phases.
+- **IR-049** — basic-lifecycle-metrics missing delete; 4,238 frozen indices incl. 222+ from 2024 growing indefinitely
+  - Severity: Critical · Status: Closed (verified live)
+  - Evidence: ilm_get_lifecycle: basic-lifecycle-metrics v12 has 5-phase cold/warm/delete/hot/frozen with 30d retention (stepped down from 90d). 528 indices, 131 data streams attached.
+- **IR-050** — Cold tier storing full replicas; ~200GB wasted
+  - Severity: High · Status: Closed (verified live)
+  - Evidence: Cluster health shows 1219 primary vs 1732 total active shards (513 replicas total) - cold tier no longer holding full replica set. Cold tier disk usage 21-29 GB per node (was bloated pre-fix).
+- **IR-051** — 50GB rollover; slow warm transitions
+  - Severity: High · Status: RESOLVED 13–20 Mar — reduced to 2GB max_primary_shard_size.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-052** — 18 APM policies hot-only (no tier transitions); 390-day 60m aggregation on hot
+  - Severity: High · Status: Closed (verified live)
+  - Evidence: ilm_get_lifecycle: all 14 APM policies (metrics-apm.*, traces-apm.*, logs-apm.*) v2 with cold->warm->hot->delete->frozen phases, retention 10-270d. No hot-only APM policies remain.
+- **IR-053** — Built-in fleet safety policies (metrics/logs/traces/synthetics/@lifecycle) with 23 zombie Nov-2024 indices B
+  - Severity: edium R · Status: Closed (verified live)
+  - Evidence: ilm_get_lifecycle: logs@lifecycle/metrics@lifecycle/synthetics@lifecycle/traces@lifecycle all v2 modified 2026-04-09 with cold->warm->hot->delete->frozen 90d. ilm_explain_lifecycle(onlyErrors) returned zero errors and no Nov-2024 zombie indices present.
+- **IR-055** — Cisco Meraki + Cisco FTD streams producing 278M docs/day combined from 8 April 2026 (92% of ap-cld ingest vs prior ~81M baseline); existing logs policy not sized for this volume
+  - Severity: P1 · Status: CORRECTED (state differs from doc)
+  - Evidence: ap-network-logs ILM policy v4 EXISTS with 5-phase + 30d delete (140 indices, 2 data streams attached) - confirmed. BUT logs-cisco_meraki.log@custom and logs-cisco_ftd.log@custom component templates DO NOT EXIST (template_not_found). Parent templates list them under ignore_missing_component_templates so absence is silent, but the 'preserve assignment through package updates' guarantee is missing. Cisco volume confirmed: 890M docs across the two data streams.
+- **IR-056** — Frozen-tier delete phase stalled for ~160 overdue indices (~40 days behind schedule)
+  - Severity: DEF · Status: ERRED — low-impact (frozen cost is cheap); indices will age out naturally through May/June 2026. Playbook §3.6 now calls this pattern out before Path B adoption on new clusters.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-071** — Windows metrics 116M of 130M docs/day (89%); windows.service 62M + perfmon 27M; 1,835 services/host at 60s
+  - Severity: High · Status: RESOLVED 9 Apr — perfmon disabled; service scoped; period increased; 87M/day eliminated (67%).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-072** — ap1bcdedit straggler agent rev 41 (3 behind); ~20M docs/day unfiltered
+  - Severity: Low-Med · Status: RESOLVED 10 Apr — self-fixed rev 43→44.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-073** — AP1XOFFTHQ01 (8.17.3, ap_windows_nonprod) fails the 9.3.3 upgrade; status error
+  - Severity: Low-Med · Status: OPEN - per-host C: cleanup then AGENT_IDS retry (same cohort as the 4 ap_windows_nonprod disk-full hosts).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-074** — Self-monitoring, system @ 10s, vSphere @ 20s, system @ 60s across 4 policies — compounding volume
+  - Severity: Medium · Status: RESOLVED 9 Apr — self-monitoring off (−6.6M); system 10s→120s (−7.7M); vSphere 20s→120s (−4.1M); system 60s→120s ×4 (−1.5M).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-076** — Clock-skew on hosts leading to ingest timestamps off by seconds to minutes; affects ordering in Kibana and alerting
+  - Severity: P3 · Status: RESOLVED Apr 22 — three @custom ingest pipelines deployed to correct timestamp skew on affected namespaces; verified via spot-check query. Pipelines pinned via component templates to survive integration updates.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-084** — 4 ap_windows_nonprod hosts (AP1XOFFCKQ03, AP1XOFFCKD01, AP1XOFFCKQ01, AP1XAPP41) fail the 9.3.3 upgrade; stuck on 8.17.3
+  - Severity: P2 · Status: OPEN - validated 2026-05-20: all 4 still 8.17.3 / UPG_FAILED. Per-host C: cleanup, then retry with explicit AGENT_IDS (selector-mode skips stale UPG_FAILED agents).
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-085** — AP1VYOPTA (9.1.3, ap_windows_prod) offline; 9.3.3 upgrade never attempted
+  - Severity: P3 · Status: OPEN - validated 2026-05-20: last check-in 2026-05-13 (offline ~7 days), DEGRADED. Confirm host powered on and reachable, then re-evaluate.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-096** — Hot tier 3z × C5D 192GB/16GB over-sized for 10–14% disk util
+  - Severity: High · Status: Closed (verified live)
+  - Evidence: cloud_get_deployment: hot tier instance_configuration_id=aws.es.datahot.i3 (was C5D) with size 8192 MB and storage_multiplier=30 (= 240 GB disk per node). Migration to I3 family confirmed.
+- **IR-097** — Warm tier 296GB/4GB oversized; 11–15% disk util
+  - Severity: Medium · Status: Closed (verified live)
+  - Evidence: cloud_get_deployment: warm tier 3 zones x 2048 MB = 148 GB disk (i3en multiplier 74). Halved from 296 GB baseline confirmed.
+- **IR-098** — Frozen tier single node (SPoF)
+  - Severity: Medium · Status: Open (verified live)
+  - Evidence: cloud_get_deployment: frozen tier zone_count=1 (single AZ ap-east-1b, instance-0000000061). SPoF persists - mitigated by S3 backing.
+- **IR-099** — Hot tier node #70 JVM 63% — blocks 3z→2z downsize (needs <50%) Wo
+  - Severity: d-gate OP · Status: Open (verified live)
+  - Evidence: get_nodes_stats(jvm): instance-0000000070 heap_used_percent=64 (still >50% gate). Sibling hot nodes instance-69=73%, instance-74=51%. JVM gate NOT met - downsize remains blocked.
+- **IR-100** — Cold tier 296GB oversized — <100GB sustained for 1 week P
+  - Severity: ate met P · Status: Closed (verified live)
+  - Evidence: cloud_get_deployment: cold tier 3 zones x 2048 MB RAM (= 148 GB disk per node, i3en multiplier 74). Downsize from 296 GB has been executed.
+- **IR-103** — Hot tier I3 450GB/15GB over-provisioned post-migration — 146 GB used of 1,350 GB available across the tier (~11% utilisation)
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: cloud_get_deployment: hot tier current size=8192 MB RAM, storage_multiplier=30 -> 240 GB disk per node. Plan last applied 2026-05-23. Disk used: instance-69=32 GB / 240 GB (13%), instance-70=53 GB / 240 GB (22%), instance-74=81 GB / 240 GB (33%). Already at 240 GB target, not 'in progress 450->225 GB' as doc states.
+- **IR-104** — Warm tier OS memory reporting 100% on all 3 nodes (matches the pattern observed on eu-b2b and eu-cld)
+  - Severity: P3 · Status: MONITOR — no heap/GC degradation observed; confirmed non-issue per Elastic Support guidance. Resize not required at this time.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-109** — Cold-tier node 0056 exhibited 63 old-GCs in 24h, peaked at 99.97% old-gen occupancy, self-recovered
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: get_nodes_stats(jvm): cold nodes instance-56=30%, instance-59=33%, instance-79=59% heap. Node 0056 (referenced in issue) at 30% - well below threshold. Self-recovery confirmed; no ongoing pressure.
+- **IR-124** — Warm-tier node instance-0000000066 (data_warm/remote_cluster_client on aws.es.datawarm.i3en) at heap 85%. Captured during fleet closing audit on 9 May 2026. New hot-spot beyond the already-documented instance-0000000070 hot-tier finding which was at heap 68% with 65 old-GC events.
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: get_nodes_stats(jvm): warm instance-0000000066 heap=66% (was reported 85% on 9 May). Trending down by ~19pp but still elevated and highest of warm trio (instance-65=53%, instance-75=47%). Audit/cleanup not yet completed but pressure has eased materially.
+- **IR-133** — Coordinating node instance-80 (m5d, ~1 vCPU / 2 GB) pinned at 88% CPU with 115k cgroup throttles plus management-queue-high and CPU-high alerts, while sibling instance-81 sits at ~2%
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: get_nodes_stats(jvm): instance-0000000080 (coordinating) heap=77% vs sibling instance-0000000081=45%. Imbalance persists (32pp gap) consistent with the client-load-balancing root cause. CPU/throttle metrics not refetched but heap split confirms the issue is live.
+- **IR-150** — MuleSoft orphan indices — 7 stale indices (~9.4 GB combined), no ILM attached
+  - Severity: Medium · Status: CORRECTED (state differs from doc)
+  - Evidence: list_indices(mulesoft*): 7 indices found, ~13 GB total (not ~9.4 GB doc claim). Largest are ACTIVE: mulesoft-aggregations-prod-v6 (10 GB, transform last ckpt 8s ago on instance-70) and mulesoft-aggregations-nonprod-v6 (452 MB, transform running on instance-69). True orphans are the older mulesoft-aggregations-prod (1.2 GB) + 4 small metadata indices (~1 MB). Ownership-blocked status valid for the legacy subset only.
+- **IR-151** — 2 stuck Enterprise Search audit indices in delete:delete ERROR
+  - Severity: edium R · Status: Closed (verified live)
+  - Evidence: ilm_explain_lifecycle(onlyErrors) returned zero indices in ERROR state. No enterprise-search audit indices stuck in delete:delete ERROR.
+- **IR-167** — Ownership gaps on orphan indices (monitoring-indices, mulesoft-aggregations) preventing decisive action
+  - Severity: High · Status: OPEN — build ownership register.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+
+_Regenerated 2026-06-01 via python-docx + Sev/Status repair pass._

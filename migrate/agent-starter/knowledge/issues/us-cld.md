@@ -1,0 +1,99 @@
+# Issues — us-cld
+
+Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 31 entries.
+
+- **IR-024** — Task overload 10 Mar — 140-task pending queue; Kibana offline; 20.7s max task wait; master snapshot pool saturated
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: basic-lifecycle-metrics v17 has delete phase min_age=30d (stepped down from 365d->180d->90d->30d); all 5 ILM policies show delete phase configured
+- **IR-025** — Core metrics policies hot→cold→frozen (no warm); cold tier held full replicas
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: warm tier exists in all 4 major policies (basic-lifecycle-metrics/logs, us-default-*) at min_age=6h; warm tier provisioned 3x4GB/760GB at 14-20% disk - scale-up no longer prerequisite
+- **IR-026** — 18 APM policies hot-tier-only with 1d delete; 355M docs/day apm.service_destination.1m on hot A
+  - Severity: 2 R · Status: Closed (verified live)
+  - Evidence: traces-apm.traces-default_policy has hot/warm/cold/delete (10d retention); rum_traces has full hot/warm/cold/frozen/delete (30d); APM policies aligned
+- **IR-027** — Synthetics policy: 365d hot-only retention
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: synthetics policy v1 still hot-only with 30d max_age 50gb max_primary_shard_size, no warm/cold/frozen/delete - claim of 'full tier transitions with 90d delete' not borne out by current policy
+- **IR-028** — 50GB rollover + 48,718 primary shards; cluster state bloated
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: rollover bumped further: basic-lifecycle-logs/us-default-*/traces-apm.* now at 10gb (not 2gb); only basic-lifecycle-metrics still at 2gb; active_primary_shards=8501 already below 18k target
+- **IR-057** — Five ILM policies on max_primary_shard_size 2 GB driving extreme rollover sprawl on chatty streams. Sample over the most-recent 300 .ds-* indices (rolling cadence < 1 day): 230 hot-tier indices across 11 streams with avg index size 2.5–3 GB confirming 2 GB cap is the dominant driver. RUM rolls every ~34 min (110 hot indices), traces-apm-na_plm_prod every ~114 min (33), mulesoft prod every ~164 min (23), infoblox_nios every ~5 h (13), mulesoft nonprod / cisco_ftd / checkpoint / synthetics e_commerce / apm.error / cisco_meraki / cisco_ise every 6–12 h.
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: basic-lifecycle-logs v13, traces-apm.rum_traces-default_policy v6, traces-apm.traces-default_policy v3, us-default-lifecycle-logs-nonprod v5, us-default-lifecycle-logs-prod v6 all show max_primary_shard_size=10gb
+- **IR-070** — Fleet collection 1.19B docs/day — windows.service 202M; perfmon 109M; apm.service_destination.1m 355M; self-monitoring 23.5M; vSphere 9.5M at 20s; system.core 3.3M; perfmon Process 1.0M D
+  - Severity: P2 · Status: RESOLVED 13 Apr — Fleet changes 1–4: self-monitoring off (99.7%), vSphere 20s→120s (83%), system.core off (99.4%), perfmon Process removed (100%), service filter (93–97%); −35.7M docs/day.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-083** — BWO-DT21-SHPT06 (8.19.2, na_windows_nonprod) fails the 9.3.3 binary upgrade
+  - Severity: P2 · Status: OPEN - validated 2026-05-20: still 8.19.2 / UPG_FAILED. Free C: then retry.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-110** — Plan-change failures #elasticsearch-221/222/223 blocked frozen and bundled-tier downsizes for 24+ hours on 2026-05-06–07
+  - Severity: P2 · Status: Closed (verified live)
+  - Evidence: current plan plan_attempt_id=cbb24099 succeeded 2026-05-22, healthy=true; frozen sized at 30 GB per zone (post-#226); cluster GREEN
+- **IR-111** — Frozen tier 30 GB → 15 GB RAM per zone resize — applied; LRU cache halved 2.17 TB → 1.08 TB per zone
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: frozen tier currently 30720 MB (30 GB) per zone across 3 zones, NOT 15 GB - cache shows 2,171 GB used of 2,273 GB per node (~95%), so frozen was scaled back up after the 15 GB shrink described in doc
+- **IR-112** — Hot tier consolidation: 9 mixed-size instances → 3 × 15 GB / 450 GB per zone
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: hot tier: 3 instances (213/214/221), c6gd, 15360 MB each, 460,800 MB (450 GB) disk, 3 zones; disk usage 58/72/69%
+- **IR-113** — Warm tier consolidation: 7 instances → 3 × 4 GB / 760 GB per zone
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: warm tier: 3 instances (189/216/217), datawarm.d3, 4096 MB each, 778,240 MB (760 GB) disk, 3 zones; disk usage 14-20%
+- **IR-114** — Coordinating/Ingest tier 8 GB → 4 GB RAM per zone (3 zones)
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: coordinating tier currently 8192 MB (8 GB) per zone, NOT 4 GB - re-upsized from 4 GB after thread-pool pressure (3 instances 223/224/225 at coordinating.m6gd 8 GB each)
+- **IR-115** — Kibana tier 8 GB → 4 GB RAM per zone (3 zones)
+  - Severity: P3 · Status: RESOLVED 7 May 2026 — #kibana-142. Verify Kibana responsiveness over next 24 h; if user-visible slowdowns appear, revert to 8 GB.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-116** — Cold node #194 heap at 87.9% post-Stage-3 resize
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: instance-194 not present in current topology (cold tier now instances 226/227/228 at 8 GB/datacold.d3); cold heap pressure 20-21% memory_pressure, 59% native - resolved by upsize 4 GB->8 GB
+- **IR-117** — Coordinating node #184 heap at 70.8% post-shrink
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: instance-184 not present in current topology (coord tier now instances 223/224/225 at 8 GB); 224 memory_pressure=61 highest, others 34-41% - resolved by upsize 4 GB->8 GB
+- **IR-118** — Hot tier downsize plan #elasticsearch-229 (Hot 15 GB → 8 GB) failed: zone-2 (instance-0000000215) provisioned at 8 GB / 240 GB / 4 GB heap; zones 0 and 1 (instances 213 and 214) stayed at 15 GB / 450 GB. Cluster transiently yellow with 541 unassigned shards mid-recovery; recovered green within minutes.
+  - Severity: P1 · Status: Closed (verified live)
+  - Evidence: hot tier confirmed symmetrical: 3x15 GB/450 GB across zones 0/1/2 - the post-revert state described in doc
+- **IR-119** — Cold tier parent circuit-breaker tripping at 4 GB / 2 GiB heap across all three cold nodes. Tripped counts at audit: instance-0000000169 = 2,196; instance-0000000194 = 1,421; instance-0000000170 = 818. Old-gen peak 99.4–99.85% of max on every cold node. Heap_used_percent at audit: 62 / 75 / 51.
+  - Severity: P1 · Status: CORRECTED (state differs from doc)
+  - Evidence: cold tier was upsized 4 GB -> 8 GB per zone (NOT shrunk to 2 GB); current 3x8 GB datacold.d3 confirms the IR-122 reclassification direction was acted on
+- **IR-121** — ML node tier removal line in optimisation tracker (2 × 4 GB ML nodes, ~$0.58/hr / ~$5,081/yr) — withdrawn from this round.
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: ML tier still provisioned: 2 zones x 4096 MB (instances 229/230 at ml.c5d) - kept per decision
+- **IR-134** — Coordinating/ingest nodes instance-184/193/222 (m6gd, ~2 vCPU / 4 GB) heavily CPU-throttled (600k-820k cgroup throttles); instance-193 CPU-high alert
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: named instances 184/193/222 no longer in topology; coord tier rebuilt as 223/224/225 at 8 GB datacold m6gd; CPU 4-23%, mem pressure 34-61% - prior throttling state likely cleared by upsize
+- **IR-135** — data_hot nodes instance-213/214 approaching disk low watermark; hot-tier nodes (213/214/221) at sustained load 5-7 with CPU throttling
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: instance-213 disk 58% (down from 91%), 214 at 72% (down from watermark trip), 221 at 69%; warm.min_age 6h reduction (IR-141) plus reroute (OT-113) cleared the watermark; still warrants monitor but no longer at risk
+- **IR-137** — Synthetics over-provisioned: 87 browser monitors, ~25,684 browser tests per 24h (measured 2026-05-25). Vendor status-page checks run a 5-minute schedule across 3 locations.
+  - Severity: P2 · Status: Open (verified live)
+  - Evidence: synthetics-browser-* still has 219 indices including e_commerce (12.8M/6.5M docs), default, network, apps; no consolidation evidence; synthetics ILM still v1 hot-only with 30d 50gb
+- **IR-139** — mulesoft-aggregations-prod-v6 = 103 GB single shard, 168,367,922 docs (live). mulesoft-aggregations-prod-v7 = 0 docs, 3-shard placeholder (empty).
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: v7 = 51.2 GB / 155.7M docs (3 primaries) and v8 = 96.6 GB / 162.6M docs (3 primaries+replicas, indexing state) BOTH populated; v6 still alive 103 GB/168M docs - reindex executed but v6 snapshot+delete step not done
+- **IR-140** — Source Transform `mulesoft-aggregations-prod-v6` has been STOPPED since 2026-03-22 02:11 UTC - 65 days with zero checkpoint progress. v6 doc count static at 168,367,922.
+  - Severity: P3 · Status: CORRECTED (state differs from doc)
+  - Evidence: mulesoft-aggregations-prod-v6 transform last_checkpoint_age=6,098,419s (~70.6 days) still stopped; v8 now indexing on instance-213 (last_checkpoint_age=133,849s ~37h, 25% failure rate) - decision was made toward v8 path
+- **IR-141** — instance-0000000213 (hot tier zone-0) drifted from 78% to 91% disk used over two days; daily ~30 GB ingest accumulating per-node despite the 2026-05-24 allocation-filter reroute (which had cleared it to 78/82/54%).
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: basic-lifecycle-metrics v17 / basic-lifecycle-logs v13 / us-default-lifecycle-logs-prod v6 / traces-apm.rum_traces-default_policy v6 all show warm.min_age=6h (modified 2026-05-26T03:29Z)
+- **IR-142** — Enterprise Search stuck data streams (api, audit) with 0 docs, 2 orphan shards
+  - Severity: Low · Status: Closed (verified live)
+  - Evidence: logs-enterprise_search.* count=0 docs, 0 shards - data streams already deleted
+- **IR-143** — MuleSoft orphan indices — 122GB hot: v1/v2/v3 + legacy typos; active v6 has no ILM
+  - Severity: Medium · Status: Open (verified live)
+  - Evidence: v1=1.1 GB, mulesoft-aggreations (typo)=232 MB, mulesoft-aggreations-full=428 MB still exist; v6 still 103 GB single shard with no ILM; v8 is new active populated 96.6 GB - cleanup not done
+- **IR-160** — Shard sprawl: 16,215 shards across 12 data nodes (~1,350/node) inflating per-node heap; parent circuit-breaker tripped count high with heap 95-100% on most data nodes; master-eligible instance-154 load-high (16 events)
+  - Severity: P2 · Status: CORRECTED (state differs from doc)
+  - Evidence: active_primary_shards=8501 / 9552 total on 12 data nodes (~796/node); down from 16215 cited (~1350/node); shard reduction substantially achieved via IR-057 (2gb->10gb) and warm shrink
+- **IR-171** — Disk-watermark policy on us-cld: 92% / 95% / 97% as steady-state (not the platform default 85% / 90% / 95%)
+  - Severity: P3 · Status: POLICY (steady-state, applied 7 May 2026) — PUT /_cluster/settings persistent watermark.low=92%, high=95%, flood_stage=97% is the documented configuration for us-cld. DO NOT blanket-apply this to other deployments. Other clusters (eu-cld, ap-cld, eu-b2b, gl-cld-reporting) keep the platform defaults unless they exhibit the same frozen-LRU steady-state pattern. Re-evaluate if frozen tier is resized again or if hot/warm/cold approach 80%+ used.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+- **IR-172** — Warm tier 4 GB → 2 GB RAM shrink — investigated and declined; documented as DO-NOT-PURSUE
+  - Severity: P3 · Status: Closed (verified live)
+  - Evidence: warm tier remains 3x4 GB datawarm.d3 (not shrunk to 2 GB); ILM warm phase confirmed number_of_replicas:0 per policy bodies
+- **IR-173** — Pre-resize playbook gap: "Use rolling grow and shrink for frozen tier" toggle was OFF when #elasticsearch-223 ran
+  - Severity: P3 · Status: OPEN — Tick the checkbox before the next frozen plan-change on this cluster. Roll into the standard pre-resize checklist (playbook §9 Validation Checklists or §12 Cross-session lessons) so the same #223 failure does not recur.
+  - Evidence: Not cluster-verifiable — needs Fleet/Kibana/billing/app-team
+
+_Regenerated 2026-06-01 via python-docx + Sev/Status repair pass._

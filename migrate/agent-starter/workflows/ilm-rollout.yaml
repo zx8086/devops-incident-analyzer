@@ -1,0 +1,97 @@
+name: ilm-rollout-flow
+description: >
+  Wave-style ILM policy change: gl-testing → dev → staging → prod, one MR each.
+  Each wave is gated on a human "go" between MRs.
+
+triggers:
+  - manual
+
+inputs:
+  policy_name: { type: string, required: true }
+  phases: { type: object, required: true }
+  target_indices_pattern: { type: string, required: true }
+  clusters_in_order: { type: array, required: true }   # e.g. ["gl-testing", "eu-b2b-dev", "eu-b2b-stg", "eu-b2b"]
+
+steps:
+
+  wave_glt:
+    skill: add-ilm-policy
+    inputs:
+      cluster: ${{ inputs.clusters_in_order[0] }}
+      policy_name: ${{ inputs.policy_name }}
+      phases: ${{ inputs.phases }}
+      target_indices_pattern: ${{ inputs.target_indices_pattern }}
+
+  glt_precheck:
+    skill: pre-check-gl-testing
+    depends_on: [wave_glt]
+    inputs:
+      branch: ${{ steps.wave_glt.outputs.branch }}
+
+  glt_mr:
+    skill: open-mr
+    depends_on: [glt_precheck]
+    conditions:
+      - ${{ steps.glt_precheck.outputs.passed == true }}
+    inputs:
+      branch: ${{ steps.wave_glt.outputs.branch }}
+      title: "[gl-testing] ILM ${{ inputs.policy_name }} — pre-check"
+      body: ${{ steps.wave_glt.outputs.body }}
+
+  # Human merges glt_mr and applies. Then resumes the flow with `gitagent run --resume wave_dev`.
+
+  wave_dev:
+    skill: add-ilm-policy
+    depends_on: [glt_mr]
+    inputs:
+      cluster: ${{ inputs.clusters_in_order[1] }}
+      policy_name: ${{ inputs.policy_name }}
+      phases: ${{ inputs.phases }}
+      target_indices_pattern: ${{ inputs.target_indices_pattern }}
+
+  dev_mr:
+    skill: open-mr
+    depends_on: [wave_dev]
+    inputs:
+      branch: ${{ steps.wave_dev.outputs.branch }}
+      title: "[${{ inputs.clusters_in_order[1] }}] ILM ${{ inputs.policy_name }}"
+      body: ${{ steps.wave_dev.outputs.body }}
+
+  wave_stg:
+    skill: add-ilm-policy
+    depends_on: [dev_mr]
+    inputs:
+      cluster: ${{ inputs.clusters_in_order[2] }}
+      policy_name: ${{ inputs.policy_name }}
+      phases: ${{ inputs.phases }}
+      target_indices_pattern: ${{ inputs.target_indices_pattern }}
+
+  stg_mr:
+    skill: open-mr
+    depends_on: [wave_stg]
+    inputs:
+      branch: ${{ steps.wave_stg.outputs.branch }}
+      title: "[${{ inputs.clusters_in_order[2] }}] ILM ${{ inputs.policy_name }}"
+      body: ${{ steps.wave_stg.outputs.body }}
+
+  wave_prod:
+    skill: add-ilm-policy
+    depends_on: [stg_mr]
+    inputs:
+      cluster: ${{ inputs.clusters_in_order[3] }}
+      policy_name: ${{ inputs.policy_name }}
+      phases: ${{ inputs.phases }}
+      target_indices_pattern: ${{ inputs.target_indices_pattern }}
+
+  prod_mr:
+    skill: open-mr
+    depends_on: [wave_prod]
+    inputs:
+      branch: ${{ steps.wave_prod.outputs.branch }}
+      title: "[${{ inputs.clusters_in_order[3] }}] ILM ${{ inputs.policy_name }} — PROD"
+      body: ${{ steps.wave_prod.outputs.body }}
+      labels: ["agent-generated", "iac", "prod", "needs-2-approvals"]
+
+error_handling:
+  on_failure: notify
+  channel: "#observability-iac"
