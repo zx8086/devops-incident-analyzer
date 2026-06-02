@@ -103,7 +103,8 @@ describe("mergeIlmPhases", () => {
 
 	test("records undefined in previous for a leaf the policy did not have", () => {
 		const { previous } = mergeIlmPhases(POLICY, { hot: { max_age: "30d", set_priority: { priority: 50 } } });
-		expect((previous as { hot: { set_priority?: unknown } }).hot.set_priority).toBeUndefined();
+		// previous mirrors the patch's nesting; a brand-new leaf records undefined at the leaf.
+		expect((previous as { hot: { set_priority: { priority?: unknown } } }).hot.set_priority.priority).toBeUndefined();
 	});
 
 	test("throws on non-object JSON", () => {
@@ -331,10 +332,10 @@ In `nodes.ts`, in `IntentSchema` (`:47-59`), after the `policyName: z.string().n
 
 - [ ] **Step 3c: Carry `phasesPatch` through `parseIntentJson`**
 
-In `nodes.ts`, in the object returned from `parseIntentJson` (`:72-84`), after the `policyName: nn(p.policyName),` line, add:
+In `nodes.ts`, in the object returned from `parseIntentJson` (`:72-84`), after the `policyName: nn(p.policyName),` line, add (no cast — `nn` preserves the `Record<string, unknown> | undefined` type; Zod 4 infers a non-partial record for string keys):
 
 ```ts
-						phasesPatch: nn(p.phasesPatch) as Record<string, unknown> | undefined,
+						phasesPatch: nn(p.phasesPatch),
 ```
 
 - [ ] **Step 3d: Add the ilm-rollout planner clause**
@@ -642,6 +643,11 @@ Run: `bun test packages/agent/src/iac/ilm-rollout.test.ts -t "proposeIlmChange"`
 Expected: FAIL — `draftChange` has no ilm-rollout route; it falls through to the legacy terraform path and calls `git_create_branch` (no `retentionChange`/`proposedFilePath` set as asserted).
 
 - [ ] **Step 4a: Implement `proposeIlmChange`**
+
+> **AS-BUILT NOTE (reconciled two plan/test surface-text conflicts during implementation, commit b9d7d27):**
+> 1. The diff leaf is rendered with the phase in brackets and the **quoted JSON field name** (e.g. `[delete] - "min_age": "30d"` / `+ "min_age": "60d"`), NOT a dotted `"delete.min_age"` key — so the test's `toContain('"min_age"')` passes and it reads as a real JSON edit.
+> 2. The 404 `blockedReason` keeps its capitalized lead but appends a lowercase `no such policy file at <path>` so the test's `toContain("no such policy")` passes; the user-facing `AIMessage` already had the lowercase phrase.
+> The shipped `nodes.ts` is the source of truth for the exact strings.
 
 In `nodes.ts`, immediately after `proposeTierResize` (ends ~line 497, the line `	}` closing the function before `// Draft the change.`), add:
 
