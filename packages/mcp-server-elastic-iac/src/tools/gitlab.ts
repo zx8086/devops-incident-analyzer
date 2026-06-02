@@ -4,7 +4,23 @@ import { z } from "zod";
 import type { Config } from "../config.ts";
 import { gitlabFetch, text } from "./shared.ts";
 
-// Repo reads + MR creation/inspection. gitlab_*_approve and gitlab_*_merge are
+// Build the POST /repository/commits body for a single-file content update.
+// GitLab's "update" action needs the FULL new file content, not a diff. (Pure;
+// unit-tested.)
+export function buildCommitFileBody(input: {
+	branch: string;
+	commitMessage: string;
+	filePath: string;
+	content: string;
+}): { branch: string; commit_message: string; actions: Array<{ action: string; file_path: string; content: string }> } {
+	return {
+		branch: input.branch,
+		commit_message: input.commitMessage,
+		actions: [{ action: "update", file_path: input.filePath, content: input.content }],
+	};
+}
+
+// Repo reads + branch/commit/MR creation. gitlab_*_approve and gitlab_*_merge are
 // intentionally absent (maker/checker separation of duties).
 //
 // Transport: GitLab REST (/api/v4) directly, so this server is self-contained and
@@ -12,9 +28,11 @@ import { gitlabFetch, text } from "./shared.ts";
 // end-state: switch these to the GitLab native MCP (the proxy pattern used by
 // packages/mcp-server-gitlab) once the target instance supports it.
 export function registerGitlabTools(server: McpServer, config: Config): void {
-	const { gitlabBaseUrl, projectId } = config.repository;
-	const token = config.gitlabToken;
-	const project = encodeURIComponent(projectId);
+	// SIO-873: prefer the GitOps target (siobytes); fall back to repository.* so the
+	// legacy read tools keep working when the GitOps vars are unset.
+	const gitlabBaseUrl = config.gitops.baseUrl || config.repository.gitlabBaseUrl;
+	const token = config.gitops.token ?? config.gitlabToken;
+	const project = encodeURIComponent(config.gitops.project || config.repository.projectId);
 
 	server.tool(
 		"gitlab_get_repository_tree",
@@ -42,6 +60,40 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				),
 			);
 		},
+	);
+
+	server.tool(
+		"gitlab_create_branch",
+		"Create a branch from a ref (server-side; no local clone). GitOps proposer step before committing a config edit.",
+		{ branch: z.string(), ref: z.string().optional() },
+		async ({ branch, ref }) => {
+			const qs = new URLSearchParams({ branch, ref: ref ?? "main" });
+			return text(
+				await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/branches?${qs}`, {
+					method: "POST",
+				}),
+			);
+		},
+	);
+
+	server.tool(
+		"gitlab_commit_file",
+		"Commit a single-file content update to a branch via the GitLab API (server-side; no local git). The content is the FULL new file body, not a diff.",
+		{
+			branch: z.string(),
+			file_path: z.string(),
+			content: z.string().describe("Full new file content (read-modify-write; not a diff)."),
+			commit_message: z.string(),
+		},
+		async ({ branch, file_path, content, commit_message }) =>
+			text(
+				await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/commits`, {
+					method: "POST",
+					body: JSON.stringify(
+						buildCommitFileBody({ branch, filePath: file_path, content, commitMessage: commit_message }),
+					),
+				}),
+			),
 	);
 
 	server.tool(

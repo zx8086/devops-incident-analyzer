@@ -17,6 +17,19 @@ export const ConfigSchema = z.object({
 		// Local clone the git/terraform tools operate inside (never the agent's CWD).
 		workspaceDir: z.string(),
 	}),
+	// SIO-873: the GitOps target the agent proposes against (edit JSON + open MR via
+	// the GitLab REST API; CI owns plan/apply). A self-hosted instance distinct from
+	// repository.* above. The agent never clones, never runs terraform, never pushes.
+	gitops: z.object({
+		baseUrl: z.string(),
+		// Namespaced project path (e.g. "siobytes/elastic-iac"); GitLab accepts it
+		// URL-encoded in place of a numeric id.
+		project: z.string(),
+		token: z.string().optional(),
+		// Path of the per-deployment JSON whose `.version` a version-upgrade edits.
+		// ${cluster} is substituted with the deployment name.
+		deploymentJsonTemplate: z.string(),
+	}),
 	terraformBin: z.string(),
 	// Task runner for the repo's read-only helper verbs (status/list/output/state-list).
 	taskBin: z.string(),
@@ -40,6 +53,13 @@ export function loadConfig(): Config {
 			gitlabBaseUrl: Bun.env.GITLAB_BASE_URL ?? "https://gitlab.com",
 			projectId: Bun.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "71488350",
 			workspaceDir: Bun.env.ELASTIC_IAC_WORKSPACE_DIR ?? "/tmp/elastic-iac-workspace",
+		},
+		gitops: {
+			baseUrl: Bun.env.ELASTIC_IAC_GITLAB_BASE_URL ?? "https://gitlab.siobytes.cloud",
+			project: Bun.env.ELASTIC_IAC_GITLAB_PROJECT ?? "siobytes/elastic-iac",
+			token: Bun.env.ELASTIC_IAC_GITLAB_TOKEN || undefined,
+			deploymentJsonTemplate:
+				Bun.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json",
 		},
 		terraformBin: Bun.env.TERRAFORM_BIN ?? "terraform",
 		taskBin: Bun.env.ELASTIC_IAC_TASK_BIN ?? "task",

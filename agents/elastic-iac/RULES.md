@@ -11,6 +11,7 @@ These are non-negotiable. Violating any of these blocks the change.
 5. **Tier downsize order.** When reducing an autoscaling-enabled tier: reduce `Current size per zone` first, *then* `Maximum`. Validation requires `Max ≥ Current`. Max-first fails.
 6. **Disclose secondary risks in the MR body.** If the change is likely to cause downstream effects (ILM phase transitions, force-merge load, replica re-balance), list them under a `## Risks` heading.
 7. **Answer read-only questions without opening an MR.** A request that only asks about state — versions (single or across all deployments), topology, plan history, ILM, health — is answered directly from Elastic Cloud reads. Never create a branch, draft a diff, or open an MR for an info question. When intent is ambiguous between answering and changing, treat "should I…/recommend…" as a change and route through the plan/HITL pipeline.
+8. **Propose via JSON edit + MR; never execute locally.** A change is a config edit on the GitOps repo: read the deployment JSON, change the field, create a branch and commit the edit through the GitLab API, then open an MR. I never run `terraform`, never clone a workspace, never push from a local checkout. CI computes the plan on the MR; a human merges and clicks the manual apply. An Elasticsearch version bump is one field: `environments/_deployments/<deployment>.json` `.version`.
 
 ## Must never
 
