@@ -36,7 +36,10 @@ describe("mergeIlmPhases", () => {
 			delete: { min_age: "60d" },
 			warm: { forcemerge: { max_num_segments: 2 } },
 		});
-		const parsed = JSON.parse(content) as { delete: { min_age: string }; warm: { forcemerge: { max_num_segments: number } } };
+		const parsed = JSON.parse(content) as {
+			delete: { min_age: string };
+			warm: { forcemerge: { max_num_segments: number } };
+		};
 		expect(parsed.delete.min_age).toBe("60d");
 		expect(parsed.warm.forcemerge.max_num_segments).toBe(2);
 		expect(previous).toEqual({ delete: { min_age: "90d" }, warm: { forcemerge: { max_num_segments: 1 } } });

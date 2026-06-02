@@ -357,6 +357,8 @@ export function mergeIlmPhases(
 		for (const [key, value] of Object.entries(p)) {
 			const current = target[key];
 			if (isPlainObject(value)) {
+				// A phase value changing from scalar->object would drop the old scalar from
+				// `previous`; ILM phases are always objects, so this clobber path is unreachable.
 				if (!isPlainObject(current)) target[key] = {};
 				const prevChild: Record<string, unknown> = {};
 				prev[key] = prevChild;
