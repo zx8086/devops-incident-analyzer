@@ -111,3 +111,26 @@ describe("parseLatestAgentMr", () => {
 		expect(parseLatestAgentMr('[200] [{"iid":50}]')).toEqual({ iid: 50, webUrl: "" });
 	});
 });
+
+// SIO-878: classify a failed plan job's log into a cause hint.
+import { classifyPipelineFailure } from "./nodes.ts";
+
+describe("classifyPipelineFailure", () => {
+	test("recognises a Terraform state-lock failure", () => {
+		const log = "...\nError: Error acquiring the state lock\nError message: HTTP remote state already locked:\n...";
+		const hint = classifyPipelineFailure(log);
+		expect(hint).toContain("state-lock");
+		expect(hint).toContain("shared deployments stack");
+		expect(hint).toContain("force-unlock");
+	});
+
+	test("generic hint for an unrecognised failure", () => {
+		const hint = classifyPipelineFailure('Error: invalid resource attribute "foo" in main.tf');
+		expect(hint).toContain("another reason");
+	});
+
+	test("no-log hint when the log was unavailable", () => {
+		expect(classifyPipelineFailure("[no plan job found in the child pipeline]")).toContain("not available");
+		expect(classifyPipelineFailure("")).toContain("not available");
+	});
+});

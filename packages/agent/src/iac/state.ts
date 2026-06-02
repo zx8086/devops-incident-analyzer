@@ -93,6 +93,9 @@ export const IacState = Annotation.Root({
 	mrIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	pipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
 	pipelineStatus: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-878: when the pipeline failed, a human-readable cause hint (e.g. a Terraform
+	// state-lock on the shared deployments stack) derived from the plan job log.
+	failureHint: Annotation<string>({ reducer: last, default: () => "" }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.
