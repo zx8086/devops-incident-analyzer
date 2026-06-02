@@ -11,6 +11,23 @@ describe("applyStreamEvent", () => {
 		expect(next2.currentContent).toBe("hi world");
 	});
 
+	// SIO-876: live pipeline-watch ticker accumulates status transitions.
+	test("accumulates iac_pipeline_progress lines", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 355, status: "running" });
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 355, status: "success" });
+		expect(state.iacPipelineProgress).toEqual(["Pipeline #355: running", "Pipeline #355: success"]);
+	});
+
+	test("iac_pipeline_progress handles a null pipelineId", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "iac_pipeline_progress",
+			pipelineId: null,
+			status: "pending",
+		});
+		expect(next.iacPipelineProgress).toEqual(["Pipeline: pending"]);
+	});
+
 	test("tracks node_start and node_end transitions", () => {
 		let state = initialReducerState();
 		state = applyStreamEvent(state, { type: "node_start", nodeId: "classify" });

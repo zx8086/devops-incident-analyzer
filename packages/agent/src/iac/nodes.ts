@@ -1,6 +1,7 @@
 // agent/src/iac/nodes.ts
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
@@ -703,6 +704,10 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 			if (newest.status !== status) {
 				status = newest.status;
 				log.info({ iid, pipelineId, status }, "iac pipeline status");
+				// SIO-876: stream the transition live (the SSE pump forwards this as
+				// iac_pipeline_progress); the final status+plan+approval still arrive as
+				// the assistant message.
+				await dispatchCustomEvent("iac_pipeline_progress", { pipelineId, status });
 			}
 			if (isTerminalPipelineStatus(status)) break;
 		}

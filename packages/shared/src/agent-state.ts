@@ -403,5 +403,12 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 			})
 			.nullable(),
 	}),
+	// SIO-876: live pipeline progress emitted by watchPipeline on each status change.
+	// The final status + plan + approval still arrive as the assistant message.
+	z.object({
+		type: z.literal("iac_pipeline_progress"),
+		pipelineId: z.number().nullable(),
+		status: z.string(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

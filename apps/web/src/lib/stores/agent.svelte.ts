@@ -76,6 +76,7 @@ function createAgentStore() {
 	// elastic-iac HITL banners.
 	let iacClarify = $state<IacClarifyPrompt | null>(null);
 	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
+	let iacPipelineProgress = $state<string[]>([]);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -98,6 +99,7 @@ function createAgentStore() {
 		lastToolsUsed = [];
 		lastRunId = undefined;
 		lastConfidence = undefined;
+		iacPipelineProgress = [];
 
 		abortController = new AbortController();
 
@@ -166,6 +168,7 @@ function createAgentStore() {
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
+			iacPipelineProgress = [];
 		}
 	}
 
@@ -188,6 +191,7 @@ function createAgentStore() {
 			topicShiftPrompt,
 			iacClarify,
 			iacPlanReview,
+			iacPipelineProgress,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -207,6 +211,7 @@ function createAgentStore() {
 		topicShiftPrompt = next.topicShiftPrompt;
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
+		iacPipelineProgress = next.iacPipelineProgress;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -352,6 +357,7 @@ function createAgentStore() {
 		topicShiftPrompt = null;
 		iacClarify = null;
 		iacPlanReview = null;
+		iacPipelineProgress = [];
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -368,6 +374,7 @@ function createAgentStore() {
 		if (isStreaming) return;
 		iacPlanReview = null;
 		iacClarify = null;
+		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
 		activeNodes = new Set();
@@ -395,6 +402,9 @@ function createAgentStore() {
 			isStreaming = false;
 			activeNodes = new Set();
 			completedNodes = new Map();
+			// SIO-876: the final status+plan+approval now lives in the message; clear the
+			// live ticker so it doesn't linger.
+			iacPipelineProgress = [];
 		}
 	}
 
@@ -540,6 +550,9 @@ function createAgentStore() {
 		},
 		get iacPlanReview() {
 			return iacPlanReview;
+		},
+		get iacPipelineProgress() {
+			return iacPipelineProgress;
 		},
 		sendMessage,
 		setFeedback,

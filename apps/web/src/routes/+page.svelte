@@ -166,6 +166,19 @@ function handleSuggestionClick(suggestion: string) {
           </div>
         {/if}
 
+        {#if agentStore.iacPipelineProgress.length > 0}
+          <div class="px-4 py-1 max-w-4xl mx-auto">
+            <ul class="text-xs text-tommy-navy/80 font-mono space-y-0.5">
+              {#each agentStore.iacPipelineProgress as line}
+                <li class="flex items-center gap-1.5">
+                  <span class="inline-block w-1.5 h-1.5 rounded-full bg-tommy-accent-blue animate-pulse"></span>
+                  {line}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+
         {#if agentStore.currentContent}
           <ChatMessage
             message={{ role: "assistant", content: agentStore.currentContent }}
