@@ -201,6 +201,14 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			toolsUsed.add(toolName);
 			send({ type: "tool_call", toolName, args: event.data?.input ?? {} });
 		}
+
+		// SIO-876: forward watchPipeline's live status transitions to the UI.
+		if (event.event === "on_custom_event" && event.name === "iac_pipeline_progress") {
+			const data = event.data as { pipelineId?: number | null; status?: unknown };
+			if (typeof data?.status === "string") {
+				send({ type: "iac_pipeline_progress", pipelineId: data.pipelineId ?? null, status: data.status });
+			}
+		}
 	}
 
 	return { toolsUsed: [...toolsUsed], responseContent };
