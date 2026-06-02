@@ -1,13 +1,13 @@
 # Handover — elastic-iac GitOps proposer arc (SIO-870 → SIO-878)
 
-- **Date**: 2026-06-02
-- **Repo state**: branch `main`, HEAD `742f3b7` (PR #179 merge). All nine tickets merged; no open elastic-iac tickets.
-- **Tickets** (all Done unless noted): [SIO-870](https://linear.app/siobytes/issue/SIO-870), [SIO-871](https://linear.app/siobytes/issue/SIO-871), [SIO-872](https://linear.app/siobytes/issue/SIO-872), [SIO-873](https://linear.app/siobytes/issue/SIO-873), [SIO-874](https://linear.app/siobytes/issue/SIO-874), [SIO-875](https://linear.app/siobytes/issue/SIO-875), [SIO-876](https://linear.app/siobytes/issue/SIO-876), [SIO-877](https://linear.app/siobytes/issue/SIO-877), [SIO-878](https://linear.app/siobytes/issue/SIO-878). PRs #170–#179.
-- **Suggested branch for follow-on work**: `sio-XXX-<topic>` off `main`.
+- **Date**: 2026-06-02 (updated after SIO-879)
+- **Repo state**: branch `main`, HEAD `1268a79` (PR #180 merge). All Done tickets merged; the only open elastic-iac ticket is SIO-880 (ILM, Backlog).
+- **Tickets** (all Done unless noted): [SIO-870](https://linear.app/siobytes/issue/SIO-870), [SIO-871](https://linear.app/siobytes/issue/SIO-871), [SIO-872](https://linear.app/siobytes/issue/SIO-872), [SIO-873](https://linear.app/siobytes/issue/SIO-873), [SIO-874](https://linear.app/siobytes/issue/SIO-874), [SIO-875](https://linear.app/siobytes/issue/SIO-875), [SIO-876](https://linear.app/siobytes/issue/SIO-876), [SIO-877](https://linear.app/siobytes/issue/SIO-877), [SIO-878](https://linear.app/siobytes/issue/SIO-878), [SIO-879](https://linear.app/siobytes/issue/SIO-879). PRs #170–#180. **Open: [SIO-880](https://linear.app/siobytes/issue/SIO-880)** (ilm-rollout migration, Backlog).
+- **Suggested branch for follow-on work**: `sio-880-<topic>` off `main` (ILM is the next obvious piece).
 
 ## TL;DR
 
-The `elastic-iac` agent was re-architected from a broken local-terraform "maker" into a **pure GitOps proposer**: it classifies intent, answers read-only questions, and for changes it edits one JSON field, commits a branch + opens an MR **entirely via the GitLab REST API** (no clone, no terraform, no local git), then watches the MR's CI pipeline and reports the real Terraform plan + approval + failure cause. It never merges or applies — CI + a human do that (maker/checker SoD). Proven end-to-end against the live self-hosted instance `gitlab.siobytes.cloud/siobytes/elastic-iac`; real version-upgrade MRs (!43 ap-cld, !44 eu-b2b) are already merged through the loop. Everything works today on `main`.
+The `elastic-iac` agent was re-architected from a broken local-terraform "maker" into a **pure GitOps proposer**: it classifies intent, answers read-only questions, and for changes (version-upgrade + tier-resize so far) it edits the deployment JSON, commits a branch + opens an MR **entirely via the GitLab REST API** (no clone, no terraform, no local git), then watches the MR's CI pipeline and reports the real Terraform plan + approval + failure cause. It never merges or applies — CI + a human do that (maker/checker SoD). Proven end-to-end against the live self-hosted instance `gitlab.siobytes.cloud/siobytes/elastic-iac`; real version-upgrade MRs (!43 ap-cld, !44 eu-b2b) are already merged through the loop. Everything works today on `main`.
 
 ## Context — how this arc came to be
 
@@ -42,11 +42,13 @@ Separate graph + checkpointer from the incident pipeline (`buildGraph`). HITL vi
 - **SIO-876** (#178): live mid-poll streaming — `dispatchCustomEvent("iac_pipeline_progress")` → SSE pump `on_custom_event` → reducer/store ticker → UI; collapses to the final message.
 - **SIO-877** (#177): "check my MR" survives reloads — `gitlab_list_agent_merge_requests` + `parseLatestAgentMr`; `watchPipeline` falls back to the newest open agent MR when the thread has no `mrIid`; lifted the classifier guard.
 - **SIO-878** (#179): failed-pipeline diagnosis — `gitlab_get_pipeline_plan_log` (tail of the failed plan job trace) + `classifyPipelineFailure` (recognizes the Terraform state-lock pattern) → `failureHint` rendered in teardown; `conventions.md` documents the single-shared-state lock nuance.
+- **SIO-879** (#180): moved **tier-resize** to the GitOps proposer. `setDeploymentTierSize` (read-modify-write `elasticsearch.<tier>.size`/`.max_size`, strings `"<N>g"`) + `proposeTierResize` node (mirrors `proposeVersionUpgrade`); `draftChange` routes it; `parseIntent` extracts `tier`/`newSizeGb`/`newMaxGb`. Generalized `reviewPlan`'s `isUpgrade`→`isConfigEdit` (version-upgrade OR tier-resize → `kind: config-edit`); `openMr` keys off `review.kind` to skip git_push; `buildMrDescription` is workflow-aware (tier-resize → Category tier-resize / Risk MEDIUM). `guards.ts` unchanged (max≥size + hot-downsize .alerts gate already cover it). Verified live (eu-cld-monitor warm max 120g→60g → MR → plan `1 update`). **ilm-rollout still on the legacy path → SIO-880.**
 
 ## Where the bodies are buried (key file:line, all on `main`)
 
 - `packages/agent/src/iac/nodes.ts` — all nodes + pure helpers (each exported + unit-tested):
-  - `parseIntentJson:63`, `intentFromText:95`, `setDeploymentVersion:297`, `extractMrUrl:497`, `extractMrIid:579`, `parseNewestPipeline:592`, `parseLatestAgentMr:610`, `parsePlanReport:626`, `formatPlanSummary:668`, `classifyPipelineFailure:676`.
+  - `parseIntentJson:63`, `intentFromText:95`, `setDeploymentVersion:299`, `setDeploymentTierSize:315`, `extractMrUrl:602`, `extractMrIid:692`, `parseNewestPipeline:705`, `parseLatestAgentMr:723`, `parsePlanReport:739`, `formatPlanSummary:781`, `classifyPipelineFailure:789`. (Line numbers drift with edits — `grep -n "export function"` to refresh.)
+  - Node-level proposers (not exported): `proposeVersionUpgrade`, `proposeTierResize:440`, `watchPipeline`, `teardownIac`. `draftChange` routes version-upgrade + tier-resize to the proposers; everything else falls through to the legacy terraform path.
   - `callTool` returns `"[status] body"`; every parse helper strips that prefix before JSON.parse.
 - `packages/agent/src/iac/graph.ts` — the 12-node wiring above.
 - `packages/agent/src/iac/state.ts` — `IacState` (incl. `intent`, `mrIid`, `pipelineStatus`, `planReport`, `approvalState`, `failureHint`).
@@ -93,7 +95,7 @@ Browser e2e (cold-restart the web server first — see gotcha below): switch to 
 
 ## Out of scope (explicitly not done)
 
-- tier-resize / ilm-rollout still use the **legacy local-terraform path** (only version-upgrade was moved to the GitOps proposer). Moving them is the obvious next ticket.
+- **ilm-rollout** still uses the **legacy local-terraform path** — it's the last workflow not yet on the GitOps proposer. Tracked in **[SIO-880](https://linear.app/siobytes/issue/SIO-880)** (Backlog): materially bigger than version-upgrade/tier-resize — full policy documents under `environments/<deployment>/lifecycle-policies/<policy>.json` (not `_deployments/`) + a multi-wave, multi-environment, MR-per-wave choreography (gl-testing→dev→stg→prod, human gate between waves). Needs a design pass (single-wave-per-invocation vs. full choreography). version-upgrade + tier-resize are **done**.
 - The agent never approves, merges, or triggers apply (DUTIES — human/CI only).
 - Migrating the GitLab REST calls to GitLab's native MCP (the instance can't do MCP yet; `tools/gitlab.ts` header documents the intended migration).
 - A standalone pipelines dashboard.
