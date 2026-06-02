@@ -22,3 +22,33 @@ describe("buildCommitFileBody", () => {
 		});
 	});
 });
+
+// SIO-875: the terraform-report walk (parent -> child -> plan job).
+import { childPipelineId, planJob } from "./gitlab.ts";
+
+describe("childPipelineId", () => {
+	test("returns the first downstream pipeline id from bridges", () => {
+		const bridges = [{ name: "deploy", downstream_pipeline: { id: 343, status: "success" } }];
+		expect(childPipelineId(bridges)).toBe(343);
+	});
+	test("null when no bridge / no downstream yet", () => {
+		expect(childPipelineId([])).toBeNull();
+		expect(childPipelineId([{ name: "deploy", downstream_pipeline: null }])).toBeNull();
+		expect(childPipelineId({ not: "an array" })).toBeNull();
+	});
+});
+
+describe("planJob", () => {
+	test("finds the plan:<deployment>:<stack> job and parses the stack", () => {
+		const jobs = [
+			{ id: 1307, name: "validate" },
+			{ id: 1308, name: "plan:ap-cld:deployments" },
+		];
+		expect(planJob(jobs)).toEqual({ id: 1308, stack: "deployments" });
+	});
+	test("null when no plan job present yet", () => {
+		expect(planJob([{ id: 1, name: "validate" }])).toBeNull();
+		expect(planJob([])).toBeNull();
+		expect(planJob("nope")).toBeNull();
+	});
+});

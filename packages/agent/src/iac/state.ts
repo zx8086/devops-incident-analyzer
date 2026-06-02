@@ -44,6 +44,21 @@ export interface IacPlanReview {
 	precheckPassed: boolean;
 }
 
+// SIO-875: the actual Terraform plan parsed from the MR pipeline's terraform report.
+export interface IacPlanReport {
+	create: number;
+	update: number;
+	delete: number;
+	resources: Array<{ address: string; actions: string[] }>;
+}
+
+// SIO-875: MR approval state from the GitLab approvals API.
+export interface IacApprovalState {
+	approved: boolean;
+	required?: number;
+	approvedBy?: string[];
+}
+
 const last = <T>(_current: T, update: T): T => update;
 
 // Dedicated IaC graph state. Kept separate from AgentState so the maker workflow
@@ -55,7 +70,9 @@ export const IacState = Annotation.Root({
 	requestId: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-870: read-vs-write routing. "info" answers from Elastic Cloud reads and
 	// stops; "gitops" enters the maker/HITL/MR pipeline. Set by classifyIacIntent.
-	intent: Annotation<"info" | "gitops" | null>({ reducer: last, default: () => null }),
+	// SIO-875: "pipeline-status" is a follow-up ("did the pipeline pass / show me the
+	// plan / check my MR") that re-enters watchPipeline using the thread's persisted MR.
+	intent: Annotation<"info" | "gitops" | "pipeline-status" | null>({ reducer: last, default: () => null }),
 	iacRequest: Annotation<IacRequest | null>({ reducer: last, default: () => null }),
 	clusterState: Annotation<IacClusterState | null>({ reducer: last, default: () => null }),
 	branch: Annotation<string>({ reducer: last, default: () => "" }),
@@ -70,6 +87,14 @@ export const IacState = Annotation.Root({
 	planReview: Annotation<IacPlanReview | null>({ reducer: last, default: () => null }),
 	reviewDecision: Annotation<"approved" | "rejected" | null>({ reducer: last, default: () => null }),
 	mrUrl: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-875: post-MR pipeline watch. mrIid persists so a follow-up "check my MR" can
+	// re-fetch; pipelineStatus is "success"|"failed"|"running"|"unknown"; planReport is
+	// the real terraform plan; approvalState is the MR approval summary.
+	mrIid: Annotation<number | null>({ reducer: last, default: () => null }),
+	pipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
+	pipelineStatus: Annotation<string>({ reducer: last, default: () => "" }),
+	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
+	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.
 	connected: Annotation<boolean>({ reducer: last, default: () => true }),
 	// terminal blocked reason from the guard (e.g. prod not named, .alerts unmanaged).

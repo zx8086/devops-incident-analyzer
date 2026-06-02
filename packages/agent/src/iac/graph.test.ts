@@ -28,4 +28,11 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("classifyIacIntent");
 		expect(nodeNames).toContain("answerInfo");
 	});
+
+	// SIO-875: post-MR pipeline watch node.
+	test("graph contains the watchPipeline node", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("watchPipeline");
+	});
 });

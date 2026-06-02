@@ -20,8 +20,47 @@ export function buildCommitFileBody(input: {
 	};
 }
 
-// Repo reads + branch/commit/MR creation. gitlab_*_approve and gitlab_*_merge are
-// intentionally absent (maker/checker separation of duties).
+// The repo's tf-report.jq shape (artifacts.reports.terraform): create/update/delete
+// counts + the changed resources. This is what the MR Terraform widget consumes.
+export interface TerraformReport {
+	create: number;
+	update: number;
+	delete: number;
+	resources: Array<{ address: string; actions: string[] }>;
+}
+
+// SIO-875: the repo runs a parent+child dynamic pipeline. The plan job (and its
+// tfplan-report.json artifact) lives in the CHILD pipeline triggered by the parent's
+// "deploy" bridge. These pure helpers walk the JSON responses; the tool chains the
+// fetches. Exported for unit tests.
+
+// First downstream (child) pipeline id from GET /pipelines/:id/bridges.
+export function childPipelineId(bridgesJson: unknown): number | null {
+	if (!Array.isArray(bridgesJson)) return null;
+	for (const b of bridgesJson) {
+		const dp = (b as { downstream_pipeline?: { id?: unknown } }).downstream_pipeline;
+		if (dp && typeof dp.id === "number") return dp.id;
+	}
+	return null;
+}
+
+// The first plan job (name `plan:<deployment>:<stack>`) from GET /pipelines/:id/jobs,
+// with the <stack> parsed out so the caller can build the artifact path.
+export function planJob(jobsJson: unknown): { id: number; stack: string } | null {
+	if (!Array.isArray(jobsJson)) return null;
+	for (const j of jobsJson) {
+		const name = (j as { name?: unknown }).name;
+		const id = (j as { id?: unknown }).id;
+		if (typeof name === "string" && name.startsWith("plan:") && typeof id === "number") {
+			const stack = name.split(":")[2] ?? "";
+			if (stack) return { id, stack };
+		}
+	}
+	return null;
+}
+
+// Repo reads + branch/commit/MR creation + read-only CI/approval status.
+// gitlab_*_approve and gitlab_*_merge are intentionally absent (maker/checker SoD).
 //
 // Transport: GitLab REST (/api/v4) directly, so this server is self-contained and
 // works against instances that do NOT expose GitLab's native MCP endpoint. Future
@@ -133,5 +172,52 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		{ iid: z.number() },
 		async ({ iid }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}/pipelines`)),
+	);
+
+	// JSON variant of gitlabFetch for the multi-hop terraform-report walk. Throws on
+	// missing token / non-2xx so the chaining handler can branch.
+	async function glJson(apiPath: string): Promise<unknown> {
+		if (!token) throw new Error("gitlab token not configured: set ELASTIC_IAC_GITLAB_TOKEN");
+		const res = await fetch(`${gitlabBaseUrl}/api/v4${apiPath}`, { headers: { "PRIVATE-TOKEN": token } });
+		if (!res.ok) throw new Error(`[${res.status}] ${await res.text()}`);
+		return res.json();
+	}
+
+	server.tool(
+		"gitlab_get_pipeline",
+		"Read a single pipeline's status (read-only GitOps status). Use the id from gitlab_get_merge_request_pipelines.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) =>
+			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines/${pipelineId}`)),
+	);
+
+	server.tool(
+		"gitlab_get_pipeline_terraform_report",
+		"Get the actual Terraform plan (create/update/delete + changed resources) for an MR pipeline. " +
+			"Walks the parent->child dynamic pipeline to the plan job's tfplan-report.json artifact. Read-only.",
+		{ pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines.") },
+		async ({ pipelineId }) => {
+			try {
+				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+				if (childId === null) return text("[no child pipeline yet -- the deploy stage has not triggered the plan]");
+				const job = planJob(await glJson(`/projects/${project}/pipelines/${childId}/jobs`));
+				if (!job) return text("[no plan job found in the child pipeline yet]");
+				// Artifact is stacks/<stack>/tfplan-report.json (raw, not [status]-wrapped).
+				const report = (await glJson(
+					`/projects/${project}/jobs/${job.id}/artifacts/stacks/${job.stack}/tfplan-report.json`,
+				)) as TerraformReport;
+				return text(JSON.stringify(report, null, 2));
+			} catch (err) {
+				return text(`[terraform report not available: ${err instanceof Error ? err.message : String(err)}]`);
+			}
+		},
+	);
+
+	server.tool(
+		"gitlab_get_merge_request_approvals",
+		"Read a merge request's approval state (approved? by whom? required count). Read-only; never approves.",
+		{ iid: z.number() },
+		async ({ iid }) =>
+			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}/approvals`)),
 	);
 }

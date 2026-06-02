@@ -9,7 +9,7 @@ import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
-import type { IacPlanReview, IacRequest, IacStateType } from "./state.ts";
+import type { IacApprovalState, IacPlanReport, IacPlanReview, IacRequest, IacStateType } from "./state.ts";
 
 const log = getLogger("agent:iac");
 const AGENT = "elastic-iac";
@@ -89,15 +89,18 @@ export function parseIntentJson(raw: string): IacRequest {
 	return { workflow: "other", isProd: false, clarification: "Which cluster and what change should I make?" };
 }
 
-// Map a raw classifier reply to an intent. Defaults to "info"; only an explicit
-// "gitops" mention routes to the maker pipeline. (Pure; unit-tested directly.)
-export function intentFromText(raw: string): "info" | "gitops" {
-	return raw.toLowerCase().includes("gitops") ? "gitops" : "info";
+// Map a raw classifier reply to an intent. "gitops" and "pipeline-status" are explicit;
+// anything else defaults to "info". (Pure; unit-tested directly.)
+export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" {
+	const r = raw.toLowerCase();
+	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
+	if (r.includes("gitops")) return "gitops";
+	return "info";
 }
 
-// Classify the request as a read-only info question vs a gitops change. Ambiguous
-// "should I…/recommend…" phrasing is biased to gitops -- that path is HITL-gated and
-// never applies, so it is the safe default (vs wrongly drafting a branch for a read).
+// Classify the request: read-only info, a gitops change, or a follow-up about an MR's
+// pipeline/plan/approval. Ambiguous "should I…/recommend…" biases to gitops (HITL-gated,
+// never applies). pipeline-status only resolves when the thread already opened an MR.
 export async function classifyIacIntent(state: IacStateType): Promise<Partial<IacStateType>> {
 	const query = lastHumanText(state);
 	const llm = createLlm("iacClassifier", AGENT);
@@ -107,10 +110,14 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
 		"- 'gitops': a request to CHANGE infrastructure (resize, downsize, add/modify ILM, import, open an MR, " +
 		"anything that should produce a Terraform diff).\n" +
-		"Reply with ONLY the single lowercase word 'info' or 'gitops'. " +
+		"- 'pipeline-status': a follow-up about a merge request the agent already opened -- 'did the pipeline " +
+		"pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's the CI status'.\n" +
+		"Reply with ONLY one word: 'info', 'gitops', or 'pipeline-status'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
-	const intent = intentFromText(String(res.content));
+	let intent = intentFromText(String(res.content));
+	// pipeline-status only makes sense once an MR exists in this thread; else treat as info.
+	if (intent === "pipeline-status" && state.mrIid === null) intent = "info";
 	log.info({ intent, query }, "classified IaC intent");
 	return { intent };
 }
@@ -564,16 +571,153 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		title: review?.title ?? "Elastic IaC change",
 		description,
 	});
-	return { mrUrl: extractMrUrl(mr) };
+	return { mrUrl: extractMrUrl(mr), mrIid: extractMrIid(mr) };
 }
 
-// Final message: post the MR link (or the terminal reason) and stop.
+// MR iid from callTool's "[status] {json}" create-MR response (for the pipeline watch).
+export function extractMrIid(toolResult: string): number | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const parsed = JSON.parse(toolResult.slice(jsonStart)) as { iid?: unknown };
+		return typeof parsed.iid === "number" ? parsed.iid : null;
+	} catch {
+		return null;
+	}
+}
+
+// Newest pipeline {id,status} from gitlab_get_merge_request_pipelines' "[status] [...]"
+// body (the JSON array of pipelines, newest first). callTool prefixes "[<http status>] ".
+export function parseNewestPipeline(toolResult: string): { id: number; status: string } | null {
+	// Skip the "[200] " status prefix: find the first "[" that opens the JSON array.
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return null;
+	try {
+		const parsed = JSON.parse(toolResult.slice(m.index)) as Array<{ id?: unknown; status?: unknown }>;
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const p = parsed[0];
+		if (typeof p?.id === "number") return { id: p.id, status: typeof p.status === "string" ? p.status : "unknown" };
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// Parse the terraform report tool result ("[...]"-free; it's the bare report JSON or a
+// "[...]" not-ready message). Returns null when not ready.
+export function parsePlanReport(toolResult: string): IacPlanReport | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const r = JSON.parse(toolResult.slice(jsonStart)) as Partial<IacPlanReport>;
+		if (typeof r.create === "number" && typeof r.update === "number" && typeof r.delete === "number") {
+			return { create: r.create, update: r.update, delete: r.delete, resources: r.resources ?? [] };
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// Parse the approvals tool result ("[status] {json}").
+export function parseApprovalState(toolResult: string): IacApprovalState | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const a = JSON.parse(toolResult.slice(jsonStart)) as {
+			approved?: unknown;
+			approvals_required?: unknown;
+			approved_by?: Array<{ user?: { username?: unknown } }>;
+		};
+		return {
+			approved: a.approved === true,
+			required: typeof a.approvals_required === "number" ? a.approvals_required : undefined,
+			approvedBy: Array.isArray(a.approved_by)
+				? a.approved_by.map((x) => String(x?.user?.username ?? "")).filter(Boolean)
+				: undefined,
+		};
+	} catch {
+		return null;
+	}
+}
+
+// A pipeline status is terminal when CI has stopped running.
+export function isTerminalPipelineStatus(status: string): boolean {
+	return ["success", "failed", "canceled", "skipped"].includes(status);
+}
+
+// One-line plan summary: "0 create / 1 update / 0 destroy".
+export function formatPlanSummary(report: IacPlanReport | null): string {
+	if (!report) return "plan not available";
+	return `${report.create} create / ${report.update} update / ${report.delete} destroy`;
+}
+
+// SIO-875: poll the MR pipeline (bounded), then gather the real plan + approval state.
+// Never hangs past the budget; teardownIac renders the result. Read-only. (Live mid-poll
+// streaming is a follow-up -- the final state is rendered once here.)
+export async function watchPipeline(state: IacStateType): Promise<Partial<IacStateType>> {
+	const iid = state.mrIid;
+	if (iid === null) return { pipelineStatus: "unknown" };
+
+	const budgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
+	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
+	const deadline = Date.now() + budgetMs;
+
+	let pipelineId: number | null = null;
+	let status = "unknown";
+	while (Date.now() < deadline) {
+		const newest = parseNewestPipeline(await callTool("gitlab_get_merge_request_pipelines", { iid }));
+		if (newest) {
+			pipelineId = newest.id;
+			if (newest.status !== status) {
+				status = newest.status;
+				log.info({ iid, pipelineId, status }, "iac pipeline status");
+			}
+			if (isTerminalPipelineStatus(status)) break;
+		}
+		if (Date.now() + intervalMs >= deadline) break;
+		await new Promise((r) => setTimeout(r, intervalMs));
+	}
+
+	// Still running at budget: surface the partial result; a follow-up re-checks.
+	if (!isTerminalPipelineStatus(status)) {
+		return { pipelineId, pipelineStatus: status || "running" };
+	}
+
+	// Terminal: fetch the real plan + approval state.
+	const planReport = pipelineId
+		? parsePlanReport(await callTool("gitlab_get_pipeline_terraform_report", { pipelineId }))
+		: null;
+	const approvalState = parseApprovalState(await callTool("gitlab_get_merge_request_approvals", { iid }));
+	return { pipelineId, pipelineStatus: status, planReport, approvalState };
+}
+
+// Final message: MR link + pipeline status + the real plan + approval state, then stop.
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
 	}
-	const link = state.mrUrl ? `MR opened: ${state.mrUrl}` : "MR step complete.";
-	return {
-		messages: [new AIMessage(`${link}\n\nReview and apply manually in GitLab. I never merge or apply.`)],
-	};
+	const lines: string[] = [state.mrUrl ? `MR opened: ${state.mrUrl}` : "MR step complete."];
+
+	if (state.pipelineStatus && state.pipelineStatus !== "unknown") {
+		const pid = state.pipelineId ? `#${state.pipelineId}` : "";
+		lines.push(`Pipeline ${pid}: ${state.pipelineStatus}`);
+	}
+	if (state.planReport) {
+		lines.push(`Plan: ${formatPlanSummary(state.planReport)}`);
+		for (const r of state.planReport.resources.slice(0, 10)) {
+			lines.push(`  ${r.actions.join("+")} ${r.address}`);
+		}
+	} else if (isTerminalPipelineStatus(state.pipelineStatus)) {
+		lines.push("Plan: not available from the pipeline report.");
+	} else if (state.pipelineStatus) {
+		lines.push('Pipeline still running — ask "check my MR" to refresh the plan + approval.');
+	}
+	if (state.approvalState) {
+		const by = state.approvalState.approvedBy?.length ? ` by ${state.approvalState.approvedBy.join(", ")}` : "";
+		const req = state.approvalState.required != null ? ` (${state.approvalState.required} required)` : "";
+		lines.push(`Approval: ${state.approvalState.approved ? `approved${by}` : "not approved"}${req}`);
+	}
+	lines.push("Review and apply manually in GitLab. I never merge or apply.");
+	return { messages: [new AIMessage(lines.join("\n"))] };
 }
