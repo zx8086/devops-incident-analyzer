@@ -3,7 +3,9 @@ import { createCheckpointer } from "@devops-agent/checkpointer";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
 import {
+	answerInfo,
 	bootstrapIac,
+	classifyIacIntent,
 	draftChange,
 	guardNode,
 	openMr,
@@ -23,6 +25,8 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 
 	const graph = new StateGraph(IacState)
 		.addNode("bootstrap", bootstrapIac)
+		.addNode("classifyIacIntent", classifyIacIntent)
+		.addNode("answerInfo", answerInfo)
 		.addNode("parseIntent", parseIntent)
 		.addNode("readClusterState", readClusterState)
 		.addNode("guard", guardNode)
@@ -34,7 +38,13 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 
 		.addEdge(START, "bootstrap")
 		// Not connected -> surface the message and stop.
-		.addConditionalEdges("bootstrap", (s) => (s.connected ? "parseIntent" : END), ["parseIntent", END])
+		.addConditionalEdges("bootstrap", (s) => (s.connected ? "classifyIacIntent" : END), ["classifyIacIntent", END])
+		// SIO-870: info questions answer from reads and stop; gitops enters the maker pipeline.
+		.addConditionalEdges("classifyIacIntent", (s) => (s.intent === "gitops" ? "parseIntent" : "answerInfo"), [
+			"parseIntent",
+			"answerInfo",
+		])
+		.addEdge("answerInfo", END)
 		.addEdge("parseIntent", "readClusterState")
 		.addEdge("readClusterState", "guard")
 		// Blocked by a mechanical safety guard -> stop before any write.
