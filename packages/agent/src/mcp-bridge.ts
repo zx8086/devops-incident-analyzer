@@ -7,6 +7,7 @@ import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/sha
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
 import { wrapAwsToolsWithEstate } from "./aws-tool-estate-wrapper.ts";
+import { wrapElasticToolsWithDeployment } from "./elastic-tool-deployment-wrapper.ts";
 
 const logger = getLogger("mcp-bridge");
 
@@ -327,6 +328,13 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 	// schema-strip is idempotent for it (delete on missing key is a no-op).
 	if (dataSourceId === "aws") {
 		return wrapAwsToolsWithEstate(raw);
+	}
+
+	// SIO-649: hide the `deployment` arg from the LLM so the per-deployment fan-out
+	// header (withElasticDeployment -> injectElasticHeaders) is the sole authority and
+	// the model can't broaden a single-deployment selection back to all deployments.
+	if (dataSourceId === "elastic") {
+		return wrapElasticToolsWithDeployment(raw);
 	}
 
 	return raw;
