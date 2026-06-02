@@ -95,6 +95,7 @@ export {
 	type BootstrapTransportResult,
 	createBootstrapAdapter,
 	createMcpApplication,
+	isBenignStreamCancel,
 	type McpApplication,
 	type McpApplicationOptions,
 } from "./bootstrap.ts";
