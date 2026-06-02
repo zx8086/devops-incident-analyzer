@@ -502,6 +502,51 @@ export function extractMrUrl(toolResult: string): string {
 	return toolResult;
 }
 
+// Minimal deterministic MR body, used as the fallback when the LLM step fails so the
+// MR never blocks. Real bodies follow knowledge/mr-template.md (filled by the LLM).
+function fallbackMrDescription(review: IacPlanReview | null): string {
+	return `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`;
+}
+
+// Build the MR description by having the LLM fill the agent's own mr-template.md
+// (already in the system prompt) per the open-mr skill, from the gathered context.
+// Falls back to the deterministic stub on any error.
+export async function buildMrDescription(state: IacStateType): Promise<string> {
+	const review = state.planReview;
+	const req = state.iacRequest;
+	try {
+		const sys = buildSystemPrompt(getAgentByName(AGENT));
+		const context = [
+			`Change: ${req?.workflow ?? "other"} on cluster ${req?.cluster ?? "?"}.`,
+			req?.workflow === "version-upgrade"
+				? `Elasticsearch version ${state.previousVersion || "?"} -> ${req?.version ?? "?"}.`
+				: "",
+			req?.reason ? `Reason given: ${req.reason}.` : "",
+			`Branch: ${state.branch}. Target: main.`,
+			`File diff:\n${review?.diff ?? "(none)"}`,
+			`Plan note: ${review?.plan ?? "(none)"}`,
+		]
+			.filter(Boolean)
+			.join("\n");
+		const instruction =
+			"Write the GitLab merge request description by filling knowledge/mr-template.md exactly, following its " +
+			"category-driven AI-agent rules. This is a config edit committed via the GitLab API (no local terraform): " +
+			"for a version bump use Category 'version-bump', Risk LOW, and mark gl-testing/plan-output sections " +
+			"'n/a -- config edit; CI computes the plan on the MR'. Fill Summary, Cluster(s) affected, What changed, " +
+			"Why, and Files touched from the context. Append the open-mr skill footer. Output ONLY the final markdown.";
+		const llm = createLlm("iacDrafter", AGENT);
+		const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(context)]);
+		const body = String(res.content).trim();
+		return body.length > 0 ? body : fallbackMrDescription(review);
+	} catch (err) {
+		log.warn(
+			{ err: err instanceof Error ? err.message : String(err) },
+			"MR description generation failed; using fallback",
+		);
+		return fallbackMrDescription(review);
+	}
+}
+
 // Open the MR. Never merges, never approves, never applies. For version-upgrade the
 // branch + commit already exist on the remote (created via the GitLab API in
 // draftChange), so there is no git_push; other workflows push the local branch first.
@@ -509,11 +554,12 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 	const review = state.planReview;
 	const isUpgrade = state.iacRequest?.workflow === "version-upgrade";
 	if (!isUpgrade) await callTool("git_push", { branch: state.branch });
+	const description = await buildMrDescription(state);
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: state.branch,
 		target_branch: "main",
 		title: review?.title ?? "Elastic IaC change",
-		description: `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`,
+		description,
 	});
 	return { mrUrl: extractMrUrl(mr) };
 }
