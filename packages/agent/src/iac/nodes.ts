@@ -456,6 +456,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
 		: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
+		kind: isUpgrade ? "config-edit" : "terraform",
 		cluster: req?.cluster ?? "",
 		branch,
 		title: `[${req?.cluster ?? "?"}] ${descriptor}: ${req?.workflow}`,
@@ -471,13 +472,34 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 // payload carries the decision. This is the only path to opening an MR.
 export function planReviewGate(state: IacStateType): Partial<IacStateType> {
 	if (!state.planReview) return { reviewDecision: "rejected" };
+	const message =
+		state.planReview.kind === "config-edit"
+			? "Review the proposed config change. Approve to open a GitLab MR, or reject. CI computes the plan on the MR; merge and apply remain manual in GitLab."
+			: "Review the Terraform plan output. Approve to open a GitLab MR, or reject. Apply remains manual in GitLab.";
 	const decision = interrupt({
 		type: "iac_plan_review",
 		review: state.planReview,
-		message:
-			"Review the Terraform plan output. Approve to open a GitLab MR, or reject. Apply remains manual in GitLab.",
+		message,
 	}) as { decision?: "approved" | "rejected" };
 	return { reviewDecision: decision?.decision === "approved" ? "approved" : "rejected" };
+}
+
+// Extract the merge_request web_url from callTool's "[status] {json}" response.
+// (Not a regex over the whole body -- the JSON also contains avatar URLs.)
+export function extractMrUrl(toolResult: string): string {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart >= 0) {
+		try {
+			const parsed: unknown = JSON.parse(toolResult.slice(jsonStart));
+			if (typeof parsed === "object" && parsed !== null) {
+				const url = (parsed as { web_url?: unknown }).web_url;
+				if (typeof url === "string" && url.length > 0) return url;
+			}
+		} catch {
+			// fall through to the raw result
+		}
+	}
+	return toolResult;
 }
 
 // Open the MR. Never merges, never approves, never applies. For version-upgrade the
@@ -493,8 +515,7 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		title: review?.title ?? "Elastic IaC change",
 		description: `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`,
 	});
-	const urlMatch = mr.match(/https?:\/\/\S+/);
-	return { mrUrl: urlMatch?.[0] ?? mr };
+	return { mrUrl: extractMrUrl(mr) };
 }
 
 // Final message: post the MR link (or the terminal reason) and stop.

@@ -1,6 +1,6 @@
 // agent/src/iac/version-upgrade.test.ts
 import { describe, expect, test } from "bun:test";
-import { branchSlug, deploymentJsonPath, parseIntentJson, setDeploymentVersion } from "./nodes.ts";
+import { branchSlug, deploymentJsonPath, extractMrUrl, parseIntentJson, setDeploymentVersion } from "./nodes.ts";
 
 // SIO-871: an upgrade request with both cluster and target version must parse to a
 // version-upgrade workflow with NO clarification, so it flows straight to the HITL
@@ -100,5 +100,21 @@ describe("deploymentJsonPath", () => {
 
 	test("substitutes every occurrence", () => {
 		expect(deploymentJsonPath("${cluster}/x/${cluster}.json", "eu-b2b")).toBe("eu-b2b/x/eu-b2b.json");
+	});
+});
+
+// SIO-874: openMr must surface the merge_request web_url, not the first https in the
+// JSON (which is a gravatar avatar URL).
+describe("extractMrUrl", () => {
+	test("returns web_url, not an earlier avatar URL in the body", () => {
+		const body =
+			'[201] {"author":{"avatar_url":"https://secure.gravatar.com/avatar/abc?s=80"},' +
+			'"web_url":"https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/40","iid":40}';
+		expect(extractMrUrl(body)).toBe("https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/40");
+	});
+
+	test("falls back to the raw result when web_url is absent / unparseable", () => {
+		expect(extractMrUrl('[400] {"message":"boom"}')).toBe('[400] {"message":"boom"}');
+		expect(extractMrUrl("[gitlab token not configured]")).toBe("[gitlab token not configured]");
 	});
 });

@@ -15,15 +15,21 @@ let {
 } = $props();
 
 const review = $derived(prompt.review);
+// SIO-874: a config-edit proposal has no terraform plan / gl-testing pre-check, so
+// render config-edit labels and hide the terraform-only badge.
+const isConfigEdit = $derived(review?.kind === "config-edit");
+const heading = $derived(isConfigEdit ? "Review proposed change" : "Review Terraform plan");
+const diffLabel = $derived(isConfigEdit ? "Config change" : "Terraform diff");
+const planLabel = $derived(isConfigEdit ? "How this applies" : "Plan output");
 </script>
 
 <div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-plan-heading">
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between gap-2">
       <h3 id="iac-plan-heading" class="text-sm font-semibold text-tommy-navy">
-        Review Terraform plan
+        {heading}
       </h3>
-      {#if review}
+      {#if review && !isConfigEdit}
         <span
           class="text-xs px-2 py-0.5 rounded-full {review.precheckPassed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-900'}"
         >
@@ -53,12 +59,12 @@ const review = $derived(prompt.review);
       {/if}
 
       <details class="mt-2" open>
-        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Plan output</summary>
-        <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(no plan output)"}</pre>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{planLabel}</summary>
+        <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(none)"}</pre>
       </details>
 
-      <details class="mt-2">
-        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Terraform diff</summary>
+      <details class="mt-2" open={isConfigEdit}>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{diffLabel}</summary>
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-gray-900 text-gray-100 text-xs p-2 whitespace-pre-wrap">{review.diff || "(no diff)"}</pre>
       </details>
     {/if}
