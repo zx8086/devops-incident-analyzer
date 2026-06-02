@@ -585,6 +585,93 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 	};
 }
 
+// SIO-880: ilm-rollout via the GitOps proposer -- deep-merge a phase patch into the
+// cluster's lifecycle-policy JSON and open an MR via the API. Mirrors proposeTierResize.
+async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const policy = req.policyName ?? "";
+	const patch = req.phasesPatch;
+
+	if (!policy || !patch || Object.keys(patch).length === 0) {
+		return {
+			blockedReason: "ILM change needs a policy name and at least one phase field to change.",
+			messages: [new AIMessage("Cannot propose the change: name the policy and at least one phase field to change.")],
+		};
+	}
+
+	const filePath = deploymentJsonPath(ilmPolicyTemplate(), cluster, policy);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// A missing policy file comes back as a 4xx from the GitLab files API.
+	if (raw.startsWith("[4")) {
+		return {
+			blockedReason: `No such policy '${policy}' on '${cluster}': no such policy file at ${filePath}.`,
+			messages: [
+				new AIMessage(
+					`Cannot propose the change: no such policy '${policy}' on '${cluster}'. Check the policy filename.`,
+				),
+			],
+		};
+	}
+
+	let updated: { content: string; previous: Record<string, unknown> };
+	try {
+		updated = mergeIlmPhases(extractFileContent(raw), patch);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	const retentionChange = detectRetentionReduction(updated.previous, patch);
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const fields = Object.keys(patch).join(", ");
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: ILM ${policy} (${fields})`,
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	// Human diff: one -/+ pair per touched leaf, walking the previous mirror against patch.
+	const diffLines: string[] = [`${filePath} (ILM ${policy})`];
+	const walk = (prev: Record<string, unknown>, p: Record<string, unknown>, prefix: string): void => {
+		for (const [key, value] of Object.entries(p)) {
+			const path = prefix ? `${prefix}.${key}` : key;
+			if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+				const prevChild = (prev[key] ?? {}) as Record<string, unknown>;
+				walk(prevChild, value as Record<string, unknown>, path);
+			} else {
+				// Prefix the dotted phase path, then the JSON field name verbatim so the diff
+				// reads as a real JSON edit (e.g. `[delete] - "min_age": "30d" + "min_age": "60d"`).
+				diffLines.push(
+					`[${path.includes(".") ? path.slice(0, path.lastIndexOf(".")) : path}] - "${key}": ${JSON.stringify(prev[key])}\n+ "${key}": ${JSON.stringify(value)}`,
+				);
+			}
+		}
+	};
+	walk(updated.previous, patch, "");
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+		retentionChange,
+	};
+}
+
 // Draft the change. version-upgrade + tier-resize go through the GitOps proposer (JSON
 // edit via the GitLab API); other workflows still draft a Terraform diff locally (legacy).
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
@@ -592,6 +679,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (!req) return {};
 	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
+	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
 
 	const branch = branchName(req);
 	await callTool("git_create_branch", { branch });

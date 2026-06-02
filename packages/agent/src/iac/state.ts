@@ -99,6 +99,9 @@ export const IacState = Annotation.Root({
 	// SIO-878: when the pipeline failed, a human-readable cause hint (e.g. a Terraform
 	// state-lock on the shared deployments stack) derived from the plan job log.
 	failureHint: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-880: when an ilm-rollout reduces delete.min_age, the from/to surfaced as a
+	// HIGH-risk line in the review card + MR body (data deletion is irreversible).
+	retentionChange: Annotation<{ from: string; to: string } | null>({ reducer: last, default: () => null }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.

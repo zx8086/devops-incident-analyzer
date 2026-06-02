@@ -1,5 +1,5 @@
 // agent/src/iac/ilm-rollout.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, deploymentJsonPath, detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
 import type { IacRequest } from "./state.ts";
 
@@ -137,5 +137,96 @@ describe("branchSlug — ilm-rollout", () => {
 		};
 		// slug lowercases and replaces non-[a-z0-9-] runs with a single '-'
 		expect(branchSlug(req)).toBe("eu-b2b-30-days-lifecycle-ilm-rollout");
+	});
+});
+
+// Build a fake tool set so callTool() inside nodes.ts resolves against our stubs.
+function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
+	const tools = Object.entries(handlers).map(([name, fn]) => ({
+		name,
+		invoke: async (args: Record<string, unknown>) => fn(args),
+	}));
+	mock.module("../mcp-bridge.ts", () => ({
+		getToolsForDataSource: () => tools,
+		getConnectedServers: () => ["elastic-iac-mcp"],
+	}));
+}
+
+describe("draftChange -> proposeIlmChange", () => {
+	test("happy path: edits the policy JSON, commits, sets precheckPassed + diff", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const policy = JSON.stringify({ name: "30-days@lifecycle", delete: { min_age: "30d" } }, null, 2);
+		mockTools({
+			gitlab_get_file_content: () =>
+				`[200] ${JSON.stringify({ content: Buffer.from(policy).toString("base64"), encoding: "base64" })}`,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				policyName: "30-days@lifecycle",
+				phasesPatch: { delete: { min_age: "60d" } },
+			},
+		};
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await draftChange(state as any);
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedFilePath).toBe("environments/eu-b2b/lifecycle-policies/30-days@lifecycle.json");
+		expect(result.proposedDiff).toContain('"min_age"');
+		expect(result.retentionChange).toBeNull(); // 30d -> 60d is an INCREASE, not a reduction
+	});
+
+	test("blocks with a clear message when phasesPatch is empty", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({});
+		const state = {
+			iacRequest: { workflow: "ilm-rollout" as const, isProd: false, cluster: "eu-b2b", policyName: "logs" },
+		};
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await draftChange(state as any);
+		expect(result.blockedReason).toContain("phase field");
+	});
+
+	test("blocks when the policy file 404s", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({ gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}' });
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				policyName: "no-such-policy",
+				phasesPatch: { delete: { min_age: "60d" } },
+			},
+		};
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await draftChange(state as any);
+		expect(result.blockedReason).toContain("no such policy");
+	});
+
+	test("sets retentionChange when retention is reduced", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const policy = JSON.stringify({ name: "90-days@lifecycle", delete: { min_age: "90d" } }, null, 2);
+		mockTools({
+			gitlab_get_file_content: () =>
+				`[200] ${JSON.stringify({ content: Buffer.from(policy).toString("base64"), encoding: "base64" })}`,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-cld",
+				policyName: "90-days@lifecycle",
+				phasesPatch: { delete: { min_age: "30d" } },
+			},
+		};
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await draftChange(state as any);
+		expect(result.retentionChange).toEqual({ from: "90d", to: "30d" });
 	});
 });
