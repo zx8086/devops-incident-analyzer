@@ -6,6 +6,11 @@ import { gitlabFetch, text } from "./shared.ts";
 
 // Repo reads + MR creation/inspection. gitlab_*_approve and gitlab_*_merge are
 // intentionally absent (maker/checker separation of duties).
+//
+// Transport: GitLab REST (/api/v4) directly, so this server is self-contained and
+// works against instances that do NOT expose GitLab's native MCP endpoint. Future
+// end-state: switch these to the GitLab native MCP (the proxy pattern used by
+// packages/mcp-server-gitlab) once the target instance supports it.
 export function registerGitlabTools(server: McpServer, config: Config): void {
 	const { gitlabBaseUrl, projectId } = config.repository;
 	const token = config.gitlabToken;
