@@ -52,6 +52,7 @@ const IntentSchema = z.object({
 	newSizeGb: z.number().nullish(),
 	newMaxGb: z.number().nullish(),
 	policyName: z.string().nullish(),
+	phasesPatch: z.record(z.string(), z.unknown()).nullish(),
 	version: z.string().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
@@ -78,6 +79,7 @@ export function parseIntentJson(raw: string): IacRequest {
 					newSizeGb: nn(p.newSizeGb),
 					newMaxGb: nn(p.newMaxGb),
 					policyName: nn(p.policyName),
+					phasesPatch: nn(p.phasesPatch),
 					version: nn(p.version),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
@@ -149,12 +151,17 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'other'), cluster, tier, resource, newSizeGb, " +
-		"newMaxGb, policyName, version, reason, isProd (true only if the user explicitly named a production " +
+		"newMaxGb, policyName, phasesPatch, version, reason, isProd (true only if the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
 		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
+		"For an ILM lifecycle-policy change ('set eu-b2b 30-days retention to 60 days', 'forcemerge warm to 1 " +
+		"segment on eu-cld logs'), set workflow to 'ilm-rollout', cluster to the named deployment, policyName to the " +
+		"policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', 'eu-default-lifecycle-logs-prod'), and phasesPatch " +
+		"to a nested object containing ONLY the phase fields to change (top-level keys are phases hot|warm|cold|delete; " +
+		"durations are strings like '60d'; retention is delete.min_age). " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -335,18 +342,93 @@ export function setDeploymentTierSize(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousMax };
 }
 
-// Resolve the per-deployment JSON path from the configured template + cluster name.
-// The template carries a literal "${cluster}" placeholder (it is config, not a JS
-// template literal), so substitute it explicitly.
-export function deploymentJsonPath(template: string, cluster: string): string {
-	return template.replace(/\$\{cluster\}/g, cluster);
+// SIO-880: read-modify-write an ILM lifecycle-policy JSON by deep-merging a nested phase
+// patch (top-level keys are phases: hot/warm/cold/delete). Recurses into nested objects
+// (e.g. warm.forcemerge), replaces scalars/arrays/null. Captures the pre-merge value of
+// every touched leaf into `previous` (a sparse mirror of the patch) for the diff +
+// retention check; a leaf the policy lacked records `undefined`. Preserves 2-space indent
+// + trailing newline. Throws on non-object JSON. (Pure; unit-tested.)
+export function mergeIlmPhases(
+	json: string,
+	patch: Record<string, unknown>,
+): { content: string; previous: Record<string, unknown> } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("ILM policy JSON is not an object");
+	}
+	const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+		typeof v === "object" && v !== null && !Array.isArray(v);
+
+	const previous: Record<string, unknown> = {};
+	const merge = (target: Record<string, unknown>, p: Record<string, unknown>, prev: Record<string, unknown>): void => {
+		for (const [key, value] of Object.entries(p)) {
+			const current = target[key];
+			if (isPlainObject(value)) {
+				// A phase value changing from scalar->object would drop the old scalar from
+				// `previous`; ILM phases are always objects, so this clobber path is unreachable.
+				if (!isPlainObject(current)) target[key] = {};
+				const prevChild: Record<string, unknown> = {};
+				prev[key] = prevChild;
+				merge(target[key] as Record<string, unknown>, value, prevChild);
+			} else {
+				prev[key] = current; // may be undefined if the policy lacked this leaf
+				target[key] = value;
+			}
+		}
+	};
+	merge(parsed as Record<string, unknown>, patch, previous);
+	return { content: `${JSON.stringify(parsed, null, 2)}\n`, previous };
+}
+
+// SIO-880: parse an Elastic time string ("30d", "48h", "90m", "30s") to seconds. Returns
+// null for an unrecognized unit/format. ms/micros/nanos are not ILM min_age units.
+function durationToSeconds(value: unknown): number | null {
+	if (typeof value !== "string") return null;
+	const m = value.match(/^(\d+)\s*(d|h|m|s)$/);
+	if (!m) return null;
+	const n = Number(m[1]);
+	const unit = m[2];
+	const mult = unit === "d" ? 86400 : unit === "h" ? 3600 : unit === "m" ? 60 : 1;
+	return n * mult;
+}
+
+// SIO-880: compare old vs new delete.min_age. Returns the from/to descriptor when the new
+// retention is strictly shorter (irreversible data loss = HIGH risk), else null. (Pure.)
+export function detectRetentionReduction(
+	previous: Record<string, unknown>,
+	patch: Record<string, unknown>,
+): { from: string; to: string } | null {
+	const prevDelete = previous.delete;
+	const patchDelete = patch.delete;
+	if (typeof prevDelete !== "object" || prevDelete === null) return null;
+	if (typeof patchDelete !== "object" || patchDelete === null) return null;
+	const from = (prevDelete as { min_age?: unknown }).min_age;
+	const to = (patchDelete as { min_age?: unknown }).min_age;
+	const fromS = durationToSeconds(from);
+	const toS = durationToSeconds(to);
+	if (fromS === null || toS === null) return null;
+	return toS < fromS ? { from: from as string, to: to as string } : null;
+}
+
+// Resolve a per-deployment/per-policy JSON path from a configured template. ${cluster}
+// and ${policy} are literal placeholders (config, not JS template literals). The policy
+// filename is substituted verbatim (it legitimately contains '@' and '.').
+export function deploymentJsonPath(template: string, cluster: string, policy?: string): string {
+	let out = template.replace(/\$\{cluster\}/g, cluster);
+	if (policy !== undefined) out = out.replace(/\$\{policy\}/g, policy);
+	return out;
 }
 
 // Pure branch slug from the request descriptor: cluster-<descriptor>-workflow.
 // For a version-upgrade the descriptor is the target version (e.g. "9-4-2").
 // (Exported for unit testing; branchName appends agent/ + the date.)
 export function branchSlug(req: IacRequest): string {
-	const descriptor = req.workflow === "version-upgrade" ? req.version : (req.tier ?? req.resource);
+	const descriptor =
+		req.workflow === "version-upgrade"
+			? req.version
+			: req.workflow === "ilm-rollout"
+				? req.policyName
+				: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -369,6 +451,13 @@ function branchName(req: IacRequest): string {
 // runtime, where a top-level `Bun.env` reference throws "Bun is not defined").
 function deploymentJsonTemplate(): string {
 	return process.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
+}
+
+// SIO-880: agent-side path template for ILM lifecycle-policy JSON. ${cluster}/${policy}
+// are literal placeholders. Lazy process.env read (no module-scope Bun.env; the web app
+// runs Vite SSR where a top-level Bun.env reference throws "Bun is not defined").
+function ilmPolicyTemplate(): string {
+	return process.env.ELASTIC_IAC_ILM_POLICY_TEMPLATE ?? "environments/${cluster}/lifecycle-policies/${policy}.json";
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -496,6 +585,96 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 	};
 }
 
+// SIO-880: ilm-rollout via the GitOps proposer -- deep-merge a phase patch into the
+// cluster's lifecycle-policy JSON and open an MR via the API. Mirrors proposeTierResize.
+async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const policy = req.policyName ?? "";
+	const patch = req.phasesPatch;
+
+	if (!policy || !patch || Object.keys(patch).length === 0) {
+		return {
+			blockedReason: "ILM change needs a policy name and at least one phase field to change.",
+			messages: [new AIMessage("Cannot propose the change: name the policy and at least one phase field to change.")],
+		};
+	}
+
+	const filePath = deploymentJsonPath(ilmPolicyTemplate(), cluster, policy);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// A missing policy file comes back as 404 from the GitLab files API. Match 404
+	// specifically so a 401/403 (auth/scope) isn't mislabeled as "no such policy".
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `No such policy '${policy}' on '${cluster}': no such policy file at ${filePath}.`,
+			messages: [
+				new AIMessage(
+					`Cannot propose the change: no such policy '${policy}' on '${cluster}'. Check the policy filename.`,
+				),
+			],
+		};
+	}
+
+	let updated: { content: string; previous: Record<string, unknown> };
+	try {
+		updated = mergeIlmPhases(extractFileContent(raw), patch);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	const retentionChange = detectRetentionReduction(updated.previous, patch);
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const fields = Object.keys(patch).join(", ");
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: ILM ${policy} (${fields})`,
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	// Human diff: one -/+ pair per touched leaf, walking the previous mirror against patch.
+	const diffLines: string[] = [`${filePath} (ILM ${policy})`];
+	const walk = (prev: Record<string, unknown>, p: Record<string, unknown>, prefix: string): void => {
+		for (const [key, value] of Object.entries(p)) {
+			const path = prefix ? `${prefix}.${key}` : key;
+			if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+				const prevChild = (prev[key] ?? {}) as Record<string, unknown>;
+				walk(prevChild, value as Record<string, unknown>, path);
+			} else {
+				// Prefix the dotted phase path, then the JSON field name verbatim so the diff
+				// reads as a real JSON edit (e.g. `[delete] - "min_age": "30d" + "min_age": "60d"`).
+				// A brand-new field has no prior value; render "?" to match proposeTierResize.
+				const before = prev[key] === undefined ? '"?"' : JSON.stringify(prev[key]);
+				diffLines.push(
+					`[${path.includes(".") ? path.slice(0, path.lastIndexOf(".")) : path}] - "${key}": ${before}\n+ "${key}": ${JSON.stringify(value)}`,
+				);
+			}
+		}
+	};
+	walk(updated.previous, patch, "");
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+		retentionChange,
+	};
+}
+
 // Draft the change. version-upgrade + tier-resize go through the GitOps proposer (JSON
 // edit via the GitLab API); other workflows still draft a Terraform diff locally (legacy).
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
@@ -503,6 +682,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (!req) return {};
 	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
+	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
 
 	const branch = branchName(req);
 	await callTool("git_create_branch", { branch });
@@ -529,7 +709,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	const isUpgrade = req?.workflow === "version-upgrade";
 	// SIO-879: version-upgrade and tier-resize are GitOps config edits (committed via the
 	// API; CI plans on the MR). Other workflows still run terraform locally (legacy).
-	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize";
+	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize" || req?.workflow === "ilm-rollout";
 
 	let plan: string;
 	let precheckPassed: boolean;
@@ -545,8 +725,17 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 
 	const risks: string[] = [];
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
-	if (req?.workflow === "ilm-rollout")
-		risks.push("ILM phase change can pull frozen data in and cause force-merge load.");
+	if (req?.workflow === "ilm-rollout") {
+		risks.push(
+			"ILM phase change can trigger force-merge load / frozen pull-in; transitions take effect as each index rolls over, not immediately.",
+		);
+		// SIO-880: a retention REDUCTION is irreversible data loss -- surface as HIGH (first).
+		if (state.retentionChange) {
+			risks.unshift(
+				`Retention REDUCED ${state.retentionChange.from}->${state.retentionChange.to}; data deleted at apply is irrecoverable -- confirm the IR/issue reference before merge.`,
+			);
+		}
+	}
 	if (isUpgrade) {
 		risks.push(
 			"Version upgrades are rolling and irreversible; confirm the target is a valid forward step and apply off-peak.",
@@ -567,7 +756,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
 		: req?.workflow === "tier-resize"
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
-			: (req?.tier ?? req?.resource ?? "change");
+			: req?.workflow === "ilm-rollout"
+				? `${req?.policyName ?? "?"}: ${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
+				: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		kind: isConfigEdit ? "config-edit" : "terraform",
 		cluster: req?.cluster ?? "",
@@ -637,6 +828,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "tier-resize"
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
+			req?.workflow === "ilm-rollout"
+				? `ILM policy '${req?.policyName}' phase change: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -647,7 +841,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 		// Category + risk follow mr-template.md's own rules: version-bump = LOW;
 		// tier size/max_size = tier-resize / MEDIUM.
 		const categoryRisk =
-			req?.workflow === "tier-resize" ? "Category tier-resize, Risk MEDIUM" : "Category version-bump, Risk LOW";
+			req?.workflow === "ilm-rollout"
+				? `Category ilm, Risk ${state.retentionChange ? "HIGH" : "MEDIUM"}`
+				: req?.workflow === "tier-resize"
+					? "Category tier-resize, Risk MEDIUM"
+					: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
