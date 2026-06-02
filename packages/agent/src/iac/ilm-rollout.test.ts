@@ -1,6 +1,7 @@
 // agent/src/iac/ilm-rollout.test.ts
 import { describe, expect, test } from "bun:test";
-import { deploymentJsonPath, detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
+import { branchSlug, deploymentJsonPath, detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
+import type { IacRequest } from "./state.ts";
 
 const POLICY = JSON.stringify(
 	{
@@ -123,5 +124,18 @@ describe("deploymentJsonPath — ${policy} substitution", () => {
 		expect(deploymentJsonPath("environments/_deployments/${cluster}.json", "ap-cld")).toBe(
 			"environments/_deployments/ap-cld.json",
 		);
+	});
+});
+
+describe("branchSlug — ilm-rollout", () => {
+	test("uses policyName as the descriptor and slugs @/.", () => {
+		const req: IacRequest = {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-b2b",
+			policyName: "30-days@lifecycle",
+		};
+		// slug lowercases and replaces non-[a-z0-9-] runs with a single '-'
+		expect(branchSlug(req)).toBe("eu-b2b-30-days-lifecycle-ilm-rollout");
 	});
 });

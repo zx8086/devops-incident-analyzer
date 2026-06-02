@@ -423,7 +423,12 @@ export function deploymentJsonPath(template: string, cluster: string, policy?: s
 // For a version-upgrade the descriptor is the target version (e.g. "9-4-2").
 // (Exported for unit testing; branchName appends agent/ + the date.)
 export function branchSlug(req: IacRequest): string {
-	const descriptor = req.workflow === "version-upgrade" ? req.version : (req.tier ?? req.resource);
+	const descriptor =
+		req.workflow === "version-upgrade"
+			? req.version
+			: req.workflow === "ilm-rollout"
+				? req.policyName
+				: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
