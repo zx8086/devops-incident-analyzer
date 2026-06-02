@@ -10,7 +10,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [read_state, read_repo, draft, plan, open_mr, review_pipeline]
+      enum: [read_state, read_repo, draft, plan, open_mr, review_pipeline, status]
       description: Stage of the IaC maker workflow to perform
     cluster:
       type: string
@@ -52,6 +52,7 @@ tool_mapping:
     - "git_*"
     - "gitlab_*"
     - "elastic_*"
+    - "iac_*"
   action_tool_map:
     read_state:
       - elastic_cloud_get_deployment
@@ -82,6 +83,12 @@ tool_mapping:
     review_pipeline:
       - gitlab_get_merge_request
       - gitlab_get_merge_request_pipelines
+    status:
+      - iac_status
+      - iac_list_stacks
+      - iac_list_deployments
+      - iac_output
+      - iac_state_list
   action_descriptions:
     read_state: when reading live Elastic Cloud deployment topology, plan history, cluster health, index templates, or ILM before drafting a change
     read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
@@ -89,7 +96,9 @@ tool_mapping:
     plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
     open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
     review_pipeline: when reading an existing MR or its pipelines to report GitOps status (read-only; never merge/approve)
+    status: when reporting IaC reconcile status, what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
   action_keywords:
     read_state: [state, deployment, topology, plan history, health, ilm]
     plan: [plan, terraform plan, validate, diff]
     open_mr: [mr, merge request, open mr, raise mr]
+    status: [status, reconcile, what's deployed, what does it own, state list, output, list stacks, list deployments]

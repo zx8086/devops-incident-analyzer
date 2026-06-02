@@ -18,6 +18,8 @@ export const ConfigSchema = z.object({
 		workspaceDir: z.string(),
 	}),
 	terraformBin: z.string(),
+	// Task runner for the repo's read-only helper verbs (status/list/output/state-list).
+	taskBin: z.string(),
 	// Optional credentials; tools degrade with a clear message when absent.
 	gitlabToken: z.string().optional(),
 	elasticCloudApiKey: z.string().optional(),
@@ -40,6 +42,7 @@ export function loadConfig(): Config {
 			workspaceDir: Bun.env.ELASTIC_IAC_WORKSPACE_DIR ?? "/tmp/elastic-iac-workspace",
 		},
 		terraformBin: Bun.env.TERRAFORM_BIN ?? "terraform",
+		taskBin: Bun.env.ELASTIC_IAC_TASK_BIN ?? "task",
 		gitlabToken: Bun.env.GITLAB_PERSONAL_ACCESS_TOKEN || undefined,
 		elasticCloudApiKey: Bun.env.EC_API_KEY || undefined,
 		elasticCloudBaseUrl: Bun.env.ELASTIC_CLOUD_BASE_URL ?? "https://api.elastic-cloud.com",

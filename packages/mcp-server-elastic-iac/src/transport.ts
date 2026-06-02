@@ -1,5 +1,10 @@
 // src/transport.ts
-import type { BootstrapTransportResult, IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
+import {
+	type BootstrapTransportResult,
+	type IdentityCard,
+	isBenignStreamCancel,
+	type ReadinessSnapshot,
+} from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -41,6 +46,16 @@ function startHttp(serverFactory: () => McpServer, config: Config, deps: Transpo
 			if (url.pathname === path) {
 				const mcp = serverFactory();
 				const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+				// SIO-869: a client that disconnects mid-stream cancels the response reader
+				// (benign AbortError). Log it here rather than letting it bubble to the global
+				// unhandledRejection handler, which would otherwise exit the whole server.
+				transport.onerror = (err: unknown) => {
+					// SIO-869: route the benign mid-stream cancel to warn; surface genuine
+					// transport failures at error so they are not hidden behind a warning.
+					const detail = { error: err instanceof Error ? err.message : String(err) };
+					if (isBenignStreamCancel(err)) log.warn(detail, "benign stream cancel");
+					else log.error(detail, "transport stream error");
+				};
 				await mcp.connect(transport);
 				try {
 					return await transport.handleRequest(req);

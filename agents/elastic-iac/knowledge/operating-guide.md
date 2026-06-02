@@ -180,3 +180,25 @@ Resize is the last lever, not the first.
 - `nodes_stats` without a `metric` filter returns a huge payload — always pass
   `{metric: 'jvm,os'}` (or similar) and `level: node`.
 - `get_shards` requires a `limit` on clusters with >500 shards (eu-b2b has ~3,000+).
+
+---
+
+## 10. IaC repo helper verbs (read-only status & inspection)
+
+Status and inspection do **not** require drafting a change. The elastic-iac server wraps the
+repo's read-only Task helpers; reach for these when asked "what's the status", "what's deployed",
+or "what does this stack own" — read and report, do not open a branch.
+
+| Tool | Wraps | Use for |
+|---|---|---|
+| `iac_status` | `task status` | Reconcile state across deployments (optionally one `deployment`). |
+| `iac_list_stacks` | `task list-stacks` | The stacks the repo manages. |
+| `iac_list_deployments` | `task list-deployments` | The deployments the repo manages. |
+| `iac_output` | `task output STACK=.. DEPLOYMENT=..` | A stack's outputs (IDs/endpoints). |
+| `iac_state_list` | `task state-list STACK=.. DEPLOYMENT=..` | What a stack currently owns in state. |
+
+For GitOps/MR status (open MRs, pipeline results) use the `review_pipeline` action
+(`gitlab_get_merge_request`, `gitlab_get_merge_request_pipelines`). The repo tree and config blobs
+read via `read_repo` (`gitlab_get_repository_tree`, `gitlab_get_file_content`) — `main` is the
+live-cluster representation. Mutating verbs — apply, destroy, import, and state surgery
+(`state-mv`/`state-rm`) — are intentionally absent; CI owns mutation behind the human gate.
