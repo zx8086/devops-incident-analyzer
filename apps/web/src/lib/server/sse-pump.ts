@@ -42,6 +42,16 @@ const PIPELINE_NODES = new Set([
 	// SIO-751: surface the topic-shift node in the UI's node-progress display
 	// so the user sees the brief pause before the banner appears.
 	"detectTopicShift",
+	// elastic-iac maker graph nodes (separate graph; harmless for the incident graph).
+	"bootstrap",
+	"parseIntent",
+	"readClusterState",
+	"guard",
+	"draftChange",
+	"reviewPlan",
+	"reviewGate",
+	"openMr",
+	"teardown",
 ]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
@@ -219,4 +229,36 @@ export function emitTopicShiftPrompt(send: SendFn, threadId: string, interruptVa
 		message: typeof obj.message === "string" ? obj.message : "Topic shift detected. Continue or fresh?",
 	});
 	return true;
+}
+
+// elastic-iac interrupts: the maker graph pauses on either a one-line clarification
+// (parseIntent) or the plan-review gate (reviewGate). Surface each to the UI; the
+// UI POSTs the resume value to /api/agent/iac/resume.
+export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue: unknown): boolean {
+	if (typeof interruptValue !== "object" || interruptValue === null) return false;
+	const obj = interruptValue as { type?: unknown; message?: unknown; question?: unknown; review?: unknown };
+
+	if (obj.type === "iac_clarify") {
+		send({
+			type: "iac_clarify",
+			threadId,
+			question: typeof obj.question === "string" ? obj.question : "Which cluster and what change?",
+		});
+		return true;
+	}
+
+	if (obj.type === "iac_plan_review") {
+		send({
+			type: "iac_plan_review",
+			threadId,
+			review: obj.review ?? null,
+			message:
+				typeof obj.message === "string"
+					? obj.message
+					: "Review the Terraform plan. Approve to open a GitLab MR, or reject.",
+		});
+		return true;
+	}
+
+	return false;
 }

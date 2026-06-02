@@ -1,6 +1,6 @@
 // gitagent-bridge/src/manifest-loader.ts
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { type HooksConfig, loadHooks } from "./hooks.ts";
 import { type LoadedMemory, loadMemoryLayout } from "./memory.ts";
@@ -28,6 +28,9 @@ export interface LoadedAgent {
 	manifest: AgentManifest;
 	soul: string;
 	rules: string;
+	// GAP dialect: separation-of-duties / role-boundary doc (permitted vs forbidden
+	// actions). Empty string when the agent has no DUTIES.md (e.g. incident-analyzer).
+	duties: string;
 	tools: ToolDefinition[];
 	skills: Map<string, string>;
 	subAgents: Map<string, LoadedAgent>;
@@ -65,6 +68,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 
 	const soul = loadOptionalFile(join(agentDir, "SOUL.md"));
 	const rules = loadOptionalFile(join(agentDir, "RULES.md"));
+	const duties = loadOptionalFile(join(agentDir, "DUTIES.md"));
 
 	const tools: ToolDefinition[] = [];
 	const toolsDir = join(agentDir, "tools");
@@ -98,7 +102,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		}
 	}
 
-	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir);
+	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir, manifest.knowledge);
 
 	// SIO-843: lifecycle asset trees are root-only.
 	const hooks = root ? loadHooks(agentDir) : undefined;
@@ -109,6 +113,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		manifest,
 		soul,
 		rules,
+		duties,
 		tools,
 		skills,
 		subAgents,
@@ -131,14 +136,24 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 	};
 }
 
-function loadKnowledge(agentDir: string): {
+function loadKnowledge(
+	agentDir: string,
+	manifestKnowledge?: string[],
+): {
 	entries: KnowledgeEntry[];
 	runbookSelection?: RunbookSelectionConfig;
 } {
 	const knowledgeDir = join(agentDir, "knowledge");
 	const indexPath = join(knowledgeDir, "index.yaml");
 
-	if (!existsSync(indexPath)) return { entries: [] };
+	// GAP dialect: no knowledge/index.yaml, but the manifest enumerates knowledge
+	// paths (files + directories). Auto-discover them so the GAP knowledge base loads.
+	if (!existsSync(indexPath)) {
+		if (manifestKnowledge && manifestKnowledge.length > 0) {
+			return { entries: loadKnowledgeFromManifest(agentDir, manifestKnowledge) };
+		}
+		return { entries: [] };
+	}
 
 	const indexYaml = parse(readFileSync(indexPath, "utf-8"));
 	const index = KnowledgeIndexSchema.safeParse(indexYaml);
@@ -203,6 +218,45 @@ function loadKnowledge(agentDir: string): {
 	}
 
 	return { entries, runbookSelection: index.data.runbook_selection };
+}
+
+// GAP auto-discovery: resolve each manifest `knowledge:` entry. A directory entry
+// (e.g. "knowledge/runbooks/") loads every *.md inside it under a category named
+// after the directory; a file entry loads under its parent directory's name.
+function loadKnowledgeFromManifest(agentDir: string, paths: string[]): KnowledgeEntry[] {
+	const entries: KnowledgeEntry[] = [];
+	for (const rel of paths) {
+		const clean = rel.replace(/\/+$/, "");
+		const abs = join(agentDir, clean);
+		if (!existsSync(abs)) continue;
+
+		if (isDirectory(abs)) {
+			const category = basename(clean);
+			for (const file of readdirSync(abs).filter((f) => f.endsWith(".md") && f !== ".gitkeep")) {
+				const content = readFileSync(join(abs, file), "utf-8").trim();
+				if (content) entries.push(makeKnowledgeEntry(category, file, content));
+			}
+		} else {
+			const category = basename(dirname(clean)) || "knowledge";
+			const content = readFileSync(abs, "utf-8").trim();
+			if (content) entries.push(makeKnowledgeEntry(category, basename(clean), content));
+		}
+	}
+	return entries;
+}
+
+// Runbook frontmatter is parsed when present but tolerated when absent/malformed
+// in GAP mode (the portable runbooks are write-ups, not always trigger-tagged).
+function makeKnowledgeEntry(category: string, filename: string, content: string): KnowledgeEntry {
+	if (category === "runbooks") {
+		try {
+			const { triggers, body } = parseRunbookFrontmatter(content);
+			return { category, filename, content: body, triggers };
+		} catch {
+			return { category, filename, content };
+		}
+	}
+	return { category, filename, content };
 }
 
 // Detects, parses, validates, and strips YAML frontmatter from a runbook file's

@@ -5,9 +5,9 @@ import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/obser
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getPendingInterrupt, invokeAgent } from "$lib/server/agent";
+import { getLastAssistantText, getPendingInterrupt, invokeAgent } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
-import { emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
+import { emitIacInterrupt, emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.stream");
@@ -20,6 +20,8 @@ const StreamRequestSchema = z.object({
 		}),
 	),
 	threadId: z.string().optional(),
+	// Which agent/graph to run. Defaults to incident-analyzer.
+	agentName: z.enum(["incident-analyzer", "elastic-iac"]).optional(),
 	dataSources: z.array(z.string()).optional(),
 	// SIO-649: Elastic deployment IDs to fan out to. Undefined = legacy single-deployment behavior.
 	targetDeployments: z.array(z.string()).optional(),
@@ -77,6 +79,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								const eventStream = await invokeAgent(body.messages, {
 									threadId,
 									runId,
+									agentName: body.agentName,
 									dataSources: body.dataSources,
 									targetDeployments: body.targetDeployments,
 									uiAwsEstates: body.uiAwsEstates,
@@ -102,6 +105,28 @@ export const POST: RequestHandler = async ({ request }) => {
 								const { toolsUsed } = await pumpEventStream(eventStream, send);
 
 								await flushLangSmithCallbacks();
+
+								// elastic-iac maker graph: surface its own interrupt events (clarify /
+								// plan-review) and, when complete, emit the final AIMessage (the IaC
+								// graph appends messages rather than streaming an output node).
+								if (body.agentName === "elastic-iac") {
+									const iacInterrupt = await getPendingInterrupt(threadId, "elastic-iac");
+									if (iacInterrupt && emitIacInterrupt(send, threadId, iacInterrupt.value)) {
+										log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.request.end");
+										return;
+									}
+									const finalText = await getLastAssistantText(threadId, "elastic-iac");
+									if (finalText) send({ type: "message", content: finalText });
+									send({
+										type: "done",
+										threadId,
+										requestId,
+										runId,
+										responseTime: Date.now() - startTime,
+										toolsUsed,
+									});
+									return;
+								}
 
 								// SIO-751: if detectTopicShift paused the graph via interrupt(),
 								// the snapshot still has the interrupt pending and no "done"

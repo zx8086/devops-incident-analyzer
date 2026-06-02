@@ -49,6 +49,11 @@ export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): 
 		sections.push(agent.rules.trim());
 	}
 
+	// GAP dialect: role-boundary / separation-of-duties policy follows the rules.
+	if (agent.duties?.trim()) {
+		sections.push(agent.duties.trim());
+	}
+
 	const skillsToLoad = activeSkills ?? [...agent.skills.keys()];
 	for (const skillName of skillsToLoad) {
 		const rendered = renderSkill(skillName, agent.skills.get(skillName));

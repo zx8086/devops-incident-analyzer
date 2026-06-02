@@ -5,10 +5,14 @@ import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 import {
 	applyStreamEvent,
 	type DataSourceFindings,
+	type IacClarifyPrompt,
+	type IacPlanReviewPrompt,
 	type ReducerState,
 	type TopicShiftPrompt,
 } from "./agent-reducer.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
+
+export type AgentId = "incident-analyzer" | "elastic-iac";
 
 export interface ChatMessage {
 	role: "user" | "assistant";
@@ -67,6 +71,11 @@ function createAgentStore() {
 	let actionResults = $state<ActionResult[]>([]);
 	// SIO-751: HITL banner state for cross-turn topic-shift detection.
 	let topicShiftPrompt = $state<TopicShiftPrompt | null>(null);
+	// Which agent the UI is driving; toggled from the robot icon.
+	let currentAgent = $state<AgentId>("incident-analyzer");
+	// elastic-iac HITL banners.
+	let iacClarify = $state<IacClarifyPrompt | null>(null);
+	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -107,6 +116,7 @@ function createAgentStore() {
 				body: JSON.stringify({
 					messages: messages.map((m) => ({ role: m.role, content: m.content })),
 					threadId: threadId || undefined,
+					agentName: currentAgent,
 					dataSources: selectedDataSources,
 					...(includeDeployments && { targetDeployments: selectedElasticDeployments }),
 					...(includeAwsEstates && { uiAwsEstates: selectedAwsEstates.filter((id) => knownEstateIds.has(id)) }),
@@ -176,6 +186,8 @@ function createAgentStore() {
 			pendingActions,
 			actionResults,
 			topicShiftPrompt,
+			iacClarify,
+			iacPlanReview,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -193,6 +205,8 @@ function createAgentStore() {
 		pendingActions = next.pendingActions;
 		actionResults = next.actionResults;
 		topicShiftPrompt = next.topicShiftPrompt;
+		iacClarify = next.iacClarify;
+		iacPlanReview = next.iacPlanReview;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -336,6 +350,62 @@ function createAgentStore() {
 		pendingActions = [];
 		actionResults = [];
 		topicShiftPrompt = null;
+		iacClarify = null;
+		iacPlanReview = null;
+	}
+
+	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
+	// starts a fresh conversation (each agent has its own graph + checkpointer).
+	function switchAgent(agent: AgentId) {
+		if (agent === currentAgent || isStreaming) return;
+		currentAgent = agent;
+		clearChat();
+	}
+
+	// Resume the elastic-iac graph after an interrupt (plan-review decision or a
+	// clarification answer), piping the resulting SSE stream back through handleEvent.
+	async function resumeIac(payload: { decision?: "approved" | "rejected"; answer?: string }, threadIdOverride: string) {
+		if (isStreaming) return;
+		iacPlanReview = null;
+		iacClarify = null;
+		isStreaming = true;
+		currentContent = "";
+		activeNodes = new Set();
+		completedNodes = new Map();
+		try {
+			const response = await fetch("/api/agent/iac/resume", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ threadId: threadIdOverride, ...payload }),
+			});
+			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+			for await (const event of parseSseChunks(response.body)) {
+				handleEvent(event);
+			}
+		} catch (error) {
+			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
+		} finally {
+			if (currentContent) {
+				messages = [
+					...messages,
+					{ role: "assistant", content: currentContent, completedNodes: new Map(completedNodes), feedback: null },
+				];
+				currentContent = "";
+			}
+			isStreaming = false;
+			activeNodes = new Set();
+			completedNodes = new Map();
+		}
+	}
+
+	function resolveIacPlanReview(decision: "approved" | "rejected") {
+		if (!iacPlanReview) return;
+		return resumeIac({ decision }, iacPlanReview.threadId);
+	}
+
+	function submitIacClarify(answer: string) {
+		if (!iacClarify || !answer.trim()) return;
+		return resumeIac({ answer }, iacClarify.threadId);
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
@@ -462,6 +532,15 @@ function createAgentStore() {
 		get topicShiftPrompt() {
 			return topicShiftPrompt;
 		},
+		get currentAgent() {
+			return currentAgent;
+		},
+		get iacClarify() {
+			return iacClarify;
+		},
+		get iacPlanReview() {
+			return iacPlanReview;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
@@ -471,6 +550,9 @@ function createAgentStore() {
 		stopHealthPolling,
 		clearChat,
 		resolveTopicShift,
+		switchAgent,
+		resolveIacPlanReview,
+		submitIacClarify,
 	};
 }
 

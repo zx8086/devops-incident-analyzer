@@ -10,7 +10,8 @@ export type McpRole =
 	| "atlassian-mcp"
 	| "aws-mcp"
 	| "aws-proxy"
-	| "kafka-proxy";
+	| "kafka-proxy"
+	| "elastic-iac-mcp";
 
 export type McpTransportMode = "stdio" | "http" | "agentcore-proxy";
 

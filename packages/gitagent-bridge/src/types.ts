@@ -1,9 +1,23 @@
 // gitagent-bridge/src/types.ts
 import { z } from "zod";
 
+// GAP dialect support: agent.yaml may list skills/tools as `[{ id: "x" }]`
+// (GitAgent Protocol layout) instead of `["x"]`. Normalize either form to a
+// plain string[] at parse time so every downstream consumer keeps seeing string[].
+const toIdList = (v: unknown): unknown => {
+	if (!Array.isArray(v)) return v;
+	return v.map((e) => {
+		if (e && typeof e === "object" && "id" in e) {
+			return (e as { id: unknown }).id;
+		}
+		return e;
+	});
+};
+
 export const ModelConfigSchema = z.object({
 	preferred: z.string(),
-	fallback: z.array(z.string()).optional(),
+	// GAP dialect allows a single fallback string; normalize to string[].
+	fallback: z.preprocess((v) => (typeof v === "string" ? [v] : v), z.array(z.string())).optional(),
 	constraints: z
 		.object({
 			temperature: z.number().min(0).max(2).optional(),
@@ -36,6 +50,25 @@ export const ComplianceSchema = z.object({
 			data_classification: z.string().optional(),
 		})
 		.optional(),
+	// GAP dialect: maker/checker separation-of-duties policy. The agent is
+	// assigned a subset of roles; conflicting role pairs (e.g. maker/checker)
+	// must never be held by the same actor.
+	segregation_of_duties: z
+		.object({
+			roles: z
+				.array(
+					z.object({
+						id: z.string(),
+						description: z.string().optional(),
+						permissions: z.array(z.string()).optional(),
+					}),
+				)
+				.optional(),
+			conflicts: z.array(z.array(z.string())).optional(),
+			assignments: z.record(z.string(), z.array(z.string())).optional(),
+			enforcement: z.enum(["strict", "advisory"]).optional(),
+		})
+		.optional(),
 });
 
 export const RuntimeConfigSchema = z.object({
@@ -54,8 +87,9 @@ export const AgentManifestSchema = z.object({
 	description: z.string(),
 	model: ModelConfigSchema.optional(),
 	runtime: RuntimeConfigSchema.optional(),
-	skills: z.array(z.string()).optional(),
-	tools: z.array(z.string()).optional(),
+	// GAP dialect: skills/tools may be `["x"]` or `[{ id: "x" }]`; both normalize to string[].
+	skills: z.preprocess(toIdList, z.array(z.string())).optional(),
+	tools: z.preprocess(toIdList, z.array(z.string())).optional(),
 	agents: z.record(z.string(), SubAgentRefSchema).optional(),
 	delegation: z
 		.object({
@@ -65,6 +99,18 @@ export const AgentManifestSchema = z.object({
 		.optional(),
 	compliance: ComplianceSchema.optional(),
 	tags: z.array(z.string()).optional(),
+	// GAP dialect: where the IaC truth lives + which knowledge/workflow files to load.
+	// repository.project_id may be numeric in the YAML.
+	repository: z
+		.object({
+			url: z.string(),
+			project_id: z.union([z.string(), z.number()]).optional(),
+			default_branch: z.string().optional(),
+			precheck_target: z.string().optional(),
+		})
+		.optional(),
+	knowledge: z.array(z.string()).optional(),
+	workflows: z.array(z.string()).optional(),
 });
 
 export const ToolDefinitionSchema = z.object({

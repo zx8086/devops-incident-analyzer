@@ -380,5 +380,28 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// SIO-751: emitted at the start of a resumed stream so the UI knows to
 	// clear its banner before the resumed graph starts pushing events again.
 	z.object({ type: z.literal("topic_shift_resolved") }),
+	// elastic-iac maker graph: a one-line clarification the planner needs, or the
+	// plan-review gate. The UI POSTs the resume value to /api/agent/iac/resume.
+	z.object({
+		type: z.literal("iac_clarify"),
+		threadId: z.string(),
+		question: z.string(),
+	}),
+	z.object({
+		type: z.literal("iac_plan_review"),
+		threadId: z.string(),
+		message: z.string(),
+		review: z
+			.object({
+				cluster: z.string(),
+				branch: z.string(),
+				title: z.string(),
+				diff: z.string(),
+				plan: z.string(),
+				risks: z.array(z.string()),
+				precheckPassed: z.boolean(),
+			})
+			.nullable(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

@@ -11,6 +11,9 @@ export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
 export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEntities } from "./graph-knowledge.ts";
+export { buildIacGraph } from "./iac/graph.ts";
+export { evaluateGuards } from "./iac/guards.ts";
+export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {
 	type BootstrapResult,
@@ -49,7 +52,7 @@ export {
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
-export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent } from "./prompt-context.ts";
+export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";

@@ -46,6 +46,8 @@ export interface McpClientConfig {
 	gitlabUrl?: string;
 	atlassianUrl?: string;
 	awsUrl?: string;
+	// Unified Elastic IaC maker server (terraform + git + gitlab + elastic reads).
+	elasticIacUrl?: string;
 }
 
 // SIO-705: pino's default JSON serializer drops non-enumerable fields on Error
@@ -168,6 +170,9 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	if (config.awsUrl) {
 		serverEntries.push({ name: "aws-mcp", url: `${config.awsUrl}/mcp` });
 	}
+	if (config.elasticIacUrl) {
+		serverEntries.push({ name: "elastic-iac-mcp", url: `${config.elasticIacUrl}/mcp` });
+	}
 
 	if (serverEntries.length === 0) {
 		logger.warn("No MCP server URLs configured. Agent will have no tools.");
@@ -286,6 +291,7 @@ export const DATASOURCE_TO_MCP_SERVER: Record<string, string> = {
 	gitlab: "gitlab-mcp",
 	atlassian: "atlassian-mcp",
 	aws: "aws-mcp",
+	"elastic-iac": "elastic-iac-mcp",
 };
 
 export class McpRoleMismatchError extends Error {
@@ -307,6 +313,7 @@ export const MCP_SERVER_TO_ROLE: Record<string, McpRole> = {
 	"gitlab-mcp": "gitlab-mcp",
 	"atlassian-mcp": "atlassian-mcp",
 	"aws-mcp": "aws-proxy",
+	"elastic-iac-mcp": "elastic-iac-mcp",
 };
 
 export function getToolsForDataSource(dataSourceId: string): StructuredToolInterface[] {

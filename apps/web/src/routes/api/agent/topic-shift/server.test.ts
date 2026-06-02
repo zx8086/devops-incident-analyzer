@@ -8,6 +8,8 @@ mock.module("@devops-agent/agent", () => ({
 	// has the symbols regardless of file ordering.
 	getConnectedServers: mock(() => [] as string[]),
 	getServerStates: mock(() => ({}) as Record<string, string>),
+	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	buildIacGraph: () => Promise.resolve({}),
 }));
 
 const sharedLogger = {
