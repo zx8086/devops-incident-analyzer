@@ -268,4 +268,12 @@ describe("reviewPlan — ilm-rollout", () => {
 		expect(result.risks?.[0]).toContain("Retention REDUCED 90d->30d");
 		expect(result.risks?.[0]).toContain("irrecoverable");
 	});
+
+	test("title carries the policy name and changed-phase keys", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		const result = await reviewPlan(baseState(null) as any);
+		expect(result.planReview?.title).toContain("90-days@lifecycle");
+		expect(result.planReview?.title).toContain("delete");
+	});
 });
