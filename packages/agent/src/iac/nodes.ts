@@ -327,8 +327,11 @@ function branchName(req: IacRequest): string {
 // passes the resolved filePath to the MCP gitlab_* tools, which only own the repo
 // target (base URL + project). Literal "${cluster}" placeholder. The agent edits
 // JSON config only; it never runs terraform or git.
-const DEPLOYMENT_JSON_TEMPLATE =
-	Bun.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
+// Read lazily via process.env (works under both Bun and the web app's Vite SSR
+// runtime, where a top-level `Bun.env` reference throws "Bun is not defined").
+function deploymentJsonTemplate(): string {
+	return process.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
+}
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
 // base64 `content` field into the raw file text.
@@ -355,7 +358,7 @@ function extractFileContent(toolResult: string): string {
 async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const version = req.version ?? "";
-	const filePath = deploymentJsonPath(DEPLOYMENT_JSON_TEMPLATE, cluster);
+	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
 	const branch = branchName(req);
 
 	const raw = await callTool("gitlab_get_file_content", { filePath });
