@@ -655,8 +655,10 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			} else {
 				// Prefix the dotted phase path, then the JSON field name verbatim so the diff
 				// reads as a real JSON edit (e.g. `[delete] - "min_age": "30d" + "min_age": "60d"`).
+				// A brand-new field has no prior value; render "?" to match proposeTierResize.
+				const before = prev[key] === undefined ? '"?"' : JSON.stringify(prev[key]);
 				diffLines.push(
-					`[${path.includes(".") ? path.slice(0, path.lastIndexOf(".")) : path}] - "${key}": ${JSON.stringify(prev[key])}\n+ "${key}": ${JSON.stringify(value)}`,
+					`[${path.includes(".") ? path.slice(0, path.lastIndexOf(".")) : path}] - "${key}": ${before}\n+ "${key}": ${JSON.stringify(value)}`,
 				);
 			}
 		}
