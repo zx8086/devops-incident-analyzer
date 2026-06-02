@@ -12,8 +12,8 @@ Validation policy: advisory — warn on empty fields, do not block submission
 
 ## Category
 <!-- Pick ONE. Drives risk default + reviewer routing. -->
-- [ ] `version-bump` — `versions.json` only (stack version)
-- [ ] `tier-resize` — autoscaling `size`/`max_size`/`zone_count` in `<region>.tf`
+- [ ] `version-bump` — Elasticsearch `version` in `environments/_deployments/<name>.json` (or stack-wide `versions.json`)
+- [ ] `tier-resize` — autoscaling `size`/`max_size`/`zone_count` in the deployment JSON
 - [ ] `ccs-ccr` — `remote_cluster` wiring (cross-cluster search/replication)
 - [ ] `ilm` — index lifecycle policy / retention change
 - [ ] `index-template` — component or composable template, mappings, settings
@@ -25,19 +25,24 @@ Validation policy: advisory — warn on empty fields, do not block submission
 - [ ] `refactor` — no functional change (rename, split, docs)
 
 ## Cluster(s) affected
-<!-- One or more. Use deployment names, not file aliases. AI agent: parse from changed .tf files (ap.tf→ap, eu.tf→eu-b2b/eu-cld, gl.tf→gl-testing, ob.tf→onboarding, us.tf→us-cld, testing.tf→gl-testing). -->
+<!-- One or more. Use deployment names = the JSON filename under environments/_deployments/<name>.json. AI agent: derive from the file you edited (environments/_deployments/<name>.json → <name>; per-stack edits environments/<name>/<stack>/ → <name>). -->
 - [ ] `gl-testing` (mandatory first non-eu-b2b target — IaC pre-check sandbox)
 - [ ] `eu-b2b`
 - [ ] `eu-cld`
 - [ ] `us-cld`
-- [ ] `onboarding`
+- [ ] `ap-cld`
+- [ ] `gl-cld-reporting`
+- [ ] `eu-onboarding`
+- [ ] `eu-cld-monitor`
+- [ ] `ap-cld-monitor`
+- [ ] `us-cld-monitor`
 - [ ] `all` (stack-wide version bump touching every deployment via `versions.json`)
 - [ ] Other: _________________
 
 ## Risk
 <!-- AI agent default rules:
-  - LOW: versions.json only, README only, refactor
-  - MEDIUM: <region>.tf size/max_size, ingest-pipeline (additive), index-template (additive)
+  - LOW: version bump (deployment JSON .version) only, README only, refactor
+  - MEDIUM: tier size/max_size in the deployment JSON, ingest-pipeline (additive), index-template (additive)
   - HIGH: remote_cluster, user_settings_yaml, ilm retention reduction, alerts removal, hotfix
 -->
 - [ ] LOW
