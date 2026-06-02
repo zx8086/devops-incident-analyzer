@@ -1024,8 +1024,15 @@ describe("collectSubAgentFixtures", () => {
 const AGENTS_ROOT = join(import.meta.dir, "../../../agents");
 const PRODUCTION_FIXTURES = collectAgents(AGENTS_ROOT);
 
+// The runbook-cleanliness discipline (read-only tool authority + "All Tools Used
+// Are Read-Only" tail section) applies only to agents that opt into runbook
+// selection (knowledge/index.yaml `runbook_selection`). GAP agents like
+// elastic-iac keep incident-history write-ups under knowledge/runbooks/ that are
+// not action-bound prompt runbooks, so they are excluded from this validation.
+const RUNBOOK_BINDING_FIXTURES = PRODUCTION_FIXTURES.filter((f) => f.agent.runbookSelection !== undefined);
+
 describe("real agent runbook bindings", () => {
-	for (const fixture of PRODUCTION_FIXTURES) {
+	for (const fixture of RUNBOOK_BINDING_FIXTURES) {
 		describe(fixture.name, () => {
 			const authority = buildAuthority(fixture.agent.tools);
 

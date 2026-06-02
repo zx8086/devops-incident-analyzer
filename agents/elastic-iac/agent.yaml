@@ -25,10 +25,8 @@ skills:
   - id: validate-cluster-state
 
 tools:
-  - id: gitlab
-  - id: elastic
-  - id: terraform
-  - id: bash
+  # Single facade onto the unified mcp-server-elastic-iac (terraform + git + gitlab + elastic reads).
+  - id: elastic-iac
 
 knowledge:
   - knowledge/iac-repo-map.md

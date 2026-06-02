@@ -12,6 +12,7 @@ function baseAgent(skills: Map<string, string>): LoadedAgent {
 		manifest: { name: "test", version: "0.1.0", description: "test" },
 		soul: "",
 		rules: "",
+		duties: "",
 		tools: [],
 		skills,
 		subAgents: new Map(),

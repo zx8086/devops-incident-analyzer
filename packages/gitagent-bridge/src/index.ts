@@ -56,6 +56,9 @@ export {
 } from "./types.ts";
 export {
 	loadWorkflows,
+	type SkillFlowDef,
+	SkillFlowSchema,
+	skillFlowToWorkflowDef,
 	type WorkflowDef,
 	WorkflowSchema,
 	type WorkflowStep,

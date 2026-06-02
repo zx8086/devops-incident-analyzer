@@ -1,0 +1,95 @@
+name: elastic-iac
+description: >
+  Elastic Cloud Infrastructure-as-Code maker tools (unified mcp-server-elastic-iac):
+  read live cluster/Cloud state, draft a Terraform diff on a branch, run fmt/validate/plan,
+  and open a GitLab merge request. Plan is read-only; apply/destroy/state-surgery and
+  MR merge/approve are intentionally absent -- a human applies from GitLab.
+version: 1.0.0
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [read_state, read_repo, draft, plan, open_mr, review_pipeline]
+      description: Stage of the IaC maker workflow to perform
+    cluster:
+      type: string
+      description: Target Elastic Cloud deployment name (e.g. eu-b2b, gl-testing)
+    branch:
+      type: string
+      description: Working branch (agent/<short>-<yyyymmdd>); never main
+    project_id:
+      type: string
+      description: GitLab project ID or URL-encoded path for the IaC repo
+    paths:
+      type: array
+      items: { type: string }
+      description: Terraform file paths under stacks/<cluster>/ to read or modify
+  required: [action]
+output_schema:
+  type: object
+  properties:
+    result: { type: object }
+annotations:
+  requires_confirmation: true
+  read_only: false
+  cost: medium
+
+prompt_template: >
+  Drive the Elastic Cloud IaC maker workflow against the unified elastic-iac server.
+  {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all actions are logged; human_in_the_loop is always.{{/if}}
+  Never run terraform apply/destroy, never merge or approve an MR, never push to main.
+
+related_tools:
+  - "Use read_state before draft to ground the change in live deployment topology and plan history"
+  - "Use plan to produce the terraform plan output surfaced to the human for review"
+  - "Use open_mr only after the human approves the reviewed plan"
+
+tool_mapping:
+  mcp_server: elastic-iac
+  mcp_patterns:
+    - "terraform_*"
+    - "git_*"
+    - "gitlab_*"
+    - "elastic_*"
+  action_tool_map:
+    read_state:
+      - elastic_cloud_get_deployment
+      - elastic_cloud_list_deployments
+      - elastic_cloud_get_plan_history
+      - elastic_get_cluster_health
+      - elastic_get_index_template
+      - elastic_ilm_get_lifecycle
+    read_repo:
+      - gitlab_get_repository_tree
+      - gitlab_get_file_content
+      - git_clone
+      - git_checkout
+      - git_status
+      - git_diff
+    draft:
+      - git_create_branch
+      - git_commit
+      - terraform_fmt
+      - terraform_search_modules
+      - terraform_search_providers
+    plan:
+      - terraform_validate
+      - terraform_plan
+    open_mr:
+      - git_push
+      - gitlab_create_merge_request
+    review_pipeline:
+      - gitlab_get_merge_request
+      - gitlab_get_merge_request_pipelines
+  action_descriptions:
+    read_state: when reading live Elastic Cloud deployment topology, plan history, cluster health, index templates, or ILM before drafting a change
+    read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
+    draft: when creating the working branch and writing the minimal Terraform diff (fmt + module/provider search to get it right)
+    plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
+    open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
+    review_pipeline: when reading an existing MR or its pipelines to report GitOps status (read-only; never merge/approve)
+  action_keywords:
+    read_state: [state, deployment, topology, plan history, health, ilm]
+    plan: [plan, terraform plan, validate, diff]
+    open_mr: [mr, merge request, open mr, raise mr]
