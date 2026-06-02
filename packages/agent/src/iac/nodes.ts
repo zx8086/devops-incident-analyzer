@@ -410,11 +410,13 @@ export function detectRetentionReduction(
 	return toS < fromS ? { from: from as string, to: to as string } : null;
 }
 
-// Resolve the per-deployment JSON path from the configured template + cluster name.
-// The template carries a literal "${cluster}" placeholder (it is config, not a JS
-// template literal), so substitute it explicitly.
-export function deploymentJsonPath(template: string, cluster: string): string {
-	return template.replace(/\$\{cluster\}/g, cluster);
+// Resolve a per-deployment/per-policy JSON path from a configured template. ${cluster}
+// and ${policy} are literal placeholders (config, not JS template literals). The policy
+// filename is substituted verbatim (it legitimately contains '@' and '.').
+export function deploymentJsonPath(template: string, cluster: string, policy?: string): string {
+	let out = template.replace(/\$\{cluster\}/g, cluster);
+	if (policy !== undefined) out = out.replace(/\$\{policy\}/g, policy);
+	return out;
 }
 
 // Pure branch slug from the request descriptor: cluster-<descriptor>-workflow.
@@ -444,6 +446,13 @@ function branchName(req: IacRequest): string {
 // runtime, where a top-level `Bun.env` reference throws "Bun is not defined").
 function deploymentJsonTemplate(): string {
 	return process.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
+}
+
+// SIO-880: agent-side path template for ILM lifecycle-policy JSON. ${cluster}/${policy}
+// are literal placeholders. Lazy process.env read (no module-scope Bun.env; the web app
+// runs Vite SSR where a top-level Bun.env reference throws "Bun is not defined").
+function ilmPolicyTemplate(): string {
+	return process.env.ELASTIC_IAC_ILM_POLICY_TEMPLATE ?? "environments/${cluster}/lifecycle-policies/${policy}.json";
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the

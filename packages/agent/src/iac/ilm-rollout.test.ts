@@ -1,6 +1,6 @@
 // agent/src/iac/ilm-rollout.test.ts
 import { describe, expect, test } from "bun:test";
-import { detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
+import { deploymentJsonPath, detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
 
 const POLICY = JSON.stringify(
 	{
@@ -106,5 +106,22 @@ describe("parseIntentJson — ilm-rollout", () => {
 		const raw = JSON.stringify({ workflow: "ilm-rollout", cluster: "eu-b2b", policyName: "logs", phasesPatch: null });
 		const req = parseIntentJson(raw);
 		expect(req.phasesPatch).toBeUndefined();
+	});
+});
+
+describe("deploymentJsonPath — ${policy} substitution", () => {
+	test("substitutes both cluster and policy, preserving @ and . in the filename", () => {
+		const path = deploymentJsonPath(
+			"environments/${cluster}/lifecycle-policies/${policy}.json",
+			"eu-b2b",
+			"30-days@lifecycle",
+		);
+		expect(path).toBe("environments/eu-b2b/lifecycle-policies/30-days@lifecycle.json");
+	});
+
+	test("still works for a cluster-only template (back-compat)", () => {
+		expect(deploymentJsonPath("environments/_deployments/${cluster}.json", "ap-cld")).toBe(
+			"environments/_deployments/ap-cld.json",
+		);
 	});
 });
