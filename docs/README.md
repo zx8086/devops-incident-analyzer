@@ -14,6 +14,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Set up from scratch | [Getting Started](development/getting-started.md) |
 | Understand architecture | [System Overview](architecture/system-overview.md) |
 | Understand agent pipeline | [Agent Pipeline](architecture/agent-pipeline.md) |
+| Use the Elastic IaC (Terraform maker) agent | [Elastic IaC Agent](superpowers/specs/2026-06-02-elastic-iac-agent-design.md) |
 | Add or modify MCP tools | [Adding MCP Tools](development/adding-mcp-tools.md) |
 | Understand action-driven tool filtering | [Action Tool Maps](development/action-tool-maps.md) |
 | Configure environment variables | [Environment Variables](configuration/environment-variables.md) |
@@ -38,6 +39,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 20-node StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, query (fan-out), align, aggregate, extractFindings, enforceCorrelations, checkConfidence, validate, mitigation split (investigate/monitor/escalate + aggregate), followUp, detectTopicShift |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
 | [MCP Integration](architecture/mcp-integration.md) | 7 MCP server connections, tool scoping, health monitoring, trace propagation |
+| [Elastic IaC Agent](superpowers/specs/2026-06-02-elastic-iac-agent-design.md) | The natural-language **maker** agent (peer to the incident-analyzer): 9-node maker graph, `elastic-iac-mcp` (:9086), HITL plan-review, GitLab MR output |
 
 ### Configuration
 
@@ -102,3 +104,4 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | 2026-04-10 | Added Authoring Skills and Runbooks guide; fixed stale runbook/knowledge coverage in gitagent-bridge and agent-pipeline |
 | 2026-04-23 | Added Atlassian MCP server (6th datasource) to all architecture, config, deployment, and development docs |
 | 2026-05-28 | docs drift sweep: AWS MCP (7th datasource) for multi-estate added across architecture, configuration, deployment; expanded elastic cloud/billing tool catalog; corrected pipeline node count (14→20); indexed `runbooks/aws-estate-onboarding.md` |
+| 2026-06-02 | Documented the Elastic IaC agent (peer maker agent): design spec under `superpowers/specs/`, `elastic-iac-mcp` (:9086) in MCP-server config + environment variables, the maker graph in agent-pipeline, and the port + peer-agent note in system-overview |

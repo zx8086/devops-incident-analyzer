@@ -715,6 +715,21 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 
 ---
 
+## Elastic IaC Maker Graph
+
+The pipeline documented above answers "what is wrong?". A second, independent graph -- the **Elastic IaC maker graph** (`packages/agent/src/iac/graph.ts`) -- answers "change it" for Elastic Cloud Terraform. It is a peer, not a sub-agent: its own `IacState` annotation (`src/iac/state.ts`), its own checkpointer thread, and a separate `buildIacGraph()` entrypoint selected by the UI agent toggle (`agentName === "elastic-iac"` routes to `getIacGraph()` instead of `getGraph()`).
+
+```text
+START -> bootstrap -> {connected? parseIntent : END}
+  -> parseIntent [iac_clarify interrupt] -> readClusterState -> guard
+  -> {blocked? END : draftChange} -> reviewPlan
+  -> reviewGate [iac_plan_review HITL interrupt] -> {approved? openMr : teardown} -> END
+```
+
+Nine nodes: `bootstrap` (MCP liveness), `parseIntent` (LLM intent + optional clarify interrupt), `readClusterState` (live Elastic Cloud + ILM read), `guard` (deterministic safety guards), `draftChange` (minimal Terraform diff on an `agent/*` branch), `reviewPlan` (`terraform validate`/`plan` + `gl-testing` pre-check + risk collection), `reviewGate` (HITL: surface the plan, pause for approval), `openMr` (push + GitLab MR), `teardown` (final message). It never applies and never merges its own MR. Full design: [Elastic IaC Agent](../superpowers/specs/2026-06-02-elastic-iac-agent-design.md).
+
+---
+
 ## Changelog
 
 | Date | Change |
@@ -727,3 +742,4 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 | 2026-05-10 | confidence cap lowered from 0.6 to 0.59 (strict-less-than HITL gate); cap inputs broadened beyond `degradedRules` to include tool-error rate >= 15% and `## Gaps` section with >= 2 bullets; new `gitlab-deploy-vs-datastore-runtime` rule with `skipCoverageCheck` flag and contradiction banner; aggregator defensive-prose ban; alignment retry now scoped to failed deployments via `retryDeployments`; Elastic deployment fan-out parallelized; new `GRAPH_TIMEOUT_MS` and `SUB_AGENT_TIMEOUT_MS` env knobs (defaults 720 s / 360 000 ms). |
 | 2026-05-16 | Phase A: inserted `extractFindings` node between `aggregate` and `enforceCorrelationsRouter` (14 nodes total); pure-function extraction of typed findings from tool outputs (Kafka only in Phase A). |
 | 2026-05-28 | docs drift sweep: added `awsEstateRouter` between `entityExtractor` and the fan-out; added AWS as the 7th datasource in the fan-out and tool-counts table; replaced single `proposeMitigation` block with the `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` branch + `aggregateMitigation` join; added `detectTopicShift` after `followUp`. Verified total node count is 20. Refreshed elastic and kafka tool-count rows to match current configuration. |
+| 2026-06-02 | Documented the Elastic IaC maker graph (`packages/agent/src/iac/graph.ts`) as an independent peer graph: 9 nodes, two HITL interrupts (`iac_clarify`, `iac_plan_review`), maker/checker SoD, selected via the UI agent toggle. |
