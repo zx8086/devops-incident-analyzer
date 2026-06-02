@@ -66,6 +66,17 @@ The AWS MCP server runs in AWS Bedrock AgentCore Runtime in production; locally 
 | `AWS_AGENTCORE_AWS_PROFILE` | No | -- | AWS CLI profile used by the local proxy to sign requests. Mutually exclusive with explicit creds below. |
 | `AWS_AGENTCORE_AWS_ACCESS_KEY_ID` / `AWS_AGENTCORE_AWS_SECRET_ACCESS_KEY` | No | -- | Explicit creds for the proxy when no profile is configured. |
 
+### AgentCore proxy retry budget (SIO-868)
+
+These tune the SigV4 proxy's JSON-RPC retry loop and apply to **every** AgentCore-proxied server (AWS and Kafka), not just AWS. A runtime that has scaled to zero emits `-32010` "Runtime health check failed or timed out" for ~40-50s while cold-starting; the proxy retries until it warms. Defaults ride out a ~50s cold-start.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS` | No | `9` | Max JSON-RPC `-320xx` retry attempts per tool call. Raise for environments with slower cold-starts. |
+| `AGENTCORE_JSONRPC_RETRY_DEADLINE_MS` | No | `60000` | Cumulative wallclock budget (ms) for all retries of one tool call -- the effective bound. A retry that would overshoot the deadline is skipped and the call fails fast. |
+
+**Tradeoff:** a genuinely-unavailable runtime is retried up to the deadline before the call fails, so a higher deadline trades faster cold-start recovery for slower fast-fail on a hard-down runtime.
+
 ### AgentCore deployment
 
 | Variable | Required | Default | Description |
@@ -75,6 +86,39 @@ The AWS MCP server runs in AWS Bedrock AgentCore Runtime in production; locally 
 **Migration from legacy singletons:** `AWS_ASSUMED_ROLE_ARN` and `AWS_EXTERNAL_ID` are removed. Move them into `AWS_ESTATES`. The generic `AGENTCORE_*` vars (without server prefix) are also no longer honored â€” use `AWS_AGENTCORE_*` (and `KAFKA_AGENTCORE_*` for Kafka, etc.) per.
 
 See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md) for the full account-onboarding procedure (IAM role + trust policy + ExternalId + deploy).
+
+---
+
+## Elastic IaC MCP
+
+The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs the **Elastic IaC agent** -- the natural-language maker for Elastic Cloud Terraform changes. It is read/plan/branch-only (no apply or destroy tools), and uses a single `src/config.ts` `loadConfig()` rather than the 4-pillar `config/` directory. See the [Elastic IaC Agent design](../superpowers/specs/2026-06-02-elastic-iac-agent-design.md).
+
+### Server (transport + repository)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ELASTIC_IAC_MCP_TRANSPORT` | No | `http` | Transport mode (`http` \| `stdio`) |
+| `ELASTIC_IAC_MCP_PORT` | No | `9086` | Server listen port |
+| `ELASTIC_IAC_MCP_HOST` | No | `0.0.0.0` | Server bind host |
+| `ELASTIC_IAC_MCP_PATH` | No | `/mcp` | HTTP path prefix |
+| `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `71488350` | GitLab project ID of the `observability-elasticcloud-deployments-terraform` IaC repo |
+| `ELASTIC_IAC_WORKSPACE_DIR` | No | `/tmp/elastic-iac-workspace` | Local directory the git/terraform tools clone and operate inside (never the agent's CWD) |
+| `TERRAFORM_BIN` | No | `terraform` | Path to the Terraform binary the `terraform_*` tools invoke |
+| `GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base for MRs, file blobs, and repository tree |
+| `ELASTIC_CLOUD_BASE_URL` | No | `https://api.elastic-cloud.com` | Elastic Cloud API base for deployment / plan-history reads |
+
+### Credentials (optional; tools degrade with a clear message when absent)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITLAB_PERSONAL_ACCESS_TOKEN` | No | -- | GitLab token for MR creation and repo reads (shared name with the GitLab datasource server) |
+| `EC_API_KEY` | No | -- | Elastic Cloud API key for deployment reads (shared name with the Elasticsearch MCP cloud/billing tools) |
+
+### Agent connection
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ELASTIC_IAC_MCP_URL` | Yes (for the IaC agent) | `http://localhost:9086` | URL the web server/agent connects to (`apps/web/src/lib/server/agent.ts`). Its `/identity` role must be `elastic-iac-mcp`. |
 
 ---
 
@@ -412,4 +456,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-05-08 | added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
 | 2026-05-10 | post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
 | 2026-05-16 | collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |
-| 2026-05-28 | docs drift sweep: added new "AWS MCP â€” Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for €“826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |
+| 2026-05-28 | docs drift sweep: added new "AWS MCP â€” Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for ï¿½ï¿½826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |

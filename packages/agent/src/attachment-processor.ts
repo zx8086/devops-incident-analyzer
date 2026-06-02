@@ -113,16 +113,18 @@ function processImage(img: ImageBlock): MessageContentComplex {
 	};
 }
 
-// ChatBedrockConverse (v0.1.4+) supports the "document" content type
-// which maps to Bedrock's DocumentBlock for native PDF processing
+// SIO-866: emit a LangChain standard file content block. @langchain/aws routes blocks
+// where isDataContentBlock() is true through fromStandardFileBlock, which builds Bedrock's
+// DocumentBlock itself (base64 -> bytes, mime -> format, name). The prior hand-rolled
+// {type:"document", source:{...}} shape had no `.document` field, so the Bedrock converter
+// fell through to "Unsupported content block type: document" -- thrown on every sub-agent
+// call before any tool ran whenever a PDF was attached.
 function processPdf(pdf: PdfBlock): MessageContentComplex {
 	return {
-		type: "document" as "image_url", // LangChain type gap -- ChatBedrockConverse handles at API layer
-		source: {
-			type: "base64",
-			media_type: "application/pdf",
-			data: pdf.base64,
-		},
+		type: "file",
+		source_type: "base64",
+		mime_type: "application/pdf",
+		data: pdf.base64,
 		metadata: {
 			name: sanitizeDocumentName(pdf.filename),
 		},

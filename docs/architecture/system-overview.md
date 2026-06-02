@@ -323,6 +323,7 @@ Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 20 — coun
 | Kong Konnect MCP Server | 9083 | Streamable HTTP (MCP) |
 | GitLab MCP Server | 9084 | Streamable HTTP (MCP) |
 | Atlassian MCP Server | 9085 | Streamable HTTP (MCP) |
+| Elastic IaC MCP Server | 9086 | Streamable HTTP (MCP) |
 | Atlassian OAuth Callback | 9185 | HTTP (OAuth 2.0 redirect) |
 | AWS MCP (SigV4 proxy) | 3001 | HTTP (SigV4-signed proxy to AgentCore runtime) |
 
@@ -354,3 +355,4 @@ The system enforces several security boundaries:
 | 2026-04-13 | Added GitLab as 5th datasource/MCP server, updated pipeline from 8 to 12 nodes (normalize, selectRunbooks, checkConfidence, proposeMitigation) |
 | 2026-04-23 | Added Atlassian (Jira/Confluence) as 6th datasource/MCP server (port 9085, OAuth callback 9185) |
 | 2026-05-28 | added AWS as 7th datasource/MCP server (multi-estate via cross-account AssumeRole, AgentCore SigV4 proxy on port 3001, `awsEstateRouter` pre-fan-out node); updated pipeline from 13 to 20 nodes (extractFindings, mitigation split into investigate/monitor/escalate + aggregateMitigation, detectTopicShift); refreshed Elastic tool count from ~84 to ~93 after the cloud/billing additions |
+| 2026-06-02 | Added the Elastic IaC MCP server (port 9086) to Port Assignments; it backs the peer Elastic IaC maker agent. Full design: `docs/superpowers/specs/2026-06-02-elastic-iac-agent-design.md`. |

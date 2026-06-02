@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ImageBlock, PdfBlock, TextFileBlock } from "@devops-agent/shared";
+import { isDataContentBlock } from "@langchain/core/messages";
 import { AttachmentError, processAttachments } from "./attachment-processor.ts";
 
 // 1x1 transparent PNG as base64 (smallest valid PNG)
@@ -55,12 +56,22 @@ describe("processAttachments", () => {
 		expect(result.warnings).toHaveLength(0);
 	});
 
-	test("processes a PDF into a document content block", async () => {
+	test("processes a PDF into a Bedrock-compatible standard file block (SIO-866)", async () => {
 		const result = await processAttachments([makePdf()]);
 
 		expect(result.contentBlocks).toHaveLength(1);
 		const block = result.contentBlocks[0] as Record<string, unknown>;
-		expect(block).toHaveProperty("source");
+		// SIO-866: the block must be a LangChain standard data content block so @langchain/aws
+		// routes it through fromStandardFileBlock; otherwise the Bedrock converter throws
+		// "Unsupported content block type: document" on every sub-agent invocation.
+		expect(isDataContentBlock(block)).toBe(true);
+		expect(block).toMatchObject({
+			type: "file",
+			source_type: "base64",
+			mime_type: "application/pdf",
+			data: "JVBERi0xLjQK",
+			metadata: { name: "runbook" },
+		});
 
 		expect(result.metadata[0]).toMatchObject({
 			filename: "runbook.pdf",
