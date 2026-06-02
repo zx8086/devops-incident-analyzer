@@ -153,9 +153,11 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
+		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
+		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
-		"cluster named, or an upgrade with no concrete target version ('upgrade to latest'). Do NOT ask for " +
-		"information the user already provided. Respond with ONLY the JSON object.";
+		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
+		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
 
 	const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(query)]);
 	let request = parseIntentJson(String(res.content));
@@ -305,6 +307,34 @@ export function setDeploymentVersion(json: string, version: string): { content: 
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous };
 }
 
+// SIO-879: read-modify-write a tier's size/max_size in the deployment JSON. Tier sizes
+// are strings like "8g" (GB); the request carries GB integers. Only sets the fields the
+// caller provides (a tier may be autoscaling-only: max_size set, size absent). Preserves
+// other tier fields (zone_count, instance_configuration_id) + trailing newline. Throws on
+// bad JSON or an unknown/absent tier. (Pure; unit-tested.)
+export function setDeploymentTierSize(
+	json: string,
+	tier: string,
+	sizeGb?: number,
+	maxGb?: number,
+): { content: string; previousSize?: string; previousMax?: string } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as { elasticsearch?: Record<string, unknown> };
+	const es = obj.elasticsearch;
+	if (!es || typeof es !== "object") throw new Error("deployment JSON has no elasticsearch block");
+	const t = es[tier];
+	if (!t || typeof t !== "object") throw new Error(`unknown or unsized tier '${tier}'`);
+	const tierObj = t as Record<string, unknown>;
+	const previousSize = typeof tierObj.size === "string" ? tierObj.size : undefined;
+	const previousMax = typeof tierObj.max_size === "string" ? tierObj.max_size : undefined;
+	if (sizeGb != null) tierObj.size = `${sizeGb}g`;
+	if (maxGb != null) tierObj.max_size = `${maxGb}g`;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousMax };
+}
+
 // Resolve the per-deployment JSON path from the configured template + cluster name.
 // The template carries a literal "${cluster}" placeholder (it is config, not a JS
 // template literal), so substitute it explicitly.
@@ -405,12 +435,74 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 	};
 }
 
-// Draft the change. version-upgrade goes through the GitOps proposer (JSON edit via
-// the GitLab API); other workflows still draft a Terraform diff locally (legacy path).
+// SIO-879: tier-resize via the GitOps proposer -- edit elasticsearch.<tier>.size/max_size
+// in the deployment JSON and open an MR via the API. Mirrors proposeVersionUpgrade.
+async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const tier = req.tier ?? "";
+	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
+	const branch = branchName(req);
+
+	if (!tier || (req.newSizeGb == null && req.newMaxGb == null)) {
+		return {
+			blockedReason: "Tier-resize needs a tier and a new size and/or max.",
+			messages: [new AIMessage("Cannot propose the change: name the tier and a new size and/or max (GB).")],
+		};
+	}
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	let updated: { content: string; previousSize?: string; previousMax?: string };
+	try {
+		updated = setDeploymentTierSize(extractFileContent(raw), tier, req.newSizeGb, req.newMaxGb);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${tier} tier in ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const target = [
+		req.newSizeGb != null ? `size ${req.newSizeGb}g` : "",
+		req.newMaxGb != null ? `max ${req.newMaxGb}g` : "",
+	]
+		.filter(Boolean)
+		.join(", ");
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: resize ${tier} tier (${target})`,
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const diffLines = [`${filePath} (elasticsearch.${tier})`];
+	if (req.newSizeGb != null)
+		diffLines.push(`- "size": "${updated.previousSize ?? "?"}"\n+ "size": "${req.newSizeGb}g"`);
+	if (req.newMaxGb != null)
+		diffLines.push(`- "max_size": "${updated.previousMax ?? "?"}"\n+ "max_size": "${req.newMaxGb}g"`);
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+	};
+}
+
+// Draft the change. version-upgrade + tier-resize go through the GitOps proposer (JSON
+// edit via the GitLab API); other workflows still draft a Terraform diff locally (legacy).
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	if (!req) return {};
 	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
+	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
 
 	const branch = branchName(req);
 	await callTool("git_create_branch", { branch });
@@ -435,10 +527,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	const req = state.iacRequest;
 	const branch = state.branch;
 	const isUpgrade = req?.workflow === "version-upgrade";
+	// SIO-879: version-upgrade and tier-resize are GitOps config edits (committed via the
+	// API; CI plans on the MR). Other workflows still run terraform locally (legacy).
+	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize";
 
 	let plan: string;
 	let precheckPassed: boolean;
-	if (isUpgrade) {
+	if (isConfigEdit) {
 		// The commit succeeded in draftChange; CI renders the authoritative plan on the MR.
 		plan = "CI computes the Terraform plan on the merge request. No local plan is run for config edits.";
 		precheckPassed = state.precheckPassed;
@@ -458,13 +553,23 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		);
 		risks.push("CCS/CCR: the local cluster must stay <= 1 minor ahead of every remote -- audit before merge.");
 	}
+	if (req?.workflow === "tier-resize")
+		risks.push("Tier resize triggers a plan change; a downsize relocates shards -- apply off-peak.");
 
-	// version-upgrade descriptor shows the version transition; tier/resize use tier/resource.
+	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
+	const tierTarget = [
+		req?.newSizeGb != null ? `${req.newSizeGb}g` : "",
+		req?.newMaxGb != null ? `max ${req.newMaxGb}g` : "",
+	]
+		.filter(Boolean)
+		.join("/");
 	const descriptor = isUpgrade
 		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
-		: (req?.tier ?? req?.resource ?? "change");
+		: req?.workflow === "tier-resize"
+			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
+			: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
-		kind: isUpgrade ? "config-edit" : "terraform",
+		kind: isConfigEdit ? "config-edit" : "terraform",
 		cluster: req?.cluster ?? "",
 		branch,
 		title: `[${req?.cluster ?? "?"}] ${descriptor}: ${req?.workflow}`,
@@ -529,6 +634,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "version-upgrade"
 				? `Elasticsearch version ${state.previousVersion || "?"} -> ${req?.version ?? "?"}.`
 				: "",
+			req?.workflow === "tier-resize"
+				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -536,15 +644,19 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 		]
 			.filter(Boolean)
 			.join("\n");
+		// Category + risk follow mr-template.md's own rules: version-bump = LOW;
+		// tier size/max_size = tier-resize / MEDIUM.
+		const categoryRisk =
+			req?.workflow === "tier-resize" ? "Category tier-resize, Risk MEDIUM" : "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
-			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: version-bump', " +
-			"'Cluster(s) affected: ap-cld', 'Risk: LOW') -- never list the unselected options or empty `- [ ]` boxes. " +
-			"This is a config edit committed via the GitLab API (no local terraform): for a version bump use Category " +
-			"version-bump, Risk LOW, and mark the gl-testing / Plan output sections 'n/a -- config edit; CI computes " +
-			"the plan on the MR'. Fill Summary, Cluster(s) affected, What changed, Why, Files touched, Rollback plan, " +
-			"and Reviewer notes from the context. Append the open-mr skill footer. Output ONLY the final markdown.";
+			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: tier-resize', " +
+			"'Cluster(s) affected: eu-b2b', 'Risk: MEDIUM') -- never list the unselected options or empty `- [ ]` boxes. " +
+			`This is a config edit committed via the GitLab API (no local terraform): use ${categoryRisk}, and mark the ` +
+			"gl-testing / Plan output sections 'n/a -- config edit; CI computes the plan on the MR'. Fill Summary, " +
+			"Cluster(s) affected, What changed, Why, Files touched, Rollback plan, and Reviewer notes from the context. " +
+			"Append the open-mr skill footer. Output ONLY the final markdown.";
 		const llm = createLlm("iacDrafter", AGENT);
 		const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(context)]);
 		const body = String(res.content).trim();
@@ -558,13 +670,14 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 	}
 }
 
-// Open the MR. Never merges, never approves, never applies. For version-upgrade the
-// branch + commit already exist on the remote (created via the GitLab API in
-// draftChange), so there is no git_push; other workflows push the local branch first.
+// Open the MR. Never merges, never approves, never applies. For a config-edit
+// (version-upgrade / tier-resize) the branch + commit already exist on the remote
+// (created via the GitLab API in draftChange), so there is no git_push; legacy
+// (terraform) workflows push the local branch first.
 export async function openMr(state: IacStateType): Promise<Partial<IacStateType>> {
 	const review = state.planReview;
-	const isUpgrade = state.iacRequest?.workflow === "version-upgrade";
-	if (!isUpgrade) await callTool("git_push", { branch: state.branch });
+	const isConfigEdit = review?.kind === "config-edit";
+	if (!isConfigEdit) await callTool("git_push", { branch: state.branch });
 	const description = await buildMrDescription(state);
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: state.branch,
