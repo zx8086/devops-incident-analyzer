@@ -609,8 +609,9 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
-	// A missing policy file comes back as a 4xx from the GitLab files API.
-	if (raw.startsWith("[4")) {
+	// A missing policy file comes back as 404 from the GitLab files API. Match 404
+	// specifically so a 401/403 (auth/scope) isn't mislabeled as "no such policy".
+	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `No such policy '${policy}' on '${cluster}': no such policy file at ${filePath}.`,
 			messages: [
