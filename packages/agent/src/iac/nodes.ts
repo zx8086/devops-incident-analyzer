@@ -670,6 +670,22 @@ export function formatPlanSummary(report: IacPlanReport | null): string {
 	return `${report.create} create / ${report.update} update / ${report.delete} destroy`;
 }
 
+// SIO-878: classify a failed plan job's log into a human-readable cause hint. The
+// deployments stack shares one Terraform state across all 10 clusters, so concurrent
+// MRs contend on a single state lock -- the most common, recoverable failure. (Pure.)
+export function classifyPipelineFailure(planLog: string): string {
+	const lower = planLog.toLowerCase();
+	if (lower.includes("error acquiring the state lock") || lower.includes("already locked")) {
+		return (
+			"Likely cause: a Terraform state-lock on the shared deployments stack (all 10 clusters share one " +
+			"state, so concurrent MRs contend on a single lock). An operator can force-unlock in GitLab or wait " +
+			"for the holding pipeline to finish, then re-run the plan."
+		);
+	}
+	if (!planLog || planLog.startsWith("[")) return "The plan job log was not available to diagnose the failure.";
+	return "The plan job failed for another reason -- review the job log on the MR.";
+}
+
 // SIO-875: poll the MR pipeline (bounded), then gather the real plan + approval state.
 // Never hangs past the budget; teardownIac renders the result. Read-only. (Live mid-poll
 // streaming is a follow-up -- the final state is rendered once here.)
@@ -729,7 +745,13 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		? parsePlanReport(await callTool("gitlab_get_pipeline_terraform_report", { pipelineId }))
 		: null;
 	const approvalState = parseApprovalState(await callTool("gitlab_get_merge_request_approvals", { iid }));
-	return { ...recovered, pipelineId, pipelineStatus: status, planReport, approvalState };
+
+	// SIO-878: on failure, read the plan job log and classify the cause (e.g. state-lock).
+	let failureHint = "";
+	if (status === "failed" && pipelineId) {
+		failureHint = classifyPipelineFailure(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
+	}
+	return { ...recovered, pipelineId, pipelineStatus: status, planReport, approvalState, failureHint };
 }
 
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
@@ -750,6 +772,8 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		}
 	} else if (isTerminalPipelineStatus(state.pipelineStatus)) {
 		lines.push("Plan: not available from the pipeline report.");
+		// SIO-878: when the pipeline failed, explain the likely cause.
+		if (state.failureHint) lines.push(state.failureHint);
 	} else if (state.pipelineStatus) {
 		lines.push('Pipeline still running — ask "check my MR" to refresh the plan + approval.');
 	}

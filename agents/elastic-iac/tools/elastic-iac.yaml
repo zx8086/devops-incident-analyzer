@@ -90,6 +90,7 @@ tool_mapping:
       - gitlab_get_merge_request_pipelines
       - gitlab_get_pipeline
       - gitlab_get_pipeline_terraform_report
+      - gitlab_get_pipeline_plan_log
       - gitlab_get_merge_request_approvals
       - gitlab_list_agent_merge_requests
     status:

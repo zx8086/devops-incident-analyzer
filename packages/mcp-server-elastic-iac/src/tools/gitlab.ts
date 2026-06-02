@@ -213,6 +213,31 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
+	const PLAN_LOG_TAIL_BYTES = 4000;
+	server.tool(
+		"gitlab_get_pipeline_plan_log",
+		"Get the tail of the plan job's log for an MR pipeline (to diagnose a FAILED plan -- e.g. a " +
+			"Terraform state-lock vs a real plan error). Walks the parent->child pipeline to the plan job. Read-only.",
+		{ pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines.") },
+		async ({ pipelineId }) => {
+			if (!token) return text("[gitlab token not configured: set ELASTIC_IAC_GITLAB_TOKEN]");
+			try {
+				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+				if (childId === null) return text("[no child pipeline yet]");
+				const job = planJob(await glJson(`/projects/${project}/pipelines/${childId}/jobs`));
+				if (!job) return text("[no plan job found in the child pipeline]");
+				const res = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${job.id}/trace`, {
+					headers: { "PRIVATE-TOKEN": token },
+				});
+				if (!res.ok) return text(`[${res.status}] could not read the plan job log`);
+				const trace = await res.text();
+				return text(trace.length > PLAN_LOG_TAIL_BYTES ? trace.slice(-PLAN_LOG_TAIL_BYTES) : trace);
+			} catch (err) {
+				return text(`[plan log not available: ${err instanceof Error ? err.message : String(err)}]`);
+			}
+		},
+	);
+
 	server.tool(
 		"gitlab_get_merge_request_approvals",
 		"Read a merge request's approval state (approved? by whom? required count). Read-only; never approves.",
