@@ -10,6 +10,8 @@ import {
 	computeJitteredBackoff,
 	extractJsonRpcError,
 	extractJsonRpcErrorCode,
+	jsonRpcRetryDeadlineMs,
+	jsonRpcRetryMaxAttempts,
 	type ProxyConfig,
 	type ProxyCredentials,
 	severityForJsonRpcRetry,
@@ -344,19 +346,34 @@ describe("JSON-RPC -320xx retry", () => {
 		expect(fetchCalls.length).toBe(1);
 	});
 
-	test("gives up after 5 attempts on persistent -32010", async () => {
-		scriptedResponses = [
-			jsonRpcError(-32010),
-			jsonRpcError(-32010),
-			jsonRpcError(-32010),
-			jsonRpcError(-32010),
-			jsonRpcError(-32010),
-		];
-		const res = await callTool();
-		const body = await res.text();
-		expect(body).toContain('"code":-32010');
-		expect(fetchCalls.length).toBe(5);
-	}, 15_000); // backoff budget is 5.6s worst-case with jitter; bun's 5s default is too tight
+	// SIO-868: the attempt cap is env-tunable; drive it small here so the test stays
+	// fast (the default is now 9 attempts / ~35s of backoff -- too slow to exhaust).
+	test("gives up after AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS attempts", async () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS = "3";
+		try {
+			scriptedResponses = [jsonRpcError(-32010), jsonRpcError(-32010), jsonRpcError(-32010)];
+			const res = await callTool();
+			const body = await res.text();
+			expect(body).toContain('"code":-32010');
+			expect(fetchCalls.length).toBe(3);
+		} finally {
+			delete process.env.AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS;
+		}
+	});
+
+	// SIO-868: the cumulative deadline can cut retries before the attempt cap.
+	test("bails on the cumulative deadline (AGENTCORE_JSONRPC_RETRY_DEADLINE_MS)", async () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS = "1";
+		try {
+			scriptedResponses = [jsonRpcError(-32010), jsonRpcOk()];
+			const res = await callTool();
+			const body = await res.text();
+			expect(body).toContain('"code":-32010');
+			expect(fetchCalls.length).toBe(1);
+		} finally {
+			delete process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS;
+		}
+	});
 
 	test("preserves mcp-session-id across retried attempts", async () => {
 		scriptedResponses = [jsonRpcOk()];
@@ -423,5 +440,34 @@ describe("JSON-RPC -320xx retry", () => {
 		const res = await callTool();
 		expect(res.status).toBe(200);
 		expect(call).toBe(2);
+	});
+});
+
+// SIO-868: the retry budget is env-tunable so cold-starts longer than the default can
+// be ridden out without a code change. Defaults widened from 5 attempts / 30s to ride
+// out a ~50s AgentCore cold-start.
+describe("retry budget knobs (SIO-868)", () => {
+	afterEach(() => {
+		delete process.env.AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS;
+		delete process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS;
+	});
+
+	test("defaults: 9 attempts, 60s deadline", () => {
+		expect(jsonRpcRetryMaxAttempts()).toBe(9);
+		expect(jsonRpcRetryDeadlineMs()).toBe(60_000);
+	});
+
+	test("env overrides are honored", () => {
+		process.env.AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS = "12";
+		process.env.AGENTCORE_JSONRPC_RETRY_DEADLINE_MS = "90000";
+		expect(jsonRpcRetryMaxAttempts()).toBe(12);
+		expect(jsonRpcRetryDeadlineMs()).toBe(90_000);
+	});
+
+	test("invalid or non-positive env falls back to the default", () => {
+		for (const bad of ["0", "-5", "abc", "1.5", ""]) {
+			process.env.AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS = bad;
+			expect(jsonRpcRetryMaxAttempts()).toBe(9);
+		}
 	});
 });

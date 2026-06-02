@@ -15,9 +15,32 @@ const logger = createMcpLogger("agentcore-proxy");
 // server-errors" band are the AgentCore transport layer's way of saying
 // the runtime container is not ready (cold-start, throttled, paused).
 // -32010 "Runtime health check failed or timed out" is the dominant case.
-const JSONRPC_RETRY_BACKOFFS_MS = [300, 800, 1500, 3000] as const;
-const JSONRPC_RETRY_MAX_ATTEMPTS = JSONRPC_RETRY_BACKOFFS_MS.length + 1; // 5
-const JSONRPC_RETRY_DEADLINE_MS = 30_000;
+//
+// SIO-868: AgentCore cold-starts (~40-50s observed) outran the prior 5-attempt /
+// 30s budget -- each -32010 round-trip is ~4-5s server-side, so the 5-attempt cap
+// exhausted at ~22-27s, before the runtime finished waking, and the earliest calls
+// in a burst gave up while later ones recovered. The defaults below ride out a ~50s
+// cold-start (the deadline is the effective bound); AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS
+// and AGENTCORE_JSONRPC_RETRY_DEADLINE_MS override per environment. Read per-request so
+// env changes (and tests) take effect without a module reload.
+const JSONRPC_RETRY_BACKOFFS_MS = [300, 800, 1500, 3000, 5000, 8000, 8000, 8000] as const;
+const JSONRPC_RETRY_DEFAULT_MAX_ATTEMPTS = JSONRPC_RETRY_BACKOFFS_MS.length + 1; // 9
+const JSONRPC_RETRY_DEFAULT_DEADLINE_MS = 60_000;
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const parsed = Number(raw);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function jsonRpcRetryMaxAttempts(): number {
+	return readPositiveIntEnv("AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS", JSONRPC_RETRY_DEFAULT_MAX_ATTEMPTS);
+}
+
+export function jsonRpcRetryDeadlineMs(): number {
+	return readPositiveIntEnv("AGENTCORE_JSONRPC_RETRY_DEADLINE_MS", JSONRPC_RETRY_DEFAULT_DEADLINE_MS);
+}
 const JSONRPC_SERVER_ERROR_MIN = -32099;
 const JSONRPC_SERVER_ERROR_MAX = -32000;
 
@@ -429,7 +452,8 @@ export async function startAgentCoreProxy(
 					const body = await req.text();
 					const tcpMaxAttempts = 2;
 					const requestStart = Date.now();
-					const deadline = requestStart + JSONRPC_RETRY_DEADLINE_MS;
+					const maxAttempts = jsonRpcRetryMaxAttempts();
+					const deadline = requestStart + jsonRpcRetryDeadlineMs();
 
 					if (!currentSessionAbort) currentSessionAbort = new AbortController();
 					const sessionAbort = currentSessionAbort;
@@ -519,7 +543,7 @@ export async function startAgentCoreProxy(
 					let response: Response | undefined;
 					let clonedBody = "";
 					let terminalFailure = false;
-					for (let jsonRpcAttempt = 1; jsonRpcAttempt <= JSONRPC_RETRY_MAX_ATTEMPTS; jsonRpcAttempt++) {
+					for (let jsonRpcAttempt = 1; jsonRpcAttempt <= maxAttempts; jsonRpcAttempt++) {
 						({ response, clonedBody, terminalFailure } = await doFetchWithTcpRetry());
 						// SIO-737: when the inner TCP loop built a 502 envelope itself,
 						// the -32000 inside it is ours -- not AgentCore's. Don't retry on
@@ -530,7 +554,7 @@ export async function startAgentCoreProxy(
 						const jsonRpcCode = jsonRpcInfo?.code;
 						const jsonRpcMessage = jsonRpcInfo?.message;
 						const retryable = isRetryableJsonRpcCode(jsonRpcCode);
-						const isFinalAttempt = jsonRpcAttempt >= JSONRPC_RETRY_MAX_ATTEMPTS;
+						const isFinalAttempt = jsonRpcAttempt >= maxAttempts;
 
 						if (!retryable || isFinalAttempt) {
 							// Terminal path: log once and break out of the loop.
@@ -545,7 +569,7 @@ export async function startAgentCoreProxy(
 								if (jsonRpcMessage !== undefined) logFields.jsonRpcMessage = jsonRpcMessage;
 								if (jsonRpcAttempt > 1) {
 									logFields.attempt = jsonRpcAttempt;
-									logFields.maxAttempts = JSONRPC_RETRY_MAX_ATTEMPTS;
+									logFields.maxAttempts = maxAttempts;
 								}
 								if (retryable && isFinalAttempt) {
 									logFields.gaveUpAfterMs = Date.now() - requestStart;
@@ -561,7 +585,10 @@ export async function startAgentCoreProxy(
 
 						// Retryable -320xx with budget remaining. Compute jittered
 						// backoff and bail if it would overshoot the cumulative deadline.
-						const base = JSONRPC_RETRY_BACKOFFS_MS[jsonRpcAttempt - 1] ?? 0;
+						// Clamp to the last backoff so an env-raised maxAttempts past the array
+						// reuses the max wait instead of falling to a 0ms (tight-loop) retry.
+						const base =
+							JSONRPC_RETRY_BACKOFFS_MS[Math.min(jsonRpcAttempt - 1, JSONRPC_RETRY_BACKOFFS_MS.length - 1)] ?? 0;
 						const retryAfterMs = computeJitteredBackoff(base);
 						if (Date.now() + retryAfterMs >= deadline) {
 							if (toolName) {
@@ -570,7 +597,7 @@ export async function startAgentCoreProxy(
 									status: classifyToolStatus(clonedBody),
 									jsonRpcCode,
 									attempt: jsonRpcAttempt,
-									maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
+									maxAttempts: maxAttempts,
 									gaveUpDueToDeadline: true,
 									totalMs: Date.now() - requestStart,
 								};
@@ -591,7 +618,7 @@ export async function startAgentCoreProxy(
 								status: classifyToolStatus(clonedBody),
 								jsonRpcCode,
 								attempt: jsonRpcAttempt,
-								maxAttempts: JSONRPC_RETRY_MAX_ATTEMPTS,
+								maxAttempts: maxAttempts,
 								retryAfterMs,
 							};
 							if (jsonRpcMessage !== undefined) retryFields.jsonRpcMessage = jsonRpcMessage;

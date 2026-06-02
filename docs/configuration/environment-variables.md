@@ -66,6 +66,17 @@ The AWS MCP server runs in AWS Bedrock AgentCore Runtime in production; locally 
 | `AWS_AGENTCORE_AWS_PROFILE` | No | -- | AWS CLI profile used by the local proxy to sign requests. Mutually exclusive with explicit creds below. |
 | `AWS_AGENTCORE_AWS_ACCESS_KEY_ID` / `AWS_AGENTCORE_AWS_SECRET_ACCESS_KEY` | No | -- | Explicit creds for the proxy when no profile is configured. |
 
+### AgentCore proxy retry budget (SIO-868)
+
+These tune the SigV4 proxy's JSON-RPC retry loop and apply to **every** AgentCore-proxied server (AWS and Kafka), not just AWS. A runtime that has scaled to zero emits `-32010` "Runtime health check failed or timed out" for ~40-50s while cold-starting; the proxy retries until it warms. Defaults ride out a ~50s cold-start.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AGENTCORE_JSONRPC_RETRY_MAX_ATTEMPTS` | No | `9` | Max JSON-RPC `-320xx` retry attempts per tool call. Raise for environments with slower cold-starts. |
+| `AGENTCORE_JSONRPC_RETRY_DEADLINE_MS` | No | `60000` | Cumulative wallclock budget (ms) for all retries of one tool call -- the effective bound. A retry that would overshoot the deadline is skipped and the call fails fast. |
+
+**Tradeoff:** a genuinely-unavailable runtime is retried up to the deadline before the call fails, so a higher deadline trades faster cold-start recovery for slower fast-fail on a hard-down runtime.
+
 ### AgentCore deployment
 
 | Variable | Required | Default | Description |
