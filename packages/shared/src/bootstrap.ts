@@ -28,6 +28,17 @@ export interface BootstrapTransportResult {
 	closeAll(): Promise<void>;
 }
 
+// SIO-869: an SSE client that disconnects mid-stream (e.g. the agent pausing at a
+// plan-review gate) cancels the response stream reader, surfacing a benign AbortError.
+// It must not escalate to process.exit() and take the whole MCP server down.
+export function isBenignStreamCancel(reason: unknown): boolean {
+	return (
+		reason instanceof Error &&
+		reason.name === "AbortError" &&
+		/releaseLock|stream reader (?:was )?cancelled/i.test(reason.message)
+	);
+}
+
 export interface McpApplicationOptions<T> {
 	name: string;
 	logger: BootstrapLogger;
@@ -164,6 +175,12 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		});
 
 		process.on("unhandledRejection", (reason) => {
+			if (isBenignStreamCancel(reason)) {
+				logger.warn(`Ignoring benign stream-cancel in ${name}`, {
+					reason: reason instanceof Error ? reason.message : String(reason),
+				});
+				return;
+			}
 			logger.error(`Unhandled rejection in ${name}`, {
 				reason: reason instanceof Error ? reason.message : String(reason),
 				stack: reason instanceof Error ? reason.stack : undefined,

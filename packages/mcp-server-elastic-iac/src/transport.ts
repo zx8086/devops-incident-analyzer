@@ -41,6 +41,12 @@ function startHttp(serverFactory: () => McpServer, config: Config, deps: Transpo
 			if (url.pathname === path) {
 				const mcp = serverFactory();
 				const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+				// SIO-869: a client that disconnects mid-stream cancels the response reader
+				// (benign AbortError). Log it here rather than letting it bubble to the global
+				// unhandledRejection handler, which would otherwise exit the whole server.
+				transport.onerror = (err: unknown) => {
+					log.warn({ error: err instanceof Error ? err.message : String(err) }, "transport stream error");
+				};
 				await mcp.connect(transport);
 				try {
 					return await transport.handleRequest(req);
