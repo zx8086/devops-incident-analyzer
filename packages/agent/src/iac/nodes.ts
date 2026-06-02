@@ -323,8 +323,10 @@ function branchName(req: IacRequest): string {
 	return `agent/${branchSlug(req)}-${date}`;
 }
 
-// SIO-873: literal "${cluster}" placeholder template; shared with the MCP server via
-// the same .env. The agent edits JSON config only -- it never runs terraform or git.
+// SIO-873: the agent owns the per-deployment JSON path -- it knows the cluster and
+// passes the resolved filePath to the MCP gitlab_* tools, which only own the repo
+// target (base URL + project). Literal "${cluster}" placeholder. The agent edits
+// JSON config only; it never runs terraform or git.
 const DEPLOYMENT_JSON_TEMPLATE =
 	Bun.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
 

@@ -26,9 +26,6 @@ export const ConfigSchema = z.object({
 		// URL-encoded in place of a numeric id.
 		project: z.string(),
 		token: z.string().optional(),
-		// Path of the per-deployment JSON whose `.version` a version-upgrade edits.
-		// ${cluster} is substituted with the deployment name.
-		deploymentJsonTemplate: z.string(),
 	}),
 	terraformBin: z.string(),
 	// Task runner for the repo's read-only helper verbs (status/list/output/state-list).
@@ -58,8 +55,6 @@ export function loadConfig(): Config {
 			baseUrl: Bun.env.ELASTIC_IAC_GITLAB_BASE_URL ?? "https://gitlab.siobytes.cloud",
 			project: Bun.env.ELASTIC_IAC_GITLAB_PROJECT ?? "siobytes/elastic-iac",
 			token: Bun.env.ELASTIC_IAC_GITLAB_TOKEN || undefined,
-			deploymentJsonTemplate:
-				Bun.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json",
 		},
 		terraformBin: Bun.env.TERRAFORM_BIN ?? "terraform",
 		taskBin: Bun.env.ELASTIC_IAC_TASK_BIN ?? "task",
