@@ -79,7 +79,7 @@ export function parseIntentJson(raw: string): IacRequest {
 					newSizeGb: nn(p.newSizeGb),
 					newMaxGb: nn(p.newMaxGb),
 					policyName: nn(p.policyName),
-					phasesPatch: nn(p.phasesPatch) as Record<string, unknown> | undefined,
+					phasesPatch: nn(p.phasesPatch),
 					version: nn(p.version),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
@@ -151,7 +151,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'other'), cluster, tier, resource, newSizeGb, " +
-		"newMaxGb, policyName, version, reason, isProd (true only if the user explicitly named a production " +
+		"newMaxGb, policyName, phasesPatch, version, reason, isProd (true only if the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
