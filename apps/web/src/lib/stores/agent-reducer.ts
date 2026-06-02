@@ -21,8 +21,12 @@ export interface TopicShiftPrompt {
 	message: string;
 }
 
-// elastic-iac plan-review gate: the reviewed Terraform change surfaced to the human.
+// elastic-iac plan-review gate: the reviewed change surfaced to the human.
 export interface IacReview {
+	// SIO-874: "config-edit" = JSON change via the GitLab API (no terraform/gl-testing;
+	// CI plans on the MR). "terraform" = legacy local plan path. Optional for back-compat
+	// with any in-flight payload that predates the field.
+	kind?: "config-edit" | "terraform";
 	cluster: string;
 	branch: string;
 	title: string;

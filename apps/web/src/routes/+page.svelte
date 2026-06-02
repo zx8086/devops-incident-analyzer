@@ -108,7 +108,7 @@ function handleSuggestionClick(suggestion: string) {
 
   {#if isIac}
     <div class="bg-blue-50 border-b border-tommy-accent-blue/30 px-6 py-2 text-xs text-tommy-navy/80">
-      Elastic Cloud IaC maker. I read live state, draft a Terraform change, pre-check on gl-testing, and open a GitLab MR for your review. I never apply.
+      Elastic Cloud IaC maker. I read live state, propose a config change, and open a GitLab MR for your review. CI computes the plan on the MR; I never merge or apply.
     </div>
   {:else}
     <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
@@ -132,8 +132,8 @@ function handleSuggestionClick(suggestion: string) {
           <h2 class="text-lg font-semibold text-tommy-navy mb-1">How can I help?</h2>
           {#if isIac}
             <p class="text-sm text-gray-500 max-w-md">
-              Describe an Elastic Cloud change in plain English (e.g. "downsize eu-b2b warm tier to 8 GB,
-              reason: Wave 2b"). I draft the Terraform, run the plan, and open an MR for your review.
+              Describe an Elastic Cloud change in plain English (e.g. "upgrade ap-cld to 9.4.2").
+              I edit the config, open a GitLab MR for your review, and CI computes the plan on the MR.
             </p>
           {:else}
             <p class="text-sm text-gray-500 max-w-md">

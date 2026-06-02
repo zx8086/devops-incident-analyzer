@@ -32,6 +32,9 @@ export interface IacClusterState {
 
 // The reviewed change surfaced to the human at the planReview interrupt.
 export interface IacPlanReview {
+	// SIO-874: "config-edit" is a JSON change committed via the GitLab API (no terraform,
+	// no gl-testing pre-check; CI plans on the MR). "terraform" is the legacy local path.
+	kind: "config-edit" | "terraform";
 	cluster: string;
 	branch: string;
 	title: string;

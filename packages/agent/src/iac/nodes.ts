@@ -456,6 +456,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		? `${state.previousVersion || "?"} -> ${req?.version ?? "?"}`
 		: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
+		kind: isUpgrade ? "config-edit" : "terraform",
 		cluster: req?.cluster ?? "",
 		branch,
 		title: `[${req?.cluster ?? "?"}] ${descriptor}: ${req?.workflow}`,
@@ -471,13 +472,79 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 // payload carries the decision. This is the only path to opening an MR.
 export function planReviewGate(state: IacStateType): Partial<IacStateType> {
 	if (!state.planReview) return { reviewDecision: "rejected" };
+	const message =
+		state.planReview.kind === "config-edit"
+			? "Review the proposed config change. Approve to open a GitLab MR, or reject. CI computes the plan on the MR; merge and apply remain manual in GitLab."
+			: "Review the Terraform plan output. Approve to open a GitLab MR, or reject. Apply remains manual in GitLab.";
 	const decision = interrupt({
 		type: "iac_plan_review",
 		review: state.planReview,
-		message:
-			"Review the Terraform plan output. Approve to open a GitLab MR, or reject. Apply remains manual in GitLab.",
+		message,
 	}) as { decision?: "approved" | "rejected" };
 	return { reviewDecision: decision?.decision === "approved" ? "approved" : "rejected" };
+}
+
+// Extract the merge_request web_url from callTool's "[status] {json}" response.
+// (Not a regex over the whole body -- the JSON also contains avatar URLs.)
+export function extractMrUrl(toolResult: string): string {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart >= 0) {
+		try {
+			const parsed: unknown = JSON.parse(toolResult.slice(jsonStart));
+			if (typeof parsed === "object" && parsed !== null) {
+				const url = (parsed as { web_url?: unknown }).web_url;
+				if (typeof url === "string" && url.length > 0) return url;
+			}
+		} catch {
+			// fall through to the raw result
+		}
+	}
+	return toolResult;
+}
+
+// Minimal deterministic MR body, used as the fallback when the LLM step fails so the
+// MR never blocks. Real bodies follow knowledge/mr-template.md (filled by the LLM).
+function fallbackMrDescription(review: IacPlanReview | null): string {
+	return `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`;
+}
+
+// Build the MR description by having the LLM fill the agent's own mr-template.md
+// (already in the system prompt) per the open-mr skill, from the gathered context.
+// Falls back to the deterministic stub on any error.
+export async function buildMrDescription(state: IacStateType): Promise<string> {
+	const review = state.planReview;
+	const req = state.iacRequest;
+	try {
+		const sys = buildSystemPrompt(getAgentByName(AGENT));
+		const context = [
+			`Change: ${req?.workflow ?? "other"} on cluster ${req?.cluster ?? "?"}.`,
+			req?.workflow === "version-upgrade"
+				? `Elasticsearch version ${state.previousVersion || "?"} -> ${req?.version ?? "?"}.`
+				: "",
+			req?.reason ? `Reason given: ${req.reason}.` : "",
+			`Branch: ${state.branch}. Target: main.`,
+			`File diff:\n${review?.diff ?? "(none)"}`,
+			`Plan note: ${review?.plan ?? "(none)"}`,
+		]
+			.filter(Boolean)
+			.join("\n");
+		const instruction =
+			"Write the GitLab merge request description by filling knowledge/mr-template.md exactly, following its " +
+			"category-driven AI-agent rules. This is a config edit committed via the GitLab API (no local terraform): " +
+			"for a version bump use Category 'version-bump', Risk LOW, and mark gl-testing/plan-output sections " +
+			"'n/a -- config edit; CI computes the plan on the MR'. Fill Summary, Cluster(s) affected, What changed, " +
+			"Why, and Files touched from the context. Append the open-mr skill footer. Output ONLY the final markdown.";
+		const llm = createLlm("iacDrafter", AGENT);
+		const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(context)]);
+		const body = String(res.content).trim();
+		return body.length > 0 ? body : fallbackMrDescription(review);
+	} catch (err) {
+		log.warn(
+			{ err: err instanceof Error ? err.message : String(err) },
+			"MR description generation failed; using fallback",
+		);
+		return fallbackMrDescription(review);
+	}
 }
 
 // Open the MR. Never merges, never approves, never applies. For version-upgrade the
@@ -487,14 +554,14 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 	const review = state.planReview;
 	const isUpgrade = state.iacRequest?.workflow === "version-upgrade";
 	if (!isUpgrade) await callTool("git_push", { branch: state.branch });
+	const description = await buildMrDescription(state);
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: state.branch,
 		target_branch: "main",
 		title: review?.title ?? "Elastic IaC change",
-		description: `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`,
+		description,
 	});
-	const urlMatch = mr.match(/https?:\/\/\S+/);
-	return { mrUrl: urlMatch?.[0] ?? mr };
+	return { mrUrl: extractMrUrl(mr) };
 }
 
 // Final message: post the MR link (or the terminal reason) and stop.
