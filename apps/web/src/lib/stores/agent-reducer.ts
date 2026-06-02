@@ -21,6 +21,28 @@ export interface TopicShiftPrompt {
 	message: string;
 }
 
+// elastic-iac plan-review gate: the reviewed Terraform change surfaced to the human.
+export interface IacReview {
+	cluster: string;
+	branch: string;
+	title: string;
+	diff: string;
+	plan: string;
+	risks: string[];
+	precheckPassed: boolean;
+}
+
+export interface IacPlanReviewPrompt {
+	threadId: string;
+	message: string;
+	review: IacReview | null;
+}
+
+export interface IacClarifyPrompt {
+	threadId: string;
+	question: string;
+}
+
 // SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
 // "couchbase"). Populated by datasource_result events emitted from the
 // extractFindings node. Absence of an entry = sub-agent didn't run or had
@@ -56,6 +78,9 @@ export interface ReducerState {
 	// SIO-751: when the graph pauses on detectTopicShift, the SSE handler
 	// emits topic_shift_prompt and the UI shows a banner with two buttons.
 	topicShiftPrompt: TopicShiftPrompt | null;
+	// elastic-iac maker graph interrupts.
+	iacClarify: IacClarifyPrompt | null;
+	iacPlanReview: IacPlanReviewPrompt | null;
 }
 
 export function initialReducerState(): ReducerState {
@@ -75,6 +100,8 @@ export function initialReducerState(): ReducerState {
 		pendingActions: [],
 		actionResults: [],
 		topicShiftPrompt: null,
+		iacClarify: null,
+		iacPlanReview: null,
 	};
 }
 
@@ -154,6 +181,18 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			};
 		case "topic_shift_resolved":
 			return { ...state, topicShiftPrompt: null };
+		case "iac_clarify":
+			return {
+				...state,
+				threadId: event.threadId,
+				iacClarify: { threadId: event.threadId, question: event.question },
+			};
+		case "iac_plan_review":
+			return {
+				...state,
+				threadId: event.threadId,
+				iacPlanReview: { threadId: event.threadId, message: event.message, review: event.review },
+			};
 		default:
 			return state;
 	}

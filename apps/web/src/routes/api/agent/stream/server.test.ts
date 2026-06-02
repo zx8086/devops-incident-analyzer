@@ -10,6 +10,8 @@ mock.module("@devops-agent/agent", () => ({
 	// has the symbols regardless of file ordering.
 	getConnectedServers: mock(() => [] as string[]),
 	getServerStates: mock(() => ({}) as Record<string, string>),
+	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	buildIacGraph: () => Promise.resolve({}),
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
 }));
 
@@ -56,6 +58,8 @@ mock.module("$lib/server/langsmith-tags", () => ({
 mock.module("$lib/server/agent", () => ({
 	invokeAgent: invokeAgentMock,
 	getPendingInterrupt: mock(async () => undefined),
+	// stream/+server.ts imports this for the elastic-iac final-message path.
+	getLastAssistantText: mock(async () => ""),
 }));
 
 const { POST } = await import("./+server.ts");

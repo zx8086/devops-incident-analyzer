@@ -6,9 +6,11 @@ import { describe, expect, mock, test } from "bun:test";
 mock.module("@devops-agent/agent", () => ({
 	AttachmentError: class AttachmentError extends Error {},
 	buildGraph: () => Promise.resolve({}),
+	buildIacGraph: () => Promise.resolve({}),
 	createMcpClient: () => Promise.resolve(),
 	flushLangSmithCallbacks: () => Promise.resolve(),
 	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	getConnectedServers: () => ["elastic-mcp", "kafka-mcp"],
 	getServerStates: () => ({
 		"elastic-mcp": "ready",

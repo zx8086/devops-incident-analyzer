@@ -7,36 +7,45 @@ const mockStreamEvents = mock(() => ({
 	},
 }));
 
+const mockAgentDef = {
+	manifest: {
+		compliance: {
+			risk_tier: "medium" as const,
+			supervision: {
+				human_in_the_loop: "conditional" as const,
+			},
+			recordkeeping: {
+				audit_logging: true,
+				retention_period: "1y",
+				immutable: true,
+			},
+			data_governance: {
+				pii_handling: "redact" as const,
+				data_classification: "internal",
+			},
+		},
+		runtime: { max_turns: 30, timeout: 300 },
+	},
+	tools: [],
+	subAgents: new Map(),
+	knowledge: [],
+};
+
 mock.module("@devops-agent/agent", () => ({
 	buildGraph: mock(() =>
 		Promise.resolve({
 			streamEvents: mockStreamEvents,
 		}),
 	),
+	// elastic-iac graph (multi-agent plumbing). agent.ts imports both builders + getAgentByName.
+	buildIacGraph: mock(() =>
+		Promise.resolve({
+			streamEvents: mockStreamEvents,
+		}),
+	),
 	createMcpClient: mock(() => Promise.resolve()),
-	getAgent: () => ({
-		manifest: {
-			compliance: {
-				risk_tier: "medium" as const,
-				supervision: {
-					human_in_the_loop: "conditional" as const,
-				},
-				recordkeeping: {
-					audit_logging: true,
-					retention_period: "1y",
-					immutable: true,
-				},
-				data_governance: {
-					pii_handling: "redact" as const,
-					data_classification: "internal",
-				},
-			},
-			runtime: { max_turns: 30, timeout: 300 },
-		},
-		tools: [],
-		subAgents: new Map(),
-		knowledge: [],
-	}),
+	getAgent: () => mockAgentDef,
+	getAgentByName: () => mockAgentDef,
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
 	// SIO-846: agent.ts now runs session bootstrap/teardown via these.

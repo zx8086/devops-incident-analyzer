@@ -295,3 +295,20 @@ export async function getPendingInterrupt(
 	}
 	return undefined;
 }
+
+// The IaC graph appends its user-facing output as AIMessages rather than streaming
+// tokens through an output node, so the SSE handler reads the final message from
+// the checkpointed state once the graph completes (no interrupt pending).
+export async function getLastAssistantText(threadId: string, agentName = "incident-analyzer"): Promise<string> {
+	const graph = agentName === "elastic-iac" ? await getIacGraph() : await getGraph();
+	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+	const values = snapshot.values as { messages?: Array<{ getType?: () => string; content?: unknown }> };
+	const messages = values?.messages ?? [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m?.getType?.() === "ai") {
+			return typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+		}
+	}
+	return "";
+}

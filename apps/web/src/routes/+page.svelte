@@ -7,10 +7,27 @@ import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import Icon from "$lib/components/Icon.svelte";
+import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
+let clarifyAnswer = $state("");
+
+const isIac = $derived(agentStore.currentAgent === "elastic-iac");
+const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
+const agentSubtitle = $derived(isIac ? "Elastic Cloud IaC change assistant" : "DevOps Incident Analysis Assistant");
+
+function toggleAgent() {
+	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
+}
+
+function submitClarify() {
+	const answer = clarifyAnswer.trim();
+	if (!answer) return;
+	clarifyAnswer = "";
+	agentStore.submitIacClarify(answer);
+}
 
 onMount(() => {
 	let es: EventSource | undefined;
@@ -60,12 +77,19 @@ function handleSuggestionClick(suggestion: string) {
 <div class="min-h-screen bg-tommy-cream flex flex-col">
   <header class="bg-tommy-navy text-white px-6 py-4 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-7 h-7 bg-tommy-navy rounded-full flex items-center justify-center">
+      <button
+        type="button"
+        onclick={toggleAgent}
+        disabled={agentStore.isStreaming}
+        title="Switch agent"
+        aria-label="Switch agent"
+        class="w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {isIac ? 'bg-tommy-accent-blue ring-2 ring-white/70' : 'bg-tommy-navy hover:bg-tommy-accent-blue'}"
+      >
         <Icon name="bot" class="w-4 h-4 text-white" />
-      </div>
+      </button>
       <div>
-        <h1 class="text-sm font-semibold leading-tight">Incident Analyzer</h1>
-        <p class="text-xs text-white/60">DevOps Incident Analysis Assistant</p>
+        <h1 class="text-sm font-semibold leading-tight">{agentTitle}</h1>
+        <p class="text-xs text-white/60">{agentSubtitle}</p>
       </div>
     </div>
     <div class="flex items-center gap-4">
@@ -82,14 +106,20 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </header>
 
-  <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
+  {#if isIac}
+    <div class="bg-blue-50 border-b border-tommy-accent-blue/30 px-6 py-2 text-xs text-tommy-navy/80">
+      Elastic Cloud IaC maker. I read live state, draft a Terraform change, pre-check on gl-testing, and open a GitLab MR for your review. I never apply.
+    </div>
+  {:else}
+    <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
 
-  {#if agentStore.selectedDataSources.includes("elastic")}
-    <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />
-  {/if}
+    {#if agentStore.selectedDataSources.includes("elastic")}
+      <ElasticDeploymentSelector deployments={agentStore.availableElasticDeployments} bind:selected={agentStore.selectedElasticDeployments} />
+    {/if}
 
-  {#if agentStore.selectedDataSources.includes("aws")}
-    <AwsEstateSelector estates={agentStore.availableAwsEstates} bind:selected={agentStore.selectedAwsEstates} />
+    {#if agentStore.selectedDataSources.includes("aws")}
+      <AwsEstateSelector estates={agentStore.availableAwsEstates} bind:selected={agentStore.selectedAwsEstates} />
+    {/if}
   {/if}
 
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">
@@ -100,10 +130,17 @@ function handleSuggestionClick(suggestion: string) {
             <Icon name="bot" class="w-8 h-8 text-tommy-navy" />
           </div>
           <h2 class="text-lg font-semibold text-tommy-navy mb-1">How can I help?</h2>
-          <p class="text-sm text-gray-500 max-w-md">
-            I can analyze incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect.
-            Describe an incident or ask about service health.
-          </p>
+          {#if isIac}
+            <p class="text-sm text-gray-500 max-w-md">
+              Describe an Elastic Cloud change in plain English (e.g. "downsize eu-b2b warm tier to 8 GB,
+              reason: Wave 2b"). I draft the Terraform, run the plan, and open an MR for your review.
+            </p>
+          {:else}
+            <p class="text-sm text-gray-500 max-w-md">
+              I can analyze incidents across Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect.
+              Describe an incident or ask about service health.
+            </p>
+          {/if}
         </div>
       {/if}
 
@@ -194,6 +231,41 @@ function handleSuggestionClick(suggestion: string) {
         </div>
       </div>
     </div>
+  {/if}
+
+  {#if agentStore.iacClarify}
+    <!-- elastic-iac clarify gate: the planner needs one direct answer to proceed. -->
+    <div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-clarify-heading">
+      <div class="max-w-4xl mx-auto">
+        <h3 id="iac-clarify-heading" class="text-sm font-semibold text-tommy-navy">One quick question</h3>
+        <p class="text-sm text-tommy-navy/80 mt-1">{agentStore.iacClarify.question}</p>
+        <form class="mt-2 flex gap-2" onsubmit={(e) => { e.preventDefault(); submitClarify(); }}>
+          <input
+            type="text"
+            bind:value={clarifyAnswer}
+            disabled={agentStore.isStreaming}
+            placeholder="Your answer"
+            class="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:border-tommy-accent-blue disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={agentStore.isStreaming || !clarifyAnswer.trim()}
+            class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-md hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  {#if agentStore.iacPlanReview}
+    <PlanReviewCard
+      prompt={agentStore.iacPlanReview}
+      disabled={agentStore.isStreaming}
+      onApprove={() => agentStore.resolveIacPlanReview("approved")}
+      onReject={() => agentStore.resolveIacPlanReview("rejected")}
+    />
   {/if}
 
   <div class="border-t border-gray-200 bg-white">
