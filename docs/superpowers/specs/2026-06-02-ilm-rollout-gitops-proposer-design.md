@@ -222,8 +222,9 @@ Switch to the elastic-iac agent -> ILM retention change on a **non-prod** policy
 | `packages/agent/src/iac/ilm-rollout.test.ts` (new) | all unit + node-level tests above |
 | `.env.example` | `ELASTIC_IAC_ILM_POLICY_TEMPLATE` |
 | `agents/elastic-iac/RULES.md` | one line: ilm-rollout is now a JSON edit at `environments/<cluster>/lifecycle-policies/<policy>.json` (alongside the existing version/tier lines) |
-| `agents/elastic-iac/tools/elastic-iac.yaml` | confirm the `propose` action already exposes the gitlab file/branch/commit tools to ilm-rollout (no new tool; verify mapping) |
-| `docs/architecture/agent-pipeline.md` | note ilm-rollout joined the config-edit proposers (if the IaC graph is documented there) |
+| `agents/elastic-iac/tools/elastic-iac.yaml` | **VERIFIED — no functional change needed.** The `propose` action already maps `gitlab_get_file_content` / `gitlab_create_branch` / `gitlab_commit_file` (lines 81-84), which is all `proposeIlmChange` uses. Optional one-line polish: broaden the `propose` `action_description` (line 106) from "read the deployment JSON, edit the field" to also mention lifecycle-policy JSON. |
+
+**Not touched:** `docs/architecture/agent-pipeline.md`. **VERIFIED stale** — its "Elastic IaC Maker Graph" section (line 718+) still describes the pre-SIO-873 9-node local-terraform graph (`draftChange` = "minimal Terraform diff", `reviewPlan` = "terraform validate/plan + gl-testing pre-check") and the original `2026-06-02-elastic-iac-agent-design.md` spec. It already predates SIO-873/879's config-edit proposers, watchPipeline, and the 12-node graph. Patching it for ilm-rollout alone would entrench a doc that needs a full refresh — defer to a separate doc-sync covering the whole proposer arc. Out of scope for SIO-880.
 
 ## Risks and edge cases
 
