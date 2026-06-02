@@ -1,6 +1,6 @@
 // agent/src/iac/ilm-rollout.test.ts
 import { describe, expect, test } from "bun:test";
-import { mergeIlmPhases } from "./nodes.ts";
+import { detectRetentionReduction, mergeIlmPhases } from "./nodes.ts";
 
 const POLICY = JSON.stringify(
 	{
@@ -59,5 +59,29 @@ describe("mergeIlmPhases", () => {
 
 	test("throws on non-object JSON", () => {
 		expect(() => mergeIlmPhases("[]", { delete: { min_age: "60d" } })).toThrow();
+	});
+});
+
+describe("detectRetentionReduction", () => {
+	test("flags a shorter delete.min_age as a reduction", () => {
+		const r = detectRetentionReduction({ delete: { min_age: "90d" } }, { delete: { min_age: "30d" } });
+		expect(r).toEqual({ from: "90d", to: "30d" });
+	});
+
+	test("returns null when retention increases", () => {
+		expect(detectRetentionReduction({ delete: { min_age: "30d" } }, { delete: { min_age: "60d" } })).toBeNull();
+	});
+
+	test("compares across units (48h is shorter than 3d)", () => {
+		const r = detectRetentionReduction({ delete: { min_age: "3d" } }, { delete: { min_age: "48h" } });
+		expect(r).toEqual({ from: "3d", to: "48h" });
+	});
+
+	test("returns null when the patch does not touch delete.min_age", () => {
+		expect(detectRetentionReduction({ warm: { min_age: "2d" } }, { warm: { min_age: "1d" } })).toBeNull();
+	});
+
+	test("returns null on an unparseable duration", () => {
+		expect(detectRetentionReduction({ delete: { min_age: "90d" } }, { delete: { min_age: "forever" } })).toBeNull();
 	});
 });

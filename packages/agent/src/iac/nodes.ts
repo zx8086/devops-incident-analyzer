@@ -373,6 +373,36 @@ export function mergeIlmPhases(
 	return { content: `${JSON.stringify(parsed, null, 2)}\n`, previous };
 }
 
+// SIO-880: parse an Elastic time string ("30d", "48h", "90m", "30s") to seconds. Returns
+// null for an unrecognized unit/format. ms/micros/nanos are not ILM min_age units.
+function durationToSeconds(value: unknown): number | null {
+	if (typeof value !== "string") return null;
+	const m = value.match(/^(\d+)\s*(d|h|m|s)$/);
+	if (!m) return null;
+	const n = Number(m[1]);
+	const unit = m[2];
+	const mult = unit === "d" ? 86400 : unit === "h" ? 3600 : unit === "m" ? 60 : 1;
+	return n * mult;
+}
+
+// SIO-880: compare old vs new delete.min_age. Returns the from/to descriptor when the new
+// retention is strictly shorter (irreversible data loss = HIGH risk), else null. (Pure.)
+export function detectRetentionReduction(
+	previous: Record<string, unknown>,
+	patch: Record<string, unknown>,
+): { from: string; to: string } | null {
+	const prevDelete = previous.delete;
+	const patchDelete = patch.delete;
+	if (typeof prevDelete !== "object" || prevDelete === null) return null;
+	if (typeof patchDelete !== "object" || patchDelete === null) return null;
+	const from = (prevDelete as { min_age?: unknown }).min_age;
+	const to = (patchDelete as { min_age?: unknown }).min_age;
+	const fromS = durationToSeconds(from);
+	const toS = durationToSeconds(to);
+	if (fromS === null || toS === null) return null;
+	return toS < fromS ? { from: from as string, to: to as string } : null;
+}
+
 // Resolve the per-deployment JSON path from the configured template + cluster name.
 // The template carries a literal "${cluster}" placeholder (it is config, not a JS
 // template literal), so substitute it explicitly.
