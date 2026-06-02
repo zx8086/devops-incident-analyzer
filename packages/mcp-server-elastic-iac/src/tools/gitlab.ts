@@ -220,4 +220,19 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		async ({ iid }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}/approvals`)),
 	);
+
+	server.tool(
+		"gitlab_list_agent_merge_requests",
+		"List the agent's open merge requests (label agent-generated), newest first. Used to recover " +
+			"the MR to watch when the thread no longer holds it (e.g. after a page reload). Read-only.",
+		{},
+		async () =>
+			text(
+				await gitlabFetch(
+					gitlabBaseUrl,
+					token,
+					`/projects/${project}/merge_requests?labels=agent-generated&state=opened&order_by=created_at&sort=desc&per_page=10`,
+				),
+			),
+	);
 }

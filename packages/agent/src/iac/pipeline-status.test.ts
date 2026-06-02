@@ -88,3 +88,26 @@ describe("formatPlanSummary", () => {
 		expect(formatPlanSummary(null)).toBe("plan not available");
 	});
 });
+
+// SIO-877: recover the latest open agent MR when the thread no longer holds one.
+import { parseLatestAgentMr } from "./nodes.ts";
+
+describe("parseLatestAgentMr", () => {
+	test("returns the newest open agent MR (first element)", () => {
+		const body =
+			'[200] [{"iid":45,"state":"opened","web_url":"https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/45","source_branch":"agent/ap-cld-monitor-9-4-2-version-upgrade-20260602"},' +
+			'{"iid":44,"state":"opened","web_url":"x","source_branch":"agent/eu-b2b-..."}]';
+		expect(parseLatestAgentMr(body)).toEqual({
+			iid: 45,
+			webUrl: "https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/45",
+		});
+	});
+	test("null when there are no open agent MRs / bad body", () => {
+		expect(parseLatestAgentMr("[200] []")).toBeNull();
+		expect(parseLatestAgentMr("[gitlab token not configured]")).toBeNull();
+		expect(parseLatestAgentMr("nope")).toBeNull();
+	});
+	test("tolerates a missing web_url", () => {
+		expect(parseLatestAgentMr('[200] [{"iid":50}]')).toEqual({ iid: 50, webUrl: "" });
+	});
+});

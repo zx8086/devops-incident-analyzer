@@ -115,10 +115,10 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"Reply with ONLY one word: 'info', 'gitops', or 'pipeline-status'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
-	let intent = intentFromText(String(res.content));
-	// pipeline-status only makes sense once an MR exists in this thread; else treat as info.
-	if (intent === "pipeline-status" && state.mrIid === null) intent = "info";
-	log.info({ intent, query }, "classified IaC intent");
+	const intent = intentFromText(String(res.content));
+	// SIO-877: pipeline-status resolves even without a thread-local mrIid -- watchPipeline
+	// falls back to the latest open agent MR (so "check my MR" survives a page reload).
+	log.info({ intent, query, hasMr: state.mrIid !== null }, "classified IaC intent");
 	return { intent };
 }
 
@@ -603,6 +603,23 @@ export function parseNewestPipeline(toolResult: string): { id: number; status: s
 	}
 }
 
+// SIO-877: newest open agent MR {iid,webUrl} from gitlab_list_agent_merge_requests'
+// "[status] [...]" body (open MRs labeled agent-generated, newest first). The fallback
+// when the thread no longer holds an mrIid (e.g. after a page reload).
+export function parseLatestAgentMr(toolResult: string): { iid: number; webUrl: string } | null {
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return null;
+	try {
+		const parsed = JSON.parse(toolResult.slice(m.index)) as Array<{ iid?: unknown; web_url?: unknown }>;
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const mr = parsed[0];
+		if (typeof mr?.iid === "number") return { iid: mr.iid, webUrl: typeof mr.web_url === "string" ? mr.web_url : "" };
+		return null;
+	} catch {
+		return null;
+	}
+}
+
 // Parse the terraform report tool result ("[...]"-free; it's the bare report JSON or a
 // "[...]" not-ready message). Returns null when not ready.
 export function parsePlanReport(toolResult: string): IacPlanReport | null {
@@ -656,8 +673,22 @@ export function formatPlanSummary(report: IacPlanReport | null): string {
 // Never hangs past the budget; teardownIac renders the result. Read-only. (Live mid-poll
 // streaming is a follow-up -- the final state is rendered once here.)
 export async function watchPipeline(state: IacStateType): Promise<Partial<IacStateType>> {
-	const iid = state.mrIid;
-	if (iid === null) return { pipelineStatus: "unknown" };
+	// SIO-877: when the thread no longer holds the MR (e.g. a follow-up after a page
+	// reload), fall back to the latest OPEN agent MR so "check my MR" still works.
+	let iid = state.mrIid;
+	let recoveredUrl = "";
+	if (iid === null) {
+		const latest = parseLatestAgentMr(await callTool("gitlab_list_agent_merge_requests", {}));
+		if (!latest) {
+			return {
+				pipelineStatus: "unknown",
+				messages: [new AIMessage("No open agent merge request to check. Propose a change first, then ask again.")],
+			};
+		}
+		iid = latest.iid;
+		recoveredUrl = latest.webUrl;
+		log.info({ iid }, "recovered latest open agent MR for pipeline-status");
+	}
 
 	const budgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
 	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
@@ -679,9 +710,13 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		await new Promise((r) => setTimeout(r, intervalMs));
 	}
 
+	// Persist the (possibly recovered) MR so subsequent turns reuse it; set the link
+	// when we recovered it (don't clobber an existing mrUrl from this thread's openMr).
+	const recovered: Partial<IacStateType> = { mrIid: iid, ...(recoveredUrl && { mrUrl: recoveredUrl }) };
+
 	// Still running at budget: surface the partial result; a follow-up re-checks.
 	if (!isTerminalPipelineStatus(status)) {
-		return { pipelineId, pipelineStatus: status || "running" };
+		return { ...recovered, pipelineId, pipelineStatus: status || "running" };
 	}
 
 	// Terminal: fetch the real plan + approval state.
@@ -689,7 +724,7 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		? parsePlanReport(await callTool("gitlab_get_pipeline_terraform_report", { pipelineId }))
 		: null;
 	const approvalState = parseApprovalState(await callTool("gitlab_get_merge_request_approvals", { iid }));
-	return { pipelineId, pipelineStatus: status, planReport, approvalState };
+	return { ...recovered, pipelineId, pipelineStatus: status, planReport, approvalState };
 }
 
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
