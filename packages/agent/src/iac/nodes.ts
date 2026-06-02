@@ -529,11 +529,14 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			.filter(Boolean)
 			.join("\n");
 		const instruction =
-			"Write the GitLab merge request description by filling knowledge/mr-template.md exactly, following its " +
-			"category-driven AI-agent rules. This is a config edit committed via the GitLab API (no local terraform): " +
-			"for a version bump use Category 'version-bump', Risk LOW, and mark gl-testing/plan-output sections " +
-			"'n/a -- config edit; CI computes the plan on the MR'. Fill Summary, Cluster(s) affected, What changed, " +
-			"Why, and Files touched from the context. Append the open-mr skill footer. Output ONLY the final markdown.";
+			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
+			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
+			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: version-bump', " +
+			"'Cluster(s) affected: ap-cld', 'Risk: LOW') -- never list the unselected options or empty `- [ ]` boxes. " +
+			"This is a config edit committed via the GitLab API (no local terraform): for a version bump use Category " +
+			"version-bump, Risk LOW, and mark the gl-testing / Plan output sections 'n/a -- config edit; CI computes " +
+			"the plan on the MR'. Fill Summary, Cluster(s) affected, What changed, Why, Files touched, Rollback plan, " +
+			"and Reviewer notes from the context. Append the open-mr skill footer. Output ONLY the final markdown.";
 		const llm = createLlm("iacDrafter", AGENT);
 		const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(context)]);
 		const body = String(res.content).trim();

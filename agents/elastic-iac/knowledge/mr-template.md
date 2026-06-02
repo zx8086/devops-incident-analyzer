@@ -11,8 +11,8 @@ Validation policy: advisory — warn on empty fields, do not block submission
 
 
 ## Category
-<!-- Pick ONE. Drives risk default + reviewer routing. -->
-- [ ] `version-bump` — Elasticsearch `version` in `environments/_deployments/<name>.json` (or stack-wide `versions.json`)
+<!-- Pick ONE. Drives risk default + reviewer routing. AI agent: emit a single resolved line "Category: <value>" (e.g. "Category: version-bump") -- do NOT reproduce this checkbox menu. -->
+- [ ] `version-bump` — Elasticsearch `version` in the deployment JSON
 - [ ] `tier-resize` — autoscaling `size`/`max_size`/`zone_count` in the deployment JSON
 - [ ] `ccs-ccr` — `remote_cluster` wiring (cross-cluster search/replication)
 - [ ] `ilm` — index lifecycle policy / retention change
@@ -25,7 +25,7 @@ Validation policy: advisory — warn on empty fields, do not block submission
 - [ ] `refactor` — no functional change (rename, split, docs)
 
 ## Cluster(s) affected
-<!-- One or more. Use deployment names = the JSON filename under environments/_deployments/<name>.json. AI agent: derive from the file you edited (environments/_deployments/<name>.json → <name>; per-stack edits environments/<name>/<stack>/ → <name>). -->
+<!-- One or more. Use deployment names = the JSON filename under environments/_deployments/<name>.json. AI agent: emit a single resolved line "Cluster(s) affected: <name>" for the deployment you edited -- do NOT reproduce this checkbox menu or list clusters you didn't touch. -->
 - [ ] `gl-testing` (mandatory first non-eu-b2b target — IaC pre-check sandbox)
 - [ ] `eu-b2b`
 - [ ] `eu-cld`
@@ -40,7 +40,7 @@ Validation policy: advisory — warn on empty fields, do not block submission
 - [ ] Other: _________________
 
 ## Risk
-<!-- AI agent default rules:
+<!-- AI agent: emit a single resolved line "Risk: <LOW|MEDIUM|HIGH>" -- do NOT reproduce this checkbox menu. Default rules:
   - LOW: version bump (deployment JSON .version) only, README only, refactor
   - MEDIUM: tier size/max_size in the deployment JSON, ingest-pipeline (additive), index-template (additive)
   - HIGH: remote_cluster, user_settings_yaml, ilm retention reduction, alerts removal, hotfix
