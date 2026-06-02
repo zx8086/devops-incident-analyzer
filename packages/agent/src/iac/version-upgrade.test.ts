@@ -1,6 +1,13 @@
 // agent/src/iac/version-upgrade.test.ts
 import { describe, expect, test } from "bun:test";
-import { branchSlug, deploymentJsonPath, extractMrUrl, parseIntentJson, setDeploymentVersion } from "./nodes.ts";
+import {
+	branchSlug,
+	deploymentJsonPath,
+	extractMrUrl,
+	parseIntentJson,
+	setDeploymentTierSize,
+	setDeploymentVersion,
+} from "./nodes.ts";
 
 // SIO-871: an upgrade request with both cluster and target version must parse to a
 // version-upgrade workflow with NO clarification, so it flows straight to the HITL
@@ -116,5 +123,60 @@ describe("extractMrUrl", () => {
 	test("falls back to the raw result when web_url is absent / unparseable", () => {
 		expect(extractMrUrl('[400] {"message":"boom"}')).toBe('[400] {"message":"boom"}');
 		expect(extractMrUrl("[gitlab token not configured]")).toBe("[gitlab token not configured]");
+	});
+});
+
+// SIO-879: tier-resize edits elasticsearch.<tier>.size/max_size (strings "<N>g").
+describe("setDeploymentTierSize", () => {
+	const json = JSON.stringify(
+		{
+			name: "eu-b2b",
+			version: "9.4.1",
+			elasticsearch: {
+				hot: { max_size: "29g", zone_count: 3 },
+				warm: { size: "8g", max_size: "15g", zone_count: 2 },
+			},
+		},
+		null,
+		2,
+	);
+
+	test("sets size + max, returns previous, preserves other tier fields", () => {
+		const out = setDeploymentTierSize(json, "warm", 4, 8);
+		expect(out.previousSize).toBe("8g");
+		expect(out.previousMax).toBe("15g");
+		const p = JSON.parse(out.content);
+		expect(p.elasticsearch.warm.size).toBe("4g");
+		expect(p.elasticsearch.warm.max_size).toBe("8g");
+		expect(p.elasticsearch.warm.zone_count).toBe(2);
+		expect(p.elasticsearch.hot.max_size).toBe("29g"); // untouched
+	});
+
+	test("sets only the field provided (autoscaling-only tier: max only)", () => {
+		const out = setDeploymentTierSize(json, "hot", undefined, 20);
+		const p = JSON.parse(out.content);
+		expect(p.elasticsearch.hot.max_size).toBe("20g");
+		expect(p.elasticsearch.hot.size).toBeUndefined();
+		expect(out.previousSize).toBeUndefined();
+		expect(out.previousMax).toBe("29g");
+	});
+
+	test("trailing newline + throws on unknown tier / bad JSON", () => {
+		expect(setDeploymentTierSize(json, "warm", 4).content.endsWith("}\n")).toBe(true);
+		expect(() => setDeploymentTierSize(json, "frozen", 4)).toThrow("unknown or unsized tier");
+		expect(() => setDeploymentTierSize("not json", "warm", 4)).toThrow();
+		expect(() => setDeploymentTierSize('{"name":"x"}', "warm", 4)).toThrow("no elasticsearch block");
+	});
+});
+
+// SIO-879: tier-resize parses to the right fields with no clarify.
+describe("parseIntentJson — tier-resize", () => {
+	test("extracts tier + newSizeGb/newMaxGb", () => {
+		const raw = JSON.stringify({ workflow: "tier-resize", cluster: "eu-b2b", tier: "warm", newSizeGb: 8 });
+		const req = parseIntentJson(raw);
+		expect(req.workflow).toBe("tier-resize");
+		expect(req.tier).toBe("warm");
+		expect(req.newSizeGb).toBe(8);
+		expect(req.clarification).toBeUndefined();
 	});
 });
