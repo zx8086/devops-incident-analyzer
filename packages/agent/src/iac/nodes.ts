@@ -827,6 +827,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "tier-resize"
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
+			req?.workflow === "ilm-rollout"
+				? `ILM policy '${req?.policyName}' phase change: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -837,7 +840,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 		// Category + risk follow mr-template.md's own rules: version-bump = LOW;
 		// tier size/max_size = tier-resize / MEDIUM.
 		const categoryRisk =
-			req?.workflow === "tier-resize" ? "Category tier-resize, Risk MEDIUM" : "Category version-bump, Risk LOW";
+			req?.workflow === "ilm-rollout"
+				? `Category ilm, Risk ${state.retentionChange ? "HIGH" : "MEDIUM"}`
+				: req?.workflow === "tier-resize"
+					? "Category tier-resize, Risk MEDIUM"
+					: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
