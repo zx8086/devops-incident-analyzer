@@ -97,6 +97,12 @@ describe("model-factory", () => {
 		expect(config.model).toBe("eu.anthropic.claude-haiku-4-5-20251001-v1:0");
 	});
 
+	// SIO-872: must include the -v1 inference-profile suffix; the bare ...-4-6 is invalid.
+	test("resolves claude-opus-4-6 to the -v1 inference profile", () => {
+		const config = resolveBedrockConfig({ preferred: "claude-opus-4-6" });
+		expect(config.model).toBe("eu.anthropic.claude-opus-4-6-v1");
+	});
+
 	test("applies temperature and maxTokens from constraints", () => {
 		const config = resolveBedrockConfig({
 			preferred: "claude-sonnet-4-6",

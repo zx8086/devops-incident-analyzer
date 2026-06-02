@@ -4,7 +4,9 @@ import type { ModelConfig } from "./types.ts";
 const MODEL_MAP: Record<string, string> = {
 	"claude-sonnet-4-6": "eu.anthropic.claude-sonnet-4-6",
 	"claude-haiku-4-5": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
-	"claude-opus-4-6": "eu.anthropic.claude-opus-4-6",
+	// SIO-872: the valid EU inference profile is ...-4-6-v1; the bare ...-4-6 is not a
+	// real Bedrock id and was rejected at invoke time, silently forcing the fallback.
+	"claude-opus-4-6": "eu.anthropic.claude-opus-4-6-v1",
 };
 
 export interface BedrockModelConfig {
