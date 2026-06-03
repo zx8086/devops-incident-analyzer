@@ -235,31 +235,49 @@ describe("parseDriftReport + isActionableDrift", () => {
 });
 
 describe("classifyStackByName (defaults)", () => {
-	test("config-json stacks resolve a path; only the deployment family is reconcile-to-live capable", () => {
+	test("deployment + ilm are config-json/live-reconcilable; every other stack is report-sourced by default", () => {
 		const dep = classifyStackByName("deployments", "eu-b2b");
 		expect(dep.kind).toBe("config-json");
 		expect(dep.configPath).toContain("eu-b2b");
-		// SIO-886: the deployment-config stack CAN reconcile-to-live (version); driftCheckStack
-		// narrows this to true only when version actually drifted.
 		expect(dep.liveReconcilable).toBe(true);
 
-		// ILM is now live-reconcilable as a static capability (rewrite each policy file from the
-		// live ILM policy); driftCheckStack narrows it to stacks with a parseable policy address.
 		const ilm = classifyStackByName("lifecycle-policies", "eu-b2b");
 		expect(ilm.kind).toBe("config-json");
 		expect(ilm.liveReconcilable).toBe(true);
 
-		const unwired = classifyStackByName("templates", "eu-b2b");
-		expect(unwired.kind).toBe("unwired");
-		expect(unwired.liveReconcilable).toBe(false);
+		// SIO-890: an arbitrary stack is report-sourced by DEFAULT (no allowlist) -> config-json +
+		// live-reconcilable static capability; driftCheckStack narrows it to drift with writable values.
+		const arbitrary = classifyStackByName("templates", "eu-b2b");
+		expect(arbitrary.kind).toBe("config-json");
+		expect(arbitrary.liveReconcilable).toBe(true);
+	});
+
+	test("SIO-890: an excluded stack is unwired (no reconcile-to-live)", () => {
+		process.env.ELASTIC_IAC_REPORT_STACKS_EXCLUDE = "templates";
+		try {
+			const excluded = classifyStackByName("templates", "eu-b2b");
+			expect(excluded.kind).toBe("unwired");
+			expect(excluded.liveReconcilable).toBe(false);
+		} finally {
+			delete process.env.ELASTIC_IAC_REPORT_STACKS_EXCLUDE;
+		}
 	});
 });
 
 describe("configStackFamily (defaults)", () => {
-	test("maps the config-JSON stacks and treats the rest as unwired (null family)", () => {
+	test("deployment/ilm map by name; every other stack is its own report-sourced family by default", () => {
 		expect(configStackFamily("deployments")).toBe("deployment");
 		expect(configStackFamily("lifecycle-policies")).toBe("ilm");
-		expect(configStackFamily("templates")).toBeNull();
+		expect(configStackFamily("alerting")).toBe("alerting");
+	});
+
+	test("SIO-890: an excluded stack has no family", () => {
+		process.env.ELASTIC_IAC_REPORT_STACKS_EXCLUDE = "alerting";
+		try {
+			expect(configStackFamily("alerting")).toBeNull();
+		} finally {
+			delete process.env.ELASTIC_IAC_REPORT_STACKS_EXCLUDE;
+		}
 	});
 });
 
