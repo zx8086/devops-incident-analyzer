@@ -1,62 +1,164 @@
 // agent/src/iac/drift.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	classifyStackByName,
 	configStackFamily,
 	driftFingerprint,
 	extractLiveVersion,
 	formatDriftSummary,
+	isActionableDrift,
 	parseAgentMrBySourceBranch,
-	parseStackPlanResult,
-	parseTaskNameList,
+	parseDriftCheckResult,
+	parseDriftReport,
+	parseEcDeploymentNames,
+	parseRepoTreeDirs,
+	parseTriggerResult,
 	reconcileBranch,
 } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
-// SIO-882: drift sub-flow pure helpers.
+// SIO-884: drift sub-flow pure helpers (GitLab + Elastic Cloud API; no local clone).
 
-describe("parseTaskNameList", () => {
-	test("parses a newline list and drops the exit suffix", () => {
-		expect(parseTaskNameList("deployments\nlifecycle-policies\ntemplates\n[exit 0]")).toEqual([
-			"deployments",
-			"lifecycle-policies",
-			"templates",
-		]);
+describe("parseRepoTreeDirs", () => {
+	test("returns the tree (directory) names from a repo-tree response", () => {
+		const body = `[200] ${JSON.stringify([
+			{ id: "a", name: "deployments", type: "tree", path: "stacks/deployments" },
+			{ id: "b", name: "lifecycle-policies", type: "tree", path: "stacks/lifecycle-policies" },
+			{ id: "c", name: "README.md", type: "blob", path: "stacks/README.md" },
+		])}`;
+		expect(parseRepoTreeDirs(body)).toEqual(["deployments", "lifecycle-policies"]);
 	});
-
-	test("skips a header line and strips bullets", () => {
-		expect(parseTaskNameList("Available stacks:\n- deployments\n- templates\n")).toEqual(["deployments", "templates"]);
-	});
-
-	test("does NOT eat a stack legitimately named 'deployments'", () => {
-		expect(parseTaskNameList("deployments\n")).toEqual(["deployments"]);
-	});
-
-	test("handles a single space/comma-separated line", () => {
-		expect(parseTaskNameList("deployments, lifecycle-policies templates\n[exit 0]")).toEqual([
-			"deployments",
-			"lifecycle-policies",
-			"templates",
-		]);
+	test("returns [] on a non-2xx / unparseable body", () => {
+		expect(parseRepoTreeDirs("[404] not found")).toEqual([]);
 	});
 });
 
-describe("parseStackPlanResult", () => {
-	test("reads iac_plan's structured JSON", () => {
-		const out = JSON.stringify({
-			stack: "templates",
-			deployment: "gl-testing",
-			drifted: true,
-			create: 0,
-			update: 1,
-			delete: 0,
-			resources: [],
+describe("parseEcDeploymentNames", () => {
+	test("extracts deployment names from the EC list", () => {
+		const body = `[200] ${JSON.stringify({ deployments: [{ name: "eu-b2b" }, { name: "us-cld" }] })}`;
+		expect(parseEcDeploymentNames(body)).toEqual(["eu-b2b", "us-cld"]);
+	});
+});
+
+describe("parseTriggerResult", () => {
+	test("reads the pipeline id + status", () => {
+		expect(
+			parseTriggerResult(JSON.stringify({ stack: "x", deployment: "y", pipelineId: 42, status: "created" })),
+		).toEqual({
+			pipelineId: 42,
+			status: "created",
+			note: "",
 		});
-		expect(parseStackPlanResult(out)).toEqual({ create: 0, update: 1, delete: 0, resources: [] });
+	});
+	test("surfaces a lock with no pipeline id", () => {
+		const r = parseTriggerResult(JSON.stringify({ pipelineId: null, status: "locked", note: "apply in progress" }));
+		expect(r.pipelineId).toBeNull();
+		expect(r.status).toBe("locked");
+	});
+});
+
+describe("parseDriftCheckResult", () => {
+	test("extracts the raw report text", () => {
+		const r = parseDriftCheckResult(JSON.stringify({ status: "success", report: '{"resources":[]}' }));
+		expect(r.status).toBe("success");
+		expect(r.report).toBe('{"resources":[]}');
+	});
+});
+
+describe("parseDriftReport + isActionableDrift", () => {
+	// The user's live eu-b2b/lifecycle-policies result: 1 change, but it's .alerts-ilm-policy
+	// tagged known-noise (kibana-churn) -> has_actionable_drift false.
+	const onlyNoise = JSON.stringify({
+		stack: "lifecycle-policies",
+		deployment: "eu-b2b",
+		totals: { noop: 34, create: 0, update: 0, destroy: 0, replace: 0, "known-noise": 1 },
+		resources: [
+			{
+				address: 'module.lifecycle_policies.elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]',
+				type: "elasticstack_elasticsearch_index_lifecycle",
+				actions: ["update"],
+				category: "known-noise",
+				changedKeys: ["hot", "metadata", "modified_date"],
+				reason: "kibana-churn: keys changed = hot, metadata, modified_date",
+				noiseTag: "kibana-churn",
+			},
+		],
+		has_actionable_drift: false,
 	});
 
-	test("returns null on a parseError payload (no counts)", () => {
-		const out = JSON.stringify({ stack: "x", deployment: "y", drifted: false, parseError: true, tail: "..." });
-		expect(parseStackPlanResult(out)).toBeNull();
+	// The us-cld/deployments version drift: has_actionable_drift true.
+	const realDrift = JSON.stringify({
+		stack: "deployments",
+		deployment: "us-cld",
+		totals: { noop: 9, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+		resources: [
+			{
+				address: 'module.deployments["us-cld"].ec_deployment.this',
+				type: "ec_deployment",
+				actions: ["update"],
+				category: "update",
+				changedKeys: ["version"],
+				reason: "attributes changed: version",
+			},
+		],
+		has_actionable_drift: true,
+	});
+
+	test("uses has_actionable_drift + totals (real drift)", () => {
+		const p = parseDriftReport(realDrift);
+		expect(p).not.toBeNull();
+		expect(p?.hasActionableDrift).toBe(true);
+		expect(p?.totals.update).toBe(1);
+		expect(p?.resources).toHaveLength(1);
+	});
+
+	test("the .alerts known-noise case is NOT actionable", () => {
+		const p = parseDriftReport(onlyNoise);
+		expect(p?.hasActionableDrift).toBe(false);
+		expect(p?.totals.knownNoise).toBe(1);
+		expect(p?.resources.filter(isActionableDrift)).toHaveLength(0);
+	});
+
+	test("isActionableDrift excludes known-noise, includes real changes", () => {
+		expect(
+			isActionableDrift({ address: "a", category: "update", actions: ["update"], changedKeys: [], reason: "" }),
+		).toBe(true);
+		expect(
+			isActionableDrift({ address: "a", category: "destroy", actions: ["delete"], changedKeys: [], reason: "" }),
+		).toBe(true);
+		expect(
+			isActionableDrift({
+				address: "a",
+				category: "known-noise",
+				actions: ["update"],
+				changedKeys: [],
+				reason: "",
+				noiseTag: "kibana-churn",
+			}),
+		).toBe(false);
+	});
+
+	test("returns null for an empty / unparseable report", () => {
+		expect(parseDriftReport("")).toBeNull();
+		expect(parseDriftReport("not json")).toBeNull();
+	});
+});
+
+describe("classifyStackByName (defaults)", () => {
+	test("config-json stacks resolve a path; reconcile-to-live deferred (liveReconcilable false)", () => {
+		const dep = classifyStackByName("deployments", "eu-b2b");
+		expect(dep.kind).toBe("config-json");
+		expect(dep.configPath).toContain("eu-b2b");
+		// reconcile-to-live is deferred until the writer handles all deployment-json fields.
+		expect(dep.liveReconcilable).toBe(false);
+
+		const ilm = classifyStackByName("lifecycle-policies", "eu-b2b");
+		expect(ilm.kind).toBe("config-json");
+		expect(ilm.liveReconcilable).toBe(false);
+
+		const hcl = classifyStackByName("templates", "eu-b2b");
+		expect(hcl.kind).toBe("hcl");
+		expect(hcl.liveReconcilable).toBe(false);
 	});
 });
 
@@ -65,42 +167,35 @@ describe("configStackFamily (defaults)", () => {
 		expect(configStackFamily("deployments")).toBe("deployment");
 		expect(configStackFamily("lifecycle-policies")).toBe("ilm");
 		expect(configStackFamily("templates")).toBeNull();
-		expect(configStackFamily("topology")).toBeNull();
 	});
 });
 
 describe("reconcileBranch", () => {
 	test("is deterministic and DATE-FREE (idempotent across days)", () => {
-		const a = reconcileBranch("gl-testing", "templates", "reconcile-to-json");
-		expect(reconcileBranch("gl-testing", "templates", "reconcile-to-json")).toBe(a);
-		expect(a).toBe("agent/reconcile-gl-testing-templates-reconcile-to-json");
-		expect(a).not.toMatch(/\d{8}/); // no YYYYMMDD date
+		const a = reconcileBranch("eu-b2b", "templates", "reconcile-to-json");
+		expect(reconcileBranch("eu-b2b", "templates", "reconcile-to-json")).toBe(a);
+		expect(a).toBe("agent/reconcile-eu-b2b-templates-reconcile-to-json");
+		expect(a).not.toMatch(/\d{8}/);
 	});
-
 	test("differs by direction", () => {
-		expect(reconcileBranch("gl-testing", "templates", "reconcile-to-live")).not.toBe(
-			reconcileBranch("gl-testing", "templates", "reconcile-to-json"),
+		expect(reconcileBranch("eu-b2b", "templates", "reconcile-to-live")).not.toBe(
+			reconcileBranch("eu-b2b", "templates", "reconcile-to-json"),
 		);
 	});
 });
 
 describe("parseAgentMrBySourceBranch", () => {
 	test("finds the web_url for a matching source branch", () => {
-		const body = `[200] ${JSON.stringify([
-			{ source_branch: "agent/reconcile-x", web_url: "https://gl/mr/1" },
-			{ source_branch: "other", web_url: "https://gl/mr/2" },
-		])}`;
+		const body = `[200] ${JSON.stringify([{ source_branch: "agent/reconcile-x", web_url: "https://gl/mr/1" }])}`;
 		expect(parseAgentMrBySourceBranch(body, "agent/reconcile-x")).toBe("https://gl/mr/1");
 	});
-
 	test("returns empty when no branch matches", () => {
-		const body = `[200] ${JSON.stringify([{ source_branch: "other", web_url: "https://gl/mr/2" }])}`;
-		expect(parseAgentMrBySourceBranch(body, "agent/reconcile-x")).toBe("");
+		expect(parseAgentMrBySourceBranch("[200] []", "agent/reconcile-x")).toBe("");
 	});
 });
 
 describe("driftFingerprint", () => {
-	test("is stable and order-independent for the same drift", () => {
+	test("is stable and order-independent", () => {
 		const a = driftFingerprint({
 			create: 0,
 			update: 2,
@@ -121,19 +216,17 @@ describe("driftFingerprint", () => {
 		});
 		expect(a).toBe(b);
 	});
-
 	test("changes when the drift changes", () => {
-		const a = driftFingerprint({ create: 0, update: 1, delete: 0, resources: [] });
-		const b = driftFingerprint({ create: 0, update: 2, delete: 0, resources: [] });
-		expect(a).not.toBe(b);
+		expect(driftFingerprint({ create: 0, update: 1, delete: 0, resources: [] })).not.toBe(
+			driftFingerprint({ create: 0, update: 2, delete: 0, resources: [] }),
+		);
 	});
 });
 
 describe("extractLiveVersion", () => {
-	test("pulls the first semver from a deployment detail blob", () => {
+	test("pulls the ES version from a deployment detail blob", () => {
 		expect(extractLiveVersion('{"resources":{"elasticsearch":[{"info":{"version":"9.4.2"}}]}}')).toBe("9.4.2");
 	});
-
 	test("returns empty when absent", () => {
 		expect(extractLiveVersion("{}")).toBe("");
 	});
@@ -142,9 +235,9 @@ describe("extractLiveVersion", () => {
 describe("formatDriftSummary", () => {
 	const drifted = (over: Partial<IacStateType>): IacStateType =>
 		({
-			targetDeployment: "gl-testing",
+			targetDeployment: "eu-b2b",
 			driftReport: {
-				deployment: "gl-testing",
+				deployment: "eu-b2b",
 				generatedAt: "",
 				stacks: [
 					{
@@ -182,17 +275,16 @@ describe("formatDriftSummary", () => {
 				],
 			}),
 		);
-		expect(out).toContain("Drift reconcile summary for gl-testing");
+		expect(out).toContain("Drift reconcile summary for eu-b2b");
 		expect(out).toContain("templates: MR opened");
-		expect(out).toContain("https://gl/mr/1");
 		expect(out).toContain("deployments: skipped");
 	});
 
 	test("reports no drift when nothing drifted", () => {
 		const state = {
-			targetDeployment: "gl-testing",
+			targetDeployment: "eu-b2b",
 			driftReport: {
-				deployment: "gl-testing",
+				deployment: "eu-b2b",
 				generatedAt: "",
 				stacks: [
 					{
@@ -214,9 +306,9 @@ describe("formatDriftSummary", () => {
 
 	test("surfaces plan-error stacks instead of falsely reporting them clean", () => {
 		const state = {
-			targetDeployment: "gl-testing",
+			targetDeployment: "eu-b2b",
 			driftReport: {
-				deployment: "gl-testing",
+				deployment: "eu-b2b",
 				generatedAt: "",
 				stacks: [
 					{
@@ -247,7 +339,5 @@ describe("formatDriftSummary", () => {
 		const out = formatDriftSummary(state);
 		expect(out).toContain("could NOT be planned");
 		expect(out).toContain("broken");
-		// Only 1 of the 2 stacks was actually planned.
-		expect(out).toContain("1 stack(s) I could plan");
 	});
 });

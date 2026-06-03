@@ -52,3 +52,33 @@ describe("planJob", () => {
 		expect(planJob("nope")).toBeNull();
 	});
 });
+
+// SIO-884: drift-check job/pipeline helpers.
+import { findJobByName, parsePipelineRef } from "./gitlab.ts";
+
+describe("findJobByName", () => {
+	test("returns the id of the matching job", () => {
+		const jobs = [
+			{ id: 1, name: "validate" },
+			{ id: 2, name: "drift-check-on-demand" },
+		];
+		expect(findJobByName(jobs, "drift-check-on-demand")).toBe(2);
+	});
+	test("null when absent / non-array", () => {
+		expect(findJobByName([{ id: 1, name: "validate" }], "drift-check-on-demand")).toBeNull();
+		expect(findJobByName("nope", "x")).toBeNull();
+	});
+});
+
+describe("parsePipelineRef", () => {
+	test("reads id + status from a create-pipeline body", () => {
+		expect(parsePipelineRef(`[201] ${JSON.stringify({ id: 555, status: "created" })}`)).toEqual({
+			id: 555,
+			status: "created",
+		});
+	});
+	test("defaults status to 'created' and null on no id", () => {
+		expect(parsePipelineRef(`[201] ${JSON.stringify({ id: 7 })}`)).toEqual({ id: 7, status: "created" });
+		expect(parsePipelineRef("[500] err")).toBeNull();
+	});
+});

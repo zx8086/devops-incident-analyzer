@@ -59,6 +59,32 @@ export function planJob(jobsJson: unknown): { id: number; stack: string } | null
 	return null;
 }
 
+// SIO-884: the id of a job matching `name` from GET /pipelines/:id/jobs (the
+// drift-check-on-demand job). (Pure; unit-tested.)
+export function findJobByName(jobsJson: unknown, name: string): number | null {
+	if (!Array.isArray(jobsJson)) return null;
+	for (const j of jobsJson) {
+		const n = (j as { name?: unknown }).name;
+		const id = (j as { id?: unknown }).id;
+		if (n === name && typeof id === "number") return id;
+	}
+	return null;
+}
+
+// Pipeline id + status from a create-pipeline / get-pipeline "[status] {json}" body.
+// (Pure; unit-tested.)
+export function parsePipelineRef(toolResult: string): { id: number; status: string } | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const p = JSON.parse(toolResult.slice(jsonStart)) as { id?: unknown; status?: unknown };
+		if (typeof p.id === "number") return { id: p.id, status: typeof p.status === "string" ? p.status : "created" };
+		return null;
+	} catch {
+		return null;
+	}
+}
+
 // Repo reads + branch/commit/MR creation + read-only CI/approval status.
 // gitlab_*_approve and gitlab_*_merge are intentionally absent (maker/checker SoD).
 //
@@ -209,6 +235,107 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				return text(JSON.stringify(report, null, 2));
 			} catch (err) {
 				return text(`[terraform report not available: ${err instanceof Error ? err.message : String(err)}]`);
+			}
+		},
+	);
+
+	// SIO-884: trigger the repo's on-demand drift-check pipeline for one (stack, deployment).
+	// DRIFT_CHECK=true makes CI run ONLY the drift-check-on-demand job (terraform plan
+	// -refresh, never apply). Returns the pipeline id to poll. A 409 means an apply currently
+	// holds the state lock. Plan-only read trigger; the agent never applies.
+	server.tool(
+		"gitlab_trigger_drift_check",
+		"Trigger the on-demand drift-check pipeline for one (stack, deployment): POST a pipeline with DRIFT_CHECK=true, " +
+			"STACK, DEPLOYMENT. Plan-only (refresh); never applies. Returns {stack,deployment,pipelineId,status}. Then poll gitlab_get_drift_check_result.",
+		{
+			stack: z.string(),
+			deployment: z.string(),
+			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_DRIFT_PIPELINE_REF or 'main')."),
+		},
+		async ({ stack, deployment, ref }) => {
+			const driftRef = ref ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
+			const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
+				method: "POST",
+				body: JSON.stringify({
+					ref: driftRef,
+					variables: [
+						{ key: "DRIFT_CHECK", value: "true" },
+						{ key: "STACK", value: stack },
+						{ key: "DEPLOYMENT", value: deployment },
+					],
+				}),
+			});
+			// A 409 means the deployments-stack state lock is held by an in-flight apply.
+			if (res.startsWith("[409")) {
+				return text(
+					JSON.stringify({
+						stack,
+						deployment,
+						pipelineId: null,
+						status: "locked",
+						note: "apply in progress (state lock); retry later",
+					}),
+				);
+			}
+			const ref2 = res.startsWith("[2") ? parsePipelineRef(res) : null;
+			if (ref2) return text(JSON.stringify({ stack, deployment, pipelineId: ref2.id, status: ref2.status }));
+			return text(JSON.stringify({ stack, deployment, pipelineId: null, status: "error", note: res.slice(0, 200) }));
+		},
+	);
+
+	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
+	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
+	const isTerminal = (s: string) => ["success", "failed", "canceled", "skipped"].includes(s);
+
+	// SIO-884: poll a drift-check pipeline to terminal, then return its drift-report.json
+	// artifact (raw JSON) from the drift-check-on-demand job. Drift lives in the ARTIFACT,
+	// not the pipeline status (allow_failure:[2] keeps a drifted run "success"; when:always
+	// uploads the artifact even on error). Read-only.
+	server.tool(
+		"gitlab_get_drift_check_result",
+		"Poll a drift-check pipeline to completion and return its drift-report.json artifact (raw JSON) from the " +
+			"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. Returns {pipelineId,jobId,status,report}.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) => {
+			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
+			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
+			let status = "unknown";
+			try {
+				while (Date.now() < deadline) {
+					const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };
+					status = typeof p.status === "string" ? p.status : "unknown";
+					if (isTerminal(status)) break;
+					if (Date.now() + DRIFT_POLL_INTERVAL_MS >= deadline) break;
+					await new Promise((r) => setTimeout(r, DRIFT_POLL_INTERVAL_MS));
+				}
+				if (!isTerminal(status)) {
+					return text(
+						JSON.stringify({ pipelineId, status: status || "running", note: "still running at budget; re-check" }),
+					);
+				}
+				const jobName = process.env.ELASTIC_IAC_DRIFT_JOB_NAME ?? "drift-check-on-demand";
+				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
+				if (jobId === null) {
+					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+					if (childId !== null)
+						jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${childId}/jobs`), jobName);
+				}
+				if (jobId === null)
+					return text(JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` }));
+				const res = await fetch(
+					`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/artifacts/drift-report.json`,
+					{
+						headers: { "PRIVATE-TOKEN": token },
+					},
+				);
+				if (!res.ok)
+					return text(
+						JSON.stringify({ pipelineId, jobId, status, note: `[${res.status}] drift-report.json not available` }),
+					);
+				// Raw artifact text; the agent parses it into the DriftReport shape.
+				return text(JSON.stringify({ pipelineId, jobId, status, report: await res.text() }));
+			} catch (err) {
+				return text(JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) }));
 			}
 		},
 	);
