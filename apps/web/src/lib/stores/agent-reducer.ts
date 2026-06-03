@@ -53,6 +53,8 @@ export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "sk
 export interface IacDriftStack {
 	stack: string;
 	drifted: boolean;
+	// SIO-882: true when iac_plan could not be read -- the stack was not assessed.
+	planError?: boolean;
 	kind: "config-json" | "hcl";
 	create: number;
 	update: number;

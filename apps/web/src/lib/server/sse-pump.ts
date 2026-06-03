@@ -314,12 +314,15 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 	// SIO-882: per-stack reconcile-direction gate. The UI POSTs { direction } to the
 	// resume endpoint; the loop re-pauses here for the next drifted stack.
 	if (obj.type === "iac_reconcile_choice") {
-		const directions = Array.isArray(obj.directions)
+		const filtered = Array.isArray(obj.directions)
 			? obj.directions.filter(
 					(d): d is "reconcile-to-json" | "reconcile-to-live" | "skip" =>
 						d === "reconcile-to-json" || d === "reconcile-to-live" || d === "skip",
 				)
-			: ["reconcile-to-json", "skip"];
+			: [];
+		// Never emit an empty direction set (would render a choice card with no buttons);
+		// reconcile-to-json + skip are always valid for any stack.
+		const directions = filtered.length > 0 ? filtered : ["reconcile-to-json", "skip"];
 		send({
 			type: "iac_reconcile_choice",
 			threadId,

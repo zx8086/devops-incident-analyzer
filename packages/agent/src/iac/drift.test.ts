@@ -211,4 +211,43 @@ describe("formatDriftSummary", () => {
 		} as unknown as IacStateType;
 		expect(formatDriftSummary(state)).toContain("No drift detected");
 	});
+
+	test("surfaces plan-error stacks instead of falsely reporting them clean", () => {
+		const state = {
+			targetDeployment: "gl-testing",
+			driftReport: {
+				deployment: "gl-testing",
+				generatedAt: "",
+				stacks: [
+					{
+						stack: "ok",
+						drifted: false,
+						kind: "hcl",
+						create: 0,
+						update: 0,
+						delete: 0,
+						resources: [],
+						liveReconcilable: false,
+					},
+					{
+						stack: "broken",
+						drifted: false,
+						planError: true,
+						kind: "hcl",
+						create: 0,
+						update: 0,
+						delete: 0,
+						resources: [],
+						liveReconcilable: false,
+					},
+				],
+			},
+			reconcileResults: [],
+		} as unknown as IacStateType;
+		const out = formatDriftSummary(state);
+		expect(out).toContain("could NOT be planned");
+		expect(out).toContain("broken");
+		// Only 1 of the 2 stacks was actually planned.
+		expect(out).toContain("1 stack(s) I could plan");
+	});
 });

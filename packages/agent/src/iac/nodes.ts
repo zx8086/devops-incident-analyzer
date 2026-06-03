@@ -1186,7 +1186,11 @@ async function classifyStack(
 		if (raw.startsWith("[2")) return { kind: "config-json", configPath: path, liveReconcilable: true };
 	}
 	if (family === "ilm") {
-		const dir = `environments/${deployment}/lifecycle-policies`;
+		// Derive the lifecycle-policies dir from the configured template (honors
+		// ELASTIC_IAC_ILM_POLICY_TEMPLATE) rather than hard-coding it, so an override
+		// doesn't misclassify ILM stacks as HCL.
+		const probe = deploymentJsonPath(ilmPolicyTemplate(), deployment, "__probe__");
+		const dir = probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
 		const tree = await callTool("gitlab_get_repository_tree", { path: dir });
 		if (tree.startsWith("[2") && tree.includes('"name"'))
 			return { kind: "config-json", configPath: dir, liveReconcilable: false };
@@ -1242,6 +1246,29 @@ export function driftFingerprint(stack: {
 // The first semver-shaped version in the live Elastic Cloud deployment detail (best-effort;
 // used for the deployment-config reconcile-to-live mapping). (Pure; unit-tested.)
 export function extractLiveVersion(deploymentDetail: string): string {
+	// Prefer the Elasticsearch service version from the structured deployment detail so an
+	// unrelated "version" field (Kibana, integrations server, plan metadata) can't be
+	// picked up; fall back to the first semver only when parsing fails / the shape differs.
+	try {
+		const jsonStart = deploymentDetail.indexOf("{");
+		if (jsonStart >= 0) {
+			const parsed = JSON.parse(deploymentDetail.slice(jsonStart)) as {
+				resources?: {
+					elasticsearch?: Array<{
+						info?: {
+							version?: unknown;
+							plan_info?: { current?: { plan?: { elasticsearch?: { version?: unknown } } } };
+						};
+					}>;
+				};
+			};
+			const info = parsed.resources?.elasticsearch?.[0]?.info;
+			const v = info?.version ?? info?.plan_info?.current?.plan?.elasticsearch?.version;
+			if (typeof v === "string" && v.length > 0) return v;
+		}
+	} catch {
+		// fall through to the regex
+	}
 	const m = deploymentDetail.match(/"version"\s*:\s*"(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?)"/);
 	return m?.[1] ?? "";
 }
@@ -1367,7 +1394,10 @@ async function openReconcileMr(
 		content,
 		commit_message: commitMessage,
 	});
-	if (commit.startsWith("[5")) {
+	// A failed commit (4xx auth/validation/bad-path or 5xx) must block -- otherwise we'd open
+	// an MR on a branch with no change. The early MR-reuse check above already short-circuits
+	// the idempotent re-run, so a 4xx here is a real failure.
+	if (commit.startsWith("[4") || commit.startsWith("[5")) {
 		return { stack: stack.stack, direction, status: "blocked", note: `Commit failed: ${commit.slice(0, 120)}`, branch };
 	}
 
@@ -1378,10 +1408,28 @@ async function openReconcileMr(
 		title,
 		description,
 	});
-	// A 409 (MR already exists for this branch) -> reuse via the list.
-	if (mr.startsWith("[4")) {
+	// Only a 409 (MR already exists for this branch) is a reuse; any other 4xx/5xx is a real
+	// failure and must block (never report a successful reconcile with an empty MR url).
+	if (mr.startsWith("[409")) {
 		const reuse = parseAgentMrBySourceBranch(await callTool("gitlab_list_agent_merge_requests", {}), branch);
-		return { stack: stack.stack, direction, status: "reused", mrUrl: reuse, branch };
+		return reuse
+			? { stack: stack.stack, direction, status: "reused", mrUrl: reuse, branch }
+			: {
+					stack: stack.stack,
+					direction,
+					status: "blocked",
+					note: "MR already exists but could not be resolved.",
+					branch,
+				};
+	}
+	if (mr.startsWith("[4") || mr.startsWith("[5")) {
+		return {
+			stack: stack.stack,
+			direction,
+			status: "blocked",
+			note: `MR creation failed: ${mr.slice(0, 120)}`,
+			branch,
+		};
 	}
 	return { stack: stack.stack, direction, status: "opened", mrUrl: extractMrUrl(mr), branch };
 }
@@ -1440,7 +1488,11 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 		const del = counts?.delete ?? 0;
 		stackDrifts.push({
 			stack,
-			drifted: create + update + del > 0,
+			// A null plan result means iac_plan could not be read (task failure / unknown
+			// format). Surface it as planError rather than silently reporting "no drift" --
+			// a false "clean" would skip reconciliation for a stack we never assessed.
+			planError: counts === null,
+			drifted: counts !== null && create + update + del > 0,
 			kind,
 			create,
 			update,
@@ -1458,6 +1510,7 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 		stacks: stackDrifts.map((s) => ({
 			stack: s.stack,
 			drifted: s.drifted,
+			planError: s.planError ?? false,
 			kind: s.kind,
 			create: s.create,
 			update: s.update,
@@ -1534,8 +1587,15 @@ export function formatDriftSummary(state: IacStateType): string {
 	const dep = state.targetDeployment || "(unknown)";
 	const all = state.driftReport?.stacks ?? [];
 	const drifted = all.filter((s) => s.drifted);
+	const planErrored = all.filter((s) => s.planError);
+	// Stacks whose plan could not be read were NOT assessed -- never imply they are clean.
+	const errSuffix =
+		planErrored.length > 0
+			? ` ${planErrored.length} stack(s) could NOT be planned and were not assessed: ${planErrored.map((s) => s.stack).join(", ")}.`
+			: "";
 	if (drifted.length === 0) {
-		return `No drift detected for ${dep}. All ${all.length} audited stack(s) match the declared configuration.`;
+		const planned = all.length - planErrored.length;
+		return `No drift detected for ${dep} across the ${planned} stack(s) I could plan.${errSuffix}`;
 	}
 	const lines = [`Drift reconcile summary for ${dep} (${drifted.length} drifted stack(s)):`];
 	for (const r of state.reconcileResults) {
@@ -1546,6 +1606,7 @@ export function formatDriftSummary(state: IacStateType): string {
 	}
 	const handled = new Set(state.reconcileResults.map((r) => r.stack));
 	for (const s of drifted) if (!handled.has(s.stack)) lines.push(`  ${s.stack}: not processed`);
+	if (errSuffix) lines.push(`Note:${errSuffix}`);
 	lines.push("Review each MR's plan in GitLab, then merge and apply. I never merge or apply.");
 	return lines.join("\n");
 }

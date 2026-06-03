@@ -11,7 +11,9 @@ let {
 } = $props();
 
 const drifted = $derived(report.stacks.filter((s) => s.drifted));
-const clean = $derived(report.stacks.filter((s) => !s.drifted));
+const planErrored = $derived(report.stacks.filter((s) => s.planError));
+// "In sync" excludes plan-error stacks: those were not assessed, not confirmed clean.
+const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
 </script>
 
 <div class="px-4 py-2 max-w-4xl mx-auto">
@@ -36,6 +38,12 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted));
       </ul>
     {:else}
       <p class="mt-2 text-xs text-tommy-navy/70">No drift detected. All stacks match the declared configuration.</p>
+    {/if}
+
+    {#if planErrored.length > 0}
+      <p class="mt-2 text-xs text-yellow-800">
+        Plan unavailable (not assessed): {planErrored.map((s) => s.stack).join(", ")}
+      </p>
     {/if}
 
     {#if clean.length > 0}

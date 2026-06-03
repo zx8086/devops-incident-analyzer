@@ -27,8 +27,13 @@ const ResumeRequestSchema = z
 		answer: z.string().optional(),
 		direction: z.enum(["reconcile-to-json", "reconcile-to-live", "skip"]).optional(),
 	})
-	.refine((b) => b.decision !== undefined || b.answer !== undefined || b.direction !== undefined, {
-		message: "Provide a decision, an answer, or a direction",
+	// Exactly one resume field -- reject mixed payloads so a stale field can't resume the
+	// wrong interrupt (the resumeValue below would otherwise silently prefer one).
+	.superRefine((b, ctx) => {
+		const provided = [b.decision, b.answer, b.direction].filter((v) => v !== undefined).length;
+		if (provided !== 1) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide exactly one of decision, answer, or direction" });
+		}
 	});
 
 export const POST: RequestHandler = async ({ request }) => {

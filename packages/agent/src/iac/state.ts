@@ -84,6 +84,9 @@ export interface StackDrift {
 	// Phase 1: reconcile-to-live is only offered when a clean live->file mapping exists
 	// (currently the deployment-config version field). HCL + ILM + tier-sizing defer it.
 	liveReconcilable: boolean;
+	// True when iac_plan could not be read for this stack (task failure / unknown format):
+	// the stack was NOT assessed, so it is neither drifted nor confirmed clean.
+	planError?: boolean;
 }
 
 export interface DriftReport {

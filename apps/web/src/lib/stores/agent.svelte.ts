@@ -399,9 +399,10 @@ function createAgentStore() {
 		if (isStreaming) return;
 		iacPlanReview = null;
 		iacClarify = null;
-		// SIO-882: dismiss the current per-stack choice; the next chained interrupt (the
-		// next drifted stack) repopulates it. The drift report + results persist.
-		iacReconcileChoice = null;
+		// SIO-882: keep the current per-stack choice until the resume actually succeeds, so a
+		// transient network/500 failure doesn't drop the only UI to retry this stack. Cleared
+		// on success (the next chained interrupt repopulates it); restored on failure.
+		const pendingReconcileChoice = iacReconcileChoice;
 		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
@@ -414,10 +415,13 @@ function createAgentStore() {
 				body: JSON.stringify({ threadId: threadIdOverride, ...payload }),
 			});
 			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+			iacReconcileChoice = null;
 			for await (const event of parseSseChunks(response.body)) {
 				handleEvent(event);
 			}
 		} catch (error) {
+			// Restore the choice so the user can retry (keep a newer chained prompt if one arrived).
+			iacReconcileChoice = iacReconcileChoice ?? pendingReconcileChoice;
 			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
 		} finally {
 			if (currentContent) {
