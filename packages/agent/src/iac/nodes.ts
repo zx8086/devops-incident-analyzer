@@ -1444,17 +1444,32 @@ async function openReconcileMr(
 	direction: ReconcileDirection,
 ): Promise<ReconcileResult> {
 	const branch = reconcileBranch(deployment, stack.stack, direction);
+	log.info({ deployment, stack: stack.stack, direction, branch }, "iac reconcile: opening MR");
 
 	const existing = parseAgentMrBySourceBranch(await callTool("gitlab_list_agent_merge_requests", {}), branch);
-	if (existing) return { stack: stack.stack, direction, status: "reused", mrUrl: existing, branch };
+	if (existing) {
+		log.info(
+			{ deployment, stack: stack.stack, branch, mrUrl: existing },
+			"iac reconcile: reusing existing MR (idempotent)",
+		);
+		return { stack: stack.stack, direction, status: "reused", mrUrl: existing, branch };
+	}
 
 	let filePath: string;
 	let content: string;
 	let commitMessage: string;
 	let title: string;
+	// reconcile-to-live edits an EXISTING config file (update); reconcile-to-json writes a NEW
+	// marker (create). The tool upserts either way, but starting with the right action avoids a
+	// wasted first request and a spurious "doesn't exist"/"already exists" 400.
+	let commitAction: "create" | "update";
 
 	if (direction === "reconcile-to-live") {
 		if (!stack.liveReconcilable || !stack.configPath) {
+			log.info(
+				{ deployment, stack: stack.stack },
+				"iac reconcile: reconcile-to-live blocked (not supported for this stack)",
+			);
 			return {
 				stack: stack.stack,
 				direction,
@@ -1468,12 +1483,14 @@ async function openReconcileMr(
 		content = built.content;
 		commitMessage = `${deployment}: reconcile ${stack.stack} to live (version ${built.from} -> ${built.to})`;
 		title = `[${deployment}] reconcile ${stack.stack} to live`;
+		commitAction = "update";
 	} else {
 		// reconcile-to-json: a deterministic, plan-neutral marker that triggers the stack plan.
 		filePath = reconcileMarkerPath(deployment, stack.stack);
 		content = reconcileMarkerContent(deployment, stack);
 		commitMessage = `${deployment}: reconcile ${stack.stack} to declared config`;
 		title = `[${deployment}] reconcile ${stack.stack} to declared config`;
+		commitAction = "create";
 	}
 
 	// Create the branch (tolerate "already exists" 4xx, like the proposers) and commit.
@@ -1483,13 +1500,22 @@ async function openReconcileMr(
 		file_path: filePath,
 		content,
 		commit_message: commitMessage,
+		action: commitAction,
 	});
 	// A failed commit (4xx auth/validation/bad-path or 5xx) must block -- otherwise we'd open
 	// an MR on a branch with no change. The early MR-reuse check above already short-circuits
 	// the idempotent re-run, so a 4xx here is a real failure.
 	if (commit.startsWith("[4") || commit.startsWith("[5")) {
+		log.error(
+			{ deployment, stack: stack.stack, branch, filePath, commit: commit.slice(0, 200) },
+			"iac reconcile: commit failed; blocking",
+		);
 		return { stack: stack.stack, direction, status: "blocked", note: `Commit failed: ${commit.slice(0, 120)}`, branch };
 	}
+	log.info(
+		{ deployment, stack: stack.stack, branch, filePath, action: commitAction },
+		"iac reconcile: committed; creating MR",
+	);
 
 	const description = buildReconcileMrBody(deployment, stack, direction, filePath);
 	const mr = await callTool("gitlab_create_merge_request", {
@@ -1513,6 +1539,10 @@ async function openReconcileMr(
 				};
 	}
 	if (mr.startsWith("[4") || mr.startsWith("[5")) {
+		log.error(
+			{ deployment, stack: stack.stack, branch, mr: mr.slice(0, 200) },
+			"iac reconcile: MR creation failed; blocking",
+		);
 		return {
 			stack: stack.stack,
 			direction,
@@ -1521,7 +1551,9 @@ async function openReconcileMr(
 			branch,
 		};
 	}
-	return { stack: stack.stack, direction, status: "opened", mrUrl: extractMrUrl(mr), branch };
+	const mrUrl = extractMrUrl(mr);
+	log.info({ deployment, stack: stack.stack, branch, mrUrl }, "iac reconcile: MR opened");
+	return { stack: stack.stack, direction, status: "opened", mrUrl, branch };
 }
 
 // Resolve the target deployment for a drift audit from the user's text, matched against the
@@ -1578,12 +1610,18 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 		...(configPath && { configPath }),
 	};
 
+	log.info({ deployment, stack, kind }, "iac drift: triggering drift-check for stack");
 	const trig = parseTriggerResult(await callTool("gitlab_trigger_drift_check", { stack, deployment }));
 	if (trig.pipelineId === null) {
 		const why = trig.status === "locked" ? "apply in progress (state lock)" : "trigger failed";
+		log.warn(
+			{ deployment, stack, status: trig.status, note: trig.note },
+			"iac drift: trigger did not start a pipeline (planError)",
+		);
 		await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: `${stack}: ${why}` });
 		return { ...base, planError: true };
 	}
+	log.info({ deployment, stack, pipelineId: trig.pipelineId }, "iac drift: pipeline triggered; polling for result");
 	const result = parseDriftCheckResult(
 		await callTool("gitlab_get_drift_check_result", { pipelineId: trig.pipelineId }),
 	);
@@ -1592,6 +1630,10 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	// way -> planError, never a false "no drift". (A drifted run still reports pipeline success;
 	// allow_failure:[2] keeps it green, with the drift in the artifact.)
 	if (result.status !== "success" || !result.report) {
+		log.warn(
+			{ deployment, stack, pipelineId: trig.pipelineId, status: result.status, hasReport: Boolean(result.report) },
+			"iac drift: drift-check not authoritative (planError)",
+		);
 		await dispatchCustomEvent("iac_pipeline_progress", {
 			pipelineId: trig.pipelineId,
 			status: `${stack}: ${result.status !== "success" ? `check ${result.status}` : "no report"}`,
@@ -1601,6 +1643,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 
 	const parsed = parseDriftReport(result.report);
 	if (parsed === null) {
+		log.warn({ deployment, stack, pipelineId: trig.pipelineId }, "iac drift: unreadable drift-report.json (planError)");
 		await dispatchCustomEvent("iac_pipeline_progress", {
 			pipelineId: trig.pipelineId,
 			status: `${stack}: unreadable report`,
@@ -1621,6 +1664,18 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 					: "no drift"
 		}`,
 	});
+	log.info(
+		{
+			deployment,
+			stack,
+			pipelineId: trig.pipelineId,
+			drifted: parsed.hasActionableDrift,
+			actionable: actionable.length,
+			knownNoise: noiseCount,
+			totals: parsed.totals,
+		},
+		"iac drift: stack assessed",
+	);
 	return {
 		...base,
 		drifted: parsed.hasActionableDrift,
@@ -1667,6 +1722,7 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 			? [...new Set([...configured, depStack])]
 			: parseRepoTreeDirs(await callTool("gitlab_get_repository_tree", { path: "stacks" }));
 	if (stacks.length === 0) {
+		log.warn({ deployment }, "iac drift: no stacks to audit (GitOps repo unreachable or empty environments path)");
 		return {
 			targetDeployment: deployment,
 			messages: [
@@ -1678,7 +1734,17 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 	}
 
 	const cap = Number(process.env.ELASTIC_IAC_DRIFT_CONCURRENCY ?? "4");
+	log.info({ deployment, stacks, count: stacks.length, concurrency: cap }, "iac drift: auditing stacks for deployment");
 	const stackDrifts = await mapWithConcurrency(stacks, cap, (stack) => driftCheckStack(deployment, stack));
+	log.info(
+		{
+			deployment,
+			total: stackDrifts.length,
+			drifted: stackDrifts.filter((s) => s.drifted).map((s) => s.stack),
+			planError: stackDrifts.filter((s) => s.planError).map((s) => s.stack),
+		},
+		"iac drift: audit complete",
+	);
 
 	const driftReport: DriftReport = { deployment, stacks: stackDrifts, generatedAt: new Date().toISOString() };
 	// Emit the full report once for the UI overview (forwarded by the SSE pump).

@@ -1,11 +1,11 @@
 // src/tools/gitlab.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildCommitFileBody } from "./gitlab.ts";
+import { buildCommitFileBody, flipCommitAction } from "./gitlab.ts";
 
-// SIO-873: the GitLab commits API needs a single "update" action with the FULL new
-// file content (not a diff). This is what gitlab_commit_file POSTs.
+// SIO-873: the GitLab commits API needs a single action with the FULL new file content
+// (not a diff). This is what gitlab_commit_file POSTs.
 describe("buildCommitFileBody", () => {
-	test("builds a single update action with full content", () => {
+	test("defaults to a single update action with full content", () => {
 		const body = buildCommitFileBody({
 			branch: "agent/ap-cld-9-4-2-version-upgrade-20260602",
 			commitMessage: "ap-cld: upgrade Elasticsearch 9.4.1 -> 9.4.2",
@@ -20,6 +20,36 @@ describe("buildCommitFileBody", () => {
 			file_path: "environments/_deployments/ap-cld.json",
 			content: '{\n  "version": "9.4.2"\n}\n',
 		});
+	});
+
+	// SIO-885: the reconcile marker is a NEW file -> create. "update" on it 400s.
+	test("honors an explicit create action (new file)", () => {
+		const body = buildCommitFileBody({
+			branch: "agent/reconcile-eu-b2b-templates-reconcile-to-json",
+			commitMessage: "eu-b2b: reconcile templates to declared config",
+			filePath: "stacks/templates/.agent-reconcile/eu-b2b.json",
+			content: "{}\n",
+			action: "create",
+		});
+		expect(body.actions[0]?.action).toBe("create");
+	});
+});
+
+// SIO-885: gitlab_commit_file is an upsert. flipCommitAction recovers from the action/file
+// mismatch GitLab returns ("doesn't exist" / "already exists") by flipping update<->create.
+describe("flipCommitAction", () => {
+	test("update on a missing file -> retry as create", () => {
+		expect(flipCommitAction("update", '[400] {"message":"A file with this name doesn\'t exist"}')).toBe("create");
+		// tolerate the "does not exist" phrasing too
+		expect(flipCommitAction("update", '[400] {"message":"A file with this name does not exist"}')).toBe("create");
+	});
+	test("create on an existing file -> retry as update", () => {
+		expect(flipCommitAction("create", '[400] {"message":"A file with this name already exists"}')).toBe("update");
+	});
+	test("null when the response is not a recoverable file-exists mismatch", () => {
+		expect(flipCommitAction("update", '[201] {"id":"abc"}')).toBeNull();
+		expect(flipCommitAction("update", '[403] {"message":"insufficient permissions"}')).toBeNull();
+		expect(flipCommitAction("create", '[400] {"message":"branch not found"}')).toBeNull();
 	});
 });
 
