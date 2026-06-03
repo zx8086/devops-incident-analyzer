@@ -1331,11 +1331,13 @@ function configIlmStacks(): Set<string> {
 	);
 }
 
-// SIO-889: report-sourced stacks (Approach B) -- live values come from the drift-report `values`,
-// not an MCP live read. Lazy process.env read (no module-scope Bun.env; the web app's Vite SSR throws).
-function configReportStacks(): Set<string> {
+// SIO-890: report-sourced reconcile (Approach B) is the DEFAULT for every stack that is not a
+// deployment/ilm family -- every stack is JSON-config-driven, so there is no allowlist. This is the
+// opt-OUT set: stacks to suppress (default none -> whole stack; an escape hatch, not a limit). Lazy
+// process.env read (no module-scope Bun.env; the web app's Vite SSR throws).
+function reportStacksExcluded(): Set<string> {
 	return new Set(
-		(process.env.ELASTIC_IAC_CONFIG_REPORT_STACKS ?? "agent-policies")
+		(process.env.ELASTIC_IAC_REPORT_STACKS_EXCLUDE ?? "")
 			.split(",")
 			.map((s) => s.trim().toLowerCase())
 			.filter(Boolean),
@@ -1358,11 +1360,11 @@ function stackResourceDir(template: string, cluster: string, stack: string): str
 	return probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
 }
 
-// SIO-889: the live-reconcile family registry. Each entry declares how one stack family maps its
-// drift onto an editable repo JSON file and whether the actual drift is reconcilable to live. Adding
-// a stack to reconcile-to-live is a new entry here (+ a build branch in buildLiveReconcile). A
-// function (not a module const) so the env-driven `matches` sets are read lazily (process.env; the
-// web app's Vite SSR throws on a module-scope Bun.env reference).
+// SIO-889/SIO-890: the live-reconcile family model. deployment + ilm are MCP-sourced (live read via
+// Elastic/EC APIs). EVERY other stack is report-sourced by DEFAULT (Approach B; live values from the
+// drift-report `values.before`) -- there is no allowlist, because every stack is JSON-config-driven.
+// Functions (not module consts) so the env-driven config is read lazily (process.env; the web app's
+// Vite SSR throws on a module-scope Bun.env reference).
 interface LiveReconcileFamily {
 	name: string;
 	matches: (stack: string) => boolean;
@@ -1373,7 +1375,8 @@ interface LiveReconcileFamily {
 	build: (deployment: string, stack: StackDrift) => Promise<LiveReconcileBuild | { blocked: string }>;
 }
 
-function liveReconcileFamilies(): LiveReconcileFamily[] {
+// MCP-sourced families: live state read from Elastic/EC APIs (not the drift-report).
+function mcpReconcileFamilies(): LiveReconcileFamily[] {
 	return [
 		{
 			name: "deployment",
@@ -1395,27 +1398,32 @@ function liveReconcileFamilies(): LiveReconcileFamily[] {
 			hasReconcilableDrift: (actionable) => actionable.some((c) => ilmPolicyFromAddress(c.address) !== ""),
 			build: buildLiveIlmReconcile,
 		},
-		// SIO-889: report-sourced families (Approach B). Live values come from the drift-report
-		// `values.before` (no MCP live read); each resource's config file is environments/<dep>/<stack>/
-		// <for_each-key>.json and provider attrs map to top-level JSON keys (README convention; override
-		// via ELASTIC_IAC_STACK_CONFIG_TEMPLATE). First target: agent-policies.
-		...[...configReportStacks()].map(
-			(stackName): LiveReconcileFamily => ({
-				name: stackName,
-				matches: (s) => s === stackName,
-				configPath: (d) => stackResourceDir(stackConfigPathTemplate(), d, stackName),
-				hasReconcilableDrift: (actionable) =>
-					actionable.some((c) => (c.category === "update" || c.category === "replace") && hasWritableBefore(c.values)),
-				build: buildReportSourcedReconcile,
-			}),
-		),
 	];
 }
 
-// The live-reconcile family a stack belongs to, or undefined (unwired -- no live-reconcile wired).
+// Report-sourced family for an arbitrary stack (Approach B). Live values come from the drift-report
+// `values.before`; the resource's file is environments/<dep>/<stack>/<for_each-key>.json and provider
+// attrs map to top-level JSON keys (override via ELASTIC_IAC_STACK_CONFIG_TEMPLATE). Reconcile-to-live
+// is only OFFERED when the drift has writable values; buildReportSourcedReconcile fails safe (blocks on
+// an unreadable/mis-resolved file), so a stack that does not fit the convention never writes garbage.
+function reportReconcileFamily(stack: string): LiveReconcileFamily {
+	return {
+		name: stack,
+		matches: (s) => s === stack,
+		configPath: (d) => stackResourceDir(stackConfigPathTemplate(), d, stack),
+		hasReconcilableDrift: (actionable) =>
+			actionable.some((c) => (c.category === "update" || c.category === "replace") && hasWritableBefore(c.values)),
+		build: buildReportSourcedReconcile,
+	};
+}
+
+// The live-reconcile family a stack belongs to, or undefined (unwired). deployment/ilm match by name;
+// every other stack is report-sourced by DEFAULT unless suppressed via ELASTIC_IAC_REPORT_STACKS_EXCLUDE.
 function liveReconcileFamily(stack: string): LiveReconcileFamily | undefined {
 	const s = stack.toLowerCase();
-	return liveReconcileFamilies().find((f) => f.matches(s));
+	const mcp = mcpReconcileFamilies().find((f) => f.matches(s));
+	if (mcp) return mcp;
+	return reportStacksExcluded().has(s) ? undefined : reportReconcileFamily(s);
 }
 
 // Pure: the live-reconcile family name a stack belongs to (null = unwired). Exported for unit testing;
