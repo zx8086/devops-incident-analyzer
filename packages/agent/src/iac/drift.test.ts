@@ -66,54 +66,91 @@ describe("parseDriftCheckResult", () => {
 });
 
 describe("parseDriftReport + isActionableDrift", () => {
-	const report = JSON.stringify({
+	// The user's live eu-b2b/lifecycle-policies result: 1 change, but it's .alerts-ilm-policy
+	// tagged known-noise (kibana-churn) -> has_actionable_drift false.
+	const onlyNoise = JSON.stringify({
 		stack: "lifecycle-policies",
 		deployment: "eu-b2b",
+		totals: { noop: 34, create: 0, update: 0, destroy: 0, replace: 0, "known-noise": 1 },
 		resources: [
-			{ address: "module.x.alerts", action: "update", category: "known-noise", noiseTag: "kibana-churn" },
-			{ address: "module.x.real", action: "update", category: "substantive" },
-			{ address: "module.x.noop", action: "no-op", category: "substantive" },
+			{
+				address: 'module.lifecycle_policies.elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]',
+				type: "elasticstack_elasticsearch_index_lifecycle",
+				actions: ["update"],
+				category: "known-noise",
+				changedKeys: ["hot", "metadata", "modified_date"],
+				reason: "kibana-churn: keys changed = hot, metadata, modified_date",
+				noiseTag: "kibana-churn",
+			},
 		],
+		has_actionable_drift: false,
 	});
 
-	test("parses every resource change", () => {
-		expect(parseDriftReport(report)).toHaveLength(3);
+	// The us-cld/deployments version drift: has_actionable_drift true.
+	const realDrift = JSON.stringify({
+		stack: "deployments",
+		deployment: "us-cld",
+		totals: { noop: 9, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+		resources: [
+			{
+				address: 'module.deployments["us-cld"].ec_deployment.this',
+				type: "ec_deployment",
+				actions: ["update"],
+				category: "update",
+				changedKeys: ["version"],
+				reason: "attributes changed: version",
+			},
+		],
+		has_actionable_drift: true,
 	});
 
-	test("known-noise and no-op are NOT actionable; the substantive update IS", () => {
-		const actionable = parseDriftReport(report).filter(isActionableDrift);
-		expect(actionable).toHaveLength(1);
-		expect(actionable[0]?.address).toBe("module.x.real");
+	test("uses has_actionable_drift + totals (real drift)", () => {
+		const p = parseDriftReport(realDrift);
+		expect(p).not.toBeNull();
+		expect(p?.hasActionableDrift).toBe(true);
+		expect(p?.totals.update).toBe(1);
+		expect(p?.resources).toHaveLength(1);
 	});
 
-	// The user's live result: eu-b2b lifecycle-policies has 1 change, but it's the
-	// .alerts-ilm-policy tagged known-noise (kibana-churn) -> not real drift.
-	test("the .alerts known-noise case yields no actionable drift", () => {
-		const onlyNoise = JSON.stringify({
-			resources: [
-				{
-					address: "module.lifecycle_policies.alerts-ilm-policy",
-					action: "update",
-					category: "known-noise",
-					noiseTag: "kibana-churn",
-				},
-			],
-		});
-		expect(parseDriftReport(onlyNoise).filter(isActionableDrift)).toHaveLength(0);
+	test("the .alerts known-noise case is NOT actionable", () => {
+		const p = parseDriftReport(onlyNoise);
+		expect(p?.hasActionableDrift).toBe(false);
+		expect(p?.totals.knownNoise).toBe(1);
+		expect(p?.resources.filter(isActionableDrift)).toHaveLength(0);
 	});
 
-	test("returns [] for an empty / unparseable report", () => {
-		expect(parseDriftReport("")).toEqual([]);
-		expect(parseDriftReport("not json")).toEqual([]);
+	test("isActionableDrift excludes known-noise, includes real changes", () => {
+		expect(
+			isActionableDrift({ address: "a", category: "update", actions: ["update"], changedKeys: [], reason: "" }),
+		).toBe(true);
+		expect(
+			isActionableDrift({ address: "a", category: "destroy", actions: ["delete"], changedKeys: [], reason: "" }),
+		).toBe(true);
+		expect(
+			isActionableDrift({
+				address: "a",
+				category: "known-noise",
+				actions: ["update"],
+				changedKeys: [],
+				reason: "",
+				noiseTag: "kibana-churn",
+			}),
+		).toBe(false);
+	});
+
+	test("returns null for an empty / unparseable report", () => {
+		expect(parseDriftReport("")).toBeNull();
+		expect(parseDriftReport("not json")).toBeNull();
 	});
 });
 
 describe("classifyStackByName (defaults)", () => {
-	test("deployments -> config-json + liveReconcilable; lifecycle-policies -> config-json; others -> hcl", () => {
+	test("config-json stacks resolve a path; reconcile-to-live deferred (liveReconcilable false)", () => {
 		const dep = classifyStackByName("deployments", "eu-b2b");
 		expect(dep.kind).toBe("config-json");
-		expect(dep.liveReconcilable).toBe(true);
 		expect(dep.configPath).toContain("eu-b2b");
+		// reconcile-to-live is deferred until the writer handles all deployment-json fields.
+		expect(dep.liveReconcilable).toBe(false);
 
 		const ilm = classifyStackByName("lifecycle-policies", "eu-b2b");
 		expect(ilm.kind).toBe("config-json");

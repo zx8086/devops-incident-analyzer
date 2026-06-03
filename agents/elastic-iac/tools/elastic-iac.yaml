@@ -109,7 +109,7 @@ tool_mapping:
     propose: when proposing a config change via the GitLab API -- read the deployment JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
     plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
     open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
-    review_pipeline: when reading an existing MR or its pipelines to report GitOps status, or reading the per-stack drift the CI plan already computed (gitlab_get_drift_reports) -- read-only; never merge/approve
+    review_pipeline: when reading an existing MR or its pipelines to report GitOps status, or triggering and reading on-demand per-stack drift-check results (gitlab_trigger_drift_check and gitlab_get_drift_check_result) -- read-only; never merge/approve
     status: when reporting IaC reconcile status, what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
   action_keywords:
     read_state: [state, deployment, topology, plan history, health, ilm, version, versions, running, list]

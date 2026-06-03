@@ -1151,44 +1151,84 @@ export function parseDriftCheckResult(toolResult: string): { status: string; rep
 	}
 }
 
-// One resource change from the drift-check `drift-report.json` artifact.
+// One resource change from the drift-check `drift-report.json` artifact (DriftReport.
+// resources[]; noop entries are already filtered out by the drift-check script).
 export interface DriftResourceChange {
 	address: string;
-	action: string; // create | update | delete | replace | no-op | read | ...
-	category: string; // substantive | known-noise | ...
-	noiseTag?: string; // kibana-churn | restapi-noise | provider-bump (when known-noise)
+	category: string; // create | update | destroy | replace | known-noise
+	actions: string[]; // raw terraform actions: ["update"], ["delete","create"] (=replace), ...
+	changedKeys: string[];
+	reason: string;
+	noiseTag?: string; // kibana-churn | stack-monitoring-churn (when known-noise)
 }
 
-// Parse the drift-report.json artifact into its resource changes. Tolerant of the exact
-// envelope -- only the `resources`/`changes` array is needed. (Pure; unit-tested.)
-export function parseDriftReport(reportJson: string): DriftResourceChange[] {
+// The parsed drift-report.json: the authoritative has_actionable_drift boolean (the single
+// field to branch alerts on -- already excludes known-noise + noop), per-category totals,
+// and the resource changes.
+export interface ParsedDriftReport {
+	hasActionableDrift: boolean;
+	totals: { create: number; update: number; destroy: number; replace: number; noop: number; knownNoise: number };
+	resources: DriftResourceChange[];
+}
+
+// Parse the drift-report.json artifact. null on empty/unparseable (caller -> planError, never
+// a false "no drift"). (Pure; unit-tested.)
+export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 	const jsonStart = reportJson.indexOf("{");
-	if (jsonStart < 0) return [];
+	if (jsonStart < 0) return null;
 	try {
-		const o = JSON.parse(reportJson.slice(jsonStart)) as { resources?: unknown; changes?: unknown };
-		const arr = Array.isArray(o.resources) ? o.resources : Array.isArray(o.changes) ? o.changes : [];
-		return (arr as unknown[])
-			.map((r) => {
-				const x = r as { address?: unknown; action?: unknown; category?: unknown; noiseTag?: unknown };
-				return {
-					address: typeof x.address === "string" ? x.address : "",
-					action: typeof x.action === "string" ? x.action : "",
-					category: typeof x.category === "string" ? x.category : "",
-					noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
-				};
-			})
-			.filter((r) => r.address);
+		const o = JSON.parse(reportJson.slice(jsonStart)) as {
+			has_actionable_drift?: unknown;
+			totals?: Record<string, unknown>;
+			resources?: unknown;
+		};
+		const t = o.totals ?? {};
+		const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+		const strs = (v: unknown): string[] =>
+			Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+		const resources = Array.isArray(o.resources)
+			? (o.resources as unknown[])
+					.map((r) => {
+						const x = r as {
+							address?: unknown;
+							category?: unknown;
+							actions?: unknown;
+							changedKeys?: unknown;
+							reason?: unknown;
+							noiseTag?: unknown;
+						};
+						return {
+							address: typeof x.address === "string" ? x.address : "",
+							category: typeof x.category === "string" ? x.category : "",
+							actions: strs(x.actions),
+							changedKeys: strs(x.changedKeys),
+							reason: typeof x.reason === "string" ? x.reason : "",
+							noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
+						};
+					})
+					.filter((r) => r.address)
+			: [];
+		return {
+			hasActionableDrift: o.has_actionable_drift === true,
+			totals: {
+				create: num(t.create),
+				update: num(t.update),
+				destroy: num(t.destroy),
+				replace: num(t.replace),
+				noop: num(t.noop),
+				knownNoise: num(t["known-noise"]),
+			},
+			resources,
+		};
 	} catch {
-		return [];
+		return null;
 	}
 }
 
-// Actionable drift = a real change to reconcile: NOT known-noise, NOT a no-op/read. The
-// drift-check tags Kibana/restapi/provider churn as known-noise so it doesn't page. (Pure.)
+// Actionable = a real change to reconcile (category is not known-noise). noop is already
+// excluded from resources[] by the script. (Pure.)
 export function isActionableDrift(r: DriftResourceChange): boolean {
-	if (r.category === "known-noise") return false;
-	const a = r.action.toLowerCase();
-	return a !== "" && a !== "no-op" && a !== "noop" && a !== "read";
+	return r.category !== "known-noise";
 }
 
 // Which stack names own per-deployment JSON the agent can edit. Read lazily (process.env,
@@ -1230,10 +1270,13 @@ export function classifyStackByName(
 ): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
 	const family = configStackFamily(stack);
 	if (family === "deployment") {
+		// reconcile-to-live is DEFERRED for now: buildLiveVersionReconcile only rewrites the
+		// top-level version, so offering it for tier/zone/autoscaling drift would open an MR
+		// that doesn't reconcile the reported change. reconcile-to-json covers it meanwhile.
 		return {
 			kind: "config-json",
 			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
-			liveReconcilable: true,
+			liveReconcilable: false,
 		};
 	}
 	if (family === "ilm") {
@@ -1487,7 +1530,16 @@ async function resolveDriftDeployment(state: IacStateType): Promise<string> {
 	if (state.targetDeployment) return state.targetDeployment;
 	const query = lastHumanText(state).toLowerCase();
 	const names = parseEcDeploymentNames(await callTool("elastic_cloud_list_deployments", {}));
-	return names.find((d) => query.includes(d.toLowerCase())) ?? "";
+	// Exact (case-insensitive) match wins; otherwise accept a partial only when it's the unique
+	// candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
+	// unambiguous match -> "" routes to the iac_clarify interrupt.
+	const exact = names.find((d) => d.toLowerCase() === query);
+	if (exact) return exact;
+	const partial = names.filter((d) => {
+		const n = d.toLowerCase();
+		return query.includes(n) || n.includes(query);
+	});
+	return partial.length === 1 ? (partial[0] ?? "") : "";
 }
 
 function driftedStacks(state: IacStateType): StackDrift[] {
@@ -1535,29 +1587,50 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	const result = parseDriftCheckResult(
 		await callTool("gitlab_get_drift_check_result", { pipelineId: trig.pipelineId }),
 	);
-	if (!result.report) {
+	// The pipeline must be "success" for the artifact to be authoritative. A "failed" pipeline
+	// is a script error (not a drift signal); "canceled" was superseded (interruptible). Either
+	// way -> planError, never a false "no drift". (A drifted run still reports pipeline success;
+	// allow_failure:[2] keeps it green, with the drift in the artifact.)
+	if (result.status !== "success" || !result.report) {
 		await dispatchCustomEvent("iac_pipeline_progress", {
 			pipelineId: trig.pipelineId,
-			status: `${stack}: no report (${result.status})`,
+			status: `${stack}: ${result.status !== "success" ? `check ${result.status}` : "no report"}`,
 		});
 		return { ...base, planError: true };
 	}
 
-	const actionable = parseDriftReport(result.report).filter(isActionableDrift);
-	const create = actionable.filter((c) => c.action.toLowerCase() === "create").length;
-	const del = actionable.filter((c) => ["delete", "destroy"].includes(c.action.toLowerCase())).length;
-	const update = actionable.length - create - del; // update + replace
+	const parsed = parseDriftReport(result.report);
+	if (parsed === null) {
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: trig.pipelineId,
+			status: `${stack}: unreadable report`,
+		});
+		return { ...base, planError: true };
+	}
+	// has_actionable_drift is the authoritative alert boolean (excludes known-noise + noop);
+	// totals drive the counts; the resource list is the actionable (non-known-noise) changes.
+	const actionable = parsed.resources.filter(isActionableDrift);
+	const noiseCount = parsed.totals.knownNoise;
 	await dispatchCustomEvent("iac_pipeline_progress", {
 		pipelineId: trig.pipelineId,
-		status: `${stack}: ${actionable.length > 0 ? `${actionable.length} change(s)` : "no drift"}`,
+		status: `${stack}: ${
+			parsed.hasActionableDrift
+				? `${actionable.length} change(s)`
+				: noiseCount > 0
+					? `no drift (${noiseCount} known-noise)`
+					: "no drift"
+		}`,
 	});
 	return {
 		...base,
-		drifted: actionable.length > 0,
-		create,
-		update,
-		delete: del,
-		resources: actionable.map((c) => ({ address: c.address, actions: [c.action] })),
+		drifted: parsed.hasActionableDrift,
+		create: parsed.totals.create,
+		update: parsed.totals.update + parsed.totals.replace, // group replace into "update" for the UI counts
+		delete: parsed.totals.destroy,
+		resources: actionable.map((c) => ({
+			address: c.address,
+			actions: c.actions.length > 0 ? c.actions : [c.category],
+		})),
 	};
 }
 
@@ -1581,13 +1654,24 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 		};
 	}
 
-	const stacks = parseRepoTreeDirs(await callTool("gitlab_get_repository_tree", { path: "stacks" }));
+	// The deployment's CONFIGURED stacks live under environments/<deployment>/<stack>/ (each
+	// with terraform.tfvars); the special `deployments` stack is configured via
+	// environments/_deployments/<deployment>.json, so add it explicitly. Fall back to the
+	// full stacks/ tree if the environments path doesn't resolve.
+	const configured = parseRepoTreeDirs(
+		await callTool("gitlab_get_repository_tree", { path: `environments/${deployment}` }),
+	);
+	const depStack = [...configDeploymentStacks()][0] ?? "deployments";
+	const stacks =
+		configured.length > 0
+			? [...new Set([...configured, depStack])]
+			: parseRepoTreeDirs(await callTool("gitlab_get_repository_tree", { path: "stacks" }));
 	if (stacks.length === 0) {
 		return {
 			targetDeployment: deployment,
 			messages: [
 				new AIMessage(
-					`Could not list the stacks to audit for '${deployment}'. Is the GitOps repo reachable (ELASTIC_IAC_GITLAB_TOKEN) with a stacks/ directory?`,
+					`Could not list the stacks to audit for '${deployment}'. Is the GitOps repo reachable (ELASTIC_IAC_GITLAB_TOKEN) with an environments/${deployment}/ directory?`,
 				),
 			],
 		};

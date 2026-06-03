@@ -283,7 +283,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "120000");
+	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
 	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
 	const isTerminal = (s: string) => ["success", "failed", "canceled", "skipped"].includes(s);
 
