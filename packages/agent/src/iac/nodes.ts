@@ -1270,13 +1270,14 @@ export function classifyStackByName(
 ): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
 	const family = configStackFamily(stack);
 	if (family === "deployment") {
-		// reconcile-to-live is DEFERRED for now: buildLiveVersionReconcile only rewrites the
-		// top-level version, so offering it for tier/zone/autoscaling drift would open an MR
-		// that doesn't reconcile the reported change. reconcile-to-json covers it meanwhile.
+		// SIO-886: the deployment-config stack CAN reconcile-to-live (the version field).
+		// This is the static capability; driftCheckStack narrows it to true only when version
+		// actually drifted, so reconcile-to-live never opens an empty-diff MR for tier/zone-only
+		// drift (those still use reconcile-to-json).
 		return {
 			kind: "config-json",
 			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
-			liveReconcilable: false,
+			liveReconcilable: true,
 		};
 	}
 	if (family === "ilm") {
@@ -1597,7 +1598,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 // drift-report.json into a StackDrift (known-noise/provider-bump filtered out). A trigger
 // lock/failure or a missing report becomes planError (never a false "no drift").
 async function driftCheckStack(deployment: string, stack: string): Promise<StackDrift> {
-	const { kind, configPath, liveReconcilable } = classifyStackByName(stack, deployment);
+	const { kind, configPath } = classifyStackByName(stack, deployment);
 	const base: StackDrift = {
 		stack,
 		drifted: false,
@@ -1606,7 +1607,9 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 		update: 0,
 		delete: 0,
 		resources: [],
-		liveReconcilable,
+		// Safe default for the planError / no-drift early returns (the reconcile gate only
+		// processes drifted stacks); the drifted return below sets the real, version-aware value.
+		liveReconcilable: false,
 		...(configPath && { configPath }),
 	};
 
@@ -1664,6 +1667,12 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 					: "no drift"
 		}`,
 	});
+	// SIO-886: reconcile-to-live is offered only when it will actually reconcile something --
+	// today that is the deployment-config version field. A deployment stack that drifted on
+	// tier/zone/autoscaling (not version) keeps reconcile-to-json + skip, so we never open an
+	// empty-diff "sync version to live" MR. (ILM/HCL never reconcile-to-live in this iteration.)
+	const versionDrifted = actionable.some((c) => c.changedKeys.includes("version"));
+	const liveReconcilable = configStackFamily(stack) === "deployment" && versionDrifted;
 	log.info(
 		{
 			deployment,
@@ -1672,6 +1681,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			drifted: parsed.hasActionableDrift,
 			actionable: actionable.length,
 			knownNoise: noiseCount,
+			liveReconcilable,
 			totals: parsed.totals,
 		},
 		"iac drift: stack assessed",
@@ -1679,12 +1689,18 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	return {
 		...base,
 		drifted: parsed.hasActionableDrift,
+		liveReconcilable,
 		create: parsed.totals.create,
 		update: parsed.totals.update + parsed.totals.replace, // group replace into "update" for the UI counts
 		delete: parsed.totals.destroy,
+		// SIO-886: keep the per-resource reason + changed keys so the explainer/UI can show
+		// WHAT drifted (previously only {address, actions} survived).
 		resources: actionable.map((c) => ({
 			address: c.address,
 			actions: c.actions.length > 0 ? c.actions : [c.category],
+			reason: c.reason,
+			changedKeys: c.changedKeys,
+			category: c.category,
 		})),
 	};
 }
@@ -1747,10 +1763,65 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 	);
 
 	const driftReport: DriftReport = { deployment, stacks: stackDrifts, generatedAt: new Date().toISOString() };
-	// Emit the full report once for the UI overview (forwarded by the SSE pump).
+	// SIO-886: the enriched report is emitted by explainDrift (next node), once, with the
+	// per-stack explanations attached -- so the UI gets a single, fully-detailed overview.
+	return { targetDeployment: deployment, driftReport, driftIndex: 0, reconcileResults: [] };
+}
+
+// SIO-886: drop the terraform module wrapper so the explanation reads in resource terms --
+// `module.deployments["us-cld"].ec_deployment.this` -> `ec_deployment.this ["us-cld"]`.
+// The index key can sit on the module wrapper (mid-address) or the resource (trailing); keep
+// the last one as the human-meaningful key. (Pure; unit-tested.)
+export function shortAddress(address: string): string {
+	const key = address.match(/\[[^\]]*\]/g)?.pop() ?? "";
+	const clean = address.replace(/\[[^\]]*\]/g, "");
+	const parts = clean.split(".").filter(Boolean);
+	// Keep the resource type + name (the last two dotted segments); the module.<name> wrappers
+	// are noise for a human reading the change.
+	const tail = parts.slice(-2).join(".") || clean;
+	return key ? `${tail} ${key}` : tail;
+}
+
+// SIO-886: a concise, GROUNDED explanation of what a stack's drift is, built straight from
+// the drift-report fields (no LLM -> no hallucination). Empty string for a non-drifted stack.
+// (Pure; unit-tested.)
+export function explainStackDrift(stack: StackDrift): string {
+	if (!stack.drifted || stack.resources.length === 0) return "";
+	const verb = (actions: string[], category?: string): string => {
+		const a = actions.length > 0 ? actions.join("+") : (category ?? "change");
+		if (a.includes("delete") && a.includes("create")) return "replace";
+		if (a === "create") return "create";
+		if (a === "delete" || a === "destroy") return "delete";
+		return "update";
+	};
+	const lines = stack.resources.slice(0, 8).map((r) => {
+		const detail =
+			r.reason || (r.changedKeys && r.changedKeys.length > 0 ? `changed: ${r.changedKeys.join(", ")}` : "");
+		return `- ${verb(r.actions, r.category)} ${shortAddress(r.address)}${detail ? ` (${detail})` : ""}`;
+	});
+	const more = stack.resources.length > 8 ? `\n- ...and ${stack.resources.length - 8} more` : "";
+	const counts = `${stack.create} create / ${stack.update} update / ${stack.delete} destroy`;
+	return `${counts}\n${lines.join("\n")}${more}`;
+}
+
+// SIO-886: dedicated drift-explainer node. Attaches a grounded per-stack explanation to the
+// drift report and emits the enriched iac_drift_report once for the UI (the overview card +
+// the per-resource detail). No writes; runs between detectDrift and the reconcile loop.
+export async function explainDrift(state: IacStateType): Promise<Partial<IacStateType>> {
+	const report = state.driftReport;
+	if (!report) return {};
+	const stacks = report.stacks.map((s) => ({ ...s, explanation: explainStackDrift(s) }));
+	log.info(
+		{
+			deployment: report.deployment,
+			explained: stacks.filter((s) => s.explanation).map((s) => s.stack),
+		},
+		"iac drift: explanations attached",
+	);
+	// Emit the full, enriched report once (forwarded by the SSE pump to the drift card).
 	await dispatchCustomEvent("iac_drift_report", {
-		deployment,
-		stacks: stackDrifts.map((s) => ({
+		deployment: report.deployment,
+		stacks: stacks.map((s) => ({
 			stack: s.stack,
 			drifted: s.drifted,
 			planError: s.planError ?? false,
@@ -1758,11 +1829,11 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 			create: s.create,
 			update: s.update,
 			delete: s.delete,
+			explanation: s.explanation ?? "",
 			resources: s.resources,
 		})),
 	});
-
-	return { targetDeployment: deployment, driftReport, driftIndex: 0, reconcileResults: [] };
+	return { driftReport: { ...report, stacks } };
 }
 
 // HITL gate for the stack at driftIndex. Pauses (interrupt) asking the human to pick a
@@ -1777,15 +1848,27 @@ export function reconcileGate(state: IacStateType): Partial<IacStateType> {
 		? ["reconcile-to-live", "reconcile-to-json", "skip"]
 		: ["reconcile-to-json", "skip"];
 	const summary = `${current.create} create / ${current.update} update / ${current.delete} destroy`;
+	const liveHint = current.liveReconcilable
+		? "Reconcile toward live (sync the declared version into the config file), "
+		: "";
 	const choice = interrupt({
 		type: "iac_reconcile_choice",
 		stack: current.stack,
 		kind: current.kind,
 		summary,
+		// SIO-886: the grounded explanation + per-resource detail so the human can see WHAT
+		// drifted before choosing MR-vs-skip.
+		explanation: current.explanation ?? "",
+		resources: current.resources.slice(0, 8).map((r) => ({
+			address: r.address,
+			actions: r.actions,
+			reason: r.reason ?? "",
+			changedKeys: r.changedKeys ?? [],
+		})),
 		directions,
 		message:
 			`Stack '${current.stack}' (${state.driftIndex + 1} of ${drifted.length}) has drifted: ${summary}. ` +
-			"Reconcile toward live, toward the declared config (opens an MR; CI shows the revert), or skip.",
+			`${liveHint}reconcile toward the declared config (opens an MR; CI shows the revert), or skip.`,
 	}) as { direction?: ReconcileDirection };
 
 	const dir = choice?.direction;

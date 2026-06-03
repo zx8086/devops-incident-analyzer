@@ -286,6 +286,8 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		stack?: unknown;
 		kind?: unknown;
 		summary?: unknown;
+		explanation?: unknown;
+		resources?: unknown;
 		directions?: unknown;
 	};
 
@@ -323,12 +325,28 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		// Never emit an empty direction set (would render a choice card with no buttons);
 		// reconcile-to-json + skip are always valid for any stack.
 		const directions = filtered.length > 0 ? filtered : ["reconcile-to-json", "skip"];
+		// SIO-886: forward the grounded explanation + per-resource detail (what drifted).
+		const resources = Array.isArray(obj.resources)
+			? obj.resources.map((r) => {
+					const x = r as { address?: unknown; actions?: unknown; reason?: unknown; changedKeys?: unknown };
+					return {
+						address: typeof x.address === "string" ? x.address : "",
+						actions: Array.isArray(x.actions) ? x.actions.filter((a): a is string => typeof a === "string") : [],
+						...(typeof x.reason === "string" && x.reason && { reason: x.reason }),
+						...(Array.isArray(x.changedKeys) && {
+							changedKeys: x.changedKeys.filter((k): k is string => typeof k === "string"),
+						}),
+					};
+				})
+			: undefined;
 		send({
 			type: "iac_reconcile_choice",
 			threadId,
 			stack: typeof obj.stack === "string" ? obj.stack : "",
 			kind: obj.kind === "hcl" ? "hcl" : "config-json",
 			summary: typeof obj.summary === "string" ? obj.summary : "",
+			...(typeof obj.explanation === "string" && obj.explanation && { explanation: obj.explanation }),
+			...(resources && { resources }),
 			directions,
 			message: typeof obj.message === "string" ? obj.message : "Choose a reconcile direction for this stack.",
 		});

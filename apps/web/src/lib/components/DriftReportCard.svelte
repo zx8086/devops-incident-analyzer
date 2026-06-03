@@ -26,13 +26,30 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
     </div>
 
     {#if drifted.length > 0}
-      <ul class="mt-2 space-y-1">
+      <ul class="mt-2 space-y-2">
         {#each drifted as s (s.stack)}
-          <li class="flex items-center gap-2 text-xs">
-            <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-            <span class="font-medium text-tommy-navy">{s.stack}</span>
-            <span class="px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700">{s.kind}</span>
-            <span class="font-mono text-tommy-navy/80">+{s.create} ~{s.update} -{s.delete}</span>
+          <li class="text-xs">
+            <div class="flex items-center gap-2">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              <span class="font-medium text-tommy-navy">{s.stack}</span>
+              <span class="px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700">{s.kind}</span>
+              <span class="font-mono text-tommy-navy/80">+{s.create} ~{s.update} -{s.delete}</span>
+            </div>
+            <!-- SIO-886: surface WHAT drifted (reason + changed keys per resource). -->
+            {#if s.resources.length > 0}
+              <ul class="mt-1 ml-3.5 space-y-0.5 border-l border-amber-300 pl-2">
+                {#each s.resources as r (r.address)}
+                  <li class="text-tommy-navy/80">
+                    <span class="font-mono break-all">{r.address}</span>
+                    {#if r.reason}
+                      <span class="text-gray-600"> &mdash; {r.reason}</span>
+                    {:else if r.changedKeys && r.changedKeys.length > 0}
+                      <span class="text-gray-600"> &mdash; changed: {r.changedKeys.join(", ")}</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </li>
         {/each}
       </ul>
