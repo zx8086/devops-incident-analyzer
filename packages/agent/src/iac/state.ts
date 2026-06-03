@@ -62,6 +62,49 @@ export interface IacApprovalState {
 	approvedBy?: string[];
 }
 
+// SIO-882: drift reconcile sub-flow. Direction the human picks per drifted stack:
+// "reconcile-to-live" rewrites the repo to match the live cluster (config-JSON stacks
+// only in Phase 1); "reconcile-to-json" opens an MR re-asserting the declared config so
+// CI's plan shows the revert; "skip" leaves the stack untouched.
+export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
+
+// One stack's drift from `iac_plan` (the tfplan-report counts) plus its classification.
+export interface StackDrift {
+	stack: string;
+	drifted: boolean;
+	// "config-json" stacks own per-deployment JSON the agent can edit; "hcl" stacks are
+	// terraform-only. Drives the UI badge.
+	kind: "config-json" | "hcl";
+	create: number;
+	update: number;
+	delete: number;
+	resources: Array<{ address: string; actions: string[] }>;
+	// Resolved repo JSON path when kind === "config-json" (set by the path-resolve probe).
+	configPath?: string;
+	// Phase 1: reconcile-to-live is only offered when a clean live->file mapping exists
+	// (currently the deployment-config version field). HCL + ILM + tier-sizing defer it.
+	liveReconcilable: boolean;
+	// True when iac_plan could not be read for this stack (task failure / unknown format):
+	// the stack was NOT assessed, so it is neither drifted nor confirmed clean.
+	planError?: boolean;
+}
+
+export interface DriftReport {
+	deployment: string;
+	stacks: StackDrift[];
+	generatedAt: string;
+}
+
+// Outcome of reconciling one stack (one independent, idempotent MR or a skip/block).
+export interface ReconcileResult {
+	stack: string;
+	direction: ReconcileDirection;
+	status: "opened" | "reused" | "skipped" | "blocked";
+	mrUrl?: string;
+	branch?: string;
+	note?: string;
+}
+
 const last = <T>(_current: T, update: T): T => update;
 
 // Dedicated IaC graph state. Kept separate from AgentState so the maker workflow
@@ -75,7 +118,8 @@ export const IacState = Annotation.Root({
 	// stops; "gitops" enters the maker/HITL/MR pipeline. Set by classifyIacIntent.
 	// SIO-875: "pipeline-status" is a follow-up ("did the pipeline pass / show me the
 	// plan / check my MR") that re-enters watchPipeline using the thread's persisted MR.
-	intent: Annotation<"info" | "gitops" | "pipeline-status" | null>({ reducer: last, default: () => null }),
+	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
+	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | null>({ reducer: last, default: () => null }),
 	iacRequest: Annotation<IacRequest | null>({ reducer: last, default: () => null }),
 	clusterState: Annotation<IacClusterState | null>({ reducer: last, default: () => null }),
 	branch: Annotation<string>({ reducer: last, default: () => "" }),
@@ -108,6 +152,16 @@ export const IacState = Annotation.Root({
 	connected: Annotation<boolean>({ reducer: last, default: () => true }),
 	// terminal blocked reason from the guard (e.g. prod not named, .alerts unmanaged).
 	blockedReason: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-882: drift reconcile sub-flow. targetDeployment scopes the audit to one
+	// deployment; driftReport holds the per-stack plan; driftIndex walks the drifted
+	// stacks sequentially; currentDirection is the gate's chosen direction for the
+	// stack at driftIndex (read by the gate->worker edge); reconcileResults accumulates
+	// one entry per processed stack (MR opened/reused, skipped, or blocked).
+	targetDeployment: Annotation<string>({ reducer: last, default: () => "" }),
+	driftReport: Annotation<DriftReport | null>({ reducer: last, default: () => null }),
+	driftIndex: Annotation<number>({ reducer: last, default: () => 0 }),
+	currentDirection: Annotation<ReconcileDirection | null>({ reducer: last, default: () => null }),
+	reconcileResults: Annotation<ReconcileResult[]>({ reducer: last, default: () => [] }),
 });
 
 export type IacStateType = typeof IacState.State;

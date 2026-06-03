@@ -5,9 +5,11 @@ import AwsEstateSelector from "$lib/components/AwsEstateSelector.svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
+import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
+import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
 
@@ -204,6 +206,13 @@ function handleSuggestionClick(suggestion: string) {
         {/if}
       {/if}
 
+      <!-- SIO-882: drift overview + per-stack reconcile results. Persists across the
+           interrupt pauses (outside the isStreaming gate) so it stays visible while the
+           user works through the per-stack choices. -->
+      {#if agentStore.iacDriftReport}
+        <DriftReportCard report={agentStore.iacDriftReport} results={agentStore.iacReconcileResults} />
+      {/if}
+
     </div>
   </div>
 
@@ -278,6 +287,15 @@ function handleSuggestionClick(suggestion: string) {
       disabled={agentStore.isStreaming}
       onApprove={() => agentStore.resolveIacPlanReview("approved")}
       onReject={() => agentStore.resolveIacPlanReview("rejected")}
+    />
+  {/if}
+
+  {#if agentStore.iacReconcileChoice}
+    <!-- SIO-882: per-stack reconcile gate (sequential; one stack at a time). -->
+    <ReconcileChoiceCard
+      prompt={agentStore.iacReconcileChoice}
+      disabled={agentStore.isStreaming}
+      onChoose={(d) => agentStore.resolveReconcileChoice(d)}
     />
   {/if}
 

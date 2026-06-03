@@ -47,6 +47,45 @@ export interface IacClarifyPrompt {
 	question: string;
 }
 
+// SIO-882: drift sub-flow UI state.
+export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
+
+export interface IacDriftStack {
+	stack: string;
+	drifted: boolean;
+	// SIO-882: true when iac_plan could not be read -- the stack was not assessed.
+	planError?: boolean;
+	kind: "config-json" | "hcl";
+	create: number;
+	update: number;
+	delete: number;
+	resources: Array<{ address: string; actions: string[] }>;
+}
+
+export interface IacDriftReport {
+	deployment: string;
+	stacks: IacDriftStack[];
+}
+
+// One per-stack reconcile gate (the current interrupt). directions is the allowed set
+// for this stack (reconcile-to-live is absent for HCL/non-live-reconcilable stacks).
+export interface IacReconcileChoice {
+	threadId: string;
+	stack: string;
+	kind: "config-json" | "hcl";
+	summary: string;
+	directions: ReconcileDirection[];
+	message: string;
+}
+
+export interface IacReconcileResultRow {
+	stack: string;
+	direction: ReconcileDirection;
+	status: "opened" | "reused" | "skipped" | "blocked";
+	mrUrl?: string;
+	note?: string;
+}
+
 // SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
 // "couchbase"). Populated by datasource_result events emitted from the
 // extractFindings node. Absence of an entry = sub-agent didn't run or had
@@ -88,6 +127,11 @@ export interface ReducerState {
 	// SIO-876: live pipeline-watch status lines (e.g. "Pipeline #355: running"),
 	// shown in the streaming area; the final status+plan+approval lands as the message.
 	iacPipelineProgress: string[];
+	// SIO-882: drift sub-flow. The full report (overview), the current per-stack choice
+	// prompt (interrupt), and the accumulating per-stack results.
+	iacDriftReport: IacDriftReport | null;
+	iacReconcileChoice: IacReconcileChoice | null;
+	iacReconcileResults: IacReconcileResultRow[];
 }
 
 export function initialReducerState(): ReducerState {
@@ -110,6 +154,9 @@ export function initialReducerState(): ReducerState {
 		iacClarify: null,
 		iacPlanReview: null,
 		iacPipelineProgress: [],
+		iacDriftReport: null,
+		iacReconcileChoice: null,
+		iacReconcileResults: [],
 	};
 }
 
@@ -205,6 +252,41 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			const label = event.pipelineId ? `Pipeline #${event.pipelineId}: ${event.status}` : `Pipeline: ${event.status}`;
 			return { ...state, iacPipelineProgress: [...state.iacPipelineProgress, label] };
 		}
+		// SIO-882: drift sub-flow events.
+		case "iac_drift_report":
+			// A fresh report starts a new reconcile pass.
+			return {
+				...state,
+				iacDriftReport: { deployment: event.deployment, stacks: event.stacks },
+				iacReconcileResults: [],
+			};
+		case "iac_reconcile_choice":
+			return {
+				...state,
+				threadId: event.threadId,
+				iacReconcileChoice: {
+					threadId: event.threadId,
+					stack: event.stack,
+					kind: event.kind,
+					summary: event.summary,
+					directions: event.directions,
+					message: event.message,
+				},
+			};
+		case "iac_reconcile_result":
+			return {
+				...state,
+				iacReconcileResults: [
+					...state.iacReconcileResults,
+					{
+						stack: event.stack,
+						direction: event.direction,
+						status: event.status,
+						mrUrl: event.mrUrl,
+						note: event.note,
+					},
+				],
+			};
 		default:
 			return state;
 	}

@@ -19,4 +19,11 @@ describe("intentFromText", () => {
 		expect(intentFromText("")).toBe("info");
 		expect(intentFromText("unsure")).toBe("info");
 	});
+
+	// SIO-882: a "drift"/"reconcile" reply routes to the drift + per-stack reconcile flow.
+	test("maps drift/reconcile replies to drift", () => {
+		expect(intentFromText("drift")).toBe("drift");
+		expect(intentFromText("reconcile")).toBe("drift");
+		expect(intentFromText("the answer is drift")).toBe("drift");
+	});
 });

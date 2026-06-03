@@ -3,15 +3,19 @@ import { createCheckpointer } from "@devops-agent/checkpointer";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
 import {
+	advanceDrift,
 	answerInfo,
 	bootstrapIac,
 	classifyIacIntent,
+	detectDrift,
 	draftChange,
 	guardNode,
 	openMr,
 	parseIntent,
 	planReviewGate,
 	readClusterState,
+	reconcileGate,
+	reconcileStack,
 	reviewPlan,
 	teardownIac,
 	watchPipeline,
@@ -36,17 +40,31 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("reviewGate", planReviewGate)
 		.addNode("openMr", openMr)
 		.addNode("watchPipeline", watchPipeline)
+		// SIO-882: drift reconcile sub-flow. detectDrift audits all stacks; the
+		// reconcileGate -> reconcileStack -> advanceDrift loop processes drifted stacks
+		// one at a time (reconcileGate holds the single interrupt per stack).
+		.addNode("detectDrift", detectDrift)
+		.addNode("reconcileGate", reconcileGate)
+		.addNode("reconcileStack", reconcileStack)
+		.addNode("advanceDrift", advanceDrift)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
 		// Not connected -> surface the message and stop.
 		.addConditionalEdges("bootstrap", (s) => (s.connected ? "classifyIacIntent" : END), ["classifyIacIntent", END])
 		// SIO-870 info -> answerInfo; gitops -> maker pipeline. SIO-875 pipeline-status ->
-		// re-check the thread's MR via watchPipeline (only set when an MR already exists).
+		// re-check the thread's MR via watchPipeline. SIO-882 drift -> detectDrift.
 		.addConditionalEdges(
 			"classifyIacIntent",
-			(s) => (s.intent === "gitops" ? "parseIntent" : s.intent === "pipeline-status" ? "watchPipeline" : "answerInfo"),
-			["parseIntent", "answerInfo", "watchPipeline"],
+			(s) =>
+				s.intent === "gitops"
+					? "parseIntent"
+					: s.intent === "drift"
+						? "detectDrift"
+						: s.intent === "pipeline-status"
+							? "watchPipeline"
+							: "answerInfo",
+			["parseIntent", "detectDrift", "answerInfo", "watchPipeline"],
 		)
 		.addEdge("answerInfo", END)
 		.addEdge("parseIntent", "readClusterState")
@@ -65,6 +83,29 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-875: after opening the MR, watch the pipeline (bounded) then render.
 		.addEdge("openMr", "watchPipeline")
 		.addEdge("watchPipeline", "teardown")
+		// SIO-882: drift sub-flow. Early exit (no deployment/stacks) -> END (the message is
+		// already set); no drift -> teardown renders the "no drift" summary; >=1 drifted ->
+		// the per-stack reconcile loop.
+		.addConditionalEdges(
+			"detectDrift",
+			(s) =>
+				!s.driftReport ? END : s.driftReport.stacks.filter((x) => x.drifted).length > 0 ? "reconcileGate" : "teardown",
+			["reconcileGate", "teardown", END],
+		)
+		// reconcileGate holds the per-stack interrupt; "skip" advances, any reconcile
+		// direction opens an MR in reconcileStack.
+		.addConditionalEdges("reconcileGate", (s) => (s.currentDirection === "skip" ? "advanceDrift" : "reconcileStack"), [
+			"reconcileStack",
+			"advanceDrift",
+		])
+		.addEdge("reconcileStack", "advanceDrift")
+		// Loop back to the gate until every drifted stack is processed, then render the summary.
+		.addConditionalEdges(
+			"advanceDrift",
+			(s) =>
+				s.driftIndex < (s.driftReport?.stacks.filter((x) => x.drifted).length ?? 0) ? "reconcileGate" : "teardown",
+			["reconcileGate", "teardown"],
+		)
 		.addEdge("teardown", END);
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");

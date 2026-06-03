@@ -99,6 +99,7 @@ tool_mapping:
       - iac_list_deployments
       - iac_output
       - iac_state_list
+      - iac_plan
   action_descriptions:
     read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before drafting
     read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
@@ -107,9 +108,9 @@ tool_mapping:
     plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
     open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
     review_pipeline: when reading an existing MR or its pipelines to report GitOps status (read-only; never merge/approve)
-    status: when reporting IaC reconcile status, what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
+    status: when reporting IaC reconcile status, per-stack drift (iac_plan), what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
   action_keywords:
     read_state: [state, deployment, topology, plan history, health, ilm, version, versions, running, list]
     plan: [plan, terraform plan, validate, diff]
     open_mr: [mr, merge request, open mr, raise mr]
-    status: [status, reconcile, what's deployed, what does it own, state list, output, list stacks, list deployments]
+    status: [status, reconcile, drift, what's deployed, what does it own, state list, output, list stacks, list deployments]
