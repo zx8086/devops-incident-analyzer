@@ -1377,10 +1377,12 @@ export function extractLiveVersion(deploymentDetail: string): string {
 }
 
 // Agent-side path template for the reconcile-to-json marker. ${stack}/${deployment} are
-// literal placeholders. The marker is plan-neutral (Terraform does not auto-load a
-// .agent-reconcile/*.json file) but lives under the stack dir so the per-stack
-// plan:<deployment>:<stack> job's `changes:` rule triggers. [Assumption A2 -- validate the
-// path against the repo's .gitlab-ci.yml] Lazy process.env read (no module-scope Bun.env).
+// literal placeholders. The IaC repo's CI generator special-cases this exact path (MR !66,
+// merged 2026-06-03) so a marker scopes the MR pipeline to ONLY the named (stack, deployment)
+// -- plan:<deployment>:<stack> + a manual apply -- instead of fanning out across every
+// deployment of the stack (the pre-!66 behavior that over-planned reconcile MRs !62-!65). The
+// marker is otherwise plan-neutral: Terraform ignores it (the stack's fileset("*.json") does
+// not recurse into the .agent-reconcile/ subdir). Lazy process.env read (no module-scope Bun.env).
 function reconcileMarkerTemplate(): string {
 	return process.env.ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE ?? "stacks/${stack}/.agent-reconcile/${deployment}.json";
 }
@@ -1651,12 +1653,16 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	// way -> planError, never a false "no drift". (A drifted run still reports pipeline success;
 	// allow_failure:[2] keeps it green, with the drift in the artifact.)
 	if (result.status !== "success" || !result.report) {
-		// SIO-887: a failed/canceled pipeline -> classify the job trace tail (state-lock vs real
-		// plan error); a green-but-empty run -> the job produced no report.
+		// SIO-887: distinguish a real failure (classify the job trace tail -- state-lock vs plan
+		// error) from a pipeline that simply did not reach terminal within the poll budget. The
+		// latter is common on the shared-state deployments stack under lock contention (the IaC
+		// guide budgets it at 30 min) -- it is NOT a failure, so point the user at Re-check.
 		const reason =
-			result.status !== "success"
+			result.status === "failed" || result.status === "canceled"
 				? `Drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog)}`
-				: "The drift-check produced no report.";
+				: result.status !== "success"
+					? "Drift-check did not finish within the poll budget (possible state-lock contention); use Re-check to retry."
+					: "The drift-check produced no report.";
 		log.warn(
 			{ deployment, stack, pipelineId: trig.pipelineId, status: result.status, hasReport: Boolean(result.report) },
 			"iac drift: drift-check not authoritative (planError)",
