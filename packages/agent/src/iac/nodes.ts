@@ -1090,55 +1090,105 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 // never merges or applies -- a human reviews each MR's plan in GitLab.
 // ============================================================================
 
-// Parse a `task`-helper name list (list-stacks / list-deployments) into clean names.
-// The output format is repo-defined (external Taskfile), so this is deliberately tolerant:
-// drop the "[exit N]" suffix, then read line by line. A header line ("Available stacks:")
-// ends with ":" and is skipped; otherwise a line's whitespace/comma tokens are accepted
-// when they are ALL ident-shaped -- so a stack legitimately named "deployments" survives
-// (a noise-word filter would wrongly eat it). Handles newline-, bullet-, space-, and
-// comma-separated output. (Pure; unit-tested.) [Assumption A1/A3]
-export function parseTaskNameList(toolResult: string): string[] {
-	const body = toolResult.replace(/\n?\[exit -?\d+\]\s*$/, "");
-	const names: string[] = [];
-	for (const raw of body.split(/\r?\n/)) {
-		const line = raw.trim();
-		if (!line || line.endsWith(":")) continue; // skip blanks + header lines
-		const stripped = line.replace(/^[-*•]\s*/, ""); // a single leading bullet
-		const tokens = stripped.split(/[\s,]+/).filter(Boolean);
-		if (tokens.every((t) => /^[A-Za-z0-9._-]+$/.test(t))) {
-			for (const t of tokens) if (t.length > 1 && !t.startsWith("list-")) names.push(t);
-		}
+// Directory names from a GitLab repo-tree response ("[status] [{name,type}...]"). Used to
+// enumerate the deployment's stacks (stacks/<stack>/) over the API, no local clone. (Pure.)
+export function parseRepoTreeDirs(toolResult: string): string[] {
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return [];
+	try {
+		const arr = JSON.parse(toolResult.slice(m.index)) as Array<{ name?: unknown; type?: unknown }>;
+		if (!Array.isArray(arr)) return [];
+		return arr.filter((e) => e.type === "tree" && typeof e.name === "string").map((e) => e.name as string);
+	} catch {
+		return [];
 	}
-	return [...new Set(names)];
 }
 
-// Parse iac_plan's JSON result into drift counts. The MCP tool returns clean JSON
-// ({stack,deployment,drifted,create,update,delete,resources}); read leniently from the
-// first "{" so any wrapping is tolerated. (Pure; unit-tested.)
-export function parseStackPlanResult(
-	toolResult: string,
-): { create: number; update: number; delete: number; resources: Array<{ address: string; actions: string[] }> } | null {
+// Deployment names from elastic_cloud_list_deployments' "[status] {deployments:[{name}]}".
+// (Pure; unit-tested.)
+export function parseEcDeploymentNames(toolResult: string): string[] {
 	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return null;
+	if (jsonStart < 0) return [];
 	try {
-		const r = JSON.parse(toolResult.slice(jsonStart)) as Partial<{
-			create: number;
-			update: number;
-			delete: number;
-			resources: Array<{ address: string; actions: string[] }>;
-		}>;
-		if (typeof r.create === "number" && typeof r.update === "number" && typeof r.delete === "number") {
-			return {
-				create: r.create,
-				update: r.update,
-				delete: r.delete,
-				resources: Array.isArray(r.resources) ? r.resources : [],
-			};
-		}
-		return null;
+		const parsed = JSON.parse(toolResult.slice(jsonStart)) as { deployments?: Array<{ name?: unknown }> };
+		const rows = Array.isArray(parsed.deployments) ? parsed.deployments : [];
+		return rows.map((r) => (typeof r.name === "string" ? r.name : "")).filter(Boolean);
 	} catch {
-		return null;
+		return [];
 	}
+}
+
+// Pipeline id/status from gitlab_trigger_drift_check's JSON. (Pure; unit-tested.)
+export function parseTriggerResult(toolResult: string): { pipelineId: number | null; status: string; note: string } {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return { pipelineId: null, status: "error", note: "unparseable" };
+	try {
+		const o = JSON.parse(toolResult.slice(jsonStart)) as { pipelineId?: unknown; status?: unknown; note?: unknown };
+		return {
+			pipelineId: typeof o.pipelineId === "number" ? o.pipelineId : null,
+			status: typeof o.status === "string" ? o.status : "unknown",
+			note: typeof o.note === "string" ? o.note : "",
+		};
+	} catch {
+		return { pipelineId: null, status: "error", note: "unparseable" };
+	}
+}
+
+// gitlab_get_drift_check_result's outer JSON: {status,report?,note?}. `report` is the raw
+// drift-report.json text (parsed by parseDriftReport). (Pure; unit-tested.)
+export function parseDriftCheckResult(toolResult: string): { status: string; report: string; note: string } {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return { status: "error", report: "", note: "unparseable" };
+	try {
+		const o = JSON.parse(toolResult.slice(jsonStart)) as { status?: unknown; report?: unknown; note?: unknown };
+		return {
+			status: typeof o.status === "string" ? o.status : "unknown",
+			report: typeof o.report === "string" ? o.report : "",
+			note: typeof o.note === "string" ? o.note : "",
+		};
+	} catch {
+		return { status: "error", report: "", note: "unparseable" };
+	}
+}
+
+// One resource change from the drift-check `drift-report.json` artifact.
+export interface DriftResourceChange {
+	address: string;
+	action: string; // create | update | delete | replace | no-op | read | ...
+	category: string; // substantive | known-noise | ...
+	noiseTag?: string; // kibana-churn | restapi-noise | provider-bump (when known-noise)
+}
+
+// Parse the drift-report.json artifact into its resource changes. Tolerant of the exact
+// envelope -- only the `resources`/`changes` array is needed. (Pure; unit-tested.)
+export function parseDriftReport(reportJson: string): DriftResourceChange[] {
+	const jsonStart = reportJson.indexOf("{");
+	if (jsonStart < 0) return [];
+	try {
+		const o = JSON.parse(reportJson.slice(jsonStart)) as { resources?: unknown; changes?: unknown };
+		const arr = Array.isArray(o.resources) ? o.resources : Array.isArray(o.changes) ? o.changes : [];
+		return (arr as unknown[])
+			.map((r) => {
+				const x = r as { address?: unknown; action?: unknown; category?: unknown; noiseTag?: unknown };
+				return {
+					address: typeof x.address === "string" ? x.address : "",
+					action: typeof x.action === "string" ? x.action : "",
+					category: typeof x.category === "string" ? x.category : "",
+					noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
+				};
+			})
+			.filter((r) => r.address);
+	} catch {
+		return [];
+	}
+}
+
+// Actionable drift = a real change to reconcile: NOT known-noise, NOT a no-op/read. The
+// drift-check tags Kibana/restapi/provider churn as known-noise so it doesn't page. (Pure.)
+export function isActionableDrift(r: DriftResourceChange): boolean {
+	if (r.category === "known-noise") return false;
+	const a = r.action.toLowerCase();
+	return a !== "" && a !== "no-op" && a !== "noop" && a !== "read";
 }
 
 // Which stack names own per-deployment JSON the agent can edit. Read lazily (process.env,
@@ -1170,30 +1220,27 @@ export function configStackFamily(stack: string): "deployment" | "ilm" | null {
 	return null;
 }
 
-// Classify a stack as config-JSON (the agent can edit its per-deployment JSON) or HCL.
-// Name-based family + a repo path-resolve probe (a non-2xx means the path doesn't resolve
-// -> fall back to HCL, the conservative fewer-directions case). liveReconcilable is true
-// only where a clean live->file mapping exists in Phase 1 (the deployment-config version
-// field); HCL + ILM + tier-sizing defer reconcile-to-live.
-async function classifyStack(
+// Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). config-JSON
+// families resolve an editable JSON path; liveReconcilable is true only where a clean
+// live->file write exists (the deployment-config stack -> version). ILM + HCL get
+// reconcile-to-json + skip only. (Pure; unit-tested.)
+export function classifyStackByName(
 	stack: string,
 	deployment: string,
-): Promise<{ kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean }> {
+): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
 	const family = configStackFamily(stack);
 	if (family === "deployment") {
-		const path = deploymentJsonPath(deploymentJsonTemplate(), deployment);
-		const raw = await callTool("gitlab_get_file_content", { filePath: path });
-		if (raw.startsWith("[2")) return { kind: "config-json", configPath: path, liveReconcilable: true };
+		return {
+			kind: "config-json",
+			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
+			liveReconcilable: true,
+		};
 	}
 	if (family === "ilm") {
-		// Derive the lifecycle-policies dir from the configured template (honors
-		// ELASTIC_IAC_ILM_POLICY_TEMPLATE) rather than hard-coding it, so an override
-		// doesn't misclassify ILM stacks as HCL.
+		// Lifecycle-policies dir from the configured template (honors ELASTIC_IAC_ILM_POLICY_TEMPLATE).
 		const probe = deploymentJsonPath(ilmPolicyTemplate(), deployment, "__probe__");
 		const dir = probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
-		const tree = await callTool("gitlab_get_repository_tree", { path: dir });
-		if (tree.startsWith("[2") && tree.includes('"name"'))
-			return { kind: "config-json", configPath: dir, liveReconcilable: false };
+		return { kind: "config-json", configPath: dir, liveReconcilable: false };
 	}
 	return { kind: "hcl", liveReconcilable: false };
 }
@@ -1434,74 +1481,120 @@ async function openReconcileMr(
 	return { stack: stack.stack, direction, status: "opened", mrUrl: extractMrUrl(mr), branch };
 }
 
-// Resolve the target deployment for a drift audit from the user's text, matched against
-// the repo's known deployments (so a typo doesn't run N plans against nothing).
+// Resolve the target deployment for a drift audit from the user's text, matched against the
+// live Elastic Cloud deployment names (no local clone).
 async function resolveDriftDeployment(state: IacStateType): Promise<string> {
 	if (state.targetDeployment) return state.targetDeployment;
 	const query = lastHumanText(state).toLowerCase();
-	const listed = parseTaskNameList(await callTool("iac_list_deployments", {}));
-	return listed.find((d) => query.includes(d.toLowerCase())) ?? "";
+	const names = parseEcDeploymentNames(await callTool("elastic_cloud_list_deployments", {}));
+	return names.find((d) => query.includes(d.toLowerCase())) ?? "";
 }
 
 function driftedStacks(state: IacStateType): StackDrift[] {
 	return (state.driftReport?.stacks ?? []).filter((s) => s.drifted);
 }
 
-// Audit every stack of one deployment for drift. Resolves the deployment (asking once via
-// an iac_clarify interrupt when it's not named), enumerates stacks, runs the read-only
-// iac_plan per stack, classifies each, and emits the full report once (iac_drift_report)
-// for the UI overview. No writes here.
+// Bounded-concurrency map -- the fan-out triggers N drift-check pipelines; cap to be polite
+// to CI and the shared deployments-stack state lock.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+	const out = new Array<R>(items.length);
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const i = next++;
+			out[i] = await fn(items[i] as T);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => worker()));
+	return out;
+}
+
+// Run the IaC repo's on-demand drift-check for ONE stack: trigger -> poll -> parse the
+// drift-report.json into a StackDrift (known-noise/provider-bump filtered out). A trigger
+// lock/failure or a missing report becomes planError (never a false "no drift").
+async function driftCheckStack(deployment: string, stack: string): Promise<StackDrift> {
+	const { kind, configPath, liveReconcilable } = classifyStackByName(stack, deployment);
+	const base: StackDrift = {
+		stack,
+		drifted: false,
+		kind,
+		create: 0,
+		update: 0,
+		delete: 0,
+		resources: [],
+		liveReconcilable,
+		...(configPath && { configPath }),
+	};
+
+	const trig = parseTriggerResult(await callTool("gitlab_trigger_drift_check", { stack, deployment }));
+	if (trig.pipelineId === null) {
+		const why = trig.status === "locked" ? "apply in progress (state lock)" : "trigger failed";
+		await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: `${stack}: ${why}` });
+		return { ...base, planError: true };
+	}
+	const result = parseDriftCheckResult(
+		await callTool("gitlab_get_drift_check_result", { pipelineId: trig.pipelineId }),
+	);
+	if (!result.report) {
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: trig.pipelineId,
+			status: `${stack}: no report (${result.status})`,
+		});
+		return { ...base, planError: true };
+	}
+
+	const actionable = parseDriftReport(result.report).filter(isActionableDrift);
+	const create = actionable.filter((c) => c.action.toLowerCase() === "create").length;
+	const del = actionable.filter((c) => ["delete", "destroy"].includes(c.action.toLowerCase())).length;
+	const update = actionable.length - create - del; // update + replace
+	await dispatchCustomEvent("iac_pipeline_progress", {
+		pipelineId: trig.pipelineId,
+		status: `${stack}: ${actionable.length > 0 ? `${actionable.length} change(s)` : "no drift"}`,
+	});
+	return {
+		...base,
+		drifted: actionable.length > 0,
+		create,
+		update,
+		delete: del,
+		resources: actionable.map((c) => ({ address: c.address, actions: [c.action] })),
+	};
+}
+
+// Audit ALL stacks of one deployment for drift. Resolves the deployment (asking once via an
+// iac_clarify interrupt when unnamed), enumerates stacks from the GitLab `stacks/` tree (no
+// clone), fans out the repo's on-demand drift-check per stack, and emits the full report
+// once (iac_drift_report) for the UI overview. No writes here.
 export async function detectDrift(state: IacStateType): Promise<Partial<IacStateType>> {
 	let deployment = await resolveDriftDeployment(state);
 	if (!deployment) {
 		const answer = interrupt({
 			type: "iac_clarify",
-			question: "Which deployment should I check for drift? (e.g. gl-testing)",
-			message: "Which deployment should I check for drift? (e.g. gl-testing)",
+			question: "Which deployment should I check for drift? (e.g. eu-b2b)",
+			message: "Which deployment should I check for drift? (e.g. eu-b2b)",
 		}) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
 	}
 	if (!deployment) {
 		return {
-			messages: [new AIMessage('I need a deployment name to check for drift. Try: "check gl-testing for drift".')],
+			messages: [new AIMessage('I need a deployment name to check for drift. Try: "check eu-b2b for drift".')],
 		};
 	}
 
-	const stacks = parseTaskNameList(await callTool("iac_list_stacks", {}));
+	const stacks = parseRepoTreeDirs(await callTool("gitlab_get_repository_tree", { path: "stacks" }));
 	if (stacks.length === 0) {
 		return {
 			targetDeployment: deployment,
 			messages: [
 				new AIMessage(
-					`Could not list the stacks to audit for '${deployment}'. Is the elastic-iac server connected and its repo workspace initialized?`,
+					`Could not list the stacks to audit for '${deployment}'. Is the GitOps repo reachable (ELASTIC_IAC_GITLAB_TOKEN) with a stacks/ directory?`,
 				),
 			],
 		};
 	}
 
-	const stackDrifts: StackDrift[] = [];
-	for (const stack of stacks) {
-		const counts = parseStackPlanResult(await callTool("iac_plan", { stack, deployment }));
-		const { kind, configPath, liveReconcilable } = await classifyStack(stack, deployment);
-		const create = counts?.create ?? 0;
-		const update = counts?.update ?? 0;
-		const del = counts?.delete ?? 0;
-		stackDrifts.push({
-			stack,
-			// A null plan result means iac_plan could not be read (task failure / unknown
-			// format). Surface it as planError rather than silently reporting "no drift" --
-			// a false "clean" would skip reconciliation for a stack we never assessed.
-			planError: counts === null,
-			drifted: counts !== null && create + update + del > 0,
-			kind,
-			create,
-			update,
-			delete: del,
-			resources: counts?.resources ?? [],
-			...(configPath && { configPath }),
-			liveReconcilable,
-		});
-	}
+	const cap = Number(process.env.ELASTIC_IAC_DRIFT_CONCURRENCY ?? "4");
+	const stackDrifts = await mapWithConcurrency(stacks, cap, (stack) => driftCheckStack(deployment, stack));
 
 	const driftReport: DriftReport = { deployment, stacks: stackDrifts, generatedAt: new Date().toISOString() };
 	// Emit the full report once for the UI overview (forwarded by the SSE pump).
