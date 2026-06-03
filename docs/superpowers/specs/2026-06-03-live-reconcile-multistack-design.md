@@ -1,6 +1,6 @@
 # Reconcile-to-Live for Kibana-backed stacks — design
 
-- Status: Approach **B** selected (2026-06-03, maintainer). Cross-repo dependency: elastic-iac `scripts/tf-report.jq`.
+- Status: Approach **B** selected (2026-06-03). elastic-iac side DELIVERED (commit `0f845a3`); agent-side foundation (drift-report `values` parsing) landed. See the Update section at the end.
 - Date: 2026-06-03
 - Ticket: SIO-XXX (to be created/linked)
 - Related: PR #186 (generalized reconcile-to-live within the deployment + ILM JSON families), `docs/superpowers/specs/2026-06-02-elastic-iac-agent-design.md`, `docs/superpowers/specs/2026-06-02-ilm-rollout-gitops-proposer-design.md`
@@ -144,7 +144,7 @@ Smallest schema, and the operator had real `dataviews` drift (5 actionable). Ste
 
 1. (this monorepo, decision-independent, safe now) Registry refactor + `kind: "hcl"` -> `"terraform-only"` rename + gate absence-reason copy. No behavior change; full suite stays green.
 2. (this monorepo) `parseDriftReport` keeps an optional per-resource `before`/`values` map (backward-compatible; absent in today's reports -> reconcile simply stays unavailable until the report carries them).
-3. (elastic-iac repo, EXTERNAL) `scripts/tf-report.jq` emits per-resource `before` values into `drift-report.json`. Coordinated MR there; defines the exact schema step 4 maps from. Full work order: `docs/superpowers/specs/2026-06-03-elastic-iac-before-values-workorder.md`.
+3. ~~(elastic-iac repo, EXTERNAL) emit per-resource `before` values into `drift-report.json`~~ **DONE** (elastic-iac `0f845a3`, via `scripts/drift-check.ts` + `scripts/drift-values.ts`). Work order: `docs/superpowers/specs/2026-06-03-elastic-iac-before-values-workorder.md`.
 4. (this monorepo) `dataviews` family: reverse-map the `before` provider-schema values onto the repo JSON shape; register the family; tests.
 5. (this monorepo) Frontend absence-reason copy.
 
@@ -156,3 +156,14 @@ Steps 1-2 proceed immediately; steps 3-4 are blocked on the elastic-iac schema d
 - New unit tests for the registry, the `dataviews` projection, and classify/gate changes.
 - MCP validation: `tools/list` shows the new Kibana reader; a live call returns a 2xx body the projection accepts (per the project rule: validate MCP tool changes by running the tool, not just typechecking).
 - Manual: trigger a `dataviews` drift on a sandbox deployment (e.g. `gl-testing`), confirm the gate offers Reconcile to Live, accept it, and confirm the opened MR's `plan:<dep>:dataviews` job shows no remaining drift.
+
+## Update — 2026-06-03 (elastic-iac delivered)
+
+The elastic-iac side shipped (commit `0f845a3` on `main`); see that team's operational handover. Adjustments to this plan:
+
+- **Producer:** `values` is emitted by `scripts/drift-check.ts --format=json` with redaction in `scripts/drift-values.ts` (not a `tf-report.jq` change as the work order assumed). Contract otherwise as specified: `values[key] = {before, after}`, keys 1:1 with `changedKeys`, sentinels `"<redacted:sensitive>"`/`"<omitted:too-large>"`, present only on update/replace.
+- **Marker path already aligned:** the agent's `reconcileMarkerPath` default (`stacks/${stack}/.agent-reconcile/${deployment}.json`) matches the CI carve-out — no change needed.
+- **First reconcile-to-live target moves from `dataviews` to `agent-policies`.** Verified live: `dataviews/eu-b2b` drift is all *creates* (no `before` values -> not a reconcile-to-live target); `agent-policies/eu-b2b` has 16 *updates* with populated `values`. `dataviews` stays a candidate wherever it has update drift.
+- **Direction is a runtime judgment (handover section 5).** Some update drift should reconcile to *declared*, not live (e.g. the observed `name` drift is a trailing space the repo trimmed -> reverting to declared is likely correct). The projection is identical; the to-live-vs-to-declared choice is the operator/agent's, enabled by surfacing both `before` and `after`.
+- **DONE (this monorepo):** `parseDriftReport` + `StackDriftResource`/`DriftResourceChange` carry the optional `values` field (backward-compatible; tests in `drift.test.ts`).
+- **Still needed before the projection:** the elastic-iac repo file-layout convention for the target stack — how a drift resource address (the `for_each` key, e.g. `["eu-oit-prd"]`) maps to a config file path under `environments/<dep>/<stack>/` and the key within that file.

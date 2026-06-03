@@ -1220,6 +1220,11 @@ export interface DriftResourceChange {
 	changedKeys: string[];
 	reason: string;
 	noiseTag?: string; // kibana-churn | stack-monitoring-churn (when known-noise)
+	// SIO-889: per-changed-key {before: live, after: declared} from the drift-report `values`
+	// field (keys 1:1 with changedKeys). before is the reconcile-to-live source; sentinels
+	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
+	// create/destroy/noop and older reports.
+	values?: Record<string, { before?: unknown; after?: unknown }>;
 }
 
 // The parsed drift-report.json: the authoritative has_actionable_drift boolean (the single
@@ -1246,6 +1251,19 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 		const num = (v: unknown): number => (typeof v === "number" ? v : 0);
 		const strs = (v: unknown): string[] =>
 			Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+		// SIO-889: parse the drift-report `values` field ({key: {before, after}}); tolerant of
+		// absence and non-object entries. before/after kept as unknown (may be sentinel strings).
+		const parseValues = (v: unknown): Record<string, { before?: unknown; after?: unknown }> | undefined => {
+			if (!v || typeof v !== "object") return undefined;
+			const out: Record<string, { before?: unknown; after?: unknown }> = {};
+			for (const [k, pair] of Object.entries(v as Record<string, unknown>)) {
+				if (pair && typeof pair === "object") {
+					const p = pair as { before?: unknown; after?: unknown };
+					out[k] = { before: p.before, after: p.after };
+				}
+			}
+			return Object.keys(out).length > 0 ? out : undefined;
+		};
 		const resources = Array.isArray(o.resources)
 			? (o.resources as unknown[])
 					.map((r) => {
@@ -1256,6 +1274,7 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							changedKeys?: unknown;
 							reason?: unknown;
 							noiseTag?: unknown;
+							values?: unknown;
 						};
 						return {
 							address: typeof x.address === "string" ? x.address : "",
@@ -1264,6 +1283,7 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							changedKeys: strs(x.changedKeys),
 							reason: typeof x.reason === "string" ? x.reason : "",
 							noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
+							values: parseValues(x.values),
 						};
 					})
 					.filter((r) => r.address)
@@ -2034,6 +2054,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			reason: c.reason,
 			changedKeys: c.changedKeys,
 			category: c.category,
+			values: c.values,
 		})),
 	};
 }

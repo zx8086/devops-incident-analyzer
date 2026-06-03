@@ -4,7 +4,7 @@
 - Owner: elastic-iac team
 - Consumer: devops-incident-analyzer agent (SIO-889, Approach B) — PR #187
 - Companion design: `docs/superpowers/specs/2026-06-03-live-reconcile-multistack-design.md`
-- Status: work order (hand-off; the agent side is tracked separately and does not block this)
+- Status: DELIVERED (elastic-iac commit `0f845a3`, 2026-06-03) — retained for reference. Note: implemented in `scripts/drift-check.ts` + `scripts/drift-values.ts`, not `tf-report.jq` as assumed below; the field contract matches.
 
 ## Why this is needed
 

@@ -186,6 +186,50 @@ describe("parseDriftReport + isActionableDrift", () => {
 		expect(parseDriftReport("")).toBeNull();
 		expect(parseDriftReport("not json")).toBeNull();
 	});
+
+	// SIO-889: the agent-policies/eu-b2b live run -- name.before carries the live value (a
+	// trailing space) the agent reconciles to; values keys are 1:1 with changedKeys.
+	test("keeps the values field (before=live, after=declared) keyed by changedKeys", () => {
+		const withValues = JSON.stringify({
+			stack: "agent-policies",
+			deployment: "eu-b2b",
+			totals: { noop: 58, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			has_actionable_drift: true,
+			resources: [
+				{
+					address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
+					category: "update",
+					actions: ["update"],
+					changedKeys: ["name"],
+					reason: "attributes changed: name",
+					values: { name: { before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" } },
+				},
+			],
+		});
+		const p = parseDriftReport(withValues);
+		expect(p?.resources[0]?.values).toEqual({
+			name: { before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" },
+		});
+	});
+
+	test("values is undefined when absent and preserves redaction sentinels", () => {
+		expect(parseDriftReport(realDrift)?.resources[0]?.values).toBeUndefined();
+		const redacted = JSON.stringify({
+			has_actionable_drift: true,
+			totals: { noop: 0, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			resources: [
+				{
+					address: 'module.action_connectors.elasticstack_kibana_action_connector.this["slack"]',
+					category: "update",
+					actions: ["update"],
+					changedKeys: ["secrets"],
+					reason: "attributes changed: secrets",
+					values: { secrets: { before: "<redacted:sensitive>", after: "<redacted:sensitive>" } },
+				},
+			],
+		});
+		expect(parseDriftReport(redacted)?.resources[0]?.values?.secrets?.before).toBe("<redacted:sensitive>");
+	});
 });
 
 describe("classifyStackByName (defaults)", () => {

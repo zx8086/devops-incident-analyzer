@@ -78,6 +78,11 @@ export interface StackDriftResource {
 	changedKeys?: string[];
 	// create | update | destroy | replace (known-noise is filtered out upstream).
 	category?: string;
+	// SIO-889: per-changed-key {before: live, after: declared} from the drift-report `values`
+	// field (keys 1:1 with changedKeys). before is the reconcile-to-live source; the sentinels
+	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
+	// create/destroy/noop and older reports.
+	values?: Record<string, { before?: unknown; after?: unknown }>;
 }
 
 // One stack's drift from the on-demand drift-check plus its classification.
