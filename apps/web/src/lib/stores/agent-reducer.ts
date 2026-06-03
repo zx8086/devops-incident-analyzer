@@ -64,6 +64,8 @@ export interface IacDriftStack {
 	drifted: boolean;
 	// SIO-882: true when iac_plan could not be read -- the stack was not assessed.
 	planError?: boolean;
+	// SIO-887: human-readable reason for planError, shown on the drift card.
+	planErrorReason?: string;
 	kind: "config-json" | "hcl";
 	create: number;
 	update: number;

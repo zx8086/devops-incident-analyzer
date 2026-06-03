@@ -1011,7 +1011,7 @@ export function classifyPipelineFailure(planLog: string): string {
 		);
 	}
 	if (!planLog || planLog.startsWith("[")) return "The plan job log was not available to diagnose the failure.";
-	return "The plan job failed for another reason -- review the job log on the MR.";
+	return "The plan job failed for another reason -- review the job log.";
 }
 
 // SIO-875: poll the MR pipeline (bounded), then gather the real plan + approval state.
@@ -1134,20 +1134,32 @@ export function parseTriggerResult(toolResult: string): { pipelineId: number | n
 	}
 }
 
-// gitlab_get_drift_check_result's outer JSON: {status,report?,note?}. `report` is the raw
-// drift-report.json text (parsed by parseDriftReport). (Pure; unit-tested.)
-export function parseDriftCheckResult(toolResult: string): { status: string; report: string; note: string } {
+// gitlab_get_drift_check_result's outer JSON: {status,report?,failureLog?,note?}. `report` is
+// the raw drift-report.json text (parsed by parseDriftReport); `failureLog` is the job trace
+// tail on a failed run (SIO-887, classified into a human reason). (Pure; unit-tested.)
+export function parseDriftCheckResult(toolResult: string): {
+	status: string;
+	report: string;
+	failureLog: string;
+	note: string;
+} {
 	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return { status: "error", report: "", note: "unparseable" };
+	if (jsonStart < 0) return { status: "error", report: "", failureLog: "", note: "unparseable" };
 	try {
-		const o = JSON.parse(toolResult.slice(jsonStart)) as { status?: unknown; report?: unknown; note?: unknown };
+		const o = JSON.parse(toolResult.slice(jsonStart)) as {
+			status?: unknown;
+			report?: unknown;
+			failureLog?: unknown;
+			note?: unknown;
+		};
 		return {
 			status: typeof o.status === "string" ? o.status : "unknown",
 			report: typeof o.report === "string" ? o.report : "",
+			failureLog: typeof o.failureLog === "string" ? o.failureLog : "",
 			note: typeof o.note === "string" ? o.note : "",
 		};
 	} catch {
-		return { status: "error", report: "", note: "unparseable" };
+		return { status: "error", report: "", failureLog: "", note: "unparseable" };
 	}
 }
 
@@ -1616,13 +1628,19 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	log.info({ deployment, stack, kind }, "iac drift: triggering drift-check for stack");
 	const trig = parseTriggerResult(await callTool("gitlab_trigger_drift_check", { stack, deployment }));
 	if (trig.pipelineId === null) {
+		// SIO-887: a state lock at trigger means an apply currently holds the stack's state;
+		// any other null is a real trigger failure (surface the server note).
+		const reason =
+			trig.status === "locked"
+				? "Apply in progress (state lock); re-check once it clears."
+				: `Could not trigger the drift-check${trig.note ? `: ${trig.note}` : "."}`;
 		const why = trig.status === "locked" ? "apply in progress (state lock)" : "trigger failed";
 		log.warn(
 			{ deployment, stack, status: trig.status, note: trig.note },
 			"iac drift: trigger did not start a pipeline (planError)",
 		);
 		await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: `${stack}: ${why}` });
-		return { ...base, planError: true };
+		return { ...base, planError: true, planErrorReason: reason };
 	}
 	log.info({ deployment, stack, pipelineId: trig.pipelineId }, "iac drift: pipeline triggered; polling for result");
 	const result = parseDriftCheckResult(
@@ -1633,6 +1651,12 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 	// way -> planError, never a false "no drift". (A drifted run still reports pipeline success;
 	// allow_failure:[2] keeps it green, with the drift in the artifact.)
 	if (result.status !== "success" || !result.report) {
+		// SIO-887: a failed/canceled pipeline -> classify the job trace tail (state-lock vs real
+		// plan error); a green-but-empty run -> the job produced no report.
+		const reason =
+			result.status !== "success"
+				? `Drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog)}`
+				: "The drift-check produced no report.";
 		log.warn(
 			{ deployment, stack, pipelineId: trig.pipelineId, status: result.status, hasReport: Boolean(result.report) },
 			"iac drift: drift-check not authoritative (planError)",
@@ -1641,7 +1665,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			pipelineId: trig.pipelineId,
 			status: `${stack}: ${result.status !== "success" ? `check ${result.status}` : "no report"}`,
 		});
-		return { ...base, planError: true };
+		return { ...base, planError: true, planErrorReason: reason };
 	}
 
 	const parsed = parseDriftReport(result.report);
@@ -1651,7 +1675,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			pipelineId: trig.pipelineId,
 			status: `${stack}: unreadable report`,
 		});
-		return { ...base, planError: true };
+		return { ...base, planError: true, planErrorReason: "The drift-check report could not be parsed." };
 	}
 	// has_actionable_drift is the authoritative alert boolean (excludes known-noise + noop);
 	// totals drive the counts; the resource list is the actionable (non-known-noise) changes.
@@ -1825,6 +1849,7 @@ export async function explainDrift(state: IacStateType): Promise<Partial<IacStat
 			stack: s.stack,
 			drifted: s.drifted,
 			planError: s.planError ?? false,
+			...(s.planErrorReason && { planErrorReason: s.planErrorReason }),
 			kind: s.kind,
 			create: s.create,
 			update: s.update,
@@ -1917,7 +1942,9 @@ export function formatDriftSummary(state: IacStateType): string {
 	// Stacks whose plan could not be read were NOT assessed -- never imply they are clean.
 	const errSuffix =
 		planErrored.length > 0
-			? ` ${planErrored.length} stack(s) could NOT be planned and were not assessed: ${planErrored.map((s) => s.stack).join(", ")}.`
+			? ` ${planErrored.length} stack(s) could NOT be planned and were not assessed: ${planErrored
+					.map((s) => (s.planErrorReason ? `${s.stack} (${s.planErrorReason})` : s.stack))
+					.join("; ")}.`
 			: "";
 	if (drifted.length === 0) {
 		const planned = all.length - planErrored.length;

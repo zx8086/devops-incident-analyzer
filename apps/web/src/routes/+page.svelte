@@ -210,7 +210,12 @@ function handleSuggestionClick(suggestion: string) {
            interrupt pauses (outside the isStreaming gate) so it stays visible while the
            user works through the per-stack choices. -->
       {#if agentStore.iacDriftReport}
-        <DriftReportCard report={agentStore.iacDriftReport} results={agentStore.iacReconcileResults} />
+        <DriftReportCard
+          report={agentStore.iacDriftReport}
+          results={agentStore.iacReconcileResults}
+          recheckDisabled={agentStore.isStreaming}
+          onRecheck={() => agentStore.sendMessage(`check ${agentStore.iacDriftReport?.deployment} for drift`)}
+        />
       {/if}
 
     </div>

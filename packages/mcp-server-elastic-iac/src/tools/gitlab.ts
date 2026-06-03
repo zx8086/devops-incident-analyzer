@@ -347,6 +347,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
 	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
+	const DRIFT_FAIL_LOG_TAIL_BYTES = 4000; // SIO-887: trace tail returned for a failed drift-check
 	const isTerminal = (s: string) => ["success", "failed", "canceled", "skipped"].includes(s);
 
 	// SIO-884: poll a drift-check pipeline to terminal, then return its drift-report.json
@@ -356,7 +357,8 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	server.tool(
 		"gitlab_get_drift_check_result",
 		"Poll a drift-check pipeline to completion and return its drift-report.json artifact (raw JSON) from the " +
-			"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. Returns {pipelineId,jobId,status,report}.",
+			"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. On a failed run also returns " +
+			"the job trace tail. Returns {pipelineId,jobId,status,report,failureLog?}.",
 		{ pipelineId: z.number() },
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
@@ -407,22 +409,36 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 						headers: { "PRIVATE-TOKEN": token },
 					},
 				);
-				if (!res.ok) {
+				const report = res.ok ? await res.text() : "";
+				// SIO-887: on a non-success terminal status the artifact is usually empty, so also
+				// pull the drift-check job's trace tail. The agent classifies it into a human reason
+				// (state-lock vs real plan error) instead of a generic "plan unavailable".
+				let failureLog = "";
+				if (status !== "success") {
+					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
+						headers: { "PRIVATE-TOKEN": token },
+					});
+					if (traceRes.ok) {
+						const trace = await traceRes.text();
+						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
+					}
+				}
+				if (!report && !failureLog) {
 					log.warn(
 						{ pipelineId, jobId, status, artifactStatus: res.status },
-						"gitlab_get_drift_check_result: drift-report.json not available",
+						"gitlab_get_drift_check_result: neither report nor trace available",
 					);
 					return text(
 						JSON.stringify({ pipelineId, jobId, status, note: `[${res.status}] drift-report.json not available` }),
 					);
 				}
-				// Raw artifact text; the agent parses it into the DriftReport shape.
-				const report = await res.text();
 				log.info(
-					{ pipelineId, jobId, status, reportBytes: report.length },
-					"gitlab_get_drift_check_result: drift-report.json fetched",
+					{ pipelineId, jobId, status, reportBytes: report.length, failureBytes: failureLog.length },
+					"gitlab_get_drift_check_result: result fetched",
 				);
-				return text(JSON.stringify({ pipelineId, jobId, status, report }));
+				// Raw artifact text; the agent parses it into the DriftReport shape. failureLog is the
+				// job trace tail on a failed run (absent on success).
+				return text(JSON.stringify({ pipelineId, jobId, status, report, ...(failureLog && { failureLog }) }));
 			} catch (err) {
 				log.error(
 					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },

@@ -5,9 +5,14 @@ import type { IacDriftReport, IacReconcileResultRow } from "$lib/stores/agent-re
 let {
 	report,
 	results = [],
+	onRecheck,
+	recheckDisabled = false,
 }: {
 	report: IacDriftReport;
 	results?: IacReconcileResultRow[];
+	// SIO-887: re-run the drift audit for this deployment (the agent re-triggers per-stack checks).
+	onRecheck?: () => void;
+	recheckDisabled?: boolean;
 } = $props();
 
 const drifted = $derived(report.stacks.filter((s) => s.drifted));
@@ -20,9 +25,21 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
   <div class="rounded-lg border border-tommy-accent-blue/30 bg-blue-50/60 p-3">
     <div class="flex items-center justify-between gap-2">
       <h3 class="text-sm font-semibold text-tommy-navy">Content drift: {report.deployment}</h3>
-      <span class="text-xs text-tommy-navy/70">
-        {drifted.length} of {report.stacks.length} stack{report.stacks.length === 1 ? "" : "s"} drifted
-      </span>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-tommy-navy/70">
+          {drifted.length} of {report.stacks.length} stack{report.stacks.length === 1 ? "" : "s"} drifted
+        </span>
+        {#if onRecheck}
+          <button
+            type="button"
+            onclick={() => onRecheck?.()}
+            disabled={recheckDisabled}
+            class="text-xs px-2 py-0.5 rounded-md border border-tommy-navy text-tommy-navy hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Re-check
+          </button>
+        {/if}
+      </div>
     </div>
 
     {#if drifted.length > 0}
@@ -58,9 +75,17 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
     {/if}
 
     {#if planErrored.length > 0}
-      <p class="mt-2 text-xs text-yellow-800">
-        Plan unavailable (not assessed): {planErrored.map((s) => s.stack).join(", ")}
-      </p>
+      <!-- SIO-887: show WHY each stack could not be assessed (state-lock, plan failure, ...). -->
+      <div class="mt-2 text-xs text-yellow-800">
+        <p class="font-medium">Plan unavailable (not assessed):</p>
+        <ul class="mt-0.5 space-y-0.5">
+          {#each planErrored as s (s.stack)}
+            <li>
+              <span class="font-medium">{s.stack}</span>{#if s.planErrorReason} &mdash; {s.planErrorReason}{/if}
+            </li>
+          {/each}
+        </ul>
+      </div>
     {/if}
 
     {#if clean.length > 0}

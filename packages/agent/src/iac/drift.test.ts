@@ -64,6 +64,16 @@ describe("parseDriftCheckResult", () => {
 		const r = parseDriftCheckResult(JSON.stringify({ status: "success", report: '{"resources":[]}' }));
 		expect(r.status).toBe("success");
 		expect(r.report).toBe('{"resources":[]}');
+		expect(r.failureLog).toBe("");
+	});
+	// SIO-887: a failed run returns the job trace tail for the explainer to classify.
+	test("extracts the failureLog on a failed run", () => {
+		const r = parseDriftCheckResult(
+			JSON.stringify({ status: "failed", report: "", failureLog: "Error: Error acquiring the state lock" }),
+		);
+		expect(r.status).toBe("failed");
+		expect(r.report).toBe("");
+		expect(r.failureLog).toContain("state lock");
 	});
 });
 
