@@ -429,7 +429,18 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 				create: z.number(),
 				update: z.number(),
 				delete: z.number(),
-				resources: z.array(z.object({ address: z.string(), actions: z.array(z.string()) })),
+				// SIO-886: grounded explanation of what drifted (from explainDrift).
+				explanation: z.string().optional(),
+				resources: z.array(
+					z.object({
+						address: z.string(),
+						actions: z.array(z.string()),
+						// SIO-886: CI's human reason + the attributes that changed, so the UI shows WHAT drifted.
+						reason: z.string().optional(),
+						changedKeys: z.array(z.string()).optional(),
+						category: z.string().optional(),
+					}),
+				),
 			}),
 		),
 	}),
@@ -439,6 +450,18 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		stack: z.string(),
 		kind: z.enum(["config-json", "hcl"]),
 		summary: z.string(),
+		// SIO-886: the grounded explanation + per-resource detail surfaced in the choice card.
+		explanation: z.string().optional(),
+		resources: z
+			.array(
+				z.object({
+					address: z.string(),
+					actions: z.array(z.string()),
+					reason: z.string().optional(),
+					changedKeys: z.array(z.string()).optional(),
+				}),
+			)
+			.optional(),
 		directions: z.array(z.enum(["reconcile-to-json", "reconcile-to-live", "skip"])),
 		message: z.string(),
 	}),

@@ -4,6 +4,7 @@ import {
 	classifyStackByName,
 	configStackFamily,
 	driftFingerprint,
+	explainStackDrift,
 	extractLiveVersion,
 	formatDriftSummary,
 	isActionableDrift,
@@ -14,8 +15,9 @@ import {
 	parseRepoTreeDirs,
 	parseTriggerResult,
 	reconcileBranch,
+	shortAddress,
 } from "./nodes.ts";
-import type { IacStateType } from "./state.ts";
+import type { IacStateType, StackDrift } from "./state.ts";
 
 // SIO-884: drift sub-flow pure helpers (GitLab + Elastic Cloud API; no local clone).
 
@@ -145,13 +147,15 @@ describe("parseDriftReport + isActionableDrift", () => {
 });
 
 describe("classifyStackByName (defaults)", () => {
-	test("config-json stacks resolve a path; reconcile-to-live deferred (liveReconcilable false)", () => {
+	test("config-json stacks resolve a path; only the deployment family is reconcile-to-live capable", () => {
 		const dep = classifyStackByName("deployments", "eu-b2b");
 		expect(dep.kind).toBe("config-json");
 		expect(dep.configPath).toContain("eu-b2b");
-		// reconcile-to-live is deferred until the writer handles all deployment-json fields.
-		expect(dep.liveReconcilable).toBe(false);
+		// SIO-886: the deployment-config stack CAN reconcile-to-live (version); driftCheckStack
+		// narrows this to true only when version actually drifted.
+		expect(dep.liveReconcilable).toBe(true);
 
+		// ILM stays reconcile-to-json + skip (live ES ILM JSON -> repo policy-file mapping deferred).
 		const ilm = classifyStackByName("lifecycle-policies", "eu-b2b");
 		expect(ilm.kind).toBe("config-json");
 		expect(ilm.liveReconcilable).toBe(false);
@@ -220,6 +224,60 @@ describe("driftFingerprint", () => {
 		expect(driftFingerprint({ create: 0, update: 1, delete: 0, resources: [] })).not.toBe(
 			driftFingerprint({ create: 0, update: 2, delete: 0, resources: [] }),
 		);
+	});
+});
+
+// SIO-886: drift explainer helpers.
+describe("shortAddress", () => {
+	test("drops the module wrapper, keeps type.name and the index key", () => {
+		expect(shortAddress('module.deployments["us-cld"].ec_deployment.this')).toBe('ec_deployment.this ["us-cld"]');
+		expect(
+			shortAddress('module.lifecycle_policies.elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]'),
+		).toBe('elasticstack_elasticsearch_index_lifecycle.this ["alerts-ilm-policy"]');
+	});
+	test("passes a bare address through", () => {
+		expect(shortAddress("ec_deployment.this")).toBe("ec_deployment.this");
+	});
+});
+
+describe("explainStackDrift", () => {
+	const stack = (over: Partial<StackDrift>): StackDrift => ({
+		stack: "deployments",
+		drifted: true,
+		kind: "config-json",
+		create: 0,
+		update: 1,
+		delete: 0,
+		liveReconcilable: true,
+		resources: [
+			{
+				address: 'module.deployments["us-cld"].ec_deployment.this',
+				actions: ["update"],
+				reason: "attributes changed: version",
+				changedKeys: ["version"],
+				category: "update",
+			},
+		],
+		...over,
+	});
+
+	test("builds a grounded summary from the reason/changed keys", () => {
+		const out = explainStackDrift(stack({}));
+		expect(out).toContain("0 create / 1 update / 0 destroy");
+		expect(out).toContain("update ec_deployment.this");
+		expect(out).toContain("attributes changed: version");
+	});
+	test("falls back to changed keys when no reason is present", () => {
+		const out = explainStackDrift(
+			stack({
+				resources: [{ address: "ec_deployment.this", actions: ["update"], changedKeys: ["version", "region"] }],
+			}),
+		);
+		expect(out).toContain("changed: version, region");
+	});
+	test("empty for a non-drifted or resource-less stack", () => {
+		expect(explainStackDrift(stack({ drifted: false }))).toBe("");
+		expect(explainStackDrift(stack({ resources: [] }))).toBe("");
 	});
 });
 

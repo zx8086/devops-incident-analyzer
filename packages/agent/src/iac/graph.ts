@@ -9,6 +9,7 @@ import {
 	classifyIacIntent,
 	detectDrift,
 	draftChange,
+	explainDrift,
 	guardNode,
 	openMr,
 	parseIntent,
@@ -40,10 +41,12 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("reviewGate", planReviewGate)
 		.addNode("openMr", openMr)
 		.addNode("watchPipeline", watchPipeline)
-		// SIO-882: drift reconcile sub-flow. detectDrift audits all stacks; the
+		// SIO-882: drift reconcile sub-flow. detectDrift audits all stacks; SIO-886
+		// explainDrift attaches a grounded per-stack explanation + emits the report; the
 		// reconcileGate -> reconcileStack -> advanceDrift loop processes drifted stacks
 		// one at a time (reconcileGate holds the single interrupt per stack).
 		.addNode("detectDrift", detectDrift)
+		.addNode("explainDrift", explainDrift)
 		.addNode("reconcileGate", reconcileGate)
 		.addNode("reconcileStack", reconcileStack)
 		.addNode("advanceDrift", advanceDrift)
@@ -84,13 +87,14 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addEdge("openMr", "watchPipeline")
 		.addEdge("watchPipeline", "teardown")
 		// SIO-882: drift sub-flow. Early exit (no deployment/stacks) -> END (the message is
-		// already set); no drift -> teardown renders the "no drift" summary; >=1 drifted ->
+		// already set); otherwise explainDrift attaches explanations + emits the report.
+		.addConditionalEdges("detectDrift", (s) => (s.driftReport ? "explainDrift" : END), ["explainDrift", END])
+		// SIO-886: after explaining, no drift -> teardown ("no drift" summary); >=1 drifted ->
 		// the per-stack reconcile loop.
 		.addConditionalEdges(
-			"detectDrift",
-			(s) =>
-				!s.driftReport ? END : s.driftReport.stacks.filter((x) => x.drifted).length > 0 ? "reconcileGate" : "teardown",
-			["reconcileGate", "teardown", END],
+			"explainDrift",
+			(s) => (s.driftReport && s.driftReport.stacks.filter((x) => x.drifted).length > 0 ? "reconcileGate" : "teardown"),
+			["reconcileGate", "teardown"],
 		)
 		// reconcileGate holds the per-stack interrupt; "skip" advances, any reconcile
 		// direction opens an MR in reconcileStack.

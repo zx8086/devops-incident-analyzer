@@ -2,22 +2,42 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "../config.ts";
+import { createContextLogger } from "../logger.ts";
 import { gitlabFetch, text } from "./shared.ts";
 
-// Build the POST /repository/commits body for a single-file content update.
-// GitLab's "update" action needs the FULL new file content, not a diff. (Pure;
-// unit-tested.)
+const log = createContextLogger("gitlab");
+
+// Build the POST /repository/commits body for a single-file content change. GitLab's
+// commit actions take the FULL new file content, not a diff: "update" requires the file
+// to already exist, "create" requires it to be absent. Defaults to "update" (the
+// read-modify-write proposer path edits existing config); a new file (e.g. the reconcile
+// marker) passes "create". (Pure; unit-tested.)
 export function buildCommitFileBody(input: {
 	branch: string;
 	commitMessage: string;
 	filePath: string;
 	content: string;
+	action?: "create" | "update";
 }): { branch: string; commit_message: string; actions: Array<{ action: string; file_path: string; content: string }> } {
 	return {
 		branch: input.branch,
 		commit_message: input.commitMessage,
-		actions: [{ action: "update", file_path: input.filePath, content: input.content }],
+		actions: [{ action: input.action ?? "update", file_path: input.filePath, content: input.content }],
 	};
+}
+
+// SIO-885: GitLab rejects "update" on a missing file ([400] "A file with this name
+// doesn't exist") and "create" on an existing one ([400] "...already exists").
+// gitlab_commit_file is an upsert: it flips the action and retries ONCE when the response
+// body says so, so a brand-new reconcile marker (create) and an edited config file
+// (update) both commit regardless of which action was tried first. Returns the action to
+// retry with, or null when the response is not a recoverable file-exists mismatch.
+// (Pure; unit-tested.)
+export function flipCommitAction(action: "create" | "update", response: string): "create" | "update" | null {
+	const lower = response.toLowerCase();
+	if (action === "update" && (lower.includes("doesn't exist") || lower.includes("does not exist"))) return "create";
+	if (action === "create" && lower.includes("already exists")) return "update";
+	return null;
 }
 
 // The repo's tf-report.jq shape (artifacts.reports.terraform): create/update/delete
@@ -143,22 +163,52 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	server.tool(
 		"gitlab_commit_file",
-		"Commit a single-file content update to a branch via the GitLab API (server-side; no local git). The content is the FULL new file body, not a diff.",
+		"Commit a single-file content change to a branch via the GitLab API (server-side; no local git). " +
+			"Upsert: updates the file when it exists, creates it when it does not. The content is the FULL new file body, not a diff.",
 		{
 			branch: z.string(),
 			file_path: z.string(),
 			content: z.string().describe("Full new file content (read-modify-write; not a diff)."),
 			commit_message: z.string(),
+			action: z
+				.enum(["create", "update"])
+				.optional()
+				.describe(
+					"Initial commit action; defaults to 'update'. Auto-falls back to the other on a file-exists mismatch.",
+				),
 		},
-		async ({ branch, file_path, content, commit_message }) =>
-			text(
-				await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/commits`, {
+		async ({ branch, file_path, content, commit_message, action }) => {
+			const initial = action ?? "update";
+			const commitWith = (act: "create" | "update") =>
+				gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/commits`, {
 					method: "POST",
 					body: JSON.stringify(
-						buildCommitFileBody({ branch, filePath: file_path, content, commitMessage: commit_message }),
+						buildCommitFileBody({ branch, filePath: file_path, content, commitMessage: commit_message, action: act }),
 					),
-				}),
-			),
+				});
+			log.info(
+				{ branch, filePath: file_path, action: initial, bytes: content.length },
+				"gitlab_commit_file: committing",
+			);
+			let res = await commitWith(initial);
+			const flipped = res.startsWith("[4") ? flipCommitAction(initial, res) : null;
+			if (flipped) {
+				log.warn(
+					{ branch, filePath: file_path, from: initial, to: flipped, response: res.slice(0, 200) },
+					"gitlab_commit_file: action/file-existence mismatch; retrying with flipped action",
+				);
+				res = await commitWith(flipped);
+			}
+			if (res.startsWith("[2")) {
+				log.info({ branch, filePath: file_path, action: flipped ?? initial }, "gitlab_commit_file: commit succeeded");
+			} else {
+				log.error(
+					{ branch, filePath: file_path, action: flipped ?? initial, response: res.slice(0, 300) },
+					"gitlab_commit_file: commit failed",
+				);
+			}
+			return text(res);
+		},
 	);
 
 	server.tool(
@@ -254,6 +304,10 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 		async ({ stack, deployment, ref }) => {
 			const driftRef = ref ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
+			log.info(
+				{ stack, deployment, ref: driftRef },
+				"gitlab_trigger_drift_check: triggering on-demand drift-check pipeline",
+			);
 			const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
 				method: "POST",
 				body: JSON.stringify({
@@ -267,6 +321,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			});
 			// A 409 means the deployments-stack state lock is held by an in-flight apply.
 			if (res.startsWith("[409")) {
+				log.warn({ stack, deployment }, "gitlab_trigger_drift_check: blocked by state lock (apply in progress)");
 				return text(
 					JSON.stringify({
 						stack,
@@ -278,7 +333,14 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				);
 			}
 			const ref2 = res.startsWith("[2") ? parsePipelineRef(res) : null;
-			if (ref2) return text(JSON.stringify({ stack, deployment, pipelineId: ref2.id, status: ref2.status }));
+			if (ref2) {
+				log.info(
+					{ stack, deployment, pipelineId: ref2.id, status: ref2.status },
+					"gitlab_trigger_drift_check: pipeline created",
+				);
+				return text(JSON.stringify({ stack, deployment, pipelineId: ref2.id, status: ref2.status }));
+			}
+			log.error({ stack, deployment, response: res.slice(0, 200) }, "gitlab_trigger_drift_check: trigger failed");
 			return text(JSON.stringify({ stack, deployment, pipelineId: null, status: "error", note: res.slice(0, 200) }));
 		},
 	);
@@ -300,19 +362,31 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
 			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
 			let status = "unknown";
+			let polls = 0;
+			log.info(
+				{ pipelineId, budgetMs: DRIFT_POLL_BUDGET_MS },
+				"gitlab_get_drift_check_result: polling pipeline to terminal",
+			);
 			try {
 				while (Date.now() < deadline) {
 					const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };
 					status = typeof p.status === "string" ? p.status : "unknown";
+					polls++;
+					log.debug({ pipelineId, status, polls }, "gitlab_get_drift_check_result: poll");
 					if (isTerminal(status)) break;
 					if (Date.now() + DRIFT_POLL_INTERVAL_MS >= deadline) break;
 					await new Promise((r) => setTimeout(r, DRIFT_POLL_INTERVAL_MS));
 				}
 				if (!isTerminal(status)) {
+					log.warn(
+						{ pipelineId, status, polls },
+						"gitlab_get_drift_check_result: still running at budget; client should re-check",
+					);
 					return text(
 						JSON.stringify({ pipelineId, status: status || "running", note: "still running at budget; re-check" }),
 					);
 				}
+				log.info({ pipelineId, status, polls }, "gitlab_get_drift_check_result: pipeline reached terminal status");
 				const jobName = process.env.ELASTIC_IAC_DRIFT_JOB_NAME ?? "drift-check-on-demand";
 				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
 				if (jobId === null) {
@@ -320,21 +394,40 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					if (childId !== null)
 						jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${childId}/jobs`), jobName);
 				}
-				if (jobId === null)
+				if (jobId === null) {
+					log.warn(
+						{ pipelineId, status, jobName },
+						"gitlab_get_drift_check_result: no drift-check job in the pipeline",
+					);
 					return text(JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` }));
+				}
 				const res = await fetch(
 					`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/artifacts/drift-report.json`,
 					{
 						headers: { "PRIVATE-TOKEN": token },
 					},
 				);
-				if (!res.ok)
+				if (!res.ok) {
+					log.warn(
+						{ pipelineId, jobId, status, artifactStatus: res.status },
+						"gitlab_get_drift_check_result: drift-report.json not available",
+					);
 					return text(
 						JSON.stringify({ pipelineId, jobId, status, note: `[${res.status}] drift-report.json not available` }),
 					);
+				}
 				// Raw artifact text; the agent parses it into the DriftReport shape.
-				return text(JSON.stringify({ pipelineId, jobId, status, report: await res.text() }));
+				const report = await res.text();
+				log.info(
+					{ pipelineId, jobId, status, reportBytes: report.length },
+					"gitlab_get_drift_check_result: drift-report.json fetched",
+				);
+				return text(JSON.stringify({ pipelineId, jobId, status, report }));
 			} catch (err) {
+				log.error(
+					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
+					"gitlab_get_drift_check_result: polling errored",
+				);
 				return text(JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) }));
 			}
 		},

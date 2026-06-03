@@ -36,11 +36,12 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("watchPipeline");
 	});
 
-	// SIO-882: drift detection + per-stack reconcile loop nodes.
-	test("graph contains the drift detection + reconcile loop nodes", async () => {
+	// SIO-882/886: drift detection, the explainer, and the per-stack reconcile loop nodes.
+	test("graph contains the drift detection + explainer + reconcile loop nodes", async () => {
 		const graph = await buildIacGraph({ checkpointerType: "memory" });
 		const nodeNames = Object.keys(graph.getGraph().nodes);
 		expect(nodeNames).toContain("detectDrift");
+		expect(nodeNames).toContain("explainDrift");
 		expect(nodeNames).toContain("reconcileGate");
 		expect(nodeNames).toContain("reconcileStack");
 		expect(nodeNames).toContain("advanceDrift");

@@ -28,6 +28,25 @@ const LABELS: Record<ReconcileDirection, string> = {
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
     <p class="mt-1 text-xs font-mono text-tommy-navy/70">Drift: {prompt.summary}</p>
 
+    <!-- SIO-886: show WHAT drifted so the human can decide MR-vs-skip with the facts. -->
+    {#if prompt.resources && prompt.resources.length > 0}
+      <div class="mt-2 rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2">
+        <p class="text-xs font-semibold text-tommy-navy">What changed</p>
+        <ul class="mt-1 space-y-0.5 text-xs">
+          {#each prompt.resources as r (r.address)}
+            <li class="text-tommy-navy/80">
+              <span class="font-mono break-all">{r.address}</span>
+              {#if r.reason}
+                <span class="text-gray-600"> &mdash; {r.reason}</span>
+              {:else if r.changedKeys && r.changedKeys.length > 0}
+                <span class="text-gray-600"> &mdash; changed: {r.changedKeys.join(", ")}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
     <div class="mt-3 flex flex-wrap gap-2">
       {#each prompt.directions as direction (direction)}
         <button
@@ -41,7 +60,11 @@ const LABELS: Record<ReconcileDirection, string> = {
       {/each}
     </div>
     <p class="mt-2 text-xs text-gray-500">
-      Reconcile to declared opens an MR; CI computes the plan showing the revert. I never merge or apply.
+      {#if prompt.directions.includes("reconcile-to-live")}
+        Reconcile to live writes the live value into the config file; reconcile to declared re-asserts the repo so CI's plan shows the revert. Both open an MR &mdash; I never merge or apply.
+      {:else}
+        Reconcile to declared opens an MR; CI computes the plan showing the revert. I never merge or apply.
+      {/if}
     </p>
   </div>
 </div>

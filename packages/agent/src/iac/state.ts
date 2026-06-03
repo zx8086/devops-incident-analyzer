@@ -68,7 +68,19 @@ export interface IacApprovalState {
 // CI's plan shows the revert; "skip" leaves the stack untouched.
 export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
 
-// One stack's drift from `iac_plan` (the tfplan-report counts) plus its classification.
+// One drifted resource, carrying the drift-report.json detail the explainer surfaces.
+// SIO-886: reason/changedKeys/category were previously dropped before reaching the UI.
+export interface StackDriftResource {
+	address: string;
+	actions: string[];
+	// "attributes changed: version", "kibana-churn: keys changed = ..." -- CI's human reason.
+	reason?: string;
+	changedKeys?: string[];
+	// create | update | destroy | replace (known-noise is filtered out upstream).
+	category?: string;
+}
+
+// One stack's drift from the on-demand drift-check plus its classification.
 export interface StackDrift {
 	stack: string;
 	drifted: boolean;
@@ -78,14 +90,18 @@ export interface StackDrift {
 	create: number;
 	update: number;
 	delete: number;
-	resources: Array<{ address: string; actions: string[] }>;
+	resources: StackDriftResource[];
+	// SIO-886: a concise, grounded human explanation of what drifted (set by explainDrift),
+	// shown in the drift card + reconcile-choice card to inform the MR-vs-skip decision.
+	explanation?: string;
 	// Resolved repo JSON path when kind === "config-json" (set by the path-resolve probe).
 	configPath?: string;
-	// Phase 1: reconcile-to-live is only offered when a clean live->file mapping exists
-	// (currently the deployment-config version field). HCL + ILM + tier-sizing defer it.
+	// reconcile-to-live is offered only when a clean live->file mapping exists for the actual
+	// drift: SIO-886 enables it for the deployment-config version field (set true in
+	// driftCheckStack when version drifted). ILM/tier/HCL still defer it.
 	liveReconcilable: boolean;
-	// True when iac_plan could not be read for this stack (task failure / unknown format):
-	// the stack was NOT assessed, so it is neither drifted nor confirmed clean.
+	// True when the drift-check could not be read for this stack (trigger lock / failed
+	// pipeline / unreadable report): the stack was NOT assessed -- neither drifted nor clean.
 	planError?: boolean;
 }
 

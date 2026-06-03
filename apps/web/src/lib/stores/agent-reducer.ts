@@ -50,6 +50,15 @@ export interface IacClarifyPrompt {
 // SIO-882: drift sub-flow UI state.
 export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
 
+// SIO-886: one drifted resource with the detail the explainer surfaces (reason / changed keys).
+export interface IacDriftResource {
+	address: string;
+	actions: string[];
+	reason?: string;
+	changedKeys?: string[];
+	category?: string;
+}
+
 export interface IacDriftStack {
 	stack: string;
 	drifted: boolean;
@@ -59,7 +68,9 @@ export interface IacDriftStack {
 	create: number;
 	update: number;
 	delete: number;
-	resources: Array<{ address: string; actions: string[] }>;
+	// SIO-886: grounded explanation of what drifted (from the explainDrift node).
+	explanation?: string;
+	resources: IacDriftResource[];
 }
 
 export interface IacDriftReport {
@@ -74,6 +85,9 @@ export interface IacReconcileChoice {
 	stack: string;
 	kind: "config-json" | "hcl";
 	summary: string;
+	// SIO-886: grounded explanation + per-resource detail surfaced in the choice card.
+	explanation?: string;
+	resources?: Array<{ address: string; actions: string[]; reason?: string; changedKeys?: string[] }>;
 	directions: ReconcileDirection[];
 	message: string;
 }
@@ -269,6 +283,8 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					stack: event.stack,
 					kind: event.kind,
 					summary: event.summary,
+					explanation: event.explanation,
+					resources: event.resources,
 					directions: event.directions,
 					message: event.message,
 				},
