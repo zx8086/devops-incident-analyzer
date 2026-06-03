@@ -144,7 +144,7 @@ Smallest schema, and the operator had real `dataviews` drift (5 actionable). Ste
 
 1. (this monorepo, decision-independent, safe now) Registry refactor + `kind: "hcl"` -> `"terraform-only"` rename + gate absence-reason copy. No behavior change; full suite stays green.
 2. (this monorepo) `parseDriftReport` keeps an optional per-resource `before`/`values` map (backward-compatible; absent in today's reports -> reconcile simply stays unavailable until the report carries them).
-3. (elastic-iac repo, EXTERNAL) `scripts/tf-report.jq` emits per-resource `before` values into `drift-report.json`. Coordinated MR there; defines the exact schema step 4 maps from. Draft the jq here, hand off.
+3. (elastic-iac repo, EXTERNAL) `scripts/tf-report.jq` emits per-resource `before` values into `drift-report.json`. Coordinated MR there; defines the exact schema step 4 maps from. Full work order: `docs/superpowers/specs/2026-06-03-elastic-iac-before-values-workorder.md`.
 4. (this monorepo) `dataviews` family: reverse-map the `before` provider-schema values onto the repo JSON shape; register the family; tests.
 5. (this monorepo) Frontend absence-reason copy.
 
