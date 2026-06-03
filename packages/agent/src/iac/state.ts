@@ -89,9 +89,9 @@ export interface StackDriftResource {
 export interface StackDrift {
 	stack: string;
 	drifted: boolean;
-	// "config-json" stacks own per-deployment JSON the agent can edit; "hcl" stacks are
-	// terraform-only. Drives the UI badge.
-	kind: "config-json" | "hcl";
+	// Every stack is JSON-config-driven; "config-json" here means live-reconcile is wired (the agent
+	// can edit the repo JSON from live), "unwired" means it is not wired yet. Drives the UI badge.
+	kind: "config-json" | "unwired";
 	create: number;
 	update: number;
 	delete: number;

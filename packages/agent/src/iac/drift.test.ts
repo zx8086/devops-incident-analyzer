@@ -247,14 +247,14 @@ describe("classifyStackByName (defaults)", () => {
 		expect(ilm.kind).toBe("config-json");
 		expect(ilm.liveReconcilable).toBe(true);
 
-		const hcl = classifyStackByName("templates", "eu-b2b");
-		expect(hcl.kind).toBe("hcl");
-		expect(hcl.liveReconcilable).toBe(false);
+		const unwired = classifyStackByName("templates", "eu-b2b");
+		expect(unwired.kind).toBe("unwired");
+		expect(unwired.liveReconcilable).toBe(false);
 	});
 });
 
 describe("configStackFamily (defaults)", () => {
-	test("maps the config-JSON stacks and treats the rest as HCL", () => {
+	test("maps the config-JSON stacks and treats the rest as unwired (null family)", () => {
 		expect(configStackFamily("deployments")).toBe("deployment");
 		expect(configStackFamily("lifecycle-policies")).toBe("ilm");
 		expect(configStackFamily("templates")).toBeNull();
@@ -388,7 +388,7 @@ describe("formatDriftSummary", () => {
 					{
 						stack: "templates",
 						drifted: true,
-						kind: "hcl",
+						kind: "unwired",
 						create: 0,
 						update: 1,
 						delete: 0,
@@ -435,7 +435,7 @@ describe("formatDriftSummary", () => {
 					{
 						stack: "x",
 						drifted: false,
-						kind: "hcl",
+						kind: "unwired",
 						create: 0,
 						update: 0,
 						delete: 0,
@@ -459,7 +459,7 @@ describe("formatDriftSummary", () => {
 					{
 						stack: "ok",
 						drifted: false,
-						kind: "hcl",
+						kind: "unwired",
 						create: 0,
 						update: 0,
 						delete: 0,
@@ -470,7 +470,7 @@ describe("formatDriftSummary", () => {
 						stack: "broken",
 						drifted: false,
 						planError: true,
-						kind: "hcl",
+						kind: "unwired",
 						create: 0,
 						update: 0,
 						delete: 0,

@@ -1331,44 +1331,68 @@ function configIlmStacks(): Set<string> {
 	);
 }
 
-// Pure: the config-JSON family a stack name belongs to (null = treat as HCL). Exported
-// for unit testing; classifyStack adds a repo path-resolve probe on top.
-export function configStackFamily(stack: string): "deployment" | "ilm" | null {
-	const s = stack.toLowerCase();
-	if (configDeploymentStacks().has(s)) return "deployment";
-	if (configIlmStacks().has(s)) return "ilm";
-	return null;
+// SIO-889: the live-reconcile family registry. Each entry declares how one stack family maps its
+// drift onto an editable repo JSON file and whether the actual drift is reconcilable to live. Adding
+// a stack to reconcile-to-live is a new entry here (+ a build branch in buildLiveReconcile). A
+// function (not a module const) so the env-driven `matches` sets are read lazily (process.env; the
+// web app's Vite SSR throws on a module-scope Bun.env reference).
+interface LiveReconcileFamily {
+	name: "deployment" | "ilm";
+	matches: (stack: string) => boolean;
+	configPath: (deployment: string) => string;
+	// Narrow the STATIC capability to the actual drift: true => offer reconcile-to-live.
+	hasReconcilableDrift: (actionable: DriftResourceChange[]) => boolean;
 }
 
-// Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). config-JSON
-// families resolve an editable JSON path; liveReconcilable is the STATIC capability (true for both
-// config-JSON families -- the deployment-config stack and the lifecycle-policies/ILM stack);
-// driftCheckStack narrows it to the actual drift. HCL is never live-reconcilable. (Pure; unit-tested.)
+function liveReconcileFamilies(): LiveReconcileFamily[] {
+	return [
+		{
+			name: "deployment",
+			matches: (s) => configDeploymentStacks().has(s),
+			configPath: (d) => deploymentJsonPath(deploymentJsonTemplate(), d),
+			// "version" -> live ES version; "elasticsearch" -> live tier sizing/zone.
+			hasReconcilableDrift: (actionable) =>
+				actionable.some((c) => (c.changedKeys ?? []).some((k) => k === "version" || k === "elasticsearch")),
+		},
+		{
+			name: "ilm",
+			matches: (s) => configIlmStacks().has(s),
+			configPath: (d) => {
+				const probe = deploymentJsonPath(ilmPolicyTemplate(), d, "__probe__");
+				return probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
+			},
+			// Any resource whose policy name parses from its address -> live ILM policy rewrite.
+			hasReconcilableDrift: (actionable) => actionable.some((c) => ilmPolicyFromAddress(c.address) !== ""),
+		},
+	];
+}
+
+// The live-reconcile family a stack belongs to, or undefined (unwired -- no live-reconcile wired).
+function liveReconcileFamily(stack: string): LiveReconcileFamily | undefined {
+	const s = stack.toLowerCase();
+	return liveReconcileFamilies().find((f) => f.matches(s));
+}
+
+// Pure: the config-JSON family a stack name belongs to (null = unwired). Exported for unit testing;
+// classifyStackByName layers kind/configPath/liveReconcilable on top.
+export function configStackFamily(stack: string): "deployment" | "ilm" | null {
+	return liveReconcileFamily(stack)?.name ?? null;
+}
+
+// Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). A stack in a
+// live-reconcile family resolves an editable JSON path and is live-reconcilable (STATIC capability;
+// driftCheckStack narrows it to the actual drift, and the empty-diff guard in buildLiveReconcile
+// blocks a no-op MR). Every other stack is "unwired" -- JSON-config like all stacks, but with no
+// live read + projection wired yet, so reconcile-to-live is not offered. (Pure; unit-tested.)
 export function classifyStackByName(
 	stack: string,
 	deployment: string,
-): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
-	const family = configStackFamily(stack);
-	if (family === "deployment") {
-		// The deployment-config stack CAN reconcile-to-live (version + tier sizing/zone). This is the
-		// static capability; driftCheckStack narrows it to the keys that actually drifted, and the
-		// empty-diff guard in buildLiveReconcile prevents an MR when live already matches the repo.
-		return {
-			kind: "config-json",
-			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
-			liveReconcilable: true,
-		};
+): { kind: "config-json" | "unwired"; configPath?: string; liveReconcilable: boolean } {
+	const family = liveReconcileFamily(stack);
+	if (family) {
+		return { kind: "config-json", configPath: family.configPath(deployment), liveReconcilable: true };
 	}
-	if (family === "ilm") {
-		// Lifecycle-policies dir from the configured template (honors ELASTIC_IAC_ILM_POLICY_TEMPLATE).
-		// The ILM stack CAN reconcile-to-live (rewrite each policy file from the live ILM policy);
-		// driftCheckStack narrows it to stacks with a parseable policy address, and the live read
-		// needs a configured per-deployment cluster (ELASTIC_IAC_CLUSTER_*), else the build blocks.
-		const probe = deploymentJsonPath(ilmPolicyTemplate(), deployment, "__probe__");
-		const dir = probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
-		return { kind: "config-json", configPath: dir, liveReconcilable: true };
-	}
-	return { kind: "hcl", liveReconcilable: false };
+	return { kind: "unwired", liveReconcilable: false };
 }
 
 // Deterministic, DATE-FREE reconcile branch per (deployment, stack, direction). Date-free
@@ -2014,18 +2038,12 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 					: "no drift"
 		}`,
 	});
-	// reconcile-to-live is offered only when the actual drift maps to a clean live->file write.
-	// deployment family: the "version" key (-> live ES version) or the "elasticsearch" key (-> live
-	// tier sizing/zone). ilm family: any resource whose policy name parses from its address (-> live
-	// ILM policy rewrite). HCL: never. The empty-diff guard in buildLiveReconcile still blocks an
-	// MR when live already equals the repo, so a coarse "elasticsearch" key never opens a no-op MR.
-	const family = configStackFamily(stack);
-	const deploymentLiveKeys =
-		family === "deployment"
-			? actionable.flatMap((c) => c.changedKeys).filter((k) => k === "version" || k === "elasticsearch")
-			: [];
-	const ilmLiveReconcilable = family === "ilm" && actionable.some((c) => ilmPolicyFromAddress(c.address) !== "");
-	const liveReconcilable = deploymentLiveKeys.length > 0 || ilmLiveReconcilable;
+	// reconcile-to-live is offered only when the actual drift maps to a clean live->file write; the
+	// matched family decides (deployment: version/elasticsearch keys; ilm: a parseable policy address).
+	// Unwired stacks never offer it. The empty-diff guard in buildLiveReconcile still blocks a no-op MR
+	// when live already equals the repo, so a coarse "elasticsearch" key never opens an empty MR.
+	const family = liveReconcileFamily(stack);
+	const liveReconcilable = family ? family.hasReconcilableDrift(actionable) : false;
 	log.info(
 		{
 			deployment,

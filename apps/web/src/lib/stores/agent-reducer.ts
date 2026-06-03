@@ -76,7 +76,7 @@ export interface IacDriftStack {
 	planError?: boolean;
 	// SIO-887: human-readable reason for planError, shown on the drift card.
 	planErrorReason?: string;
-	kind: "config-json" | "hcl";
+	kind: "config-json" | "unwired";
 	create: number;
 	update: number;
 	delete: number;
@@ -91,11 +91,11 @@ export interface IacDriftReport {
 }
 
 // One per-stack reconcile gate (the current interrupt). directions is the allowed set
-// for this stack (reconcile-to-live is absent for HCL/non-live-reconcilable stacks).
+// for this stack (reconcile-to-live is absent for unwired / non-live-reconcilable stacks).
 export interface IacReconcileChoice {
 	threadId: string;
 	stack: string;
-	kind: "config-json" | "hcl";
+	kind: "config-json" | "unwired";
 	summary: string;
 	// SIO-886: grounded explanation + per-resource detail surfaced in the choice card.
 	explanation?: string;

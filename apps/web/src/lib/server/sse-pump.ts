@@ -343,7 +343,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 			type: "iac_reconcile_choice",
 			threadId,
 			stack: typeof obj.stack === "string" ? obj.stack : "",
-			kind: obj.kind === "hcl" ? "hcl" : "config-json",
+			kind: obj.kind === "unwired" ? "unwired" : "config-json",
 			summary: typeof obj.summary === "string" ? obj.summary : "",
 			...(typeof obj.explanation === "string" && obj.explanation && { explanation: obj.explanation }),
 			...(resources && { resources }),
