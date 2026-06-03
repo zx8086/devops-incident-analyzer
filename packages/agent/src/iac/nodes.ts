@@ -384,15 +384,23 @@ export function applyLiveTopology(
 		const tierObj = t as Record<string, unknown>;
 		const prev: { maxSize?: string; zoneCount?: number } = {};
 		let touched = false;
+		// Only count a field as touched when the live value actually differs from the repo value;
+		// otherwise a no-op (live already matches) would record a phantom edit in `previous`, which
+		// the MR summary then reports as a change that was never written.
 		if (live.sizeGb !== undefined) {
-			if (typeof tierObj.max_size === "string") prev.maxSize = tierObj.max_size;
-			tierObj.max_size = `${live.sizeGb}g`;
-			touched = true;
+			const next = `${live.sizeGb}g`;
+			if (tierObj.max_size !== next) {
+				if (typeof tierObj.max_size === "string") prev.maxSize = tierObj.max_size;
+				tierObj.max_size = next;
+				touched = true;
+			}
 		}
 		if (live.zoneCount !== undefined) {
-			if (typeof tierObj.zone_count === "number") prev.zoneCount = tierObj.zone_count;
-			tierObj.zone_count = live.zoneCount;
-			touched = true;
+			if (tierObj.zone_count !== live.zoneCount) {
+				if (typeof tierObj.zone_count === "number") prev.zoneCount = tierObj.zone_count;
+				tierObj.zone_count = live.zoneCount;
+				touched = true;
+			}
 		}
 		if (touched) previous[tier] = prev;
 	}

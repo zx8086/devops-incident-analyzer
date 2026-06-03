@@ -220,6 +220,15 @@ describe("applyLiveTopology", () => {
 		expect(out.previous.hot).toEqual({ zoneCount: 3 });
 	});
 
+	test("records only fields that actually changed (no phantom edits)", () => {
+		// hot already matches live on both fields -> not recorded at all.
+		expect(applyLiveTopology(json, { hot: { sizeGb: 29, zoneCount: 3 } }).previous.hot).toBeUndefined();
+		// warm: max_size differs (15g->8g) but zone_count already matches (2) -> only maxSize captured.
+		const out = applyLiveTopology(json, { warm: { sizeGb: 8, zoneCount: 2 } });
+		expect(out.previous.warm).toEqual({ maxSize: "15g" });
+		expect(JSON.parse(out.content).elasticsearch.warm.zone_count).toBe(2);
+	});
+
 	test("trailing newline + throws on bad JSON / missing elasticsearch block", () => {
 		expect(applyLiveTopology(json, { warm: { sizeGb: 4 } }).content.endsWith("}\n")).toBe(true);
 		expect(() => applyLiveTopology("not json", {})).toThrow();

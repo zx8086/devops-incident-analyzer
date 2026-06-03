@@ -173,42 +173,30 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 	);
 
 	// Cluster-API (data-plane) reads resolve a per-deployment URL + auth from config
-	// (ELASTIC_IAC_CLUSTER_*), keyed by the `deployment` name. `clusterUrl` still works as a
-	// direct (unauthenticated) override for local dev / tests. Read-only (GET); never mutates.
+	// (ELASTIC_IAC_CLUSTER_*), keyed by the `deployment` name -- never a model-supplied base URL.
+	// A model-controlled URL would bypass the deployment allowlist and make this an SSRF primitive,
+	// so the tool surface only takes a deployment name. Read-only (GET); never mutates.
 	server.tool(
 		"elastic_get_cluster_health",
 		"Read cluster health for a configured deployment's cluster API.",
-		{ deployment: z.string().optional(), clusterUrl: z.string().optional() },
-		async ({ deployment, clusterUrl }) =>
-			text(
-				clusterUrl
-					? await clusterFetchRaw(clusterUrl, "/_cluster/health")
-					: await clusterFetch(config.clusterDeployments, deployment, "/_cluster/health"),
-			),
+		{ deployment: z.string().optional() },
+		async ({ deployment }) => text(await clusterFetch(config.clusterDeployments, deployment, "/_cluster/health")),
 	);
 
 	server.tool(
 		"elastic_get_index_template",
 		"Read an index template (composable/component) from a configured deployment's cluster API.",
-		{ name: z.string(), deployment: z.string().optional(), clusterUrl: z.string().optional() },
-		async ({ name, deployment, clusterUrl }) =>
-			text(
-				clusterUrl
-					? await clusterFetchRaw(clusterUrl, `/_index_template/${name}`)
-					: await clusterFetch(config.clusterDeployments, deployment, `/_index_template/${name}`),
-			),
+		{ name: z.string(), deployment: z.string().optional() },
+		async ({ name, deployment }) =>
+			text(await clusterFetch(config.clusterDeployments, deployment, `/_index_template/${name}`)),
 	);
 
 	server.tool(
 		"elastic_ilm_get_lifecycle",
 		"Read an ILM policy from a configured deployment's cluster API. Pass `deployment` (cluster name) to resolve the configured URL + auth.",
-		{ policy: z.string(), deployment: z.string().optional(), clusterUrl: z.string().optional() },
-		async ({ policy, deployment, clusterUrl }) =>
-			text(
-				clusterUrl
-					? await clusterFetchRaw(clusterUrl, `/_ilm/policy/${encodeURIComponent(policy)}`)
-					: await clusterFetch(config.clusterDeployments, deployment, `/_ilm/policy/${encodeURIComponent(policy)}`),
-			),
+		{ policy: z.string(), deployment: z.string().optional() },
+		async ({ policy, deployment }) =>
+			text(await clusterFetch(config.clusterDeployments, deployment, `/_ilm/policy/${encodeURIComponent(policy)}`)),
 	);
 }
 

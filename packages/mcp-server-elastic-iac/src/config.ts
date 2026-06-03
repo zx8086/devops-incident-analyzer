@@ -4,8 +4,10 @@ import { z } from "zod";
 // Per-deployment ES data-plane (cluster API) connection, used by the read-only cluster tools
 // (ILM / index-template / health) the drift flow needs for reconcile-to-live. Distinct from the
 // EC control-plane (elasticCloudApiKey/elasticCloudBaseUrl above). Auth is apiKey OR
-// username+password OR none. Mirrors mcp-server-elastic's DeploymentConfigSchema.
-const ClusterDeploymentSchema = z
+// username+password OR none -- the three are mutually exclusive, since resolveCluster() prefers
+// apiKey and would silently ignore a co-supplied username/password. Mirrors mcp-server-elastic's
+// DeploymentConfigSchema.
+export const ClusterDeploymentSchema = z
 	.object({
 		id: z.string().min(1),
 		url: z.string().url().min(1),
@@ -13,9 +15,24 @@ const ClusterDeploymentSchema = z
 		username: z.string().optional(),
 		password: z.string().optional(),
 	})
-	.refine((d) => (d.username ? !!d.password : d.password ? !!d.username : true), {
-		message: "Cluster auth requires apiKey, or both username+password, or neither",
-		path: ["username", "password"],
+	.superRefine((d, ctx) => {
+		const hasApiKey = !!d.apiKey;
+		const hasUsername = !!d.username;
+		const hasPassword = !!d.password;
+		if (hasUsername !== hasPassword) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Cluster basic auth requires both username and password",
+				path: hasUsername ? ["password"] : ["username"],
+			});
+		}
+		if (hasApiKey && (hasUsername || hasPassword)) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Cluster auth must use either apiKey or username+password, not both",
+				path: ["apiKey"],
+			});
+		}
 	});
 
 export type ClusterDeployment = z.infer<typeof ClusterDeploymentSchema>;
