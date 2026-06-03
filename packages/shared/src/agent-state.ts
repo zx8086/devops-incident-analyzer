@@ -427,7 +427,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 				planError: z.boolean().optional(),
 				// SIO-887: human-readable reason for planError (state-lock / classified plan failure / ...).
 				planErrorReason: z.string().optional(),
-				kind: z.enum(["config-json", "hcl"]),
+				kind: z.enum(["config-json", "unwired"]),
 				create: z.number(),
 				update: z.number(),
 				delete: z.number(),
@@ -450,7 +450,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		type: z.literal("iac_reconcile_choice"),
 		threadId: z.string(),
 		stack: z.string(),
-		kind: z.enum(["config-json", "hcl"]),
+		kind: z.enum(["config-json", "unwired"]),
 		summary: z.string(),
 		// SIO-886: the grounded explanation + per-resource detail surfaced in the choice card.
 		explanation: z.string().optional(),

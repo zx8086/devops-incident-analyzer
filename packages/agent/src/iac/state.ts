@@ -78,15 +78,20 @@ export interface StackDriftResource {
 	changedKeys?: string[];
 	// create | update | destroy | replace (known-noise is filtered out upstream).
 	category?: string;
+	// SIO-889: per-changed-key {before: live, after: declared} from the drift-report `values`
+	// field (keys 1:1 with changedKeys). before is the reconcile-to-live source; the sentinels
+	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
+	// create/destroy/noop and older reports.
+	values?: Record<string, { before?: unknown; after?: unknown }>;
 }
 
 // One stack's drift from the on-demand drift-check plus its classification.
 export interface StackDrift {
 	stack: string;
 	drifted: boolean;
-	// "config-json" stacks own per-deployment JSON the agent can edit; "hcl" stacks are
-	// terraform-only. Drives the UI badge.
-	kind: "config-json" | "hcl";
+	// Every stack is JSON-config-driven; "config-json" here means live-reconcile is wired (the agent
+	// can edit the repo JSON from live), "unwired" means it is not wired yet. Drives the UI badge.
+	kind: "config-json" | "unwired";
 	create: number;
 	update: number;
 	delete: number;

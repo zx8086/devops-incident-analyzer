@@ -1220,6 +1220,11 @@ export interface DriftResourceChange {
 	changedKeys: string[];
 	reason: string;
 	noiseTag?: string; // kibana-churn | stack-monitoring-churn (when known-noise)
+	// SIO-889: per-changed-key {before: live, after: declared} from the drift-report `values`
+	// field (keys 1:1 with changedKeys). before is the reconcile-to-live source; sentinels
+	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
+	// create/destroy/noop and older reports.
+	values?: Record<string, { before?: unknown; after?: unknown }>;
 }
 
 // The parsed drift-report.json: the authoritative has_actionable_drift boolean (the single
@@ -1246,6 +1251,19 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 		const num = (v: unknown): number => (typeof v === "number" ? v : 0);
 		const strs = (v: unknown): string[] =>
 			Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+		// SIO-889: parse the drift-report `values` field ({key: {before, after}}); tolerant of
+		// absence and non-object entries. before/after kept as unknown (may be sentinel strings).
+		const parseValues = (v: unknown): Record<string, { before?: unknown; after?: unknown }> | undefined => {
+			if (!v || typeof v !== "object") return undefined;
+			const out: Record<string, { before?: unknown; after?: unknown }> = {};
+			for (const [k, pair] of Object.entries(v as Record<string, unknown>)) {
+				if (pair && typeof pair === "object") {
+					const p = pair as { before?: unknown; after?: unknown };
+					out[k] = { before: p.before, after: p.after };
+				}
+			}
+			return Object.keys(out).length > 0 ? out : undefined;
+		};
 		const resources = Array.isArray(o.resources)
 			? (o.resources as unknown[])
 					.map((r) => {
@@ -1256,6 +1274,7 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							changedKeys?: unknown;
 							reason?: unknown;
 							noiseTag?: unknown;
+							values?: unknown;
 						};
 						return {
 							address: typeof x.address === "string" ? x.address : "",
@@ -1264,6 +1283,7 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							changedKeys: strs(x.changedKeys),
 							reason: typeof x.reason === "string" ? x.reason : "",
 							noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
+							values: parseValues(x.values),
 						};
 					})
 					.filter((r) => r.address)
@@ -1311,44 +1331,113 @@ function configIlmStacks(): Set<string> {
 	);
 }
 
-// Pure: the config-JSON family a stack name belongs to (null = treat as HCL). Exported
-// for unit testing; classifyStack adds a repo path-resolve probe on top.
-export function configStackFamily(stack: string): "deployment" | "ilm" | null {
-	const s = stack.toLowerCase();
-	if (configDeploymentStacks().has(s)) return "deployment";
-	if (configIlmStacks().has(s)) return "ilm";
-	return null;
+// SIO-889: report-sourced stacks (Approach B) -- live values come from the drift-report `values`,
+// not an MCP live read. Lazy process.env read (no module-scope Bun.env; the web app's Vite SSR throws).
+function configReportStacks(): Set<string> {
+	return new Set(
+		(process.env.ELASTIC_IAC_CONFIG_REPORT_STACKS ?? "agent-policies")
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
+// Per-resource config-file template for report-sourced stacks. ${cluster}=deployment, ${stack}=stack
+// name, ${key}=the resource's for_each index key (README convention; override via env).
+function stackConfigPathTemplate(): string {
+	return process.env.ELASTIC_IAC_STACK_CONFIG_TEMPLATE ?? "environments/${cluster}/${stack}/${key}.json";
+}
+function stackResourcePath(template: string, cluster: string, stack: string, key: string): string {
+	return template
+		.replace(/\$\{cluster\}/g, cluster)
+		.replace(/\$\{stack\}/g, stack)
+		.replace(/\$\{key\}/g, key);
+}
+// The stack's config directory (for the StackDrift.configPath badge), from a probe key.
+function stackResourceDir(template: string, cluster: string, stack: string): string {
+	const probe = stackResourcePath(template, cluster, stack, "__probe__");
+	return probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
 }
 
-// Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). config-JSON
-// families resolve an editable JSON path; liveReconcilable is the STATIC capability (true for both
-// config-JSON families -- the deployment-config stack and the lifecycle-policies/ILM stack);
-// driftCheckStack narrows it to the actual drift. HCL is never live-reconcilable. (Pure; unit-tested.)
+// SIO-889: the live-reconcile family registry. Each entry declares how one stack family maps its
+// drift onto an editable repo JSON file and whether the actual drift is reconcilable to live. Adding
+// a stack to reconcile-to-live is a new entry here (+ a build branch in buildLiveReconcile). A
+// function (not a module const) so the env-driven `matches` sets are read lazily (process.env; the
+// web app's Vite SSR throws on a module-scope Bun.env reference).
+interface LiveReconcileFamily {
+	name: string;
+	matches: (stack: string) => boolean;
+	configPath: (deployment: string) => string;
+	// Narrow the STATIC capability to the actual drift: true => offer reconcile-to-live.
+	hasReconcilableDrift: (actionable: DriftResourceChange[]) => boolean;
+	// Build the reconcile-to-live change (live read + projection -> changed repo files, or blocked).
+	build: (deployment: string, stack: StackDrift) => Promise<LiveReconcileBuild | { blocked: string }>;
+}
+
+function liveReconcileFamilies(): LiveReconcileFamily[] {
+	return [
+		{
+			name: "deployment",
+			matches: (s) => configDeploymentStacks().has(s),
+			configPath: (d) => deploymentJsonPath(deploymentJsonTemplate(), d),
+			// "version" -> live ES version; "elasticsearch" -> live tier sizing/zone.
+			hasReconcilableDrift: (actionable) =>
+				actionable.some((c) => (c.changedKeys ?? []).some((k) => k === "version" || k === "elasticsearch")),
+			build: buildLiveDeploymentReconcile,
+		},
+		{
+			name: "ilm",
+			matches: (s) => configIlmStacks().has(s),
+			configPath: (d) => {
+				const probe = deploymentJsonPath(ilmPolicyTemplate(), d, "__probe__");
+				return probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
+			},
+			// Any resource whose policy name parses from its address -> live ILM policy rewrite.
+			hasReconcilableDrift: (actionable) => actionable.some((c) => ilmPolicyFromAddress(c.address) !== ""),
+			build: buildLiveIlmReconcile,
+		},
+		// SIO-889: report-sourced families (Approach B). Live values come from the drift-report
+		// `values.before` (no MCP live read); each resource's config file is environments/<dep>/<stack>/
+		// <for_each-key>.json and provider attrs map to top-level JSON keys (README convention; override
+		// via ELASTIC_IAC_STACK_CONFIG_TEMPLATE). First target: agent-policies.
+		...[...configReportStacks()].map(
+			(stackName): LiveReconcileFamily => ({
+				name: stackName,
+				matches: (s) => s === stackName,
+				configPath: (d) => stackResourceDir(stackConfigPathTemplate(), d, stackName),
+				hasReconcilableDrift: (actionable) =>
+					actionable.some((c) => (c.category === "update" || c.category === "replace") && hasWritableBefore(c.values)),
+				build: buildReportSourcedReconcile,
+			}),
+		),
+	];
+}
+
+// The live-reconcile family a stack belongs to, or undefined (unwired -- no live-reconcile wired).
+function liveReconcileFamily(stack: string): LiveReconcileFamily | undefined {
+	const s = stack.toLowerCase();
+	return liveReconcileFamilies().find((f) => f.matches(s));
+}
+
+// Pure: the live-reconcile family name a stack belongs to (null = unwired). Exported for unit testing;
+// classifyStackByName layers kind/configPath/liveReconcilable on top.
+export function configStackFamily(stack: string): string | null {
+	return liveReconcileFamily(stack)?.name ?? null;
+}
+
+// Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). A stack in a
+// live-reconcile family resolves an editable JSON path and is live-reconcilable (STATIC capability;
+// driftCheckStack narrows it to the actual drift, and the empty-diff guard in buildLiveReconcile
+// blocks a no-op MR). Every other stack is "unwired" -- JSON-config like all stacks, but with no
+// live read + projection wired yet, so reconcile-to-live is not offered. (Pure; unit-tested.)
 export function classifyStackByName(
 	stack: string,
 	deployment: string,
-): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
-	const family = configStackFamily(stack);
-	if (family === "deployment") {
-		// The deployment-config stack CAN reconcile-to-live (version + tier sizing/zone). This is the
-		// static capability; driftCheckStack narrows it to the keys that actually drifted, and the
-		// empty-diff guard in buildLiveReconcile prevents an MR when live already matches the repo.
-		return {
-			kind: "config-json",
-			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
-			liveReconcilable: true,
-		};
+): { kind: "config-json" | "unwired"; configPath?: string; liveReconcilable: boolean } {
+	const family = liveReconcileFamily(stack);
+	if (family) {
+		return { kind: "config-json", configPath: family.configPath(deployment), liveReconcilable: true };
 	}
-	if (family === "ilm") {
-		// Lifecycle-policies dir from the configured template (honors ELASTIC_IAC_ILM_POLICY_TEMPLATE).
-		// The ILM stack CAN reconcile-to-live (rewrite each policy file from the live ILM policy);
-		// driftCheckStack narrows it to stacks with a parseable policy address, and the live read
-		// needs a configured per-deployment cluster (ELASTIC_IAC_CLUSTER_*), else the build blocks.
-		const probe = deploymentJsonPath(ilmPolicyTemplate(), deployment, "__probe__");
-		const dir = probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
-		return { kind: "config-json", configPath: dir, liveReconcilable: true };
-	}
-	return { kind: "hcl", liveReconcilable: false };
+	return { kind: "unwired", liveReconcilable: false };
 }
 
 // Deterministic, DATE-FREE reconcile branch per (deployment, stack, direction). Date-free
@@ -1530,12 +1619,51 @@ function buildReconcileMrBody(
 	return lines.filter((l) => l !== "").join("\n");
 }
 
-// Pull the ILM policy name from a drift resource address' last index key:
-// `...elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]` -> `alerts-ilm-policy`.
-// "" when the address has no index key. (Pure; unit-tested.)
-export function ilmPolicyFromAddress(address: string): string {
+// Pull the last `[...]` index key from a drift resource address (the for_each / count key):
+// `...fleet_agent_policy.this["eu-oit-prd"]` -> `eu-oit-prd`. "" when there is no index key.
+// (Pure; unit-tested.)
+export function addressIndexKey(address: string): string {
 	const key = address.match(/\[[^\]]*\]/g)?.pop() ?? "";
 	return key.replace(/^\[|\]$/g, "").replace(/^["']|["']$/g, "");
+}
+
+// ILM policy name = the address index key (`...index_lifecycle.this["alerts-ilm-policy"]`).
+export function ilmPolicyFromAddress(address: string): string {
+	return addressIndexKey(address);
+}
+
+// SIO-889: redaction/oversize sentinels the elastic-iac drift-report uses for values the agent must
+// never write back (a secret was here / the value exceeded the cap). Mirrors scripts/drift-values.ts.
+const REDACTED_SENTINEL = "<redacted:sensitive>";
+const OVERSIZED_SENTINEL = "<omitted:too-large>";
+
+// True when a resource carries at least one writable live value (a defined, non-sentinel `before`).
+function hasWritableBefore(values?: Record<string, { before?: unknown }>): boolean {
+	if (!values) return false;
+	return Object.values(values).some(
+		(v) => v?.before !== undefined && v.before !== REDACTED_SENTINEL && v.before !== OVERSIZED_SENTINEL,
+	);
+}
+
+// SIO-889: Approach-B projection. Set each writable top-level key of a repo config file to the live
+// (`before`) value from the drift-report. Skips undefined + sentinels and keys already equal to live
+// (per-key empty-diff). `applied` lists the keys actually changed (empty => no change -> caller skips
+// the file). Throws on unparseable JSON. Top-level keys only (provider attrs are top-level in the repo
+// JSON, per the README convention). (Pure; unit-tested.)
+export function applyReportValuesToConfig(
+	fileContent: string,
+	values: Record<string, { before?: unknown; after?: unknown }>,
+): { content: string; applied: string[] } {
+	const obj = JSON.parse(fileContent) as Record<string, unknown>;
+	const applied: string[] = [];
+	for (const [key, pair] of Object.entries(values)) {
+		const before = pair?.before;
+		if (before === undefined || before === REDACTED_SENTINEL || before === OVERSIZED_SENTINEL) continue;
+		if (JSON.stringify(obj[key]) === JSON.stringify(before)) continue; // per-key empty-diff guard
+		obj[key] = before;
+		applied.push(key);
+	}
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, applied };
 }
 
 // Project a LIVE `_ilm/policy/<name>` response onto the repo's flattened phase-file shape (top-level
@@ -1639,17 +1767,16 @@ interface LiveReconcileBuild {
 	note?: string;
 }
 
-// reconcile-to-live: rewrite the repo config to match the live cluster. Dispatches by stack family
-// -- the deployment stack edits its single per-deployment JSON (version + tier sizing/zone); the
-// lifecycle-policies stack rewrites each drifted policy file from its live ILM policy. (Exported
-// for unit testing via mocked tools.)
+// reconcile-to-live: rewrite the repo config to match the live cluster. Dispatches to the matched
+// family's build (deployment: version + tier sizing/zone; ilm: each policy file from the live ILM
+// policy; report-sourced: each resource file from the drift-report `values.before`). (Exported for
+// unit testing via mocked tools.)
 export async function buildLiveReconcile(
 	deployment: string,
 	stack: StackDrift,
 ): Promise<LiveReconcileBuild | { blocked: string }> {
-	return configStackFamily(stack.stack) === "ilm"
-		? buildLiveIlmReconcile(deployment, stack)
-		: buildLiveDeploymentReconcile(deployment, stack);
+	const family = liveReconcileFamily(stack.stack);
+	return family ? family.build(deployment, stack) : { blocked: "No live-reconcile family is wired for this stack." };
 }
 
 // deployment family: read the live EC deployment once, then apply the live version (when "version"
@@ -1738,6 +1865,42 @@ async function buildLiveIlmReconcile(
 			? `Live ILM actions not represented in the repo file shape will be dropped after apply: ${[...lost].sort().join(", ")}.`
 			: undefined;
 	return { files, summary: `${files.length} policy file(s): ${written.join(", ")}`, ...(note && { note }) };
+}
+
+// SIO-889: Approach-B reconcile-to-live for report-sourced families (e.g. agent-policies). Live
+// values come from each resource's drift-report `values.before` (no MCP live read); the per-resource
+// repo file is environments/<dep>/<stack>/<for_each-key>.json. Reads each file, projects the writable
+// live values onto it, and drops no-op files. Blocks (never a false no-op) on an unreadable file.
+async function buildReportSourcedReconcile(
+	deployment: string,
+	stack: StackDrift,
+): Promise<LiveReconcileBuild | { blocked: string }> {
+	const template = stackConfigPathTemplate();
+	const files: ReconcileFile[] = [];
+	const summaryParts: string[] = [];
+	for (const r of stack.resources) {
+		if ((r.category !== "update" && r.category !== "replace") || !r.values) continue;
+		const key = addressIndexKey(r.address);
+		if (!key) continue; // no for_each key -> cannot resolve a file
+		const filePath = stackResourcePath(template, deployment, stack.stack, key);
+		const raw = await callTool("gitlab_get_file_content", { filePath });
+		if (!raw.startsWith("[2")) return { blocked: `Could not read ${filePath} from the repo.` };
+		let projected: { content: string; applied: string[] };
+		try {
+			projected = applyReportValuesToConfig(extractFileContent(raw), r.values);
+		} catch (err) {
+			return { blocked: `${filePath} could not be rewritten: ${err instanceof Error ? err.message : String(err)}` };
+		}
+		if (projected.applied.length === 0) continue; // all keys redacted/oversized or already match
+		files.push({ path: filePath, content: projected.content });
+		summaryParts.push(`${key}: ${projected.applied.join(", ")}`);
+	}
+	if (files.length === 0) {
+		return {
+			blocked: "No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).",
+		};
+	}
+	return { files, summary: summaryParts.join("; ") };
 }
 
 // Open one independent, idempotent MR for a stack + direction (or block with a reason).
@@ -1994,18 +2157,12 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 					: "no drift"
 		}`,
 	});
-	// reconcile-to-live is offered only when the actual drift maps to a clean live->file write.
-	// deployment family: the "version" key (-> live ES version) or the "elasticsearch" key (-> live
-	// tier sizing/zone). ilm family: any resource whose policy name parses from its address (-> live
-	// ILM policy rewrite). HCL: never. The empty-diff guard in buildLiveReconcile still blocks an
-	// MR when live already equals the repo, so a coarse "elasticsearch" key never opens a no-op MR.
-	const family = configStackFamily(stack);
-	const deploymentLiveKeys =
-		family === "deployment"
-			? actionable.flatMap((c) => c.changedKeys).filter((k) => k === "version" || k === "elasticsearch")
-			: [];
-	const ilmLiveReconcilable = family === "ilm" && actionable.some((c) => ilmPolicyFromAddress(c.address) !== "");
-	const liveReconcilable = deploymentLiveKeys.length > 0 || ilmLiveReconcilable;
+	// reconcile-to-live is offered only when the actual drift maps to a clean live->file write; the
+	// matched family decides (deployment: version/elasticsearch keys; ilm: a parseable policy address).
+	// Unwired stacks never offer it. The empty-diff guard in buildLiveReconcile still blocks a no-op MR
+	// when live already equals the repo, so a coarse "elasticsearch" key never opens an empty MR.
+	const family = liveReconcileFamily(stack);
+	const liveReconcilable = family ? family.hasReconcilableDrift(actionable) : false;
 	log.info(
 		{
 			deployment,
@@ -2034,6 +2191,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			reason: c.reason,
 			changedKeys: c.changedKeys,
 			category: c.category,
+			values: c.values,
 		})),
 	};
 }
