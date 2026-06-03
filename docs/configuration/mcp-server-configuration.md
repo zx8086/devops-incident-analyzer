@@ -659,7 +659,7 @@ Per project rules the schema carries no `.default()`; `loadConfig()` supplies ex
 | Terraform (5) | `terraform_fmt`, `terraform_validate`, `terraform_plan`, `terraform_search_modules`, `terraform_search_providers` | Read-only / local sanity checks; no apply. |
 | Git (7) | `git_clone`, `git_checkout`, `git_create_branch`, `git_commit`, `git_push`, `git_status`, `git_diff` | Branches are `agent/*` only; `git_push` never targets `main`/`master` and never `--force`. |
 | GitLab (5) | `gitlab_get_repository_tree`, `gitlab_get_file_content`, `gitlab_create_merge_request`, `gitlab_get_merge_request`, `gitlab_get_merge_request_pipelines` | REST (`/api/v4`) today; `gitlab_create_merge_request` squashes + removes the source branch and never merges/approves. |
-| Elastic Cloud (6) | `elastic_cloud_list_deployments`, `elastic_cloud_get_deployment`, `elastic_cloud_get_plan_history`, `elastic_get_cluster_health`, `elastic_get_index_template`, `elastic_ilm_get_lifecycle` | Live topology + health reads for the maker graph's `readClusterState`. |
+| Elastic Cloud (6) | `elastic_cloud_list_deployments`, `elastic_cloud_get_deployment`, `elastic_cloud_get_plan_history`, `elastic_get_cluster_health`, `elastic_get_index_template`, `elastic_ilm_get_lifecycle` | Live topology + health reads for the IaC proposer graph's `readClusterState`. |
 
 > **GitLab REST now, native MCP later:** the GitLab tools call the REST API directly because the target instance does not yet expose native MCP. The intended end-state mirrors `packages/mcp-server-gitlab`'s proxy pattern (commit `542f1eb`).
 
