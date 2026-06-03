@@ -93,13 +93,15 @@ tool_mapping:
       - gitlab_get_pipeline_plan_log
       - gitlab_get_merge_request_approvals
       - gitlab_list_agent_merge_requests
+      - gitlab_trigger_drift_check
+      - gitlab_get_drift_check_result
+      - gitlab_get_repository_tree
     status:
       - iac_status
       - iac_list_stacks
       - iac_list_deployments
       - iac_output
       - iac_state_list
-      - iac_plan
   action_descriptions:
     read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before drafting
     read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
@@ -107,8 +109,8 @@ tool_mapping:
     propose: when proposing a config change via the GitLab API -- read the deployment JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
     plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
     open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
-    review_pipeline: when reading an existing MR or its pipelines to report GitOps status (read-only; never merge/approve)
-    status: when reporting IaC reconcile status, per-stack drift (iac_plan), what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
+    review_pipeline: when reading an existing MR or its pipelines to report GitOps status, or reading the per-stack drift the CI plan already computed (gitlab_get_drift_reports) -- read-only; never merge/approve
+    status: when reporting IaC reconcile status, what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
   action_keywords:
     read_state: [state, deployment, topology, plan history, health, ilm, version, versions, running, list]
     plan: [plan, terraform plan, validate, diff]
