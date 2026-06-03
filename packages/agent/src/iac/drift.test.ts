@@ -1,13 +1,18 @@
 // agent/src/iac/drift.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
 	classifyStackByName,
 	configStackFamily,
+	detectLostIlmActions,
 	driftFingerprint,
 	explainStackDrift,
+	extractLiveTopology,
 	extractLiveVersion,
 	formatDriftSummary,
+	ilmPolicyFromAddress,
+	ilmRepoShapeToFile,
 	isActionableDrift,
+	liveIlmToRepoShape,
 	parseAgentMrBySourceBranch,
 	parseDriftCheckResult,
 	parseDriftReport,
@@ -18,6 +23,33 @@ import {
 	shortAddress,
 } from "./nodes.ts";
 import type { IacStateType, StackDrift } from "./state.ts";
+
+// Build a fake tool set so callTool() inside nodes.ts resolves against our stubs.
+function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
+	const tools = Object.entries(handlers).map(([name, fn]) => ({
+		name,
+		invoke: async (args: Record<string, unknown>) => fn(args),
+	}));
+	mock.module("../mcp-bridge.ts", () => ({
+		getToolsForDataSource: () => tools,
+		getConnectedServers: () => ["elastic-iac-mcp"],
+	}));
+}
+
+// A StackDrift stub for the reconcile builders (only the fields they read).
+function stackDrift(over: Partial<StackDrift>): StackDrift {
+	return {
+		stack: "deployments",
+		drifted: true,
+		kind: "config-json",
+		create: 0,
+		update: 1,
+		delete: 0,
+		resources: [],
+		liveReconcilable: true,
+		...over,
+	};
+}
 
 // SIO-884: drift sub-flow pure helpers (GitLab + Elastic Cloud API; no local clone).
 
@@ -165,10 +197,11 @@ describe("classifyStackByName (defaults)", () => {
 		// narrows this to true only when version actually drifted.
 		expect(dep.liveReconcilable).toBe(true);
 
-		// ILM stays reconcile-to-json + skip (live ES ILM JSON -> repo policy-file mapping deferred).
+		// ILM is now live-reconcilable as a static capability (rewrite each policy file from the
+		// live ILM policy); driftCheckStack narrows it to stacks with a parseable policy address.
 		const ilm = classifyStackByName("lifecycle-policies", "eu-b2b");
 		expect(ilm.kind).toBe("config-json");
-		expect(ilm.liveReconcilable).toBe(false);
+		expect(ilm.liveReconcilable).toBe(true);
 
 		const hcl = classifyStackByName("templates", "eu-b2b");
 		expect(hcl.kind).toBe("hcl");
@@ -407,5 +440,328 @@ describe("formatDriftSummary", () => {
 		const out = formatDriftSummary(state);
 		expect(out).toContain("could NOT be planned");
 		expect(out).toContain("broken");
+	});
+});
+
+// reconcile-to-live: deployment tier topology extraction from the live EC deployment GET.
+describe("extractLiveTopology", () => {
+	const body = `[200] ${JSON.stringify({
+		resources: {
+			elasticsearch: [
+				{
+					info: {
+						plan_info: {
+							current: {
+								plan: {
+									cluster_topology: [
+										{ id: "hot_content", size: { value: 8192, resource: "memory" }, zone_count: 2 },
+										{ id: "warm", size: { value: 15360, resource: "memory" }, zone_count: 1 },
+									],
+								},
+							},
+						},
+					},
+				},
+			],
+		},
+	})}`;
+
+	test("maps EC node-role ids -> repo tier keys and MB-RAM -> GB", () => {
+		const topo = extractLiveTopology(body);
+		expect(topo.hot).toEqual({ sizeGb: 8, zoneCount: 2 }); // hot_content -> hot
+		expect(topo.warm).toEqual({ sizeGb: 15, zoneCount: 1 });
+	});
+
+	test("returns {} when the body has no topology / is unparseable", () => {
+		expect(extractLiveTopology("[200] {}")).toEqual({});
+		expect(extractLiveTopology("not json")).toEqual({});
+	});
+
+	test("skips an element with no id and ignores non-memory size", () => {
+		const b = `[200] ${JSON.stringify({
+			resources: {
+				elasticsearch: [
+					{
+						info: {
+							plan_info: {
+								current: {
+									plan: {
+										cluster_topology: [
+											{ size: { value: 4096, resource: "memory" } }, // no id -> skipped
+											{ id: "cold", size: { value: 2, resource: "storage" }, zone_count: 1 }, // non-memory size ignored
+										],
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+		})}`;
+		expect(extractLiveTopology(b)).toEqual({ cold: { zoneCount: 1 } });
+	});
+});
+
+describe("ilmPolicyFromAddress", () => {
+	test("extracts the policy name from the trailing index key", () => {
+		expect(
+			ilmPolicyFromAddress(
+				'module.lifecycle_policies.elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]',
+			),
+		).toBe("alerts-ilm-policy");
+	});
+	test("preserves @ and . in the policy name", () => {
+		expect(ilmPolicyFromAddress('module.x.this["90-days@lifecycle"]')).toBe("90-days@lifecycle");
+	});
+	test("returns empty for an address with no index key", () => {
+		expect(ilmPolicyFromAddress("ec_deployment.this")).toBe("");
+	});
+});
+
+describe("liveIlmToRepoShape", () => {
+	const live = `[200] ${JSON.stringify({
+		"90-days@lifecycle": {
+			version: 3,
+			modified_date: "2026-01-01",
+			policy: {
+				phases: {
+					hot: {
+						min_age: "0ms",
+						actions: {
+							rollover: { max_age: "30d", max_primary_shard_size: "50gb", min_docs: 1 },
+							set_priority: { priority: 100 },
+						},
+					},
+					warm: { min_age: "2d", actions: { forcemerge: { max_num_segments: 1 }, set_priority: { priority: 50 } } },
+					delete: { min_age: "90d", actions: { delete: { delete_searchable_snapshot: true } } },
+				},
+			},
+		},
+	})}`;
+
+	test("projects live phases onto the repo flattened shape", () => {
+		expect(liveIlmToRepoShape(live, "90-days@lifecycle")).toEqual({
+			name: "90-days@lifecycle",
+			hot: { rollover: true, max_age: "30d", max_primary_shard_size: "50gb", min_docs: 1 },
+			warm: { min_age: "2d", forcemerge: { max_num_segments: 1 } },
+			delete: { min_age: "90d", delete_searchable_snapshot: true },
+		});
+	});
+
+	test("drops hot min_age (0ms) and unmodeled set_priority", () => {
+		const shape = liveIlmToRepoShape(live, "90-days@lifecycle") as Record<string, Record<string, unknown>>;
+		expect(shape.hot?.min_age).toBeUndefined();
+		expect(shape.hot?.set_priority).toBeUndefined();
+		expect(shape.warm?.set_priority).toBeUndefined();
+	});
+
+	test("null on a missing policy key / unparseable body", () => {
+		expect(liveIlmToRepoShape(live, "no-such-policy")).toBeNull();
+		expect(liveIlmToRepoShape("[404] not found", "x")).toBeNull();
+	});
+});
+
+describe("ilmRepoShapeToFile", () => {
+	test("serializes with 2-space indent and a trailing newline", () => {
+		const out = ilmRepoShapeToFile({ name: "x", delete: { min_age: "90d" } });
+		expect(out.endsWith("}\n")).toBe(true);
+		expect(out).toContain('\n  "delete": {');
+	});
+});
+
+describe("detectLostIlmActions", () => {
+	test("lists live action keys the repo file shape can't represent (sorted, deduped)", () => {
+		const live = `[200] ${JSON.stringify({
+			p: {
+				policy: {
+					phases: {
+						hot: { actions: { rollover: {}, set_priority: { priority: 100 } } },
+						warm: { actions: { allocate: { number_of_replicas: 1 }, forcemerge: {}, set_priority: {} } },
+					},
+				},
+			},
+		})}`;
+		expect(detectLostIlmActions(live)).toEqual(["allocate", "set_priority"]);
+	});
+	test("empty when only modeled actions are present, and on an unparseable body", () => {
+		const live = `[200] ${JSON.stringify({ p: { policy: { phases: { delete: { actions: { delete: {} } } } } } })}`;
+		expect(detectLostIlmActions(live)).toEqual([]);
+		expect(detectLostIlmActions("nope")).toEqual([]);
+	});
+});
+
+// Build the reconcile-to-live change through mocked tools (the proven pattern: mock mcp-bridge,
+// then dynamic-import the flow function so callTool resolves against the stubs).
+const b64 = (s: string) =>
+	`[200] ${JSON.stringify({ content: Buffer.from(s).toString("base64"), encoding: "base64" })}`;
+
+describe("buildLiveReconcile — deployment family", () => {
+	const ecList = `[200] ${JSON.stringify({ deployments: [{ id: "dep-1", name: "eu-b2b" }] })}`;
+
+	test("version drift: writes the live version into the per-deployment JSON", async () => {
+		mockTools({
+			elastic_cloud_list_deployments: () => ecList,
+			elastic_cloud_get_deployment: () =>
+				`[200] ${JSON.stringify({ resources: { elasticsearch: [{ info: { version: "9.4.2" } }] } })}`,
+			gitlab_get_file_content: () => b64(`${JSON.stringify({ name: "eu-b2b", version: "9.4.1" }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "deployments",
+				configPath: "environments/_deployments/eu-b2b.json",
+				resources: [
+					{ address: 'module.deployments["eu-b2b"].ec_deployment.this', actions: ["update"], changedKeys: ["version"] },
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(built.files).toHaveLength(1);
+			expect(built.files[0]?.path).toBe("environments/_deployments/eu-b2b.json");
+			expect(JSON.parse(built.files[0]?.content ?? "{}").version).toBe("9.4.2");
+			expect(built.summary).toContain("version 9.4.1 -> 9.4.2");
+		}
+	});
+
+	test("elasticsearch drift: writes live tier max_size + zone_count, leaves current size", async () => {
+		mockTools({
+			elastic_cloud_list_deployments: () => ecList,
+			elastic_cloud_get_deployment: () =>
+				`[200] ${JSON.stringify({
+					resources: {
+						elasticsearch: [
+							{
+								info: {
+									plan_info: {
+										current: {
+											plan: {
+												cluster_topology: [{ id: "warm", size: { value: 8192, resource: "memory" }, zone_count: 3 }],
+											},
+										},
+									},
+								},
+							},
+						],
+					},
+				})}`,
+			gitlab_get_file_content: () =>
+				b64(
+					`${JSON.stringify({ name: "eu-b2b", elasticsearch: { warm: { size: "8g", max_size: "15g", zone_count: 2 } } }, null, 2)}\n`,
+				),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "deployments",
+				configPath: "environments/_deployments/eu-b2b.json",
+				resources: [
+					{
+						address: 'module.deployments["eu-b2b"].ec_deployment.this',
+						actions: ["update"],
+						changedKeys: ["elasticsearch"],
+					},
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			const p = JSON.parse(built.files[0]?.content ?? "{}");
+			expect(p.elasticsearch.warm.max_size).toBe("8g"); // 8192MB -> 8g
+			expect(p.elasticsearch.warm.zone_count).toBe(3);
+			expect(p.elasticsearch.warm.size).toBe("8g"); // current size untouched
+			expect(built.summary).toContain("warm");
+		}
+	});
+
+	test("empty-diff guard: blocks when live already matches the repo", async () => {
+		const repo = `${JSON.stringify({ name: "eu-b2b", version: "9.4.1" }, null, 2)}\n`;
+		mockTools({
+			elastic_cloud_list_deployments: () => ecList,
+			elastic_cloud_get_deployment: () =>
+				`[200] ${JSON.stringify({ resources: { elasticsearch: [{ info: { version: "9.4.1" } }] } })}`,
+			gitlab_get_file_content: () => b64(repo),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "deployments",
+				configPath: "environments/_deployments/eu-b2b.json",
+				resources: [{ address: "x", actions: ["update"], changedKeys: ["version"] }],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) expect(built.blocked).toContain("already matches live");
+	});
+});
+
+describe("buildLiveReconcile — ilm family", () => {
+	const ilmAddr = (p: string) => `module.lifecycle_policies.elasticstack_elasticsearch_index_lifecycle.this["${p}"]`;
+
+	test("rewrites the policy file from the live ILM policy", async () => {
+		const live = `[200] ${JSON.stringify({
+			"90-days@lifecycle": {
+				policy: { phases: { delete: { min_age: "90d", actions: { delete: { delete_searchable_snapshot: true } } } } },
+			},
+		})}`;
+		mockTools({
+			elastic_ilm_get_lifecycle: () => live,
+			gitlab_get_file_content: () =>
+				b64(`${JSON.stringify({ name: "90-days@lifecycle", delete: { min_age: "30d" } }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "lifecycle-policies",
+				resources: [{ address: ilmAddr("90-days@lifecycle"), actions: ["update"], changedKeys: ["delete"] }],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/lifecycle-policies/90-days@lifecycle.json");
+			const p = JSON.parse(built.files[0]?.content ?? "{}");
+			expect(p.delete.min_age).toBe("90d");
+			expect(p.delete.delete_searchable_snapshot).toBe(true);
+		}
+	});
+
+	test("blocks when the live cluster read is not authoritative (e.g. cluster not configured)", async () => {
+		mockTools({
+			elastic_ilm_get_lifecycle: () =>
+				"[cluster 'eu-b2b' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]",
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "lifecycle-policies",
+				resources: [{ address: ilmAddr("logs"), actions: ["update"], changedKeys: ["hot"] }],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) expect(built.blocked).toContain("Could not read live ILM policy");
+	});
+
+	test("empty-diff guard: blocks when the repo file already matches live", async () => {
+		const live = `[200] ${JSON.stringify({ logs: { policy: { phases: { delete: { min_age: "90d", actions: {} } } } } })}`;
+		const matching = ilmRepoShapeToFile({ name: "logs", delete: { min_age: "90d" } });
+		mockTools({
+			elastic_ilm_get_lifecycle: () => live,
+			gitlab_get_file_content: () => b64(matching),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "lifecycle-policies",
+				resources: [{ address: ilmAddr("logs"), actions: ["update"], changedKeys: ["delete"] }],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) expect(built.blocked).toContain("already match");
 	});
 });

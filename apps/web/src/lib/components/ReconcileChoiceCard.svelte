@@ -1,6 +1,10 @@
 <script lang="ts">
 // apps/web/src/lib/components/ReconcileChoiceCard.svelte
-import type { IacReconcileChoice, ReconcileDirection } from "$lib/stores/agent-reducer.ts";
+import {
+	type IacReconcileChoice,
+	RECONCILE_DIRECTION_LABELS,
+	type ReconcileDirection,
+} from "$lib/stores/agent-reducer.ts";
 
 let {
 	prompt,
@@ -12,11 +16,7 @@ let {
 	onChoose: (direction: ReconcileDirection) => void;
 } = $props();
 
-const LABELS: Record<ReconcileDirection, string> = {
-	"reconcile-to-live": "Reconcile to live",
-	"reconcile-to-json": "Reconcile to declared (open MR)",
-	skip: "Skip",
-};
+const LABELS = RECONCILE_DIRECTION_LABELS;
 </script>
 
 <div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-reconcile-heading">
@@ -61,9 +61,9 @@ const LABELS: Record<ReconcileDirection, string> = {
     </div>
     <p class="mt-2 text-xs text-gray-500">
       {#if prompt.directions.includes("reconcile-to-live")}
-        Reconcile to live writes the live value into the config file; reconcile to declared re-asserts the repo so CI's plan shows the revert. Both open an MR &mdash; I never merge or apply.
+        Reconcile to Live Deployment writes the live values into the config file; Reconcile to GitLab re-asserts the repo so CI's plan shows the revert. Both open an MR &mdash; I never merge or apply.
       {:else}
-        Reconcile to declared opens an MR; CI computes the plan showing the revert. I never merge or apply.
+        Reconcile to GitLab opens an MR; CI computes the plan showing the revert. I never merge or apply.
       {/if}
     </p>
   </div>

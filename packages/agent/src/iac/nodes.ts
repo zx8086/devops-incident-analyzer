@@ -359,6 +359,54 @@ export function setDeploymentTierSize(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousMax };
 }
 
+// reconcile-to-live: rewrite the deployment JSON's elasticsearch block to match the live cluster's
+// per-tier sizing. Sets max_size ("<N>g") + zone_count for each tier present in BOTH the JSON and
+// `topo`; never invents a tier the repo doesn't manage. The live "size" is the autoscaling ceiling
+// -> max_size; the repo's current "size" is left untouched (the drift signal is too coarse to tell
+// size from max_size, so the empty-diff guard upstream catches no-op rewrites). Captures a per-tier
+// previous mirror for the MR summary. Preserves other tier fields + trailing newline. Throws on bad
+// JSON / missing elasticsearch block. (Pure; unit-tested.)
+export function applyLiveTopology(
+	json: string,
+	topo: Record<string, { sizeGb?: number; zoneCount?: number }>,
+): { content: string; previous: Record<string, { maxSize?: string; zoneCount?: number }> } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as { elasticsearch?: Record<string, unknown> };
+	const es = obj.elasticsearch;
+	if (!es || typeof es !== "object") throw new Error("deployment JSON has no elasticsearch block");
+	const previous: Record<string, { maxSize?: string; zoneCount?: number }> = {};
+	for (const [tier, live] of Object.entries(topo)) {
+		const t = es[tier];
+		if (!t || typeof t !== "object") continue; // never invent a tier the repo doesn't manage
+		const tierObj = t as Record<string, unknown>;
+		const prev: { maxSize?: string; zoneCount?: number } = {};
+		let touched = false;
+		// Only count a field as touched when the live value actually differs from the repo value;
+		// otherwise a no-op (live already matches) would record a phantom edit in `previous`, which
+		// the MR summary then reports as a change that was never written.
+		if (live.sizeGb !== undefined) {
+			const next = `${live.sizeGb}g`;
+			if (tierObj.max_size !== next) {
+				if (typeof tierObj.max_size === "string") prev.maxSize = tierObj.max_size;
+				tierObj.max_size = next;
+				touched = true;
+			}
+		}
+		if (live.zoneCount !== undefined) {
+			if (tierObj.zone_count !== live.zoneCount) {
+				if (typeof tierObj.zone_count === "number") prev.zoneCount = tierObj.zone_count;
+				tierObj.zone_count = live.zoneCount;
+				touched = true;
+			}
+		}
+		if (touched) previous[tier] = prev;
+	}
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous };
+}
+
 // SIO-880: read-modify-write an ILM lifecycle-policy JSON by deep-merging a nested phase
 // patch (top-level keys are phases: hot/warm/cold/delete). Recurses into nested objects
 // (e.g. warm.forcemerge), replaces scalars/arrays/null. Captures the pre-merge value of
@@ -1273,19 +1321,18 @@ export function configStackFamily(stack: string): "deployment" | "ilm" | null {
 }
 
 // Classify a stack from its NAME (no repo probe -- the fan-out runs N of these). config-JSON
-// families resolve an editable JSON path; liveReconcilable is true only where a clean
-// live->file write exists (the deployment-config stack -> version). ILM + HCL get
-// reconcile-to-json + skip only. (Pure; unit-tested.)
+// families resolve an editable JSON path; liveReconcilable is the STATIC capability (true for both
+// config-JSON families -- the deployment-config stack and the lifecycle-policies/ILM stack);
+// driftCheckStack narrows it to the actual drift. HCL is never live-reconcilable. (Pure; unit-tested.)
 export function classifyStackByName(
 	stack: string,
 	deployment: string,
 ): { kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean } {
 	const family = configStackFamily(stack);
 	if (family === "deployment") {
-		// SIO-886: the deployment-config stack CAN reconcile-to-live (the version field).
-		// This is the static capability; driftCheckStack narrows it to true only when version
-		// actually drifted, so reconcile-to-live never opens an empty-diff MR for tier/zone-only
-		// drift (those still use reconcile-to-json).
+		// The deployment-config stack CAN reconcile-to-live (version + tier sizing/zone). This is the
+		// static capability; driftCheckStack narrows it to the keys that actually drifted, and the
+		// empty-diff guard in buildLiveReconcile prevents an MR when live already matches the repo.
 		return {
 			kind: "config-json",
 			configPath: deploymentJsonPath(deploymentJsonTemplate(), deployment),
@@ -1294,9 +1341,12 @@ export function classifyStackByName(
 	}
 	if (family === "ilm") {
 		// Lifecycle-policies dir from the configured template (honors ELASTIC_IAC_ILM_POLICY_TEMPLATE).
+		// The ILM stack CAN reconcile-to-live (rewrite each policy file from the live ILM policy);
+		// driftCheckStack narrows it to stacks with a parseable policy address, and the live read
+		// needs a configured per-deployment cluster (ELASTIC_IAC_CLUSTER_*), else the build blocks.
 		const probe = deploymentJsonPath(ilmPolicyTemplate(), deployment, "__probe__");
 		const dir = probe.includes("/") ? probe.slice(0, probe.lastIndexOf("/")) : probe;
-		return { kind: "config-json", configPath: dir, liveReconcilable: false };
+		return { kind: "config-json", configPath: dir, liveReconcilable: true };
 	}
 	return { kind: "hcl", liveReconcilable: false };
 }
@@ -1376,6 +1426,52 @@ export function extractLiveVersion(deploymentDetail: string): string {
 	return m?.[1] ?? "";
 }
 
+// Per-tier sizing from the live EC deployment GET body (resources.elasticsearch[0].info.plan_info
+// .current.plan.cluster_topology[]). Maps EC node-role ids -> repo tier keys (hot_content -> hot;
+// warm/cold/frozen pass through) and MB-RAM size.value -> GB. Empty when the body lacks topology.
+// (Pure; unit-tested.)
+export function extractLiveTopology(deploymentDetail: string): Record<string, { sizeGb?: number; zoneCount?: number }> {
+	const out: Record<string, { sizeGb?: number; zoneCount?: number }> = {};
+	const jsonStart = deploymentDetail.indexOf("{");
+	if (jsonStart < 0) return out;
+	try {
+		const parsed = JSON.parse(deploymentDetail.slice(jsonStart)) as {
+			resources?: {
+				elasticsearch?: Array<{
+					info?: {
+						plan_info?: {
+							current?: {
+								plan?: {
+									cluster_topology?: Array<{
+										id?: unknown;
+										size?: { value?: unknown; resource?: unknown };
+										zone_count?: unknown;
+									}>;
+								};
+							};
+						};
+					};
+				}>;
+			};
+		};
+		const topo = parsed.resources?.elasticsearch?.[0]?.info?.plan_info?.current?.plan?.cluster_topology ?? [];
+		for (const el of topo) {
+			const id = typeof el.id === "string" ? el.id : "";
+			if (!id) continue;
+			const tier = id === "hot_content" ? "hot" : id;
+			const entry: { sizeGb?: number; zoneCount?: number } = {};
+			if (el.size && el.size.resource === "memory" && typeof el.size.value === "number") {
+				entry.sizeGb = el.size.value / 1024;
+			}
+			if (typeof el.zone_count === "number") entry.zoneCount = el.zone_count;
+			if (entry.sizeGb !== undefined || entry.zoneCount !== undefined) out[tier] = entry;
+		}
+	} catch {
+		// best-effort: return whatever parsed cleanly
+	}
+	return out;
+}
+
 // Agent-side path template for the reconcile-to-json marker. ${stack}/${deployment} are
 // literal placeholders. The IaC repo's CI generator special-cases this exact path (MR !66,
 // merged 2026-06-03) so a marker scopes the MR pipeline to ONLY the named (stack, deployment)
@@ -1406,7 +1502,8 @@ function buildReconcileMrBody(
 	deployment: string,
 	stack: StackDrift,
 	direction: ReconcileDirection,
-	filePath: string,
+	filePaths: string,
+	note?: string,
 ): string {
 	const summary = `${stack.create} create / ${stack.update} update / ${stack.delete} destroy`;
 	const lines = [
@@ -1423,32 +1520,224 @@ function buildReconcileMrBody(
 					.map((r) => `- ${r.actions.join("+")} ${r.address}`)
 					.join("\n")}`
 			: "",
-		`\nFile touched: \`${filePath}\``,
+		`\nFile(s) touched: \`${filePaths}\``,
+		// Caveat (e.g. live ILM actions the repo file shape can't represent) -- shown so a reviewer
+		// sees what reconcile-to-live would drop before approving.
+		note ? `\n> Note: ${note}` : "",
 		"",
 		"Agent-generated. I never merge or apply; review the plan and apply manually in GitLab.",
 	];
 	return lines.filter((l) => l !== "").join("\n");
 }
 
-// reconcile-to-live (deployment-config version only, Phase 1): write the LIVE version into
-// the repo JSON via the existing read-modify-write helper.
-async function buildLiveVersionReconcile(
+// Pull the ILM policy name from a drift resource address' last index key:
+// `...elasticstack_elasticsearch_index_lifecycle.this["alerts-ilm-policy"]` -> `alerts-ilm-policy`.
+// "" when the address has no index key. (Pure; unit-tested.)
+export function ilmPolicyFromAddress(address: string): string {
+	const key = address.match(/\[[^\]]*\]/g)?.pop() ?? "";
+	return key.replace(/^\[|\]$/g, "").replace(/^["']|["']$/g, "");
+}
+
+// Project a LIVE `_ilm/policy/<name>` response onto the repo's flattened phase-file shape (top-level
+// hot/warm/cold/delete + name). LOSSY BY DESIGN: only the fields the repo models survive (the hot
+// rollover fields + a rollover:true flag, per-phase forcemerge, warm/cold/delete min_age, and
+// delete.delete_searchable_snapshot). Unmodeled live actions (set_priority, allocate, readonly,
+// shrink, searchable_snapshot, downsample, ...) have no repo slot and are dropped -- detectLostIlmActions
+// surfaces them. null on an unparseable body / missing policy.phases. (Pure; unit-tested.)
+export function liveIlmToRepoShape(liveResponse: string, policyName: string): Record<string, unknown> | null {
+	const start = liveResponse.indexOf("{");
+	if (start < 0) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(liveResponse.slice(start));
+	} catch {
+		return null;
+	}
+	const get = (o: unknown, k: string): unknown =>
+		o && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined;
+	const phases = get(get(get(parsed, policyName), "policy"), "phases");
+	if (!phases || typeof phases !== "object") return null;
+	const phasesObj = phases as Record<string, unknown>;
+
+	const out: Record<string, unknown> = { name: policyName };
+	for (const phase of ["hot", "warm", "cold", "delete"] as const) {
+		const p = phasesObj[phase];
+		if (!p || typeof p !== "object") continue;
+		const actions = get(p, "actions");
+		const repoPhase: Record<string, unknown> = {};
+		const minAge = get(p, "min_age");
+		// hot.min_age is conventionally "0ms" (rollover phase) -> not a repo field; keep it elsewhere.
+		if (phase !== "hot" && typeof minAge === "string") repoPhase.min_age = minAge;
+		if (phase === "hot") {
+			const rollover = get(actions, "rollover");
+			if (rollover) {
+				repoPhase.rollover = true;
+				for (const f of ["max_age", "max_primary_shard_size", "max_size", "min_docs"]) {
+					const v = get(rollover, f);
+					if (v !== undefined) repoPhase[f] = v;
+				}
+			}
+		}
+		const forcemerge = get(actions, "forcemerge");
+		if (forcemerge !== undefined) repoPhase.forcemerge = forcemerge;
+		if (phase === "delete") {
+			const dss = get(get(actions, "delete"), "delete_searchable_snapshot");
+			if (dss !== undefined) repoPhase.delete_searchable_snapshot = dss;
+		}
+		if (Object.keys(repoPhase).length > 0) out[phase] = repoPhase;
+	}
+	return out;
+}
+
+// Serialize a repo ILM shape with house style (2-space indent + trailing newline). (Pure.)
+export function ilmRepoShapeToFile(shape: Record<string, unknown>): string {
+	return `${JSON.stringify(shape, null, 2)}\n`;
+}
+
+// The live ILM action keys the repo file shape does NOT model, across all phases (set_priority,
+// allocate, readonly, shrink, searchable_snapshot, downsample, migrate, ...). Surfaced in the MR
+// body so a human sees what reconcile-to-live would drop after apply. (Pure; unit-tested.)
+export function detectLostIlmActions(liveResponse: string): string[] {
+	const start = liveResponse.indexOf("{");
+	if (start < 0) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(liveResponse.slice(start));
+	} catch {
+		return [];
+	}
+	const get = (o: unknown, k: string): unknown =>
+		o && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined;
+	const modeled = new Set(["rollover", "forcemerge", "delete"]);
+	const lost = new Set<string>();
+	if (typeof parsed === "object" && parsed !== null) {
+		for (const node of Object.values(parsed as Record<string, unknown>)) {
+			const phases = get(get(node, "policy"), "phases");
+			if (!phases || typeof phases !== "object") continue;
+			for (const phase of Object.values(phases as Record<string, unknown>)) {
+				const actions = get(phase, "actions");
+				if (!actions || typeof actions !== "object") continue;
+				for (const key of Object.keys(actions as Record<string, unknown>)) {
+					if (!modeled.has(key)) lost.add(key);
+				}
+			}
+		}
+	}
+	return [...lost].sort();
+}
+
+// One repo file a reconcile-to-live MR writes (full new content, not a diff).
+interface ReconcileFile {
+	path: string;
+	content: string;
+}
+// The result of building a reconcile-to-live change: the changed files (empty-diff files dropped),
+// a human summary for the commit/MR, and an optional caveat note (e.g. dropped ILM actions).
+interface LiveReconcileBuild {
+	files: ReconcileFile[];
+	summary: string;
+	note?: string;
+}
+
+// reconcile-to-live: rewrite the repo config to match the live cluster. Dispatches by stack family
+// -- the deployment stack edits its single per-deployment JSON (version + tier sizing/zone); the
+// lifecycle-policies stack rewrites each drifted policy file from its live ILM policy. (Exported
+// for unit testing via mocked tools.)
+export async function buildLiveReconcile(
 	deployment: string,
-	configPath: string,
-): Promise<{ content: string; from: string; to: string } | { blocked: string }> {
+	stack: StackDrift,
+): Promise<LiveReconcileBuild | { blocked: string }> {
+	return configStackFamily(stack.stack) === "ilm"
+		? buildLiveIlmReconcile(deployment, stack)
+		: buildLiveDeploymentReconcile(deployment, stack);
+}
+
+// deployment family: read the live EC deployment once, then apply the live version (when "version"
+// drifted) and/or the live tier sizing/zone (when "elasticsearch" drifted) to the per-deployment
+// JSON. Empty-diff guard blocks a no-op MR (live already matches the repo).
+async function buildLiveDeploymentReconcile(
+	deployment: string,
+	stack: StackDrift,
+): Promise<LiveReconcileBuild | { blocked: string }> {
+	const configPath = stack.configPath;
+	if (!configPath) return { blocked: "No deployment config path resolved for this stack." };
 	const deploymentId = await resolveDeploymentId(deployment);
 	if (!deploymentId) return { blocked: `Could not resolve a live Elastic Cloud deployment id for '${deployment}'.` };
 	const detail = await callTool("elastic_cloud_get_deployment", { deploymentId });
-	const liveVersion = extractLiveVersion(detail);
-	if (!liveVersion) return { blocked: "Could not read the live Elasticsearch version to reconcile." };
 	const raw = await callTool("gitlab_get_file_content", { filePath: configPath });
 	if (!raw.startsWith("[2")) return { blocked: `Could not read ${configPath} from the repo.` };
+	const original = extractFileContent(raw);
+
+	const changedKeys = stack.resources.flatMap((r) => r.changedKeys ?? []);
+	const summaryParts: string[] = [];
+	let content = original;
 	try {
-		const updated = setDeploymentVersion(extractFileContent(raw), liveVersion);
-		return { content: updated.content, from: updated.previous ?? "?", to: liveVersion };
-	} catch {
-		return { blocked: `${configPath} did not parse as JSON.` };
+		if (changedKeys.includes("version")) {
+			const liveVersion = extractLiveVersion(detail);
+			if (!liveVersion) return { blocked: "Could not read the live Elasticsearch version to reconcile." };
+			const updated = setDeploymentVersion(content, liveVersion);
+			content = updated.content;
+			summaryParts.push(`version ${updated.previous ?? "?"} -> ${liveVersion}`);
+		}
+		if (changedKeys.includes("elasticsearch")) {
+			const topo = extractLiveTopology(detail);
+			if (Object.keys(topo).length === 0) return { blocked: "Could not read the live tier topology to reconcile." };
+			const updated = applyLiveTopology(content, topo);
+			content = updated.content;
+			for (const [tier, prev] of Object.entries(updated.previous)) {
+				const live = topo[tier];
+				const bits: string[] = [];
+				if (live?.sizeGb !== undefined) bits.push(`max_size ${prev.maxSize ?? "?"} -> ${live.sizeGb}g`);
+				if (live?.zoneCount !== undefined) bits.push(`zone_count ${prev.zoneCount ?? "?"} -> ${live.zoneCount}`);
+				if (bits.length > 0) summaryParts.push(`${tier} ${bits.join(", ")}`);
+			}
+		}
+	} catch (err) {
+		return { blocked: `${configPath} could not be rewritten: ${err instanceof Error ? err.message : String(err)}` };
 	}
+	// Empty-diff guard: never open an MR that changes nothing (live already matches the repo).
+	if (content === original) return { blocked: "Repo already matches live for the drifted fields; nothing to write." };
+	return { files: [{ path: configPath, content }], summary: summaryParts.join("; ") || "reconcile to live" };
+}
+
+// ilm family: for each drifted policy (name parsed from the drift address) read the live ILM policy,
+// project it onto the repo file shape, and rewrite the policy file. Per-file empty-diff guard drops
+// no-op files; a note lists live actions the repo shape can't represent (dropped after apply).
+async function buildLiveIlmReconcile(
+	deployment: string,
+	stack: StackDrift,
+): Promise<LiveReconcileBuild | { blocked: string }> {
+	const policies = [...new Set(stack.resources.map((r) => ilmPolicyFromAddress(r.address)).filter(Boolean))];
+	if (policies.length === 0) return { blocked: "No ILM policy name could be parsed from the drift addresses." };
+
+	const files: ReconcileFile[] = [];
+	const lost = new Set<string>();
+	const written: string[] = [];
+	for (const policy of policies) {
+		const live = await callTool("elastic_ilm_get_lifecycle", { policy, deployment });
+		// clusterFetch returns "[<status>] <body>"; only a 2xx is an authoritative live read. A
+		// missing cluster config / unreachable cluster / non-2xx all fall here -> block (never a
+		// false "no change").
+		if (!live.startsWith("[2")) {
+			return { blocked: `Could not read live ILM policy '${policy}' on '${deployment}': ${live.slice(0, 120)}` };
+		}
+		const shape = liveIlmToRepoShape(live, policy);
+		if (!shape) return { blocked: `Live ILM policy '${policy}' did not match the expected response shape.` };
+		const filePath = deploymentJsonPath(ilmPolicyTemplate(), deployment, policy);
+		const fileRaw = await callTool("gitlab_get_file_content", { filePath });
+		if (!fileRaw.startsWith("[2")) return { blocked: `Could not read ${filePath} from the repo.` };
+		for (const a of detectLostIlmActions(live)) lost.add(a);
+		const next = ilmRepoShapeToFile(shape);
+		if (next === extractFileContent(fileRaw)) continue; // empty-diff guard: skip no-op files
+		files.push({ path: filePath, content: next });
+		written.push(policy);
+	}
+	if (files.length === 0) return { blocked: "Repo files already match the live ILM policies; nothing to write." };
+	const note =
+		lost.size > 0
+			? `Live ILM actions not represented in the repo file shape will be dropped after apply: ${[...lost].sort().join(", ")}.`
+			: undefined;
+	return { files, summary: `${files.length} policy file(s): ${written.join(", ")}`, ...(note && { note }) };
 }
 
 // Open one independent, idempotent MR for a stack + direction (or block with a reason).
@@ -1470,69 +1759,77 @@ async function openReconcileMr(
 		return { stack: stack.stack, direction, status: "reused", mrUrl: existing, branch };
 	}
 
-	let filePath: string;
-	let content: string;
+	// reconcile-to-live rewrites EXISTING config file(s) (update; one for the deployment stack, one
+	// per drifted policy for ILM); reconcile-to-json writes a NEW marker (create). The commit tool
+	// upserts either way, but starting with the right action avoids a wasted first request and a
+	// spurious "doesn't exist"/"already exists" 400.
+	let commits: Array<{ path: string; content: string; action: "create" | "update" }>;
 	let commitMessage: string;
 	let title: string;
-	// reconcile-to-live edits an EXISTING config file (update); reconcile-to-json writes a NEW
-	// marker (create). The tool upserts either way, but starting with the right action avoids a
-	// wasted first request and a spurious "doesn't exist"/"already exists" 400.
-	let commitAction: "create" | "update";
+	let mrNote: string | undefined;
 
 	if (direction === "reconcile-to-live") {
-		if (!stack.liveReconcilable || !stack.configPath) {
+		if (!stack.liveReconcilable) {
 			log.info(
 				{ deployment, stack: stack.stack },
-				"iac reconcile: reconcile-to-live blocked (not supported for this stack)",
+				"iac reconcile: reconcile-to-live blocked (not available for this stack)",
 			);
 			return {
 				stack: stack.stack,
 				direction,
 				status: "blocked",
-				note: "reconcile-to-live is not supported for this stack in Phase 1; use reconcile-to-json.",
+				note: "Reconcile to Live Deployment is not available for this stack; use Reconcile to GitLab.",
 			};
 		}
-		const built = await buildLiveVersionReconcile(deployment, stack.configPath);
+		const built = await buildLiveReconcile(deployment, stack);
 		if ("blocked" in built) return { stack: stack.stack, direction, status: "blocked", note: built.blocked, branch };
-		filePath = stack.configPath;
-		content = built.content;
-		commitMessage = `${deployment}: reconcile ${stack.stack} to live (version ${built.from} -> ${built.to})`;
+		commits = built.files.map((f) => ({ path: f.path, content: f.content, action: "update" as const }));
+		commitMessage = `${deployment}: reconcile ${stack.stack} to live (${built.summary})`;
 		title = `[${deployment}] reconcile ${stack.stack} to live`;
-		commitAction = "update";
+		mrNote = built.note;
 	} else {
 		// reconcile-to-json: a deterministic, plan-neutral marker that triggers the stack plan.
-		filePath = reconcileMarkerPath(deployment, stack.stack);
-		content = reconcileMarkerContent(deployment, stack);
+		commits = [
+			{
+				path: reconcileMarkerPath(deployment, stack.stack),
+				content: reconcileMarkerContent(deployment, stack),
+				action: "create",
+			},
+		];
 		commitMessage = `${deployment}: reconcile ${stack.stack} to declared config`;
 		title = `[${deployment}] reconcile ${stack.stack} to declared config`;
-		commitAction = "create";
 	}
 
-	// Create the branch (tolerate "already exists" 4xx, like the proposers) and commit.
+	// Create the branch (tolerate "already exists" 4xx, like the proposers) and commit each file.
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const commit = await callTool("gitlab_commit_file", {
-		branch,
-		file_path: filePath,
-		content,
-		commit_message: commitMessage,
-		action: commitAction,
-	});
-	// A failed commit (4xx auth/validation/bad-path or 5xx) must block -- otherwise we'd open
-	// an MR on a branch with no change. The early MR-reuse check above already short-circuits
-	// the idempotent re-run, so a 4xx here is a real failure.
-	if (commit.startsWith("[4") || commit.startsWith("[5")) {
-		log.error(
-			{ deployment, stack: stack.stack, branch, filePath, commit: commit.slice(0, 200) },
-			"iac reconcile: commit failed; blocking",
-		);
-		return { stack: stack.stack, direction, status: "blocked", note: `Commit failed: ${commit.slice(0, 120)}`, branch };
+	for (const c of commits) {
+		const commit = await callTool("gitlab_commit_file", {
+			branch,
+			file_path: c.path,
+			content: c.content,
+			commit_message: commitMessage,
+			action: c.action,
+		});
+		// A failed commit (4xx auth/validation/bad-path or 5xx) must block -- otherwise we'd open
+		// an MR on a branch with no change. The early MR-reuse check above already short-circuits
+		// the idempotent re-run, so a 4xx here is a real failure.
+		if (commit.startsWith("[4") || commit.startsWith("[5")) {
+			log.error(
+				{ deployment, stack: stack.stack, branch, filePath: c.path, commit: commit.slice(0, 200) },
+				"iac reconcile: commit failed; blocking",
+			);
+			return {
+				stack: stack.stack,
+				direction,
+				status: "blocked",
+				note: `Commit failed: ${commit.slice(0, 120)}`,
+				branch,
+			};
+		}
 	}
-	log.info(
-		{ deployment, stack: stack.stack, branch, filePath, action: commitAction },
-		"iac reconcile: committed; creating MR",
-	);
+	log.info({ deployment, stack: stack.stack, branch, files: commits.length }, "iac reconcile: committed; creating MR");
 
-	const description = buildReconcileMrBody(deployment, stack, direction, filePath);
+	const description = buildReconcileMrBody(deployment, stack, direction, commits.map((c) => c.path).join(", "), mrNote);
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: branch,
 		target_branch: "main",
@@ -1697,12 +1994,18 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 					: "no drift"
 		}`,
 	});
-	// SIO-886: reconcile-to-live is offered only when it will actually reconcile something --
-	// today that is the deployment-config version field. A deployment stack that drifted on
-	// tier/zone/autoscaling (not version) keeps reconcile-to-json + skip, so we never open an
-	// empty-diff "sync version to live" MR. (ILM/HCL never reconcile-to-live in this iteration.)
-	const versionDrifted = actionable.some((c) => c.changedKeys.includes("version"));
-	const liveReconcilable = configStackFamily(stack) === "deployment" && versionDrifted;
+	// reconcile-to-live is offered only when the actual drift maps to a clean live->file write.
+	// deployment family: the "version" key (-> live ES version) or the "elasticsearch" key (-> live
+	// tier sizing/zone). ilm family: any resource whose policy name parses from its address (-> live
+	// ILM policy rewrite). HCL: never. The empty-diff guard in buildLiveReconcile still blocks an
+	// MR when live already equals the repo, so a coarse "elasticsearch" key never opens a no-op MR.
+	const family = configStackFamily(stack);
+	const deploymentLiveKeys =
+		family === "deployment"
+			? actionable.flatMap((c) => c.changedKeys).filter((k) => k === "version" || k === "elasticsearch")
+			: [];
+	const ilmLiveReconcilable = family === "ilm" && actionable.some((c) => ilmPolicyFromAddress(c.address) !== "");
+	const liveReconcilable = deploymentLiveKeys.length > 0 || ilmLiveReconcilable;
 	log.info(
 		{
 			deployment,
@@ -1880,7 +2183,7 @@ export function reconcileGate(state: IacStateType): Partial<IacStateType> {
 		: ["reconcile-to-json", "skip"];
 	const summary = `${current.create} create / ${current.update} update / ${current.delete} destroy`;
 	const liveHint = current.liveReconcilable
-		? "Reconcile toward live (sync the declared version into the config file), "
+		? "Reconcile to Live Deployment (write the live values into the config file), "
 		: "";
 	const choice = interrupt({
 		type: "iac_reconcile_choice",
@@ -1899,7 +2202,7 @@ export function reconcileGate(state: IacStateType): Partial<IacStateType> {
 		directions,
 		message:
 			`Stack '${current.stack}' (${state.driftIndex + 1} of ${drifted.length}) has drifted: ${summary}. ` +
-			`${liveHint}reconcile toward the declared config (opens an MR; CI shows the revert), or skip.`,
+			`${liveHint}Reconcile to GitLab (opens an MR; CI shows the revert), or do nothing.`,
 	}) as { direction?: ReconcileDirection };
 
 	const dir = choice?.direction;

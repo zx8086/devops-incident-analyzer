@@ -1,7 +1,7 @@
 // src/tools/elastic.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Config } from "../config.ts";
+import type { ClusterDeployment, Config } from "../config.ts";
 import { text } from "./shared.ts";
 
 // Shapes of the slices of the Elastic Cloud deployment payloads this server reads.
@@ -172,34 +172,67 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 			),
 	);
 
-	// Cluster-API reads go through a per-cluster URL the caller supplies (env-injected
-	// in real deployments); here they return a clear placeholder when unset.
+	// Cluster-API (data-plane) reads resolve a per-deployment URL + auth from config
+	// (ELASTIC_IAC_CLUSTER_*), keyed by the `deployment` name -- never a model-supplied base URL.
+	// A model-controlled URL would bypass the deployment allowlist and make this an SSRF primitive,
+	// so the tool surface only takes a deployment name. Read-only (GET); never mutates.
 	server.tool(
 		"elastic_get_cluster_health",
-		"Read cluster health for the connected deployment.",
-		{ clusterUrl: z.string().optional() },
-		async ({ clusterUrl }) => text(await clusterFetch(clusterUrl, "/_cluster/health")),
+		"Read cluster health for a configured deployment's cluster API.",
+		{ deployment: z.string().optional() },
+		async ({ deployment }) => text(await clusterFetch(config.clusterDeployments, deployment, "/_cluster/health")),
 	);
 
 	server.tool(
 		"elastic_get_index_template",
-		"Read an index template (composable/component).",
-		{ name: z.string(), clusterUrl: z.string().optional() },
-		async ({ name, clusterUrl }) => text(await clusterFetch(clusterUrl, `/_index_template/${name}`)),
+		"Read an index template (composable/component) from a configured deployment's cluster API.",
+		{ name: z.string(), deployment: z.string().optional() },
+		async ({ name, deployment }) =>
+			text(await clusterFetch(config.clusterDeployments, deployment, `/_index_template/${name}`)),
 	);
 
 	server.tool(
 		"elastic_ilm_get_lifecycle",
-		"Read an ILM policy.",
-		{ policy: z.string(), clusterUrl: z.string().optional() },
-		async ({ policy, clusterUrl }) => text(await clusterFetch(clusterUrl, `/_ilm/policy/${policy}`)),
+		"Read an ILM policy from a configured deployment's cluster API. Pass `deployment` (cluster name) to resolve the configured URL + auth.",
+		{ policy: z.string(), deployment: z.string().optional() },
+		async ({ policy, deployment }) =>
+			text(await clusterFetch(config.clusterDeployments, deployment, `/_ilm/policy/${encodeURIComponent(policy)}`)),
 	);
 }
 
-async function clusterFetch(clusterUrl: string | undefined, apiPath: string): Promise<string> {
-	if (!clusterUrl) return "[cluster URL not provided: pass clusterUrl or configure per-deployment endpoints]";
+// Resolve a configured cluster (by name) to its base URL + Authorization header. "" url => the
+// deployment isn't configured (the caller surfaces a clear placeholder). (Pure; unit-tested.)
+export function resolveCluster(
+	deployments: ClusterDeployment[],
+	deployment: string | undefined,
+): { url: string; authHeader?: string } {
+	const d = deployments.find((c) => c.id === deployment);
+	if (!d) return { url: "" };
+	if (d.apiKey) return { url: d.url, authHeader: `ApiKey ${d.apiKey}` };
+	if (d.username && d.password) {
+		return { url: d.url, authHeader: `Basic ${Buffer.from(`${d.username}:${d.password}`).toString("base64")}` };
+	}
+	return { url: d.url };
+}
+
+// Read-only GET against a configured per-deployment cluster. Returns a clear "not configured"
+// placeholder when the deployment has no cluster connection (so reconcile-to-live blocks rather
+// than guessing). Never mutates -- the agent observes; Terraform (via CI) applies.
+async function clusterFetch(
+	deployments: ClusterDeployment[],
+	deployment: string | undefined,
+	apiPath: string,
+): Promise<string> {
+	const { url, authHeader } = resolveCluster(deployments, deployment);
+	if (!url) {
+		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]`;
+	}
+	return clusterFetchRaw(url, apiPath, authHeader);
+}
+
+async function clusterFetchRaw(baseUrl: string, apiPath: string, authHeader?: string): Promise<string> {
 	try {
-		const res = await fetch(`${clusterUrl}${apiPath}`);
+		const res = await fetch(`${baseUrl}${apiPath}`, authHeader ? { headers: { Authorization: authHeader } } : {});
 		return `[${res.status}] ${await res.text()}`;
 	} catch (err) {
 		return `[cluster request failed: ${err instanceof Error ? err.message : String(err)}]`;

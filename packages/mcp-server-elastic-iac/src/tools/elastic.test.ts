@@ -1,6 +1,6 @@
 // src/tools/elastic.test.ts
 import { describe, expect, test } from "bun:test";
-import { asDeploymentRows, extractDeploymentDetail, extractListRow } from "./elastic.ts";
+import { asDeploymentRows, extractDeploymentDetail, extractListRow, resolveCluster } from "./elastic.ts";
 
 // Mirrors the real Elastic Cloud GET /api/v1/deployments envelope: deployments[]
 // where resources is a flat array tagged with `kind`. The list endpoint carries
@@ -96,5 +96,37 @@ describe("extractDeploymentDetail", () => {
 			healthy: null,
 			region: "",
 		});
+	});
+});
+
+// reconcile-to-live cluster auth: the data-plane Authorization header per configured deployment.
+describe("resolveCluster", () => {
+	const deployments = [
+		{ id: "eu-b2b", url: "https://es.example:9243", apiKey: "abc123" },
+		{ id: "eu-cld", url: "https://cld.example:9243", username: "u", password: "p" },
+		{ id: "eu-bare", url: "https://bare.example:9243" },
+	];
+
+	test("builds an ApiKey header when an apiKey is configured", () => {
+		expect(resolveCluster(deployments, "eu-b2b")).toEqual({
+			url: "https://es.example:9243",
+			authHeader: "ApiKey abc123",
+		});
+	});
+
+	test("builds a Basic header from username + password", () => {
+		expect(resolveCluster(deployments, "eu-cld")).toEqual({
+			url: "https://cld.example:9243",
+			authHeader: `Basic ${Buffer.from("u:p").toString("base64")}`,
+		});
+	});
+
+	test("no auth header when neither apiKey nor basic creds are set", () => {
+		expect(resolveCluster(deployments, "eu-bare")).toEqual({ url: "https://bare.example:9243" });
+	});
+
+	test("unknown / unset deployment -> empty url (treated as not configured)", () => {
+		expect(resolveCluster(deployments, "nope")).toEqual({ url: "" });
+		expect(resolveCluster(deployments, undefined)).toEqual({ url: "" });
 	});
 });

@@ -1,6 +1,10 @@
 <script lang="ts">
 // apps/web/src/lib/components/DriftReportCard.svelte
-import type { IacDriftReport, IacReconcileResultRow } from "$lib/stores/agent-reducer.ts";
+import {
+	type IacDriftReport,
+	type IacReconcileResultRow,
+	RECONCILE_DIRECTION_LABELS,
+} from "$lib/stores/agent-reducer.ts";
 
 let {
 	report,
@@ -99,7 +103,7 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
           {#each results as r (r.stack + r.direction)}
             <li class="text-tommy-navy/80">
               <span class="font-medium">{r.stack}</span>
-              <span class="text-gray-500"> &middot; {r.direction} &middot; {r.status}</span>
+              <span class="text-gray-500"> &middot; {RECONCILE_DIRECTION_LABELS[r.direction]} &middot; {r.status}</span>
               {#if r.mrUrl}
                 <a href={r.mrUrl} target="_blank" rel="noopener noreferrer" class="text-tommy-accent-blue underline">MR</a>
               {/if}
