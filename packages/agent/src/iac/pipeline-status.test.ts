@@ -95,11 +95,11 @@ import { parseLatestAgentMr } from "./nodes.ts";
 describe("parseLatestAgentMr", () => {
 	test("returns the newest open agent MR (first element)", () => {
 		const body =
-			'[200] [{"iid":45,"state":"opened","web_url":"https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/45","source_branch":"agent/ap-cld-monitor-9-4-2-version-upgrade-20260602"},' +
+			'[200] [{"iid":45,"state":"opened","web_url":"https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/45","source_branch":"agent/ap-cld-monitor-9-4-2-version-upgrade-20260602"},' +
 			'{"iid":44,"state":"opened","web_url":"x","source_branch":"agent/eu-b2b-..."}]';
 		expect(parseLatestAgentMr(body)).toEqual({
 			iid: 45,
-			webUrl: "https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/45",
+			webUrl: "https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/45",
 		});
 	});
 	test("null when there are no open agent MRs / bad body", () => {

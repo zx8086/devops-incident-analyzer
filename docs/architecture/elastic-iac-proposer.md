@@ -63,8 +63,8 @@ The GitOps target is resolved by the MCP server; the JSON paths are agent-side t
 
 | Env var | Default | Owner |
 |---------|---------|-------|
-| `ELASTIC_IAC_GITLAB_BASE_URL` | `https://gitlab.siobytes.cloud` | MCP |
-| `ELASTIC_IAC_GITLAB_PROJECT` | `siobytes/elastic-iac` | MCP |
+| `ELASTIC_IAC_GITLAB_BASE_URL` | `https://gitlab.com` | MCP |
+| `ELASTIC_IAC_GITLAB_PROJECT` | `pvhcorp/dhco/observability/observability-elastic-iac` | MCP |
 | `ELASTIC_IAC_GITLAB_TOKEN` | *(required)* | MCP |
 | `ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE` | `environments/_deployments/${cluster}.json` | agent |
 | `ELASTIC_IAC_ILM_POLICY_TEMPLATE` | `environments/${cluster}/lifecycle-policies/${policy}.json` | agent |

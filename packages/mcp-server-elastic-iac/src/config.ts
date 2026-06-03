@@ -54,12 +54,14 @@ export const ConfigSchema = z.object({
 		workspaceDir: z.string(),
 	}),
 	// SIO-873: the GitOps target the agent proposes against (edit JSON + open MR via
-	// the GitLab REST API; CI owns plan/apply). A self-hosted instance distinct from
-	// repository.* above. The agent never clones, never runs terraform, never pushes.
+	// the GitLab REST API; CI owns plan/apply). SIO-891: now the same instance as
+	// repository.* (gitlab.com) after the migration off gitlab.siobytes.cloud, but kept
+	// as separate vars so the target can diverge again. The agent never clones, never
+	// runs terraform, never pushes.
 	gitops: z.object({
 		baseUrl: z.string(),
-		// Namespaced project path (e.g. "siobytes/elastic-iac"); GitLab accepts it
-		// URL-encoded in place of a numeric id.
+		// Namespaced project path (e.g. "pvhcorp/dhco/observability/observability-elastic-iac");
+		// GitLab accepts it URL-encoded in place of a numeric id.
 		project: z.string(),
 		token: z.string().optional(),
 	}),
@@ -124,8 +126,8 @@ export function loadConfig(): Config {
 			workspaceDir: Bun.env.ELASTIC_IAC_WORKSPACE_DIR ?? "/tmp/elastic-iac-workspace",
 		},
 		gitops: {
-			baseUrl: Bun.env.ELASTIC_IAC_GITLAB_BASE_URL ?? "https://gitlab.siobytes.cloud",
-			project: Bun.env.ELASTIC_IAC_GITLAB_PROJECT ?? "siobytes/elastic-iac",
+			baseUrl: Bun.env.ELASTIC_IAC_GITLAB_BASE_URL ?? "https://gitlab.com",
+			project: Bun.env.ELASTIC_IAC_GITLAB_PROJECT ?? "pvhcorp/dhco/observability/observability-elastic-iac",
 			token: Bun.env.ELASTIC_IAC_GITLAB_TOKEN || undefined,
 		},
 		terraformBin: Bun.env.TERRAFORM_BIN ?? "terraform",

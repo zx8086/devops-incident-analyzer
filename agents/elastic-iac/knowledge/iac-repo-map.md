@@ -2,8 +2,8 @@
 
 ## Primary repo
 
-- **Codename:** `siobytes/elastic-iac`
-- **Real path:** `pvhcorp/dhco/observability/observability-elasticcloud-deployments-terraform`
+- **Former path (pre-migration):** `gitlab.siobytes.cloud/siobytes/elastic-iac`
+- **Real path:** `gitlab.com/pvhcorp/dhco/observability/observability-elasticcloud-deployments-terraform`
 - **GitLab project ID:** `71488350`
 - **Default branch:** `main`
 - **Pre-check sandbox:** `gl-testing` (mandatory first target, single-node, ~$37/mo)

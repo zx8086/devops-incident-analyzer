@@ -117,8 +117,10 @@ describe("extractMrUrl", () => {
 	test("returns web_url, not an earlier avatar URL in the body", () => {
 		const body =
 			'[201] {"author":{"avatar_url":"https://secure.gravatar.com/avatar/abc?s=80"},' +
-			'"web_url":"https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/40","iid":40}';
-		expect(extractMrUrl(body)).toBe("https://gitlab.siobytes.cloud/siobytes/elastic-iac/-/merge_requests/40");
+			'"web_url":"https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/40","iid":40}';
+		expect(extractMrUrl(body)).toBe(
+			"https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/40",
+		);
 	});
 
 	test("falls back to the raw result when web_url is absent / unparseable", () => {
