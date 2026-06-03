@@ -1,6 +1,25 @@
 // src/config.ts
 import { z } from "zod";
 
+// Per-deployment ES data-plane (cluster API) connection, used by the read-only cluster tools
+// (ILM / index-template / health) the drift flow needs for reconcile-to-live. Distinct from the
+// EC control-plane (elasticCloudApiKey/elasticCloudBaseUrl above). Auth is apiKey OR
+// username+password OR none. Mirrors mcp-server-elastic's DeploymentConfigSchema.
+const ClusterDeploymentSchema = z
+	.object({
+		id: z.string().min(1),
+		url: z.string().url().min(1),
+		apiKey: z.string().optional(),
+		username: z.string().optional(),
+		password: z.string().optional(),
+	})
+	.refine((d) => (d.username ? !!d.password : d.password ? !!d.username : true), {
+		message: "Cluster auth requires apiKey, or both username+password, or neither",
+		path: ["username", "password"],
+	});
+
+export type ClusterDeployment = z.infer<typeof ClusterDeploymentSchema>;
+
 // Per project rules, no .default() inside the schema; the loader supplies explicit
 // env fallbacks. The server is read/plan/branch-only -- it has no apply/destroy knobs.
 export const ConfigSchema = z.object({
@@ -34,9 +53,45 @@ export const ConfigSchema = z.object({
 	gitlabToken: z.string().optional(),
 	elasticCloudApiKey: z.string().optional(),
 	elasticCloudBaseUrl: z.string(),
+	// Per-deployment cluster (data-plane) connections, keyed by cluster name (the drift flow's
+	// targetDeployment). Empty when none configured -- cluster reads then return a clear "not
+	// configured" placeholder, and ILM reconcile-to-live blocks instead of guessing.
+	clusterDeployments: z.array(ClusterDeploymentSchema),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
+
+// Per-deployment cluster env convention: ELASTIC_IAC_CLUSTER_<ID_UPPER_UNDERSCORED>_<SUFFIX>
+// (URL / API_KEY / USERNAME / PASSWORD), with the id list in ELASTIC_IAC_CLUSTER_DEPLOYMENTS.
+// Mirrors mcp-server-elastic's deployments loader. A deployment with no URL is skipped (one
+// misconfigured cluster never blocks the others).
+function clusterEnvKey(id: string, suffix: string): string {
+	return `ELASTIC_IAC_CLUSTER_${id.toUpperCase().replace(/-/g, "_")}_${suffix}`;
+}
+function readClusterEnv(id: string, suffix: string): string | undefined {
+	const v = Bun.env[clusterEnvKey(id, suffix)];
+	return v && v.length > 0 ? v : undefined;
+}
+function loadClusterDeployments(): ClusterDeployment[] {
+	const raw = Bun.env.ELASTIC_IAC_CLUSTER_DEPLOYMENTS;
+	if (!raw) return [];
+	const out: ClusterDeployment[] = [];
+	for (const id of raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean)) {
+		const url = readClusterEnv(id, "URL");
+		if (!url) continue;
+		out.push({
+			id,
+			url,
+			apiKey: readClusterEnv(id, "API_KEY"),
+			username: readClusterEnv(id, "USERNAME"),
+			password: readClusterEnv(id, "PASSWORD"),
+		});
+	}
+	return out;
+}
 
 export function loadConfig(): Config {
 	return ConfigSchema.parse({
@@ -61,5 +116,6 @@ export function loadConfig(): Config {
 		gitlabToken: Bun.env.GITLAB_PERSONAL_ACCESS_TOKEN || undefined,
 		elasticCloudApiKey: Bun.env.EC_API_KEY || undefined,
 		elasticCloudBaseUrl: Bun.env.ELASTIC_CLOUD_BASE_URL ?? "https://api.elastic-cloud.com",
+		clusterDeployments: loadClusterDeployments(),
 	});
 }

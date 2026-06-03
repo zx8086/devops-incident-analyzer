@@ -50,6 +50,16 @@ export interface IacClarifyPrompt {
 // SIO-882: drift sub-flow UI state.
 export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
 
+// Human labels for the per-stack reconcile directions, shared by the choice card (buttons)
+// and the drift-report card (results rows) so both read the same friendly text. "Reconcile to
+// GitLab" reverts live -> declared (marker MR); "Reconcile to Live Deployment" rewrites the repo
+// JSON to match live.
+export const RECONCILE_DIRECTION_LABELS: Record<ReconcileDirection, string> = {
+	"reconcile-to-json": "Reconcile to GitLab",
+	"reconcile-to-live": "Reconcile to Live Deployment",
+	skip: "Do Nothing",
+};
+
 // SIO-886: one drifted resource with the detail the explainer surfaces (reason / changed keys).
 export interface IacDriftResource {
 	address: string;

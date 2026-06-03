@@ -1,6 +1,7 @@
 // agent/src/iac/version-upgrade.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	applyLiveTopology,
 	branchSlug,
 	deploymentJsonPath,
 	extractMrUrl,
@@ -178,5 +179,50 @@ describe("parseIntentJson — tier-resize", () => {
 		expect(req.tier).toBe("warm");
 		expect(req.newSizeGb).toBe(8);
 		expect(req.clarification).toBeUndefined();
+	});
+});
+
+// reconcile-to-live: rewrite the elasticsearch block's per-tier sizing from the live topology.
+describe("applyLiveTopology", () => {
+	const json = JSON.stringify(
+		{
+			name: "eu-b2b",
+			elasticsearch: {
+				hot: { max_size: "29g", zone_count: 3 },
+				warm: { size: "8g", max_size: "15g", zone_count: 2 },
+			},
+		},
+		null,
+		2,
+	);
+
+	test("sets max_size + zone_count from live, captures previous, leaves current size", () => {
+		const out = applyLiveTopology(json, { warm: { sizeGb: 8, zoneCount: 3 } });
+		const p = JSON.parse(out.content);
+		expect(p.elasticsearch.warm.max_size).toBe("8g");
+		expect(p.elasticsearch.warm.zone_count).toBe(3);
+		expect(p.elasticsearch.warm.size).toBe("8g"); // current size untouched
+		expect(out.previous.warm).toEqual({ maxSize: "15g", zoneCount: 2 });
+		expect(p.elasticsearch.hot.max_size).toBe("29g"); // untouched tier
+	});
+
+	test("never invents a tier the repo JSON lacks", () => {
+		const out = applyLiveTopology(json, { frozen: { sizeGb: 4, zoneCount: 1 } });
+		expect(JSON.parse(out.content).elasticsearch.frozen).toBeUndefined();
+		expect(out.previous.frozen).toBeUndefined();
+	});
+
+	test("sets only the fields present in the live entry", () => {
+		const out = applyLiveTopology(json, { hot: { zoneCount: 2 } });
+		const p = JSON.parse(out.content);
+		expect(p.elasticsearch.hot.zone_count).toBe(2);
+		expect(p.elasticsearch.hot.max_size).toBe("29g"); // sizeGb absent -> max_size unchanged
+		expect(out.previous.hot).toEqual({ zoneCount: 3 });
+	});
+
+	test("trailing newline + throws on bad JSON / missing elasticsearch block", () => {
+		expect(applyLiveTopology(json, { warm: { sizeGb: 4 } }).content.endsWith("}\n")).toBe(true);
+		expect(() => applyLiveTopology("not json", {})).toThrow();
+		expect(() => applyLiveTopology('{"name":"x"}', { warm: { sizeGb: 4 } })).toThrow("no elasticsearch block");
 	});
 });
