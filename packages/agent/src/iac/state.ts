@@ -103,6 +103,9 @@ export interface StackDrift {
 	// True when the drift-check could not be read for this stack (trigger lock / failed
 	// pipeline / unreadable report): the stack was NOT assessed -- neither drifted nor clean.
 	planError?: boolean;
+	// SIO-887: a human-readable reason for planError (state-lock, classified plan failure,
+	// no report, ...), surfaced in the drift card instead of a generic "plan unavailable".
+	planErrorReason?: string;
 }
 
 export interface DriftReport {

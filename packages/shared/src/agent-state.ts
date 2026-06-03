@@ -425,6 +425,8 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 				drifted: z.boolean(),
 				// SIO-882: true when iac_plan could not be read -- the stack was not assessed.
 				planError: z.boolean().optional(),
+				// SIO-887: human-readable reason for planError (state-lock / classified plan failure / ...).
+				planErrorReason: z.string().optional(),
 				kind: z.enum(["config-json", "hcl"]),
 				create: z.number(),
 				update: z.number(),
