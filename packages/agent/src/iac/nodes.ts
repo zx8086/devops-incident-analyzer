@@ -2407,11 +2407,40 @@ export function advanceDrift(state: IacStateType): Partial<IacStateType> {
 	return { driftIndex: state.driftIndex + 1, currentDirection: null };
 }
 
+// SIO-892: when EVERY stack failed the drift-check trigger with the same GitLab
+// permission wall (the gitlab.com protected-branch rule on `main` after the SIO-891
+// migration), that is an infra blocker, not a clean result -- returning a "no drift"
+// summary reads like all-clear, the opposite of the truth. Return a blocker message
+// only when every stack planError'd for the permission reason; mixed / state-lock /
+// other-error runs fall through to the per-stack summary. (Pure; over StackDrift[].)
+export function allStacksBlockedReason(deployment: string, stacks: StackDrift[]): string | null {
+	if (stacks.length === 0) return null;
+	if (!stacks.every((s) => s.planError === true)) return null;
+	// The reason text is built from the raw GitLab 400 body (nodes.ts driftCheckStack ->
+	// the server `note`), so match the permission phrasing rather than a status code.
+	const isPermission = (s: StackDrift): boolean =>
+		/sufficient permission to run a pipeline|insufficient permission|not have sufficient permission/i.test(
+			s.planErrorReason ?? "",
+		);
+	if (!stacks.every(isPermission)) return null;
+	return (
+		`Drift-check could not run for ${deployment}: GitLab denied pipeline creation on 'main' for all ` +
+		`${stacks.length} stack(s) (insufficient permission). This is a permissions issue, not a clean result -- ` +
+		"no stack was assessed.\n" +
+		"Fix: grant the elastic-iac GitLab token user the Maintainer role on the GitOps project " +
+		"(or allow it under main's protected-branch rules), then re-run the drift check."
+	);
+}
+
 // The drift flow's terminal message -- per-stack outcomes (MR opened/reused, skipped,
 // blocked) + the apply reminder. (Pure; reads only state.)
 export function formatDriftSummary(state: IacStateType): string {
 	const dep = state.targetDeployment || "(unknown)";
 	const all = state.driftReport?.stacks ?? [];
+	// SIO-892: lead with the infra blocker when every stack hit the same GitLab permission
+	// wall -- before computing the drift/no-drift headline that would otherwise read as clean.
+	const blocker = allStacksBlockedReason(dep, all);
+	if (blocker) return blocker;
 	const drifted = all.filter((s) => s.drifted);
 	const planErrored = all.filter((s) => s.planError);
 	// Stacks whose plan could not be read were NOT assessed -- never imply they are clean.

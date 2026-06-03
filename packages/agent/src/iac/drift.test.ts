@@ -2,6 +2,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
 	addressIndexKey,
+	allStacksBlockedReason,
 	applyReportValuesToConfig,
 	classifyStackByName,
 	configStackFamily,
@@ -504,6 +505,80 @@ describe("formatDriftSummary", () => {
 		const out = formatDriftSummary(state);
 		expect(out).toContain("could NOT be planned");
 		expect(out).toContain("broken");
+	});
+
+	// SIO-892: when every stack failed with the same GitLab permission wall, lead with the
+	// infra blocker instead of the "No drift detected" headline.
+	test("leads with the GitLab-permissions blocker when all stacks are permission-blocked", () => {
+		const stack = (name: string): StackDrift => ({
+			stack: name,
+			drifted: false,
+			planError: true,
+			planErrorReason:
+				"Could not trigger the drift-check: [400] You do not have sufficient permission to run a pipeline on 'main'.",
+			kind: "config-json",
+			create: 0,
+			update: 0,
+			delete: 0,
+			resources: [],
+			liveReconcilable: false,
+		});
+		const state = {
+			targetDeployment: "eu-b2b",
+			driftReport: { deployment: "eu-b2b", generatedAt: "", stacks: [stack("a"), stack("b"), stack("c")] },
+			reconcileResults: [],
+		} as unknown as IacStateType;
+		const out = formatDriftSummary(state);
+		expect(out).toContain("GitLab denied pipeline creation on 'main' for all 3 stack(s)");
+		expect(out).toContain("Maintainer role");
+		expect(out).not.toContain("No drift detected");
+	});
+});
+
+describe("allStacksBlockedReason", () => {
+	const permErr = (name: string): StackDrift => ({
+		stack: name,
+		drifted: false,
+		planError: true,
+		planErrorReason: "Could not trigger the drift-check: insufficient permission to run a pipeline on 'main'.",
+		kind: "config-json",
+		create: 0,
+		update: 0,
+		delete: 0,
+		resources: [],
+		liveReconcilable: false,
+	});
+	const stateLockErr = (name: string): StackDrift => ({
+		...permErr(name),
+		planErrorReason: "Apply in progress (state lock); re-check once it clears.",
+	});
+	const clean = (name: string): StackDrift => ({
+		stack: name,
+		drifted: false,
+		kind: "config-json",
+		create: 0,
+		update: 0,
+		delete: 0,
+		resources: [],
+		liveReconcilable: false,
+	});
+
+	test("returns a blocker when every stack is permission-blocked", () => {
+		const out = allStacksBlockedReason("eu-b2b", [permErr("a"), permErr("b")]);
+		expect(out).toContain("all 2 stack(s)");
+		expect(out).toContain("Maintainer role");
+	});
+
+	test("null when some stacks were assessed (mixed)", () => {
+		expect(allStacksBlockedReason("eu-b2b", [permErr("a"), clean("b")])).toBeNull();
+	});
+
+	test("null when all errored but the cause is not permission (state lock)", () => {
+		expect(allStacksBlockedReason("eu-b2b", [stateLockErr("a"), stateLockErr("b")])).toBeNull();
+	});
+
+	test("null for an empty stack list", () => {
+		expect(allStacksBlockedReason("eu-b2b", [])).toBeNull();
 	});
 });
 
