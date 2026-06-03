@@ -1,6 +1,8 @@
 // agent/src/iac/drift.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import {
+	addressIndexKey,
+	applyReportValuesToConfig,
 	classifyStackByName,
 	configStackFamily,
 	detectLostIlmActions,
@@ -807,5 +809,101 @@ describe("buildLiveReconcile — ilm family", () => {
 		);
 		expect("blocked" in built).toBe(true);
 		if ("blocked" in built) expect(built.blocked).toContain("already match");
+	});
+});
+
+describe("addressIndexKey", () => {
+	test("extracts the last bracket key, unquoted; empty when none", () => {
+		expect(addressIndexKey('module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]')).toBe(
+			"eu-oit-prd",
+		);
+		expect(addressIndexKey("module.x.this")).toBe("");
+	});
+});
+
+describe("applyReportValuesToConfig (SIO-889 Approach-B projection)", () => {
+	const file = `${JSON.stringify({ name: "old", namespace: "prd", count: 1 }, null, 2)}\n`;
+
+	test("writes live before-values into top-level keys; lists applied; trailing newline", () => {
+		const r = applyReportValuesToConfig(file, {
+			name: { before: "new", after: "old" },
+			count: { before: 3, after: 1 },
+		});
+		expect(r.applied.sort()).toEqual(["count", "name"]);
+		expect(JSON.parse(r.content)).toEqual({ name: "new", namespace: "prd", count: 3 });
+		expect(r.content.endsWith("}\n")).toBe(true);
+	});
+
+	test("skips redaction/oversize sentinels and undefined before (never writes a sentinel)", () => {
+		const r = applyReportValuesToConfig(file, {
+			name: { before: "<redacted:sensitive>" },
+			namespace: { before: "<omitted:too-large>" },
+			count: { after: 5 },
+		});
+		expect(r.applied).toEqual([]);
+		expect(JSON.parse(r.content)).toEqual({ name: "old", namespace: "prd", count: 1 });
+	});
+
+	test("per-key empty-diff: a key already equal to live is not applied", () => {
+		expect(applyReportValuesToConfig(file, { name: { before: "old" } }).applied).toEqual([]);
+	});
+
+	test("throws on unparseable JSON", () => {
+		expect(() => applyReportValuesToConfig("not json", { a: { before: 1 } })).toThrow();
+	});
+});
+
+describe("buildLiveReconcile — report-sourced family (agent-policies)", () => {
+	test("writes the live before-value into the per-resource config file (top-level key)", async () => {
+		mockTools({
+			gitlab_get_file_content: () => b64(`${JSON.stringify({ name: "eu-oit.prd - SM", namespace: "prd" }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				configPath: "environments/eu-b2b/agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" } },
+					},
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(built.files).toHaveLength(1);
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/eu-oit-prd.json");
+			expect(JSON.parse(built.files[0]?.content ?? "{}").name).toBe("eu-oit.prd - SM ");
+			expect(built.summary).toContain("eu-oit-prd: name");
+		}
+	});
+
+	test("blocks when the only drift is a redacted secret (never writes the sentinel)", async () => {
+		mockTools({
+			gitlab_get_file_content: () => b64(`${JSON.stringify({ name: "x", secrets: "real" }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["p1"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["secrets"],
+						values: { secrets: { before: "<redacted:sensitive>", after: "<redacted:sensitive>" } },
+					},
+				],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
 	});
 });
