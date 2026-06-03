@@ -17,7 +17,7 @@ After SIO-873 (version-upgrade) and SIO-879 (tier-resize) moved to the GitOps pr
 
 ### Ground truth established during design (corrects stale docs)
 
-Probed live from `gitlab.siobytes.cloud/siobytes/elastic-iac`:
+Probed live from `gitlab.siobytes.cloud/siobytes/elastic-iac` (SIO-891: this repo has since migrated to `gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac`; the findings below still hold):
 
 - ILM policies are **per-environment JSON files** at `environments/<cluster>/lifecycle-policies/<policy>.json` (one file per policy). The SIO-880 handover path claim is correct.
 - The legacy `agents/elastic-iac/skills/add-ilm-policy/SKILL.md` and `agents/elastic-iac/knowledge/iac-repo-map.md` are **STALE**: they describe `stacks/<cluster>/ilm.tf` (Terraform HCL) and an `elasticstack_elasticsearch_index_lifecycle` resource. The repo migrated to per-env JSON config. Do not follow the HCL instructions. (Doc-sync is out of scope for this ticket — noted below.)

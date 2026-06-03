@@ -113,8 +113,9 @@ export function parsePipelineRef(toolResult: string): { id: number; status: stri
 // end-state: switch these to the GitLab native MCP (the proxy pattern used by
 // packages/mcp-server-gitlab) once the target instance supports it.
 export function registerGitlabTools(server: McpServer, config: Config): void {
-	// SIO-873: prefer the GitOps target (siobytes); fall back to repository.* so the
-	// legacy read tools keep working when the GitOps vars are unset.
+	// SIO-873: prefer the GitOps target; fall back to repository.* so the legacy read
+	// tools keep working when the GitOps vars are unset. SIO-891: both now point at
+	// gitlab.com after the migration off gitlab.siobytes.cloud.
 	const gitlabBaseUrl = config.gitops.baseUrl || config.repository.gitlabBaseUrl;
 	const token = config.gitops.token ?? config.gitlabToken;
 	const project = encodeURIComponent(config.gitops.project || config.repository.projectId);

@@ -1023,10 +1023,12 @@ Expected: the review card shows Risk HIGH and a "Retention REDUCED 30d->7d ... i
 
 For the MR opened in Step 3 (read the iid from the final message / `gitlab_list_agent_merge_requests`):
 
+<!-- SIO-891: the GitOps repo migrated to gitlab.com; BASE/PROJ below are pre-migration values. -->
+
 ```bash
 TOKEN=$(grep "^ELASTIC_IAC_GITLAB_TOKEN=" .env | cut -d= -f2-)
-BASE=https://gitlab.siobytes.cloud
-PROJ=$(printf 'siobytes/elastic-iac' | jq -sRr @uri)
+BASE=https://gitlab.com
+PROJ=$(printf 'pvhcorp/dhco/observability/observability-elastic-iac' | jq -sRr @uri)
 # close the MR
 curl -s -X PUT "$BASE/api/v4/projects/$PROJ/merge_requests/<iid>?state_event=close" -H "PRIVATE-TOKEN: $TOKEN" >/dev/null
 # delete the branch (url-encode agent/...)
