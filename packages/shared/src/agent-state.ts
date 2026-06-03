@@ -410,5 +410,43 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		pipelineId: z.number().nullable(),
 		status: z.string(),
 	}),
+	// SIO-882: elastic-iac drift sub-flow. The full per-stack drift report (emitted once
+	// by detectDrift), the per-stack reconcile-direction interrupt prompt, and a per-stack
+	// result as each MR opens. The UI POSTs the chosen direction to /api/agent/iac/resume;
+	// the agent never merges or applies. drift_report / reconcile_result are dispatched as
+	// custom events (no threadId, like iac_pipeline_progress); reconcile_choice is an
+	// interrupt surfaced with the thread's id.
+	z.object({
+		type: z.literal("iac_drift_report"),
+		deployment: z.string(),
+		stacks: z.array(
+			z.object({
+				stack: z.string(),
+				drifted: z.boolean(),
+				kind: z.enum(["config-json", "hcl"]),
+				create: z.number(),
+				update: z.number(),
+				delete: z.number(),
+				resources: z.array(z.object({ address: z.string(), actions: z.array(z.string()) })),
+			}),
+		),
+	}),
+	z.object({
+		type: z.literal("iac_reconcile_choice"),
+		threadId: z.string(),
+		stack: z.string(),
+		kind: z.enum(["config-json", "hcl"]),
+		summary: z.string(),
+		directions: z.array(z.enum(["reconcile-to-json", "reconcile-to-live", "skip"])),
+		message: z.string(),
+	}),
+	z.object({
+		type: z.literal("iac_reconcile_result"),
+		stack: z.string(),
+		direction: z.enum(["reconcile-to-json", "reconcile-to-live", "skip"]),
+		status: z.enum(["opened", "reused", "skipped", "blocked"]),
+		mrUrl: z.string().optional(),
+		note: z.string().optional(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

@@ -52,6 +52,11 @@ const PIPELINE_NODES = new Set([
 	"reviewGate",
 	"openMr",
 	"teardown",
+	// SIO-882: elastic-iac drift sub-flow nodes.
+	"detectDrift",
+	"reconcileGate",
+	"reconcileStack",
+	"advanceDrift",
 ]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
@@ -209,6 +214,35 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				send({ type: "iac_pipeline_progress", pipelineId: data.pipelineId ?? null, status: data.status });
 			}
 		}
+
+		// SIO-882: forward detectDrift's full per-stack drift report (the overview card).
+		if (event.event === "on_custom_event" && event.name === "iac_drift_report") {
+			const data = event.data as { deployment?: unknown; stacks?: unknown };
+			if (typeof data?.deployment === "string" && Array.isArray(data.stacks)) {
+				send({ type: "iac_drift_report", deployment: data.deployment, stacks: data.stacks });
+			}
+		}
+
+		// SIO-882: forward each per-stack reconcile outcome as its MR opens/reuses/skips.
+		if (event.event === "on_custom_event" && event.name === "iac_reconcile_result") {
+			const data = event.data as {
+				stack?: unknown;
+				direction?: unknown;
+				status?: unknown;
+				mrUrl?: unknown;
+				note?: unknown;
+			};
+			if (typeof data?.stack === "string" && typeof data?.direction === "string" && typeof data?.status === "string") {
+				send({
+					type: "iac_reconcile_result",
+					stack: data.stack,
+					direction: data.direction,
+					status: data.status,
+					...(typeof data.mrUrl === "string" && { mrUrl: data.mrUrl }),
+					...(typeof data.note === "string" && { note: data.note }),
+				});
+			}
+		}
 	}
 
 	return { toolsUsed: [...toolsUsed], responseContent };
@@ -244,7 +278,16 @@ export function emitTopicShiftPrompt(send: SendFn, threadId: string, interruptVa
 // UI POSTs the resume value to /api/agent/iac/resume.
 export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue: unknown): boolean {
 	if (typeof interruptValue !== "object" || interruptValue === null) return false;
-	const obj = interruptValue as { type?: unknown; message?: unknown; question?: unknown; review?: unknown };
+	const obj = interruptValue as {
+		type?: unknown;
+		message?: unknown;
+		question?: unknown;
+		review?: unknown;
+		stack?: unknown;
+		kind?: unknown;
+		summary?: unknown;
+		directions?: unknown;
+	};
 
 	if (obj.type === "iac_clarify") {
 		send({
@@ -264,6 +307,27 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 				typeof obj.message === "string"
 					? obj.message
 					: "Review the Terraform plan. Approve to open a GitLab MR, or reject.",
+		});
+		return true;
+	}
+
+	// SIO-882: per-stack reconcile-direction gate. The UI POSTs { direction } to the
+	// resume endpoint; the loop re-pauses here for the next drifted stack.
+	if (obj.type === "iac_reconcile_choice") {
+		const directions = Array.isArray(obj.directions)
+			? obj.directions.filter(
+					(d): d is "reconcile-to-json" | "reconcile-to-live" | "skip" =>
+						d === "reconcile-to-json" || d === "reconcile-to-live" || d === "skip",
+				)
+			: ["reconcile-to-json", "skip"];
+		send({
+			type: "iac_reconcile_choice",
+			threadId,
+			stack: typeof obj.stack === "string" ? obj.stack : "",
+			kind: obj.kind === "hcl" ? "hcl" : "config-json",
+			summary: typeof obj.summary === "string" ? obj.summary : "",
+			directions,
+			message: typeof obj.message === "string" ? obj.message : "Choose a reconcile direction for this stack.",
 		});
 		return true;
 	}

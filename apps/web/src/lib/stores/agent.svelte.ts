@@ -6,7 +6,11 @@ import {
 	applyStreamEvent,
 	type DataSourceFindings,
 	type IacClarifyPrompt,
+	type IacDriftReport,
 	type IacPlanReviewPrompt,
+	type IacReconcileChoice,
+	type IacReconcileResultRow,
+	type ReconcileDirection,
 	type ReducerState,
 	type TopicShiftPrompt,
 } from "./agent-reducer.ts";
@@ -77,6 +81,10 @@ function createAgentStore() {
 	let iacClarify = $state<IacClarifyPrompt | null>(null);
 	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
 	let iacPipelineProgress = $state<string[]>([]);
+	// SIO-882: drift sub-flow UI state.
+	let iacDriftReport = $state<IacDriftReport | null>(null);
+	let iacReconcileChoice = $state<IacReconcileChoice | null>(null);
+	let iacReconcileResults = $state<IacReconcileResultRow[]>([]);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -100,6 +108,11 @@ function createAgentStore() {
 		lastRunId = undefined;
 		lastConfidence = undefined;
 		iacPipelineProgress = [];
+		// SIO-882: a new message starts a fresh drift pass (the prompt/report persist
+		// across interrupt pauses, so they're cleared here, not in the stream's finally).
+		iacDriftReport = null;
+		iacReconcileChoice = null;
+		iacReconcileResults = [];
 
 		abortController = new AbortController();
 
@@ -192,6 +205,9 @@ function createAgentStore() {
 			iacClarify,
 			iacPlanReview,
 			iacPipelineProgress,
+			iacDriftReport,
+			iacReconcileChoice,
+			iacReconcileResults,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -212,6 +228,9 @@ function createAgentStore() {
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
 		iacPipelineProgress = next.iacPipelineProgress;
+		iacDriftReport = next.iacDriftReport;
+		iacReconcileChoice = next.iacReconcileChoice;
+		iacReconcileResults = next.iacReconcileResults;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -358,6 +377,9 @@ function createAgentStore() {
 		iacClarify = null;
 		iacPlanReview = null;
 		iacPipelineProgress = [];
+		iacDriftReport = null;
+		iacReconcileChoice = null;
+		iacReconcileResults = [];
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -370,10 +392,16 @@ function createAgentStore() {
 
 	// Resume the elastic-iac graph after an interrupt (plan-review decision or a
 	// clarification answer), piping the resulting SSE stream back through handleEvent.
-	async function resumeIac(payload: { decision?: "approved" | "rejected"; answer?: string }, threadIdOverride: string) {
+	async function resumeIac(
+		payload: { decision?: "approved" | "rejected"; answer?: string; direction?: ReconcileDirection },
+		threadIdOverride: string,
+	) {
 		if (isStreaming) return;
 		iacPlanReview = null;
 		iacClarify = null;
+		// SIO-882: dismiss the current per-stack choice; the next chained interrupt (the
+		// next drifted stack) repopulates it. The drift report + results persist.
+		iacReconcileChoice = null;
 		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
@@ -416,6 +444,13 @@ function createAgentStore() {
 	function submitIacClarify(answer: string) {
 		if (!iacClarify || !answer.trim()) return;
 		return resumeIac({ answer }, iacClarify.threadId);
+	}
+
+	// SIO-882: answer the per-stack reconcile gate (live / json / skip). Resumes the loop,
+	// which opens the MR (or skips) and re-pauses for the next drifted stack.
+	function resolveReconcileChoice(direction: ReconcileDirection) {
+		if (!iacReconcileChoice) return;
+		return resumeIac({ direction }, iacReconcileChoice.threadId);
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
@@ -554,6 +589,15 @@ function createAgentStore() {
 		get iacPipelineProgress() {
 			return iacPipelineProgress;
 		},
+		get iacDriftReport() {
+			return iacDriftReport;
+		},
+		get iacReconcileChoice() {
+			return iacReconcileChoice;
+		},
+		get iacReconcileResults() {
+			return iacReconcileResults;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
@@ -566,6 +610,7 @@ function createAgentStore() {
 		switchAgent,
 		resolveIacPlanReview,
 		submitIacClarify,
+		resolveReconcileChoice,
 	};
 }
 

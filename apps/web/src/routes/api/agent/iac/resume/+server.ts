@@ -18,15 +18,17 @@ const log = getLogger("api.agent.iac.resume");
 
 const AGENT = "elastic-iac";
 
-// decision answers the plan-review gate; answer answers a clarify question.
+// decision answers the plan-review gate; answer answers a clarify question; direction
+// answers the SIO-882 per-stack reconcile gate.
 const ResumeRequestSchema = z
 	.object({
 		threadId: z.string().min(1),
 		decision: z.enum(["approved", "rejected"]).optional(),
 		answer: z.string().optional(),
+		direction: z.enum(["reconcile-to-json", "reconcile-to-live", "skip"]).optional(),
 	})
-	.refine((b) => b.decision !== undefined || b.answer !== undefined, {
-		message: "Provide a decision or an answer",
+	.refine((b) => b.decision !== undefined || b.answer !== undefined || b.direction !== undefined, {
+		message: "Provide a decision, an answer, or a direction",
 	});
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -37,7 +39,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ error: "Invalid request" }, { status: 400 });
 	}
 
-	const resumeValue = body.decision !== undefined ? { decision: body.decision } : { answer: body.answer };
+	const resumeValue =
+		body.direction !== undefined
+			? { direction: body.direction }
+			: body.decision !== undefined
+				? { decision: body.decision }
+				: { answer: body.answer };
 
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream({

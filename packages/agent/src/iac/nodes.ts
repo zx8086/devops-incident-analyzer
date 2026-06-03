@@ -1,4 +1,6 @@
 // agent/src/iac/nodes.ts
+
+import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
@@ -10,7 +12,17 @@ import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
-import type { IacApprovalState, IacPlanReport, IacPlanReview, IacRequest, IacStateType } from "./state.ts";
+import type {
+	DriftReport,
+	IacApprovalState,
+	IacPlanReport,
+	IacPlanReview,
+	IacRequest,
+	IacStateType,
+	ReconcileDirection,
+	ReconcileResult,
+	StackDrift,
+} from "./state.ts";
 
 const log = getLogger("agent:iac");
 const AGENT = "elastic-iac";
@@ -92,11 +104,13 @@ export function parseIntentJson(raw: string): IacRequest {
 	return { workflow: "other", isProd: false, clarification: "Which cluster and what change should I make?" };
 }
 
-// Map a raw classifier reply to an intent. "gitops" and "pipeline-status" are explicit;
-// anything else defaults to "info". (Pure; unit-tested directly.)
-export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" {
+// Map a raw classifier reply to an intent. "gitops", "pipeline-status", and "drift" are
+// explicit; anything else defaults to "info". (Pure; unit-tested directly.)
+export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" | "drift" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
+	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
+	if (r.includes("drift") || r.includes("reconcile")) return "drift";
 	if (r.includes("gitops")) return "gitops";
 	return "info";
 }
@@ -111,12 +125,15 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"Classify the user's Elastic Cloud request into exactly one word:\n" +
 		"- 'info': a read-only question answerable by reading state (versions, topology, plan history, " +
 		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
-		"- 'gitops': a request to CHANGE infrastructure (resize, downsize, add/modify ILM, import, open an MR, " +
-		"anything that should produce a Terraform diff).\n" +
+		"- 'gitops': a request to CHANGE one specific thing (resize, downsize, add/modify ILM, upgrade a version, " +
+		"open an MR) -- a single targeted Terraform diff.\n" +
+		"- 'drift': a request to DETECT or RECONCILE configuration drift for a deployment -- 'check X for drift', " +
+		"'what has drifted', 'reconcile X with live', 'compare the repo with the live cluster', 'show drift by stack'. " +
+		"This audits ALL stacks of one deployment and offers a per-stack reconcile choice.\n" +
 		"- 'pipeline-status': a follow-up about a merge request the agent already opened -- 'did the pipeline " +
 		"pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's the CI status'.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', or 'pipeline-status'. " +
-		"If the user asks for a recommendation or 'should I…' that implies a change, answer 'gitops'.";
+		"Reply with ONLY one word: 'info', 'gitops', 'drift', or 'pipeline-status'. " +
+		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
 	const intent = intentFromText(String(res.content));
 	// SIO-877: pipeline-status resolves even without a thread-local mrIid -- watchPipeline
@@ -1065,8 +1082,480 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	return { ...recovered, pipelineId, pipelineStatus: status, planReport, approvalState, failureHint };
 }
 
+// ============================================================================
+// SIO-882: content-drift detection + per-stack reconcile sub-flow.
+// detectDrift audits every stack of one deployment; reconcileGate asks the human for a
+// direction per drifted stack (a sequential interrupt loop); reconcileStack opens one
+// independent, idempotent MR per chosen stack; advanceDrift walks the index. The agent
+// never merges or applies -- a human reviews each MR's plan in GitLab.
+// ============================================================================
+
+// Parse a `task`-helper name list (list-stacks / list-deployments) into clean names.
+// The output format is repo-defined (external Taskfile), so this is deliberately tolerant:
+// drop the "[exit N]" suffix, then read line by line. A header line ("Available stacks:")
+// ends with ":" and is skipped; otherwise a line's whitespace/comma tokens are accepted
+// when they are ALL ident-shaped -- so a stack legitimately named "deployments" survives
+// (a noise-word filter would wrongly eat it). Handles newline-, bullet-, space-, and
+// comma-separated output. (Pure; unit-tested.) [Assumption A1/A3]
+export function parseTaskNameList(toolResult: string): string[] {
+	const body = toolResult.replace(/\n?\[exit -?\d+\]\s*$/, "");
+	const names: string[] = [];
+	for (const raw of body.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line || line.endsWith(":")) continue; // skip blanks + header lines
+		const stripped = line.replace(/^[-*•]\s*/, ""); // a single leading bullet
+		const tokens = stripped.split(/[\s,]+/).filter(Boolean);
+		if (tokens.every((t) => /^[A-Za-z0-9._-]+$/.test(t))) {
+			for (const t of tokens) if (t.length > 1 && !t.startsWith("list-")) names.push(t);
+		}
+	}
+	return [...new Set(names)];
+}
+
+// Parse iac_plan's JSON result into drift counts. The MCP tool returns clean JSON
+// ({stack,deployment,drifted,create,update,delete,resources}); read leniently from the
+// first "{" so any wrapping is tolerated. (Pure; unit-tested.)
+export function parseStackPlanResult(
+	toolResult: string,
+): { create: number; update: number; delete: number; resources: Array<{ address: string; actions: string[] }> } | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const r = JSON.parse(toolResult.slice(jsonStart)) as Partial<{
+			create: number;
+			update: number;
+			delete: number;
+			resources: Array<{ address: string; actions: string[] }>;
+		}>;
+		if (typeof r.create === "number" && typeof r.update === "number" && typeof r.delete === "number") {
+			return {
+				create: r.create,
+				update: r.update,
+				delete: r.delete,
+				resources: Array.isArray(r.resources) ? r.resources : [],
+			};
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// Which stack names own per-deployment JSON the agent can edit. Read lazily (process.env,
+// never module-scope Bun.env -- Vite SSR throws). Defaults match the repo map (the
+// deployment-config stack + the lifecycle-policies stack). [Assumption A3]
+function configDeploymentStacks(): Set<string> {
+	return new Set(
+		(process.env.ELASTIC_IAC_CONFIG_DEPLOYMENT_STACKS ?? "deployments")
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
+function configIlmStacks(): Set<string> {
+	return new Set(
+		(process.env.ELASTIC_IAC_CONFIG_ILM_STACKS ?? "lifecycle-policies")
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
+
+// Pure: the config-JSON family a stack name belongs to (null = treat as HCL). Exported
+// for unit testing; classifyStack adds a repo path-resolve probe on top.
+export function configStackFamily(stack: string): "deployment" | "ilm" | null {
+	const s = stack.toLowerCase();
+	if (configDeploymentStacks().has(s)) return "deployment";
+	if (configIlmStacks().has(s)) return "ilm";
+	return null;
+}
+
+// Classify a stack as config-JSON (the agent can edit its per-deployment JSON) or HCL.
+// Name-based family + a repo path-resolve probe (a non-2xx means the path doesn't resolve
+// -> fall back to HCL, the conservative fewer-directions case). liveReconcilable is true
+// only where a clean live->file mapping exists in Phase 1 (the deployment-config version
+// field); HCL + ILM + tier-sizing defer reconcile-to-live.
+async function classifyStack(
+	stack: string,
+	deployment: string,
+): Promise<{ kind: "config-json" | "hcl"; configPath?: string; liveReconcilable: boolean }> {
+	const family = configStackFamily(stack);
+	if (family === "deployment") {
+		const path = deploymentJsonPath(deploymentJsonTemplate(), deployment);
+		const raw = await callTool("gitlab_get_file_content", { filePath: path });
+		if (raw.startsWith("[2")) return { kind: "config-json", configPath: path, liveReconcilable: true };
+	}
+	if (family === "ilm") {
+		const dir = `environments/${deployment}/lifecycle-policies`;
+		const tree = await callTool("gitlab_get_repository_tree", { path: dir });
+		if (tree.startsWith("[2") && tree.includes('"name"'))
+			return { kind: "config-json", configPath: dir, liveReconcilable: false };
+	}
+	return { kind: "hcl", liveReconcilable: false };
+}
+
+// Deterministic, DATE-FREE reconcile branch per (deployment, stack, direction). Date-free
+// so re-running on a later day reuses the same branch (idempotent MR). (Pure; unit-tested.)
+export function reconcileBranch(deployment: string, stack: string, direction: ReconcileDirection): string {
+	const slug = `${deployment}-${stack}-${direction}`
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "")
+		.slice(0, 60);
+	return `agent/reconcile-${slug}`;
+}
+
+// The web_url of an OPEN agent MR whose source branch matches, from
+// gitlab_list_agent_merge_requests' "[status] [...]" body. "" when none. Powers idempotent
+// reuse (re-running never opens a duplicate). (Pure; unit-tested.)
+export function parseAgentMrBySourceBranch(toolResult: string, branch: string): string {
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return "";
+	try {
+		const arr = JSON.parse(toolResult.slice(m.index)) as Array<{ source_branch?: unknown; web_url?: unknown }>;
+		if (!Array.isArray(arr)) return "";
+		const found = arr.find((mr) => mr.source_branch === branch);
+		return found && typeof found.web_url === "string" ? found.web_url : "";
+	} catch {
+		return "";
+	}
+}
+
+// Stable fingerprint of a stack's drift (sorted resource changes, else the counts). Same
+// drift -> same marker content -> same branch (idempotent); changed drift -> new marker
+// commit. (Pure; unit-tested.)
+export function driftFingerprint(stack: {
+	resources: Array<{ address: string; actions: string[] }>;
+	create: number;
+	update: number;
+	delete: number;
+}): string {
+	const addresses = stack.resources
+		.map((r) => `${r.actions.join("+")} ${r.address}`)
+		.sort()
+		.join("\n");
+	const basis = addresses || `${stack.create}/${stack.update}/${stack.delete}`;
+	return createHash("sha1").update(basis).digest("hex").slice(0, 12);
+}
+
+// The first semver-shaped version in the live Elastic Cloud deployment detail (best-effort;
+// used for the deployment-config reconcile-to-live mapping). (Pure; unit-tested.)
+export function extractLiveVersion(deploymentDetail: string): string {
+	const m = deploymentDetail.match(/"version"\s*:\s*"(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?)"/);
+	return m?.[1] ?? "";
+}
+
+// Agent-side path template for the reconcile-to-json marker. ${stack}/${deployment} are
+// literal placeholders. The marker is plan-neutral (Terraform does not auto-load a
+// .agent-reconcile/*.json file) but lives under the stack dir so the per-stack
+// plan:<deployment>:<stack> job's `changes:` rule triggers. [Assumption A2 -- validate the
+// path against the repo's .gitlab-ci.yml] Lazy process.env read (no module-scope Bun.env).
+function reconcileMarkerTemplate(): string {
+	return process.env.ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE ?? "stacks/${stack}/.agent-reconcile/${deployment}.json";
+}
+function reconcileMarkerPath(deployment: string, stack: string): string {
+	return reconcileMarkerTemplate()
+		.replace(/\$\{stack\}/g, stack)
+		.replace(/\$\{deployment\}/g, deployment);
+}
+function reconcileMarkerContent(deployment: string, stack: StackDrift): string {
+	const body = {
+		reconcile: "reconcile-to-json",
+		deployment,
+		stack: stack.stack,
+		driftFingerprint: driftFingerprint(stack),
+		note: "Agent-generated reconcile marker (Terraform ignores this file). Merging re-runs the stack plan to revert live drift; a human approves and applies.",
+	};
+	return `${JSON.stringify(body, null, 2)}\n`;
+}
+
+function buildReconcileMrBody(
+	deployment: string,
+	stack: StackDrift,
+	direction: ReconcileDirection,
+	filePath: string,
+): string {
+	const summary = `${stack.create} create / ${stack.update} update / ${stack.delete} destroy`;
+	const lines = [
+		`## Reconcile: ${stack.stack} on ${deployment}`,
+		"",
+		direction === "reconcile-to-live"
+			? `Direction: **reconcile to live** -- the repo config is updated to match the live cluster. After merge, the next plan for \`${stack.stack}\` should show no changes.`
+			: `Direction: **reconcile to declared config** -- this re-asserts the repo's declared state. The MR pipeline's \`plan:${deployment}:${stack.stack}\` job shows the live drift it will revert. Review the plan, then merge and apply.`,
+		"",
+		`Detected drift: ${summary}.`,
+		stack.resources.length > 0
+			? `\nResources:\n${stack.resources
+					.slice(0, 20)
+					.map((r) => `- ${r.actions.join("+")} ${r.address}`)
+					.join("\n")}`
+			: "",
+		`\nFile touched: \`${filePath}\``,
+		"",
+		"Agent-generated. I never merge or apply; review the plan and apply manually in GitLab.",
+	];
+	return lines.filter((l) => l !== "").join("\n");
+}
+
+// reconcile-to-live (deployment-config version only, Phase 1): write the LIVE version into
+// the repo JSON via the existing read-modify-write helper.
+async function buildLiveVersionReconcile(
+	deployment: string,
+	configPath: string,
+): Promise<{ content: string; from: string; to: string } | { blocked: string }> {
+	const deploymentId = await resolveDeploymentId(deployment);
+	if (!deploymentId) return { blocked: `Could not resolve a live Elastic Cloud deployment id for '${deployment}'.` };
+	const detail = await callTool("elastic_cloud_get_deployment", { deploymentId });
+	const liveVersion = extractLiveVersion(detail);
+	if (!liveVersion) return { blocked: "Could not read the live Elasticsearch version to reconcile." };
+	const raw = await callTool("gitlab_get_file_content", { filePath: configPath });
+	if (!raw.startsWith("[2")) return { blocked: `Could not read ${configPath} from the repo.` };
+	try {
+		const updated = setDeploymentVersion(extractFileContent(raw), liveVersion);
+		return { content: updated.content, from: updated.previous ?? "?", to: liveVersion };
+	} catch {
+		return { blocked: `${configPath} did not parse as JSON.` };
+	}
+}
+
+// Open one independent, idempotent MR for a stack + direction (or block with a reason).
+// Reuses an existing open agent MR on the deterministic branch rather than duplicating.
+async function openReconcileMr(
+	deployment: string,
+	stack: StackDrift,
+	direction: ReconcileDirection,
+): Promise<ReconcileResult> {
+	const branch = reconcileBranch(deployment, stack.stack, direction);
+
+	const existing = parseAgentMrBySourceBranch(await callTool("gitlab_list_agent_merge_requests", {}), branch);
+	if (existing) return { stack: stack.stack, direction, status: "reused", mrUrl: existing, branch };
+
+	let filePath: string;
+	let content: string;
+	let commitMessage: string;
+	let title: string;
+
+	if (direction === "reconcile-to-live") {
+		if (!stack.liveReconcilable || !stack.configPath) {
+			return {
+				stack: stack.stack,
+				direction,
+				status: "blocked",
+				note: "reconcile-to-live is not supported for this stack in Phase 1; use reconcile-to-json.",
+			};
+		}
+		const built = await buildLiveVersionReconcile(deployment, stack.configPath);
+		if ("blocked" in built) return { stack: stack.stack, direction, status: "blocked", note: built.blocked, branch };
+		filePath = stack.configPath;
+		content = built.content;
+		commitMessage = `${deployment}: reconcile ${stack.stack} to live (version ${built.from} -> ${built.to})`;
+		title = `[${deployment}] reconcile ${stack.stack} to live`;
+	} else {
+		// reconcile-to-json: a deterministic, plan-neutral marker that triggers the stack plan.
+		filePath = reconcileMarkerPath(deployment, stack.stack);
+		content = reconcileMarkerContent(deployment, stack);
+		commitMessage = `${deployment}: reconcile ${stack.stack} to declared config`;
+		title = `[${deployment}] reconcile ${stack.stack} to declared config`;
+	}
+
+	// Create the branch (tolerate "already exists" 4xx, like the proposers) and commit.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content,
+		commit_message: commitMessage,
+	});
+	if (commit.startsWith("[5")) {
+		return { stack: stack.stack, direction, status: "blocked", note: `Commit failed: ${commit.slice(0, 120)}`, branch };
+	}
+
+	const description = buildReconcileMrBody(deployment, stack, direction, filePath);
+	const mr = await callTool("gitlab_create_merge_request", {
+		source_branch: branch,
+		target_branch: "main",
+		title,
+		description,
+	});
+	// A 409 (MR already exists for this branch) -> reuse via the list.
+	if (mr.startsWith("[4")) {
+		const reuse = parseAgentMrBySourceBranch(await callTool("gitlab_list_agent_merge_requests", {}), branch);
+		return { stack: stack.stack, direction, status: "reused", mrUrl: reuse, branch };
+	}
+	return { stack: stack.stack, direction, status: "opened", mrUrl: extractMrUrl(mr), branch };
+}
+
+// Resolve the target deployment for a drift audit from the user's text, matched against
+// the repo's known deployments (so a typo doesn't run N plans against nothing).
+async function resolveDriftDeployment(state: IacStateType): Promise<string> {
+	if (state.targetDeployment) return state.targetDeployment;
+	const query = lastHumanText(state).toLowerCase();
+	const listed = parseTaskNameList(await callTool("iac_list_deployments", {}));
+	return listed.find((d) => query.includes(d.toLowerCase())) ?? "";
+}
+
+function driftedStacks(state: IacStateType): StackDrift[] {
+	return (state.driftReport?.stacks ?? []).filter((s) => s.drifted);
+}
+
+// Audit every stack of one deployment for drift. Resolves the deployment (asking once via
+// an iac_clarify interrupt when it's not named), enumerates stacks, runs the read-only
+// iac_plan per stack, classifies each, and emits the full report once (iac_drift_report)
+// for the UI overview. No writes here.
+export async function detectDrift(state: IacStateType): Promise<Partial<IacStateType>> {
+	let deployment = await resolveDriftDeployment(state);
+	if (!deployment) {
+		const answer = interrupt({
+			type: "iac_clarify",
+			question: "Which deployment should I check for drift? (e.g. gl-testing)",
+			message: "Which deployment should I check for drift? (e.g. gl-testing)",
+		}) as { answer?: string };
+		deployment = (answer?.answer ?? "").trim();
+	}
+	if (!deployment) {
+		return {
+			messages: [new AIMessage('I need a deployment name to check for drift. Try: "check gl-testing for drift".')],
+		};
+	}
+
+	const stacks = parseTaskNameList(await callTool("iac_list_stacks", {}));
+	if (stacks.length === 0) {
+		return {
+			targetDeployment: deployment,
+			messages: [
+				new AIMessage(
+					`Could not list the stacks to audit for '${deployment}'. Is the elastic-iac server connected and its repo workspace initialized?`,
+				),
+			],
+		};
+	}
+
+	const stackDrifts: StackDrift[] = [];
+	for (const stack of stacks) {
+		const counts = parseStackPlanResult(await callTool("iac_plan", { stack, deployment }));
+		const { kind, configPath, liveReconcilable } = await classifyStack(stack, deployment);
+		const create = counts?.create ?? 0;
+		const update = counts?.update ?? 0;
+		const del = counts?.delete ?? 0;
+		stackDrifts.push({
+			stack,
+			drifted: create + update + del > 0,
+			kind,
+			create,
+			update,
+			delete: del,
+			resources: counts?.resources ?? [],
+			...(configPath && { configPath }),
+			liveReconcilable,
+		});
+	}
+
+	const driftReport: DriftReport = { deployment, stacks: stackDrifts, generatedAt: new Date().toISOString() };
+	// Emit the full report once for the UI overview (forwarded by the SSE pump).
+	await dispatchCustomEvent("iac_drift_report", {
+		deployment,
+		stacks: stackDrifts.map((s) => ({
+			stack: s.stack,
+			drifted: s.drifted,
+			kind: s.kind,
+			create: s.create,
+			update: s.update,
+			delete: s.delete,
+			resources: s.resources,
+		})),
+	});
+
+	return { targetDeployment: deployment, driftReport, driftIndex: 0, reconcileResults: [] };
+}
+
+// HITL gate for the stack at driftIndex. Pauses (interrupt) asking the human to pick a
+// reconcile direction; the resume payload carries { direction }. reconcile-to-live is
+// offered only where a clean live->file mapping exists (liveReconcilable).
+export function reconcileGate(state: IacStateType): Partial<IacStateType> {
+	const drifted = driftedStacks(state);
+	const current = drifted[state.driftIndex];
+	if (!current) return { currentDirection: "skip" };
+
+	const directions: ReconcileDirection[] = current.liveReconcilable
+		? ["reconcile-to-live", "reconcile-to-json", "skip"]
+		: ["reconcile-to-json", "skip"];
+	const summary = `${current.create} create / ${current.update} update / ${current.delete} destroy`;
+	const choice = interrupt({
+		type: "iac_reconcile_choice",
+		stack: current.stack,
+		kind: current.kind,
+		summary,
+		directions,
+		message:
+			`Stack '${current.stack}' (${state.driftIndex + 1} of ${drifted.length}) has drifted: ${summary}. ` +
+			"Reconcile toward live, toward the declared config (opens an MR; CI shows the revert), or skip.",
+	}) as { direction?: ReconcileDirection };
+
+	const dir = choice?.direction;
+	const valid: ReconcileDirection = dir && directions.includes(dir) ? dir : "skip";
+	return { currentDirection: valid };
+}
+
+// Act on the chosen direction for the stack at driftIndex -- open one independent,
+// idempotent MR (reconcile-to-live or reconcile-to-json) or record a skip. Emits a
+// per-stack result for the UI as each MR resolves.
+export async function reconcileStack(state: IacStateType): Promise<Partial<IacStateType>> {
+	const drifted = driftedStacks(state);
+	const current = drifted[state.driftIndex];
+	const direction = state.currentDirection ?? "skip";
+	if (!current) return {};
+
+	const result: ReconcileResult =
+		direction === "skip"
+			? { stack: current.stack, direction: "skip", status: "skipped" }
+			: await openReconcileMr(state.targetDeployment, current, direction);
+
+	await dispatchCustomEvent("iac_reconcile_result", {
+		stack: result.stack,
+		direction: result.direction,
+		status: result.status,
+		...(result.mrUrl && { mrUrl: result.mrUrl }),
+		...(result.note && { note: result.note }),
+	});
+
+	return { reconcileResults: [...state.reconcileResults, result] };
+}
+
+// Step to the next drifted stack (the gate->worker->advance loop re-enters reconcileGate
+// until every drifted stack is processed). Clears the per-stack direction.
+export function advanceDrift(state: IacStateType): Partial<IacStateType> {
+	return { driftIndex: state.driftIndex + 1, currentDirection: null };
+}
+
+// The drift flow's terminal message -- per-stack outcomes (MR opened/reused, skipped,
+// blocked) + the apply reminder. (Pure; reads only state.)
+export function formatDriftSummary(state: IacStateType): string {
+	const dep = state.targetDeployment || "(unknown)";
+	const all = state.driftReport?.stacks ?? [];
+	const drifted = all.filter((s) => s.drifted);
+	if (drifted.length === 0) {
+		return `No drift detected for ${dep}. All ${all.length} audited stack(s) match the declared configuration.`;
+	}
+	const lines = [`Drift reconcile summary for ${dep} (${drifted.length} drifted stack(s)):`];
+	for (const r of state.reconcileResults) {
+		if (r.status === "opened") lines.push(`  ${r.stack}: MR opened (${r.direction}) -> ${r.mrUrl}`);
+		else if (r.status === "reused") lines.push(`  ${r.stack}: existing MR reused (${r.direction}) -> ${r.mrUrl}`);
+		else if (r.status === "skipped") lines.push(`  ${r.stack}: skipped`);
+		else lines.push(`  ${r.stack}: blocked -- ${r.note ?? "see logs"}`);
+	}
+	const handled = new Set(state.reconcileResults.map((r) => r.stack));
+	for (const s of drifted) if (!handled.has(s.stack)) lines.push(`  ${s.stack}: not processed`);
+	lines.push("Review each MR's plan in GitLab, then merge and apply. I never merge or apply.");
+	return lines.join("\n");
+}
+
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
+	// SIO-882: the drift flow renders its own per-stack reconcile summary.
+	if (state.intent === "drift") {
+		return { messages: [new AIMessage(formatDriftSummary(state))] };
+	}
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
 	}
