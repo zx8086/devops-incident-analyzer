@@ -99,7 +99,7 @@ describe("classifyToolError oauth typed errors", () => {
 
 	test("OAuthRequiresInteractiveAuthError message classified as auth/non-retryable", () => {
 		const msg =
-			"OAuth interactive authorization required for gitlab but MCP_OAUTH_HEADLESS=true; run `bun run oauth:seed:gitlab`";
+			"OAuth interactive authorization required for gitlab but interactive auth is disabled (MCP_OAUTH_HEADLESS=true or non-interactive/piped stdout); run `bun run oauth:seed:gitlab` once interactively to seed tokens";
 		const result = classifyToolError(msg);
 		expect(result.category).toBe("auth");
 		expect(result.retryable).toBe(false);

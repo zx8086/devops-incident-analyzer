@@ -6,7 +6,8 @@ export class OAuthRequiresInteractiveAuthError extends Error {
 
 	constructor(namespace: string, authorizationUrl: URL) {
 		super(
-			`OAuth interactive authorization required for ${namespace} but MCP_OAUTH_HEADLESS=true; ` +
+			`OAuth interactive authorization required for ${namespace} but interactive auth is disabled ` +
+				`(MCP_OAUTH_HEADLESS=true or non-interactive/piped stdout); ` +
 				`run \`bun run oauth:seed:${namespace}\` once interactively to seed tokens`,
 		);
 		this.name = "OAuthRequiresInteractiveAuthError";
