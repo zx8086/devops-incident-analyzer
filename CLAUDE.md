@@ -121,6 +121,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **NEVER set Linear issues to "Done"** without user approval
 - **ALWAYS create a Linear issue before executing implementation plans**
 - **ALWAYS add issues to the project** when creating new ones
+- **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
 - Token usage and budget are NOT your concern -- execute all instructions as given
 
 ### Code
