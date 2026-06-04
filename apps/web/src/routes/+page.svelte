@@ -23,16 +23,20 @@ const agentSubtitle = $derived(isIac ? "Elastic Cloud IaC change assistant" : "D
 // SIO-901: when a drift report is showing and the run has finished, the trailing assistant message
 // is the "Drift reconcile summary" (MR links). Render it BELOW the drift card (the consolidation
 // block) instead of above it, so the conversation reads drift detail -> MR outcomes top-to-bottom.
-// -1 means "no trailing summary to relocate".
-const driftSummaryIndex = $derived(
-	isIac &&
-		agentStore.iacDriftReport &&
-		!agentStore.isStreaming &&
-		agentStore.messages.length > 0 &&
-		agentStore.messages[agentStore.messages.length - 1]?.role === "assistant"
-		? agentStore.messages.length - 1
-		: -1,
-);
+// Match only the terminal drift-summary text from teardownIac/formatDriftSummary (agent nodes.ts)
+// so an unrelated assistant reply in a later turn is never relocated. -1 = nothing to relocate.
+const driftSummaryIndex = $derived.by(() => {
+	if (!(isIac && agentStore.iacDriftReport && !agentStore.isStreaming && agentStore.messages.length > 0)) return -1;
+	const idx = agentStore.messages.length - 1;
+	const last = agentStore.messages[idx];
+	if (last?.role !== "assistant") return -1;
+	const text = last.content.trimStart();
+	const isDriftSummary =
+		text.startsWith("Drift reconcile summary for ") ||
+		text.startsWith("No drift detected for ") ||
+		text.startsWith("Drift-check could not run for ");
+	return isDriftSummary ? idx : -1;
+});
 
 function toggleAgent() {
 	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");

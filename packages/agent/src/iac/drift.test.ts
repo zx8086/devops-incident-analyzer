@@ -1359,4 +1359,44 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		expect("blocked" in built).toBe(true);
 		if ("blocked" in built) expect(built.blocked).toContain("Could not read any config file");
 	});
+
+	test("readable-but-already-in-sync + unreadable -> 'no reconcilable values' (not 'could not read any')", async () => {
+		mockTools({
+			gitlab_get_file_content: (args) => {
+				const fp = String(args.filePath ?? "");
+				// in-sync.json reads OK but the live value already equals the repo (applied = []);
+				// missing.json is unreadable. files.length stays 0, but NOT every file was unreadable.
+				return fp.endsWith("in-sync.json") ? b64(`${JSON.stringify({ name: "same" }, null, 2)}\n`) : "[404] not found";
+			},
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["in-sync"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "same", after: "same" } },
+					},
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["missing"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "x", after: "y" } },
+					},
+				],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) {
+			expect(built.blocked).toContain("No reconcilable live values");
+			expect(built.blocked).not.toContain("Could not read any config file");
+			expect(built.blocked).toContain("Skipped 1 unreadable"); // skip note still surfaced
+		}
+	});
 });

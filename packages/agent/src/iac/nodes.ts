@@ -2182,6 +2182,9 @@ async function buildReportSourcedReconcile(
 	// <key>.json template does not match). Skip them and reconcile the rest -- one unreadable file
 	// must not sink the whole stack -- but surface them so the human knows what was left out.
 	const skipped: string[] = [];
+	// SIO-901: count files we actually read, so "every candidate was unreadable" is distinguishable
+	// from "readable but already in sync" (which also yields files.length === 0).
+	let readableFileCount = 0;
 	for (const r of stack.resources) {
 		if (r.category !== "update" && r.category !== "replace") continue;
 		const useChanges = hasWritableChanges(r);
@@ -2194,6 +2197,7 @@ async function buildReportSourcedReconcile(
 			skipped.push(filePath); // SIO-901: skip-with-note instead of blocking the whole stack
 			continue;
 		}
+		readableFileCount++; // SIO-901: read OK (it may still be a no-op if already in sync)
 		const original = extractFileContent(raw);
 		let projected: { content: string; applied: string[] };
 		try {
@@ -2220,13 +2224,14 @@ async function buildReportSourcedReconcile(
 			? `Skipped ${skipped.length} unreadable config file(s): ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.`
 			: undefined;
 	if (files.length === 0) {
-		// SIO-901: only block when nothing reconciled. If that was purely because every file was
-		// unreadable, say so (more actionable than the generic "no reconcilable values").
-		if (skipped.length > 0) {
+		// SIO-901: only call it "unreadable" when EVERY candidate file failed to read -- a
+		// readable-but-already-in-sync stack (readableFileCount > 0) must not be misreported as
+		// unreadable. Otherwise it is the generic no-reconcilable-values case (with the skip note).
+		if (readableFileCount === 0 && skipped.length > 0) {
 			return { blocked: `Could not read any config file for this stack. ${skipNote}` };
 		}
 		return {
-			blocked: "No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).",
+			blocked: `No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).${skipNote ? ` ${skipNote}` : ""}`,
 		};
 	}
 	return { files, summary: summaryParts.join("; "), ...(skipNote && { note: skipNote }) };
