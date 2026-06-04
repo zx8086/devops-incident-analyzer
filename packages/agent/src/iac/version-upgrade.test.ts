@@ -5,6 +5,7 @@ import {
 	branchSlug,
 	deploymentJsonPath,
 	extractMrUrl,
+	isUnchangedConfig,
 	parseIntentJson,
 	setDeploymentTierSize,
 	setDeploymentVersion,
@@ -96,6 +97,48 @@ describe("setDeploymentVersion", () => {
 	test("throws on non-object / invalid JSON", () => {
 		expect(() => setDeploymentVersion("not json", "9.4.2")).toThrow();
 		expect(() => setDeploymentVersion("[1,2,3]", "9.4.2")).toThrow("not an object");
+	});
+});
+
+// No-op guard for the GitOps proposers: an edit that re-serializes to the current file
+// must short-circuit before opening an empty-diff MR (immediate "already at target"
+// feedback). Pure helper, tested against the read-modify-write helpers it gates.
+describe("isUnchangedConfig", () => {
+	test("true when a version edit re-serializes to the current file", () => {
+		const original = JSON.stringify({ name: "ap-cld", version: "9.4.2", region: "ap-east-1" }, null, 2);
+		expect(isUnchangedConfig(setDeploymentVersion(original, "9.4.2").content, original)).toBe(true);
+	});
+
+	test("false for a real version bump", () => {
+		const original = JSON.stringify({ name: "ap-cld", version: "9.4.1" }, null, 2);
+		expect(isUnchangedConfig(setDeploymentVersion(original, "9.4.2").content, original)).toBe(false);
+	});
+
+	test("normalizes formatting: a compact original still reads as unchanged", () => {
+		const compact = '{"name":"ap-cld","version":"9.4.2"}';
+		expect(isUnchangedConfig(setDeploymentVersion(compact, "9.4.2").content, compact)).toBe(true);
+	});
+
+	test("true when a tier-resize requests the size the JSON already has", () => {
+		const original = JSON.stringify(
+			{ name: "eu-b2b", elasticsearch: { warm: { size: "8g", max_size: "15g", zone_count: 2 } } },
+			null,
+			2,
+		);
+		expect(isUnchangedConfig(setDeploymentTierSize(original, "warm", 8, 15).content, original)).toBe(true);
+	});
+
+	test("false when a tier-resize actually changes a size", () => {
+		const original = JSON.stringify(
+			{ name: "eu-b2b", elasticsearch: { warm: { size: "8g", max_size: "15g" } } },
+			null,
+			2,
+		);
+		expect(isUnchangedConfig(setDeploymentTierSize(original, "warm", 4, 15).content, original)).toBe(false);
+	});
+
+	test("false when the original is not valid JSON", () => {
+		expect(isUnchangedConfig("{}\n", "not json")).toBe(false);
 	});
 });
 

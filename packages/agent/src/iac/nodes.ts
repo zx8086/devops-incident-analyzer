@@ -545,6 +545,19 @@ function extractFileContent(toolResult: string): string {
 	return toolResult;
 }
 
+// No-op guard: true when re-serializing the edited object yields the same bytes as the
+// current file -- i.e. the proposed change would produce an empty diff. All three GitOps
+// proposers emit content via JSON.stringify(obj, null, 2) + "\n", so normalize the
+// original the same way before comparing (formatting/whitespace must not read as a
+// change). Lets a proposer short-circuit before opening a pointless MR. (Pure.)
+export function isUnchangedConfig(updatedContent: string, originalJson: string): boolean {
+	try {
+		return updatedContent === `${JSON.stringify(JSON.parse(originalJson), null, 2)}\n`;
+	} catch {
+		return false;
+	}
+}
+
 // version-upgrade: propose the change as a GitLab config edit + branch + commit via
 // the API (no clone, no terraform, no local git). CI computes the plan on the MR.
 async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
@@ -567,6 +580,19 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 		return {
 			blockedReason: `Could not read ${filePath} as JSON (got: ${raw.slice(0, 120)}).`,
 			messages: [new AIMessage(`Cannot propose the change: ${filePath} did not parse as JSON.`)],
+		};
+	}
+
+	// No-op guard: already at the target version, so an MR would have an empty diff.
+	// Surface immediate feedback and open nothing (no branch, no commit, no review gate).
+	if (updated.previous === version) {
+		return {
+			blockedReason: `${cluster} is already on ${version}; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: ${cluster} is already on Elasticsearch ${version}. I did not open a merge request.`,
+				),
+			],
 		};
 	}
 
@@ -619,6 +645,18 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 		return {
 			blockedReason: `Could not edit ${tier} tier in ${filePath}: ${reason}.`,
 			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	// No-op guard: requested sizing already matches the deployment JSON (empty diff).
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `${tier} tier already has the requested sizing; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: the ${tier} tier already has the requested sizing. I did not open a merge request.`,
+				),
+			],
 		};
 	}
 
@@ -695,6 +733,18 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		return {
 			blockedReason: `Could not edit ${filePath}: ${reason}.`,
 			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	// No-op guard: the phase patch matches the current policy (empty diff).
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
+				),
+			],
 		};
 	}
 

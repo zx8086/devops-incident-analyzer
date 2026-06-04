@@ -164,7 +164,7 @@ function handleSuggestionClick(suggestion: string) {
       {#if agentStore.isStreaming}
         {#if agentStore.activeNodes.size > 0 || agentStore.completedNodes.size > 0}
           <div class="px-4">
-            <StreamingProgress activeNodes={agentStore.activeNodes} completedNodes={agentStore.completedNodes} />
+            <StreamingProgress variant={isIac ? "iac" : "incident"} activeNodes={agentStore.activeNodes} completedNodes={agentStore.completedNodes} />
           </div>
         {/if}
 
