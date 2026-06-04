@@ -57,6 +57,10 @@ const PIPELINE_NODES = new Set([
 	"reconcileGate",
 	"reconcileStack",
 	"advanceDrift",
+	// SIO-902: elastic-iac synthetics drift sub-flow nodes.
+	"detectSyntheticsDrift",
+	"syntheticsPushGate",
+	"pushSynthetics",
 ]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
@@ -243,6 +247,58 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				});
 			}
 		}
+
+		// SIO-902: forward detectSyntheticsDrift's whole-deployment report (the synthetics card).
+		if (event.event === "on_custom_event" && event.name === "synthetics_drift_report") {
+			const data = event.data as {
+				deployment?: unknown;
+				kibanaUrl?: unknown;
+				kibanaSpace?: unknown;
+				hasActionableDrift?: unknown;
+				planError?: unknown;
+				planErrorReason?: unknown;
+				totals?: unknown;
+				drift?: unknown;
+				reconcilePlan?: unknown;
+			};
+			if (typeof data?.deployment === "string" && Array.isArray(data.drift)) {
+				send({
+					type: "synthetics_drift_report",
+					deployment: data.deployment,
+					kibanaUrl: typeof data.kibanaUrl === "string" ? data.kibanaUrl : "",
+					kibanaSpace: typeof data.kibanaSpace === "string" ? data.kibanaSpace : "",
+					hasActionableDrift: data.hasActionableDrift === true,
+					...(data.planError === true && { planError: true }),
+					...(typeof data.planErrorReason === "string" && { planErrorReason: data.planErrorReason }),
+					totals: data.totals,
+					drift: data.drift,
+					reconcilePlan: data.reconcilePlan,
+				});
+			}
+		}
+
+		// SIO-902: forward the single synthetics push outcome.
+		if (event.event === "on_custom_event" && event.name === "synthetics_push_result") {
+			const data = event.data as {
+				status?: unknown;
+				pushedCount?: unknown;
+				project?: unknown;
+				pipelineId?: unknown;
+				pipelineStatus?: unknown;
+				note?: unknown;
+			};
+			if (typeof data?.status === "string") {
+				send({
+					type: "synthetics_push_result",
+					status: data.status,
+					pushedCount: typeof data.pushedCount === "number" ? data.pushedCount : 0,
+					...(typeof data.project === "string" && { project: data.project }),
+					...(typeof data.pipelineId === "number" && { pipelineId: data.pipelineId }),
+					...(typeof data.pipelineStatus === "string" && { pipelineStatus: data.pipelineStatus }),
+					...(typeof data.note === "string" && { note: data.note }),
+				});
+			}
+		}
 	}
 
 	return { toolsUsed: [...toolsUsed], responseContent };
@@ -289,6 +345,15 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		explanation?: unknown;
 		resources?: unknown;
 		directions?: unknown;
+		// SIO-902: synthetics push gate fields.
+		deployment?: unknown;
+		kibanaSpace?: unknown;
+		pushableCount?: unknown;
+		extraCount?: unknown;
+		projectScope?: unknown;
+		command?: unknown;
+		pushMonitors?: unknown;
+		extraMonitors?: unknown;
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -364,6 +429,36 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 			...(resources && { resources }),
 			directions,
 			message: typeof obj.message === "string" ? obj.message : "Choose a reconcile direction for this stack.",
+		});
+		return true;
+	}
+
+	// SIO-902: the single synthetics push approve/decline gate. The UI POSTs { approve } to
+	// the resume endpoint. extra_in_kibana is shown surface-only (never pushed).
+	if (obj.type === "synthetics_push_choice") {
+		const monitorsOf = (v: unknown): Array<{ project: string; monitorName: string }> =>
+			Array.isArray(v)
+				? v.map((m) => {
+						const x = m as { project?: unknown; monitorName?: unknown };
+						return {
+							project: typeof x.project === "string" ? x.project : "",
+							monitorName: typeof x.monitorName === "string" ? x.monitorName : "",
+						};
+					})
+				: [];
+		send({
+			type: "synthetics_push_choice",
+			threadId,
+			deployment: typeof obj.deployment === "string" ? obj.deployment : "",
+			kibanaSpace: typeof obj.kibanaSpace === "string" ? obj.kibanaSpace : "",
+			pushableCount: typeof obj.pushableCount === "number" ? obj.pushableCount : 0,
+			extraCount: typeof obj.extraCount === "number" ? obj.extraCount : 0,
+			projectScope: typeof obj.projectScope === "string" ? obj.projectScope : null,
+			command: typeof obj.command === "string" ? obj.command : "",
+			...(typeof obj.explanation === "string" && obj.explanation && { explanation: obj.explanation }),
+			pushMonitors: monitorsOf(obj.pushMonitors),
+			extraMonitors: monitorsOf(obj.extraMonitors),
+			message: typeof obj.message === "string" ? obj.message : "Approve the synthetics push to Kibana, or decline.",
 		});
 		return true;
 	}

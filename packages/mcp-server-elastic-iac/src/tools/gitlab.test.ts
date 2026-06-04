@@ -112,3 +112,28 @@ describe("parsePipelineRef", () => {
 		expect(parsePipelineRef("[500] err")).toBeNull();
 	});
 });
+
+import { buildSyntheticsPipelineVars } from "./gitlab.ts";
+
+// SIO-902: the synthetics trigger var array. Whole-deployment (no STACK); PROJECT only when scoped.
+describe("buildSyntheticsPipelineVars", () => {
+	test("drift-check: SYNTH_DRIFT_CHECK + DEPLOYMENT, no PROJECT when omitted", () => {
+		expect(buildSyntheticsPipelineVars("SYNTH_DRIFT_CHECK", "eu-b2b")).toEqual([
+			{ key: "SYNTH_DRIFT_CHECK", value: "true" },
+			{ key: "DEPLOYMENT", value: "eu-b2b" },
+		]);
+	});
+
+	test("push: SYNTH_PUSH + DEPLOYMENT + PROJECT when project-scoped", () => {
+		expect(buildSyntheticsPipelineVars("SYNTH_PUSH", "eu-b2b", "eu-oit.prd")).toEqual([
+			{ key: "SYNTH_PUSH", value: "true" },
+			{ key: "DEPLOYMENT", value: "eu-b2b" },
+			{ key: "PROJECT", value: "eu-oit.prd" },
+		]);
+	});
+
+	test("never emits a STACK variable", () => {
+		const vars = buildSyntheticsPipelineVars("SYNTH_DRIFT_CHECK", "eu-b2b", "eu-oit.prd");
+		expect(vars.some((v) => v.key === "STACK")).toBe(false);
+	});
+});

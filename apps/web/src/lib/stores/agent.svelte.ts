@@ -12,6 +12,9 @@ import {
 	type IacReconcileResultRow,
 	type ReconcileDirection,
 	type ReducerState,
+	type SyntheticsDriftReport,
+	type SyntheticsPushChoice,
+	type SyntheticsPushResultRow,
 	type TopicShiftPrompt,
 } from "./agent-reducer.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
@@ -85,6 +88,9 @@ function createAgentStore() {
 	let iacDriftReport = $state<IacDriftReport | null>(null);
 	let iacReconcileChoice = $state<IacReconcileChoice | null>(null);
 	let iacReconcileResults = $state<IacReconcileResultRow[]>([]);
+	let syntheticsDriftReport = $state<SyntheticsDriftReport | null>(null);
+	let syntheticsPushChoice = $state<SyntheticsPushChoice | null>(null);
+	let syntheticsPushResult = $state<SyntheticsPushResultRow | null>(null);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -113,6 +119,10 @@ function createAgentStore() {
 		iacDriftReport = null;
 		iacReconcileChoice = null;
 		iacReconcileResults = [];
+		// SIO-902: same for the synthetics drift sub-flow.
+		syntheticsDriftReport = null;
+		syntheticsPushChoice = null;
+		syntheticsPushResult = null;
 
 		abortController = new AbortController();
 
@@ -208,6 +218,9 @@ function createAgentStore() {
 			iacDriftReport,
 			iacReconcileChoice,
 			iacReconcileResults,
+			syntheticsDriftReport,
+			syntheticsPushChoice,
+			syntheticsPushResult,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -231,6 +244,9 @@ function createAgentStore() {
 		iacDriftReport = next.iacDriftReport;
 		iacReconcileChoice = next.iacReconcileChoice;
 		iacReconcileResults = next.iacReconcileResults;
+		syntheticsDriftReport = next.syntheticsDriftReport;
+		syntheticsPushChoice = next.syntheticsPushChoice;
+		syntheticsPushResult = next.syntheticsPushResult;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -380,6 +396,9 @@ function createAgentStore() {
 		iacDriftReport = null;
 		iacReconcileChoice = null;
 		iacReconcileResults = [];
+		syntheticsDriftReport = null;
+		syntheticsPushChoice = null;
+		syntheticsPushResult = null;
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -393,7 +412,7 @@ function createAgentStore() {
 	// Resume the elastic-iac graph after an interrupt (plan-review decision or a
 	// clarification answer), piping the resulting SSE stream back through handleEvent.
 	async function resumeIac(
-		payload: { decision?: "approved" | "rejected"; answer?: string; direction?: ReconcileDirection },
+		payload: { decision?: "approved" | "rejected"; answer?: string; direction?: ReconcileDirection; approve?: boolean },
 		threadIdOverride: string,
 	) {
 		if (isStreaming) return;
@@ -455,6 +474,13 @@ function createAgentStore() {
 	function resolveReconcileChoice(direction: ReconcileDirection) {
 		if (!iacReconcileChoice) return;
 		return resumeIac({ direction }, iacReconcileChoice.threadId);
+	}
+
+	// SIO-902: answer the single synthetics push gate (approve / decline). On approve the
+	// agent triggers the remote push; on decline it stops with "Push declined".
+	function approveSyntheticsPush(approve: boolean) {
+		if (!syntheticsPushChoice) return;
+		return resumeIac({ approve }, syntheticsPushChoice.threadId);
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
@@ -602,6 +628,15 @@ function createAgentStore() {
 		get iacReconcileResults() {
 			return iacReconcileResults;
 		},
+		get syntheticsDriftReport() {
+			return syntheticsDriftReport;
+		},
+		get syntheticsPushChoice() {
+			return syntheticsPushChoice;
+		},
+		get syntheticsPushResult() {
+			return syntheticsPushResult;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
@@ -615,6 +650,7 @@ function createAgentStore() {
 		resolveIacPlanReview,
 		submitIacClarify,
 		resolveReconcileChoice,
+		approveSyntheticsPush,
 	};
 }
 

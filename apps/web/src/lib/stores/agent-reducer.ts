@@ -147,6 +147,66 @@ export interface IacReconcileResultRow {
 	note?: string;
 }
 
+// SIO-902: synthetics drift. Whole-deployment monitor diff (source YAML vs live Kibana).
+export interface SyntheticsDriftMonitor {
+	project: string;
+	monitorId: string;
+	monitorName: string;
+	category: "changed" | "missing_in_kibana" | "extra_in_kibana";
+	fields?: Array<{ field: string; source?: unknown; live?: unknown }>;
+}
+
+export interface SyntheticsDriftTotals {
+	projectsChecked: number;
+	monitorsInSource: number;
+	monitorsInKibana: number;
+	missingInKibana: number;
+	extraInKibana: number;
+	changed: number;
+}
+
+export interface SyntheticsReconcilePlan {
+	pushToKibana: { command: string; monitors: Array<{ project: string; monitorId: string; monitorName: string }> };
+	addToSource: { action: string; monitors: Array<{ project: string; monitorId: string; monitorName: string }> };
+}
+
+export interface SyntheticsDriftReport {
+	deployment: string;
+	kibanaUrl: string;
+	kibanaSpace: string;
+	hasActionableDrift: boolean;
+	planError?: boolean;
+	planErrorReason?: string;
+	totals: SyntheticsDriftTotals;
+	drift: SyntheticsDriftMonitor[];
+	reconcilePlan: SyntheticsReconcilePlan;
+}
+
+// The single operator push approve/decline interrupt (no per-stack loop). The UI POSTs
+// { approve } to the resume endpoint.
+export interface SyntheticsPushChoice {
+	threadId: string;
+	deployment: string;
+	kibanaSpace: string;
+	pushableCount: number;
+	extraCount: number;
+	projectScope: string | null;
+	command: string;
+	explanation?: string;
+	pushMonitors: Array<{ project: string; monitorName: string }>;
+	extraMonitors: Array<{ project: string; monitorName: string }>;
+	message: string;
+}
+
+export interface SyntheticsPushResultRow {
+	status: "pushed" | "skipped" | "blocked" | "failed";
+	pushedCount: number;
+	project?: string;
+	pipelineId?: number;
+	pipelineStatus?: string;
+	note?: string;
+}
+
 // SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
 // "couchbase"). Populated by datasource_result events emitted from the
 // extractFindings node. Absence of an entry = sub-agent didn't run or had
@@ -193,6 +253,11 @@ export interface ReducerState {
 	iacDriftReport: IacDriftReport | null;
 	iacReconcileChoice: IacReconcileChoice | null;
 	iacReconcileResults: IacReconcileResultRow[];
+	// SIO-902: synthetics drift sub-flow. The whole-deployment report, the single push
+	// approve/decline prompt (interrupt), and the single push outcome.
+	syntheticsDriftReport: SyntheticsDriftReport | null;
+	syntheticsPushChoice: SyntheticsPushChoice | null;
+	syntheticsPushResult: SyntheticsPushResultRow | null;
 }
 
 export function initialReducerState(): ReducerState {
@@ -218,6 +283,9 @@ export function initialReducerState(): ReducerState {
 		iacDriftReport: null,
 		iacReconcileChoice: null,
 		iacReconcileResults: [],
+		syntheticsDriftReport: null,
+		syntheticsPushChoice: null,
+		syntheticsPushResult: null,
 	};
 }
 
@@ -349,6 +417,55 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 						note: event.note,
 					},
 				],
+			};
+		// SIO-902: synthetics drift sub-flow events.
+		case "synthetics_drift_report":
+			// A fresh report clears any prior push outcome.
+			return {
+				...state,
+				syntheticsDriftReport: {
+					deployment: event.deployment,
+					kibanaUrl: event.kibanaUrl,
+					kibanaSpace: event.kibanaSpace,
+					hasActionableDrift: event.hasActionableDrift,
+					planError: event.planError,
+					planErrorReason: event.planErrorReason,
+					totals: event.totals,
+					drift: event.drift,
+					reconcilePlan: event.reconcilePlan,
+				},
+				syntheticsPushResult: null,
+			};
+		case "synthetics_push_choice":
+			return {
+				...state,
+				threadId: event.threadId,
+				syntheticsPushChoice: {
+					threadId: event.threadId,
+					deployment: event.deployment,
+					kibanaSpace: event.kibanaSpace,
+					pushableCount: event.pushableCount,
+					extraCount: event.extraCount,
+					projectScope: event.projectScope,
+					command: event.command,
+					explanation: event.explanation,
+					pushMonitors: event.pushMonitors,
+					extraMonitors: event.extraMonitors,
+					message: event.message,
+				},
+			};
+		case "synthetics_push_result":
+			return {
+				...state,
+				syntheticsPushChoice: null,
+				syntheticsPushResult: {
+					status: event.status,
+					pushedCount: event.pushedCount,
+					project: event.project,
+					pipelineId: event.pipelineId,
+					pipelineStatus: event.pipelineStatus,
+					note: event.note,
+				},
 			};
 		default:
 			return state;

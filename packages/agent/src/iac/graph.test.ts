@@ -46,4 +46,13 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("reconcileStack");
 		expect(nodeNames).toContain("advanceDrift");
 	});
+
+	// SIO-902: synthetics drift detection + push gate + push nodes.
+	test("graph contains the synthetics drift detection + push gate + push nodes", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("detectSyntheticsDrift");
+		expect(nodeNames).toContain("syntheticsPushGate");
+		expect(nodeNames).toContain("pushSynthetics");
+	});
 });
