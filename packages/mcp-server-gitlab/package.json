@@ -9,7 +9,8 @@
 		"start": "bun src/index.ts",
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit",
-		"oauth:seed": "bun --env-file=../../.env src/cli/seed-oauth.ts"
+		"oauth:seed": "bun --env-file=../../.env src/cli/seed-oauth.ts",
+		"oauth:doctor": "bun --env-file=../../.env src/cli/doctor-oauth.ts"
 	},
 	"dependencies": {
 		"@devops-agent/shared": "workspace:*",

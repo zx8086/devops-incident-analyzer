@@ -1,8 +1,30 @@
 // src/oauth/boot-warn.ts
 
-import type { OAuthProviderLogger } from "./base-provider.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { getOAuthStoragePath, type OAuthProviderLogger, type PersistedOAuthState } from "./base-provider.ts";
 import { isHeadless } from "./headless.ts";
 import { hasSeededTokens } from "./seeded-tokens.ts";
+
+// SIO-894: surface seeded-token health (scope + hours until access-token expiry)
+// in the boot log so a trace shows whether OAuth is the problem at startup,
+// without running oauth:doctor. Read-only and best-effort: any parse failure
+// yields an empty summary rather than blocking boot.
+function tokenSummary(namespace: string, key: string): Record<string, unknown> {
+	const path = getOAuthStoragePath(namespace, key);
+	if (!existsSync(path)) return {};
+	try {
+		const state = JSON.parse(readFileSync(path, "utf-8")) as PersistedOAuthState;
+		const summary: Record<string, unknown> = {};
+		if (state.tokens?.scope) summary.tokenScope = state.tokens.scope;
+		if (typeof state.tokenObtainedAt === "number" && typeof state.tokens?.expires_in === "number") {
+			const remainingMs = state.tokenObtainedAt + state.tokens.expires_in * 1000 - Date.now();
+			summary.accessTokenExpiresInHours = Math.round((remainingMs / 3_600_000) * 100) / 100;
+		}
+		return summary;
+	} catch {
+		return {};
+	}
+}
 
 export interface WarnIfOAuthNotSeededOptions {
 	namespace: string;
@@ -48,7 +70,7 @@ export function warnIfOAuthNotSeeded(options: WarnIfOAuthNotSeededOptions): void
 
 	if (headless) {
 		options.logger.info(
-			{ namespace: options.namespace, seeded },
+			{ namespace: options.namespace, seeded, ...(seeded ? tokenSummary(options.namespace, options.key) : {}) },
 			"MCP_OAUTH_HEADLESS active -- OAuth browser popups disabled; missing tokens will throw OAuthRequiresInteractiveAuthError",
 		);
 	}

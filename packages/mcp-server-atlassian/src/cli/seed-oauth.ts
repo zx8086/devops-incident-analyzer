@@ -28,12 +28,14 @@ async function main() {
 		},
 	});
 
-	console.log(`Seeding Atlassian OAuth tokens (endpoint=${config.atlassian.mcpEndpoint})`);
+	const force = process.argv.includes("--force");
+	console.log(`Seeding Atlassian OAuth tokens (endpoint=${config.atlassian.mcpEndpoint})${force ? " [--force]" : ""}`);
 	await seedOAuth({
 		provider,
 		mcpUrl,
 		callbackPort: config.atlassian.oauthCallbackPort,
 		clientName: "atlassian-mcp-seed",
+		force,
 	});
 	console.log("Done. Tokens persisted to ~/.mcp-auth/atlassian/.");
 }
