@@ -23,6 +23,9 @@ import type {
 	ReconcileDirection,
 	ReconcileResult,
 	StackDrift,
+	SyntheticsDriftMonitor,
+	SyntheticsDriftReport,
+	SyntheticsPushResult,
 } from "./state.ts";
 
 const log = getLogger("agent:iac");
@@ -105,11 +108,16 @@ export function parseIntentJson(raw: string): IacRequest {
 	return { workflow: "other", isProd: false, clarification: "Which cluster and what change should I make?" };
 }
 
-// Map a raw classifier reply to an intent. "gitops", "pipeline-status", and "drift" are
-// explicit; anything else defaults to "info". (Pure; unit-tested directly.)
-export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" | "drift" {
+// Map a raw classifier reply to an intent. "gitops", "pipeline-status", "synthetics-drift",
+// and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested directly.)
+export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
+	// SIO-902: synthetics drift must be checked BEFORE plain drift -- a synthetics request also
+	// contains "drift"/"reconcile" (e.g. "reconcile the synthetics monitors"), so "synthetic"
+	// has to win the tiebreak.
+	if (r.includes("synthetic") || r.includes("synthetics-drift") || r.includes("monitor drift") || r.includes("uptime"))
+		return "synthetics-drift";
 	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
 	if (r.includes("drift") || r.includes("reconcile")) return "drift";
 	if (r.includes("gitops")) return "gitops";
@@ -128,12 +136,16 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
 		"- 'gitops': a request to CHANGE one specific thing (resize, downsize, add/modify ILM, upgrade a version, " +
 		"open an MR) -- a single targeted Terraform diff.\n" +
-		"- 'drift': a request to DETECT or RECONCILE configuration drift for a deployment -- 'check X for drift', " +
+		"- 'drift': a request to DETECT or RECONCILE Terraform configuration drift for a deployment -- 'check X for drift', " +
 		"'what has drifted', 'reconcile X with live', 'compare the repo with the live cluster', 'show drift by stack'. " +
-		"This audits ALL stacks of one deployment and offers a per-stack reconcile choice.\n" +
+		"This audits ALL Terraform stacks of one deployment and offers a per-stack reconcile choice.\n" +
+		"- 'synthetics-drift': detect or push SYNTHETICS/UPTIME MONITOR drift between the source YAML and live Kibana " +
+		"for a deployment -- 'check synthetics drift for X', 'are the monitors in sync', 'push monitors to Kibana', " +
+		"'reconcile synthetics', 'check uptime monitors'. This compares source vs live Kibana monitors and offers an " +
+		"operator-approved push (NOT a per-stack Terraform reconcile).\n" +
 		"- 'pipeline-status': a follow-up about a merge request the agent already opened -- 'did the pipeline " +
 		"pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's the CI status'.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', 'drift', or 'pipeline-status'. " +
+		"Reply with ONLY one word: 'info', 'gitops', 'drift', 'synthetics-drift', or 'pipeline-status'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
 	const intent = intentFromText(String(res.content));
@@ -2828,6 +2840,11 @@ export function formatDriftSummary(state: IacStateType): string {
 
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
+	// SIO-902: the synthetics flow renders its own summary (checked before "drift" since the
+	// synthetics report lives on a different channel).
+	if (state.intent === "synthetics-drift") {
+		return { messages: [new AIMessage(formatSyntheticsSummary(state))] };
+	}
 	// SIO-882: the drift flow renders its own per-stack reconcile summary.
 	if (state.intent === "drift") {
 		return { messages: [new AIMessage(formatDriftSummary(state))] };
@@ -2866,4 +2883,462 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	}
 	lines.push("Review and apply manually in GitLab. I never merge or apply.");
 	return { messages: [new AIMessage(lines.join("\n"))] };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────
+// SIO-902: synthetics drift detection + operator-approved remote push.
+// Straight-line sub-flow (no per-stack loop): detectSyntheticsDrift -> syntheticsPushGate
+// -> pushSynthetics -> teardown. The synthetics-drift-report.json contract is whole-
+// deployment with pre-aggregated totals + a bidirectional reconcile_plan; reconcile is a
+// single CI push (re-assert source YAML), never a repo write or per-resource MR.
+// ──────────────────────────────────────────────────────────────────────────────────────
+
+// One drifted monitor from the report `drift[]`. Tolerant: drops entries with no monitor id or
+// an unknown category; maps fields[] {field,source,live} when present (only on "changed").
+function parseSyntheticsMonitor(entry: unknown): SyntheticsDriftMonitor | null {
+	if (!entry || typeof entry !== "object") return null;
+	const m = entry as {
+		project?: unknown;
+		monitor_id?: unknown;
+		monitor_name?: unknown;
+		category?: unknown;
+		fields?: unknown;
+	};
+	const monitorId = typeof m.monitor_id === "string" ? m.monitor_id : "";
+	if (!monitorId) return null;
+	if (m.category !== "changed" && m.category !== "missing_in_kibana" && m.category !== "extra_in_kibana") return null;
+	const fields = Array.isArray(m.fields)
+		? m.fields
+				.filter((f): f is { field: string; source?: unknown; live?: unknown } => {
+					return Boolean(f) && typeof f === "object" && typeof (f as { field?: unknown }).field === "string";
+				})
+				.map((f) => ({ field: f.field, source: f.source, live: f.live }))
+		: undefined;
+	return {
+		project: typeof m.project === "string" ? m.project : "",
+		monitorId,
+		monitorName: typeof m.monitor_name === "string" ? m.monitor_name : monitorId,
+		category: m.category,
+		...(fields && fields.length > 0 && { fields }),
+	};
+}
+
+// reconcile_plan.{push_to_kibana,add_to_source}; tolerant of absence -> empty command/action +
+// empty monitor lists.
+function parseReconcilePlan(plan: unknown): SyntheticsDriftReport["reconcilePlan"] {
+	const p = (plan && typeof plan === "object" ? plan : {}) as {
+		push_to_kibana?: unknown;
+		add_to_source?: unknown;
+	};
+	const monitorsOf = (v: unknown): Array<{ project: string; monitorId: string; monitorName: string }> => {
+		const raw = v && typeof v === "object" ? (v as { monitors?: unknown }).monitors : undefined;
+		if (!Array.isArray(raw)) return [];
+		return raw
+			.map((entry) => {
+				if (!entry || typeof entry !== "object") return null;
+				const m = entry as { project?: unknown; monitor_id?: unknown; monitor_name?: unknown };
+				const monitorId = typeof m.monitor_id === "string" ? m.monitor_id : "";
+				if (!monitorId) return null;
+				return {
+					project: typeof m.project === "string" ? m.project : "",
+					monitorId,
+					monitorName: typeof m.monitor_name === "string" ? m.monitor_name : monitorId,
+				};
+			})
+			.filter((m): m is { project: string; monitorId: string; monitorName: string } => m !== null);
+	};
+	const strField = (v: unknown, key: string): string => {
+		const s = v && typeof v === "object" ? (v as Record<string, unknown>)[key] : undefined;
+		return typeof s === "string" ? s : "";
+	};
+	return {
+		pushToKibana: { command: strField(p.push_to_kibana, "command"), monitors: monitorsOf(p.push_to_kibana) },
+		addToSource: { action: strField(p.add_to_source, "action"), monitors: monitorsOf(p.add_to_source) },
+	};
+}
+
+// Parse synthetics-drift-report.json. Mirrors parseDriftReport tolerance: slice from the first
+// "{", JSON.parse, return null on empty/unparseable (caller sets planError -- never a false
+// "in sync"). generatedAt is set by the caller. (Pure; unit-tested.)
+export function parseSyntheticsDriftReport(reportJson: string): SyntheticsDriftReport | null {
+	const jsonStart = reportJson.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const o = JSON.parse(reportJson.slice(jsonStart)) as Record<string, unknown>;
+		const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+		const str = (v: unknown): string => (typeof v === "string" ? v : "");
+		const t = (o.totals && typeof o.totals === "object" ? o.totals : {}) as Record<string, unknown>;
+		const drift = Array.isArray(o.drift)
+			? (o.drift as unknown[]).map(parseSyntheticsMonitor).filter((m): m is SyntheticsDriftMonitor => m !== null)
+			: [];
+		return {
+			deployment: str(o.deployment),
+			kibanaUrl: str(o.kibana_url),
+			kibanaSpace: str(o.kibana_space),
+			hasActionableDrift: o.has_actionable_drift === true,
+			totals: {
+				projectsChecked: num(t.projects_checked),
+				monitorsInSource: num(t.monitors_in_source),
+				monitorsInKibana: num(t.monitors_in_kibana),
+				missingInKibana: num(t.missing_in_kibana),
+				extraInKibana: num(t.extra_in_kibana),
+				changed: num(t.changed),
+			},
+			drift,
+			reconcilePlan: parseReconcilePlan(o.reconcile_plan),
+			generatedAt: "",
+		};
+	} catch {
+		return null;
+	}
+}
+
+// The source-authoritative push set: changed + missing_in_kibana. NEVER extra_in_kibana --
+// pushing it would delete live monitors. This invariant gates the push gate and the scope.
+// (Pure; unit-tested.)
+export function pushableMonitors(report: SyntheticsDriftReport): SyntheticsDriftMonitor[] {
+	return report.drift.filter((m) => m.category === "changed" || m.category === "missing_in_kibana");
+}
+
+// The PROJECT to pass to the push trigger: the single shared project when EVERY pushable monitor
+// belongs to one project, else undefined (fleet-wide). extra_in_kibana is excluded (it is never
+// pushed, so it must not influence scope). (Pure; unit-tested.)
+export function pushProjectScope(report: SyntheticsDriftReport): string | undefined {
+	const projects = new Set(
+		pushableMonitors(report)
+			.map((m) => m.project)
+			.filter(Boolean),
+	);
+	return projects.size === 1 ? [...projects][0] : undefined;
+}
+
+// Graph-edge predicate: is there pushable synthetics drift worth a push gate? True only when the
+// report exists, was assessed (no planError), is actionable, and has >=1 pushable monitor. An
+// extra_in_kibana-only report is actionable but NOT pushable -> false (surface-only). (Pure.)
+export function hasPushableSyntheticsDrift(report: SyntheticsDriftReport | null): boolean {
+	if (!report || report.planError || !report.hasActionableDrift) return false;
+	return pushableMonitors(report).length > 0;
+}
+
+// Cap a field value for display (mirror formatLeafChange's value cap).
+function fmtSynthVal(v: unknown): string {
+	const s = typeof v === "string" ? v : JSON.stringify(v);
+	return s.length > 80 ? `${s.slice(0, 77)}...` : s;
+}
+
+// Grounded, no-LLM explanation grouped by category. Used in the push-gate message and the
+// summary. Notes the extra_in_kibana surface-only rule and the browser-monitor blind spot.
+// (Pure; unit-tested.)
+export function explainSyntheticsDrift(report: SyntheticsDriftReport): string {
+	if (!report.hasActionableDrift) return "";
+	const lines: string[] = [];
+	const changed = report.drift.filter((m) => m.category === "changed");
+	const missing = report.drift.filter((m) => m.category === "missing_in_kibana");
+	const extra = report.drift.filter((m) => m.category === "extra_in_kibana");
+	if (changed.length > 0) {
+		lines.push(`Changed (${changed.length}) -- source differs from Kibana:`);
+		for (const m of changed.slice(0, 8)) {
+			const flds = (m.fields ?? [])
+				.slice(0, 3)
+				.map((f) => `${f.field}: ${fmtSynthVal(f.live)} -> ${fmtSynthVal(f.source)}`)
+				.join(", ");
+			lines.push(`  - ${m.project}/${m.monitorName}${flds ? ` (${flds})` : ""}`);
+		}
+		if (changed.length > 8) lines.push(`  ...and ${changed.length - 8} more`);
+	}
+	if (missing.length > 0) {
+		lines.push(`Missing in Kibana (${missing.length}) -- in source, not live (push will create):`);
+		for (const m of missing.slice(0, 8)) lines.push(`  - ${m.project}/${m.monitorName}`);
+		if (missing.length > 8) lines.push(`  ...and ${missing.length - 8} more`);
+	}
+	if (extra.length > 0) {
+		lines.push(
+			`Extra in Kibana (${extra.length}) -- live, not in source. SURFACE-ONLY; the push never deletes these. ` +
+				"Add them to source or remove them in Kibana manually:",
+		);
+		for (const m of extra.slice(0, 8)) lines.push(`  - ${m.project}/${m.monitorName}`);
+		if (extra.length > 8) lines.push(`  ...and ${extra.length - 8} more`);
+	}
+	lines.push("Note: browser (journey) monitors are not covered by this check.");
+	return lines.join("\n");
+}
+
+// A zeroed report carrying a planError (mirror StackDrift.planError): the drift-check was NOT
+// assessed -- never a false "in sync".
+function emptySyntheticsReport(deployment: string, reason: string): SyntheticsDriftReport {
+	return {
+		deployment,
+		kibanaUrl: "",
+		kibanaSpace: "",
+		hasActionableDrift: false,
+		totals: {
+			projectsChecked: 0,
+			monitorsInSource: 0,
+			monitorsInKibana: 0,
+			missingInKibana: 0,
+			extraInKibana: 0,
+			changed: 0,
+		},
+		drift: [],
+		reconcilePlan: { pushToKibana: { command: "", monitors: [] }, addToSource: { action: "", monitors: [] } },
+		generatedAt: new Date().toISOString(),
+		planError: true,
+		planErrorReason: reason,
+	};
+}
+
+// Emit the enriched report once (forwarded by the SSE pump to the synthetics drift card).
+async function emitSyntheticsReport(report: SyntheticsDriftReport): Promise<void> {
+	await dispatchCustomEvent("synthetics_drift_report", {
+		deployment: report.deployment,
+		kibanaUrl: report.kibanaUrl,
+		kibanaSpace: report.kibanaSpace,
+		hasActionableDrift: report.hasActionableDrift,
+		planError: report.planError ?? false,
+		...(report.planErrorReason && { planErrorReason: report.planErrorReason }),
+		totals: report.totals,
+		drift: report.drift,
+		reconcilePlan: report.reconcilePlan,
+	});
+}
+
+// Detect synthetics drift for one deployment: resolve deployment (interrupt if needed), trigger
+// the SYNTH_DRIFT_CHECK pipeline, poll, parse, emit the report. The explanation is folded in
+// (the report is already grounded + category-grouped, so no separate explain node).
+export async function detectSyntheticsDrift(state: IacStateType): Promise<Partial<IacStateType>> {
+	let deployment = await resolveDriftDeployment(state);
+	if (!deployment) {
+		const answer = interrupt({
+			type: "iac_clarify",
+			question: "Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
+			message: "Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
+		}) as { answer?: string };
+		deployment = (answer?.answer ?? "").trim();
+	}
+	if (!deployment) {
+		return {
+			messages: [
+				new AIMessage('I need a deployment name to check synthetics drift. Try: "check synthetics drift for eu-b2b".'),
+			],
+		};
+	}
+
+	log.info({ deployment }, "iac synthetics drift: triggering synthetics drift-check");
+	const trig = parseTriggerResult(await callTool("gitlab_trigger_synthetics_drift_check", { deployment }));
+	if (trig.pipelineId === null) {
+		const reason =
+			trig.status === "locked"
+				? "A synthetics pipeline is already running; re-check once it clears."
+				: `Could not trigger the synthetics drift-check${trig.note ? `: ${trig.note}` : "."}`;
+		log.warn(
+			{ deployment, status: trig.status, note: trig.note },
+			"iac synthetics drift: trigger did not start (planError)",
+		);
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: null,
+			status: `synthetics: ${trig.status === "locked" ? "locked" : "trigger failed"}`,
+		});
+		const report = emptySyntheticsReport(deployment, reason);
+		await emitSyntheticsReport(report);
+		return { targetDeployment: deployment, syntheticsDriftReport: report };
+	}
+
+	log.info({ deployment, pipelineId: trig.pipelineId }, "iac synthetics drift: pipeline triggered; polling");
+	const result = parseDriftCheckResult(
+		await callTool("gitlab_get_synthetics_drift_result", { pipelineId: trig.pipelineId }),
+	);
+	if (result.status !== "success" || !result.report) {
+		const reason =
+			result.status === "failed" || result.status === "canceled"
+				? `Synthetics drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog)}`
+				: result.status !== "success"
+					? "Synthetics drift-check did not finish within the poll budget; use Re-check to retry."
+					: "The synthetics drift-check produced no report.";
+		log.warn(
+			{ deployment, pipelineId: trig.pipelineId, status: result.status, hasReport: Boolean(result.report) },
+			"iac synthetics drift: not authoritative (planError)",
+		);
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: trig.pipelineId,
+			status: `synthetics: ${result.status !== "success" ? `check ${result.status}` : "no report"}`,
+		});
+		const report = emptySyntheticsReport(deployment, reason);
+		await emitSyntheticsReport(report);
+		return { targetDeployment: deployment, syntheticsDriftReport: report };
+	}
+
+	const parsed = parseSyntheticsDriftReport(result.report);
+	if (parsed === null) {
+		log.warn({ deployment, pipelineId: trig.pipelineId }, "iac synthetics drift: unreadable report (planError)");
+		const report = emptySyntheticsReport(deployment, "The synthetics drift-check report could not be parsed.");
+		await emitSyntheticsReport(report);
+		return { targetDeployment: deployment, syntheticsDriftReport: report };
+	}
+
+	const report: SyntheticsDriftReport = { ...parsed, deployment, generatedAt: new Date().toISOString() };
+	const driftedCount = report.totals.changed + report.totals.missingInKibana + report.totals.extraInKibana;
+	log.info(
+		{ deployment, pipelineId: trig.pipelineId, drifted: report.hasActionableDrift, totals: report.totals },
+		"iac synthetics drift: assessed",
+	);
+	await dispatchCustomEvent("iac_pipeline_progress", {
+		pipelineId: trig.pipelineId,
+		status: `synthetics: ${report.hasActionableDrift ? `${driftedCount} drifted monitor(s)` : "in sync"}`,
+	});
+	await emitSyntheticsReport(report);
+	return { targetDeployment: deployment, syntheticsDriftReport: report };
+}
+
+// The single operator approve/decline interrupt for the deployment (no per-stack loop). Only
+// reached when hasPushableSyntheticsDrift is true (graph edge enforces). Surfaces the pushable
+// set and the surface-only extras. Resume payload {approve: boolean}.
+export function syntheticsPushGate(state: IacStateType): Partial<IacStateType> {
+	const report = state.syntheticsDriftReport;
+	if (!report) return { syntheticsPushApproved: false };
+	const pushable = pushableMonitors(report);
+	const scope = pushProjectScope(report);
+	const extra = report.drift.filter((m) => m.category === "extra_in_kibana");
+	const choice = interrupt({
+		type: "synthetics_push_choice",
+		deployment: report.deployment,
+		kibanaSpace: report.kibanaSpace,
+		pushableCount: pushable.length,
+		extraCount: extra.length,
+		projectScope: scope ?? null,
+		command: report.reconcilePlan.pushToKibana.command,
+		explanation: explainSyntheticsDrift(report),
+		pushMonitors: pushable.slice(0, 50).map((m) => ({ project: m.project, monitorName: m.monitorName })),
+		extraMonitors: extra.slice(0, 50).map((m) => ({ project: m.project, monitorName: m.monitorName })),
+		message:
+			`${report.deployment}: ${pushable.length} monitor(s) will be PUSHED to Kibana ` +
+			`(${scope ? `project '${scope}'` : "fleet-wide"}). ` +
+			`${extra.length ? `${extra.length} extra Kibana monitor(s) are surface-only and will NOT be deleted. ` : ""}` +
+			"Approve the push, or decline. I never delete live monitors.",
+	}) as { approve?: boolean };
+	return { syntheticsPushApproved: choice?.approve === true };
+}
+
+// Emit the push outcome (forwarded by the SSE pump).
+async function emitSyntheticsPushResult(r: SyntheticsPushResult): Promise<void> {
+	await dispatchCustomEvent("synthetics_push_result", {
+		status: r.status,
+		pushedCount: r.pushedCount,
+		...(r.project && { project: r.project }),
+		...(r.pipelineId != null && { pipelineId: r.pipelineId }),
+		...(r.pipelineStatus && { pipelineStatus: r.pipelineStatus }),
+		...(r.note && { note: r.note }),
+	});
+}
+
+// Trigger the operator-approved remote push (SYNTH_PUSH) and poll it to terminal. Honours project
+// scoping (single project -> PROJECT; mixed -> fleet-wide). extra_in_kibana is never in scope.
+export async function pushSynthetics(state: IacStateType): Promise<Partial<IacStateType>> {
+	const report = state.syntheticsDriftReport;
+	if (!report) return {};
+	const pushable = pushableMonitors(report);
+	const scope = pushProjectScope(report);
+
+	log.info(
+		{ deployment: report.deployment, project: scope, pushable: pushable.length },
+		"iac synthetics push: triggering",
+	);
+	const trig = parseTriggerResult(
+		await callTool("gitlab_trigger_synthetics_push", {
+			deployment: report.deployment,
+			...(scope && { project: scope }),
+		}),
+	);
+	if (trig.pipelineId === null) {
+		const note =
+			trig.status === "locked"
+				? "A synthetics pipeline is already running; re-try the push later."
+				: `Could not trigger the push${trig.note ? `: ${trig.note}` : "."}`;
+		log.warn({ deployment: report.deployment, status: trig.status, note: trig.note }, "iac synthetics push: blocked");
+		const result: SyntheticsPushResult = {
+			status: "blocked",
+			...(scope && { project: scope }),
+			pipelineId: null,
+			pushedCount: pushable.length,
+			note,
+		};
+		await emitSyntheticsPushResult(result);
+		return { syntheticsPushResult: result };
+	}
+
+	log.info(
+		{ deployment: report.deployment, pipelineId: trig.pipelineId },
+		"iac synthetics push: pipeline triggered; polling",
+	);
+	const res = parseDriftCheckResult(
+		await callTool("gitlab_get_synthetics_push_result", { pipelineId: trig.pipelineId }),
+	);
+	const result: SyntheticsPushResult =
+		res.status === "success"
+			? {
+					status: "pushed",
+					...(scope && { project: scope }),
+					pipelineId: trig.pipelineId,
+					pipelineStatus: res.status,
+					pushedCount: pushable.length,
+				}
+			: {
+					status: "failed",
+					...(scope && { project: scope }),
+					pipelineId: trig.pipelineId,
+					pipelineStatus: res.status,
+					pushedCount: pushable.length,
+					note:
+						res.status === "failed" || res.status === "canceled"
+							? `Push pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog)}`
+							: "Push did not finish within the poll budget; re-check the pipeline in GitLab.",
+				};
+	log.info(
+		{ deployment: report.deployment, pipelineId: trig.pipelineId, status: result.status },
+		"iac synthetics push: result",
+	);
+	await emitSyntheticsPushResult(result);
+	return { syntheticsPushResult: result };
+}
+
+// Final message for the synthetics flow. Branches: planError, clean (in sync), only-extra
+// (nothing to push), pushed, declined, blocked/failed. (Pure; unit-tested.)
+export function formatSyntheticsSummary(state: IacStateType): string {
+	const report = state.syntheticsDriftReport;
+	const dep = state.targetDeployment || "(unknown)";
+	if (!report) return `Could not check synthetics drift for ${dep}.`;
+	if (report.planError) {
+		return `Synthetics drift-check for ${dep} could not be completed: ${report.planErrorReason ?? "unknown error"}`;
+	}
+	if (!report.hasActionableDrift) {
+		return (
+			`No synthetics drift for ${dep}: source and Kibana are in sync ` +
+			`(${report.totals.monitorsInSource} monitor(s) checked across ${report.totals.projectsChecked} project(s)). ` +
+			"Note: browser (journey) monitors are not covered by this check."
+		);
+	}
+	const pushable = pushableMonitors(report);
+	const explanation = explainSyntheticsDrift(report);
+	const result = state.syntheticsPushResult;
+	// Only extra_in_kibana -> the push gate was never reached.
+	if (pushable.length === 0) {
+		return (
+			`${explanation}\n\n` +
+			"Nothing to push (only extra-in-Kibana monitors, which are surface-only). " +
+			"Add them to source or remove them in Kibana manually."
+		);
+	}
+	if (!result || result.status === "skipped") {
+		return `${explanation}\n\nPush declined. No monitors were pushed. ${pushable.length} drifted monitor(s) remain.`;
+	}
+	const scopeText = result.project ? `project '${result.project}'` : "fleet-wide";
+	const extraReminder =
+		report.totals.extraInKibana > 0
+			? ` ${report.totals.extraInKibana} extra Kibana monitor(s) were left untouched (surface-only).`
+			: "";
+	if (result.status === "pushed") {
+		const pid = result.pipelineId ? ` Pipeline #${result.pipelineId}: ${result.pipelineStatus ?? "success"}.` : "";
+		return `Pushed ${result.pushedCount} monitor(s) to Kibana (${scopeText}).${pid}${extraReminder}`;
+	}
+	// blocked | failed
+	return `Synthetics push ${result.status}: ${result.note ?? "see logs"}.${extraReminder}`;
 }

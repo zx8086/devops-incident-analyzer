@@ -11,6 +11,8 @@ import Icon from "$lib/components/Icon.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
+import SyntheticsDriftCard from "$lib/components/SyntheticsDriftCard.svelte";
+import SyntheticsPushChoiceCard from "$lib/components/SyntheticsPushChoiceCard.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
@@ -36,6 +38,28 @@ const driftSummaryIndex = $derived.by(() => {
 		text.startsWith("No drift detected for ") ||
 		text.startsWith("Drift-check could not run for ");
 	return isDriftSummary ? idx : -1;
+});
+
+// SIO-902: same relocation for the synthetics flow -- render the terminal synthetics summary
+// (from formatSyntheticsSummary) BELOW the synthetics card so the order reads detail -> outcome.
+const syntheticsSummaryIndex = $derived.by(() => {
+	if (!(isIac && agentStore.syntheticsDriftReport && !agentStore.isStreaming && agentStore.messages.length > 0))
+		return -1;
+	const idx = agentStore.messages.length - 1;
+	const last = agentStore.messages[idx];
+	if (last?.role !== "assistant") return -1;
+	const text = last.content.trimStart();
+	const isSyntheticsSummary =
+		text.startsWith("No synthetics drift for ") ||
+		text.startsWith("Pushed ") ||
+		text.startsWith("Push declined.") ||
+		text.startsWith("Synthetics push ") ||
+		text.startsWith("Synthetics drift-check for ") ||
+		text.startsWith("Nothing to push ") ||
+		text.startsWith("Changed (") ||
+		text.startsWith("Missing in Kibana (") ||
+		text.startsWith("Extra in Kibana (");
+	return isSyntheticsSummary ? idx : -1;
 });
 
 function toggleAgent() {
@@ -256,6 +280,35 @@ function handleSuggestionClick(suggestion: string) {
         {/if}
       {/if}
 
+      <!-- SIO-902: synthetics drift card (whole-deployment monitor diff). The push outcome,
+           once available, renders inline; the terminal summary relocates below the card. -->
+      {#if agentStore.syntheticsDriftReport}
+        <SyntheticsDriftCard
+          report={agentStore.syntheticsDriftReport}
+          result={agentStore.syntheticsPushResult}
+          recheckDisabled={agentStore.isStreaming}
+          onRecheck={() =>
+            agentStore.sendMessage(`check synthetics drift for ${agentStore.syntheticsDriftReport?.deployment}`)}
+        />
+        {#if syntheticsSummaryIndex >= 0}
+          {@const synthSummaryMsg = agentStore.messages[syntheticsSummaryIndex]}
+          {#if synthSummaryMsg}
+            <ChatMessage
+              message={synthSummaryMsg}
+              index={syntheticsSummaryIndex}
+              isLast={true}
+              isStreaming={false}
+              onSuggestionClick={handleSuggestionClick}
+              onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
+              pendingActions={agentStore.pendingActions}
+              actionResults={agentStore.actionResults}
+              onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
+              onActionDismiss={(id) => agentStore.dismissAction(id)}
+            />
+          {/if}
+        {/if}
+      {/if}
+
     </div>
   </div>
 
@@ -339,6 +392,16 @@ function handleSuggestionClick(suggestion: string) {
       prompt={agentStore.iacReconcileChoice}
       disabled={agentStore.isStreaming}
       onChoose={(d) => agentStore.resolveReconcileChoice(d)}
+    />
+  {/if}
+
+  {#if agentStore.syntheticsPushChoice}
+    <!-- SIO-902: single synthetics push approve/decline gate. -->
+    <SyntheticsPushChoiceCard
+      prompt={agentStore.syntheticsPushChoice}
+      disabled={agentStore.isStreaming}
+      onApprove={() => agentStore.approveSyntheticsPush(true)}
+      onDecline={() => agentStore.approveSyntheticsPush(false)}
     />
   {/if}
 

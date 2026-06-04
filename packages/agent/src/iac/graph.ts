@@ -8,16 +8,20 @@ import {
 	bootstrapIac,
 	classifyIacIntent,
 	detectDrift,
+	detectSyntheticsDrift,
 	draftChange,
 	explainDrift,
 	guardNode,
+	hasPushableSyntheticsDrift,
 	openMr,
 	parseIntent,
 	planReviewGate,
+	pushSynthetics,
 	readClusterState,
 	reconcileGate,
 	reconcileStack,
 	reviewPlan,
+	syntheticsPushGate,
 	teardownIac,
 	watchPipeline,
 } from "./nodes.ts";
@@ -50,6 +54,12 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("reconcileGate", reconcileGate)
 		.addNode("reconcileStack", reconcileStack)
 		.addNode("advanceDrift", advanceDrift)
+		// SIO-902: synthetics drift sub-flow. detectSyntheticsDrift audits one deployment's
+		// monitors (source YAML vs live Kibana) and emits the report; syntheticsPushGate holds
+		// the single operator approve/decline interrupt; pushSynthetics triggers the remote push.
+		.addNode("detectSyntheticsDrift", detectSyntheticsDrift)
+		.addNode("syntheticsPushGate", syntheticsPushGate)
+		.addNode("pushSynthetics", pushSynthetics)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
@@ -62,12 +72,14 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			(s) =>
 				s.intent === "gitops"
 					? "parseIntent"
-					: s.intent === "drift"
-						? "detectDrift"
-						: s.intent === "pipeline-status"
-							? "watchPipeline"
-							: "answerInfo",
-			["parseIntent", "detectDrift", "answerInfo", "watchPipeline"],
+					: s.intent === "synthetics-drift"
+						? "detectSyntheticsDrift"
+						: s.intent === "drift"
+							? "detectDrift"
+							: s.intent === "pipeline-status"
+								? "watchPipeline"
+								: "answerInfo",
+			["parseIntent", "detectSyntheticsDrift", "detectDrift", "answerInfo", "watchPipeline"],
 		)
 		.addEdge("answerInfo", END)
 		.addEdge("parseIntent", "readClusterState")
@@ -110,6 +122,19 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 				s.driftIndex < (s.driftReport?.stacks.filter((x) => x.drifted).length ?? 0) ? "reconcileGate" : "teardown",
 			["reconcileGate", "teardown"],
 		)
+		// SIO-902: synthetics straight line. No report / planError / clean / extra-only ->
+		// teardown (the summary leads with the right headline); pushable drift -> the push gate.
+		.addConditionalEdges(
+			"detectSyntheticsDrift",
+			(s) => (hasPushableSyntheticsDrift(s.syntheticsDriftReport) ? "syntheticsPushGate" : "teardown"),
+			["syntheticsPushGate", "teardown"],
+		)
+		// Operator approval routes to the push or to teardown (declined).
+		.addConditionalEdges("syntheticsPushGate", (s) => (s.syntheticsPushApproved ? "pushSynthetics" : "teardown"), [
+			"pushSynthetics",
+			"teardown",
+		])
+		.addEdge("pushSynthetics", "teardown")
 		.addEdge("teardown", END);
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");

@@ -19,20 +19,24 @@ const log = getLogger("api.agent.iac.resume");
 const AGENT = "elastic-iac";
 
 // decision answers the plan-review gate; answer answers a clarify question; direction
-// answers the SIO-882 per-stack reconcile gate.
+// answers the SIO-882 per-stack reconcile gate; approve answers the SIO-902 synthetics push gate.
 const ResumeRequestSchema = z
 	.object({
 		threadId: z.string().min(1),
 		decision: z.enum(["approved", "rejected"]).optional(),
 		answer: z.string().optional(),
 		direction: z.enum(["reconcile-to-json", "reconcile-to-live", "skip"]).optional(),
+		approve: z.boolean().optional(),
 	})
 	// Exactly one resume field -- reject mixed payloads so a stale field can't resume the
 	// wrong interrupt (the resumeValue below would otherwise silently prefer one).
 	.superRefine((b, ctx) => {
-		const provided = [b.decision, b.answer, b.direction].filter((v) => v !== undefined).length;
+		const provided = [b.decision, b.answer, b.direction, b.approve].filter((v) => v !== undefined).length;
 		if (provided !== 1) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide exactly one of decision, answer, or direction" });
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Provide exactly one of decision, answer, direction, or approve",
+			});
 		}
 	});
 
@@ -45,11 +49,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const resumeValue =
-		body.direction !== undefined
-			? { direction: body.direction }
-			: body.decision !== undefined
-				? { decision: body.decision }
-				: { answer: body.answer };
+		body.approve !== undefined
+			? { approve: body.approve }
+			: body.direction !== undefined
+				? { direction: body.direction }
+				: body.decision !== undefined
+					? { decision: body.decision }
+					: { answer: body.answer };
 
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream({

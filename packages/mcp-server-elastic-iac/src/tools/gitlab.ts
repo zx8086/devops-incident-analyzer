@@ -91,6 +91,22 @@ export function findJobByName(jobsJson: unknown, name: string): number | null {
 	return null;
 }
 
+// SIO-902: the CI variables[] array for a synthetics pipeline trigger. varKey is the
+// activating flag (SYNTH_DRIFT_CHECK or SYNTH_PUSH); DEPLOYMENT scopes the deployment;
+// PROJECT is appended only when a single synthetics project is targeted (omitted =
+// fleet-wide). No STACK -- synthetics is whole-deployment, not per-stack. (Pure; unit-tested.)
+export function buildSyntheticsPipelineVars(
+	varKey: string,
+	deployment: string,
+	project?: string,
+): Array<{ key: string; value: string }> {
+	return [
+		{ key: varKey, value: "true" },
+		{ key: "DEPLOYMENT", value: deployment },
+		...(project ? [{ key: "PROJECT", value: project }] : []),
+	];
+}
+
 // Pipeline id + status from a create-pipeline / get-pipeline "[status] {json}" body.
 // (Pure; unit-tested.)
 export function parsePipelineRef(toolResult: string): { id: number; status: string } | null {
@@ -444,6 +460,305 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				log.error(
 					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
 					"gitlab_get_drift_check_result: polling errored",
+				);
+				return text(JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) }));
+			}
+		},
+	);
+
+	// SIO-902: synthetics drift detection + operator-approved remote push. Mirrors the
+	// drift-check pair (gitlab_trigger_drift_check / gitlab_get_drift_check_result) but is
+	// whole-deployment (no STACK var) and uses the synthetics job/artifact names. The push
+	// pair re-asserts source YAML monitors to Kibana; it never deletes extra-in-Kibana
+	// monitors. All four reuse glJson/gitlabFetch/parsePipelineRef/findJobByName/
+	// childPipelineId/isTerminal and the DRIFT_* poll constants above.
+	const synthDriftRef =
+		process.env.ELASTIC_IAC_SYNTH_PIPELINE_REF ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
+
+	server.tool(
+		"gitlab_trigger_synthetics_drift_check",
+		"Trigger the on-demand synthetics drift-check pipeline for one deployment: POST a pipeline with " +
+			"SYNTH_DRIFT_CHECK=true, DEPLOYMENT, and optional PROJECT (no STACK). Read-only -- compares source YAML " +
+			"monitors against live Kibana. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_drift_result.",
+		{
+			deployment: z.string(),
+			project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
+			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+		},
+		async ({ deployment, project: synthProject, ref }) => {
+			const driftRef = ref ?? synthDriftRef;
+			const varKey = process.env.ELASTIC_IAC_SYNTH_DRIFT_VAR ?? "SYNTH_DRIFT_CHECK";
+			log.info(
+				{ deployment, project: synthProject, ref: driftRef },
+				"gitlab_trigger_synthetics_drift_check: triggering on-demand synthetics drift-check pipeline",
+			);
+			const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
+				method: "POST",
+				body: JSON.stringify({
+					ref: driftRef,
+					variables: buildSyntheticsPipelineVars(varKey, deployment, synthProject),
+				}),
+			});
+			// Synthetics has no Terraform state lock, but a concurrent synthetics pipeline can still
+			// return 409; keep the same "locked" shape so the agent handles it uniformly.
+			if (res.startsWith("[409")) {
+				log.warn(
+					{ deployment, project: synthProject },
+					"gitlab_trigger_synthetics_drift_check: blocked (a synthetics pipeline is already running)",
+				);
+				return text(
+					JSON.stringify({
+						deployment,
+						project: synthProject ?? null,
+						pipelineId: null,
+						status: "locked",
+						note: "a synthetics pipeline is already running; retry later",
+					}),
+				);
+			}
+			const ref2 = res.startsWith("[2") ? parsePipelineRef(res) : null;
+			if (ref2) {
+				log.info(
+					{ deployment, project: synthProject, pipelineId: ref2.id, status: ref2.status },
+					"gitlab_trigger_synthetics_drift_check: pipeline created",
+				);
+				return text(
+					JSON.stringify({ deployment, project: synthProject ?? null, pipelineId: ref2.id, status: ref2.status }),
+				);
+			}
+			log.error(
+				{ deployment, project: synthProject, response: res.slice(0, 200) },
+				"gitlab_trigger_synthetics_drift_check: trigger failed",
+			);
+			return text(
+				JSON.stringify({
+					deployment,
+					project: synthProject ?? null,
+					pipelineId: null,
+					status: "error",
+					note: res.slice(0, 200),
+				}),
+			);
+		},
+	);
+
+	server.tool(
+		"gitlab_get_synthetics_drift_result",
+		"Poll a synthetics drift-check pipeline to completion and return its synthetics-drift-report.json artifact " +
+			"(raw JSON) from the drift-check-synthetics-on-demand job. On a failed run also returns the job trace tail. " +
+			"Returns {pipelineId,jobId,status,report,failureLog?}.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) => {
+			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
+			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
+			let status = "unknown";
+			let polls = 0;
+			log.info(
+				{ pipelineId, budgetMs: DRIFT_POLL_BUDGET_MS },
+				"gitlab_get_synthetics_drift_result: polling pipeline to terminal",
+			);
+			try {
+				while (Date.now() < deadline) {
+					const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };
+					status = typeof p.status === "string" ? p.status : "unknown";
+					polls++;
+					log.debug({ pipelineId, status, polls }, "gitlab_get_synthetics_drift_result: poll");
+					if (isTerminal(status)) break;
+					if (Date.now() + DRIFT_POLL_INTERVAL_MS >= deadline) break;
+					await new Promise((r) => setTimeout(r, DRIFT_POLL_INTERVAL_MS));
+				}
+				if (!isTerminal(status)) {
+					log.warn(
+						{ pipelineId, status, polls },
+						"gitlab_get_synthetics_drift_result: still running at budget; client should re-check",
+					);
+					return text(
+						JSON.stringify({ pipelineId, status: status || "running", note: "still running at budget; re-check" }),
+					);
+				}
+				log.info({ pipelineId, status, polls }, "gitlab_get_synthetics_drift_result: pipeline reached terminal status");
+				const jobName = process.env.ELASTIC_IAC_SYNTH_DRIFT_JOB_NAME ?? "drift-check-synthetics-on-demand";
+				const artifactName = process.env.ELASTIC_IAC_SYNTH_DRIFT_ARTIFACT ?? "synthetics-drift-report.json";
+				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
+				if (jobId === null) {
+					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+					if (childId !== null)
+						jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${childId}/jobs`), jobName);
+				}
+				if (jobId === null) {
+					log.warn(
+						{ pipelineId, status, jobName },
+						"gitlab_get_synthetics_drift_result: no synthetics drift-check job in the pipeline",
+					);
+					return text(JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` }));
+				}
+				const res = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/artifacts/${artifactName}`, {
+					headers: { "PRIVATE-TOKEN": token },
+				});
+				const report = res.ok ? await res.text() : "";
+				let failureLog = "";
+				if (status !== "success") {
+					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
+						headers: { "PRIVATE-TOKEN": token },
+					});
+					if (traceRes.ok) {
+						const trace = await traceRes.text();
+						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
+					}
+				}
+				if (!report && !failureLog) {
+					log.warn(
+						{ pipelineId, jobId, status, artifactStatus: res.status },
+						"gitlab_get_synthetics_drift_result: neither report nor trace available",
+					);
+					return text(
+						JSON.stringify({ pipelineId, jobId, status, note: `[${res.status}] ${artifactName} not available` }),
+					);
+				}
+				log.info(
+					{ pipelineId, jobId, status, reportBytes: report.length, failureBytes: failureLog.length },
+					"gitlab_get_synthetics_drift_result: result fetched",
+				);
+				return text(JSON.stringify({ pipelineId, jobId, status, report, ...(failureLog && { failureLog }) }));
+			} catch (err) {
+				log.error(
+					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
+					"gitlab_get_synthetics_drift_result: polling errored",
+				);
+				return text(JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) }));
+			}
+		},
+	);
+
+	server.tool(
+		"gitlab_trigger_synthetics_push",
+		"Trigger the operator-approved synthetics PUSH pipeline: POST a pipeline with SYNTH_PUSH=true, DEPLOYMENT, " +
+			"and optional PROJECT. Re-asserts source YAML monitors to Kibana (the push_to_kibana set). NEVER deletes " +
+			"extra-in-Kibana monitors. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_push_result.",
+		{
+			deployment: z.string(),
+			project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
+			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+		},
+		async ({ deployment, project: synthProject, ref }) => {
+			const pushRef = ref ?? synthDriftRef;
+			const varKey = process.env.ELASTIC_IAC_SYNTH_PUSH_VAR ?? "SYNTH_PUSH";
+			log.info(
+				{ deployment, project: synthProject, ref: pushRef },
+				"gitlab_trigger_synthetics_push: triggering synthetics push pipeline",
+			);
+			const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
+				method: "POST",
+				body: JSON.stringify({
+					ref: pushRef,
+					variables: buildSyntheticsPipelineVars(varKey, deployment, synthProject),
+				}),
+			});
+			if (res.startsWith("[409")) {
+				log.warn(
+					{ deployment, project: synthProject },
+					"gitlab_trigger_synthetics_push: blocked (a synthetics pipeline is already running)",
+				);
+				return text(
+					JSON.stringify({
+						deployment,
+						project: synthProject ?? null,
+						pipelineId: null,
+						status: "locked",
+						note: "a synthetics pipeline is already running; retry the push later",
+					}),
+				);
+			}
+			const ref2 = res.startsWith("[2") ? parsePipelineRef(res) : null;
+			if (ref2) {
+				log.info(
+					{ deployment, project: synthProject, pipelineId: ref2.id, status: ref2.status },
+					"gitlab_trigger_synthetics_push: pipeline created",
+				);
+				return text(
+					JSON.stringify({ deployment, project: synthProject ?? null, pipelineId: ref2.id, status: ref2.status }),
+				);
+			}
+			log.error(
+				{ deployment, project: synthProject, response: res.slice(0, 200) },
+				"gitlab_trigger_synthetics_push: trigger failed",
+			);
+			return text(
+				JSON.stringify({
+					deployment,
+					project: synthProject ?? null,
+					pipelineId: null,
+					status: "error",
+					note: res.slice(0, 200),
+				}),
+			);
+		},
+	);
+
+	server.tool(
+		"gitlab_get_synthetics_push_result",
+		"Poll a synthetics PUSH pipeline to completion. The push job emits NO artifact -- its success/failure IS the " +
+			"signal. On a failed run returns the job trace tail. Returns {pipelineId,jobId,status,failureLog?}.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) => {
+			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
+			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
+			let status = "unknown";
+			let polls = 0;
+			log.info(
+				{ pipelineId, budgetMs: DRIFT_POLL_BUDGET_MS },
+				"gitlab_get_synthetics_push_result: polling pipeline to terminal",
+			);
+			try {
+				while (Date.now() < deadline) {
+					const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };
+					status = typeof p.status === "string" ? p.status : "unknown";
+					polls++;
+					log.debug({ pipelineId, status, polls }, "gitlab_get_synthetics_push_result: poll");
+					if (isTerminal(status)) break;
+					if (Date.now() + DRIFT_POLL_INTERVAL_MS >= deadline) break;
+					await new Promise((r) => setTimeout(r, DRIFT_POLL_INTERVAL_MS));
+				}
+				if (!isTerminal(status)) {
+					log.warn(
+						{ pipelineId, status, polls },
+						"gitlab_get_synthetics_push_result: still running at budget; re-check",
+					);
+					return text(
+						JSON.stringify({ pipelineId, status: status || "running", note: "still running at budget; re-check" }),
+					);
+				}
+				log.info({ pipelineId, status, polls }, "gitlab_get_synthetics_push_result: pipeline reached terminal status");
+				const jobName = process.env.ELASTIC_IAC_SYNTH_PUSH_JOB_NAME ?? "synthetics-push-on-demand";
+				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
+				if (jobId === null) {
+					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+					if (childId !== null)
+						jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${childId}/jobs`), jobName);
+				}
+				if (jobId === null) {
+					log.warn({ pipelineId, status, jobName }, "gitlab_get_synthetics_push_result: no push job in the pipeline");
+					return text(JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` }));
+				}
+				let failureLog = "";
+				if (status !== "success") {
+					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
+						headers: { "PRIVATE-TOKEN": token },
+					});
+					if (traceRes.ok) {
+						const trace = await traceRes.text();
+						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
+					}
+				}
+				log.info(
+					{ pipelineId, jobId, status, failureBytes: failureLog.length },
+					"gitlab_get_synthetics_push_result: result fetched",
+				);
+				return text(JSON.stringify({ pipelineId, jobId, status, ...(failureLog && { failureLog }) }));
+			} catch (err) {
+				log.error(
+					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
+					"gitlab_get_synthetics_push_result: polling errored",
 				);
 				return text(JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) }));
 			}

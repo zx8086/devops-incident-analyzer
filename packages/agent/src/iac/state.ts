@@ -141,6 +141,69 @@ export interface DriftReport {
 	generatedAt: string;
 }
 
+// SIO-902: synthetics drift. The synthetics stack (null_resource + @elastic/synthetics push)
+// is invisible to `terraform plan`, so a separate SYNTH_DRIFT_CHECK CI job compares source
+// YAML monitors against live Kibana and emits synthetics-drift-report.json. Unlike the TF
+// drift report this is whole-deployment (no per-stack), and reconcile is a single remote
+// push (re-assert source YAML), not per-resource MRs.
+
+// One drifted monitor from the report `drift[]` array. category: changed (both sides differ) |
+// missing_in_kibana (in source, not live -- push creates) | extra_in_kibana (live, no source --
+// SURFACE-ONLY, never pushed/deleted). fields present only on "changed" (source vs live diff).
+export interface SyntheticsDriftMonitor {
+	project: string;
+	monitorId: string;
+	monitorName: string;
+	category: "changed" | "missing_in_kibana" | "extra_in_kibana";
+	fields?: Array<{ field: string; source?: unknown; live?: unknown }>;
+}
+
+export interface SyntheticsDriftTotals {
+	projectsChecked: number;
+	monitorsInSource: number;
+	monitorsInKibana: number;
+	missingInKibana: number;
+	extraInKibana: number;
+	changed: number;
+}
+
+// reconcile_plan from the report: the producer's pre-computed bidirectional action split.
+// pushToKibana = the source-authoritative set the push asserts (changed + missing_in_kibana),
+// with a project-scoped CLI command. addToSource = surface-only guidance for extra_in_kibana
+// (the agent NEVER auto-actions this -- a push would delete those live monitors).
+export interface SyntheticsReconcilePlan {
+	pushToKibana: { command: string; monitors: Array<{ project: string; monitorId: string; monitorName: string }> };
+	addToSource: { action: string; monitors: Array<{ project: string; monitorId: string; monitorName: string }> };
+}
+
+export interface SyntheticsDriftReport {
+	deployment: string;
+	kibanaUrl: string;
+	kibanaSpace: string;
+	// has_actionable_drift -- the PRIMARY signal (false => source and Kibana are in sync).
+	hasActionableDrift: boolean;
+	totals: SyntheticsDriftTotals;
+	drift: SyntheticsDriftMonitor[];
+	reconcilePlan: SyntheticsReconcilePlan;
+	generatedAt: string;
+	// True when the drift-check could not be read (trigger lock / failed pipeline / unreadable
+	// report): NOT assessed -- neither drifted nor clean (mirror StackDrift.planError).
+	planError?: boolean;
+	planErrorReason?: string;
+}
+
+// Outcome of the operator-approved push (single, not per-stack). pushed = CI push succeeded;
+// skipped = operator declined; blocked = could not trigger (lock/error); failed = push pipeline
+// failed/timed out. project is the scope passed (single-project) or undefined (fleet-wide).
+export interface SyntheticsPushResult {
+	status: "pushed" | "skipped" | "blocked" | "failed";
+	project?: string;
+	pipelineId?: number | null;
+	pipelineStatus?: string;
+	pushedCount: number;
+	note?: string;
+}
+
 // Outcome of reconciling one stack (one independent, idempotent MR or a skip/block).
 export interface ReconcileResult {
 	stack: string;
@@ -165,7 +228,11 @@ export const IacState = Annotation.Root({
 	// SIO-875: "pipeline-status" is a follow-up ("did the pipeline pass / show me the
 	// plan / check my MR") that re-enters watchPipeline using the thread's persisted MR.
 	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
-	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | null>({ reducer: last, default: () => null }),
+	// SIO-902: "synthetics-drift" enters the synthetics monitor drift + operator-approved push sub-flow.
+	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | null>({
+		reducer: last,
+		default: () => null,
+	}),
 	iacRequest: Annotation<IacRequest | null>({ reducer: last, default: () => null }),
 	clusterState: Annotation<IacClusterState | null>({ reducer: last, default: () => null }),
 	branch: Annotation<string>({ reducer: last, default: () => "" }),
@@ -211,6 +278,13 @@ export const IacState = Annotation.Root({
 	driftIndex: Annotation<number>({ reducer: last, default: () => 0 }),
 	currentDirection: Annotation<ReconcileDirection | null>({ reducer: last, default: () => null }),
 	reconcileResults: Annotation<ReconcileResult[]>({ reducer: last, default: () => [] }),
+	// SIO-902: synthetics drift sub-flow. syntheticsDriftReport holds the parsed report (or a
+	// planError stub); syntheticsPushApproved is the operator's push decision (read by the
+	// gate->worker edge); syntheticsPushResult is the single push outcome. targetDeployment
+	// (above) is reused for the resolved deployment.
+	syntheticsDriftReport: Annotation<SyntheticsDriftReport | null>({ reducer: last, default: () => null }),
+	syntheticsPushApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
+	syntheticsPushResult: Annotation<SyntheticsPushResult | null>({ reducer: last, default: () => null }),
 });
 
 export type IacStateType = typeof IacState.State;

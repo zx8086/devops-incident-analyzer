@@ -510,5 +510,69 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		mrUrl: z.string().optional(),
 		note: z.string().optional(),
 	}),
+	// SIO-902: synthetics drift report (whole-deployment; from detectSyntheticsDrift).
+	z.object({
+		type: z.literal("synthetics_drift_report"),
+		deployment: z.string(),
+		kibanaUrl: z.string(),
+		kibanaSpace: z.string(),
+		hasActionableDrift: z.boolean(),
+		planError: z.boolean().optional(),
+		planErrorReason: z.string().optional(),
+		totals: z.object({
+			projectsChecked: z.number(),
+			monitorsInSource: z.number(),
+			monitorsInKibana: z.number(),
+			missingInKibana: z.number(),
+			extraInKibana: z.number(),
+			changed: z.number(),
+		}),
+		drift: z.array(
+			z.object({
+				project: z.string(),
+				monitorId: z.string(),
+				monitorName: z.string(),
+				category: z.enum(["changed", "missing_in_kibana", "extra_in_kibana"]),
+				fields: z
+					.array(z.object({ field: z.string(), source: z.unknown().optional(), live: z.unknown().optional() }))
+					.optional(),
+			}),
+		),
+		reconcilePlan: z.object({
+			pushToKibana: z.object({
+				command: z.string(),
+				monitors: z.array(z.object({ project: z.string(), monitorId: z.string(), monitorName: z.string() })),
+			}),
+			addToSource: z.object({
+				action: z.string(),
+				monitors: z.array(z.object({ project: z.string(), monitorId: z.string(), monitorName: z.string() })),
+			}),
+		}),
+	}),
+	// SIO-902: the single operator push approve/decline interrupt, surfaced with the thread's id.
+	z.object({
+		type: z.literal("synthetics_push_choice"),
+		threadId: z.string(),
+		deployment: z.string(),
+		kibanaSpace: z.string(),
+		pushableCount: z.number(),
+		extraCount: z.number(),
+		projectScope: z.string().nullable(),
+		command: z.string(),
+		explanation: z.string().optional(),
+		pushMonitors: z.array(z.object({ project: z.string(), monitorName: z.string() })),
+		extraMonitors: z.array(z.object({ project: z.string(), monitorName: z.string() })),
+		message: z.string(),
+	}),
+	// SIO-902: the single push outcome (from pushSynthetics).
+	z.object({
+		type: z.literal("synthetics_push_result"),
+		status: z.enum(["pushed", "skipped", "blocked", "failed"]),
+		pushedCount: z.number(),
+		project: z.string().optional(),
+		pipelineId: z.number().optional(),
+		pipelineStatus: z.string().optional(),
+		note: z.string().optional(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

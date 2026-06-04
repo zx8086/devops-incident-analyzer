@@ -26,4 +26,22 @@ describe("intentFromText", () => {
 		expect(intentFromText("reconcile")).toBe("drift");
 		expect(intentFromText("the answer is drift")).toBe("drift");
 	});
+
+	// SIO-902: synthetics phrasings route to synthetics-drift, and must win the tiebreak over
+	// plain "drift"/"reconcile" (a synthetics reply contains those words too).
+	test("maps synthetics replies to synthetics-drift", () => {
+		expect(intentFromText("synthetics-drift")).toBe("synthetics-drift");
+		expect(intentFromText("synthetic")).toBe("synthetics-drift");
+		expect(intentFromText("monitor drift")).toBe("synthetics-drift");
+		expect(intentFromText("uptime")).toBe("synthetics-drift");
+		// "reconcile synthetics" / "synthetics drift" contain "drift"/"reconcile" but must NOT
+		// fall through to plain drift.
+		expect(intentFromText("reconcile synthetics")).toBe("synthetics-drift");
+		expect(intentFromText("synthetics drift")).toBe("synthetics-drift");
+	});
+
+	test("plain drift requests still route to drift (not synthetics)", () => {
+		expect(intentFromText("check eu-b2b for drift")).toBe("drift");
+		expect(intentFromText("reconcile the lifecycle-policies stack")).toBe("drift");
+	});
 });
