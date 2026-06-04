@@ -9,7 +9,10 @@ import { GitLabOAuthProvider } from "../gitlab-client/oauth-provider.js";
 // in the calling shell; otherwise the provider would throw before the popup
 // fires. Operators run this CLI specifically to seed tokens for headless
 // downstream contexts (eval, AgentCore).
+// SIO-897: FORCE_INTERACTIVE also defeats the isHeadless() TTY check -- this CLI
+// runs under `bun run`'s piped stdout where isTTY is false at a real terminal.
 delete process.env.MCP_OAUTH_HEADLESS;
+process.env.MCP_OAUTH_FORCE_INTERACTIVE = "true";
 
 async function main() {
 	const config = await loadConfiguration();
