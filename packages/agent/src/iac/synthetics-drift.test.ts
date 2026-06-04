@@ -75,7 +75,7 @@ describe("parseSyntheticsDriftReport", () => {
 		],
 		reconcile_plan: {
 			push_to_kibana: {
-				command: "task drift:synthetics DEPLOYMENT=eu-b2b PROJECT=eu-oit.prd",
+				command: "task synthetics:push DEPLOYMENT=eu-b2b PROJECT=eu-oit.prd",
 				monitors: [{ project: "eu-oit.prd", monitor_id: "Prana - API Health", monitor_name: "OIT - API Health" }],
 			},
 			add_to_source: {
