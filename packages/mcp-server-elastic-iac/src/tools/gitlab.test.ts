@@ -113,6 +113,26 @@ describe("parsePipelineRef", () => {
 	});
 });
 
+import { traceHasStateLock } from "./gitlab.ts";
+
+describe("traceHasStateLock", () => {
+	test("detects the lock signature anywhere in the full trace", () => {
+		const trace =
+			"Initializing...\nError: Error acquiring the state lock\nLock Info:\n  ID: abc\n  Path: ...\n" +
+			// signature is far from the end -- the returned tail would have lost it.
+			"x".repeat(20000) +
+			"\nCleaning up project directory\nERROR: Job failed: exit code 1\n";
+		expect(traceHasStateLock(trace)).toBe(true);
+	});
+	test("matches the 'already locked' variant case-insensitively", () => {
+		expect(traceHasStateLock("HTTP remote state ALREADY LOCKED: ...")).toBe(true);
+	});
+	test("false for an unrelated plan error", () => {
+		expect(traceHasStateLock('Error: invalid resource attribute "foo" in main.tf')).toBe(false);
+		expect(traceHasStateLock("")).toBe(false);
+	});
+});
+
 import { buildSyntheticsPipelineVars } from "./gitlab.ts";
 
 // SIO-902: the synthetics trigger var array. Whole-deployment (no STACK); PROJECT only when scoped.

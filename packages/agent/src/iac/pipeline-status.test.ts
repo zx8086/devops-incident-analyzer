@@ -129,6 +129,20 @@ describe("classifyPipelineFailure", () => {
 		expect(hint).toContain("another reason");
 	});
 
+	// SIO-904: the MCP's full-trace stateLocked verdict wins even when the tail lost the signature.
+	test("stateLocked override returns the lock hint despite a signature-free tail", () => {
+		const tailWithoutSignature =
+			"...\nCleaning up project directory and file based variables\nERROR: Job failed: exit code 1\n";
+		const hint = classifyPipelineFailure(tailWithoutSignature, true);
+		expect(hint).toContain("state-lock");
+		expect(hint).toContain("force-unlock");
+	});
+
+	test("stateLocked=false does not force the lock hint on an unrelated failure", () => {
+		const hint = classifyPipelineFailure('Error: invalid resource attribute "foo" in main.tf', false);
+		expect(hint).toContain("another reason");
+	});
+
 	test("no-log hint when the log was unavailable", () => {
 		expect(classifyPipelineFailure("[no plan job found in the child pipeline]")).toContain("not available");
 		expect(classifyPipelineFailure("")).toContain("not available");
