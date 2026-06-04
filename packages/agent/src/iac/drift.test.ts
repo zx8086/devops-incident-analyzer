@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
 	addressIndexKey,
 	allStacksBlockedReason,
+	applyReportChangesToConfig,
 	applyReportValuesToConfig,
 	classifyStackByName,
 	configStackFamily,
@@ -12,6 +13,7 @@ import {
 	extractLiveTopology,
 	extractLiveVersion,
 	formatDriftSummary,
+	formatLeafChange,
 	ilmPolicyFromAddress,
 	ilmRepoShapeToFile,
 	isActionableDrift,
@@ -20,12 +22,13 @@ import {
 	parseDriftCheckResult,
 	parseDriftReport,
 	parseEcDeploymentNames,
+	parseLeafPath,
 	parseRepoTreeDirs,
 	parseTriggerResult,
 	reconcileBranch,
 	shortAddress,
 } from "./nodes.ts";
-import type { IacStateType, StackDrift } from "./state.ts";
+import type { IacStateType, LeafChange, StackDrift } from "./state.ts";
 
 // Build a fake tool set so callTool() inside nodes.ts resolves against our stubs.
 function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
@@ -998,5 +1001,293 @@ describe("buildLiveReconcile — report-sourced family (agent-policies)", () => 
 			}),
 		);
 		expect("blocked" in built).toBe(true);
+	});
+});
+
+// SIO-900: Increment 2 -- leaf-level changes[] parsing, path projection, explainer, and formatter.
+describe("parseDriftReport changes[] (SIO-900)", () => {
+	test("keeps changes[] + changeCount; drops truncated:false", () => {
+		const withChanges = JSON.stringify({
+			has_actionable_drift: true,
+			totals: { noop: 0, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			resources: [
+				{
+					address: 'module.agent_policies.elasticstack_fleet_integration_policy.this["k8s"]',
+					category: "update",
+					actions: ["update"],
+					changedKeys: ["inputs"],
+					changeCount: 1,
+					truncated: false,
+					changes: [{ path: 'inputs["kubelet/metrics"].period', op: "update", before: "10s", after: "30s" }],
+				},
+			],
+		});
+		const r = parseDriftReport(withChanges)?.resources[0];
+		expect(r?.changes).toEqual([
+			{ path: 'inputs["kubelet/metrics"].period', op: "update", before: "10s", after: "30s" },
+		]);
+		expect(r?.changeCount).toBe(1);
+		expect(r?.truncated).toBeUndefined();
+	});
+
+	test("sets truncated when the report flags it", () => {
+		const t = JSON.stringify({
+			has_actionable_drift: true,
+			totals: { noop: 0, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			resources: [
+				{
+					address: "a",
+					category: "update",
+					actions: ["update"],
+					changedKeys: ["x"],
+					changeCount: 51,
+					truncated: true,
+					changes: [{ path: "x.y", op: "update", before: 1, after: 2 }],
+				},
+			],
+		});
+		const r = parseDriftReport(t)?.resources[0];
+		expect(r?.truncated).toBe(true);
+		expect(r?.changeCount).toBe(51);
+	});
+
+	test("drops malformed change entries (no path / bad op) -> changes undefined; tolerates absence", () => {
+		const m = JSON.stringify({
+			has_actionable_drift: true,
+			totals: { noop: 0, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			resources: [
+				{
+					address: "a",
+					category: "update",
+					actions: ["update"],
+					changedKeys: ["x"],
+					changes: [{ op: "update" }, { path: "x", op: "nope" }],
+				},
+			],
+		});
+		expect(parseDriftReport(m)?.resources[0]?.changes).toBeUndefined();
+		const noChanges = JSON.stringify({
+			has_actionable_drift: true,
+			totals: { noop: 0, create: 0, update: 1, destroy: 0, replace: 0, "known-noise": 0 },
+			resources: [{ address: "a", category: "update", actions: ["update"], changedKeys: ["version"] }],
+		});
+		expect(parseDriftReport(noChanges)?.resources[0]?.changes).toBeUndefined();
+	});
+});
+
+describe("parseLeafPath", () => {
+	test("dot notation -> key segments", () => {
+		expect(parseLeafPath("policy.hot.actions.rollover.max_age")).toEqual([
+			{ kind: "key", key: "policy" },
+			{ kind: "key", key: "hot" },
+			{ kind: "key", key: "actions" },
+			{ kind: "key", key: "rollover" },
+			{ kind: "key", key: "max_age" },
+		]);
+	});
+	test("identity-bracket notation -> id segment", () => {
+		expect(parseLeafPath('inputs["kubelet/metrics"].period')).toEqual([
+			{ kind: "key", key: "inputs" },
+			{ kind: "id", id: "kubelet/metrics" },
+			{ kind: "key", key: "period" },
+		]);
+	});
+	test("numeric index -> index segment; empty path -> []", () => {
+		expect(parseLeafPath("tags[0].value")).toEqual([
+			{ kind: "key", key: "tags" },
+			{ kind: "index", index: 0 },
+			{ kind: "key", key: "value" },
+		]);
+		expect(parseLeafPath("")).toEqual([]);
+	});
+});
+
+describe("applyReportChangesToConfig (SIO-900 path projection)", () => {
+	const file = (o: unknown) => `${JSON.stringify(o, null, 2)}\n`;
+
+	test("update: writes the live before at a nested object path", () => {
+		const r = applyReportChangesToConfig(file({ policy: { hot: { rollover: { max_age: "14d" } } } }), [
+			{ path: "policy.hot.rollover.max_age", op: "update", before: "30d", after: "14d" },
+		]);
+		expect(r.applied).toEqual(["policy.hot.rollover.max_age"]);
+		expect(JSON.parse(r.content).policy.hot.rollover.max_age).toBe("30d");
+	});
+
+	test("update: resolves an identity-keyed array element and writes the leaf, leaving siblings", () => {
+		const r = applyReportChangesToConfig(
+			file({
+				inputs: [
+					{ name: "kubelet/metrics", period: "30s" },
+					{ name: "other", period: "1m" },
+				],
+			}),
+			[{ path: 'inputs["kubelet/metrics"].period', op: "update", before: "10s", after: "30s" }],
+		);
+		expect(r.applied).toEqual(['inputs["kubelet/metrics"].period']);
+		const inputs = JSON.parse(r.content).inputs;
+		expect(inputs[0].period).toBe("10s");
+		expect(inputs[1].period).toBe("1m");
+	});
+
+	test("remove: re-adds a live-only array element", () => {
+		const r = applyReportChangesToConfig(file({ inputs: [{ name: "keep" }] }), [
+			{ path: 'inputs["audit-logs"]', op: "remove", before: { name: "audit-logs", enabled: true } },
+		]);
+		expect(r.applied).toEqual(['inputs["audit-logs"]']);
+		expect(JSON.parse(r.content).inputs).toHaveLength(2);
+	});
+
+	test("add: deletes a declared-only leaf", () => {
+		const r = applyReportChangesToConfig(file({ inputs: [{ name: "x", enabled: false, extra: 1 }] }), [
+			{ path: 'inputs["x"].extra', op: "add", after: 1 },
+		]);
+		expect(r.applied).toEqual(['inputs["x"].extra']);
+		expect(JSON.parse(r.content).inputs[0]).toEqual({ name: "x", enabled: false });
+	});
+
+	test("skips redaction/oversize sentinels and unstableIndex paths; never writes them", () => {
+		const r = applyReportChangesToConfig(file({ secret: "real", tags: [{ value: "a" }] }), [
+			{ path: "secret", op: "update", before: "<redacted:sensitive>", after: "<redacted:sensitive>" },
+			{ path: "tags[0].value", op: "update", before: "b", after: "a", unstableIndex: true },
+		]);
+		expect(r.applied).toEqual([]);
+		expect(JSON.parse(r.content)).toEqual({ secret: "real", tags: [{ value: "a" }] });
+	});
+
+	test("per-leaf empty-diff: a leaf already equal to live is not applied", () => {
+		const r = applyReportChangesToConfig(file({ a: { b: "x" } }), [
+			{ path: "a.b", op: "update", before: "x", after: "y" },
+		]);
+		expect(r.applied).toEqual([]);
+	});
+
+	test("skips a path that does not resolve (never synthesizes structure)", () => {
+		const r = applyReportChangesToConfig(file({ a: 1 }), [
+			{ path: 'b["missing"].c', op: "update", before: 9, after: 8 },
+		]);
+		expect(r.applied).toEqual([]);
+		expect(JSON.parse(r.content)).toEqual({ a: 1 });
+	});
+
+	test("throws on unparseable JSON", () => {
+		expect(() => applyReportChangesToConfig("not json", [{ path: "a", op: "update", before: 1 }])).toThrow();
+	});
+});
+
+describe("formatLeafChange", () => {
+	test("update shows live -> declared", () => {
+		expect(formatLeafChange({ path: "schedule.interval", op: "update", before: "10m", after: "5m" })).toBe(
+			"~ schedule.interval: 10m -> 5m",
+		);
+	});
+	test("add shows declared; remove shows live", () => {
+		expect(formatLeafChange({ path: "x", op: "add", after: 1 })).toBe("+ x = 1");
+		expect(formatLeafChange({ path: 'inputs["a"]', op: "remove", before: { n: 1 } })).toBe(
+			'- inputs["a"] (live: {"n":1})',
+		);
+	});
+	test("renders sentinels as short labels, never the raw secret", () => {
+		const out = formatLeafChange({
+			path: "secrets.token",
+			op: "update",
+			before: "<redacted:sensitive>",
+			after: "<redacted:sensitive>",
+		});
+		expect(out).toContain("<redacted>");
+		expect(out).not.toContain("sensitive");
+	});
+});
+
+describe("explainStackDrift with changes[] (SIO-900)", () => {
+	test("expands leaf-level changes and notes 'and N more' when capped", () => {
+		const out = explainStackDrift({
+			stack: "agent-policies",
+			drifted: true,
+			kind: "config-json",
+			create: 0,
+			update: 1,
+			delete: 0,
+			liveReconcilable: true,
+			resources: [
+				{
+					address: 'module.agent_policies.elasticstack_fleet_integration_policy.this["k8s"]',
+					actions: ["update"],
+					category: "update",
+					changedKeys: ["inputs"],
+					changeCount: 5,
+					truncated: true,
+					changes: [
+						{ path: 'inputs["kubelet/metrics"].period', op: "update", before: "10s", after: "30s" },
+						{ path: 'inputs["audit-logs"]', op: "remove", before: { name: "audit-logs" } },
+					],
+				},
+			],
+		});
+		expect(out).toContain("(5 changes)");
+		expect(out).toContain('~ inputs["kubelet/metrics"].period: 10s -> 30s');
+		expect(out).toContain("...and 3 more change(s)");
+	});
+});
+
+describe("buildLiveReconcile — report-sourced via changes[] (SIO-900)", () => {
+	test("writes the live before at a nested identity-keyed leaf path", async () => {
+		mockTools({
+			gitlab_get_file_content: () =>
+				b64(`${JSON.stringify({ name: "k8s", inputs: [{ name: "kubelet/metrics", period: "30s" }] }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				configPath: "environments/eu-b2b/agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_integration_policy.this["k8s"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["inputs"],
+						changeCount: 1,
+						changes: [{ path: 'inputs["kubelet/metrics"].period', op: "update", before: "10s", after: "30s" }],
+					},
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/k8s.json");
+			expect(JSON.parse(built.files[0]?.content ?? "{}").inputs[0].period).toBe("10s");
+			expect(built.summary).toContain('k8s: inputs["kubelet/metrics"].period');
+		}
+	});
+
+	test("falls back to attribute-grain values when changes[] is truncated", async () => {
+		mockTools({
+			gitlab_get_file_content: () => b64(`${JSON.stringify({ name: "eu-oit.prd - SM", namespace: "prd" }, null, 2)}\n`),
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				configPath: "environments/eu-b2b/agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						truncated: true,
+						changeCount: 99,
+						changes: [{ path: "name", op: "update", before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" }],
+						values: { name: { before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" } },
+					},
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(JSON.parse(built.files[0]?.content ?? "{}").name).toBe("eu-oit.prd - SM ");
+		}
 	});
 });

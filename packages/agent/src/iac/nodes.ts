@@ -19,6 +19,7 @@ import type {
 	IacPlanReview,
 	IacRequest,
 	IacStateType,
+	LeafChange,
 	ReconcileDirection,
 	ReconcileResult,
 	StackDrift,
@@ -1292,6 +1293,10 @@ export interface DriftResourceChange {
 	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
 	// create/destroy/noop and older reports.
 	values?: Record<string, { before?: unknown; after?: unknown }>;
+	// SIO-900: leaf-level decomposition of the changed attributes (Increment 2 / elastic-iac MR !77).
+	changes?: LeafChange[];
+	changeCount?: number; // true total leaf changes before the producer's cap
+	truncated?: boolean; // true when changes[] was capped
 }
 
 // The parsed drift-report.json: the authoritative has_actionable_drift boolean (the single
@@ -1331,6 +1336,27 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 			}
 			return Object.keys(out).length > 0 ? out : undefined;
 		};
+		// SIO-900: parse the drift-report `changes[]` field (Increment 2): leaf-level diffs keyed by
+		// a dot/identity-bracket path. Tolerant of absence + malformed entries; keeps only entries
+		// with a string path and a known op. before/after stay unknown (may be sentinel strings).
+		const parseChanges = (v: unknown): LeafChange[] | undefined => {
+			if (!Array.isArray(v)) return undefined;
+			const out: LeafChange[] = [];
+			for (const entry of v) {
+				if (!entry || typeof entry !== "object") continue;
+				const c = entry as { path?: unknown; op?: unknown; before?: unknown; after?: unknown; unstableIndex?: unknown };
+				if (typeof c.path !== "string" || !c.path) continue;
+				if (c.op !== "add" && c.op !== "remove" && c.op !== "update") continue;
+				out.push({
+					path: c.path,
+					op: c.op,
+					before: c.before,
+					after: c.after,
+					...(c.unstableIndex === true && { unstableIndex: true }),
+				});
+			}
+			return out.length > 0 ? out : undefined;
+		};
 		const resources = Array.isArray(o.resources)
 			? (o.resources as unknown[])
 					.map((r) => {
@@ -1342,7 +1368,11 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							reason?: unknown;
 							noiseTag?: unknown;
 							values?: unknown;
+							changes?: unknown;
+							changeCount?: unknown;
+							truncated?: unknown;
 						};
+						const changes = parseChanges(x.changes);
 						return {
 							address: typeof x.address === "string" ? x.address : "",
 							category: typeof x.category === "string" ? x.category : "",
@@ -1351,6 +1381,9 @@ export function parseDriftReport(reportJson: string): ParsedDriftReport | null {
 							reason: typeof x.reason === "string" ? x.reason : "",
 							noiseTag: typeof x.noiseTag === "string" ? x.noiseTag : undefined,
 							values: parseValues(x.values),
+							...(changes && { changes }),
+							...(typeof x.changeCount === "number" && { changeCount: x.changeCount }),
+							...(x.truncated === true && { truncated: true }),
 						};
 					})
 					.filter((r) => r.address)
@@ -1479,7 +1512,12 @@ function reportReconcileFamily(stack: string): LiveReconcileFamily {
 		matches: (s) => s === stack,
 		configPath: (d) => stackResourceDir(stackConfigPathTemplate(), d, stack),
 		hasReconcilableDrift: (actionable) =>
-			actionable.some((c) => (c.category === "update" || c.category === "replace") && hasWritableBefore(c.values)),
+			actionable.some(
+				(c) =>
+					(c.category === "update" || c.category === "replace") &&
+					// SIO-900: a writable live value at attribute grain (values) OR leaf grain (changes) qualifies.
+					(hasWritableBefore(c.values) || hasWritableChanges(c)),
+			),
 		build: buildReportSourcedReconcile,
 	};
 }
@@ -1741,6 +1779,190 @@ export function applyReportValuesToConfig(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, applied };
 }
 
+// SIO-900: one parsed segment of a drift-report leaf path. `key` = object property (dot identifier);
+// `id` = quoted bracket key (an array element matched by identity, or an object key); `index` =
+// numeric bracket index (only on unstable paths, which the applier skips).
+type PathSeg = { kind: "key"; key: string } | { kind: "id"; id: string } | { kind: "index"; index: number };
+
+// SIO-900: parse a drift-report `changes[].path` (e.g. `inputs["kubelet/metrics"].period`,
+// `policy.hot.actions.rollover.max_age`, `tags[0].value`) into navigable segments. Tolerant of
+// quoting; an empty/garbage path yields []. (Pure; unit-tested.)
+export function parseLeafPath(path: string): PathSeg[] {
+	const segs: PathSeg[] = [];
+	let i = 0;
+	const n = path.length;
+	while (i < n) {
+		const ch = path[i];
+		if (ch === ".") {
+			i++;
+			continue;
+		}
+		if (ch === "[") {
+			i++; // consume "["
+			const q = path[i];
+			if (q === '"' || q === "'") {
+				i++; // consume opening quote
+				let s = "";
+				while (i < n && path[i] !== q) {
+					if (path[i] === "\\" && i + 1 < n) i++; // skip the escape, keep the next char literal
+					s += path[i++];
+				}
+				i++; // closing quote
+				if (path[i] === "]") i++;
+				segs.push({ kind: "id", id: s });
+			} else {
+				let s = "";
+				while (i < n && path[i] !== "]") s += path[i++];
+				if (path[i] === "]") i++;
+				const num = Number(s);
+				segs.push(Number.isInteger(num) && s.trim() !== "" ? { kind: "index", index: num } : { kind: "id", id: s });
+			}
+			continue;
+		}
+		let name = "";
+		while (i < n && path[i] !== "." && path[i] !== "[") name += path[i++];
+		if (name) segs.push({ kind: "key", key: name });
+	}
+	return segs;
+}
+
+// Identity fields used to match an array element to a quoted path key, in priority order. Mirrors
+// the producer's identity heuristic (elastic-iac scripts/drift-values.ts).
+const IDENTITY_FIELDS = ["name", "id", "monitor_id", "policy_id", "type"];
+
+function findArrayIndexById(arr: unknown[], id: string): number {
+	return arr.findIndex(
+		(el) =>
+			el !== null && typeof el === "object" && IDENTITY_FIELDS.some((f) => (el as Record<string, unknown>)[f] === id),
+	);
+}
+
+// Walk to the container holding the terminal segment WITHOUT synthesizing structure -- a missing
+// intermediate returns undefined so the caller skips the change (never corrupts a file).
+function navigateToParent(root: unknown, segs: PathSeg[]): unknown {
+	let cur: unknown = root;
+	for (let k = 0; k < segs.length - 1; k++) {
+		if (cur === null || typeof cur !== "object") return undefined;
+		const seg = segs[k];
+		if (!seg) continue;
+		if (seg.kind === "key") cur = (cur as Record<string, unknown>)[seg.key];
+		else if (seg.kind === "id")
+			cur = Array.isArray(cur) ? cur[findArrayIndexById(cur, seg.id)] : (cur as Record<string, unknown>)[seg.id];
+		else cur = Array.isArray(cur) ? cur[seg.index] : undefined;
+	}
+	return cur;
+}
+
+function getLeaf(parent: unknown, seg: PathSeg): unknown {
+	if (parent === null || typeof parent !== "object") return undefined;
+	if (seg.kind === "key") return (parent as Record<string, unknown>)[seg.key];
+	if (seg.kind === "id")
+		return Array.isArray(parent)
+			? parent[findArrayIndexById(parent, seg.id)]
+			: (parent as Record<string, unknown>)[seg.id];
+	return Array.isArray(parent) ? parent[seg.index] : undefined;
+}
+
+function setLeaf(parent: unknown, seg: PathSeg, value: unknown): boolean {
+	if (parent === null || typeof parent !== "object") return false;
+	if (seg.kind === "key") {
+		(parent as Record<string, unknown>)[seg.key] = value;
+		return true;
+	}
+	if (seg.kind === "id") {
+		if (Array.isArray(parent)) {
+			const idx = findArrayIndexById(parent, seg.id);
+			if (idx >= 0) parent[idx] = value;
+			else parent.push(value); // re-add a missing element (op: remove -> reconcile to live)
+			return true;
+		}
+		(parent as Record<string, unknown>)[seg.id] = value;
+		return true;
+	}
+	if (Array.isArray(parent) && seg.index >= 0 && seg.index <= parent.length) {
+		parent[seg.index] = value;
+		return true;
+	}
+	return false;
+}
+
+function deleteLeaf(parent: unknown, seg: PathSeg): boolean {
+	if (parent === null || typeof parent !== "object") return false;
+	if (seg.kind === "key") {
+		const o = parent as Record<string, unknown>;
+		if (seg.key in o) {
+			delete o[seg.key];
+			return true;
+		}
+		return false;
+	}
+	if (seg.kind === "id") {
+		if (Array.isArray(parent)) {
+			const idx = findArrayIndexById(parent, seg.id);
+			if (idx >= 0) {
+				parent.splice(idx, 1);
+				return true;
+			}
+			return false;
+		}
+		const o = parent as Record<string, unknown>;
+		if (seg.id in o) {
+			delete o[seg.id];
+			return true;
+		}
+		return false;
+	}
+	if (Array.isArray(parent) && seg.index >= 0 && seg.index < parent.length) {
+		parent.splice(seg.index, 1);
+		return true;
+	}
+	return false;
+}
+
+// SIO-900: reconcile-to-live by leaf PATH (Increment 2). Apply each leaf change to the repo config
+// so it matches LIVE: `update`/`remove` write the live `before` at the path (`remove` re-adds a
+// live-only leaf); `add` deletes a declared-only leaf. Skips sentinels, unstable-index paths
+// (caller falls back to attribute-grain `values`), per-leaf no-ops, and paths that don't resolve
+// (never synthesizes structure). `applied` lists the paths actually changed. Throws on unparseable
+// JSON. (Pure; unit-tested.)
+export function applyReportChangesToConfig(
+	fileContent: string,
+	changes: LeafChange[],
+): { content: string; applied: string[] } {
+	const obj = JSON.parse(fileContent) as Record<string, unknown>;
+	const applied: string[] = [];
+	for (const c of changes) {
+		if (c.unstableIndex) continue; // unstable numeric index -> reconcile at attribute grain (values)
+		const segs = parseLeafPath(c.path);
+		if (segs.length === 0) continue;
+		const parent = navigateToParent(obj, segs);
+		const terminal = segs[segs.length - 1];
+		if (!terminal) continue;
+		if (c.op === "add") {
+			// in declared but not live -> to match live, remove it from the repo config.
+			if (deleteLeaf(parent, terminal)) applied.push(c.path);
+			continue;
+		}
+		// update | remove -> write the live (before) value back into the repo config.
+		const before = c.before;
+		if (before === undefined || before === REDACTED_SENTINEL || before === OVERSIZED_SENTINEL) continue;
+		if (JSON.stringify(getLeaf(parent, terminal)) === JSON.stringify(before)) continue; // per-leaf empty-diff
+		if (setLeaf(parent, terminal, before)) applied.push(c.path);
+	}
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, applied };
+}
+
+// True when a resource's leaf changes[] is usable for path-precise reconcile-to-live: present,
+// not truncated, and carrying at least one writable (non-sentinel) before or a deletable `add`.
+function hasWritableChanges(r: { changes?: LeafChange[]; truncated?: boolean }): boolean {
+	if (!r.changes || r.changes.length === 0 || r.truncated) return false;
+	return r.changes.some(
+		(c) =>
+			!c.unstableIndex &&
+			(c.op === "add" || (c.before !== undefined && c.before !== REDACTED_SENTINEL && c.before !== OVERSIZED_SENTINEL)),
+	);
+}
+
 // Project a LIVE `_ilm/policy/<name>` response onto the repo's flattened phase-file shape (top-level
 // hot/warm/cold/delete + name). LOSSY BY DESIGN: only the fields the repo models survive (the hot
 // rollover fields + a rollover:true flag, per-phase forcemerge, warm/cold/delete min_age, and
@@ -1942,10 +2164,13 @@ async function buildLiveIlmReconcile(
 	return { files, summary: `${files.length} policy file(s): ${written.join(", ")}`, ...(note && { note }) };
 }
 
-// SIO-889: Approach-B reconcile-to-live for report-sourced families (e.g. agent-policies). Live
-// values come from each resource's drift-report `values.before` (no MCP live read); the per-resource
-// repo file is environments/<dep>/<stack>/<for_each-key>.json. Reads each file, projects the writable
-// live values onto it, and drops no-op files. Blocks (never a false no-op) on an unreadable file.
+// SIO-889 / SIO-900: Approach-B reconcile-to-live for report-sourced families (e.g. agent-policies).
+// Live values come from the drift-report (no MCP live read); the per-resource repo file is
+// environments/<dep>/<stack>/<for_each-key>.json. SIO-900: prefer the leaf-level `changes[]` to write
+// each drifted LEAF by path (so a nested input/monitor change is reconciled precisely); fall back to
+// the attribute-grain `values.before` when changes[] is absent/truncated/unstable or resolves nothing.
+// Reads each file, projects the writable live values onto it, and drops no-op files. Blocks (never a
+// false no-op) on an unreadable file.
 async function buildReportSourcedReconcile(
 	deployment: string,
 	stack: StackDrift,
@@ -1954,19 +2179,31 @@ async function buildReportSourcedReconcile(
 	const files: ReconcileFile[] = [];
 	const summaryParts: string[] = [];
 	for (const r of stack.resources) {
-		if ((r.category !== "update" && r.category !== "replace") || !r.values) continue;
+		if (r.category !== "update" && r.category !== "replace") continue;
+		const useChanges = hasWritableChanges(r);
+		if (!useChanges && !hasWritableBefore(r.values)) continue; // nothing writable from this resource
 		const key = addressIndexKey(r.address);
 		if (!key) continue; // no for_each key -> cannot resolve a file
 		const filePath = stackResourcePath(template, deployment, stack.stack, key);
 		const raw = await callTool("gitlab_get_file_content", { filePath });
 		if (!raw.startsWith("[2")) return { blocked: `Could not read ${filePath} from the repo.` };
+		const original = extractFileContent(raw);
 		let projected: { content: string; applied: string[] };
 		try {
-			projected = applyReportValuesToConfig(extractFileContent(raw), r.values);
+			projected = useChanges
+				? applyReportChangesToConfig(original, r.changes ?? [])
+				: r.values
+					? applyReportValuesToConfig(original, r.values)
+					: { content: original, applied: [] };
+			// Path-precise resolved nothing (paths didn't match the repo shape) -> fall back to the
+			// attribute-grain projection so a reconcilable drift never silently no-ops.
+			if (useChanges && projected.applied.length === 0 && r.values && hasWritableBefore(r.values)) {
+				projected = applyReportValuesToConfig(original, r.values);
+			}
 		} catch (err) {
 			return { blocked: `${filePath} could not be rewritten: ${err instanceof Error ? err.message : String(err)}` };
 		}
-		if (projected.applied.length === 0) continue; // all keys redacted/oversized or already match
+		if (projected.applied.length === 0) continue; // all redacted/oversized/unresolved or already match
 		files.push({ path: filePath, content: projected.content });
 		summaryParts.push(`${key}: ${projected.applied.join(", ")}`);
 	}
@@ -2267,6 +2504,10 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 			changedKeys: c.changedKeys,
 			category: c.category,
 			values: c.values,
+			// SIO-900: carry the leaf-level decomposition through for the explainer/UI + reconcile-by-path.
+			...(c.changes && { changes: c.changes }),
+			...(c.changeCount !== undefined && { changeCount: c.changeCount }),
+			...(c.truncated && { truncated: true }),
 		})),
 	};
 }
@@ -2348,9 +2589,25 @@ export function shortAddress(address: string): string {
 	return key ? `${tail} ${key}` : tail;
 }
 
+// SIO-900: render a single leaf change as a grounded one-liner (before = live, after = declared).
+// Sentinels become short labels; long values are capped so the explanation stays readable. (Pure.)
+export function formatLeafChange(c: LeafChange): string {
+	const val = (v: unknown): string => {
+		if (v === REDACTED_SENTINEL) return "<redacted>";
+		if (v === OVERSIZED_SENTINEL) return "<too large>";
+		const s = typeof v === "string" ? v : JSON.stringify(v);
+		const text = s ?? String(v);
+		return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+	};
+	if (c.op === "add") return `+ ${c.path} = ${val(c.after)}`; // in declared, not live
+	if (c.op === "remove") return `- ${c.path} (live: ${val(c.before)})`; // in live, not declared
+	return `~ ${c.path}: ${val(c.before)} -> ${val(c.after)}`; // update: live -> declared
+}
+
 // SIO-886: a concise, GROUNDED explanation of what a stack's drift is, built straight from
 // the drift-report fields (no LLM -> no hallucination). Empty string for a non-drifted stack.
-// (Pure; unit-tested.)
+// SIO-900: when a resource carries leaf-level `changes[]`, expand the line into per-leaf detail
+// ("showing X of N") instead of the opaque attribute-grain reason. (Pure; unit-tested.)
 export function explainStackDrift(stack: StackDrift): string {
 	if (!stack.drifted || stack.resources.length === 0) return "";
 	const verb = (actions: string[], category?: string): string => {
@@ -2361,9 +2618,16 @@ export function explainStackDrift(stack: StackDrift): string {
 		return "update";
 	};
 	const lines = stack.resources.slice(0, 8).map((r) => {
+		const head = `- ${verb(r.actions, r.category)} ${shortAddress(r.address)}`;
+		if (r.changes && r.changes.length > 0) {
+			const total = r.changeCount ?? r.changes.length;
+			const shown = r.changes.slice(0, 3).map((c) => `    ${formatLeafChange(c)}`);
+			const extra = total > shown.length ? `\n    ...and ${total - shown.length} more change(s)` : "";
+			return `${head} (${total} change${total === 1 ? "" : "s"})\n${shown.join("\n")}${extra}`;
+		}
 		const detail =
 			r.reason || (r.changedKeys && r.changedKeys.length > 0 ? `changed: ${r.changedKeys.join(", ")}` : "");
-		return `- ${verb(r.actions, r.category)} ${shortAddress(r.address)}${detail ? ` (${detail})` : ""}`;
+		return `${head}${detail ? ` (${detail})` : ""}`;
 	});
 	const more = stack.resources.length > 8 ? `\n- ...and ${stack.resources.length - 8} more` : "";
 	const counts = `${stack.create} create / ${stack.update} update / ${stack.delete} destroy`;
@@ -2424,13 +2688,18 @@ export function reconcileGate(state: IacStateType): Partial<IacStateType> {
 		kind: current.kind,
 		summary,
 		// SIO-886: the grounded explanation + per-resource detail so the human can see WHAT
-		// drifted before choosing MR-vs-skip.
+		// drifted before choosing MR-vs-skip. SIO-900: include the leaf-level changes[] + values
+		// so the choice card can expand the precise per-leaf detail.
 		explanation: current.explanation ?? "",
 		resources: current.resources.slice(0, 8).map((r) => ({
 			address: r.address,
 			actions: r.actions,
 			reason: r.reason ?? "",
 			changedKeys: r.changedKeys ?? [],
+			...(r.values && { values: r.values }),
+			...(r.changes && { changes: r.changes }),
+			...(r.changeCount !== undefined && { changeCount: r.changeCount }),
+			...(r.truncated && { truncated: true }),
 		})),
 		directions,
 		message:

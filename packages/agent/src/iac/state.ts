@@ -68,6 +68,21 @@ export interface IacApprovalState {
 // CI's plan shows the revert; "skip" leaves the stack untouched.
 export type ReconcileDirection = "reconcile-to-json" | "reconcile-to-live" | "skip";
 
+// SIO-900: one leaf-level diff inside a changed attribute, from the drift-report `changes[]`
+// field (elastic-iac Increment 2 / MR !77). `path` is a dot/identity-bracket locator from the
+// resource root whose first segment is one of `changedKeys`, e.g. `inputs["kubelet/metrics"].period`.
+// op: update (both sides, differ) | add (declared-only) | remove (live-only). before = live,
+// after = declared; the "<redacted:sensitive>"/"<omitted:too-large>" sentinels must never be
+// written back. unstableIndex marks a numeric-array-index path (no stable identity key): treat as
+// a hint only and reconcile at attribute grain via `values` instead of writing by path.
+export interface LeafChange {
+	path: string;
+	op: "add" | "remove" | "update";
+	before?: unknown;
+	after?: unknown;
+	unstableIndex?: boolean;
+}
+
 // One drifted resource, carrying the drift-report.json detail the explainer surfaces.
 // SIO-886: reason/changedKeys/category were previously dropped before reaching the UI.
 export interface StackDriftResource {
@@ -83,6 +98,13 @@ export interface StackDriftResource {
 	// "<redacted:sensitive>"/"<omitted:too-large>" must never be written back. Absent on
 	// create/destroy/noop and older reports.
 	values?: Record<string, { before?: unknown; after?: unknown }>;
+	// SIO-900: leaf-level decomposition of the changed attributes (Increment 2). Preferred over
+	// `values` for precise explanation + reconcile; falls back to `values` when absent/truncated.
+	changes?: LeafChange[];
+	// True total leaf changes before the producer's 50-entry cap (UI: "showing X of N").
+	changeCount?: number;
+	// True when `changes[]` was capped at the producer's limit.
+	truncated?: boolean;
 }
 
 // One stack's drift from the on-demand drift-check plus its classification.

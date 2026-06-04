@@ -328,7 +328,16 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		// SIO-886: forward the grounded explanation + per-resource detail (what drifted).
 		const resources = Array.isArray(obj.resources)
 			? obj.resources.map((r) => {
-					const x = r as { address?: unknown; actions?: unknown; reason?: unknown; changedKeys?: unknown };
+					const x = r as {
+						address?: unknown;
+						actions?: unknown;
+						reason?: unknown;
+						changedKeys?: unknown;
+						values?: unknown;
+						changes?: unknown;
+						changeCount?: unknown;
+						truncated?: unknown;
+					};
 					return {
 						address: typeof x.address === "string" ? x.address : "",
 						actions: Array.isArray(x.actions) ? x.actions.filter((a): a is string => typeof a === "string") : [],
@@ -336,6 +345,12 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 						...(Array.isArray(x.changedKeys) && {
 							changedKeys: x.changedKeys.filter((k): k is string => typeof k === "string"),
 						}),
+						// SIO-900: forward the attribute-grain values + leaf-level changes[] so the choice
+						// card can expand exactly which leaves drifted (the schema validates the shape).
+						...(typeof x.values === "object" && x.values !== null && { values: x.values }),
+						...(Array.isArray(x.changes) && { changes: x.changes }),
+						...(typeof x.changeCount === "number" && { changeCount: x.changeCount }),
+						...(x.truncated === true && { truncated: true }),
 					};
 				})
 			: undefined;
