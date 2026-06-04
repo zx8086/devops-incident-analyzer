@@ -1,5 +1,6 @@
 // apps/web/src/routes/api/agent/topic-shift/+server.test.ts
 import { describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 
 mock.module("@devops-agent/agent", () => ({
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
@@ -10,6 +11,9 @@ mock.module("@devops-agent/agent", () => ({
 	getServerStates: mock(() => ({}) as Record<string, string>),
 	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	buildIacGraph: () => Promise.resolve({}),
+	// SIO-906: events route test imports mcpEvents from this specifier; include it so
+	// the shared process-global mock stays link-compatible across files.
+	mcpEvents: new EventEmitter(),
 }));
 
 const sharedLogger = {
