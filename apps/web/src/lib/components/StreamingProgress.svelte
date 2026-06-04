@@ -16,15 +16,20 @@ const INCIDENT_NODES = [
 
 // elastic-iac maker happy path (version-upgrade / tier-resize / ilm-rollout). bootstrap,
 // classifyIacIntent, watchPipeline and teardown are plumbing/covered elsewhere and omitted.
-const IAC_NODES = [
+const IAC_MAKER_NODES = [
 	{ id: "parseIntent", activeLabel: "Parsing", completeLabel: "Parsed" },
 	{ id: "readClusterState", activeLabel: "Reading state", completeLabel: "Read state" },
 	{ id: "guard", activeLabel: "Checking", completeLabel: "Checked" },
 	{ id: "draftChange", activeLabel: "Drafting", completeLabel: "Drafted" },
 	{ id: "reviewPlan", activeLabel: "Preparing review", completeLabel: "Prepared" },
 	{ id: "openMr", activeLabel: "Opening MR", completeLabel: "MR opened" },
-	// SIO-903: SIO-882 drift sub-flow + SIO-902 synthetics-drift sub-flow nodes were already
-	// in the server PIPELINE_NODES; labels were missing here so they rendered "Processing...".
+] as const;
+
+// SIO-903: drift (SIO-882) + synthetics-drift (SIO-902) sub-flow. A drift run never executes
+// the maker nodes (and vice versa), so the two lists are rendered exclusively -- pick whichever
+// the live node events match, so a drift audit leads with "Detecting drift" rather than six grey
+// maker pills that never light up.
+const IAC_DRIFT_NODES = [
 	{ id: "detectDrift", activeLabel: "Detecting drift", completeLabel: "Drift detected" },
 	{ id: "reconcileGate", activeLabel: "Reviewing drift", completeLabel: "Reviewed" },
 	{ id: "reconcileStack", activeLabel: "Reconciling", completeLabel: "Reconciled" },
@@ -44,7 +49,16 @@ let {
 	variant?: "incident" | "iac";
 } = $props();
 
-const NODES = $derived(variant === "iac" ? IAC_NODES : INCIDENT_NODES);
+// For IaC, drift and maker flows are mutually exclusive within a run; render only the list
+// that the live node events belong to. Default to maker until a drift node appears so we never
+// show a half-grey row of irrelevant pills.
+const iacNodes = $derived.by(() => {
+	const seen = (id: string) => activeNodes.has(id) || completedNodes.has(id);
+	const isDrift = IAC_DRIFT_NODES.some((n) => seen(n.id));
+	return isDrift ? IAC_DRIFT_NODES : IAC_MAKER_NODES;
+});
+
+const NODES = $derived(variant === "iac" ? iacNodes : INCIDENT_NODES);
 
 const currentActiveLabel = $derived.by(() => {
 	for (const node of NODES) {
