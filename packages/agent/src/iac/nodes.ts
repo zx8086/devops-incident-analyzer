@@ -175,10 +175,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
 		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
 		"For an ILM lifecycle-policy change ('set eu-b2b 30-days retention to 60 days', 'forcemerge warm to 1 " +
-		"segment on eu-cld logs'), set workflow to 'ilm-rollout', cluster to the named deployment, policyName to the " +
-		"policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', 'eu-default-lifecycle-logs-prod'), and phasesPatch " +
-		"to a nested object containing ONLY the phase fields to change (top-level keys are phases hot|warm|cold|delete; " +
-		"durations are strings like '60d'; retention is delete.min_age). " +
+		"segment on eu-cld logs', 'add a delete phase to .alerts-ilm-policy'), set workflow to 'ilm-rollout', cluster " +
+		"to the named deployment, policyName to the policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', " +
+		"'.alerts-ilm-policy'), and phasesPatch to a nested object whose top-level keys are phases (hot|warm|cold|delete). " +
+		"Use the repo's FLAT phase DSL, NOT Elasticsearch's native phases/actions form -- e.g. " +
+		'{ "hot": { "max_age": "30d", "max_primary_shard_size": "50gb", "rollover": true }, "delete": { "min_age": "90d" } } ' +
+		"(durations are strings like '90d'; retention is delete.min_age). Patch ONLY the fields to change for an existing " +
+		"policy; if the policy may be new or untracked, include EVERY phase it should have (the full intended lifecycle) " +
+		"so the created file is complete. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -712,40 +716,42 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
-	// A missing policy file comes back as 404 from the GitLab files API. Match 404
-	// specifically so a 401/403 (auth/scope) isn't mislabeled as "no such policy".
-	if (raw.startsWith("[404")) {
-		return {
-			blockedReason: `No such policy '${policy}' on '${cluster}': no such policy file at ${filePath}.`,
-			messages: [
-				new AIMessage(
-					`Cannot propose the change: no such policy '${policy}' on '${cluster}'. Check the policy filename.`,
-				),
-			],
-		};
-	}
-
+	// SIO-899: a 404 means the policy file is not tracked in IaC yet (the policy may exist
+	// live but was never onboarded). Instead of dead-ending, CREATE it: a brand-new policy
+	// is the flat DSL `{ name, ...phases }` -- the same shape phasesPatch already uses -- so
+	// merging the patch onto a `{ name }` stub yields the full new file. `previous` then has
+	// undefined leaves, so the diff renders every field as an addition and
+	// detectRetentionReduction returns null (no prior retention to reduce). Match 404 only so
+	// a 401/403 (auth/scope) is NOT treated as "untracked"; those fall through to the modify
+	// path and surface as a JSON-parse edit failure, exactly as before.
 	let updated: { content: string; previous: Record<string, unknown> };
-	try {
-		updated = mergeIlmPhases(extractFileContent(raw), patch);
-	} catch (err) {
-		const reason = err instanceof Error ? err.message : String(err);
-		return {
-			blockedReason: `Could not edit ${filePath}: ${reason}.`,
-			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
-		};
-	}
+	let policyCreated = false;
+	if (raw.startsWith("[404")) {
+		policyCreated = true;
+		updated = mergeIlmPhases(JSON.stringify({ name: policy }), patch);
+	} else {
+		try {
+			updated = mergeIlmPhases(extractFileContent(raw), patch);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
 
-	// No-op guard: the phase patch matches the current policy (empty diff).
-	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
-		return {
-			blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
-			messages: [
-				new AIMessage(
-					`No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
-				),
-			],
-		};
+		// No-op guard: the phase patch matches the current policy (empty diff). Only a
+		// modify can be a no-op; a freshly created file is always a change.
+		if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+			return {
+				blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
+				messages: [
+					new AIMessage(
+						`No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
+					),
+				],
+			};
+		}
 	}
 
 	const retentionChange = detectRetentionReduction(updated.previous, patch);
@@ -756,12 +762,16 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: ILM ${policy} (${fields})`,
+		commit_message: `${cluster}: ${policyCreated ? "create " : ""}ILM ${policy} (${fields})`,
+		// SIO-899: gitlab_commit_file upserts (flips update<->create on a file-exists
+		// mismatch), but pass the right action up front to skip the wasted first attempt.
+		action: policyCreated ? "create" : "update",
 	});
 	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
 
 	// Human diff: one -/+ pair per touched leaf, walking the previous mirror against patch.
-	const diffLines: string[] = [`${filePath} (ILM ${policy})`];
+	// A created policy has no prior values, so every leaf renders as an addition ("?"->value).
+	const diffLines: string[] = [`${filePath} (${policyCreated ? "NEW ILM policy" : "ILM"} ${policy})`];
 	const walk = (prev: Record<string, unknown>, p: Record<string, unknown>, prefix: string): void => {
 		for (const [key, value] of Object.entries(p)) {
 			const path = prefix ? `${prefix}.${key}` : key;
@@ -787,6 +797,7 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
 		retentionChange,
+		policyCreated,
 	};
 }
 
@@ -844,6 +855,12 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		risks.push(
 			"ILM phase change can trigger force-merge load / frozen pull-in; transitions take effect as each index rolls over, not immediately.",
 		);
+		// SIO-899: creating a previously-untracked policy file is a CREATE in CI's plan.
+		if (state.policyCreated) {
+			risks.push(
+				"Creates a NEW managed ILM policy file not currently tracked in IaC; CI's plan will show a create. Verify all required phases (e.g. hot rollover + a delete/retention phase) are present, and that adopting the existing live policy will not need a Terraform import.",
+			);
+		}
 		// SIO-880: a retention REDUCTION is irreversible data loss -- surface as HIGH (first).
 		if (state.retentionChange) {
 			risks.unshift(
@@ -872,7 +889,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		: req?.workflow === "tier-resize"
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
 			: req?.workflow === "ilm-rollout"
-				? `${req?.policyName ?? "?"}: ${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
+				? `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
 				: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		kind: isConfigEdit ? "config-edit" : "terraform",
@@ -944,7 +961,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
 			req?.workflow === "ilm-rollout"
-				? `ILM policy '${req?.policyName}' phase change: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				? `ILM policy '${req?.policyName}' ${state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
 				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
@@ -957,7 +974,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 		// tier size/max_size = tier-resize / MEDIUM.
 		const categoryRisk =
 			req?.workflow === "ilm-rollout"
-				? `Category ilm, Risk ${state.retentionChange ? "HIGH" : "MEDIUM"}`
+				? `Category ilm${state.policyCreated ? " (new policy)" : ""}, Risk ${state.retentionChange ? "HIGH" : "MEDIUM"}`
 				: req?.workflow === "tier-resize"
 					? "Category tier-resize, Risk MEDIUM"
 					: "Category version-bump, Risk LOW";
@@ -2528,6 +2545,12 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
 	}
 	const lines: string[] = [state.mrUrl ? `MR opened: ${state.mrUrl}` : "MR step complete."];
+	// SIO-899: when onboarding an untracked policy, name the created file + scope it (Step 2 is a runtime apply).
+	if (state.policyCreated) {
+		lines.push(
+			`Created a new managed ILM policy '${state.iacRequest?.policyName ?? "?"}' (was untracked in IaC). Attaching it to existing indices is a runtime apply done in GitLab/Elasticsearch, not part of this MR.`,
+		);
+	}
 
 	if (state.pipelineStatus && state.pipelineStatus !== "unknown") {
 		const pid = state.pipelineId ? `#${state.pipelineId}` : "";

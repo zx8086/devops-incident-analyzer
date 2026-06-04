@@ -170,6 +170,9 @@ export const IacState = Annotation.Root({
 	// SIO-880: when an ilm-rollout reduces delete.min_age, the from/to surfaced as a
 	// HIGH-risk line in the review card + MR body (data deletion is irreversible).
 	retentionChange: Annotation<{ from: string; to: string } | null>({ reducer: last, default: () => null }),
+	// SIO-899: an ilm-rollout created a previously-untracked policy file (404 -> onboard);
+	// surfaced in the review card / MR body / final message so the human reviews a CREATE.
+	policyCreated: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.

@@ -190,21 +190,40 @@ describe("draftChange -> proposeIlmChange", () => {
 		expect(result.blockedReason).toContain("phase field");
 	});
 
-	test("blocks when the policy file 404s", async () => {
+	test("creates the policy file when it 404s (onboards an untracked policy)", async () => {
 		const { draftChange } = await import("./nodes.ts");
-		mockTools({ gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}' });
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}',
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
 		const state = {
 			iacRequest: {
 				workflow: "ilm-rollout" as const,
 				isProd: false,
 				cluster: "eu-b2b",
-				policyName: "no-such-policy",
-				phasesPatch: { delete: { min_age: "60d" } },
+				policyName: ".alerts-ilm-policy",
+				phasesPatch: { hot: { max_age: "30d", rollover: true }, delete: { min_age: "90d" } },
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-899 - partial IacState test stub
 		const result = await draftChange(state as any);
-		expect(result.blockedReason).toContain("no such policy");
+		expect(result.blockedReason).toBeUndefined();
+		expect(result.policyCreated).toBe(true);
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedFilePath).toBe("environments/eu-b2b/lifecycle-policies/.alerts-ilm-policy.json");
+		expect(result.retentionChange).toBeNull();
+		expect(result.proposedDiff).toContain("NEW ILM policy");
+		expect(result.proposedDiff).toContain('"min_age"');
+		// The committed body is a create of the new policy: name + the requested phases.
+		expect(committed.action).toBe("create");
+		const written = JSON.parse(String(committed.content)) as { name: string; delete: { min_age: string } };
+		expect(written.name).toBe(".alerts-ilm-policy");
+		expect(written.delete.min_age).toBe("90d");
 	});
 
 	test("sets retentionChange when retention is reduced", async () => {
@@ -275,5 +294,13 @@ describe("reviewPlan — ilm-rollout", () => {
 		const result = await reviewPlan(baseState(null) as any);
 		expect(result.planReview?.title).toContain("90-days@lifecycle");
 		expect(result.planReview?.title).toContain("delete");
+	});
+
+	test("labels a created policy and adds the new-policy risk note", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-899 - partial IacState test stub
+		const result = await reviewPlan({ ...baseState(null), policyCreated: true } as any);
+		expect(result.planReview?.title).toContain("create");
+		expect(result.risks?.some((r) => r.includes("NEW managed ILM policy"))).toBe(true);
 	});
 });
