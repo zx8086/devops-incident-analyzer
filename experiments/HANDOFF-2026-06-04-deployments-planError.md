@@ -2,12 +2,30 @@
 
 ## Header block
 
-- **Date**: 2026-06-04
-- **Ticket**: none yet — create one if a code change is decided (see "The fix" — most likely a GitLab-side / runbook change, not this repo). Related context ticket: [SIO-903](https://linear.app/siobytes/issue/SIO-903) (the UI progress-pill fix from the same drift run; merged, PR #203).
+- **Date**: 2026-06-04 (updated 2026-06-04 with the Option-B resolution — see "Resolution" below)
+- **Ticket**: [SIO-904](https://linear.app/siobytes/issue/SIO-904) (Option B implemented, PR #204, In Review) + [SIO-905](https://linear.app/siobytes/issue/SIO-905) (the real root cause — elastic-iac CI missing EC credentials — cross-team follow-up). Related context ticket: [SIO-903](https://linear.app/siobytes/issue/SIO-903) (the UI progress-pill fix from the same drift run; merged, PR #203).
 - **Related tickets**: [SIO-887](https://linear.app/siobytes/issue/SIO-887) (introduced the planError classification), [SIO-878](https://linear.app/siobytes/issue/SIO-878) (`classifyPipelineFailure`), [SIO-891](https://linear.app/siobytes/issue/SIO-891) / [SIO-892](https://linear.app/siobytes/issue/SIO-892) / [SIO-893](https://linear.app/siobytes/issue/SIO-893) (gitlab.com migration + runner/permission chain that this stack is sensitive to).
 - **Repo state**: branch `main`, HEAD `15ee1ed` ("SIO-903: add IaC drift sub-flow nodes to StreamingProgress IAC_NODES (#203)").
 - **Suggested branch (only if a code change lands here)**: `sio-XXX-deployments-planerror-diagnostics`.
 - **GitOps target repo**: `pvhcorp/dhco/observability/observability-elastic-iac` on `https://gitlab.com` (project id `82850717`). The drift-check CI lives THERE; this repo only orchestrates it.
+
+## Resolution (added 2026-06-04 — read this first)
+
+Option B was implemented (SIO-904, PR #204) and the real root cause was found via a live test.
+
+1. **Option B shipped** — the MCP now greps the **full** job trace for the state-lock signature (new pure `traceHasStateLock()` in `packages/mcp-server-elastic-iac/src/tools/gitlab.ts`) and returns a structured `stateLocked` boolean; the failure-log tail was bumped 4000 → 16000 bytes (`ELASTIC_IAC_DRIFT_FAIL_LOG_TAIL_BYTES`). Agent side: `parseDriftCheckResult` surfaces it and `classifyPipelineFailure(log, stateLocked?)` prefers it over the substring scan (fallback intact). So a lock whose signature scrolled out of the tail is no longer misclassified.
+
+2. **The actual cause of THIS planError was NOT a state lock.** Cold-restarted the MCP and called `gitlab_get_drift_check_result` against the original failed pipeline `2577636962` (job `14702757586`, `plan:eu-b2b:deployments`). Result: `status: failed`, `stateLocked: false` (correctly — no lock signature anywhere in the full trace), and the larger tail finally captured the real error the old 4000-byte tail had been hiding:
+
+   ```
+   Error: Unable to create api Client config
+     with provider["registry.terraform.io/elastic/ec"], on providers.tf line 4
+   authwriter: one of apikey or username and password must be specified
+   ```
+
+   i.e. the `deployments` drift-check plan job is missing its **EC (Elastic Cloud) provider credentials** in the elastic-iac CI. A genuine credential/CI error, not lock contention. Tracked as **[SIO-905](https://linear.app/siobytes/issue/SIO-905)** for the elastic-iac repo owner (set/scope `EC_API_KEY` for the drift-check job). The SIO-904 behavior is exactly right here: only a real lock flips `stateLocked` true; a genuine plan error keeps the generic "review the job log" message AND now surfaces the real cause in the tail.
+
+The TL;DR and investigation below are preserved as the original record; note the "most often state-lock" framing was the *prior assumption* — for `eu-b2b` the live cause turned out to be missing EC credentials (SIO-905).
 
 ## TL;DR
 
