@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
 	serializeMcpConnectError,
+	_toolTimeoutForTest as toolTimeoutFor,
 	_withTimeoutForTest as withTimeout,
 } from "./mcp-bridge.ts";
 
@@ -101,5 +102,51 @@ describe("connectTimeoutFor (SIO-774)", () => {
 
 	test("unknown server falls back to default", () => {
 		expect(connectTimeoutFor("not-a-real-server")).toBe(10_000);
+	});
+});
+
+describe("toolTimeoutFor (SIO-893)", () => {
+	// Own BOTH env vars in beforeEach -- Bun auto-loads repo .env, so a value could
+	// leak in locally; delete them so the default-path assertions hold (the .env-leak
+	// class of failure, reference_bun_env_leaks_into_config_tests).
+	let savedOverride: string | undefined;
+	let savedBudget: string | undefined;
+	beforeEach(() => {
+		savedOverride = process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
+		savedBudget = process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
+		delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
+		delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
+	});
+	afterEach(() => {
+		if (savedOverride === undefined) delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
+		else process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = savedOverride;
+		if (savedBudget === undefined) delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
+		else process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = savedBudget;
+	});
+
+	test("non-elastic-iac servers get no override (adapter default)", () => {
+		expect(toolTimeoutFor("kafka-mcp")).toBeUndefined();
+		expect(toolTimeoutFor("elastic-mcp")).toBeUndefined();
+		expect(toolTimeoutFor("gitlab-mcp")).toBeUndefined();
+	});
+
+	test("elastic-iac defaults to poll budget + margin", () => {
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(300_000 + 30_000);
+	});
+
+	test("elastic-iac tracks the configured poll budget + margin", () => {
+		process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = "120000";
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(120_000 + 30_000);
+	});
+
+	test("explicit ELASTIC_IAC_TOOL_TIMEOUT_MS wins over the budget-derived value", () => {
+		process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = "90000";
+		process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = "300000";
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000);
+	});
+
+	test("a non-positive override is ignored (falls back to budget + margin)", () => {
+		process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = "0";
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(300_000 + 30_000);
 	});
 });

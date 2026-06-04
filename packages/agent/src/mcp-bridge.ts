@@ -106,6 +106,26 @@ function connectTimeoutFor(serverName: string): number {
 	return PER_SERVER_CONNECT_TIMEOUTS[serverName] ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
 }
 
+// SIO-893: per-server tool-call timeout. The @langchain/mcp-adapters default tool
+// timeout is 60s, which is shorter than elastic-iac's drift-check round trip: the
+// gitlab_get_drift_check_result tool polls a CI pipeline internally for up to
+// ELASTIC_IAC_DRIFT_POLL_BUDGET_MS (5 min), and a cold k8s runner takes ~130s+ to
+// queue + install Bun/Terraform + plan. At 60s the client aborts the call before
+// the tool's own poll finishes -> every stack reports a false planError. Give
+// elastic-iac a tool timeout just above its internal poll budget so the tool's
+// poll is the binding constraint, not the transport. Env-tunable; read lazily
+// (no module-scope Bun.env -- the web app imports this under Vite SSR).
+const DRIFT_POLL_BUDGET_DEFAULT_MS = 300_000;
+const ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS = 30_000;
+
+function toolTimeoutFor(serverName: string): number | undefined {
+	if (serverName !== "elastic-iac-mcp") return undefined; // others use the adapter default
+	const override = Number(process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS);
+	if (Number.isFinite(override) && override > 0) return override;
+	const pollBudget = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS) || DRIFT_POLL_BUDGET_DEFAULT_MS;
+	return pollBudget + ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS;
+}
+
 // SIO-680/682: Generic timeout wrapper. Races the input promise against
 // AbortSignal.timeout(ms); rejects with a descriptive error if the promise
 // hasn't settled by deadline.
@@ -191,12 +211,16 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 			// The beforeToolCall hook is supported at runtime but missing from the TypeScript
 			// type definitions in @langchain/mcp-adapters@1.1.3, hence the type assertion.
 			const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
+			// SIO-893: elastic-iac drift tools poll a CI pipeline well past the 60s
+			// adapter default; set a per-server tool timeout above their internal budget.
+			const toolTimeout = toolTimeoutFor(name);
 			const client = new MultiServerMCPClient({
 				mcpServers: {
 					[name]: {
 						transport: "http",
 						url,
 						beforeToolCall: () => beforeToolCall(),
+						...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
 					} as never,
 				},
 			});
@@ -635,7 +659,11 @@ export function stopHealthPolling(): void {
 // SIO-680/682: exported for testing only. Do not import from production code.
 // SIO-774: same test-only export pattern for the per-server connect-timeout helper.
 // SIO-782: pollServerHealth + serverUrls + unreadyStreak exposed for debounce tests.
-export { connectTimeoutFor as _connectTimeoutForTest, withTimeout as _withTimeoutForTest };
+export {
+	connectTimeoutFor as _connectTimeoutForTest,
+	toolTimeoutFor as _toolTimeoutForTest,
+	withTimeout as _withTimeoutForTest,
+};
 export const _pollServerHealthForTest = pollServerHealth;
 export function _setServerUrlsForTest(entries: Array<[string, string]>): void {
 	serverUrls = new Map(entries);
