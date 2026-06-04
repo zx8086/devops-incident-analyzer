@@ -2,7 +2,10 @@
 // apps/web/src/lib/components/StreamingProgress.svelte
 import Icon from "./Icon.svelte";
 
-const NODES = [
+// The incident pipeline and the elastic-iac maker graph run different node ids, so the
+// step labels are selected per agent. Both id sets are already emitted by the server SSE
+// pump (PIPELINE_NODES) into activeNodes/completedNodes; only the matching labels differ.
+const INCIDENT_NODES = [
 	{ id: "classify", activeLabel: "Classifying", completeLabel: "Classified" },
 	{ id: "entityExtractor", activeLabel: "Extracting", completeLabel: "Extracted" },
 	{ id: "queryDataSource", activeLabel: "Querying", completeLabel: "Queried" },
@@ -11,13 +14,28 @@ const NODES = [
 	{ id: "validate", activeLabel: "Validating", completeLabel: "Validated" },
 ] as const;
 
+// elastic-iac maker happy path (version-upgrade / tier-resize / ilm-rollout). bootstrap,
+// classifyIacIntent, watchPipeline and teardown are plumbing/covered elsewhere and omitted.
+const IAC_NODES = [
+	{ id: "parseIntent", activeLabel: "Parsing", completeLabel: "Parsed" },
+	{ id: "readClusterState", activeLabel: "Reading state", completeLabel: "Read state" },
+	{ id: "guard", activeLabel: "Checking", completeLabel: "Checked" },
+	{ id: "draftChange", activeLabel: "Drafting", completeLabel: "Drafted" },
+	{ id: "reviewPlan", activeLabel: "Preparing review", completeLabel: "Prepared" },
+	{ id: "openMr", activeLabel: "Opening MR", completeLabel: "MR opened" },
+] as const;
+
 let {
 	activeNodes,
 	completedNodes,
+	variant = "incident",
 }: {
 	activeNodes: Set<string>;
 	completedNodes: Map<string, { duration: number }>;
+	variant?: "incident" | "iac";
 } = $props();
+
+const NODES = $derived(variant === "iac" ? IAC_NODES : INCIDENT_NODES);
 
 const currentActiveLabel = $derived.by(() => {
 	for (const node of NODES) {
