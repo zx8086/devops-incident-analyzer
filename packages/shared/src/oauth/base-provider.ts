@@ -464,7 +464,7 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 		if (isHeadless()) {
 			this.logger.error(
 				{ namespace: this.storageNamespace, url: authorizationUrl.toString() },
-				`OAuth interactive authorization required but MCP_OAUTH_HEADLESS=true; run \`bun run oauth:seed:${this.storageNamespace}\``,
+				`OAuth interactive authorization required but interactive auth is disabled (MCP_OAUTH_HEADLESS=true or non-interactive stdout); run \`bun run oauth:seed:${this.storageNamespace}\``,
 			);
 			throw new OAuthRequiresInteractiveAuthError(this.storageNamespace, authorizationUrl);
 		}

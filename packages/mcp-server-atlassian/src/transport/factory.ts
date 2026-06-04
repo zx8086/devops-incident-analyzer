@@ -1,6 +1,6 @@
 // src/transport/factory.ts
 
-import type { IdentityCard, ReadinessSnapshot } from "@devops-agent/shared";
+import type { IdentityCard, ReadinessSnapshot, TransportListenInfo } from "@devops-agent/shared";
 import { type AgentCoreTransportResult, createBootstrapAdapter, startAgentCoreTransport } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportConfig } from "../config/index.js";
@@ -16,6 +16,7 @@ export interface TransportResult {
 	stdio?: StdioTransportResult;
 	http?: HttpTransportResult;
 	agentcore?: AgentCoreTransportResult;
+	listen?: TransportListenInfo;
 	closeAll(): Promise<void>;
 }
 
@@ -90,6 +91,23 @@ export async function createTransport(
 	}
 
 	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Transport initialized");
+
+	// Surface the bound listener so the bootstrap logs a uniform startup line.
+	if (result.http) {
+		result.listen = {
+			mode: "http",
+			port: result.http.server.port,
+			url: `http://${config.host}:${result.http.server.port}${config.path}`,
+		};
+	} else if (result.agentcore) {
+		result.listen = {
+			mode: "agentcore",
+			port: config.port,
+			url: `http://${config.host}:${config.port}${config.path}`,
+		};
+	} else {
+		result.listen = { mode: "stdio" };
+	}
 
 	return result;
 }

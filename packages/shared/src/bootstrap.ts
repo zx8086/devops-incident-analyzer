@@ -1,6 +1,7 @@
 // shared/src/bootstrap.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pino from "pino";
+import { OAuthRequiresInteractiveAuthError } from "./oauth/errors.ts";
 import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 import { buildIdentityCard, type IdentityCard, type McpRole } from "./transport/identity.ts";
@@ -24,7 +25,17 @@ export function createBootstrapAdapter(pinoLogger: pino.Logger): BootstrapLogger
 	};
 }
 
+// Per-server transport surface for the uniform "listening on" boot line.
+// http/agentcore populate port (+ url); stdio leaves port undefined so the
+// boot log says "stdio transport, no port" instead of inventing a bogus port.
+export interface TransportListenInfo {
+	mode: string;
+	port?: number;
+	url?: string;
+}
+
 export interface BootstrapTransportResult {
+	listen?: TransportListenInfo;
 	closeAll(): Promise<void>;
 }
 
@@ -117,6 +128,20 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// Step 5: Start transport (serverFactory may be undefined in proxy mode)
 		const transport = await options.createTransport(serverFactory, datasource, identityCard);
 
+		// Step 5b: Uniform startup line so every server states its listening port
+		// (or stdio) on launch, regardless of which transport mode it selected.
+		const listen = transport.listen;
+		if (listen?.port !== undefined) {
+			logger.info(`${name} listening on ${listen.url ?? `port ${listen.port}`}`, {
+				port: listen.port,
+				mode: listen.mode,
+			});
+		} else {
+			logger.info(`${name} ready (${listen?.mode ?? "stdio"} transport, no port)`, {
+				mode: listen?.mode ?? "stdio",
+			});
+		}
+
 		// Step 6: Build structured shutdown function with re-entrancy guard
 		let isShuttingDown = false;
 
@@ -197,6 +222,20 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 
 		return { datasource, transport, shutdown };
 	} catch (error) {
+		// An un-authorized OAuth server (no valid seeded tokens under headless /
+		// non-interactive stdout) surfaces a typed error. The deep SDK auth stack
+		// (auth.js -> streamableHttp.js) is noise -- the fix is a one-time
+		// interactive seed -- so render one actionable line, then exit non-zero.
+		if (error instanceof OAuthRequiresInteractiveAuthError) {
+			logger.error(
+				`Cannot start ${name}: ${error.namespace} OAuth is not authorized (no valid seeded tokens under ` +
+					`MCP_OAUTH_HEADLESS / non-interactive stdout). Run \`bun run oauth:seed:${error.namespace}\` once ` +
+					"interactively to seed tokens (add `-- --force` to re-seed expired tokens), then restart.",
+				{ namespace: error.namespace },
+			);
+			if (logger.flush) logger.flush();
+			process.exit(1);
+		}
 		logger.error(`Fatal error starting ${name}`, {
 			error: error instanceof Error ? error.message : String(error),
 			stack: error instanceof Error ? error.stack : undefined,

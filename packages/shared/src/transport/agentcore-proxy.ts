@@ -23,6 +23,7 @@ export async function createAgentCoreProxyTransport(
 	logger.info("AgentCore proxy ready", { prefix, port: proxy.port, url: proxy.url });
 
 	return {
+		listen: { mode: "agentcore-proxy", port: proxy.port, url: proxy.url },
 		closeAll: async () => {
 			await traceSpan("agentcore-proxy", "proxy.close", async (_span) => proxy.close(), { "proxy.prefix": prefix });
 			logger.info("AgentCore proxy closed", { prefix });

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type BootstrapLogger, createMcpApplication, type McpApplicationOptions } from "../bootstrap.ts";
+import { OAuthRequiresInteractiveAuthError } from "../oauth/errors.ts";
 
 // Mock process.exit to prevent test runner from exiting
 const originalExit = process.exit;
@@ -355,5 +356,85 @@ describe("createMcpApplication proxy mode", () => {
 		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm + 1);
 		expect(process.listenerCount("uncaughtException")).toBe(before.uncaught + 1);
 		expect(process.listenerCount("unhandledRejection")).toBe(before.unhandled + 1);
+	});
+});
+
+describe("OAuth not-authorized clean hard-fail", () => {
+	test("renders OAuthRequiresInteractiveAuthError as one actionable line (no stack), exits 1", async () => {
+		const { options, logger } = createTestOptions({
+			initDatasource: async () => {
+				throw new OAuthRequiresInteractiveAuthError("atlassian", new URL("https://mcp.atlassian.com/v1/authorize"));
+			},
+		});
+
+		try {
+			await createMcpApplication(options);
+		} catch {
+			// process.exit throws in our mock
+		}
+
+		expect(exitCode).toBe(1);
+		const errorCalls = logger.calls.filter((c) => c.method === "error");
+		const oauthCall = errorCalls.find((c) => (c.args[0] as string).includes("oauth:seed:atlassian"));
+		// The clean remediation line replaces the generic stack-trace log
+		expect(oauthCall).toBeDefined();
+		expect(errorCalls.some((c) => (c.args[0] as string).includes("Fatal error starting"))).toBe(false);
+		// The deep SDK auth stack is deliberately omitted; namespace is structured metadata
+		const meta = oauthCall?.args[1] as Record<string, unknown> | undefined;
+		expect(meta?.stack).toBeUndefined();
+		expect(meta?.namespace).toBe("atlassian");
+	});
+
+	test("non-OAuth errors still log the generic fatal stack and exit 1", async () => {
+		const { options, logger } = createTestOptions({
+			initDatasource: async () => {
+				throw new Error("connection refused");
+			},
+		});
+
+		try {
+			await createMcpApplication(options);
+		} catch {
+			// process.exit throws
+		}
+
+		expect(exitCode).toBe(1);
+		const errorCalls = logger.calls.filter((c) => c.method === "error");
+		expect(errorCalls.some((c) => (c.args[0] as string).includes("Fatal error starting test-server"))).toBe(true);
+	});
+});
+
+describe("startup port logging", () => {
+	test("logs a uniform 'listening on' line with the bound port for an HTTP transport", async () => {
+		const { options, logger } = createTestOptions({
+			initDatasource: async () => ({ id: "test" }),
+			createTransport: mock(async () => ({
+				listen: { mode: "http", port: 9085, url: "http://0.0.0.0:9085/mcp" },
+				closeAll: mock(async () => {}),
+			})),
+		});
+
+		await createMcpApplication(options);
+
+		const infoCalls = logger.calls.filter((c) => c.method === "info");
+		const listenCall = infoCalls.find((c) => (c.args[0] as string).includes("listening on"));
+		expect(listenCall).toBeDefined();
+		expect(listenCall?.args[0]).toContain("http://0.0.0.0:9085/mcp");
+		expect((listenCall?.args[1] as Record<string, unknown>)?.port).toBe(9085);
+	});
+
+	test("logs a stdio ready line (no port) when the transport exposes no port", async () => {
+		const { options, logger } = createTestOptions({
+			initDatasource: async () => ({ id: "test" }),
+			createTransport: mock(async () => ({
+				listen: { mode: "stdio" },
+				closeAll: mock(async () => {}),
+			})),
+		});
+
+		await createMcpApplication(options);
+
+		const infoCalls = logger.calls.filter((c) => c.method === "info");
+		expect(infoCalls.some((c) => (c.args[0] as string).includes("ready (stdio transport, no port)"))).toBe(true);
 	});
 });

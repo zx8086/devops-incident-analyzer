@@ -72,6 +72,7 @@ function startHttp(serverFactory: () => McpServer, config: Config, deps: Transpo
 	});
 	log.info({ port, host, path }, "Elastic IaC MCP HTTP transport listening");
 	return {
+		listen: { mode: "http", port: server.port, url: `http://${host}:${server.port}${path}` },
 		async closeAll() {
 			await server.stop(true);
 		},
@@ -83,6 +84,7 @@ async function startStdio(serverFactory: () => McpServer): Promise<BootstrapTran
 	const transport = new StdioServerTransport();
 	await mcp.connect(transport);
 	return {
+		listen: { mode: "stdio" },
 		async closeAll() {
 			await transport.close();
 		},

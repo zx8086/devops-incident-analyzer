@@ -98,6 +98,7 @@ export {
 	isBenignStreamCancel,
 	type McpApplication,
 	type McpApplicationOptions,
+	type TransportListenInfo,
 } from "./bootstrap.ts";
 export {
 	type AgentConfig,
