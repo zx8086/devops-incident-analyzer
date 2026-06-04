@@ -91,6 +91,15 @@ export function findJobByName(jobsJson: unknown, name: string): number | null {
 	return null;
 }
 
+// SIO-904: detect a Terraform state-lock anywhere in the FULL job trace. Terraform prints the
+// lock-info block + retries after the error, so the signature can sit far from the trace tail --
+// grep the whole body here (not the returned tail) so the agent never misclassifies a recoverable
+// lock as a generic plan error. (Pure; unit-tested.)
+export function traceHasStateLock(trace: string): boolean {
+	const lower = trace.toLowerCase();
+	return lower.includes("error acquiring the state lock") || lower.includes("already locked");
+}
+
 // SIO-902: the CI variables[] array for a synthetics pipeline trigger. varKey is the
 // activating flag (SYNTH_DRIFT_CHECK or SYNTH_PUSH); DEPLOYMENT scopes the deployment;
 // PROJECT is appended only when a single synthetics project is targeted (omitted =
@@ -364,7 +373,10 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
 	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
-	const DRIFT_FAIL_LOG_TAIL_BYTES = 4000; // SIO-887: trace tail returned for a failed drift-check
+	// SIO-887: trace tail returned for a failed drift-check (human review).
+	// SIO-904: bumped 4000 -> 16000 because Terraform prints the lock-info block + retries
+	// AFTER the state-lock error, which pushed the signature out of a 4000-byte tail.
+	const DRIFT_FAIL_LOG_TAIL_BYTES = Number(process.env.ELASTIC_IAC_DRIFT_FAIL_LOG_TAIL_BYTES ?? "16000");
 	const isTerminal = (s: string) => ["success", "failed", "canceled", "skipped"].includes(s);
 
 	// SIO-884: poll a drift-check pipeline to terminal, then return its drift-report.json
@@ -375,7 +387,8 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		"gitlab_get_drift_check_result",
 		"Poll a drift-check pipeline to completion and return its drift-report.json artifact (raw JSON) from the " +
 			"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. On a failed run also returns " +
-			"the job trace tail. Returns {pipelineId,jobId,status,report,failureLog?}.",
+			"the job trace tail plus stateLocked (full-trace state-lock detection). " +
+			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
 		{ pipelineId: z.number() },
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
@@ -431,12 +444,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				// pull the drift-check job's trace tail. The agent classifies it into a human reason
 				// (state-lock vs real plan error) instead of a generic "plan unavailable".
 				let failureLog = "";
+				// SIO-904: grep the FULL trace for the lock signature, then return only a tail for
+				// human review. Detection no longer depends on the signature surviving the tail slice.
+				let stateLocked = false;
 				if (status !== "success") {
 					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
 						headers: { "PRIVATE-TOKEN": token },
 					});
 					if (traceRes.ok) {
 						const trace = await traceRes.text();
+						stateLocked = traceHasStateLock(trace);
 						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
 					}
 				}
@@ -455,7 +472,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				);
 				// Raw artifact text; the agent parses it into the DriftReport shape. failureLog is the
 				// job trace tail on a failed run (absent on success).
-				return text(JSON.stringify({ pipelineId, jobId, status, report, ...(failureLog && { failureLog }) }));
+				return text(
+					JSON.stringify({
+						pipelineId,
+						jobId,
+						status,
+						report,
+						...(failureLog && { failureLog }),
+						...(stateLocked && { stateLocked: true }),
+					}),
+				);
 			} catch (err) {
 				log.error(
 					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
@@ -546,7 +572,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		"gitlab_get_synthetics_drift_result",
 		"Poll a synthetics drift-check pipeline to completion and return its synthetics-drift-report.json artifact " +
 			"(raw JSON) from the drift-check-synthetics-on-demand job. On a failed run also returns the job trace tail. " +
-			"Returns {pipelineId,jobId,status,report,failureLog?}.",
+			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
 		{ pipelineId: z.number() },
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
@@ -597,12 +623,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				});
 				const report = res.ok ? await res.text() : "";
 				let failureLog = "";
+				// SIO-904: grep the FULL trace for the lock signature, then return only a tail for
+				// human review. Detection no longer depends on the signature surviving the tail slice.
+				let stateLocked = false;
 				if (status !== "success") {
 					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
 						headers: { "PRIVATE-TOKEN": token },
 					});
 					if (traceRes.ok) {
 						const trace = await traceRes.text();
+						stateLocked = traceHasStateLock(trace);
 						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
 					}
 				}
@@ -619,7 +649,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					{ pipelineId, jobId, status, reportBytes: report.length, failureBytes: failureLog.length },
 					"gitlab_get_synthetics_drift_result: result fetched",
 				);
-				return text(JSON.stringify({ pipelineId, jobId, status, report, ...(failureLog && { failureLog }) }));
+				return text(
+					JSON.stringify({
+						pipelineId,
+						jobId,
+						status,
+						report,
+						...(failureLog && { failureLog }),
+						...(stateLocked && { stateLocked: true }),
+					}),
+				);
 			} catch (err) {
 				log.error(
 					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },
@@ -698,7 +737,8 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	server.tool(
 		"gitlab_get_synthetics_push_result",
 		"Poll a synthetics PUSH pipeline to completion. The push job emits NO artifact -- its success/failure IS the " +
-			"signal. On a failed run returns the job trace tail. Returns {pipelineId,jobId,status,failureLog?}.",
+			"signal. On a failed run returns the job trace tail plus stateLocked. " +
+			"Returns {pipelineId,jobId,status,failureLog?,stateLocked?}.",
 		{ pipelineId: z.number() },
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
@@ -741,12 +781,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					return text(JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` }));
 				}
 				let failureLog = "";
+				// SIO-904: grep the FULL trace for the lock signature, then return only a tail for
+				// human review. Detection no longer depends on the signature surviving the tail slice.
+				let stateLocked = false;
 				if (status !== "success") {
 					const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
 						headers: { "PRIVATE-TOKEN": token },
 					});
 					if (traceRes.ok) {
 						const trace = await traceRes.text();
+						stateLocked = traceHasStateLock(trace);
 						failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
 					}
 				}
@@ -754,7 +798,15 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					{ pipelineId, jobId, status, failureBytes: failureLog.length },
 					"gitlab_get_synthetics_push_result: result fetched",
 				);
-				return text(JSON.stringify({ pipelineId, jobId, status, ...(failureLog && { failureLog }) }));
+				return text(
+					JSON.stringify({
+						pipelineId,
+						jobId,
+						status,
+						...(failureLog && { failureLog }),
+						...(stateLocked && { stateLocked: true }),
+					}),
+				);
 			} catch (err) {
 				log.error(
 					{ pipelineId, status, err: err instanceof Error ? err.message : String(err) },

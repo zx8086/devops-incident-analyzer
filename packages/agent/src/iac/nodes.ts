@@ -1129,9 +1129,13 @@ export function formatPlanSummary(report: IacPlanReport | null): string {
 // SIO-878: classify a failed plan job's log into a human-readable cause hint. The
 // deployments stack shares one Terraform state across all 10 clusters, so concurrent
 // MRs contend on a single state lock -- the most common, recoverable failure. (Pure.)
-export function classifyPipelineFailure(planLog: string): string {
+//
+// SIO-904: the MCP now greps the FULL trace and returns a `stateLocked` verdict; prefer it when
+// present, since the signature can sit beyond the returned tail. When the flag is absent (e.g. the
+// gitlab_get_pipeline_plan_log caller), fall back to substring-matching the supplied log.
+export function classifyPipelineFailure(planLog: string, stateLocked?: boolean): string {
 	const lower = planLog.toLowerCase();
-	if (lower.includes("error acquiring the state lock") || lower.includes("already locked")) {
+	if (stateLocked === true || lower.includes("error acquiring the state lock") || lower.includes("already locked")) {
 		return (
 			"Likely cause: a Terraform state-lock on the shared deployments stack (all 10 clusters share one " +
 			"state, so concurrent MRs contend on a single lock). An operator can force-unlock in GitLab or wait " +
@@ -1262,32 +1266,36 @@ export function parseTriggerResult(toolResult: string): { pipelineId: number | n
 	}
 }
 
-// gitlab_get_drift_check_result's outer JSON: {status,report?,failureLog?,note?}. `report` is
-// the raw drift-report.json text (parsed by parseDriftReport); `failureLog` is the job trace
-// tail on a failed run (SIO-887, classified into a human reason). (Pure; unit-tested.)
+// gitlab_get_drift_check_result's outer JSON: {status,report?,failureLog?,stateLocked?,note?}.
+// `report` is the raw drift-report.json text (parsed by parseDriftReport); `failureLog` is the
+// job trace tail on a failed run (SIO-887, classified into a human reason); `stateLocked` is the
+// MCP's full-trace state-lock verdict (SIO-904), preferred over the tail when present. (Pure; unit-tested.)
 export function parseDriftCheckResult(toolResult: string): {
 	status: string;
 	report: string;
 	failureLog: string;
+	stateLocked: boolean;
 	note: string;
 } {
 	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return { status: "error", report: "", failureLog: "", note: "unparseable" };
+	if (jsonStart < 0) return { status: "error", report: "", failureLog: "", stateLocked: false, note: "unparseable" };
 	try {
 		const o = JSON.parse(toolResult.slice(jsonStart)) as {
 			status?: unknown;
 			report?: unknown;
 			failureLog?: unknown;
+			stateLocked?: unknown;
 			note?: unknown;
 		};
 		return {
 			status: typeof o.status === "string" ? o.status : "unknown",
 			report: typeof o.report === "string" ? o.report : "",
 			failureLog: typeof o.failureLog === "string" ? o.failureLog : "",
+			stateLocked: o.stateLocked === true,
 			note: typeof o.note === "string" ? o.note : "",
 		};
 	} catch {
-		return { status: "error", report: "", failureLog: "", note: "unparseable" };
+		return { status: "error", report: "", failureLog: "", stateLocked: false, note: "unparseable" };
 	}
 }
 
@@ -2465,7 +2473,7 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 		// guide budgets it at 30 min) -- it is NOT a failure, so point the user at Re-check.
 		const reason =
 			result.status === "failed" || result.status === "canceled"
-				? `Drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog)}`
+				? `Drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog, result.stateLocked)}`
 				: result.status !== "success"
 					? "Drift-check did not finish within the poll budget (possible state-lock contention); use Re-check to retry."
 					: "The drift-check produced no report.";
@@ -3150,7 +3158,7 @@ export async function detectSyntheticsDrift(state: IacStateType): Promise<Partia
 	if (result.status !== "success" || !result.report) {
 		const reason =
 			result.status === "failed" || result.status === "canceled"
-				? `Synthetics drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog)}`
+				? `Synthetics drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog, result.stateLocked)}`
 				: result.status !== "success"
 					? "Synthetics drift-check did not finish within the poll budget; use Re-check to retry."
 					: "The synthetics drift-check produced no report.";
@@ -3289,7 +3297,7 @@ export async function pushSynthetics(state: IacStateType): Promise<Partial<IacSt
 					pushedCount: pushable.length,
 					note:
 						res.status === "failed" || res.status === "canceled"
-							? `Push pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog)}`
+							? `Push pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`
 							: "Push did not finish within the poll budget; re-check the pipeline in GitLab.",
 				};
 	log.info(

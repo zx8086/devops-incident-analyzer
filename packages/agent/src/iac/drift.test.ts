@@ -112,6 +112,14 @@ describe("parseDriftCheckResult", () => {
 		expect(r.status).toBe("failed");
 		expect(r.report).toBe("");
 		expect(r.failureLog).toContain("state lock");
+		expect(r.stateLocked).toBe(false);
+	});
+	// SIO-904: the MCP's full-trace state-lock verdict is surfaced as a boolean.
+	test("surfaces stateLocked from the MCP result", () => {
+		const r = parseDriftCheckResult(
+			JSON.stringify({ status: "failed", report: "", failureLog: "...tail without signature...", stateLocked: true }),
+		);
+		expect(r.stateLocked).toBe(true);
 	});
 });
 
