@@ -23,6 +23,15 @@ const IAC_NODES = [
 	{ id: "draftChange", activeLabel: "Drafting", completeLabel: "Drafted" },
 	{ id: "reviewPlan", activeLabel: "Preparing review", completeLabel: "Prepared" },
 	{ id: "openMr", activeLabel: "Opening MR", completeLabel: "MR opened" },
+	// SIO-903: SIO-882 drift sub-flow + SIO-902 synthetics-drift sub-flow nodes were already
+	// in the server PIPELINE_NODES; labels were missing here so they rendered "Processing...".
+	{ id: "detectDrift", activeLabel: "Detecting drift", completeLabel: "Drift detected" },
+	{ id: "reconcileGate", activeLabel: "Reviewing drift", completeLabel: "Reviewed" },
+	{ id: "reconcileStack", activeLabel: "Reconciling", completeLabel: "Reconciled" },
+	{ id: "advanceDrift", activeLabel: "Advancing", completeLabel: "Advanced" },
+	{ id: "detectSyntheticsDrift", activeLabel: "Checking synthetics", completeLabel: "Synthetics checked" },
+	{ id: "syntheticsPushGate", activeLabel: "Reviewing push", completeLabel: "Reviewed" },
+	{ id: "pushSynthetics", activeLabel: "Pushing synthetics", completeLabel: "Pushed" },
 ] as const;
 
 let {
