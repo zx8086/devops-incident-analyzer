@@ -20,6 +20,24 @@ const isIac = $derived(agentStore.currentAgent === "elastic-iac");
 const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
 const agentSubtitle = $derived(isIac ? "Elastic Cloud IaC change assistant" : "DevOps Incident Analysis Assistant");
 
+// SIO-901: when a drift report is showing and the run has finished, the trailing assistant message
+// is the "Drift reconcile summary" (MR links). Render it BELOW the drift card (the consolidation
+// block) instead of above it, so the conversation reads drift detail -> MR outcomes top-to-bottom.
+// Match only the terminal drift-summary text from teardownIac/formatDriftSummary (agent nodes.ts)
+// so an unrelated assistant reply in a later turn is never relocated. -1 = nothing to relocate.
+const driftSummaryIndex = $derived.by(() => {
+	if (!(isIac && agentStore.iacDriftReport && !agentStore.isStreaming && agentStore.messages.length > 0)) return -1;
+	const idx = agentStore.messages.length - 1;
+	const last = agentStore.messages[idx];
+	if (last?.role !== "assistant") return -1;
+	const text = last.content.trimStart();
+	const isDriftSummary =
+		text.startsWith("Drift reconcile summary for ") ||
+		text.startsWith("No drift detected for ") ||
+		text.startsWith("Drift-check could not run for ");
+	return isDriftSummary ? idx : -1;
+});
+
 function toggleAgent() {
 	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
 }
@@ -147,18 +165,21 @@ function handleSuggestionClick(suggestion: string) {
       {/if}
 
       {#each agentStore.messages as msg, i}
-        <ChatMessage
-          message={msg}
-          index={i}
-          isLast={i === agentStore.messages.length - 1}
-          isStreaming={false}
-          onSuggestionClick={handleSuggestionClick}
-          onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
-          pendingActions={i === agentStore.messages.length - 1 ? agentStore.pendingActions : []}
-          actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
-          onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
-          onActionDismiss={(id) => agentStore.dismissAction(id)}
-        />
+        <!-- SIO-901: skip the trailing drift summary here; it is re-rendered below the drift card. -->
+        {#if i !== driftSummaryIndex}
+          <ChatMessage
+            message={msg}
+            index={i}
+            isLast={i === agentStore.messages.length - 1}
+            isStreaming={false}
+            onSuggestionClick={handleSuggestionClick}
+            onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
+            pendingActions={i === agentStore.messages.length - 1 ? agentStore.pendingActions : []}
+            actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
+            onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
+            onActionDismiss={(id) => agentStore.dismissAction(id)}
+          />
+        {/if}
       {/each}
 
       {#if agentStore.isStreaming}
@@ -206,16 +227,33 @@ function handleSuggestionClick(suggestion: string) {
         {/if}
       {/if}
 
-      <!-- SIO-882: drift overview + per-stack reconcile results. Persists across the
-           interrupt pauses (outside the isStreaming gate) so it stays visible while the
-           user works through the per-stack choices. -->
+      <!-- SIO-882: drift overview. Persists across the interrupt pauses (outside the isStreaming
+           gate) so it stays visible while the user works through the per-stack choices.
+           SIO-901: the reconcile summary (MR links) now renders as a block BELOW this card. -->
       {#if agentStore.iacDriftReport}
         <DriftReportCard
           report={agentStore.iacDriftReport}
-          results={agentStore.iacReconcileResults}
           recheckDisabled={agentStore.isStreaming}
           onRecheck={() => agentStore.sendMessage(`check ${agentStore.iacDriftReport?.deployment} for drift`)}
         />
+        <!-- SIO-901: the trailing "Drift reconcile summary" message, relocated under the card. -->
+        {#if driftSummaryIndex >= 0}
+          {@const summaryMsg = agentStore.messages[driftSummaryIndex]}
+          {#if summaryMsg}
+            <ChatMessage
+              message={summaryMsg}
+              index={driftSummaryIndex}
+              isLast={true}
+              isStreaming={false}
+              onSuggestionClick={handleSuggestionClick}
+              onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
+              pendingActions={agentStore.pendingActions}
+              actionResults={agentStore.actionResults}
+              onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
+              onActionDismiss={(id) => agentStore.dismissAction(id)}
+            />
+          {/if}
+        {/if}
       {/if}
 
     </div>

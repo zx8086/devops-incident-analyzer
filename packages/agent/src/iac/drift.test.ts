@@ -1291,3 +1291,112 @@ describe("buildLiveReconcile — report-sourced via changes[] (SIO-900)", () => 
 		}
 	});
 });
+
+describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
+	test("reconciles readable files, skips unreadable ones with a note, does NOT block the whole stack", async () => {
+		// agent-policies mixes fleet_agent_policy (flat <key>.json, readable) + fleet_integration_policy
+		// (not at the flat path -> unreadable). The readable one must still reconcile.
+		mockTools({
+			gitlab_get_file_content: (args) => {
+				const fp = String(args.filePath ?? "");
+				return fp.endsWith("eu-oit-prd.json")
+					? b64(`${JSON.stringify({ name: "eu-oit.prd - SM" }, null, 2)}\n`)
+					: "[404] not found";
+			},
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				configPath: "environments/eu-b2b/agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "eu-oit.prd - SM ", after: "eu-oit.prd - SM" } },
+					},
+					{
+						address:
+							'module.agent_policies.elasticstack_fleet_integration_policy.this["eu-mendix-platform-dev-cloud_security_posture"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["description"],
+						values: { description: { before: "live-desc", after: "declared-desc" } },
+					},
+				],
+			}),
+		);
+		expect("files" in built).toBe(true);
+		if ("files" in built) {
+			expect(built.files).toHaveLength(1);
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/eu-oit-prd.json");
+			expect(built.note).toContain("Skipped 1 unreadable");
+			expect(built.note).toContain("eu-mendix-platform-dev-cloud_security_posture.json");
+		}
+	});
+
+	test("blocks only when EVERY file is unreadable", async () => {
+		mockTools({ gitlab_get_file_content: () => "[404] not found" });
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["p1"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "x", after: "y" } },
+					},
+				],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) expect(built.blocked).toContain("Could not read any config file");
+	});
+
+	test("readable-but-already-in-sync + unreadable -> 'no reconcilable values' (not 'could not read any')", async () => {
+		mockTools({
+			gitlab_get_file_content: (args) => {
+				const fp = String(args.filePath ?? "");
+				// in-sync.json reads OK but the live value already equals the repo (applied = []);
+				// missing.json is unreadable. files.length stays 0, but NOT every file was unreadable.
+				return fp.endsWith("in-sync.json") ? b64(`${JSON.stringify({ name: "same" }, null, 2)}\n`) : "[404] not found";
+			},
+		});
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const built = await buildLiveReconcile(
+			"eu-b2b",
+			stackDrift({
+				stack: "agent-policies",
+				resources: [
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["in-sync"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "same", after: "same" } },
+					},
+					{
+						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["missing"]',
+						actions: ["update"],
+						category: "update",
+						changedKeys: ["name"],
+						values: { name: { before: "x", after: "y" } },
+					},
+				],
+			}),
+		);
+		expect("blocked" in built).toBe(true);
+		if ("blocked" in built) {
+			expect(built.blocked).toContain("No reconcilable live values");
+			expect(built.blocked).not.toContain("Could not read any config file");
+			expect(built.blocked).toContain("Skipped 1 unreadable"); // skip note still surfaced
+		}
+	});
+});

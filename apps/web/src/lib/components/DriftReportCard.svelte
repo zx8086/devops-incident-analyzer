@@ -1,20 +1,13 @@
 <script lang="ts">
 // apps/web/src/lib/components/DriftReportCard.svelte
-import {
-	formatLeafChange,
-	type IacDriftReport,
-	type IacReconcileResultRow,
-	RECONCILE_DIRECTION_LABELS,
-} from "$lib/stores/agent-reducer.ts";
+import { formatLeafChange, type IacDriftReport } from "$lib/stores/agent-reducer.ts";
 
 let {
 	report,
-	results = [],
 	onRecheck,
 	recheckDisabled = false,
 }: {
 	report: IacDriftReport;
-	results?: IacReconcileResultRow[];
 	// SIO-887: re-run the drift audit for this deployment (the agent re-triggers per-stack checks).
 	onRecheck?: () => void;
 	recheckDisabled?: boolean;
@@ -113,23 +106,7 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
     {#if clean.length > 0}
       <p class="mt-2 text-xs text-gray-500">In sync: {clean.map((s) => s.stack).join(", ")}</p>
     {/if}
-
-    {#if results.length > 0}
-      <div class="mt-3 border-t border-tommy-accent-blue/20 pt-2">
-        <p class="text-xs font-semibold text-tommy-navy">Reconcile results</p>
-        <ul class="mt-1 space-y-0.5 text-xs">
-          {#each results as r (r.stack + r.direction)}
-            <li class="text-tommy-navy/80">
-              <span class="font-medium">{r.stack}</span>
-              <span class="text-gray-500"> &middot; {RECONCILE_DIRECTION_LABELS[r.direction]} &middot; {r.status}</span>
-              {#if r.mrUrl}
-                <a href={r.mrUrl} target="_blank" rel="noopener noreferrer" class="text-tommy-accent-blue underline">MR</a>
-              {/if}
-              {#if r.note}<span class="text-gray-500"> &mdash; {r.note}</span>{/if}
-            </li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
+    <!-- SIO-901: the per-stack reconcile results / MR links now render in the "Drift reconcile
+         summary" message rendered directly below this card, not in a footer here. -->
   </div>
 </div>
