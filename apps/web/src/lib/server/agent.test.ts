@@ -1,5 +1,6 @@
 // apps/web/src/lib/server/agent.test.ts
 import { describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 
 const mockStreamEvents = mock(() => ({
 	async *[Symbol.asyncIterator]() {
@@ -61,6 +62,9 @@ mock.module("@devops-agent/agent", () => ({
 	getConnectedServers: mock(() => [] as string[]),
 	getServerStates: mock(() => ({}) as Record<string, string>),
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
+	// SIO-906: events route test imports mcpEvents from this specifier; include it so
+	// the shared process-global mock stays link-compatible across files.
+	mcpEvents: new EventEmitter(),
 }));
 
 mock.module("@devops-agent/gitagent-bridge", () => ({

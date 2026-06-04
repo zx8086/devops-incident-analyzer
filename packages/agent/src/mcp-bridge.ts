@@ -623,7 +623,17 @@ async function pollServerHealth(): Promise<void> {
 						newInstanceId: result.card.instanceId,
 						toolCountDelta: newToolCount - oldToolCount,
 					};
-					mcpEvents.emit("mcp_replaced", event);
+					// SIO-906: emit() runs listeners synchronously and re-throws; a single
+					// dead SSE controller must not unwind into pollServerHealth() and kill
+					// the whole health-poll cycle for every server.
+					try {
+						mcpEvents.emit("mcp_replaced", event);
+					} catch (err) {
+						logger.warn(
+							{ serverName: name, error: err instanceof Error ? err.message : String(err) },
+							"mcp_replaced listener threw; continuing health poll",
+						);
+					}
 					logger.info(event, "mcp_replaced event emitted");
 					break;
 				}

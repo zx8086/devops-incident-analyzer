@@ -1,5 +1,6 @@
 // apps/web/src/routes/api/agent/stream/server.test.ts
 import { describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { z } from "zod";
 
 mock.module("@devops-agent/agent", () => ({
@@ -13,6 +14,9 @@ mock.module("@devops-agent/agent", () => ({
 	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	buildIacGraph: () => Promise.resolve({}),
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
+	// SIO-906: events route test imports mcpEvents from this specifier; keep it in the
+	// shared mock so the link succeeds when this file's mock wins the last-write race.
+	mcpEvents: new EventEmitter(),
 }));
 
 const sharedLogger = {

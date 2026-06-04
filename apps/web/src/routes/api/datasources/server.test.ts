@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 
 // SIO-780: mock.module is process-global in bun; include every export touched by
 // any sibling web test so the @devops-agent/agent module link succeeds regardless
@@ -18,6 +19,9 @@ mock.module("@devops-agent/agent", () => ({
 		"konnect-mcp": "down",
 	}),
 	processAttachments: () => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] }),
+	// SIO-906: events route test imports mcpEvents from this specifier; include it so
+	// the shared process-global mock stays link-compatible across files.
+	mcpEvents: new EventEmitter(),
 }));
 // SIO-780: sibling tests register additional exports on $lib/server/agent; mirror
 // them here so the global mock cache stays link-compatible across files.
