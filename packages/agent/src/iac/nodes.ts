@@ -2178,6 +2178,10 @@ async function buildReportSourcedReconcile(
 	const template = stackConfigPathTemplate();
 	const files: ReconcileFile[] = [];
 	const summaryParts: string[] = [];
+	// SIO-901: files we could not read (e.g. a fleet_integration_policy whose repo layout the flat
+	// <key>.json template does not match). Skip them and reconcile the rest -- one unreadable file
+	// must not sink the whole stack -- but surface them so the human knows what was left out.
+	const skipped: string[] = [];
 	for (const r of stack.resources) {
 		if (r.category !== "update" && r.category !== "replace") continue;
 		const useChanges = hasWritableChanges(r);
@@ -2186,7 +2190,10 @@ async function buildReportSourcedReconcile(
 		if (!key) continue; // no for_each key -> cannot resolve a file
 		const filePath = stackResourcePath(template, deployment, stack.stack, key);
 		const raw = await callTool("gitlab_get_file_content", { filePath });
-		if (!raw.startsWith("[2")) return { blocked: `Could not read ${filePath} from the repo.` };
+		if (!raw.startsWith("[2")) {
+			skipped.push(filePath); // SIO-901: skip-with-note instead of blocking the whole stack
+			continue;
+		}
 		const original = extractFileContent(raw);
 		let projected: { content: string; applied: string[] };
 		try {
@@ -2207,12 +2214,22 @@ async function buildReportSourcedReconcile(
 		files.push({ path: filePath, content: projected.content });
 		summaryParts.push(`${key}: ${projected.applied.join(", ")}`);
 	}
+	// SIO-901: a note naming the skipped files (capped) when some -- but not all -- could be read.
+	const skipNote =
+		skipped.length > 0
+			? `Skipped ${skipped.length} unreadable config file(s): ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.`
+			: undefined;
 	if (files.length === 0) {
+		// SIO-901: only block when nothing reconciled. If that was purely because every file was
+		// unreadable, say so (more actionable than the generic "no reconcilable values").
+		if (skipped.length > 0) {
+			return { blocked: `Could not read any config file for this stack. ${skipNote}` };
+		}
 		return {
 			blocked: "No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).",
 		};
 	}
-	return { files, summary: summaryParts.join("; ") };
+	return { files, summary: summaryParts.join("; "), ...(skipNote && { note: skipNote }) };
 }
 
 // Open one independent, idempotent MR for a stack + direction (or block with a reason).
