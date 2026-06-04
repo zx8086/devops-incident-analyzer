@@ -7,7 +7,10 @@ import { loadConfiguration } from "../config/index.js";
 
 // See packages/mcp-server-gitlab/src/cli/seed-oauth.ts for the rationale; the
 // seeder must always run interactively even if MCP_OAUTH_HEADLESS is set.
+// SIO-897: FORCE_INTERACTIVE also defeats the isHeadless() TTY check -- this CLI
+// runs under `bun run`'s piped stdout where isTTY is false at a real terminal.
 delete process.env.MCP_OAUTH_HEADLESS;
+process.env.MCP_OAUTH_FORCE_INTERACTIVE = "true";
 
 async function main() {
 	const config = await loadConfiguration();
