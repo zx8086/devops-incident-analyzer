@@ -1,6 +1,7 @@
 <script lang="ts">
 // apps/web/src/lib/components/ReconcileChoiceCard.svelte
 import {
+	formatLeafChange,
 	type IacReconcileChoice,
 	RECONCILE_DIRECTION_LABELS,
 	type ReconcileDirection,
@@ -40,6 +41,23 @@ const LABELS = RECONCILE_DIRECTION_LABELS;
                 <span class="text-gray-600"> &mdash; {r.reason}</span>
               {:else if r.changedKeys && r.changedKeys.length > 0}
                 <span class="text-gray-600"> &mdash; changed: {r.changedKeys.join(", ")}</span>
+              {/if}
+              <!-- SIO-900: expand the precise leaf-level changes so the human sees exactly which
+                   nested leaves drifted before choosing reconcile-to-live / to-GitLab / skip. -->
+              {#if r.changes && r.changes.length > 0}
+                <details class="mt-0.5 ml-2">
+                  <summary class="cursor-pointer text-tommy-accent-blue">
+                    {r.changeCount ?? r.changes.length} change{(r.changeCount ?? r.changes.length) === 1 ? "" : "s"}{r.truncated ? ` (showing ${r.changes.length})` : ""}
+                  </summary>
+                  <ul class="mt-0.5 space-y-0.5">
+                    {#each r.changes as c (c.path)}
+                      <li class="font-mono break-all text-gray-600">{formatLeafChange(c)}</li>
+                    {/each}
+                    {#if r.changeCount && r.changeCount > r.changes.length}
+                      <li class="text-gray-400">&hellip;and {r.changeCount - r.changes.length} more</li>
+                    {/if}
+                  </ul>
+                </details>
               {/if}
             </li>
           {/each}

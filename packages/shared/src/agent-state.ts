@@ -441,6 +441,24 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 						reason: z.string().optional(),
 						changedKeys: z.array(z.string()).optional(),
 						category: z.string().optional(),
+						// SIO-889: attribute-grain before/after; SIO-900: leaf-level changes[] so the UI can
+						// expand exactly which nested leaves drifted (before = live, after = declared).
+						values: z
+							.record(z.string(), z.object({ before: z.unknown().optional(), after: z.unknown().optional() }))
+							.optional(),
+						changes: z
+							.array(
+								z.object({
+									path: z.string(),
+									op: z.enum(["add", "remove", "update"]),
+									before: z.unknown().optional(),
+									after: z.unknown().optional(),
+									unstableIndex: z.boolean().optional(),
+								}),
+							)
+							.optional(),
+						changeCount: z.number().optional(),
+						truncated: z.boolean().optional(),
 					}),
 				),
 			}),
@@ -461,6 +479,23 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 					actions: z.array(z.string()),
 					reason: z.string().optional(),
 					changedKeys: z.array(z.string()).optional(),
+					// SIO-900: leaf-level detail + attribute-grain values for the reconcile-choice card.
+					values: z
+						.record(z.string(), z.object({ before: z.unknown().optional(), after: z.unknown().optional() }))
+						.optional(),
+					changes: z
+						.array(
+							z.object({
+								path: z.string(),
+								op: z.enum(["add", "remove", "update"]),
+								before: z.unknown().optional(),
+								after: z.unknown().optional(),
+								unstableIndex: z.boolean().optional(),
+							}),
+						)
+						.optional(),
+					changeCount: z.number().optional(),
+					truncated: z.boolean().optional(),
 				}),
 			)
 			.optional(),

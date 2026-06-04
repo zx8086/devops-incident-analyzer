@@ -60,13 +60,47 @@ export const RECONCILE_DIRECTION_LABELS: Record<ReconcileDirection, string> = {
 	skip: "Do Nothing",
 };
 
+// SIO-900: one leaf-level diff inside a changed attribute (elastic-iac Increment 2). path is a
+// dot/identity-bracket locator (e.g. inputs["kubelet/metrics"].period); op: update | add | remove;
+// before = live, after = declared. unstableIndex marks a numeric-array-index path (a hint only).
+export interface LeafChange {
+	path: string;
+	op: "add" | "remove" | "update";
+	before?: unknown;
+	after?: unknown;
+	unstableIndex?: boolean;
+}
+
 // SIO-886: one drifted resource with the detail the explainer surfaces (reason / changed keys).
+// SIO-900: plus the attribute-grain values + leaf-level changes[] so the cards can expand the
+// precise per-leaf detail ("showing X of N").
 export interface IacDriftResource {
 	address: string;
 	actions: string[];
 	reason?: string;
 	changedKeys?: string[];
 	category?: string;
+	values?: Record<string, { before?: unknown; after?: unknown }>;
+	changes?: LeafChange[];
+	changeCount?: number;
+	truncated?: boolean;
+}
+
+// SIO-900: render one leaf change as a grounded one-liner for the drift/reconcile cards (before =
+// live, after = declared). Sentinels become short labels; long values are capped for readability.
+const LEAF_REDACTED = "<redacted:sensitive>";
+const LEAF_OVERSIZED = "<omitted:too-large>";
+export function formatLeafChange(c: LeafChange): string {
+	const val = (v: unknown): string => {
+		if (v === LEAF_REDACTED) return "<redacted>";
+		if (v === LEAF_OVERSIZED) return "<too large>";
+		const s = typeof v === "string" ? v : JSON.stringify(v);
+		const text = s ?? String(v);
+		return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+	};
+	if (c.op === "add") return `+ ${c.path} = ${val(c.after)}`; // in declared, not live
+	if (c.op === "remove") return `- ${c.path} (live: ${val(c.before)})`; // in live, not declared
+	return `~ ${c.path}: ${val(c.before)} -> ${val(c.after)}`; // update: live -> declared
 }
 
 export interface IacDriftStack {
@@ -98,8 +132,9 @@ export interface IacReconcileChoice {
 	kind: "config-json" | "unwired";
 	summary: string;
 	// SIO-886: grounded explanation + per-resource detail surfaced in the choice card.
+	// SIO-900: reuse the full drift-resource shape so the choice card renders leaf-level changes too.
 	explanation?: string;
-	resources?: Array<{ address: string; actions: string[]; reason?: string; changedKeys?: string[] }>;
+	resources?: IacDriftResource[];
 	directions: ReconcileDirection[];
 	message: string;
 }
