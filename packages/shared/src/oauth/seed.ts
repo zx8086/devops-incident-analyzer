@@ -49,23 +49,31 @@ export async function seedOAuth(options: SeedOAuthOptions): Promise<void> {
 	let transport = makeTransport(mcpUrl, { authProvider: provider });
 
 	// SIO-894: --force wipes persisted credentials (scope 'all' bypasses the
-	// stale-wipe guard) and skips the already-authorized probe so a fresh DCR +
-	// authorization always runs. Without it, seedOAuth is idempotent and a live
-	// token short-circuits the browser flow.
+	// stale-wipe guard) so a fresh DCR + authorization always runs. Without it,
+	// seedOAuth is idempotent and a live token short-circuits the browser flow.
 	if (options.force) {
 		log.info("Force re-seed: invalidating any existing OAuth credentials before authorization.");
 		await provider.invalidateCredentials?.("all");
-	} else {
-		try {
-			await client.connect(transport);
+	}
+
+	// SIO-898: client.connect() is the ONLY thing that drives the SDK auth()
+	// flow -> redirectToAuthorization -> onRedirect (prints the URL + opens the
+	// browser). It must run on BOTH paths. With no token (fresh seed, or just
+	// wiped by --force) it throws UnauthorizedError after firing onRedirect; we
+	// catch that and wait for the callback. The earlier --force build skipped
+	// this connect entirely, so no browser ever opened and the callback timed
+	// out. Only the non-force path early-returns when a live token connects.
+	try {
+		await client.connect(transport);
+		if (!options.force) {
 			log.info("Already authorized; tokens are present and the connection succeeded.");
 			log.info("Run with --force to replace the token, or run oauth:doctor to inspect it.");
 			await transport.close();
 			return;
-		} catch (error) {
-			if (!(error instanceof UnauthorizedError)) {
-				throw error;
-			}
+		}
+	} catch (error) {
+		if (!(error instanceof UnauthorizedError)) {
+			throw error;
 		}
 	}
 
