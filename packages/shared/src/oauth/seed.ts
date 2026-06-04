@@ -21,6 +21,11 @@ export interface SeedOAuthOptions {
 	mcpUrl: URL;
 	callbackPort: number;
 	clientName: string;
+	// SIO-894: when true, wipe any persisted credentials and skip the
+	// "already authorized" early-return so a fresh authorization always runs.
+	// The escape hatch for a token the operator suspects is stale -- replaces
+	// the manual `rm ~/.mcp-auth/<ns>/*.json` step.
+	force?: boolean;
 	logger?: { info(msg: string): void; warn(msg: string): void };
 	// Test seam: production uses the SDK's Client; tests inject a stub.
 	makeClient?: () => SeedClientLike;
@@ -43,14 +48,24 @@ export async function seedOAuth(options: SeedOAuthOptions): Promise<void> {
 	let client = makeClient();
 	let transport = makeTransport(mcpUrl, { authProvider: provider });
 
-	try {
-		await client.connect(transport);
-		log.info("Already authorized; tokens are present and the connection succeeded.");
-		await transport.close();
-		return;
-	} catch (error) {
-		if (!(error instanceof UnauthorizedError)) {
-			throw error;
+	// SIO-894: --force wipes persisted credentials (scope 'all' bypasses the
+	// stale-wipe guard) and skips the already-authorized probe so a fresh DCR +
+	// authorization always runs. Without it, seedOAuth is idempotent and a live
+	// token short-circuits the browser flow.
+	if (options.force) {
+		log.info("Force re-seed: invalidating any existing OAuth credentials before authorization.");
+		await provider.invalidateCredentials?.("all");
+	} else {
+		try {
+			await client.connect(transport);
+			log.info("Already authorized; tokens are present and the connection succeeded.");
+			log.info("Run with --force to replace the token, or run oauth:doctor to inspect it.");
+			await transport.close();
+			return;
+		} catch (error) {
+			if (!(error instanceof UnauthorizedError)) {
+				throw error;
+			}
 		}
 	}
 

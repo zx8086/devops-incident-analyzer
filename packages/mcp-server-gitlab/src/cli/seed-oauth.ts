@@ -26,12 +26,14 @@ async function main() {
 		}
 	});
 
-	console.log(`Seeding GitLab OAuth tokens (instance=${config.gitlab.instanceUrl})`);
+	const force = process.argv.includes("--force");
+	console.log(`Seeding GitLab OAuth tokens (instance=${config.gitlab.instanceUrl})${force ? " [--force]" : ""}`);
 	await seedOAuth({
 		provider,
 		mcpUrl,
 		callbackPort: config.gitlab.oauthCallbackPort,
 		clientName: "gitlab-mcp-seed",
+		force,
 	});
 	console.log("Done. Tokens persisted to ~/.mcp-auth/gitlab/.");
 }

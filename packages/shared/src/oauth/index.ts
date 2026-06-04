@@ -12,6 +12,14 @@ export {
 } from "./base-provider.ts";
 export { type WarnIfOAuthNotSeededOptions, warnIfOAuthNotSeeded } from "./boot-warn.ts";
 export {
+	type CheckStatus,
+	type DiagnoseOAuthOptions,
+	type DiagnoseOAuthResult,
+	type DiagnosticCheck,
+	diagnoseOAuth,
+	formatDiagnosis,
+} from "./doctor.ts";
+export {
 	OAuthRefreshChainExpiredError,
 	OAuthRefreshLockTimeoutError,
 	OAuthRequiresInteractiveAuthError,

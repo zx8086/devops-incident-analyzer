@@ -111,6 +111,46 @@ describe("seedOAuth", () => {
 		expect(log.messages.some((m) => m.toLowerCase().includes("seeded oauth tokens successfully"))).toBe(true);
 	});
 
+	test("force: skips the already-authorized probe, invalidates credentials, and re-auths", async () => {
+		const log = { messages: [] as string[], info: (m: string) => log.messages.push(m), warn: () => {} };
+		const invalidateScopes: string[] = [];
+		let connectCalls = 0;
+		const finishAuthArgs: string[] = [];
+
+		const provider = makeProvider();
+		provider.invalidateCredentials = (scope) => {
+			invalidateScopes.push(scope);
+		};
+
+		await seedOAuth({
+			provider,
+			mcpUrl: new URL("https://example.com/mcp"),
+			callbackPort: 9999,
+			clientName: "test-seed",
+			force: true,
+			logger: log,
+			makeClient: () => ({
+				connect: async () => {
+					connectCalls += 1;
+				},
+			}),
+			makeTransport: () =>
+				stubTransport({
+					finishAuth: async (code: string) => {
+						finishAuthArgs.push(code);
+					},
+				}) as unknown as ReturnType<NonNullable<Parameters<typeof seedOAuth>[0]["makeTransport"]>>,
+			awaitCallback: async () => ({ code: "fresh-code" }),
+		});
+
+		// 'all' wipe (bypasses the stale-wipe guard), no early-return probe, and a
+		// single verify-reconnect after finishAuth.
+		expect(invalidateScopes).toEqual(["all"]);
+		expect(connectCalls).toBe(1);
+		expect(finishAuthArgs).toEqual(["fresh-code"]);
+		expect(log.messages.some((m) => m.toLowerCase().includes("force re-seed"))).toBe(true);
+	});
+
 	test("non-Unauthorized errors propagate untouched", async () => {
 		const log = { messages: [] as string[], info: () => {}, warn: () => {} };
 
