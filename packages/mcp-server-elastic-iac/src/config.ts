@@ -50,7 +50,8 @@ export const ConfigSchema = z.object({
 		// GitLab REST base for the IaC repo (MRs, file blobs, repository tree).
 		gitlabBaseUrl: z.string(),
 		projectId: z.string(),
-		// Local clone the git/terraform tools operate inside (never the agent's CWD).
+		// Working dir the read-only `task` helper tools (iac.ts: status/list/output/state-list)
+		// run inside. SIO-912: no longer a terraform/git clone -- those local tools were retired.
 		workspaceDir: z.string(),
 	}),
 	// SIO-873: the GitOps target the agent proposes against (edit JSON + open MR via
@@ -65,7 +66,6 @@ export const ConfigSchema = z.object({
 		project: z.string(),
 		token: z.string().optional(),
 	}),
-	terraformBin: z.string(),
 	// Task runner for the repo's read-only helper verbs (status/list/output/state-list).
 	taskBin: z.string(),
 	// Optional credentials; tools degrade with a clear message when absent.
@@ -130,7 +130,6 @@ export function loadConfig(): Config {
 			project: Bun.env.ELASTIC_IAC_GITLAB_PROJECT ?? "pvhcorp/dhco/observability/observability-elastic-iac",
 			token: Bun.env.ELASTIC_IAC_GITLAB_TOKEN || undefined,
 		},
-		terraformBin: Bun.env.TERRAFORM_BIN ?? "terraform",
 		taskBin: Bun.env.ELASTIC_IAC_TASK_BIN ?? "task",
 		gitlabToken: Bun.env.GITLAB_PERSONAL_ACCESS_TOKEN || undefined,
 		elasticCloudApiKey: Bun.env.EC_API_KEY || undefined,

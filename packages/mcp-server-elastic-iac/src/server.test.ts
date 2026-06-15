@@ -9,7 +9,7 @@ describe("elastic-iac MCP server", () => {
 		expect(config.transport.port).toBe(9086);
 		expect(config.transport.path).toBe("/mcp");
 		expect(config.repository.projectId).toBe("71488350");
-		expect(config.terraformBin).toBe("terraform");
+		expect(config.taskBin).toBe("task");
 	});
 
 	test("createServer registers tools without throwing", () => {
