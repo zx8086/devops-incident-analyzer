@@ -82,7 +82,10 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			["parseIntent", "detectSyntheticsDrift", "detectDrift", "answerInfo", "watchPipeline"],
 		)
 		.addEdge("answerInfo", END)
-		.addEdge("parseIntent", "readClusterState")
+		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow
+		// "other") with a capability message + blockedReason -> stop before reading cluster
+		// state or drafting. Otherwise proceed to the maker pipeline.
+		.addConditionalEdges("parseIntent", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
 		.addEdge("readClusterState", "guard")
 		// Blocked by a mechanical safety guard -> stop before any write.
 		.addConditionalEdges("guard", (s) => (s.blockedReason ? END : "draftChange"), ["draftChange", END])

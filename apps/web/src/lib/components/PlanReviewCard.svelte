@@ -15,12 +15,13 @@ let {
 } = $props();
 
 const review = $derived(prompt.review);
-// SIO-874: a config-edit proposal has no terraform plan / gl-testing pre-check, so
-// render config-edit labels and hide the terraform-only badge.
-const isConfigEdit = $derived(review?.kind === "config-edit");
-const heading = $derived(isConfigEdit ? "Review proposed change" : "Review Terraform plan");
-const diffLabel = $derived(isConfigEdit ? "Config change" : "Terraform diff");
-const planLabel = $derived(isConfigEdit ? "How this applies" : "Plan output");
+// SIO-874 / SIO-912: every IaC proposal is a config edit (the agent edits config + opens an
+// MR; CI computes the plan). The agent never runs terraform locally, so there is no terraform
+// plan output and no gl-testing pre-check badge -- those rendered only for the retired
+// local-terraform path.
+const heading = "Review proposed change";
+const diffLabel = "Config change";
+const planLabel = "How this applies";
 </script>
 
 <div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-plan-heading">
@@ -29,13 +30,6 @@ const planLabel = $derived(isConfigEdit ? "How this applies" : "Plan output");
       <h3 id="iac-plan-heading" class="text-sm font-semibold text-tommy-navy">
         {heading}
       </h3>
-      {#if review && !isConfigEdit}
-        <span
-          class="text-xs px-2 py-0.5 rounded-full {review.precheckPassed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-900'}"
-        >
-          gl-testing pre-check: {review.precheckPassed ? "passed" : "not confirmed"}
-        </span>
-      {/if}
     </div>
 
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
@@ -63,7 +57,7 @@ const planLabel = $derived(isConfigEdit ? "How this applies" : "Plan output");
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(none)"}</pre>
       </details>
 
-      <details class="mt-2" open={isConfigEdit}>
+      <details class="mt-2" open>
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{diffLabel}</summary>
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-gray-900 text-gray-100 text-xs p-2 whitespace-pre-wrap">{review.diff || "(no diff)"}</pre>
       </details>

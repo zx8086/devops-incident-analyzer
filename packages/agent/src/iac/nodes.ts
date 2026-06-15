@@ -108,6 +108,29 @@ export function parseIntentJson(raw: string): IacRequest {
 	return { workflow: "other", isProd: false, clarification: "Which cluster and what change should I make?" };
 }
 
+// SIO-912: the agent is a propose-only GitOps maker -- it edits config and opens an MR;
+// CI computes the plan and a human merges/applies (deck slide 18 "Agent proposes, GitOps
+// disposes"). A request that resolves to workflow "other" is one this maker has no proposer
+// for yet (e.g. a Fleet agent BINARY upgrade, which is an imperative Fleet API call, not a
+// Terraform config edit -- SIO-913). It must NOT fall through to the legacy local-terraform
+// path; instead we surface what the maker can do today. Returns the user-facing message.
+// (Pure; unit-tested.)
+export function capabilityMessage(): string {
+	return (
+		"I can't make that change yet. I'm an Elastic Cloud IaC *config* maker: I edit the deployment " +
+		"configuration and open a GitLab merge request for your review -- CI computes the Terraform plan " +
+		"on the MR and a human merges and applies. I never run Terraform myself.\n\n" +
+		"Today I can propose:\n" +
+		'- **Version upgrades** -- e.g. "upgrade ap-cld to 9.4.2"\n' +
+		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
+		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n\n' +
+		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
+		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
+		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
+		"upgrade trigger are on the roadmap."
+	);
+}
+
 // Map a raw classifier reply to an intent. "gitops", "pipeline-status", "synthetics-drift",
 // and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested directly.)
 export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" {
@@ -217,7 +240,26 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 			new HumanMessage(reply),
 		]);
 		request = { ...parseIntentJson(String(res2.content)), clarification: undefined };
+		// SIO-912: a re-parse that still lands on "other" has no proposer -- surface capabilities.
+		if (request.workflow === "other") {
+			return {
+				iacRequest: request,
+				blockedReason: "No proposer for this request (workflow 'other').",
+				messages: [new HumanMessage(reply), new AIMessage(capabilityMessage())],
+			};
+		}
 		return { iacRequest: request, messages: [new HumanMessage(reply)] };
+	}
+
+	// SIO-912: "other" is a request this config maker has no proposer for. Stop here with a
+	// capability message instead of falling through to draftChange -> reviewPlan's dead
+	// local-terraform branch (which shelled out to a `terraform` binary absent at runtime).
+	if (request.workflow === "other") {
+		return {
+			iacRequest: request,
+			blockedReason: "No proposer for this request (workflow 'other').",
+			messages: [new AIMessage(capabilityMessage())],
+		};
 	}
 
 	return { iacRequest: request };
@@ -814,8 +856,10 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 	};
 }
 
-// Draft the change. version-upgrade + tier-resize go through the GitOps proposer (JSON
-// edit via the GitLab API); other workflows still draft a Terraform diff locally (legacy).
+// Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
+// GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
+// path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
+// capability message before reaching draftChange, so any unmatched workflow here is a bug.
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	if (!req) return {};
@@ -823,44 +867,26 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
 	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
 
-	const branch = branchName(req);
-	await callTool("git_create_branch", { branch });
-
-	const llm = createLlm("iacDrafter", AGENT);
-	const sys = buildSystemPrompt(getAgentByName(AGENT));
-	const res = await llm.invoke([
-		new SystemMessage(sys),
-		new HumanMessage(
-			`Produce the minimal Terraform diff for: ${JSON.stringify(req)}.\n` +
-				`Cluster state:\n${state.clusterState?.summary ?? "(unavailable)"}\n` +
-				"Output the unified diff only. Do not apply. Do not push to main.",
-		),
-	]);
-	return { branch, proposedDiff: String(res.content) };
+	// Defensive: a workflow value with no proposer must stop before the review gate rather
+	// than open an empty MR. parseIntent should already have blocked "other" upstream.
+	return {
+		blockedReason: `No proposer for workflow '${req.workflow}'.`,
+		messages: [new AIMessage(capabilityMessage())],
+	};
 }
 
-// Assemble the review payload. version-upgrade skips local terraform entirely -- the
-// change is already committed to a branch and CI computes the plan on the MR (deck
-// p.18). Other workflows still run terraform validate/plan locally (legacy path).
+// Assemble the review payload. Every workflow is a GitOps config edit: the change is
+// already committed to a branch via the GitLab API and CI computes the authoritative plan
+// on the MR (deck slide 18). SIO-912: the legacy local-terraform validate/plan branch is
+// gone -- the agent never runs terraform; "other" is short-circuited in parseIntent.
 export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	const branch = state.branch;
 	const isUpgrade = req?.workflow === "version-upgrade";
-	// SIO-879: version-upgrade and tier-resize are GitOps config edits (committed via the
-	// API; CI plans on the MR). Other workflows still run terraform locally (legacy).
-	const isConfigEdit = isUpgrade || req?.workflow === "tier-resize" || req?.workflow === "ilm-rollout";
 
-	let plan: string;
-	let precheckPassed: boolean;
-	if (isConfigEdit) {
-		// The commit succeeded in draftChange; CI renders the authoritative plan on the MR.
-		plan = "CI computes the Terraform plan on the merge request. No local plan is run for config edits.";
-		precheckPassed = state.precheckPassed;
-	} else {
-		await callTool("terraform_validate", { branch });
-		plan = await callTool("terraform_plan", { branch, cluster: req?.cluster });
-		precheckPassed = !plan.startsWith("[") && !/error/i.test(plan);
-	}
+	// The commit succeeded in draftChange; CI renders the authoritative plan on the MR.
+	const plan = "CI computes the Terraform plan on the merge request. No local plan is run for config edits.";
+	const precheckPassed = state.precheckPassed;
 
 	const risks: string[] = [];
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
@@ -905,7 +931,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 				? `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
 				: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
-		kind: isConfigEdit ? "config-edit" : "terraform",
+		// SIO-912: every maker workflow is a config edit; the agent never produces a local
+		// terraform plan. The "terraform" review kind is retired.
+		kind: "config-edit",
 		cluster: req?.cluster ?? "",
 		branch,
 		title: `[${req?.cluster ?? "?"}] ${descriptor}: ${req?.workflow}`,
@@ -1013,14 +1041,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 	}
 }
 
-// Open the MR. Never merges, never approves, never applies. For a config-edit
-// (version-upgrade / tier-resize) the branch + commit already exist on the remote
-// (created via the GitLab API in draftChange), so there is no git_push; legacy
-// (terraform) workflows push the local branch first.
+// Open the MR. Never merges, never approves, never applies. The branch + commit already
+// exist on the remote (created via the GitLab API in draftChange), so there is no local
+// git push. SIO-912: the legacy local-terraform path (which pushed a local branch) is gone.
 export async function openMr(state: IacStateType): Promise<Partial<IacStateType>> {
 	const review = state.planReview;
-	const isConfigEdit = review?.kind === "config-edit";
-	if (!isConfigEdit) await callTool("git_push", { branch: state.branch });
 	const description = await buildMrDescription(state);
 	const mr = await callTool("gitlab_create_merge_request", {
 		source_branch: state.branch,
