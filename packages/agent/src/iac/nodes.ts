@@ -5951,6 +5951,16 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 
 	log.info({ deployment, pipelineId: trig.pipelineId }, "iac fleet upgrade: apply triggered; polling");
 
+	// SIO-926: tell the user up front that the upgrade started and how long it is expected to take
+	// (from the rollout window), so the expectation is set before we ever return a `dispatched`
+	// outcome -- a long rollout is normal, not a hang.
+	await dispatchCustomEvent("iac_pipeline_progress", {
+		pipelineId: trig.pipelineId,
+		status:
+			`fleet apply: started -- ${report.crosstab.upgradeable} agent(s) -> ${targetVersion}, ` +
+			`expected ${formatRolloutDuration(report.rolloutSeconds)}`,
+	});
+
 	// SIO-924: stream live apply progress like watchPipeline, so the user can TRACK the imperative
 	// bulk_upgrade instead of staring at a frozen card for ~2 min. Surface the pipeline id + a
 	// clickable GitLab link up front, then emit iac_pipeline_progress on each status transition.
