@@ -5789,7 +5789,13 @@ async function emitFleetResult(r: FleetUpgradeResult): Promise<void> {
 // (interrupt if missing), trigger the FLEET_UPGRADE_PREVIEW pipeline, poll, parse, emit the
 // preview report. Read-only -- no bulk_upgrade POST happens here.
 export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<IacStateType>> {
-	let deployment = await resolveDriftDeployment(state);
+	// SIO-923: prefer the deployment the planner already parsed (state.iacRequest.cluster) over
+	// re-deriving it from the raw text. resolveDriftDeployment matches the WHOLE user message against
+	// a live elastic_cloud_list_deployments call -- which spuriously clarifies a named deployment when
+	// the message isn't an exact name and depends on a live MCP round-trip. This mirrors how `version`
+	// already prefers state.iacRequest?.version. resolveDriftDeployment stays the fallback for the
+	// drift/synthetics flows (and the fresh-turn case with no parsed cluster).
+	let deployment = state.iacRequest?.cluster?.trim() || (await resolveDriftDeployment(state));
 	if (!deployment) {
 		const answer = interrupt({
 			type: "iac_clarify",

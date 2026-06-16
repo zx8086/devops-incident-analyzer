@@ -1,5 +1,5 @@
 // agent/src/iac/fleet-upgrade.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
 	formatFleetUpgradeSummary,
 	hasApplicableFleetUpgrade,
@@ -226,5 +226,57 @@ describe("formatFleetUpgradeSummary", () => {
 		};
 		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
 		expect(formatFleetUpgradeSummary(s)).toContain("already running");
+	});
+});
+
+// Mirror drift.test.ts: stub mcp-bridge, then dynamic-import the flow so callTool resolves.
+function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
+	const tools = Object.entries(handlers).map(([name, fn]) => ({
+		name,
+		invoke: async (args: Record<string, unknown>) => fn(args),
+	}));
+	mock.module("../mcp-bridge.ts", () => ({
+		getToolsForDataSource: () => tools,
+		getConnectedServers: () => ["elastic-iac-mcp"],
+	}));
+}
+
+describe("detectFleetUpgrade deployment resolution (SIO-923)", () => {
+	test("prefers the parsed iacRequest.cluster -- no clarify, no elastic_cloud_list_deployments call", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const seen: string[] = [];
+		const triggerArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			// If resolution fell back to resolveDriftDeployment, THIS would be called -- assert it is not.
+			elastic_cloud_list_deployments: () => {
+				seen.push("elastic_cloud_list_deployments");
+				return '[200] {"deployments":[{"name":"eu-b2b"}]}';
+			},
+			// Short-circuit the flow right after deployment resolution: a locked trigger (no pipelineId)
+			// returns a planError report without polling -- enough to prove which deployment was used.
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				triggerArgs.push(args);
+				return '[423] {"status":"locked","note":"a fleet pipeline is already running"}';
+			},
+		});
+		const state = {
+			// The raw text is a full sentence (NOT an exact deployment name) -- the old whole-message
+			// match in resolveDriftDeployment is exactly what spuriously clarified here.
+			messages: [
+				{ getType: () => "human", content: "upgrade all the fleet elastic agents to 9.4.2 in the eu-b2b deployment" },
+			],
+			iacRequest: { workflow: "fleet-upgrade", isProd: false, cluster: "eu-b2b", version: "9.4.2" },
+		} as unknown as IacStateType;
+
+		const result = await detectFleetUpgrade(state);
+
+		// Used the parsed cluster verbatim...
+		expect(triggerArgs).toHaveLength(1);
+		expect(triggerArgs[0]?.deployment).toBe("eu-b2b");
+		// ...and never went through the text/MCP fallback.
+		expect(seen).not.toContain("elastic_cloud_list_deployments");
+		// Locked trigger -> planError report for the resolved deployment (no spurious clarify).
+		expect(result.targetDeployment).toBe("eu-b2b");
+		expect(result.fleetUpgradeReport?.planError).toBe(true);
 	});
 });
