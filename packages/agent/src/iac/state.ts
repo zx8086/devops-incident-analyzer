@@ -14,6 +14,7 @@ export interface IacRequest {
 		| "cluster-default-edit"
 		| "space-edit"
 		| "security-edit"
+		| "topology-edit"
 		| "other";
 	cluster?: string;
 	tier?: string;
@@ -71,6 +72,12 @@ export interface IacRequest {
 	grantIndexPrivileges?: string[];
 	grantKibanaApplication?: string;
 	grantKibanaPrivileges?: string[];
+	// SIO-919: topology-edit -- the global autoscale toggle and/or a tier's zone_count / per-tier
+	// autoscale in the _deployments JSON. Always HIGH risk (single shared state, long apply).
+	autoscaleEnabled?: boolean;
+	topologyTier?: string;
+	tierZoneCount?: number;
+	tierAutoscale?: boolean;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
