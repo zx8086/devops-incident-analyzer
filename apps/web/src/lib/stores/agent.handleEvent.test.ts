@@ -238,4 +238,39 @@ describe("applyStreamEvent", () => {
 		expect(state.fleetUpgradeChoice).toBeNull(); // the gate clears once the apply lands
 		expect(state.fleetUpgradeResult?.status).toBe("applied");
 	});
+
+	// SIO-928: the apply result snapshots the live progress lines onto the result row so the
+	// timeline persists as a collapsed log AFTER the `done` handler clears iacPipelineProgress.
+	test("fleet_upgrade_apply_result captures the live progress lines as progressLog", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 2606400810, status: "created" });
+		state = applyStreamEvent(state, {
+			type: "iac_pipeline_progress",
+			pipelineId: 2606400810,
+			status: "fleet apply: started -- 1608 agent(s) -> 9.4.2, expected ~60 min",
+		});
+		state = applyStreamEvent(state, { type: "fleet_upgrade_apply_result", status: "applied", acked: 1608 });
+
+		expect(state.fleetUpgradeResult?.progressLog).toEqual([
+			"Pipeline #2606400810: created",
+			"Pipeline #2606400810: fleet apply: started -- 1608 agent(s) -> 9.4.2, expected ~60 min",
+		]);
+	});
+
+	// The captured log must outlive the live ticker: the store's `done`/resume handlers reset
+	// iacPipelineProgress to [], but the result row (and its progressLog) is not touched.
+	test("progressLog on the result survives a later done that clears the live ticker", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 42, status: "running" });
+		state = applyStreamEvent(state, { type: "fleet_upgrade_apply_result", status: "applied" });
+		// The reducer itself does not clear iacPipelineProgress on `done` (the store does), but the
+		// result row must be independent of the live array regardless -- assert the snapshot is a copy.
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 42, status: "success" });
+		expect(state.fleetUpgradeResult?.progressLog).toEqual(["Pipeline #42: running"]); // not mutated by the later line
+	});
+
+	test("fleet_upgrade_apply_result with no prior progress omits progressLog", () => {
+		const state = applyStreamEvent(initialReducerState(), { type: "fleet_upgrade_apply_result", status: "applied" });
+		expect(state.fleetUpgradeResult?.progressLog).toBeUndefined();
+	});
 });
