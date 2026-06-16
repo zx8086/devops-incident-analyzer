@@ -3,7 +3,7 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
-	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "fleet-integration" | "other";
+	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "fleet-integration" | "slo-edit" | "other";
 	cluster?: string;
 	tier?: string;
 	resource?: string;
@@ -21,6 +21,13 @@ export interface IacRequest {
 	integration?: string;
 	integrationVersion?: string;
 	force?: boolean;
+	// SIO-915: slo-edit workflow -- the SLO file basename and the override fields. sloTarget is
+	// a percent (99.5) or fraction (0.995); sloWindow is a duration string ("60d"); sloTags
+	// replace the file-level tags.
+	sloName?: string;
+	sloTarget?: number;
+	sloWindow?: string;
+	sloTags?: string[];
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
@@ -316,6 +323,9 @@ export const IacState = Annotation.Root({
 	// SIO-914: a fleet-integration bump crossed a major version (leading integer increased) --
 	// surfaced as a higher-risk line in the review card / MR body (can break dashboards/mappings).
 	integrationMajorBump: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-915: a slo-edit LOWERED the objective target (looser SLO) -- surfaced as a risk line
+	// so the reviewer knows the reliability bar was relaxed.
+	sloTargetLowered: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.
