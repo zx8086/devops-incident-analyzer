@@ -817,6 +817,253 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
+	// SIO-913: Fleet agent BINARY upgrade via on-demand CI (preview -> operator gate -> apply).
+	// Imperative (POST /api/fleet/agents/bulk_upgrade), NOT Terraform. Mirrors the synthetics
+	// pair but: (1) carries VERSION + ROLLOUT_SECONDS + SELECTOR pipeline vars; (2) BOTH the
+	// preview and apply jobs emit the fleet-upgrade-report.json artifact (the synthetics push
+	// emitted none). Job names + var keys are env-overridable so the repo CI contract can move
+	// without an agent redeploy. Contract: fleet-upgrade-report/v1 (see the SIO-913 handoff doc).
+	const fleetPipelineRef =
+		process.env.ELASTIC_IAC_FLEET_PIPELINE_REF ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
+	const fleetReportArtifact = process.env.ELASTIC_IAC_FLEET_REPORT_ARTIFACT ?? "fleet-upgrade-report.json";
+
+	// CI variables[] for a fleet-upgrade pipeline. varKey is the activating flag
+	// (FLEET_UPGRADE_PREVIEW or FLEET_UPGRADE_APPLY); the rest scope the bulk_upgrade. SELECTOR
+	// is omitted when absent (the repo script defaults to all enrolled agents). (Pure.)
+	const buildFleetPipelineVars = (
+		varKey: string,
+		deployment: string,
+		version: string,
+		rolloutSeconds?: number,
+		selector?: string,
+	): Array<{ key: string; value: string }> => [
+		{ key: varKey, value: "true" },
+		{ key: "DEPLOYMENT", value: deployment },
+		{ key: "VERSION", value: version },
+		...(rolloutSeconds != null ? [{ key: "ROLLOUT_SECONDS", value: String(rolloutSeconds) }] : []),
+		...(selector ? [{ key: "SELECTOR", value: selector }] : []),
+	];
+
+	// Shared trigger: POST a fleet-upgrade pipeline and return the normalized
+	// {deployment,version,pipelineId,status} JSON string. 409 -> locked (a fleet pipeline running).
+	const triggerFleetPipeline = async (
+		phase: "preview" | "apply",
+		varKey: string,
+		deployment: string,
+		version: string,
+		rolloutSeconds: number | undefined,
+		selector: string | undefined,
+		ref: string,
+	): Promise<string> => {
+		log.info({ phase, deployment, version, rolloutSeconds, ref }, `gitlab_trigger_fleet_upgrade_${phase}: triggering`);
+		const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
+			method: "POST",
+			body: JSON.stringify({
+				ref,
+				variables: buildFleetPipelineVars(varKey, deployment, version, rolloutSeconds, selector),
+			}),
+		});
+		if (res.startsWith("[409")) {
+			log.warn({ phase, deployment }, `gitlab_trigger_fleet_upgrade_${phase}: blocked (a fleet pipeline is running)`);
+			return JSON.stringify({
+				deployment,
+				version,
+				pipelineId: null,
+				status: "locked",
+				note: "a fleet-upgrade pipeline is already running; retry later",
+			});
+		}
+		const ref2 = res.startsWith("[2") ? parsePipelineRef(res) : null;
+		if (ref2) {
+			log.info(
+				{ phase, deployment, version, pipelineId: ref2.id, status: ref2.status },
+				`gitlab_trigger_fleet_upgrade_${phase}: pipeline created`,
+			);
+			return JSON.stringify({ deployment, version, pipelineId: ref2.id, status: ref2.status });
+		}
+		log.error(
+			{ phase, deployment, response: res.slice(0, 200) },
+			`gitlab_trigger_fleet_upgrade_${phase}: trigger failed`,
+		);
+		return JSON.stringify({ deployment, version, pipelineId: null, status: "error", note: res.slice(0, 200) });
+	};
+
+	// Shared poller: poll a fleet pipeline to terminal, then return the fleet-upgrade-report.json
+	// artifact + (on non-success) the job trace tail, as a JSON string. Both preview and apply jobs
+	// upload the artifact (when:always), so this is the drift-result variant, not the push variant.
+	const pollFleetResult = async (phase: "preview" | "apply", jobName: string, pipelineId: number): Promise<string> => {
+		if (!token) return JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" });
+		const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
+		let status = "unknown";
+		let polls = 0;
+		log.info(
+			{ phase, pipelineId, budgetMs: DRIFT_POLL_BUDGET_MS },
+			`gitlab_get_fleet_upgrade_${phase}_result: polling`,
+		);
+		try {
+			while (Date.now() < deadline) {
+				const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };
+				status = typeof p.status === "string" ? p.status : "unknown";
+				polls++;
+				if (isTerminal(status)) break;
+				if (Date.now() + DRIFT_POLL_INTERVAL_MS >= deadline) break;
+				await new Promise((r) => setTimeout(r, DRIFT_POLL_INTERVAL_MS));
+			}
+			if (!isTerminal(status)) {
+				log.warn(
+					{ phase, pipelineId, status, polls },
+					`gitlab_get_fleet_upgrade_${phase}_result: still running at budget`,
+				);
+				return JSON.stringify({ pipelineId, status: status || "running", note: "still running at budget; re-check" });
+			}
+			let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
+			if (jobId === null) {
+				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
+				if (childId !== null)
+					jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${childId}/jobs`), jobName);
+			}
+			if (jobId === null) {
+				log.warn(
+					{ phase, pipelineId, status, jobName },
+					`gitlab_get_fleet_upgrade_${phase}_result: no job in pipeline`,
+				);
+				return JSON.stringify({ pipelineId, status, note: `no '${jobName}' job in the pipeline` });
+			}
+			const res = await fetch(
+				`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/artifacts/${fleetReportArtifact}`,
+				{
+					headers: { "PRIVATE-TOKEN": token },
+				},
+			);
+			const report = res.ok ? await res.text() : "";
+			let failureLog = "";
+			let stateLocked = false;
+			if (status !== "success") {
+				const traceRes = await fetch(`${gitlabBaseUrl}/api/v4/projects/${project}/jobs/${jobId}/trace`, {
+					headers: { "PRIVATE-TOKEN": token },
+				});
+				if (traceRes.ok) {
+					const trace = await traceRes.text();
+					stateLocked = traceHasStateLock(trace);
+					failureLog = trace.length > DRIFT_FAIL_LOG_TAIL_BYTES ? trace.slice(-DRIFT_FAIL_LOG_TAIL_BYTES) : trace;
+				}
+			}
+			if (!report && !failureLog) {
+				return JSON.stringify({
+					pipelineId,
+					jobId,
+					status,
+					note: `[${res.status}] ${fleetReportArtifact} not available`,
+				});
+			}
+			log.info(
+				{ phase, pipelineId, jobId, status, reportBytes: report.length },
+				`gitlab_get_fleet_upgrade_${phase}_result: result fetched`,
+			);
+			return JSON.stringify({
+				pipelineId,
+				jobId,
+				status,
+				report,
+				...(failureLog && { failureLog }),
+				...(stateLocked && { stateLocked: true }),
+			});
+		} catch (err) {
+			log.error(
+				{ phase, pipelineId, status, err: err instanceof Error ? err.message : String(err) },
+				`gitlab_get_fleet_upgrade_${phase}_result: polling errored`,
+			);
+			return JSON.stringify({ pipelineId, status, note: err instanceof Error ? err.message : String(err) });
+		}
+	};
+
+	server.tool(
+		"gitlab_trigger_fleet_upgrade_preview",
+		"Trigger the on-demand Fleet agent-binary-upgrade PREVIEW pipeline for one deployment: POST a pipeline with " +
+			"FLEET_UPGRADE_PREVIEW=true, DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR. Read-only (no bulk_upgrade " +
+			"POST) -- resolves the agent count + upgradeable crosstab. Returns {deployment,version,pipelineId,status}. " +
+			"Then poll gitlab_get_fleet_upgrade_preview_result.",
+		{
+			deployment: z.string(),
+			version: z.string().describe("Target agent version, e.g. '9.4.2'."),
+			rolloutSeconds: z.number().optional().describe("Rollout window in seconds (default the repo script's default)."),
+			selector: z.string().optional().describe("Fleet KQL selecting agents; omit for all enrolled agents."),
+			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_FLEET_PIPELINE_REF or 'main')."),
+		},
+		async ({ deployment, version, rolloutSeconds, selector, ref }) =>
+			text(
+				await triggerFleetPipeline(
+					"preview",
+					process.env.ELASTIC_IAC_FLEET_PREVIEW_VAR ?? "FLEET_UPGRADE_PREVIEW",
+					deployment,
+					version,
+					rolloutSeconds,
+					selector,
+					ref ?? fleetPipelineRef,
+				),
+			),
+	);
+
+	server.tool(
+		"gitlab_get_fleet_upgrade_preview_result",
+		"Poll a Fleet-upgrade PREVIEW pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
+			"resolved_count, version_available, upgradeable_crosstab). On a failed run also returns the job trace tail. " +
+			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) =>
+			text(
+				await pollFleetResult(
+					"preview",
+					process.env.ELASTIC_IAC_FLEET_PREVIEW_JOB_NAME ?? "fleet-upgrade-preview-on-demand",
+					pipelineId,
+				),
+			),
+	);
+
+	server.tool(
+		"gitlab_trigger_fleet_upgrade_apply",
+		"Trigger the operator-approved Fleet agent-binary-upgrade APPLY pipeline: POST a pipeline with FLEET_UPGRADE_APPLY=true, " +
+			"DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR. This issues the bulk_upgrade POST in CI and runs the verify " +
+			"sweep. Use the SAME deployment/version/selector that were previewed. Returns {deployment,version,pipelineId,status}. " +
+			"Then poll gitlab_get_fleet_upgrade_apply_result.",
+		{
+			deployment: z.string(),
+			version: z.string().describe("Target agent version, e.g. '9.4.2' (must match the previewed version)."),
+			rolloutSeconds: z.number().optional(),
+			selector: z.string().optional().describe("Fleet KQL (must match the previewed selector)."),
+			ref: z.string().optional(),
+		},
+		async ({ deployment, version, rolloutSeconds, selector, ref }) =>
+			text(
+				await triggerFleetPipeline(
+					"apply",
+					process.env.ELASTIC_IAC_FLEET_APPLY_VAR ?? "FLEET_UPGRADE_APPLY",
+					deployment,
+					version,
+					rolloutSeconds,
+					selector,
+					ref ?? fleetPipelineRef,
+				),
+			),
+	);
+
+	server.tool(
+		"gitlab_get_fleet_upgrade_apply_result",
+		"Poll a Fleet-upgrade APPLY pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
+			"action_id + apply.poll_status/acked/created/failed_silent). failed_silent is the verify-sweep UPG_FAILED ground " +
+			"truth (Fleet action_status undercounts). On failure also returns the job trace tail. " +
+			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+		{ pipelineId: z.number() },
+		async ({ pipelineId }) =>
+			text(
+				await pollFleetResult(
+					"apply",
+					process.env.ELASTIC_IAC_FLEET_APPLY_JOB_NAME ?? "fleet-upgrade-apply-on-demand",
+					pipelineId,
+				),
+			),
+	);
+
 	const PLAN_LOG_TAIL_BYTES = 4000;
 	server.tool(
 		"gitlab_get_pipeline_plan_log",

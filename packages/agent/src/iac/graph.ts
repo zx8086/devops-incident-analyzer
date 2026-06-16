@@ -5,13 +5,17 @@ import { initializeLangSmith } from "../langsmith.ts";
 import {
 	advanceDrift,
 	answerInfo,
+	applyFleetUpgrade,
 	bootstrapIac,
 	classifyIacIntent,
 	detectDrift,
+	detectFleetUpgrade,
 	detectSyntheticsDrift,
 	draftChange,
 	explainDrift,
+	fleetUpgradeGate,
 	guardNode,
+	hasApplicableFleetUpgrade,
 	hasPushableSyntheticsDrift,
 	openMr,
 	parseIntent,
@@ -60,6 +64,13 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("detectSyntheticsDrift", detectSyntheticsDrift)
 		.addNode("syntheticsPushGate", syntheticsPushGate)
 		.addNode("pushSynthetics", pushSynthetics)
+		// SIO-913: Fleet agent binary-upgrade sub-flow. detectFleetUpgrade triggers a preview
+		// pipeline (resolve count + upgradeable crosstab) and emits the report; fleetUpgradeGate
+		// holds the single operator approve/decline interrupt; applyFleetUpgrade triggers the
+		// bulk_upgrade apply pipeline + verify sweep.
+		.addNode("detectFleetUpgrade", detectFleetUpgrade)
+		.addNode("fleetUpgradeGate", fleetUpgradeGate)
+		.addNode("applyFleetUpgrade", applyFleetUpgrade)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
@@ -72,14 +83,16 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			(s) =>
 				s.intent === "gitops"
 					? "parseIntent"
-					: s.intent === "synthetics-drift"
-						? "detectSyntheticsDrift"
-						: s.intent === "drift"
-							? "detectDrift"
-							: s.intent === "pipeline-status"
-								? "watchPipeline"
-								: "answerInfo",
-			["parseIntent", "detectSyntheticsDrift", "detectDrift", "answerInfo", "watchPipeline"],
+					: s.intent === "fleet-upgrade"
+						? "detectFleetUpgrade"
+						: s.intent === "synthetics-drift"
+							? "detectSyntheticsDrift"
+							: s.intent === "drift"
+								? "detectDrift"
+								: s.intent === "pipeline-status"
+									? "watchPipeline"
+									: "answerInfo",
+			["parseIntent", "detectFleetUpgrade", "detectSyntheticsDrift", "detectDrift", "answerInfo", "watchPipeline"],
 		)
 		.addEdge("answerInfo", END)
 		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow
@@ -138,6 +151,20 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"teardown",
 		])
 		.addEdge("pushSynthetics", "teardown")
+		// SIO-913: fleet-upgrade straight line. No applicable upgrade (planError / version
+		// unavailable / nothing upgradeable) -> teardown (the summary leads with the reason);
+		// >=1 upgradeable agent -> the apply gate.
+		.addConditionalEdges(
+			"detectFleetUpgrade",
+			(s) => (hasApplicableFleetUpgrade(s.fleetUpgradeReport) ? "fleetUpgradeGate" : "teardown"),
+			["fleetUpgradeGate", "teardown"],
+		)
+		// Operator approval routes to the apply or to teardown (declined).
+		.addConditionalEdges("fleetUpgradeGate", (s) => (s.fleetUpgradeApproved ? "applyFleetUpgrade" : "teardown"), [
+			"applyFleetUpgrade",
+			"teardown",
+		])
+		.addEdge("applyFleetUpgrade", "teardown")
 		.addEdge("teardown", END);
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
