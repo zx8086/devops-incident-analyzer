@@ -1,6 +1,6 @@
 // agent/src/iac/classify.test.ts
 import { describe, expect, test } from "bun:test";
-import { intentFromText } from "./nodes.ts";
+import { intentFromText, looksLikeFleetStatusCheck } from "./nodes.ts";
 
 // SIO-870: the classifier LLM returns a single word; intentFromText maps it to the
 // route. Only an explicit "gitops" mention enters the maker pipeline; everything
@@ -43,5 +43,38 @@ describe("intentFromText", () => {
 	test("plain drift requests still route to drift (not synthetics)", () => {
 		expect(intentFromText("check eu-b2b for drift")).toBe("drift");
 		expect(intentFromText("reconcile the lifecycle-policies stack")).toBe("drift");
+	});
+});
+
+// SIO-928: a dispatched fleet binary apply has NO merge request, so its follow-ups ("how is the
+// rollout?", "check on it", "watch the pipeline") never matched the MR-scoped pipeline-status
+// classifier and fell through to info -> answerInfo, which can't re-poll the live pipeline. This
+// deterministic guard short-circuits the LLM: when a fleet apply is in flight, a status-check-shaped
+// message routes straight to pipeline-status (-> watchPipeline -> checkFleetApplyStatus).
+describe("looksLikeFleetStatusCheck (SIO-928)", () => {
+	test("matches the rollout/upgrade follow-up phrasings the user actually typed", () => {
+		expect(looksLikeFleetStatusCheck("How is the rollout?")).toBe(true);
+		expect(looksLikeFleetStatusCheck("check on it or watch the pipeline")).toBe(true);
+		expect(looksLikeFleetStatusCheck("check on it")).toBe(true);
+		expect(looksLikeFleetStatusCheck("hows the upgrade going")).toBe(true);
+		expect(looksLikeFleetStatusCheck("is the upgrade done yet")).toBe(true);
+		expect(looksLikeFleetStatusCheck("watch the pipeline")).toBe(true);
+		expect(looksLikeFleetStatusCheck("any progress on the agents?")).toBe(true);
+		expect(looksLikeFleetStatusCheck("status?")).toBe(true);
+	});
+
+	test("does NOT match a fresh upgrade request (that must still start a new apply)", () => {
+		// These name a target version -- they are a NEW upgrade, not a status check, even though the
+		// guard only fires when a pipeline is already in flight. Keep them out so a second upgrade is
+		// never swallowed as a status check.
+		expect(looksLikeFleetStatusCheck("upgrade all the fleet elastic agents to 9.4.2 on us-cld")).toBe(false);
+		expect(looksLikeFleetStatusCheck("upgrade the agents on eu-b2b to 9.5.0")).toBe(false);
+		expect(looksLikeFleetStatusCheck("bump fleet agents to 9.4.3")).toBe(false);
+	});
+
+	test("does NOT match unrelated IaC requests", () => {
+		expect(looksLikeFleetStatusCheck("check eu-b2b for drift")).toBe(false);
+		expect(looksLikeFleetStatusCheck("downsize the warm tier to 8 GB")).toBe(false);
+		expect(looksLikeFleetStatusCheck("what version is ap-cld running")).toBe(false);
 	});
 });
