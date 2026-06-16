@@ -240,6 +240,7 @@ export interface FleetUpgradeResultRow {
 	created?: number;
 	failedSilent?: number;
 	pipelineId?: number;
+	pipelineUrl?: string;
 	note?: string;
 }
 
@@ -556,6 +557,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					created: event.created,
 					failedSilent: event.failedSilent,
 					pipelineId: event.pipelineId,
+					pipelineUrl: event.pipelineUrl,
 					note: event.note,
 				},
 			};

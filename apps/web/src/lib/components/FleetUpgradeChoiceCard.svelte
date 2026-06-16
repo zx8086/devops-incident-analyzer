@@ -61,6 +61,9 @@ let {
       </div>
     {/if}
 
+    <p class="mt-3 text-xs font-semibold text-amber-700">
+      Approving runs a LIVE bulk_upgrade via CI now &mdash; this applies immediately (there is no MR for a binary upgrade). You can track the apply pipeline here.
+    </p>
     <div class="mt-3 flex flex-wrap gap-2">
       <button
         type="button"
@@ -68,7 +71,7 @@ let {
         disabled={disabled || prompt.upgradeableCount === 0}
         class="px-3 py-1.5 text-sm font-medium rounded-md bg-tommy-navy text-white hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
-        Approve upgrade
+        Approve & apply now
       </button>
       <button
         type="button"
