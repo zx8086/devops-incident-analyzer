@@ -244,6 +244,10 @@ export interface FleetUpgradeResultRow {
 	pipelineId?: number;
 	pipelineUrl?: string;
 	note?: string;
+	// SIO-928: a snapshot of the live `iac_pipeline_progress` lines captured when the apply result
+	// arrives, so the timeline persists as a collapsed log AFTER the `done` handler clears the live
+	// iacPipelineProgress array. Empty/absent when the flow produced no progress lines.
+	progressLog?: string[];
 }
 
 // SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
@@ -561,6 +565,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					pipelineId: event.pipelineId,
 					pipelineUrl: event.pipelineUrl,
 					note: event.note,
+					// SIO-928: capture the live progress lines NOW, before the `done` handler clears
+					// iacPipelineProgress, so the timeline persists as a collapsed log under the result.
+					...(state.iacPipelineProgress.length > 0 && { progressLog: [...state.iacPipelineProgress] }),
 				},
 			};
 		default:

@@ -438,10 +438,16 @@ function createAgentStore() {
 		if (isStreaming) return;
 		iacPlanReview = null;
 		iacClarify = null;
-		// SIO-882: keep the current per-stack choice until the resume actually succeeds, so a
-		// transient network/500 failure doesn't drop the only UI to retry this stack. Cleared
-		// on success (the next chained interrupt repopulates it); restored on failure.
+		// SIO-882 / SIO-928: keep the current interrupt choice cards until the resume actually
+		// succeeds, so a transient network/500 failure doesn't drop the only UI to retry. Snapshot
+		// them, null them optimistically (the card vanishes the instant the user approves, instead
+		// of lingering disabled until the terminal result ~2 min later), clear for real once the
+		// stream opens, and restore on failure. A chained interrupt repopulates them on success.
 		const pendingReconcileChoice = iacReconcileChoice;
+		const pendingFleetUpgradeChoice = fleetUpgradeChoice;
+		const pendingSyntheticsPushChoice = syntheticsPushChoice;
+		fleetUpgradeChoice = null;
+		syntheticsPushChoice = null;
 		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
@@ -459,8 +465,10 @@ function createAgentStore() {
 				handleEvent(event);
 			}
 		} catch (error) {
-			// Restore the choice so the user can retry (keep a newer chained prompt if one arrived).
+			// Restore the choices so the user can retry (keep a newer chained prompt if one arrived).
 			iacReconcileChoice = iacReconcileChoice ?? pendingReconcileChoice;
+			fleetUpgradeChoice = fleetUpgradeChoice ?? pendingFleetUpgradeChoice;
+			syntheticsPushChoice = syntheticsPushChoice ?? pendingSyntheticsPushChoice;
 			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
 		} finally {
 			if (currentContent) {

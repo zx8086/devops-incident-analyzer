@@ -9,6 +9,7 @@ import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import Icon from "$lib/components/Icon.svelte";
+import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
@@ -215,16 +216,8 @@ function handleSuggestionClick(suggestion: string) {
         {/if}
 
         {#if agentStore.iacPipelineProgress.length > 0}
-          <div class="px-4 py-1 max-w-4xl mx-auto">
-            <ul class="text-xs text-tommy-navy/80 font-mono space-y-0.5">
-              {#each agentStore.iacPipelineProgress as line}
-                <li class="flex items-center gap-1.5">
-                  <span class="inline-block w-1.5 h-1.5 rounded-full bg-tommy-accent-blue animate-pulse"></span>
-                  {line}
-                </li>
-              {/each}
-            </ul>
-          </div>
+          <!-- SIO-928: live pipeline progress as an avatar + card, not bare floating mono text. -->
+          <PipelineProgressCard variant="live" lines={agentStore.iacPipelineProgress} />
         {/if}
 
         {#if agentStore.currentContent}
@@ -414,6 +407,12 @@ function handleSuggestionClick(suggestion: string) {
       onApprove={() => agentStore.approveFleetUpgrade(true)}
       onDecline={() => agentStore.approveFleetUpgrade(false)}
     />
+  {/if}
+
+  <!-- SIO-928: after the apply completes, the live ticker is cleared; surface the captured timeline
+       as a collapsed "pipeline log" under the result so it stays auditable. -->
+  {#if !agentStore.isStreaming && agentStore.fleetUpgradeResult?.progressLog?.length}
+    <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult.progressLog} />
   {/if}
 
   <div class="border-t border-gray-200 bg-white">
