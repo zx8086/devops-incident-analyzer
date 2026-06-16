@@ -25,6 +25,8 @@ skills:
   - id: edit-alert-rule
   - id: edit-dataview
   - id: edit-cluster-default
+  - id: edit-space
+  - id: grant-security-role
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state

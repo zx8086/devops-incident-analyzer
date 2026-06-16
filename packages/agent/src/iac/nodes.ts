@@ -73,6 +73,8 @@ const IntentSchema = z.object({
 			"alerting-edit",
 			"dataview-edit",
 			"cluster-default-edit",
+			"space-edit",
+			"security-edit",
 			"other",
 		])
 		.default("other"),
@@ -105,6 +107,16 @@ const IntentSchema = z.object({
 	dataviewDisplayName: z.string().nullish(),
 	templateName: z.string().nullish(),
 	totalShardsPerNode: z.number().nullish(),
+	spaceName: z.string().nullish(),
+	spaceDisplayName: z.string().nullish(),
+	spaceDescription: z.string().nullish(),
+	spaceColor: z.string().nullish(),
+	roleName: z.string().nullish(),
+	grantCluster: z.array(z.string()).nullish(),
+	grantIndexNames: z.array(z.string()).nullish(),
+	grantIndexPrivileges: z.array(z.string()).nullish(),
+	grantKibanaApplication: z.string().nullish(),
+	grantKibanaPrivileges: z.array(z.string()).nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -153,6 +165,16 @@ export function parseIntentJson(raw: string): IacRequest {
 					dataviewDisplayName: nn(p.dataviewDisplayName),
 					templateName: nn(p.templateName),
 					totalShardsPerNode: nn(p.totalShardsPerNode),
+					spaceName: nn(p.spaceName),
+					spaceDisplayName: nn(p.spaceDisplayName),
+					spaceDescription: nn(p.spaceDescription),
+					spaceColor: nn(p.spaceColor),
+					roleName: nn(p.roleName),
+					grantCluster: nn(p.grantCluster),
+					grantIndexNames: nn(p.grantIndexNames),
+					grantIndexPrivileges: nn(p.grantIndexPrivileges),
+					grantKibanaApplication: nn(p.grantKibanaApplication),
+					grantKibanaPrivileges: nn(p.grantKibanaPrivileges),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -184,7 +206,9 @@ export function capabilityMessage(): string {
 		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n' +
 		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n' +
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on eu-b2b"\n' +
-		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n\n' +
+		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n' +
+		'- **Space edits** -- e.g. "change the developer-experience space description on eu-b2b"\n' +
+		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -276,11 +300,13 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
-		"'dataview-edit'|'cluster-default-edit'|'other'), cluster, tier, resource, newSizeGb, newMaxGb, policyName, " +
-		"phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, sloTags, ruleName, " +
-		"alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, runtimeFieldName, " +
-		"runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, totalShardsPerNode, " +
-		"reason, isProd (true only if the user explicitly named a production cluster), and clarification. " +
+		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'other'), cluster, tier, resource, newSizeGb, " +
+		"newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
+		"sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, " +
+		"runtimeFieldName, runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, " +
+		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
+		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, reason, isProd (true only if " +
+		"the user explicitly named a production cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
@@ -326,6 +352,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
 		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
 		"integer the user gave. " +
+		"For a SPACE change ('rename the developer-experience space description on eu-b2b', 'change the apps space color') " +
+		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
+		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
+		"'apps'; the part before .json), and spaceDisplayName (the human name), spaceDescription, and/or spaceColor (a hex " +
+		"like '#88B9A8'). Set at least one of those. " +
+		"For a SECURITY ROLE privilege grant ('grant the developer role read on logs-*', 'give the X role the monitor " +
+		"cluster privilege on eu-b2b') -- ADDING privileges to an EXISTING role, NOT creating a role or editing role " +
+		"mappings or anything secret -- set workflow to 'security-edit', cluster to the named deployment, roleName to the " +
+		"role name VERBATIM, and the grant: grantCluster (array of cluster privileges like ['monitor']), grantIndexNames " +
+		"(array of index patterns like ['logs-*']) + grantIndexPrivileges (array like ['read','view_index_metadata']), " +
+		"and/or grantKibanaApplication (e.g. 'kibana-.kibana') + grantKibanaPrivileges (array like ['feature_discover.read']). " +
+		"Set at least one grant. NEVER include users, api_keys, or any secret. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -669,7 +707,11 @@ export function branchSlug(req: IacRequest): string {
 								? req.dataviewName
 								: req.workflow === "cluster-default-edit"
 									? req.templateName
-									: (req.tier ?? req.resource);
+									: req.workflow === "space-edit"
+										? req.spaceName
+										: req.workflow === "security-edit"
+											? req.roleName
+											: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -993,6 +1035,143 @@ export function setClusterDefaultShards(
 	settings.index = index;
 	obj.settings = settings;
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== totalShardsPerNode };
+}
+
+// SIO-918: agent-side path for a per-deployment per-space JSON. ${cluster}/${space} are literal
+// placeholders. One file per space under environments/<cluster>/spaces/.
+function spaceTemplate(): string {
+	return process.env.ELASTIC_IAC_SPACE_TEMPLATE ?? "environments/${cluster}/spaces/${space}.json";
+}
+
+// SIO-918: agent-side path for a per-deployment security aggregate JSON. ${cluster} is the
+// literal placeholder. ONE aggregate file (roles + role_mappings + api_keys) per deployment.
+function securityTemplate(): string {
+	return process.env.ELASTIC_IAC_SECURITY_TEMPLATE ?? "environments/${cluster}/security/security.json";
+}
+
+// SIO-918: read-modify-write a per-space JSON: set name / description / color. Preserves
+// disabled_features, solution, initials, and every other field + 2-space indent + trailing
+// newline. Captures previous values for the diff. Only sets the fields the caller provides.
+// Throws on bad JSON. (Pure; unit-tested.)
+export function setSpaceFields(
+	json: string,
+	changes: { displayName?: string; description?: string; color?: string },
+): { content: string; previousName?: string; previousDescription?: string; previousColor?: string; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("space JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	let changed = false;
+
+	const previousName = typeof obj.name === "string" ? obj.name : undefined;
+	if (changes.displayName !== undefined) {
+		obj.name = changes.displayName;
+		changed = true;
+	}
+	const previousDescription = typeof obj.description === "string" ? obj.description : undefined;
+	if (changes.description !== undefined) {
+		obj.description = changes.description;
+		changed = true;
+	}
+	const previousColor = typeof obj.color === "string" ? obj.color : undefined;
+	if (changes.color !== undefined) {
+		obj.color = changes.color;
+		changed = true;
+	}
+
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousName, previousDescription, previousColor, changed };
+}
+
+// SIO-918: cluster-level / superuser privileges that escalate access -- granting any of these
+// (or "all" / "*") is always surfaced as the HIGHEST-risk change. Match is conservative: any
+// cluster privilege at all, plus the "all"/superuser keywords anywhere. (Pure; unit-tested.)
+export function isPrivilegeEscalation(grant: {
+	cluster?: string[];
+	indexPrivileges?: string[];
+	kibanaPrivileges?: string[];
+}): boolean {
+	const hi = (xs?: string[]) => (xs ?? []).some((p) => p === "all" || p === "*" || p.toLowerCase() === "superuser");
+	// Any cluster-level grant is privileged by definition; "all"/superuser anywhere is escalation.
+	return (
+		(grant.cluster?.length ?? 0) > 0 || hi(grant.cluster) || hi(grant.indexPrivileges) || hi(grant.kibanaPrivileges)
+	);
+}
+
+// SIO-918: read-modify-write the security aggregate JSON to ADD privileges to ONE existing role.
+// ADDITIVE ONLY: unions new cluster privileges, index privileges (onto matching index entries or
+// a new entry), and Kibana application privileges (onto a matching application or a new entry).
+// CRITICAL: role_mappings and api_keys are left BYTE-FOR-BYTE untouched (the api_keys block holds
+// secrets and must never be read into the diff). Never removes a privilege. Preserves 2-space
+// indent + trailing newline. Throws on bad JSON or an unknown role (so the proposer surfaces a
+// clarify rather than inventing a role). (Pure; unit-tested.)
+export function addRolePrivileges(
+	json: string,
+	roleName: string,
+	grant: {
+		cluster?: string[];
+		index?: { names: string[]; privileges: string[] };
+		kibana?: { application: string; privileges: string[]; resources?: string[] };
+	},
+): { content: string; addedCluster: string[]; addedIndex: string[]; addedKibana: string[]; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("security JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const roles = (obj.roles ?? {}) as Record<string, unknown>;
+	const role = roles[roleName];
+	if (!role || typeof role !== "object" || Array.isArray(role)) {
+		throw new Error(`unknown role '${roleName}'`);
+	}
+	const r = role as Record<string, unknown>;
+	const addedCluster: string[] = [];
+	const addedIndex: string[] = [];
+	const addedKibana: string[] = [];
+
+	if (grant.cluster && grant.cluster.length > 0) {
+		const cur = Array.isArray(r.cluster)
+			? (r.cluster as unknown[]).filter((x): x is string => typeof x === "string")
+			: [];
+		for (const p of grant.cluster) if (!cur.includes(p)) addedCluster.push(p);
+		r.cluster = [...cur, ...addedCluster];
+	}
+
+	if (grant.index && grant.index.privileges.length > 0) {
+		const indices = Array.isArray(r.indices) ? (r.indices as Array<Record<string, unknown>>) : [];
+		// Find an index entry with the same `names` set; else append a new one.
+		const sameNames = (a: unknown): boolean =>
+			Array.isArray(a) && a.length === grant.index!.names.length && grant.index!.names.every((n) => a.includes(n));
+		let entry = indices.find((e) => sameNames(e.names));
+		if (!entry) {
+			entry = { names: [...grant.index.names], privileges: [] };
+			indices.push(entry);
+		}
+		const cur = Array.isArray(entry.privileges)
+			? (entry.privileges as unknown[]).filter((x): x is string => typeof x === "string")
+			: [];
+		for (const p of grant.index.privileges) if (!cur.includes(p)) addedIndex.push(p);
+		entry.privileges = [...cur, ...addedIndex];
+		r.indices = indices;
+	}
+
+	if (grant.kibana && grant.kibana.privileges.length > 0) {
+		const apps = Array.isArray(r.applications) ? (r.applications as Array<Record<string, unknown>>) : [];
+		let entry = apps.find((e) => e.application === grant.kibana!.application);
+		if (!entry) {
+			entry = { application: grant.kibana.application, privileges: [], resources: grant.kibana.resources ?? ["*"] };
+			apps.push(entry);
+		}
+		const cur = Array.isArray(entry.privileges)
+			? (entry.privileges as unknown[]).filter((x): x is string => typeof x === "string")
+			: [];
+		for (const p of grant.kibana.privileges) if (!cur.includes(p)) addedKibana.push(p);
+		entry.privileges = [...cur, ...addedKibana];
+		r.applications = apps;
+	}
+
+	const changed = addedCluster.length > 0 || addedIndex.length > 0 || addedKibana.length > 0;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, addedCluster, addedIndex, addedKibana, changed };
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -1787,6 +1966,225 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 	};
 }
 
+// SIO-918: propose a space change -- set name/description/color on an EXISTING per-space file.
+// Mirrors proposeSloChange: single file, read-modify-write, edits only (no space create; the
+// per-file-vs-aggregate split + disabled_features defaults make creation a separate problem).
+async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const space = req.spaceName ?? "";
+
+	const hasChange =
+		req.spaceDisplayName !== undefined || req.spaceDescription !== undefined || req.spaceColor !== undefined;
+	if (!space || !hasChange) {
+		return {
+			blockedReason: "Space change needs a space name and at least one of display name / description / color.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the space and what to change (display name, description, or color).",
+				),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(spaceTemplate(), cluster).replace(/\$\{space\}/g, space);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Space '${space}' not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find a per-space file '${space}' on '${cluster}' (${filePath}). Some deployments keep spaces in an aggregate spaces.json instead -- that form, and creating a new space, are not supported yet.`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof setSpaceFields>;
+	try {
+		updated = setSpaceFields(extractFileContent(raw), {
+			displayName: req.spaceDisplayName,
+			description: req.spaceDescription,
+			color: req.spaceColor,
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Space '${space}' on '${cluster}' already has the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: space '${space}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: space ${space} update`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const diffLines: string[] = [`${filePath} (space ${space})`];
+	if (req.spaceDisplayName !== undefined) {
+		diffLines.push(
+			`[space] - "name": ${JSON.stringify(updated.previousName ?? "?")}\n+ "name": ${JSON.stringify(req.spaceDisplayName)}`,
+		);
+	}
+	if (req.spaceDescription !== undefined) {
+		diffLines.push(
+			`[space] - "description": ${JSON.stringify(updated.previousDescription ?? "?")}\n+ "description": ${JSON.stringify(req.spaceDescription)}`,
+		);
+	}
+	if (req.spaceColor !== undefined) {
+		diffLines.push(
+			`[space] - "color": ${JSON.stringify(updated.previousColor ?? "?")}\n+ "color": ${JSON.stringify(req.spaceColor)}`,
+		);
+	}
+
+	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+}
+
+// SIO-918: propose a security ROLE privilege grant -- ADD privileges to one existing role in the
+// security aggregate. role_mappings + api_keys (secrets) are left byte-for-byte untouched. HIGH
+// risk by default; cluster-level / superuser grants are flagged HIGHEST (privilege escalation).
+// ADDITIVE only (never removes), no role creation, no role_mappings edits.
+async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const roleName = req.roleName ?? "";
+
+	const grant = {
+		cluster: req.grantCluster,
+		index:
+			req.grantIndexNames && req.grantIndexPrivileges
+				? { names: req.grantIndexNames, privileges: req.grantIndexPrivileges }
+				: undefined,
+		kibana:
+			req.grantKibanaApplication && req.grantKibanaPrivileges
+				? { application: req.grantKibanaApplication, privileges: req.grantKibanaPrivileges }
+				: undefined,
+	};
+	const hasGrant = (grant.cluster?.length ?? 0) > 0 || grant.index !== undefined || grant.kibana !== undefined;
+	if (!roleName || !hasGrant) {
+		return {
+			blockedReason:
+				"Security role change needs a role name and at least one privilege grant (cluster / index / Kibana).",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the role and the privileges to grant (cluster, index names + privileges, or Kibana application + privileges).",
+				),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(securityTemplate(), cluster);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `No security file for '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find a security file for '${cluster}' (${filePath}). Confirm the deployment manages security roles.`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof addRolePrivileges>;
+	try {
+		updated = addRolePrivileges(extractFileContent(raw), roleName, grant);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		const isUnknown = reason.startsWith("unknown role");
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [
+				new AIMessage(
+					isUnknown
+						? `'${roleName}' is not a managed role in ${cluster}'s security.json. Check the role name and try again.`
+						: `Cannot propose the change: ${reason}.`,
+				),
+			],
+		};
+	}
+
+	if (!updated.changed) {
+		return {
+			blockedReason: `Role '${roleName}' on '${cluster}' already has the requested privileges; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: role '${roleName}' on '${cluster}' already has the requested privileges. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: security role ${roleName} grant privileges`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const escalation = isPrivilegeEscalation({
+		cluster: grant.cluster,
+		indexPrivileges: grant.index?.privileges,
+		kibanaPrivileges: grant.kibana?.privileges,
+	});
+
+	// Diff lists ONLY the newly-added privileges; never echoes role_mappings or api_keys.
+	const diffLines: string[] = [
+		`${filePath} (security role ${roleName}) -- ADD privileges only; role_mappings + api_keys untouched`,
+	];
+	if (updated.addedCluster.length > 0)
+		diffLines.push(`[roles.${roleName}.cluster] + ${JSON.stringify(updated.addedCluster)}`);
+	if (updated.addedIndex.length > 0)
+		diffLines.push(
+			`[roles.${roleName}.indices (${JSON.stringify(grant.index?.names ?? [])})] + ${JSON.stringify(updated.addedIndex)}`,
+		);
+	if (updated.addedKibana.length > 0)
+		diffLines.push(
+			`[roles.${roleName}.applications (${grant.kibana?.application})] + ${JSON.stringify(updated.addedKibana)}`,
+		);
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+		privilegeEscalation: escalation,
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -1802,6 +2200,8 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "alerting-edit") return proposeAlertingChange(state, req);
 	if (req.workflow === "dataview-edit") return proposeDataviewChange(state, req);
 	if (req.workflow === "cluster-default-edit") return proposeClusterDefaultChange(state, req);
+	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
+	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -1903,6 +2303,23 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	if (req?.workflow === "space-edit") {
+		risks.push(
+			"Space metadata change (name/description/color); it does not touch data, dashboards, or feature access. The space's disabled_features and solution are untouched.",
+		);
+	}
+	if (req?.workflow === "security-edit") {
+		// SIO-918: a privilege grant is HIGH risk by default; cluster/superuser escalation leads.
+		if (state.privilegeEscalation) {
+			risks.unshift(
+				"PRIVILEGE ESCALATION: grants cluster-level / superuser-class privileges -- this materially widens access. RECOMMEND HUMAN SECURITY REVIEW before merge.",
+			);
+		} else {
+			risks.unshift(
+				"Security role privilege GRANT (additive); widens what this role can do. Confirm the privileges are least-privilege and the role's members should have them. role_mappings + api_keys are untouched.",
+			);
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -1927,7 +2344,11 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 								? `${req?.dataviewName ?? "?"}: ${[req?.runtimeFieldName ? `runtime ${req.runtimeFieldName}` : "", req?.dataviewTitle ? "title" : "", req?.dataviewDisplayName ? "name" : ""].filter(Boolean).join(", ") || "change"}`
 								: req?.workflow === "cluster-default-edit"
 									? `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
-									: (req?.tier ?? req?.resource ?? "change");
+									: req?.workflow === "space-edit"
+										? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
+										: req?.workflow === "security-edit"
+											? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
+											: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -2017,6 +2438,12 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "cluster-default-edit"
 				? `Cluster-defaults template '${req?.templateName}': settings.index.routing.allocation.total_shards_per_node -> ${req?.totalShardsPerNode}.${state.shardsLowered ? " LOWERED (can unbalance allocation)." : ""}`
 				: "",
+			req?.workflow === "space-edit"
+				? `Space '${req?.spaceName}' edit:${req?.spaceDisplayName ? ` name -> ${req.spaceDisplayName}` : ""}${req?.spaceDescription ? " description (changed)" : ""}${req?.spaceColor ? ` color -> ${req.spaceColor}` : ""}.`
+				: "",
+			req?.workflow === "security-edit"
+				? `Security role '${req?.roleName}' ADDITIVE privilege grant${state.privilegeEscalation ? " (PRIVILEGE ESCALATION -- recommend human security review)" : ""}. role_mappings + api_keys untouched.`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -2041,7 +2468,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 									? "Category dataview, Risk LOW"
 									: req?.workflow === "cluster-default-edit"
 										? `Category cluster-defaults, Risk ${state.shardsLowered ? "MEDIUM" : "LOW"}`
-										: "Category version-bump, Risk LOW";
+										: req?.workflow === "space-edit"
+											? "Category spaces, Risk MEDIUM"
+											: req?.workflow === "security-edit"
+												? `Category security, Risk ${state.privilegeEscalation ? "HIGH (escalation)" : "HIGH"}`
+												: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
