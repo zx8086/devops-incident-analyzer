@@ -64,7 +64,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
 	workflow: z
-		.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "slo-edit", "other"])
+		.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "slo-edit", "alerting-edit", "other"])
 		.default("other"),
 	cluster: z.string().nullish(),
 	tier: z.string().nullish(),
@@ -81,6 +81,12 @@ const IntentSchema = z.object({
 	sloTarget: z.number().nullish(),
 	sloWindow: z.string().nullish(),
 	sloTags: z.array(z.string()).nullish(),
+	ruleName: z.string().nullish(),
+	alertThreshold: z.number().nullish(),
+	alertWindowSize: z.number().nullish(),
+	alertWindowUnit: z.string().nullish(),
+	alertEnabled: z.boolean().nullish(),
+	alertInterval: z.string().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -115,6 +121,12 @@ export function parseIntentJson(raw: string): IacRequest {
 					sloTarget: nn(p.sloTarget),
 					sloWindow: nn(p.sloWindow),
 					sloTags: nn(p.sloTags),
+					ruleName: nn(p.ruleName),
+					alertThreshold: nn(p.alertThreshold),
+					alertWindowSize: nn(p.alertWindowSize),
+					alertWindowUnit: nn(p.alertWindowUnit),
+					alertEnabled: nn(p.alertEnabled),
+					alertInterval: nn(p.alertInterval),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -143,7 +155,8 @@ export function capabilityMessage(): string {
 		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
 		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
 		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n' +
-		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n\n' +
+		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n' +
+		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -234,9 +247,10 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'other'), cluster, tier, " +
-		"resource, newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, " +
-		"sloTarget, sloWindow, sloTags, reason, isProd (true only if the user explicitly named a production cluster), and " +
+		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|'other'), " +
+		"cluster, tier, resource, newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, " +
+		"force, sloName, sloTarget, sloWindow, sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, " +
+		"alertEnabled, alertInterval, reason, isProd (true only if the user explicitly named a production cluster), and " +
 		"clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
@@ -264,6 +278,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"fraction like 0.995 -- pass it as the user said it), sloWindow to a duration string ('60d', '90d') ONLY if they " +
 		"change the window, and sloTags to the full new tag array ONLY if they change tags. Set at least one of sloTarget/" +
 		"sloWindow/sloTags. " +
+		"For an ALERT RULE change ('raise the MarTech Add-To-Wallet threshold to 5 on eu-b2b', 'disable the cart-failed " +
+		"alert on eu-b2b', 'change the X rule window to 10 minutes') -- editing an EXISTING rule's threshold/window/enabled/" +
+		"interval, NOT creating one -- set workflow to 'alerting-edit', cluster to the named deployment, ruleName to the " +
+		"rule file basename VERBATIM (it is '<space>__<rule-name>', e.g. 'default__martech_add_to_wallet_transactions_" +
+		"failed_status_prd'; if the user gives only a friendly name, construct the basename with the space prefix, " +
+		"defaulting the space to 'default' when unstated), and the field(s) to change: alertThreshold (number), " +
+		"alertWindowSize (number) + alertWindowUnit ('m'|'h'|'s'|'d'), alertEnabled (false to disable / silence the rule, " +
+		"true to enable), alertInterval (a check-interval string like '5m'). Set at least one of those alert* fields. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -601,7 +623,9 @@ export function branchSlug(req: IacRequest): string {
 					? req.integration
 					: req.workflow === "slo-edit"
 						? req.sloName
-						: (req.tier ?? req.resource);
+						: req.workflow === "alerting-edit"
+							? req.ruleName
+							: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -750,6 +774,86 @@ export function setSloOverrides(
 	}
 
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousTarget, previousWindow, previousTags, changed };
+}
+
+// SIO-916: agent-side path for a per-rule alerting JSON. ${cluster}/${rule} are literal
+// placeholders. One file per rule under environments/<cluster>/alerting/; the filename is
+// <space>__<rule-name>.json (the rule basename the caller supplies VERBATIM).
+function alertingTemplate(): string {
+	return process.env.ELASTIC_IAC_ALERTING_TEMPLATE ?? "environments/${cluster}/alerting/${rule}.json";
+}
+
+// SIO-916: read-modify-write an alert-rule JSON. Sets only the safe scalar fields: top-level
+// `enabled`/`interval` and params.threshold/windowSize/windowUnit. Leaves actions[] (connector
+// wiring), params.body (notification template), params.searchConfiguration, and every other
+// field untouched. Preserves 2-space indent + trailing newline. Captures the previous values for
+// the diff + the disabling-risk check. Only sets the fields the caller provides. Throws on bad
+// JSON. (Pure; unit-tested.)
+export function setAlertingFields(
+	json: string,
+	changes: {
+		threshold?: number;
+		windowSize?: number;
+		windowUnit?: string;
+		enabled?: boolean;
+		interval?: string;
+	},
+): {
+	content: string;
+	previousThreshold?: number;
+	previousWindowSize?: number;
+	previousWindowUnit?: string;
+	previousEnabled?: boolean;
+	previousInterval?: string;
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("alert rule JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const params = (obj.params ?? {}) as Record<string, unknown>;
+	let changed = false;
+
+	const previousThreshold = typeof params.threshold === "number" ? params.threshold : undefined;
+	const previousWindowSize = typeof params.windowSize === "number" ? params.windowSize : undefined;
+	const previousWindowUnit = typeof params.windowUnit === "string" ? params.windowUnit : undefined;
+	const previousEnabled = typeof obj.enabled === "boolean" ? obj.enabled : undefined;
+	const previousInterval = typeof obj.interval === "string" ? obj.interval : undefined;
+
+	if (changes.threshold !== undefined) {
+		params.threshold = changes.threshold;
+		obj.params = params;
+		changed = true;
+	}
+	if (changes.windowSize !== undefined) {
+		params.windowSize = changes.windowSize;
+		obj.params = params;
+		changed = true;
+	}
+	if (changes.windowUnit !== undefined) {
+		params.windowUnit = changes.windowUnit;
+		obj.params = params;
+		changed = true;
+	}
+	if (changes.enabled !== undefined) {
+		obj.enabled = changes.enabled;
+		changed = true;
+	}
+	if (changes.interval !== undefined) {
+		obj.interval = changes.interval;
+		changed = true;
+	}
+
+	return {
+		content: `${JSON.stringify(obj, null, 2)}\n`,
+		previousThreshold,
+		previousWindowSize,
+		previousWindowUnit,
+		previousEnabled,
+		previousInterval,
+		changed,
+	};
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -1123,11 +1227,6 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 	};
 }
 
-// SIO-915: propose an SLO change -- OVERRIDE objective.target / time_window.duration / tags on
-// an EXISTING per-SLO file. The SLO inherits these from _shared/slo-defaults.json; the override
-// lives in the per-SLO file (the module shallow-merges per nested block). Edits only (no SLO
-// create: that needs the indicator block + the module's monitor_id UUID guard). Mirrors
-// proposeFleetIntegration: single file, read-modify-write, no 404-create.
 async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const slo = req.sloName ?? "";
@@ -1239,6 +1338,125 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 	};
 }
 
+async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const rule = req.ruleName ?? "";
+
+	const hasChange =
+		req.alertThreshold !== undefined ||
+		req.alertWindowSize !== undefined ||
+		req.alertWindowUnit !== undefined ||
+		req.alertEnabled !== undefined ||
+		req.alertInterval !== undefined;
+	if (!rule || !hasChange) {
+		return {
+			blockedReason: "Alert rule change needs a rule name and at least one of threshold / window / enabled / interval.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the alert rule and what to change (threshold, window, enabled, or interval).",
+				),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(alertingTemplate(), cluster).replace(/\$\{rule\}/g, rule);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Alert rule '${rule}' not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find an alert rule file '${rule}' on '${cluster}' (${filePath}). Check the rule file name (it is <space>__<rule-name>; creating a new rule is not supported yet).`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof setAlertingFields>;
+	try {
+		updated = setAlertingFields(extractFileContent(raw), {
+			threshold: req.alertThreshold,
+			windowSize: req.alertWindowSize,
+			windowUnit: req.alertWindowUnit,
+			enabled: req.alertEnabled,
+			interval: req.alertInterval,
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Alert rule '${rule}' on '${cluster}' already has the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: alert rule '${rule}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: alert ${rule}${req.alertThreshold !== undefined ? ` threshold -> ${req.alertThreshold}` : ""}${req.alertEnabled === false ? " (disabled)" : req.alertEnabled === true ? " (enabled)" : ""}`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	// Disabling a rule silences its alerts -- the higher-risk change.
+	const alertDisabled = req.alertEnabled === false && updated.previousEnabled !== false;
+
+	const diffLines: string[] = [`${filePath} (alert rule ${rule})`];
+	if (req.alertThreshold !== undefined) {
+		diffLines.push(
+			`[params] - "threshold": ${JSON.stringify(updated.previousThreshold ?? "?")}\n+ "threshold": ${JSON.stringify(req.alertThreshold)}`,
+		);
+	}
+	if (req.alertWindowSize !== undefined) {
+		diffLines.push(
+			`[params] - "windowSize": ${JSON.stringify(updated.previousWindowSize ?? "?")}\n+ "windowSize": ${JSON.stringify(req.alertWindowSize)}`,
+		);
+	}
+	if (req.alertWindowUnit !== undefined) {
+		diffLines.push(
+			`[params] - "windowUnit": ${JSON.stringify(updated.previousWindowUnit ?? "?")}\n+ "windowUnit": ${JSON.stringify(req.alertWindowUnit)}`,
+		);
+	}
+	if (req.alertEnabled !== undefined) {
+		diffLines.push(
+			`[rule] - "enabled": ${JSON.stringify(updated.previousEnabled ?? "?")}\n+ "enabled": ${JSON.stringify(req.alertEnabled)}`,
+		);
+	}
+	if (req.alertInterval !== undefined) {
+		diffLines.push(
+			`[rule] - "interval": ${JSON.stringify(updated.previousInterval ?? "?")}\n+ "interval": ${JSON.stringify(req.alertInterval)}`,
+		);
+	}
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+		alertDisabled,
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -1251,6 +1469,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
 	if (req.workflow === "fleet-integration") return proposeFleetIntegration(state, req);
 	if (req.workflow === "slo-edit") return proposeSloChange(state, req);
+	if (req.workflow === "alerting-edit") return proposeAlertingChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -1325,6 +1544,17 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	if (req?.workflow === "alerting-edit") {
+		risks.push(
+			"Alert-rule change adjusts detection sensitivity (threshold/window) or scheduling; verify it does not mute a real failure mode. The actions/connector wiring is untouched.",
+		);
+		// SIO-916: disabling a rule silences its alerts -- the higher-risk change, surface first.
+		if (state.alertDisabled) {
+			risks.unshift(
+				"Rule DISABLED (enabled:false); this SILENCES the rule's alerts -- confirm the alerting gap is intended and time-bounded.",
+			);
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -1343,7 +1573,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 					? `${req?.integration ?? "?"} -> ${req?.integrationVersion ?? "?"}`
 					: req?.workflow === "slo-edit"
 						? `${req?.sloName ?? "?"}: ${[req?.sloTarget != null ? `target ${req.sloTarget}` : "", req?.sloWindow ? `window ${req.sloWindow}` : "", req?.sloTags ? "tags" : ""].filter(Boolean).join(", ") || "change"}`
-						: (req?.tier ?? req?.resource ?? "change");
+						: req?.workflow === "alerting-edit"
+							? `${req?.ruleName ?? "?"}: ${[req?.alertThreshold != null ? `threshold ${req.alertThreshold}` : "", req?.alertEnabled === false ? "disable" : req?.alertEnabled === true ? "enable" : "", req?.alertWindowSize != null ? `window ${req.alertWindowSize}${req?.alertWindowUnit ?? ""}` : "", req?.alertInterval ? `interval ${req.alertInterval}` : ""].filter(Boolean).join(", ") || "change"}`
+							: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -1424,6 +1656,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "slo-edit"
 				? `SLO '${req?.sloName}' override:${req?.sloTarget != null ? ` objective.target -> ${req.sloTarget}` : ""}${req?.sloWindow ? ` time_window.duration -> ${req.sloWindow}` : ""}${req?.sloTags ? ` tags -> ${JSON.stringify(req.sloTags)}` : ""}.${state.sloTargetLowered ? " Target LOWERED (looser SLO)." : ""}`
 				: "",
+			req?.workflow === "alerting-edit"
+				? `Alert rule '${req?.ruleName}' edit:${req?.alertThreshold != null ? ` params.threshold -> ${req.alertThreshold}` : ""}${req?.alertWindowSize != null ? ` params.windowSize -> ${req.alertWindowSize}${req?.alertWindowUnit ?? ""}` : ""}${req?.alertEnabled !== undefined ? ` enabled -> ${req.alertEnabled}` : ""}${req?.alertInterval ? ` interval -> ${req.alertInterval}` : ""}.${state.alertDisabled ? " Rule DISABLED (silences alerts)." : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -1442,7 +1677,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 						? `Category fleet-integration, Risk ${state.integrationMajorBump ? "HIGH" : "MEDIUM"}`
 						: req?.workflow === "slo-edit"
 							? "Category slo, Risk MEDIUM"
-							: "Category version-bump, Risk LOW";
+							: req?.workflow === "alerting-edit"
+								? `Category alerting, Risk ${state.alertDisabled ? "HIGH" : "MEDIUM"}`
+								: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +

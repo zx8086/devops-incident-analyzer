@@ -3,7 +3,14 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
-	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "fleet-integration" | "slo-edit" | "other";
+	workflow:
+		| "tier-resize"
+		| "ilm-rollout"
+		| "version-upgrade"
+		| "fleet-integration"
+		| "slo-edit"
+		| "alerting-edit"
+		| "other";
 	cluster?: string;
 	tier?: string;
 	resource?: string;
@@ -28,6 +35,14 @@ export interface IacRequest {
 	sloTarget?: number;
 	sloWindow?: string;
 	sloTags?: string[];
+	// SIO-916: alerting-edit workflow -- the rule file basename (<space>__<rule-name>) + the
+	// safe scalar fields to change. alertEnabled:false silences the rule (higher risk).
+	ruleName?: string;
+	alertThreshold?: number;
+	alertWindowSize?: number;
+	alertWindowUnit?: string;
+	alertEnabled?: boolean;
+	alertInterval?: string;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
@@ -326,6 +341,9 @@ export const IacState = Annotation.Root({
 	// SIO-915: a slo-edit LOWERED the objective target (looser SLO) -- surfaced as a risk line
 	// so the reviewer knows the reliability bar was relaxed.
 	sloTargetLowered: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-916: an alerting-edit DISABLED a rule (enabled:false) -- surfaced as a HIGH risk line
+	// because it silences the rule's alerts.
+	alertDisabled: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.

@@ -22,6 +22,7 @@ skills:
   - id: add-ilm-policy
   - id: pin-fleet-integration
   - id: edit-slo
+  - id: edit-alert-rule
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state
