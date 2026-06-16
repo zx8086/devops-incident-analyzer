@@ -63,7 +63,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // rejects null and would silently fail the whole parse (-> the clarify fallback), so
 // every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
-	workflow: z.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "other"]).default("other"),
+	workflow: z
+		.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "slo-edit", "other"])
+		.default("other"),
 	cluster: z.string().nullish(),
 	tier: z.string().nullish(),
 	resource: z.string().nullish(),
@@ -75,6 +77,10 @@ const IntentSchema = z.object({
 	integration: z.string().nullish(),
 	integrationVersion: z.string().nullish(),
 	force: z.boolean().nullish(),
+	sloName: z.string().nullish(),
+	sloTarget: z.number().nullish(),
+	sloWindow: z.string().nullish(),
+	sloTags: z.array(z.string()).nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -105,6 +111,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					integration: nn(p.integration),
 					integrationVersion: nn(p.integrationVersion),
 					force: nn(p.force),
+					sloName: nn(p.sloName),
+					sloTarget: nn(p.sloTarget),
+					sloWindow: nn(p.sloWindow),
+					sloTags: nn(p.sloTags),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -132,7 +142,8 @@ export function capabilityMessage(): string {
 		'- **Version upgrades** -- e.g. "upgrade ap-cld to 9.4.2"\n' +
 		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
 		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
-		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n\n' +
+		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n' +
+		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -223,9 +234,10 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'other'), cluster, tier, resource, " +
-		"newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, reason, isProd " +
-		"(true only if the user explicitly named a production cluster), and clarification. " +
+		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'other'), cluster, tier, " +
+		"resource, newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, " +
+		"sloTarget, sloWindow, sloTags, reason, isProd (true only if the user explicitly named a production cluster), and " +
+		"clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
@@ -245,6 +257,13 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"to the named deployment, integration to the integration alias key VERBATIM (e.g. 'aws', 'kafka', 'system', 'apm', " +
 		"'elastic-defend'), integrationVersion to the explicit target package version string, and force to true ONLY if the " +
 		"user explicitly asks to force/reinstall it. " +
+		"For an SLO change ('set the DS API Health SLO target to 99.5% on eu-b2b', 'change the eu-b2b ds-authentication SLO " +
+		"window to 60 days') -- editing an EXISTING SLO's target/time-window/tags, NOT creating one -- set workflow to " +
+		"'slo-edit', cluster to the named deployment, sloName to the SLO file basename VERBATIM (e.g. 'ds-authentication', " +
+		"'cci-sftpgo'; the part before .json), sloTarget to the numeric target the user gave (a percent like 99.5 or a " +
+		"fraction like 0.995 -- pass it as the user said it), sloWindow to a duration string ('60d', '90d') ONLY if they " +
+		"change the window, and sloTags to the full new tag array ONLY if they change tags. Set at least one of sloTarget/" +
+		"sloWindow/sloTags. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -580,7 +599,9 @@ export function branchSlug(req: IacRequest): string {
 				? req.policyName
 				: req.workflow === "fleet-integration"
 					? req.integration
-					: (req.tier ?? req.resource);
+					: req.workflow === "slo-edit"
+						? req.sloName
+						: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -662,6 +683,73 @@ export function isMajorVersionBump(from: string | undefined, to: string): boolea
 	const a = lead(from);
 	const b = lead(to);
 	return a !== null && b !== null && b > a;
+}
+
+// SIO-915: agent-side path for a per-deployment SLO JSON. ${cluster}/${slo} are literal
+// placeholders. One file per SLO under environments/<cluster>/slos/.
+function sloTemplate(): string {
+	return process.env.ELASTIC_IAC_SLO_TEMPLATE ?? "environments/${cluster}/slos/${slo}.json";
+}
+
+// SIO-915: normalize an SLO target to the 0-1 fraction the config stores. Users say "99.5"
+// (percent) or "0.995" (fraction); a value > 1 is treated as a percent. Rounds to avoid float
+// noise (99.95 -> 0.9995). Returns null for a nonsensical target (<=0 or >100). (Pure.)
+export function normalizeSloTarget(raw: number): number | null {
+	if (!Number.isFinite(raw) || raw <= 0 || raw > 100) return null;
+	const frac = raw > 1 ? raw / 100 : raw;
+	return Math.round(frac * 1e6) / 1e6;
+}
+
+// SIO-915: read-modify-write a per-SLO JSON to OVERRIDE nested-block fields the SLO otherwise
+// inherits from _shared/slo-defaults.json. The module shallow-merges per block
+// (merge(defaults.objective, file.objective)), so setting objective.target replaces only the
+// objective block -- which holds just target (+ optional timeslice fields), so nothing is lost.
+// time_window keeps its type ("rolling" default) when only duration changes. tags REPLACE the
+// file-level tags (the module then concats the managed-by:terraform default). Captures previous
+// values for the diff. Throws on bad JSON. Only sets the fields the caller provides. (Pure.)
+export function setSloOverrides(
+	json: string,
+	changes: { target?: number; windowDuration?: string; tags?: string[] },
+): {
+	content: string;
+	previousTarget?: number;
+	previousWindow?: string;
+	previousTags?: string[];
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("SLO JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	let changed = false;
+
+	const objective = (obj.objective ?? {}) as Record<string, unknown>;
+	const previousTarget = typeof objective.target === "number" ? objective.target : undefined;
+	if (changes.target !== undefined) {
+		objective.target = changes.target;
+		obj.objective = objective;
+		changed = true;
+	}
+
+	const timeWindow = (obj.time_window ?? {}) as Record<string, unknown>;
+	const previousWindow = typeof timeWindow.duration === "string" ? timeWindow.duration : undefined;
+	if (changes.windowDuration !== undefined) {
+		timeWindow.duration = changes.windowDuration;
+		if (typeof timeWindow.type !== "string") timeWindow.type = "rolling";
+		obj.time_window = timeWindow;
+		changed = true;
+	}
+
+	const previousTags = Array.isArray(obj.tags)
+		? (obj.tags as unknown[]).filter((t): t is string => typeof t === "string")
+		: undefined;
+	if (changes.tags !== undefined) {
+		obj.tags = changes.tags;
+		changed = true;
+	}
+
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousTarget, previousWindow, previousTags, changed };
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -1035,6 +1123,122 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 	};
 }
 
+// SIO-915: propose an SLO change -- OVERRIDE objective.target / time_window.duration / tags on
+// an EXISTING per-SLO file. The SLO inherits these from _shared/slo-defaults.json; the override
+// lives in the per-SLO file (the module shallow-merges per nested block). Edits only (no SLO
+// create: that needs the indicator block + the module's monitor_id UUID guard). Mirrors
+// proposeFleetIntegration: single file, read-modify-write, no 404-create.
+async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const slo = req.sloName ?? "";
+
+	const normalized = req.sloTarget !== undefined ? normalizeSloTarget(req.sloTarget) : undefined;
+	if (normalized === null) {
+		return {
+			blockedReason: `Invalid SLO target ${req.sloTarget}.`,
+			messages: [
+				new AIMessage(
+					`Cannot propose the change: '${req.sloTarget}' is not a valid SLO target (use e.g. 99.5 or 0.995).`,
+				),
+			],
+		};
+	}
+	const target: number | undefined = normalized;
+	const hasChange = target !== undefined || req.sloWindow !== undefined || req.sloTags !== undefined;
+	if (!slo || !hasChange) {
+		return {
+			blockedReason: "SLO change needs an SLO name and at least one of target / window / tags.",
+			messages: [
+				new AIMessage("Cannot propose the change: name the SLO and what to change (target, time window, or tags)."),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(sloTemplate(), cluster).replace(/\$\{slo\}/g, slo);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `SLO '${slo}' not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find an SLO file '${slo}' on '${cluster}' (${filePath}). Check the SLO file name (creating a new SLO is not supported yet).`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof setSloOverrides>;
+	try {
+		updated = setSloOverrides(extractFileContent(raw), {
+			target,
+			windowDuration: req.sloWindow,
+			tags: req.sloTags,
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `SLO '${slo}' on '${cluster}' already has the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: SLO '${slo}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message:
+			`${cluster}: SLO ${slo} ${target !== undefined ? `target -> ${target}` : ""}${req.sloWindow ? ` window -> ${req.sloWindow}` : ""}`.trim(),
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	// A target LOWERING (looser SLO) is worth flagging -- it relaxes the reliability bar.
+	const targetLowered = target !== undefined && updated.previousTarget !== undefined && target < updated.previousTarget;
+
+	const diffLines: string[] = [`${filePath} (SLO ${slo})`];
+	if (target !== undefined) {
+		diffLines.push(
+			`[objective] - "target": ${JSON.stringify(updated.previousTarget ?? "?")}\n+ "target": ${JSON.stringify(target)}`,
+		);
+	}
+	if (req.sloWindow !== undefined) {
+		diffLines.push(
+			`[time_window] - "duration": ${JSON.stringify(updated.previousWindow ?? "?")}\n+ "duration": ${JSON.stringify(req.sloWindow)}`,
+		);
+	}
+	if (req.sloTags !== undefined) {
+		diffLines.push(`[tags] - ${JSON.stringify(updated.previousTags ?? "?")}\n+ ${JSON.stringify(req.sloTags)}`);
+	}
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff: diffLines.join("\n"),
+		precheckPassed: committed,
+		sloTargetLowered: targetLowered,
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -1046,6 +1250,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
 	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
 	if (req.workflow === "fleet-integration") return proposeFleetIntegration(state, req);
+	if (req.workflow === "slo-edit") return proposeSloChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -1109,6 +1314,17 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			risks.push("force:true forces a package REINSTALL even if already installed -- confirm this is intended.");
 		}
 	}
+	if (req?.workflow === "slo-edit") {
+		risks.push(
+			"SLO change adjusts an error-budget target/window; it does not delete data, but it changes alerting/burn-rate behavior as the new objective takes effect.",
+		);
+		// SIO-915: lowering the target relaxes the reliability bar -- surface first.
+		if (state.sloTargetLowered) {
+			risks.unshift(
+				"Target LOWERED (looser SLO); this relaxes the reliability bar and widens the error budget -- confirm this is intended.",
+			);
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -1125,7 +1341,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 				? `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
 				: req?.workflow === "fleet-integration"
 					? `${req?.integration ?? "?"} -> ${req?.integrationVersion ?? "?"}`
-					: (req?.tier ?? req?.resource ?? "change");
+					: req?.workflow === "slo-edit"
+						? `${req?.sloName ?? "?"}: ${[req?.sloTarget != null ? `target ${req.sloTarget}` : "", req?.sloWindow ? `window ${req.sloWindow}` : "", req?.sloTags ? "tags" : ""].filter(Boolean).join(", ") || "change"}`
+						: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -1203,6 +1421,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "fleet-integration"
 				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`
 				: "",
+			req?.workflow === "slo-edit"
+				? `SLO '${req?.sloName}' override:${req?.sloTarget != null ? ` objective.target -> ${req.sloTarget}` : ""}${req?.sloWindow ? ` time_window.duration -> ${req.sloWindow}` : ""}${req?.sloTags ? ` tags -> ${JSON.stringify(req.sloTags)}` : ""}.${state.sloTargetLowered ? " Target LOWERED (looser SLO)." : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -1219,7 +1440,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 					? "Category tier-resize, Risk MEDIUM"
 					: req?.workflow === "fleet-integration"
 						? `Category fleet-integration, Risk ${state.integrationMajorBump ? "HIGH" : "MEDIUM"}`
-						: "Category version-bump, Risk LOW";
+						: req?.workflow === "slo-edit"
+							? "Category slo, Risk MEDIUM"
+							: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +

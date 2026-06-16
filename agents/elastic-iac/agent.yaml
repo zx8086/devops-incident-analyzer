@@ -21,6 +21,7 @@ skills:
   - id: resize-tier
   - id: add-ilm-policy
   - id: pin-fleet-integration
+  - id: edit-slo
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state
