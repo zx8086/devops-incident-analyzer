@@ -17,6 +17,7 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.manifest.skills).toEqual([
 			"resize-tier",
 			"add-ilm-policy",
+			"pin-fleet-integration",
 			"pre-check-gl-testing",
 			"open-mr",
 			"validate-cluster-state",

@@ -3,7 +3,7 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
-	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "other";
+	workflow: "tier-resize" | "ilm-rollout" | "version-upgrade" | "fleet-integration" | "other";
 	cluster?: string;
 	tier?: string;
 	resource?: string;
@@ -15,6 +15,12 @@ export interface IacRequest {
 	phasesPatch?: Record<string, unknown>;
 	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
 	version?: string;
+	// SIO-914: fleet-integration workflow -- the integration alias key in integrations.json
+	// (e.g. "aws", "kafka") and its target package version (e.g. "6.15.0"). force pins a
+	// reinstall (higher risk).
+	integration?: string;
+	integrationVersion?: string;
+	force?: boolean;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
@@ -307,6 +313,9 @@ export const IacState = Annotation.Root({
 	// SIO-899: an ilm-rollout created a previously-untracked policy file (404 -> onboard);
 	// surfaced in the review card / MR body / final message so the human reviews a CREATE.
 	policyCreated: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-914: a fleet-integration bump crossed a major version (leading integer increased) --
+	// surfaced as a higher-risk line in the review card / MR body (can break dashboards/mappings).
+	integrationMajorBump: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.

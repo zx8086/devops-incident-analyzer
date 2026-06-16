@@ -63,7 +63,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // rejects null and would silently fail the whole parse (-> the clarify fallback), so
 // every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
-	workflow: z.enum(["tier-resize", "ilm-rollout", "version-upgrade", "other"]).default("other"),
+	workflow: z.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "other"]).default("other"),
 	cluster: z.string().nullish(),
 	tier: z.string().nullish(),
 	resource: z.string().nullish(),
@@ -72,6 +72,9 @@ const IntentSchema = z.object({
 	policyName: z.string().nullish(),
 	phasesPatch: z.record(z.string(), z.unknown()).nullish(),
 	version: z.string().nullish(),
+	integration: z.string().nullish(),
+	integrationVersion: z.string().nullish(),
+	force: z.boolean().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -99,6 +102,9 @@ export function parseIntentJson(raw: string): IacRequest {
 					policyName: nn(p.policyName),
 					phasesPatch: nn(p.phasesPatch),
 					version: nn(p.version),
+					integration: nn(p.integration),
+					integrationVersion: nn(p.integrationVersion),
+					force: nn(p.force),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -125,7 +131,8 @@ export function capabilityMessage(): string {
 		"Today I can propose:\n" +
 		'- **Version upgrades** -- e.g. "upgrade ap-cld to 9.4.2"\n' +
 		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
-		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n\n' +
+		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
+		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -216,9 +223,9 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'other'), cluster, tier, resource, newSizeGb, " +
-		"newMaxGb, policyName, phasesPatch, version, reason, isProd (true only if the user explicitly named a production " +
-		"cluster), and clarification. " +
+		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'other'), cluster, tier, resource, " +
+		"newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, reason, isProd " +
+		"(true only if the user explicitly named a production cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
@@ -232,6 +239,12 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"(durations are strings like '90d'; retention is delete.min_age). Patch ONLY the fields to change for an existing " +
 		"policy; if the policy may be new or untracked, include EVERY phase it should have (the full intended lifecycle) " +
 		"so the created file is complete. " +
+		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-b2b to 6.15.0', 'pin kafka to " +
+		"1.28.0 on eu-cld', 'update the system integration package to 2.18.0') -- note this is the integration PACKAGE " +
+		"version, NOT a Fleet AGENT binary upgrade and NOT a cluster version -- set workflow to 'fleet-integration', cluster " +
+		"to the named deployment, integration to the integration alias key VERBATIM (e.g. 'aws', 'kafka', 'system', 'apm', " +
+		"'elastic-defend'), integrationVersion to the explicit target package version string, and force to true ONLY if the " +
+		"user explicitly asks to force/reinstall it. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -565,7 +578,9 @@ export function branchSlug(req: IacRequest): string {
 			? req.version
 			: req.workflow === "ilm-rollout"
 				? req.policyName
-				: (req.tier ?? req.resource);
+				: req.workflow === "fleet-integration"
+					? req.integration
+					: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -595,6 +610,58 @@ function deploymentJsonTemplate(): string {
 // runs Vite SSR where a top-level Bun.env reference throws "Bun is not defined").
 function ilmPolicyTemplate(): string {
 	return process.env.ELASTIC_IAC_ILM_POLICY_TEMPLATE ?? "environments/${cluster}/lifecycle-policies/${policy}.json";
+}
+
+// SIO-914: agent-side path for the per-deployment fleet-integrations aggregate JSON.
+// ${cluster} is the literal placeholder. One aggregate file keyed by integration alias.
+function fleetIntegrationsTemplate(): string {
+	return (
+		process.env.ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE ??
+		"environments/${cluster}/fleet-integrations/integrations.json"
+	);
+}
+
+// SIO-914: read-modify-write the fleet-integrations aggregate JSON: set one integration
+// alias's `version` (and optionally `force`). The file is flat -- keyed by alias, each value
+// an object { name, version, force }. Preserves 2-space indent + trailing newline (repo house
+// style) and every other alias/field. Captures the previous version/force for the diff. Throws
+// on bad JSON or an unknown alias (so the proposer surfaces a clarifying message rather than
+// silently adding a bogus key). (Pure; unit-tested.)
+export function setIntegrationVersion(
+	json: string,
+	alias: string,
+	version: string,
+	force?: boolean,
+): { content: string; previousVersion?: string; previousForce?: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("integrations.json is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const entry = obj[alias];
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+		throw new Error(`unknown integration '${alias}'`);
+	}
+	const e = entry as Record<string, unknown>;
+	const previousVersion = typeof e.version === "string" ? e.version : undefined;
+	const previousForce = typeof e.force === "boolean" ? e.force : undefined;
+	e.version = version;
+	if (force !== undefined) e.force = force;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousVersion, previousForce };
+}
+
+// SIO-914: a major-version bump (leading integer increases) is the higher-risk case for an
+// integration package (can break dashboards/pipelines/mappings). Compares the leading numeric
+// segment; returns false when either side is unparseable. (Pure; unit-tested.)
+export function isMajorVersionBump(from: string | undefined, to: string): boolean {
+	if (!from) return false;
+	const lead = (v: string): number | null => {
+		const m = v.match(/^(\d+)/);
+		return m ? Number(m[1]) : null;
+	};
+	const a = lead(from);
+	const b = lead(to);
+	return a !== null && b !== null && b > a;
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -869,6 +936,105 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 	};
 }
 
+// SIO-914: propose a Fleet integration PACKAGE version pin -- read-modify-write the one
+// alias's version (+ optional force) in the per-deployment integrations.json aggregate, then
+// commit + (caller) open the MR. Mirrors proposeIlmChange but simpler: a single flat file, no
+// 404-create (the aggregate always exists for a content-bearing deployment), no phase-merge.
+async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const alias = req.integration ?? "";
+	const version = req.integrationVersion ?? "";
+
+	if (!alias || !version) {
+		return {
+			blockedReason: "Fleet integration change needs an integration name and a target version.",
+			messages: [
+				new AIMessage("Cannot propose the change: name the integration (e.g. aws) and the target package version."),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(fleetIntegrationsTemplate(), cluster);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// A 404 means this deployment has no integrations.json (not a content-bearing deployment for
+	// Fleet). Don't invent the aggregate file -- ask the user to confirm the deployment.
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `No fleet-integrations file for '${cluster}' (${filePath} not found).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find a Fleet integrations file for '${cluster}' (${filePath}). Confirm the deployment manages Fleet integrations.`,
+				),
+			],
+		};
+	}
+
+	let updated: { content: string; previousVersion?: string; previousForce?: boolean };
+	try {
+		updated = setIntegrationVersion(extractFileContent(raw), alias, version, req.force);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		// An unknown alias is a user-facing clarify, not an internal failure.
+		const isUnknown = reason.startsWith("unknown integration");
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [
+				new AIMessage(
+					isUnknown
+						? `'${alias}' is not a managed integration in ${cluster}'s integrations.json. Check the integration alias and try again.`
+						: `Cannot propose the change: ${reason}.`,
+				),
+			],
+		};
+	}
+
+	// No-op guard: the requested version already matches (empty diff).
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Integration '${alias}' on '${cluster}' is already at ${version}; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: integration '${alias}' on '${cluster}' is already pinned to ${version}. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: pin ${alias} integration to ${version}`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const forceLine =
+		req.force !== undefined && req.force !== updated.previousForce
+			? `\n[${alias}] - "force": ${JSON.stringify(updated.previousForce ?? false)}\n+ "force": ${JSON.stringify(req.force)}`
+			: "";
+	const proposedDiff =
+		`${filePath} (fleet integration ${alias})\n` +
+		`[${alias}] - "version": ${JSON.stringify(updated.previousVersion ?? "?")}\n+ "version": ${JSON.stringify(version)}${forceLine}`;
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff,
+		precheckPassed: committed,
+		integrationMajorBump: isMajorVersionBump(updated.previousVersion, version),
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -879,6 +1045,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
 	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
+	if (req.workflow === "fleet-integration") return proposeFleetIntegration(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -928,6 +1095,20 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	}
 	if (req?.workflow === "tier-resize")
 		risks.push("Tier resize triggers a plan change; a downsize relocates shards -- apply off-peak.");
+	if (req?.workflow === "fleet-integration") {
+		risks.push(
+			"Integration package bump is a Fleet EPM install; it can change ingest pipelines, mappings, and dashboards. Verify the target version is compatible with the deployment's stack version.",
+		);
+		// SIO-914: a major-version bump is the higher-risk case -- surface first.
+		if (state.integrationMajorBump) {
+			risks.unshift(
+				`MAJOR version bump for the '${req?.integration}' integration; major upgrades can introduce breaking schema/pipeline changes -- review the integration changelog before merge.`,
+			);
+		}
+		if (req?.force) {
+			risks.push("force:true forces a package REINSTALL even if already installed -- confirm this is intended.");
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -942,7 +1123,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
 			: req?.workflow === "ilm-rollout"
 				? `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
-				: (req?.tier ?? req?.resource ?? "change");
+				: req?.workflow === "fleet-integration"
+					? `${req?.integration ?? "?"} -> ${req?.integrationVersion ?? "?"}`
+					: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -1017,6 +1200,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "ilm-rollout"
 				? `ILM policy '${req?.policyName}' ${state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
 				: "",
+			req?.workflow === "fleet-integration"
+				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -1031,7 +1217,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Category ilm${state.policyCreated ? " (new policy)" : ""}, Risk ${state.retentionChange ? "HIGH" : "MEDIUM"}`
 				: req?.workflow === "tier-resize"
 					? "Category tier-resize, Risk MEDIUM"
-					: "Category version-bump, Risk LOW";
+					: req?.workflow === "fleet-integration"
+						? `Category fleet-integration, Risk ${state.integrationMajorBump ? "HIGH" : "MEDIUM"}`
+						: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
