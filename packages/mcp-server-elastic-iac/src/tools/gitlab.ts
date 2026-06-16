@@ -374,6 +374,11 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
 	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
+	// SIO-926: a fleet-agent bulk_upgrade rolls out over its ROLLOUT_SECONDS window (e.g. 3600s) --
+	// far longer than the drift budget. We do NOT block for the whole rollout: this is a bounded
+	// "did it start cleanly" window. If the pipeline is still running at the end, the apply result
+	// reports `dispatched` (started, in-flight) and the user tracks the pipeline / asks to re-check.
+	const FLEET_APPLY_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS ?? "120000");
 	// SIO-887: trace tail returned for a failed drift-check (human review).
 	// SIO-904: bumped 4000 -> 16000 because Terraform prints the lock-info block + retries
 	// AFTER the state-lock error, which pushed the signature out of a 4000-byte tail.
@@ -894,13 +899,13 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// upload the artifact (when:always), so this is the drift-result variant, not the push variant.
 	const pollFleetResult = async (phase: "preview" | "apply", jobName: string, pipelineId: number): Promise<string> => {
 		if (!token) return JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" });
-		const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
+		// SIO-926: apply gets its own bounded budget (it rides a long ROLLOUT_SECONDS window); preview
+		// is quick and keeps the drift budget.
+		const budgetMs = phase === "apply" ? FLEET_APPLY_POLL_BUDGET_MS : DRIFT_POLL_BUDGET_MS;
+		const deadline = Date.now() + budgetMs;
 		let status = "unknown";
 		let polls = 0;
-		log.info(
-			{ phase, pipelineId, budgetMs: DRIFT_POLL_BUDGET_MS },
-			`gitlab_get_fleet_upgrade_${phase}_result: polling`,
-		);
+		log.info({ phase, pipelineId, budgetMs }, `gitlab_get_fleet_upgrade_${phase}_result: polling`);
 		try {
 			while (Date.now() < deadline) {
 				const p = (await glJson(`/projects/${project}/pipelines/${pipelineId}`)) as { status?: unknown };

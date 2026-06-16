@@ -2,6 +2,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
 	formatFleetUpgradeSummary,
+	formatRolloutDuration,
 	hasApplicableFleetUpgrade,
 	intentFromText,
 	parseFleetApplyOutcome,
@@ -228,6 +229,51 @@ describe("formatFleetUpgradeSummary", () => {
 		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
 		expect(formatFleetUpgradeSummary(s)).toContain("already running");
 	});
+
+	// SIO-926: a long-running apply that is still running at the status window is "dispatched"
+	// (started, in flight), NOT "failed". The summary must read as in-progress, name the expected
+	// duration, and offer the follow-up -- never the red failure copy.
+	test("dispatched -> reads as started/in-progress, never 'failed'", () => {
+		const result: FleetUpgradeResult = {
+			status: "dispatched",
+			pipelineId: 2605468937,
+			pipelineUrl: "https://gitlab.com/p/-/pipelines/2605468937",
+			pipelineStatus: "running",
+			note: "Upgrade started and running; not finished within the status window.",
+		};
+		const s = stateWith({
+			fleetUpgradeReport: report({ deployment: "ap-cld", rolloutSeconds: 3600 }),
+			fleetUpgradeResult: result,
+		});
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).toContain("started");
+		expect(msg).not.toContain("failed");
+		// expected duration surfaced from rolloutSeconds (3600s -> ~60 min)
+		expect(msg).toContain("60 min");
+		// the resumable follow-up affordance
+		expect(msg.toLowerCase()).toContain("check");
+		// pipeline link preserved for tracking
+		expect(msg).toContain("2605468937");
+	});
+});
+
+// SIO-926: rolloutSeconds -> a human "expected duration" phrase set up front at apply time and in
+// the dispatched summary. Pure; unit-tested.
+describe("formatRolloutDuration", () => {
+	test("hours render as minutes when under 2h (3600s -> ~60 min)", () => {
+		expect(formatRolloutDuration(3600)).toContain("60 min");
+	});
+	test("sub-hour windows render in minutes (600s -> ~10 min)", () => {
+		expect(formatRolloutDuration(600)).toContain("10 min");
+	});
+	test("multi-hour windows render in hours (7200s -> ~2 h / hours)", () => {
+		expect(formatRolloutDuration(7200).toLowerCase()).toMatch(/2\s*h/);
+	});
+	test("a missing/zero window degrades gracefully (no NaN)", () => {
+		const out = formatRolloutDuration(0);
+		expect(out).not.toContain("NaN");
+		expect(out.length).toBeGreaterThan(0);
+	});
 });
 
 // Mirror drift.test.ts: stub mcp-bridge, then dynamic-import the flow so callTool resolves.
@@ -323,5 +369,73 @@ describe("formatFleetUpgradeSummary — SIO-924 pipeline link", () => {
 		};
 		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
 		expect(formatFleetUpgradeSummary(s)).toContain("Apply pipeline #99.");
+	});
+});
+
+// SIO-926: a follow-up "how's the upgrade going?" (pipeline-status intent -> watchPipeline) must
+// re-poll the PERSISTED fleet apply pipeline read-only -- never re-trigger -- since a binary
+// upgrade has no MR to recover.
+describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
+	test("still running -> dispatched, reads gitlab_get_pipeline, never triggers or lists MRs", async () => {
+		const { watchPipeline } = await import("./nodes.ts");
+		const seen: string[] = [];
+		mockTools({
+			gitlab_get_pipeline: () => {
+				seen.push("gitlab_get_pipeline");
+				return '[200] {"id":2605468937,"status":"running","web_url":"https://gitlab.com/x/-/pipelines/2605468937"}';
+			},
+			// These MUST NOT be called on the fleet path.
+			gitlab_list_agent_merge_requests: () => {
+				seen.push("gitlab_list_agent_merge_requests");
+				return "[200] []";
+			},
+			gitlab_trigger_fleet_upgrade_apply: () => {
+				seen.push("gitlab_trigger_fleet_upgrade_apply");
+				return '[201] {"pipelineId":1,"status":"created"}';
+			},
+		});
+		const state = {
+			intent: "pipeline-status",
+			fleetApplyPipelineId: 2605468937,
+			fleetUpgradeResult: { status: "dispatched", pipelineId: 2605468937 },
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		expect(seen).toContain("gitlab_get_pipeline");
+		expect(seen).not.toContain("gitlab_list_agent_merge_requests"); // no MR recovery on the fleet path
+		expect(seen).not.toContain("gitlab_trigger_fleet_upgrade_apply"); // never re-triggers
+		expect(out.fleetUpgradeResult?.status).toBe("dispatched");
+		// still in flight -> keep the id for the next check (not cleared)
+		expect(out.fleetApplyPipelineId).toBeUndefined();
+	});
+
+	test("terminal success -> applied, fetches the apply result, clears the persisted id", async () => {
+		const { watchPipeline } = await import("./nodes.ts");
+		// The apply-result tool returns the report as a JSON STRING field (parseDriftCheckResult keeps
+		// report only when typeof === "string"), and parseFleetApplyOutcome reads action_id/apply
+		// from it at the top level.
+		const reportStr = JSON.stringify({
+			mode: "apply",
+			action_id: "abc",
+			apply: { poll_status: "COMPLETE", acked: 247, created: 247, failed_silent: 0 },
+		});
+		mockTools({
+			gitlab_get_pipeline: () => '[200] {"id":2605468937,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({ pipelineId: 2605468937, status: "success", report: reportStr })}`,
+		});
+		const state = {
+			intent: "pipeline-status",
+			fleetApplyPipelineId: 2605468937,
+			fleetUpgradeResult: { status: "dispatched", pipelineId: 2605468937 },
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		expect(out.fleetUpgradeResult?.status).toBe("applied");
+		expect(out.fleetUpgradeResult?.failedSilent).toBe(0);
+		// reached terminal -> clear the in-flight id so we don't keep re-checking
+		expect(out.fleetApplyPipelineId).toBeNull();
 	});
 });
