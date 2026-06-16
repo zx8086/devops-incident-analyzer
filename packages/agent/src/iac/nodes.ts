@@ -5997,9 +5997,20 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	if (!report) return {};
 	const { deployment, targetVersion } = report;
 
-	log.info({ deployment, version: targetVersion }, "iac fleet upgrade: triggering apply");
+	// SIO-927: the apply CI script refuses when resolved_count exceeds its blast-radius cap (default
+	// 500). The operator has already approved THIS report's resolved set at fleetUpgradeGate, so pass
+	// resolvedCount as MAX_AGENTS -- approval == accepting the full blast radius. Preview stays uncapped
+	// (we never send MAX_AGENTS on the preview trigger). Fleet's separate 10000 hard cap still applies.
+	log.info(
+		{ deployment, version: targetVersion, maxAgents: report.resolvedCount },
+		"iac fleet upgrade: triggering apply",
+	);
 	const trig = parseTriggerResult(
-		await callTool("gitlab_trigger_fleet_upgrade_apply", { deployment, version: targetVersion }),
+		await callTool("gitlab_trigger_fleet_upgrade_apply", {
+			deployment,
+			version: targetVersion,
+			maxAgents: report.resolvedCount,
+		}),
 	);
 	if (trig.pipelineId === null) {
 		const note =
