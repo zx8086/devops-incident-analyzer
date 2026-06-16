@@ -1,7 +1,11 @@
 // agent/src/iac/dashboard-edit.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, parseIntentJson, reviewPlan, validateNdjsonLines } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+// draftChange/reviewPlan read only a slice of IacState in these tests; the approved test-stub
+// cast (Partial<T> as unknown as T) keeps the call typed without `as any`.
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 // A real-shaped (small) Kibana dashboard NDJSON export: ONE saved-object line + the trailing
 // export-summary line. Mirrors the live developer-experience__amazon_bedrock_token_usage.ndjson
@@ -69,16 +73,21 @@ describe("parseIntentJson — dashboard-edit", () => {
 });
 
 describe("branchSlug — dashboard", () => {
-	test("uses the dashboard name as the descriptor", () => {
-		const req: IacRequest = {
+	test("includes the space (slugs repeat across spaces) + name, sliced to 40 chars", () => {
+		const base: Omit<IacRequest, "dashboardSpace"> = {
 			workflow: "dashboard-edit",
 			isProd: false,
 			cluster: "eu-b2b",
-			dashboardSpace: "developer-experience",
 			dashboardName: "amazon_bedrock_token_usage",
 			dashboardAction: "add",
 		};
-		expect(branchSlug(req)).toBe("eu-b2b-amazon-bedrock-token-usage-dashbo"); // sliced to 40 chars
+		const a = branchSlug({ ...base, dashboardSpace: "developer-experience" });
+		const b = branchSlug({ ...base, dashboardSpace: "default" });
+		// the space must distinguish two same-named dashboards in different spaces
+		expect(a).not.toBe(b);
+		expect(a.startsWith("eu-b2b-developer-experience-")).toBe(true);
+		expect(b.startsWith("eu-b2b-default-amazon")).toBe(true);
+		expect(a.length).toBeLessThanOrEqual(40);
 	});
 });
 
@@ -120,8 +129,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe(
 			"environments/eu-b2b/dashboards/developer-experience__amazon_bedrock_token_usage.ndjson",
@@ -148,8 +156,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		await draftChange(state as any);
+		await draftChange(asIacState(state));
 		// byte-for-byte identity proves there was no whole-file JSON.parse + re-stringify
 		expect(committed.content).toBe(NDJSON_2OBJ);
 		expect(String(committed.content).split("\n").length).toBe(3);
@@ -172,8 +179,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "replace" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(committed.action).toBe("update");
 	});
@@ -192,8 +198,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.proposedDiff).toContain("developer-experience__amazon_bedrock_token_usage.ndjson");
 		expect(result.proposedDiff).toContain("2 saved objects");
 		expect(result.proposedDiff).toContain("bytes");
@@ -216,8 +221,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("NDJSON");
 		expect(result.precheckPassed).toBeUndefined();
 	});
@@ -236,8 +240,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("malformed");
 		expect(result.blockedReason).toContain("line 2");
 	});
@@ -259,8 +262,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("ghost-space");
 		expect(result.blockedReason).toContain("not a space");
 	});
@@ -279,8 +281,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "add" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already exists");
 	});
 
@@ -298,8 +299,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "replace" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("to replace");
 	});
 
@@ -316,8 +316,7 @@ describe("draftChange -> proposeDashboardChange", () => {
 				dashboardAction: "delete" as const,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("delete is not supported");
 	});
 
@@ -334,9 +333,94 @@ describe("draftChange -> proposeDashboardChange", () => {
 				// no dashboardSpace
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("space");
+	});
+
+	test("path-traversal in a segment blocks before any repo read (SIO-920 guard)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({}); // no tools -> proves the guard fires before reading
+		const state = {
+			iacRequest: {
+				workflow: "dashboard-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				dashboardSpace: "../../secrets",
+				dashboardName: "x",
+				dashboardNdjson: NDJSON_1OBJ,
+				dashboardAction: "add" as const,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("invalid");
+	});
+
+	test("a non-2xx/non-404 space read blocks (does not guess existence)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		// space read errors (e.g. 500 / timeout placeholder) -> UNKNOWN, must block, not proceed
+		mockTools({
+			gitlab_get_file_content: () => '[500] {"message":"server error"}',
+		});
+		const state = {
+			iacRequest: {
+				workflow: "dashboard-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				dashboardSpace: "developer-experience",
+				dashboardName: "amazon_bedrock_token_usage",
+				dashboardNdjson: NDJSON_1OBJ,
+				dashboardAction: "add" as const,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("Could not verify space");
+		expect(result.precheckPassed).toBeUndefined();
+	});
+
+	test("a tool-error placeholder on the file read blocks (not treated as 'exists')", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		// space resolves; the dashboard read returns a callTool error placeholder (not 2xx/404)
+		mockTools({
+			gitlab_get_file_content: (args) =>
+				String(args.filePath ?? "").includes("/spaces/") ? SPACE_FILE : "[gitlab_get_file_content error: ETIMEDOUT]",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "dashboard-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				dashboardSpace: "developer-experience",
+				dashboardName: "amazon_bedrock_token_usage",
+				dashboardNdjson: NDJSON_1OBJ,
+				dashboardAction: "add" as const,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("Could not check dashboard");
+		expect(result.precheckPassed).toBeUndefined();
+	});
+
+	test("a failed commit blocks (not surfaced as a committed change)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: (args) => (String(args.filePath ?? "").includes("/spaces/") ? SPACE_FILE : NOT_FOUND),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[gitlab_commit_file error: 500 Internal Server Error]",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "dashboard-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				dashboardSpace: "developer-experience",
+				dashboardName: "amazon_bedrock_token_usage",
+				dashboardNdjson: NDJSON_1OBJ,
+				dashboardAction: "add" as const,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("Could not commit dashboard");
+		expect(result.precheckPassed).toBeUndefined();
 	});
 });
 
@@ -355,8 +439,7 @@ describe("reviewPlan — dashboard", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-920 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		// title carries the space__name descriptor + the workflow
 		expect(result.planReview?.title).toContain("developer-experience__amazon_bedrock_token_usage");

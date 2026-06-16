@@ -884,7 +884,9 @@ export function branchSlug(req: IacRequest): string {
 											: req.workflow === "topology-edit"
 												? req.topologyTier
 												: req.workflow === "dashboard-edit"
-													? req.dashboardName
+													? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
+														// include space + action so same-day edits don't collide on one branch.
+														[req.dashboardSpace, req.dashboardName, req.dashboardAction].filter(Boolean).join("-")
 													: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
@@ -2620,6 +2622,22 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 		};
 	}
 
+	// SIO-920: cluster/space/name are LLM-derived and get interpolated into a GitLab file path.
+	// Reject path separators and dot segments so a dashboard-edit can only ever target
+	// environments/<dep>/dashboards/<space>__<name>.ndjson, never escape the dashboards dir.
+	const isSafePathSegment = (value: string): boolean =>
+		value.length > 0 && !value.includes("\0") && !/[\\/]/.test(value) && value !== "." && value !== "..";
+	if (!isSafePathSegment(cluster) || !isSafePathSegment(space) || !isSafePathSegment(name)) {
+		return {
+			blockedReason: "Dashboard change contains an invalid deployment, space, or dashboard path segment.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: the deployment, space, and dashboard name must be plain file-name segments (no path separators or '.' / '..').",
+				),
+			],
+		};
+	}
+
 	// delete is not supported yet: there is no delete-file tool, and gitlab_commit_file only
 	// creates/updates. Surface it as a follow-up rather than silently doing nothing.
 	if (action === "delete") {
@@ -2660,6 +2678,13 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 	const filePath = dashboardNdjsonPath(dashboardNdjsonTemplate(), cluster, space, name);
 	const branch = branchName(req);
 
+	// SIO-920: classify GitLab tool responses. callTool returns "[<status>] <json>" on a real API
+	// call and "[gitlab ...]"/"[<tool> error: ...]" placeholders on failure. A read must be a clean
+	// 2xx (file present) or 404 (absent); anything else (token/timeout/5xx/placeholder) is an
+	// UNKNOWN read and must block -- never silently treated as "exists" or "absent".
+	const isGitlabSuccess = (result: string): boolean => /^\[2\d\d\]/.test(result);
+	const isGitlabNotFound = (result: string): boolean => result.startsWith("[404");
+
 	// Cross-check the space exists (the <space>__ prefix must match a real space on this deployment).
 	const spacePath = deploymentJsonPath(spaceTemplate(), cluster).replace(/\$\{space\}/g, space);
 	const spaceRaw = await callTool("gitlab_get_file_content", { filePath: spacePath });
@@ -2669,7 +2694,15 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
-	if (spaceRaw.startsWith("[404")) {
+	if (!isGitlabSuccess(spaceRaw) && !isGitlabNotFound(spaceRaw)) {
+		return {
+			blockedReason: `Could not verify space '${space}' on '${cluster}' (${spacePath}): ${spaceRaw.slice(0, 120)}.`,
+			messages: [
+				new AIMessage("Cannot propose the change: I could not read the target Kibana space from the GitOps repo."),
+			],
+		};
+	}
+	if (isGitlabNotFound(spaceRaw)) {
 		return {
 			blockedReason: `'${space}' is not a space on '${cluster}' (${spacePath}).`,
 			messages: [
@@ -2680,9 +2713,18 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 		};
 	}
 
-	// Check the target file: add expects it absent (404 ok), replace expects it present.
+	// Check the target file: add expects it absent (404 ok), replace expects it present. An UNKNOWN
+	// read (neither 2xx nor 404) blocks -- we must not guess existence from an error placeholder.
 	const fileRaw = await callTool("gitlab_get_file_content", { filePath });
-	const fileExists = !fileRaw.startsWith("[404");
+	if (!isGitlabSuccess(fileRaw) && !isGitlabNotFound(fileRaw)) {
+		return {
+			blockedReason: `Could not check dashboard '${space}__${name}' on '${cluster}' (${filePath}): ${fileRaw.slice(0, 120)}.`,
+			messages: [
+				new AIMessage("Cannot propose the change: I could not verify whether the dashboard file already exists."),
+			],
+		};
+	}
+	const fileExists = isGitlabSuccess(fileRaw);
 	if (action === "add" && fileExists) {
 		return {
 			blockedReason: `Dashboard '${space}__${name}' already exists on '${cluster}'; use replace to overwrite it.`,
@@ -2713,14 +2755,22 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 		commit_message: `${cluster}: ${action} dashboard ${space}__${name}`,
 		action: action === "add" ? "create" : "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// A clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]") or non-2xx
+	// must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit dashboard '${space}__${name}' to ${filePath}: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the dashboard file commit failed.")],
+		};
+	}
 
 	// Diff is a SUMMARY (filename + action + object count + byte size) -- NEVER the NDJSON body
 	// (a dashboard export can be 1.9 MB). objectCount counts saved-object lines (excludes the
 	// trailing export-summary line).
 	const proposedDiff = `${filePath} (dashboard ${action}): ${validated.objectCount} saved object${validated.objectCount === 1 ? "" : "s"} + export summary, ${Buffer.byteLength(ndjson, "utf8")} bytes`;
 
-	return { branch, proposedFilePath: filePath, proposedDiff, precheckPassed: committed };
+	// The commit returned 2xx (non-2xx returned early above), so the change is on the branch.
+	return { branch, proposedFilePath: filePath, proposedDiff, precheckPassed: true };
 }
 
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
