@@ -213,9 +213,14 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 
 		// SIO-876: forward watchPipeline's live status transitions to the UI.
 		if (event.event === "on_custom_event" && event.name === "iac_pipeline_progress") {
-			const data = event.data as { pipelineId?: number | null; status?: unknown };
+			const data = event.data as { pipelineId?: number | null; status?: unknown; url?: unknown };
 			if (typeof data?.status === "string") {
-				send({ type: "iac_pipeline_progress", pipelineId: data.pipelineId ?? null, status: data.status });
+				send({
+					type: "iac_pipeline_progress",
+					pipelineId: data.pipelineId ?? null,
+					status: data.status,
+					...(typeof data.url === "string" && data.url && { url: data.url }),
+				});
 			}
 		}
 
@@ -350,6 +355,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				created?: unknown;
 				failedSilent?: unknown;
 				pipelineId?: unknown;
+				pipelineUrl?: unknown;
 				note?: unknown;
 			};
 			if (typeof data?.status === "string") {
@@ -362,6 +368,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 					...(typeof data.created === "number" && { created: data.created }),
 					...(typeof data.failedSilent === "number" && { failedSilent: data.failedSilent }),
 					...(typeof data.pipelineId === "number" && { pipelineId: data.pipelineId }),
+					...(typeof data.pipelineUrl === "string" && data.pipelineUrl && { pipelineUrl: data.pipelineUrl }),
 					...(typeof data.note === "string" && { note: data.note }),
 				});
 			}

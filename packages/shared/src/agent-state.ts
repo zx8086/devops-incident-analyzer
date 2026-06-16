@@ -616,6 +616,8 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		created: z.number().optional(),
 		failedSilent: z.number().optional(),
 		pipelineId: z.number().optional(),
+		// SIO-924: clickable link to the live bulk_upgrade apply pipeline.
+		pipelineUrl: z.string().optional(),
 		note: z.string().optional(),
 	}),
 ]);

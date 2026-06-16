@@ -3420,6 +3420,24 @@ export function isTerminalPipelineStatus(status: string): boolean {
 	return ["success", "failed", "canceled", "skipped"].includes(status);
 }
 
+// SIO-924: parse a single pipeline's {status, web_url} from gitlab_get_pipeline's
+// "[status] {...}" body (GET /projects/:id/pipelines/:id). Used to stream live apply
+// progress + surface a clickable pipeline link. (Pure; unit-tested.)
+export function parseSinglePipeline(toolResult: string): { status: string; webUrl: string } | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const p = JSON.parse(toolResult.slice(jsonStart)) as { status?: unknown; web_url?: unknown };
+		if (typeof p !== "object" || p === null) return null;
+		return {
+			status: typeof p.status === "string" ? p.status : "unknown",
+			webUrl: typeof p.web_url === "string" ? p.web_url : "",
+		};
+	} catch {
+		return null;
+	}
+}
+
 // One-line plan summary: "0 create / 1 update / 0 destroy".
 export function formatPlanSummary(report: IacPlanReport | null): string {
 	if (!report) return "plan not available";
@@ -5781,6 +5799,7 @@ async function emitFleetResult(r: FleetUpgradeResult): Promise<void> {
 		...(r.created != null && { created: r.created }),
 		...(r.failedSilent != null && { failedSilent: r.failedSilent }),
 		...(r.pipelineId != null && { pipelineId: r.pipelineId }),
+		...(r.pipelineUrl && { pipelineUrl: r.pipelineUrl }),
 		...(r.note && { note: r.note }),
 	});
 }
@@ -5931,6 +5950,42 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	}
 
 	log.info({ deployment, pipelineId: trig.pipelineId }, "iac fleet upgrade: apply triggered; polling");
+
+	// SIO-924: stream live apply progress like watchPipeline, so the user can TRACK the imperative
+	// bulk_upgrade instead of staring at a frozen card for ~2 min. Surface the pipeline id + a
+	// clickable GitLab link up front, then emit iac_pipeline_progress on each status transition.
+	// gitlab_get_fleet_upgrade_apply_result blocks server-side until terminal, so the ticker comes
+	// from polling gitlab_get_pipeline (single-shot status read) BEFORE we fetch the artifact.
+	let pipelineUrl = "";
+	{
+		const first = parseSinglePipeline(await callTool("gitlab_get_pipeline", { pipelineId: trig.pipelineId }));
+		pipelineUrl = first?.webUrl ?? "";
+		let lastStatus = first?.status ?? "running";
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: trig.pipelineId,
+			status: `fleet apply: ${lastStatus}`,
+			...(pipelineUrl && { url: pipelineUrl }),
+		});
+		const budgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
+		const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
+		const deadline = Date.now() + budgetMs;
+		while (!isTerminalPipelineStatus(lastStatus) && Date.now() < deadline) {
+			if (Date.now() + intervalMs >= deadline) break;
+			await new Promise((r) => setTimeout(r, intervalMs));
+			const cur = parseSinglePipeline(await callTool("gitlab_get_pipeline", { pipelineId: trig.pipelineId }));
+			if (cur && cur.status !== lastStatus) {
+				lastStatus = cur.status;
+				if (!pipelineUrl && cur.webUrl) pipelineUrl = cur.webUrl;
+				log.info({ deployment, pipelineId: trig.pipelineId, status: lastStatus }, "iac fleet apply: pipeline status");
+				await dispatchCustomEvent("iac_pipeline_progress", {
+					pipelineId: trig.pipelineId,
+					status: `fleet apply: ${lastStatus}`,
+					...(pipelineUrl && { url: pipelineUrl }),
+				});
+			}
+		}
+	}
+
 	const res = parseDriftCheckResult(
 		await callTool("gitlab_get_fleet_upgrade_apply_result", { pipelineId: trig.pipelineId }),
 	);
@@ -5942,6 +5997,7 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 					status: "applied",
 					pipelineId: trig.pipelineId,
 					pipelineStatus: res.status,
+					...(pipelineUrl && { pipelineUrl }),
 					...(outcome && {
 						actionId: outcome.actionId,
 						pollStatus: outcome.pollStatus,
@@ -5954,6 +6010,7 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 					status: "failed",
 					pipelineId: trig.pipelineId,
 					pipelineStatus: res.status,
+					...(pipelineUrl && { pipelineUrl }),
 					...(outcome && {
 						actionId: outcome.actionId,
 						pollStatus: outcome.pollStatus,
@@ -6005,7 +6062,11 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 		);
 	}
 	if (result.status === "applied") {
-		const pid = result.pipelineId ? ` Pipeline #${result.pipelineId}.` : "";
+		const pid = result.pipelineId
+			? result.pipelineUrl
+				? ` Apply pipeline [#${result.pipelineId}](${result.pipelineUrl}).`
+				: ` Apply pipeline #${result.pipelineId}.`
+			: "";
 		const silent =
 			result.failedSilent && result.failedSilent > 0
 				? ` WARNING: ${result.failedSilent} agent(s) reached UPG_FAILED (verify sweep -- Fleet action_status undercounts these). Investigate before declaring success.`
@@ -6014,5 +6075,10 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 		return `Fleet upgrade to ${report.targetVersion} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${pid}${skipNote}`;
 	}
 	// blocked | failed
-	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${skipNote}`;
+	const bfPid = result.pipelineId
+		? result.pipelineUrl
+			? ` Apply pipeline [#${result.pipelineId}](${result.pipelineUrl}).`
+			: ` Apply pipeline #${result.pipelineId}.`
+		: "";
+	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${bfPid}${skipNote}`;
 }

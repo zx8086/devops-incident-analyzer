@@ -320,6 +320,9 @@ export interface FleetUpgradeReport {
 export interface FleetUpgradeResult {
 	status: "applied" | "skipped" | "blocked" | "failed";
 	pipelineId?: number | null;
+	// SIO-924: the apply pipeline's GitLab web_url, so the UI can render a clickable link to the
+	// live bulk_upgrade run (parity with how config edits surface the MR link).
+	pipelineUrl?: string;
 	pipelineStatus?: string;
 	actionId?: string;
 	pollStatus?: string; // COMPLETE | ROLLOUT_PASSED | FAILED | ...

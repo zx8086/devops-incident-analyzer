@@ -6,6 +6,7 @@ import {
 	intentFromText,
 	parseFleetApplyOutcome,
 	parseFleetUpgradeReport,
+	parseSinglePipeline,
 	parseTargetVersion,
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
@@ -278,5 +279,49 @@ describe("detectFleetUpgrade deployment resolution (SIO-923)", () => {
 		// Locked trigger -> planError report for the resolved deployment (no spurious clarify).
 		expect(result.targetDeployment).toBe("eu-b2b");
 		expect(result.fleetUpgradeReport?.planError).toBe(true);
+	});
+});
+
+describe("parseSinglePipeline (SIO-924)", () => {
+	test("extracts status + web_url from a [200] pipeline body", () => {
+		const r = parseSinglePipeline('[200] {"id":42,"status":"running","web_url":"https://gitlab.com/x/-/pipelines/42"}');
+		expect(r?.status).toBe("running");
+		expect(r?.webUrl).toBe("https://gitlab.com/x/-/pipelines/42");
+	});
+	test("defaults status to unknown + webUrl to empty when absent", () => {
+		const r = parseSinglePipeline('[200] {"id":42}');
+		expect(r?.status).toBe("unknown");
+		expect(r?.webUrl).toBe("");
+	});
+	test("returns null on an unparseable body", () => {
+		expect(parseSinglePipeline("[500] nope")).toBeNull();
+	});
+});
+
+describe("formatFleetUpgradeSummary — SIO-924 pipeline link", () => {
+	test("applied result renders a clickable apply-pipeline markdown link when pipelineUrl is set", () => {
+		const result: FleetUpgradeResult = {
+			status: "applied",
+			pipelineId: 99,
+			pipelineUrl: "https://gitlab.com/x/-/pipelines/99",
+			pollStatus: "COMPLETE",
+			acked: 4,
+			created: 4,
+			failedSilent: 0,
+		};
+		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).toContain("[#99](https://gitlab.com/x/-/pipelines/99)");
+	});
+	test("applied result falls back to a bare pipeline number when no url", () => {
+		const result: FleetUpgradeResult = {
+			status: "applied",
+			pipelineId: 99,
+			pollStatus: "COMPLETE",
+			acked: 4,
+			created: 4,
+		};
+		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
+		expect(formatFleetUpgradeSummary(s)).toContain("Apply pipeline #99.");
 	});
 });

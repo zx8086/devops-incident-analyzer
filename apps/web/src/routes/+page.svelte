@@ -153,7 +153,7 @@ function handleSuggestionClick(suggestion: string) {
 
   {#if isIac}
     <div class="bg-blue-50 border-b border-tommy-accent-blue/30 px-6 py-2 text-xs text-tommy-navy/80">
-      Elastic Cloud IaC maker. I read live state, propose a config change, and open a GitLab MR for your review. CI computes the plan on the MR; I never merge or apply.
+      Elastic Cloud IaC maker. For config changes I propose a diff and open a GitLab MR for your review &mdash; CI computes the plan and you merge; I never apply those. A Fleet agent <strong>binary</strong> upgrade has no config file, so on your explicit approval it runs an imperative bulk_upgrade via CI (a live change you can track here).
     </div>
   {:else}
     <DataSourceSelector dataSources={agentStore.availableDataSources} connected={agentStore.connectedDataSources} states={agentStore.stateDataSources} bind:selected={agentStore.selectedDataSources} />
