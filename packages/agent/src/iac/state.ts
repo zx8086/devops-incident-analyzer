@@ -78,6 +78,13 @@ export interface IacRequest {
 	topologyTier?: string;
 	tierZoneCount?: number;
 	tierAutoscale?: boolean;
+	// SIO-919: topology-edit also covers the SSO user_settings_yaml (raw YAML-in-JSON; HIGH -- can
+	// lock out login) and the non-data component sizing (integrations_server / kibana).
+	userSettingsTarget?: "elasticsearch_config" | "kibana";
+	userSettingsYaml?: string;
+	sizeComponent?: "integrations_server" | "kibana";
+	componentSize?: string;
+	componentZoneCount?: number;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
