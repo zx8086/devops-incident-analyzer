@@ -10,6 +10,8 @@ export interface IacRequest {
 		| "fleet-integration"
 		| "slo-edit"
 		| "alerting-edit"
+		| "dataview-edit"
+		| "cluster-default-edit"
 		| "other";
 	cluster?: string;
 	tier?: string;
@@ -43,6 +45,17 @@ export interface IacRequest {
 	alertWindowUnit?: string;
 	alertEnabled?: boolean;
 	alertInterval?: string;
+	// SIO-917: dataview-edit workflow -- the data-view file basename + a runtime field (config
+	// form: script_source) and/or title/name. cluster-default-edit -- the index-template file
+	// basename + the total_shards_per_node value.
+	dataviewName?: string;
+	runtimeFieldName?: string;
+	runtimeFieldType?: string;
+	runtimeFieldScript?: string;
+	dataviewTitle?: string;
+	dataviewDisplayName?: string;
+	templateName?: string;
+	totalShardsPerNode?: number;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
@@ -344,6 +357,9 @@ export const IacState = Annotation.Root({
 	// SIO-916: an alerting-edit DISABLED a rule (enabled:false) -- surfaced as a HIGH risk line
 	// because it silences the rule's alerts.
 	alertDisabled: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-917: a cluster-default-edit LOWERED total_shards_per_node -- surfaced as a risk line
+	// (concentrates shards on fewer nodes, can unbalance allocation).
+	shardsLowered: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.

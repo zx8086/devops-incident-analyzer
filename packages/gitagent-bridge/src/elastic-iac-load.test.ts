@@ -20,6 +20,8 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 			"pin-fleet-integration",
 			"edit-slo",
 			"edit-alert-rule",
+			"edit-dataview",
+			"edit-cluster-default",
 			"pre-check-gl-testing",
 			"open-mr",
 			"validate-cluster-state",

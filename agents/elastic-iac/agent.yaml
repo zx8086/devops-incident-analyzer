@@ -23,6 +23,8 @@ skills:
   - id: pin-fleet-integration
   - id: edit-slo
   - id: edit-alert-rule
+  - id: edit-dataview
+  - id: edit-cluster-default
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state
