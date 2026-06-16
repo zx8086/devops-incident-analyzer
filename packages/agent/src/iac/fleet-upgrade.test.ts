@@ -371,3 +371,71 @@ describe("formatFleetUpgradeSummary — SIO-924 pipeline link", () => {
 		expect(formatFleetUpgradeSummary(s)).toContain("Apply pipeline #99.");
 	});
 });
+
+// SIO-926: a follow-up "how's the upgrade going?" (pipeline-status intent -> watchPipeline) must
+// re-poll the PERSISTED fleet apply pipeline read-only -- never re-trigger -- since a binary
+// upgrade has no MR to recover.
+describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
+	test("still running -> dispatched, reads gitlab_get_pipeline, never triggers or lists MRs", async () => {
+		const { watchPipeline } = await import("./nodes.ts");
+		const seen: string[] = [];
+		mockTools({
+			gitlab_get_pipeline: () => {
+				seen.push("gitlab_get_pipeline");
+				return '[200] {"id":2605468937,"status":"running","web_url":"https://gitlab.com/x/-/pipelines/2605468937"}';
+			},
+			// These MUST NOT be called on the fleet path.
+			gitlab_list_agent_merge_requests: () => {
+				seen.push("gitlab_list_agent_merge_requests");
+				return "[200] []";
+			},
+			gitlab_trigger_fleet_upgrade_apply: () => {
+				seen.push("gitlab_trigger_fleet_upgrade_apply");
+				return '[201] {"pipelineId":1,"status":"created"}';
+			},
+		});
+		const state = {
+			intent: "pipeline-status",
+			fleetApplyPipelineId: 2605468937,
+			fleetUpgradeResult: { status: "dispatched", pipelineId: 2605468937 },
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		expect(seen).toContain("gitlab_get_pipeline");
+		expect(seen).not.toContain("gitlab_list_agent_merge_requests"); // no MR recovery on the fleet path
+		expect(seen).not.toContain("gitlab_trigger_fleet_upgrade_apply"); // never re-triggers
+		expect(out.fleetUpgradeResult?.status).toBe("dispatched");
+		// still in flight -> keep the id for the next check (not cleared)
+		expect(out.fleetApplyPipelineId).toBeUndefined();
+	});
+
+	test("terminal success -> applied, fetches the apply result, clears the persisted id", async () => {
+		const { watchPipeline } = await import("./nodes.ts");
+		// The apply-result tool returns the report as a JSON STRING field (parseDriftCheckResult keeps
+		// report only when typeof === "string"), and parseFleetApplyOutcome reads action_id/apply
+		// from it at the top level.
+		const reportStr = JSON.stringify({
+			mode: "apply",
+			action_id: "abc",
+			apply: { poll_status: "COMPLETE", acked: 247, created: 247, failed_silent: 0 },
+		});
+		mockTools({
+			gitlab_get_pipeline: () => '[200] {"id":2605468937,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({ pipelineId: 2605468937, status: "success", report: reportStr })}`,
+		});
+		const state = {
+			intent: "pipeline-status",
+			fleetApplyPipelineId: 2605468937,
+			fleetUpgradeResult: { status: "dispatched", pipelineId: 2605468937 },
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		expect(out.fleetUpgradeResult?.status).toBe("applied");
+		expect(out.fleetUpgradeResult?.failedSilent).toBe(0);
+		// reached terminal -> clear the in-flight id so we don't keep re-checking
+		expect(out.fleetApplyPipelineId).toBeNull();
+	});
+});

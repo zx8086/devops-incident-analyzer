@@ -438,6 +438,10 @@ export const IacState = Annotation.Root({
 	fleetUpgradeReport: Annotation<FleetUpgradeReport | null>({ reducer: last, default: () => null }),
 	fleetUpgradeApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	fleetUpgradeResult: Annotation<FleetUpgradeResult | null>({ reducer: last, default: () => null }),
+	// SIO-926: the in-flight apply pipeline id, persisted so a later "how's the upgrade going?"
+	// (pipeline-status intent) re-polls THIS imperative pipeline -- there is no MR for a binary
+	// upgrade, so watchPipeline's MR-recovery path can't find it. Set when the apply is dispatched.
+	fleetApplyPipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
 });
 
 export type IacStateType = typeof IacState.State;
