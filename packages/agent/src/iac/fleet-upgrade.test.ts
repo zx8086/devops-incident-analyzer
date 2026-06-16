@@ -509,3 +509,33 @@ describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
 		expect(previewArgs[0]).not.toHaveProperty("maxAgents");
 	});
 });
+
+// SIO-928: the reported bug -- a follow-up about a dispatched fleet apply ("How is the rollout?")
+// classified as info and re-printed the stale dispatched message instead of re-polling. The
+// deterministic guard in classifyIacIntent routes it to pipeline-status BEFORE the LLM, but only
+// when a fleet apply pipeline is actually in flight. These assert the routing without an LLM mock
+// (the guard returns before createLlm is reached).
+describe("classifyIacIntent fleet-status guard (SIO-928)", () => {
+	const humanState = (content: string, fleetApplyPipelineId: number | null) =>
+		({
+			messages: [{ getType: () => "human", content }],
+			fleetApplyPipelineId,
+		}) as unknown as IacStateType;
+
+	test("a rollout follow-up with a fleet apply in flight routes to pipeline-status (no LLM)", async () => {
+		const { classifyIacIntent } = await import("./nodes.ts");
+		for (const q of ["How is the rollout?", "check on it or watch the pipeline", "is the upgrade done yet"]) {
+			const out = await classifyIacIntent(humanState(q, 2606647909));
+			expect(out.intent).toBe("pipeline-status");
+		}
+	});
+
+	test("a FRESH upgrade request does NOT trip the guard even with a pipeline in flight", async () => {
+		// "upgrade ... to 9.5.0" names a version -> a NEW apply, not a status check. The guard predicate
+		// (looksLikeFleetStatusCheck) must reject it so classifyIacIntent falls through to the LLM and a
+		// second upgrade is never swallowed as pipeline-status. Asserted at the predicate the guard uses
+		// -- avoiding a process-global createLlm mock that would pollute sibling tests (SIO-635 class).
+		const { looksLikeFleetStatusCheck } = await import("./nodes.ts");
+		expect(looksLikeFleetStatusCheck("upgrade the agents on eu-cld to 9.5.0")).toBe(false);
+	});
+});

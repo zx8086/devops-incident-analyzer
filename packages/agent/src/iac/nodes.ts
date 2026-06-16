@@ -267,11 +267,58 @@ export function intentFromText(
 	return "info";
 }
 
-// Classify the request: read-only info, a gitops change, or a follow-up about an MR's
-// pipeline/plan/approval. Ambiguous "should I…/recommend…" biases to gitops (HITL-gated,
-// never applies). pipeline-status only resolves when the thread already opened an MR.
+// SIO-928: is this follow-up a status check on an already-dispatched fleet apply (NOT a fresh
+// upgrade)? Used by classifyIacIntent as a deterministic guard: a fleet binary apply has no MR, so
+// the LLM's MR-scoped "pipeline-status" never fired for "how is the rollout?"-style messages and they
+// fell through to info. We only call this when a pipeline is already in flight, so the bar is just
+// "does this look like a progress/status question rather than a new upgrade". A message that names a
+// target version (e.g. "...to 9.4.2") is a NEW upgrade and must NOT be swallowed as a status check.
+export function looksLikeFleetStatusCheck(text: string): boolean {
+	const r = text.toLowerCase();
+	// A fresh upgrade names a version (X.Y or X.Y.Z) -- never treat that as a status check.
+	if (/\b\d+\.\d+(\.\d+)?\b/.test(r)) return false;
+	const STATUS_CUES = [
+		"how is",
+		"how's",
+		"hows",
+		"how are",
+		"how far",
+		"status",
+		"progress",
+		"check on",
+		"check it",
+		"watch the pipeline",
+		"watch it",
+		"going",
+		"done yet",
+		"is it done",
+		"finished",
+		"complete",
+		"any update",
+		"update on",
+		"still running",
+		"rollout",
+	];
+	return STATUS_CUES.some((cue) => r.includes(cue));
+}
+
+// Classify the request: read-only info, a gitops change, or a follow-up about in-flight work
+// (an MR's pipeline/plan/approval, OR a dispatched fleet bulk_upgrade -- SIO-928). Ambiguous
+// "should I…/recommend…" biases to gitops (HITL-gated, never applies).
 export async function classifyIacIntent(state: IacStateType): Promise<Partial<IacStateType>> {
 	const query = lastHumanText(state);
+	// SIO-928: deterministic guard BEFORE the LLM. A dispatched fleet binary apply has no MR, so the
+	// LLM's (MR-scoped) pipeline-status never fired for "how is the rollout?"-style follow-ups and they
+	// fell through to info -> answerInfo, which cannot re-poll the live pipeline. When this thread has a
+	// fleet apply in flight AND the message reads like a progress check (not a new upgrade), route
+	// straight to pipeline-status -> watchPipeline -> checkFleetApplyStatus. Independent of LLM judgment.
+	if (state.fleetApplyPipelineId != null && looksLikeFleetStatusCheck(query)) {
+		log.info(
+			{ query, fleetApplyPipelineId: state.fleetApplyPipelineId },
+			"iac intent: fleet-status guard -> pipeline-status",
+		);
+		return { intent: "pipeline-status" };
+	}
 	const llm = createLlm("iacClassifier", AGENT);
 	const sys =
 		"Classify the user's Elastic Cloud request into exactly one word:\n" +
@@ -291,8 +338,12 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"for a deployment -- 'check synthetics drift for X', 'are the monitors in sync', 'push monitors to Kibana', " +
 		"'reconcile synthetics', 'check uptime monitors'. This compares source vs live Kibana monitors and offers an " +
 		"operator-approved push (NOT a per-stack Terraform reconcile).\n" +
-		"- 'pipeline-status': a follow-up about a merge request the agent already opened -- 'did the pipeline " +
-		"pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's the CI status'.\n" +
+		"- 'pipeline-status': a follow-up about work the agent already kicked off -- EITHER a merge request " +
+		"it opened ('did the pipeline pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's " +
+		"the CI status') OR a Fleet agent bulk_upgrade it already dispatched ('how is the rollout', 'how's the " +
+		"upgrade going', 'check on it', 'watch the pipeline', 'is the upgrade done', 'any progress on the agents'). " +
+		"Use this for ANY 'how is it going / check on it / is it done' follow-up to an in-flight change, even with " +
+		"no merge request.\n" +
 		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', or 'pipeline-status'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
