@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "../config.ts";
 import { createContextLogger } from "../logger.ts";
+import { CI_CONTRACT } from "./ci-contract.ts";
 import { gitlabFetch, text } from "./shared.ts";
 
 const log = createContextLogger("gitlab");
@@ -419,7 +420,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					);
 				}
 				log.info({ pipelineId, status, polls }, "gitlab_get_drift_check_result: pipeline reached terminal status");
-				const jobName = process.env.ELASTIC_IAC_DRIFT_JOB_NAME ?? "drift-check-on-demand";
+				const jobName = CI_CONTRACT.driftJobName;
 				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
 				if (jobId === null) {
 					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
@@ -603,8 +604,8 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					);
 				}
 				log.info({ pipelineId, status, polls }, "gitlab_get_synthetics_drift_result: pipeline reached terminal status");
-				const jobName = process.env.ELASTIC_IAC_SYNTH_DRIFT_JOB_NAME ?? "drift-check-synthetics-on-demand";
-				const artifactName = process.env.ELASTIC_IAC_SYNTH_DRIFT_ARTIFACT ?? "synthetics-drift-report.json";
+				const jobName = CI_CONTRACT.synthDriftJobName;
+				const artifactName = CI_CONTRACT.synthDriftArtifact;
 				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
 				if (jobId === null) {
 					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
@@ -769,7 +770,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					);
 				}
 				log.info({ pipelineId, status, polls }, "gitlab_get_synthetics_push_result: pipeline reached terminal status");
-				const jobName = process.env.ELASTIC_IAC_SYNTH_PUSH_JOB_NAME ?? "synthetics-push-on-demand";
+				const jobName = CI_CONTRACT.synthPushJobName;
 				let jobId = findJobByName(await glJson(`/projects/${project}/pipelines/${pipelineId}/jobs`), jobName);
 				if (jobId === null) {
 					const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
@@ -825,7 +826,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// without an agent redeploy. Contract: fleet-upgrade-report/v1 (see the SIO-913 handoff doc).
 	const fleetPipelineRef =
 		process.env.ELASTIC_IAC_FLEET_PIPELINE_REF ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
-	const fleetReportArtifact = process.env.ELASTIC_IAC_FLEET_REPORT_ARTIFACT ?? "fleet-upgrade-report.json";
+	const fleetReportArtifact = CI_CONTRACT.fleetReportArtifact;
 
 	// CI variables[] for a fleet-upgrade pipeline. varKey is the activating flag
 	// (FLEET_UPGRADE_PREVIEW or FLEET_UPGRADE_APPLY); the rest scope the bulk_upgrade. SELECTOR
@@ -1010,14 +1011,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			"resolved_count, version_available, upgradeable_crosstab). On a failed run also returns the job trace tail. " +
 			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
 		{ pipelineId: z.number() },
-		async ({ pipelineId }) =>
-			text(
-				await pollFleetResult(
-					"preview",
-					process.env.ELASTIC_IAC_FLEET_PREVIEW_JOB_NAME ?? "fleet-upgrade-preview-on-demand",
-					pipelineId,
-				),
-			),
+		async ({ pipelineId }) => text(await pollFleetResult("preview", CI_CONTRACT.fleetPreviewJobName, pipelineId)),
 	);
 
 	server.tool(
@@ -1054,14 +1048,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			"truth (Fleet action_status undercounts). On failure also returns the job trace tail. " +
 			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
 		{ pipelineId: z.number() },
-		async ({ pipelineId }) =>
-			text(
-				await pollFleetResult(
-					"apply",
-					process.env.ELASTIC_IAC_FLEET_APPLY_JOB_NAME ?? "fleet-upgrade-apply-on-demand",
-					pipelineId,
-				),
-			),
+		async ({ pipelineId }) => text(await pollFleetResult("apply", CI_CONTRACT.fleetApplyJobName, pipelineId)),
 	);
 
 	const PLAN_LOG_TAIL_BYTES = 4000;

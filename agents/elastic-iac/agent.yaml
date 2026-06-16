@@ -12,8 +12,8 @@ model:
 
 # Where the truth lives. The agent reads these on bootstrap.
 repository:
-  url: https://gitlab.com/pvhcorp/dhco/observability/observability-elasticcloud-deployments-terraform
-  project_id: 71488350
+  url: https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac
+  project_id: 82850717
   default_branch: main
   precheck_target: gl-testing            # always first non-eu-b2b target
 

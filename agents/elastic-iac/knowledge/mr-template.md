@@ -1,6 +1,6 @@
 <!--
 GitLab MR template for PVH Elastic Cloud Terraform IaC repos
-Primary target: pvhcorp/dhco/observability/observability-elasticcloud-deployments-terraform
+Primary target: pvhcorp/dhco/observability/observability-elastic-iac
 Install at: .gitlab/merge_request_templates/Default.md (or set per-project default)
 Authored: 2026-06-01 (v1) for AI-agent-driven MR creation
 Validation policy: advisory — warn on empty fields, do not block submission

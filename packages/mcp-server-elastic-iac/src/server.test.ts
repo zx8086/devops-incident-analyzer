@@ -8,7 +8,7 @@ describe("elastic-iac MCP server", () => {
 		const config = loadConfig();
 		expect(config.transport.port).toBe(9086);
 		expect(config.transport.path).toBe("/mcp");
-		expect(config.repository.projectId).toBe("71488350");
+		expect(config.repository.projectId).toBe("82850717");
 		expect(config.taskBin).toBe("task");
 	});
 

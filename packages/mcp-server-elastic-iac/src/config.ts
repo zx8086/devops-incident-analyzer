@@ -122,7 +122,7 @@ export function loadConfig(): Config {
 		},
 		repository: {
 			gitlabBaseUrl: Bun.env.GITLAB_BASE_URL ?? "https://gitlab.com",
-			projectId: Bun.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "71488350",
+			projectId: Bun.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "82850717",
 			workspaceDir: Bun.env.ELASTIC_IAC_WORKSPACE_DIR ?? "/tmp/elastic-iac-workspace",
 		},
 		gitops: {

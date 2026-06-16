@@ -1,12 +1,12 @@
 # `drift-report.json` enrichment contract for the incident agent
 
-A self-contained specification for the `siobytes/elastic-iac` team. It describes the data contract
+A self-contained specification for the `observability-elastic-iac` team. It describes the data contract
 between the drift-check pipeline and the devops incident-analyzer agent, what has already shipped,
 and one proposed additive change. You can implement the proposed change from this document alone.
 
 | | |
 |---|---|
-| **Target repo** | `siobytes/elastic-iac` (GitLab project id `71488350`) |
+| **Target repo** | `pvhcorp/dhco/observability/observability-elastic-iac` (GitLab project id `82850717`) |
 | **Producer** | `scripts/drift-check.ts --format=json` + `scripts/drift-values.ts` (redaction) -> `drift-report.json` |
 | **Consumer** | the devops incident-analyzer agent (reads `drift-report.json` only; never the raw `terraform plan`) |
 | **Increment 1 — `values`** | DELIVERED (commit `0f845a3`) |
