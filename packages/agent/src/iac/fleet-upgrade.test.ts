@@ -2,6 +2,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
 	formatFleetUpgradeSummary,
+	formatRolloutDuration,
 	hasApplicableFleetUpgrade,
 	intentFromText,
 	parseFleetApplyOutcome,
@@ -227,6 +228,51 @@ describe("formatFleetUpgradeSummary", () => {
 		};
 		const s = stateWith({ fleetUpgradeReport: report({}), fleetUpgradeResult: result });
 		expect(formatFleetUpgradeSummary(s)).toContain("already running");
+	});
+
+	// SIO-926: a long-running apply that is still running at the status window is "dispatched"
+	// (started, in flight), NOT "failed". The summary must read as in-progress, name the expected
+	// duration, and offer the follow-up -- never the red failure copy.
+	test("dispatched -> reads as started/in-progress, never 'failed'", () => {
+		const result: FleetUpgradeResult = {
+			status: "dispatched",
+			pipelineId: 2605468937,
+			pipelineUrl: "https://gitlab.com/p/-/pipelines/2605468937",
+			pipelineStatus: "running",
+			note: "Upgrade started and running; not finished within the status window.",
+		};
+		const s = stateWith({
+			fleetUpgradeReport: report({ deployment: "ap-cld", rolloutSeconds: 3600 }),
+			fleetUpgradeResult: result,
+		});
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).toContain("started");
+		expect(msg).not.toContain("failed");
+		// expected duration surfaced from rolloutSeconds (3600s -> ~60 min)
+		expect(msg).toContain("60 min");
+		// the resumable follow-up affordance
+		expect(msg.toLowerCase()).toContain("check");
+		// pipeline link preserved for tracking
+		expect(msg).toContain("2605468937");
+	});
+});
+
+// SIO-926: rolloutSeconds -> a human "expected duration" phrase set up front at apply time and in
+// the dispatched summary. Pure; unit-tested.
+describe("formatRolloutDuration", () => {
+	test("hours render as minutes when under 2h (3600s -> ~60 min)", () => {
+		expect(formatRolloutDuration(3600)).toContain("60 min");
+	});
+	test("sub-hour windows render in minutes (600s -> ~10 min)", () => {
+		expect(formatRolloutDuration(600)).toContain("10 min");
+	});
+	test("multi-hour windows render in hours (7200s -> ~2 h / hours)", () => {
+		expect(formatRolloutDuration(7200).toLowerCase()).toMatch(/2\s*h/);
+	});
+	test("a missing/zero window degrades gracefully (no NaN)", () => {
+		const out = formatRolloutDuration(0);
+		expect(out).not.toContain("NaN");
+		expect(out.length).toBeGreaterThan(0);
 	});
 });
 

@@ -314,11 +314,13 @@ export interface FleetUpgradeReport {
 }
 
 // Outcome of the operator-approved apply (single). applied = the bulk_upgrade ran to a
-// terminal poll; skipped = operator declined; blocked = could not trigger (lock/error);
-// failed = apply pipeline failed/timed out. failedSilent is the verify-sweep UPG_FAILED
-// count (Fleet action_status undercounts -- the 2026-05-17 ground truth); it leads the report.
+// terminal poll; dispatched = started and still running past the status window (SIO-926 --
+// a long rollout we did not block on, NOT a failure); skipped = operator declined; blocked =
+// could not trigger (lock/error); failed = apply pipeline actually failed/canceled.
+// failedSilent is the verify-sweep UPG_FAILED count (Fleet action_status undercounts -- the
+// 2026-05-17 ground truth); it leads the report.
 export interface FleetUpgradeResult {
-	status: "applied" | "skipped" | "blocked" | "failed";
+	status: "applied" | "dispatched" | "skipped" | "blocked" | "failed";
 	pipelineId?: number | null;
 	// SIO-924: the apply pipeline's GitLab web_url, so the UI can render a clickable link to the
 	// live bulk_upgrade run (parity with how config edits surface the MR link).

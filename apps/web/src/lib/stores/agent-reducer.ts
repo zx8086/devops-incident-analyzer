@@ -233,7 +233,9 @@ export interface FleetUpgradeChoice {
 }
 
 export interface FleetUpgradeResultRow {
-	status: "applied" | "skipped" | "blocked" | "failed";
+	// SIO-926: dispatched = the bulk_upgrade started and is still running past the status window
+	// (a long rollout we did not block on), distinct from a real failed pipeline.
+	status: "applied" | "dispatched" | "skipped" | "blocked" | "failed";
 	actionId?: string;
 	pollStatus?: string;
 	acked?: number;

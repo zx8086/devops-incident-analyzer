@@ -361,7 +361,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			if (typeof data?.status === "string") {
 				send({
 					type: "fleet_upgrade_apply_result",
-					status: data.status as "applied" | "skipped" | "blocked" | "failed",
+					status: data.status as "applied" | "dispatched" | "skipped" | "blocked" | "failed",
 					...(typeof data.actionId === "string" && { actionId: data.actionId }),
 					...(typeof data.pollStatus === "string" && { pollStatus: data.pollStatus }),
 					...(typeof data.acked === "number" && { acked: data.acked }),

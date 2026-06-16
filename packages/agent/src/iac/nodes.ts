@@ -5990,50 +5990,70 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 		await callTool("gitlab_get_fleet_upgrade_apply_result", { pipelineId: trig.pipelineId }),
 	);
 	const outcome = res.report ? parseFleetApplyOutcome(res.report) : null;
-	// success => applied; the verify sweep result rides in the report's failed_silent.
-	const result: FleetUpgradeResult =
-		res.status === "success"
-			? {
-					status: "applied",
-					pipelineId: trig.pipelineId,
-					pipelineStatus: res.status,
-					...(pipelineUrl && { pipelineUrl }),
-					...(outcome && {
-						actionId: outcome.actionId,
-						pollStatus: outcome.pollStatus,
-						acked: outcome.acked,
-						created: outcome.created,
-						failedSilent: outcome.failedSilent,
-					}),
-				}
-			: {
-					status: "failed",
-					pipelineId: trig.pipelineId,
-					pipelineStatus: res.status,
-					...(pipelineUrl && { pipelineUrl }),
-					...(outcome && {
-						actionId: outcome.actionId,
-						pollStatus: outcome.pollStatus,
-						acked: outcome.acked,
-						created: outcome.created,
-						failedSilent: outcome.failedSilent,
-					}),
-					note:
-						res.status === "failed" || res.status === "canceled"
-							? `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`
-							: "Apply did not finish within the poll budget; re-check the pipeline in GitLab.",
-				};
+	// Fields common to every outcome (pipeline identity + the verify-sweep counts if the report
+	// was fetched). SIO-926: three outcomes, not two -- success => applied; a real failed/canceled
+	// pipeline => failed; anything else (running/non-terminal at the status window) => dispatched
+	// (started, still in flight), NOT failed.
+	const common = {
+		pipelineId: trig.pipelineId,
+		pipelineStatus: res.status,
+		...(pipelineUrl && { pipelineUrl }),
+		...(outcome && {
+			actionId: outcome.actionId,
+			pollStatus: outcome.pollStatus,
+			acked: outcome.acked,
+			created: outcome.created,
+			failedSilent: outcome.failedSilent,
+		}),
+	};
+	let result: FleetUpgradeResult;
+	if (res.status === "success") {
+		result = { status: "applied", ...common };
+	} else if (res.status === "failed" || res.status === "canceled") {
+		result = {
+			status: "failed",
+			...common,
+			note: `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`,
+		};
+	} else {
+		// Running past the status window: the bulk_upgrade is in flight (a long rollout we chose not
+		// to block on). Report it as dispatched with the expected duration + the pipeline to track.
+		const eta = report.rolloutSeconds ? ` Expected ${formatRolloutDuration(report.rolloutSeconds)}.` : "";
+		result = {
+			status: "dispatched",
+			...common,
+			note: `Upgrade started and running (status ${res.status || "running"}).${eta} Not finished within the status window; ask me to check on it or watch the pipeline.`,
+		};
+	}
 	log.info(
-		{ deployment, pipelineId: trig.pipelineId, status: result.status, failedSilent: result.failedSilent },
+		{
+			deployment,
+			pipelineId: trig.pipelineId,
+			status: result.status,
+			pipelineStatus: res.status,
+			failedSilent: result.failedSilent,
+		},
 		"iac fleet upgrade: apply result",
 	);
 	await emitFleetResult(result);
 	return { fleetUpgradeResult: result };
 }
 
+// SIO-926: turn a rollout window (seconds) into a human "expected duration" phrase, used both up
+// front at apply time and in the dispatched summary so the user knows how long the bulk_upgrade
+// takes. <2h renders in minutes (the common case: a 3600s rollout reads "~60 min"); >=2h in hours.
+// Degrades to "a short while" on a missing/zero/negative window so the copy never prints NaN.
+export function formatRolloutDuration(rolloutSeconds: number): string {
+	if (!Number.isFinite(rolloutSeconds) || rolloutSeconds <= 0) return "a short while";
+	const minutes = Math.round(rolloutSeconds / 60);
+	if (rolloutSeconds < 7200) return `~${minutes} min`;
+	const hours = Math.round((rolloutSeconds / 3600) * 10) / 10;
+	return `~${hours} h`;
+}
+
 // Final message for the fleet-upgrade flow. Branches: planError, version-unavailable, nothing
-// upgradeable, declined, applied (leads with the failed_silent ground truth), blocked/failed.
-// (Pure; unit-tested.)
+// upgradeable, declined, applied (leads with the failed_silent ground truth), dispatched
+// (started, still running -- SIO-926), blocked/failed. (Pure; unit-tested.)
 export function formatFleetUpgradeSummary(state: IacStateType): string {
 	const report = state.fleetUpgradeReport;
 	const dep = state.targetDeployment || "(unknown)";
@@ -6073,6 +6093,21 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 				: " Verify sweep clean (0 UPG_FAILED).";
 		const counts = result.created != null ? ` ${result.acked ?? 0}/${result.created} acked.` : "";
 		return `Fleet upgrade to ${report.targetVersion} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${pid}${skipNote}`;
+	}
+	// SIO-926: dispatched -- the apply STARTED and is still running past the status window. This is
+	// not a failure; report it as in-progress, name the expected duration, keep the pipeline link,
+	// and offer the follow-up check (a later "how's the upgrade going?" re-polls this pipeline).
+	if (result.status === "dispatched") {
+		const dPid = result.pipelineId
+			? result.pipelineUrl
+				? ` Pipeline [#${result.pipelineId}](${result.pipelineUrl}) is running.`
+				: ` Pipeline #${result.pipelineId} is running.`
+			: "";
+		return (
+			`Fleet upgrade started for ${dep} -- ${report.crosstab.upgradeable} agent(s) upgrading to ` +
+			`${report.targetVersion} over ${formatRolloutDuration(report.rolloutSeconds)}.${dPid}${skipNote} ` +
+			"I won't block on the full rollout; ask me to check on it or watch the pipeline."
+		);
 	}
 	// blocked | failed
 	const bfPid = result.pipelineId
