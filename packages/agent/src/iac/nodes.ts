@@ -64,7 +64,17 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
 	workflow: z
-		.enum(["tier-resize", "ilm-rollout", "version-upgrade", "fleet-integration", "slo-edit", "alerting-edit", "other"])
+		.enum([
+			"tier-resize",
+			"ilm-rollout",
+			"version-upgrade",
+			"fleet-integration",
+			"slo-edit",
+			"alerting-edit",
+			"dataview-edit",
+			"cluster-default-edit",
+			"other",
+		])
 		.default("other"),
 	cluster: z.string().nullish(),
 	tier: z.string().nullish(),
@@ -87,6 +97,14 @@ const IntentSchema = z.object({
 	alertWindowUnit: z.string().nullish(),
 	alertEnabled: z.boolean().nullish(),
 	alertInterval: z.string().nullish(),
+	dataviewName: z.string().nullish(),
+	runtimeFieldName: z.string().nullish(),
+	runtimeFieldType: z.string().nullish(),
+	runtimeFieldScript: z.string().nullish(),
+	dataviewTitle: z.string().nullish(),
+	dataviewDisplayName: z.string().nullish(),
+	templateName: z.string().nullish(),
+	totalShardsPerNode: z.number().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -127,6 +145,14 @@ export function parseIntentJson(raw: string): IacRequest {
 					alertWindowUnit: nn(p.alertWindowUnit),
 					alertEnabled: nn(p.alertEnabled),
 					alertInterval: nn(p.alertInterval),
+					dataviewName: nn(p.dataviewName),
+					runtimeFieldName: nn(p.runtimeFieldName),
+					runtimeFieldType: nn(p.runtimeFieldType),
+					runtimeFieldScript: nn(p.runtimeFieldScript),
+					dataviewTitle: nn(p.dataviewTitle),
+					dataviewDisplayName: nn(p.dataviewDisplayName),
+					templateName: nn(p.templateName),
+					totalShardsPerNode: nn(p.totalShardsPerNode),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -156,7 +182,9 @@ export function capabilityMessage(): string {
 		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
 		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n' +
 		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n' +
-		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n\n' +
+		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n' +
+		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on eu-b2b"\n' +
+		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -247,11 +275,12 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|'other'), " +
-		"cluster, tier, resource, newSizeGb, newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, " +
-		"force, sloName, sloTarget, sloWindow, sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, " +
-		"alertEnabled, alertInterval, reason, isProd (true only if the user explicitly named a production cluster), and " +
-		"clarification. " +
+		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
+		"'dataview-edit'|'cluster-default-edit'|'other'), cluster, tier, resource, newSizeGb, newMaxGb, policyName, " +
+		"phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, sloTags, ruleName, " +
+		"alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, runtimeFieldName, " +
+		"runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, totalShardsPerNode, " +
+		"reason, isProd (true only if the user explicitly named a production cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
@@ -286,6 +315,17 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"defaulting the space to 'default' when unstated), and the field(s) to change: alertThreshold (number), " +
 		"alertWindowSize (number) + alertWindowUnit ('m'|'h'|'s'|'d'), alertEnabled (false to disable / silence the rule, " +
 		"true to enable), alertInterval (a check-interval string like '5m'). Set at least one of those alert* fields. " +
+		"For a DATA VIEW change ('add a service runtime field to the logs data view on eu-b2b', 'rename the logs data " +
+		"view title to logs-*') -- editing an EXISTING data view, NOT creating one -- set workflow to 'dataview-edit', " +
+		"cluster to the named deployment, dataviewName to the data-view file basename VERBATIM (e.g. 'logs', 'metrics'; the " +
+		"part before .json). To add/replace a runtime field set runtimeFieldName, runtimeFieldType (default 'keyword'), and " +
+		"runtimeFieldScript (the painless source, ONLY when the user gives a script). To change the index pattern set " +
+		"dataviewTitle; to change the display name set dataviewDisplayName. Set at least one of those. " +
+		"For a CLUSTER-DEFAULTS index-template change ('set total_shards_per_node to 3 on the logs@custom template on " +
+		"eu-b2b') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
+		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
+		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
+		"integer the user gave. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -625,7 +665,11 @@ export function branchSlug(req: IacRequest): string {
 						? req.sloName
 						: req.workflow === "alerting-edit"
 							? req.ruleName
-							: (req.tier ?? req.resource);
+							: req.workflow === "dataview-edit"
+								? req.dataviewName
+								: req.workflow === "cluster-default-edit"
+									? req.templateName
+									: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -854,6 +898,101 @@ export function setAlertingFields(
 		previousInterval,
 		changed,
 	};
+}
+
+// SIO-917: agent-side path for a per-deployment data-view JSON. ${cluster}/${dataview} are
+// literal placeholders. One file per data view under environments/<cluster>/dataviews/.
+function dataviewTemplate(): string {
+	return process.env.ELASTIC_IAC_DATAVIEW_TEMPLATE ?? "environments/${cluster}/dataviews/${dataview}.json";
+}
+
+// SIO-917: agent-side path for a per-deployment cluster-defaults index-template JSON.
+// ${cluster}/${template} are literal placeholders. One file per template under
+// environments/<cluster>/cluster-defaults/.
+function clusterDefaultTemplate(): string {
+	return (
+		process.env.ELASTIC_IAC_CLUSTER_DEFAULT_TEMPLATE ?? "environments/${cluster}/cluster-defaults/${template}.json"
+	);
+}
+
+// SIO-917: read-modify-write a data-view JSON. Adds/replaces a runtime field in
+// runtime_field_map (in the repo's CONFIG form: a flat `script_source`, NOT the state form
+// `script: { source }` -- copying state-form is the §6 footgun), and/or sets title / name.
+// Preserves every other field + 2-space indent + trailing newline. Captures previous values
+// for the diff. Only sets the fields the caller provides. Throws on bad JSON. (Pure; unit-tested.)
+export function setDataviewFields(
+	json: string,
+	changes: {
+		runtimeField?: { name: string; type: string; script?: string };
+		title?: string;
+		displayName?: string;
+	},
+): {
+	content: string;
+	runtimeFieldExisted?: boolean;
+	previousTitle?: string;
+	previousName?: string;
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("data view JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	let changed = false;
+
+	let runtimeFieldExisted: boolean | undefined;
+	if (changes.runtimeField) {
+		const map = (obj.runtime_field_map ?? {}) as Record<string, unknown>;
+		runtimeFieldExisted = changes.runtimeField.name in map;
+		// CONFIG form: { type, script_source }. A script-less keyword runtime field is valid
+		// (Optional+Computed adopt-live) -- omit script_source rather than write an empty one.
+		const field: Record<string, unknown> = { type: changes.runtimeField.type };
+		if (changes.runtimeField.script !== undefined) field.script_source = changes.runtimeField.script;
+		map[changes.runtimeField.name] = field;
+		obj.runtime_field_map = map;
+		changed = true;
+	}
+
+	const previousTitle = typeof obj.title === "string" ? obj.title : undefined;
+	if (changes.title !== undefined) {
+		obj.title = changes.title;
+		changed = true;
+	}
+
+	const previousName = typeof obj.name === "string" ? obj.name : undefined;
+	if (changes.displayName !== undefined) {
+		obj.name = changes.displayName;
+		changed = true;
+	}
+
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, runtimeFieldExisted, previousTitle, previousName, changed };
+}
+
+// SIO-917: read-modify-write a cluster-defaults index-template JSON: set the nested
+// settings.index.routing.allocation.total_shards_per_node. Creates the nested path if absent.
+// Preserves every other setting + 2-space indent + trailing newline. Captures the previous value
+// for the diff + the lowering-risk check. Throws on bad JSON. (Pure; unit-tested.)
+export function setClusterDefaultShards(
+	json: string,
+	totalShardsPerNode: number,
+): { content: string; previous?: number; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("cluster-defaults JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const settings = (obj.settings ?? {}) as Record<string, unknown>;
+	const index = (settings.index ?? {}) as Record<string, unknown>;
+	const routing = (index.routing ?? {}) as Record<string, unknown>;
+	const allocation = (routing.allocation ?? {}) as Record<string, unknown>;
+	const previous = typeof allocation.total_shards_per_node === "number" ? allocation.total_shards_per_node : undefined;
+	allocation.total_shards_per_node = totalShardsPerNode;
+	routing.allocation = allocation;
+	index.routing = routing;
+	settings.index = index;
+	obj.settings = settings;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== totalShardsPerNode };
 }
 
 // Strip callTool's "[status] body" prefix and, for the GitLab files API, decode the
@@ -1457,6 +1596,197 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 	};
 }
 
+// SIO-917: propose a data-view change -- add/replace a runtime field (config-form
+// script_source) and/or edit title/name on an EXISTING data-view file. Mirrors proposeSloChange:
+// single file, read-modify-write, edits only (no data-view create).
+async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const dataview = req.dataviewName ?? "";
+
+	const runtimeField =
+		req.runtimeFieldName !== undefined
+			? { name: req.runtimeFieldName, type: req.runtimeFieldType ?? "keyword", script: req.runtimeFieldScript }
+			: undefined;
+	const hasChange =
+		runtimeField !== undefined || req.dataviewTitle !== undefined || req.dataviewDisplayName !== undefined;
+	if (!dataview || !hasChange) {
+		return {
+			blockedReason: "Data-view change needs a data-view name and at least one of runtime field / title / name.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the data view and what to change (runtime field, title, or name).",
+				),
+			],
+		};
+	}
+
+	const filePath = deploymentJsonPath(dataviewTemplate(), cluster).replace(/\$\{dataview\}/g, dataview);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Data view '${dataview}' not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find a data-view file '${dataview}' on '${cluster}' (${filePath}). Check the data-view file name (creating a new data view is not supported yet).`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof setDataviewFields>;
+	try {
+		updated = setDataviewFields(extractFileContent(raw), {
+			runtimeField,
+			title: req.dataviewTitle,
+			displayName: req.dataviewDisplayName,
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Data view '${dataview}' on '${cluster}' already has the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: data view '${dataview}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: data view ${dataview}${runtimeField ? ` ${updated.runtimeFieldExisted ? "update" : "add"} runtime field ${runtimeField.name}` : ""}`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	const diffLines: string[] = [`${filePath} (data view ${dataview})`];
+	if (runtimeField) {
+		diffLines.push(
+			`[runtime_field_map] ${updated.runtimeFieldExisted ? "update" : "add"} "${runtimeField.name}" -> { type: ${JSON.stringify(runtimeField.type)}${runtimeField.script !== undefined ? ", script_source: <painless>" : ""} }`,
+		);
+	}
+	if (req.dataviewTitle !== undefined) {
+		diffLines.push(
+			`[dataview] - "title": ${JSON.stringify(updated.previousTitle ?? "?")}\n+ "title": ${JSON.stringify(req.dataviewTitle)}`,
+		);
+	}
+	if (req.dataviewDisplayName !== undefined) {
+		diffLines.push(
+			`[dataview] - "name": ${JSON.stringify(updated.previousName ?? "?")}\n+ "name": ${JSON.stringify(req.dataviewDisplayName)}`,
+		);
+	}
+
+	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+}
+
+// SIO-917: propose a cluster-defaults change -- set total_shards_per_node on an EXISTING
+// index-template file. Mirrors proposeSloChange: single file, read-modify-write, edits only.
+async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const template = req.templateName ?? "";
+
+	if (!template || req.totalShardsPerNode === undefined) {
+		return {
+			blockedReason: "Cluster-defaults change needs a template name and a total_shards_per_node value.",
+			messages: [
+				new AIMessage("Cannot propose the change: name the index template and the total_shards_per_node value."),
+			],
+		};
+	}
+	if (!Number.isInteger(req.totalShardsPerNode) || req.totalShardsPerNode < 1) {
+		return {
+			blockedReason: `Invalid total_shards_per_node ${req.totalShardsPerNode}.`,
+			messages: [new AIMessage(`Cannot propose the change: total_shards_per_node must be a positive integer.`)],
+		};
+	}
+
+	const filePath = deploymentJsonPath(clusterDefaultTemplate(), cluster).replace(/\$\{template\}/g, template);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Cluster-defaults template '${template}' not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find a cluster-defaults template file '${template}' on '${cluster}' (${filePath}). Check the template file name (creating a new template is not supported yet).`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof setClusterDefaultShards>;
+	try {
+		updated = setClusterDefaultShards(extractFileContent(raw), req.totalShardsPerNode);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (!updated.changed || isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: cluster-defaults ${template} total_shards_per_node -> ${req.totalShardsPerNode}`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	// Lowering total_shards_per_node concentrates shards on fewer nodes (can unbalance) -- flag.
+	const shardsLowered = updated.previous !== undefined && req.totalShardsPerNode < updated.previous;
+
+	const proposedDiff =
+		`${filePath} (cluster-defaults ${template})\n` +
+		`[settings.index.routing.allocation] - "total_shards_per_node": ${JSON.stringify(updated.previous ?? "?")}\n+ "total_shards_per_node": ${JSON.stringify(req.totalShardsPerNode)}`;
+
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedDiff,
+		precheckPassed: committed,
+		shardsLowered,
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -1470,6 +1800,8 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "fleet-integration") return proposeFleetIntegration(state, req);
 	if (req.workflow === "slo-edit") return proposeSloChange(state, req);
 	if (req.workflow === "alerting-edit") return proposeAlertingChange(state, req);
+	if (req.workflow === "dataview-edit") return proposeDataviewChange(state, req);
+	if (req.workflow === "cluster-default-edit") return proposeClusterDefaultChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -1555,6 +1887,22 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	if (req?.workflow === "dataview-edit") {
+		risks.push(
+			"Data-view change is additive/metadata (runtime field, title, name); it does not touch indices or data. A runtime field is computed at query time -- verify the painless script against the live mappings.",
+		);
+	}
+	if (req?.workflow === "cluster-default-edit") {
+		risks.push(
+			"total_shards_per_node change affects shard allocation as new indices roll over (not retroactively). Setting it too low can block allocation when a node count drops.",
+		);
+		// SIO-917: lowering concentrates shards on fewer nodes -- surface first.
+		if (state.shardsLowered) {
+			risks.unshift(
+				"total_shards_per_node LOWERED; this concentrates shards on fewer nodes and can unbalance allocation or block shard placement -- confirm the node count supports it.",
+			);
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -1575,7 +1923,11 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 						? `${req?.sloName ?? "?"}: ${[req?.sloTarget != null ? `target ${req.sloTarget}` : "", req?.sloWindow ? `window ${req.sloWindow}` : "", req?.sloTags ? "tags" : ""].filter(Boolean).join(", ") || "change"}`
 						: req?.workflow === "alerting-edit"
 							? `${req?.ruleName ?? "?"}: ${[req?.alertThreshold != null ? `threshold ${req.alertThreshold}` : "", req?.alertEnabled === false ? "disable" : req?.alertEnabled === true ? "enable" : "", req?.alertWindowSize != null ? `window ${req.alertWindowSize}${req?.alertWindowUnit ?? ""}` : "", req?.alertInterval ? `interval ${req.alertInterval}` : ""].filter(Boolean).join(", ") || "change"}`
-							: (req?.tier ?? req?.resource ?? "change");
+							: req?.workflow === "dataview-edit"
+								? `${req?.dataviewName ?? "?"}: ${[req?.runtimeFieldName ? `runtime ${req.runtimeFieldName}` : "", req?.dataviewTitle ? "title" : "", req?.dataviewDisplayName ? "name" : ""].filter(Boolean).join(", ") || "change"}`
+								: req?.workflow === "cluster-default-edit"
+									? `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
+									: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -1659,6 +2011,12 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "alerting-edit"
 				? `Alert rule '${req?.ruleName}' edit:${req?.alertThreshold != null ? ` params.threshold -> ${req.alertThreshold}` : ""}${req?.alertWindowSize != null ? ` params.windowSize -> ${req.alertWindowSize}${req?.alertWindowUnit ?? ""}` : ""}${req?.alertEnabled !== undefined ? ` enabled -> ${req.alertEnabled}` : ""}${req?.alertInterval ? ` interval -> ${req.alertInterval}` : ""}.${state.alertDisabled ? " Rule DISABLED (silences alerts)." : ""}`
 				: "",
+			req?.workflow === "dataview-edit"
+				? `Data view '${req?.dataviewName}' edit:${req?.runtimeFieldName ? ` runtime_field_map.${req.runtimeFieldName} (config-form script_source)` : ""}${req?.dataviewTitle ? ` title -> ${req.dataviewTitle}` : ""}${req?.dataviewDisplayName ? ` name -> ${req.dataviewDisplayName}` : ""}.`
+				: "",
+			req?.workflow === "cluster-default-edit"
+				? `Cluster-defaults template '${req?.templateName}': settings.index.routing.allocation.total_shards_per_node -> ${req?.totalShardsPerNode}.${state.shardsLowered ? " LOWERED (can unbalance allocation)." : ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -1679,7 +2037,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 							? "Category slo, Risk MEDIUM"
 							: req?.workflow === "alerting-edit"
 								? `Category alerting, Risk ${state.alertDisabled ? "HIGH" : "MEDIUM"}`
-								: "Category version-bump, Risk LOW";
+								: req?.workflow === "dataview-edit"
+									? "Category dataview, Risk LOW"
+									: req?.workflow === "cluster-default-edit"
+										? `Category cluster-defaults, Risk ${state.shardsLowered ? "MEDIUM" : "LOW"}`
+										: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
