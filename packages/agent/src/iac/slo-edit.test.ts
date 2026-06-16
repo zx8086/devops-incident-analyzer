@@ -1,7 +1,9 @@
 // agent/src/iac/slo-edit.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, normalizeSloTarget, parseIntentJson, reviewPlan, setSloOverrides } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 // A real-shaped per-SLO file: inherits objective/time_window from _shared defaults (no override).
 const SLO = JSON.stringify(
@@ -172,8 +174,7 @@ describe("draftChange -> proposeSloChange", () => {
 				sloTarget: 99.5,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/slos/ds-authentication.json");
 		expect(result.proposedDiff).toContain('"target"');
@@ -194,8 +195,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const state = {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "x", sloTarget: 0.95 },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.sloTargetLowered).toBe(true); // 0.99 -> 0.95
 	});
 
@@ -205,8 +205,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const state = {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "x" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("at least one of target");
 	});
 
@@ -216,8 +215,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const state = {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "x", sloTarget: 150 },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("Invalid SLO target");
 	});
 
@@ -227,8 +225,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const state = {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "nope", sloTarget: 0.99 },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("not found");
 	});
 
@@ -243,8 +240,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const state = {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "x", sloTarget: 0.99 },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has the requested values");
 	});
 });
@@ -264,8 +260,7 @@ describe("reviewPlan — slo-edit", () => {
 			precheckPassed: true,
 			sloTargetLowered: false,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("ds-authentication");
 		expect(result.planReview?.title).toContain("slo-edit");
@@ -280,8 +275,7 @@ describe("reviewPlan — slo-edit", () => {
 			precheckPassed: true,
 			sloTargetLowered: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-915 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("LOWERED");
 	});
 });

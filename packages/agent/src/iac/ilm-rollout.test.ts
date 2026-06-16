@@ -1,7 +1,9 @@
 // agent/src/iac/ilm-rollout.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, deploymentJsonPath, detectRetentionReduction, mergeIlmPhases, parseIntentJson } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 const POLICY = JSON.stringify(
 	{
@@ -171,8 +173,7 @@ describe("draftChange -> proposeIlmChange", () => {
 				phasesPatch: { delete: { min_age: "60d" } },
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/lifecycle-policies/30-days@lifecycle.json");
 		expect(result.proposedDiff).toContain('"min_age"');
@@ -185,8 +186,7 @@ describe("draftChange -> proposeIlmChange", () => {
 		const state = {
 			iacRequest: { workflow: "ilm-rollout" as const, isProd: false, cluster: "eu-b2b", policyName: "logs" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("phase field");
 	});
 
@@ -210,8 +210,7 @@ describe("draftChange -> proposeIlmChange", () => {
 				phasesPatch: { hot: { max_age: "30d", rollover: true }, delete: { min_age: "90d" } },
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-899 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toBeUndefined();
 		expect(result.policyCreated).toBe(true);
 		expect(result.precheckPassed).toBe(true);
@@ -244,8 +243,7 @@ describe("draftChange -> proposeIlmChange", () => {
 				phasesPatch: { delete: { min_age: "30d" } },
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.retentionChange).toEqual({ from: "90d", to: "30d" });
 	});
 });
@@ -267,39 +265,34 @@ describe("reviewPlan — ilm-rollout", () => {
 
 	test("marks the review kind config-edit and skips local terraform", async () => {
 		const { reviewPlan } = await import("./nodes.ts");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await reviewPlan(baseState(null) as any);
+		const result = await reviewPlan(asIacState(baseState(null)));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.plan).toContain("CI computes the Terraform plan");
 	});
 
 	test("adds the always-on ILM phase-transition risk", async () => {
 		const { reviewPlan } = await import("./nodes.ts");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await reviewPlan(baseState(null) as any);
+		const result = await reviewPlan(asIacState(baseState(null)));
 		expect(result.risks?.some((r) => r.includes("force-merge") || r.includes("rolls over"))).toBe(true);
 	});
 
 	test("prepends a HIGH retention-reduction risk when retention is reduced", async () => {
 		const { reviewPlan } = await import("./nodes.ts");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await reviewPlan(baseState({ from: "90d", to: "30d" }) as any);
+		const result = await reviewPlan(asIacState(baseState({ from: "90d", to: "30d" })));
 		expect(result.risks?.[0]).toContain("Retention REDUCED 90d->30d");
 		expect(result.risks?.[0]).toContain("irrecoverable");
 	});
 
 	test("title carries the policy name and changed-phase keys", async () => {
 		const { reviewPlan } = await import("./nodes.ts");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-880 - partial IacState test stub
-		const result = await reviewPlan(baseState(null) as any);
+		const result = await reviewPlan(asIacState(baseState(null)));
 		expect(result.planReview?.title).toContain("90-days@lifecycle");
 		expect(result.planReview?.title).toContain("delete");
 	});
 
 	test("labels a created policy and adds the new-policy risk note", async () => {
 		const { reviewPlan } = await import("./nodes.ts");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-899 - partial IacState test stub
-		const result = await reviewPlan({ ...baseState(null), policyCreated: true } as any);
+		const result = await reviewPlan(asIacState({ ...baseState(null), policyCreated: true }));
 		expect(result.planReview?.title).toContain("create");
 		expect(result.risks?.some((r) => r.includes("NEW managed ILM policy"))).toBe(true);
 	});

@@ -8,13 +8,16 @@ import {
 	setDeploymentTopology,
 	setDeploymentUserSettings,
 } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 // A real-shaped _deployments/<cluster>.json (mirrors the live eu-onboarding.json): global autoscale +
 // per-tier zone_count; SSO user_settings_yaml lives under elasticsearch_config AND kibana (raw YAML
 // inside a JSON string); integrations_server/kibana are sizable. All of this must survive byte-for-byte
 // except the requested edit.
-const ES_SSO = 'xpack.security.authc.realms.saml.kibana-realm:\n  order: 2\n  idp.metadata.path: "https://idp/secret-md"\n';
+const ES_SSO =
+	'xpack.security.authc.realms.saml.kibana-realm:\n  order: 2\n  idp.metadata.path: "https://idp/secret-md"\n';
 const KB_SSO = "xpack.security.authc.providers:\n  saml.kibana-realm:\n    order: 0\n    realm: kibana-realm\n";
 const DEPLOYMENT = JSON.stringify(
 	{
@@ -145,8 +148,7 @@ describe("draftChange -> proposeTopologyChange", () => {
 				tierZoneCount: 3,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/_deployments/eu-b2b.json");
 		// diff shows only the changed scalars
@@ -175,8 +177,7 @@ describe("draftChange -> proposeTopologyChange", () => {
 				autoscaleEnabled: true,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("not found");
 	});
 
@@ -192,8 +193,7 @@ describe("draftChange -> proposeTopologyChange", () => {
 				tierZoneCount: 5,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("zone_count");
 	});
 
@@ -209,8 +209,7 @@ describe("draftChange -> proposeTopologyChange", () => {
 				tierZoneCount: 2,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("ghost");
 	});
 
@@ -226,8 +225,7 @@ describe("draftChange -> proposeTopologyChange", () => {
 				tierZoneCount: 2, // already 2 in DEPLOYMENT
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has the requested topology values");
 	});
 });
@@ -247,8 +245,7 @@ describe("reviewPlan — topology", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("eu-b2b");
 		// the shared-state warning must lead the risk list (highest blast radius in the repo)
@@ -346,8 +343,7 @@ describe("draftChange -> proposeTopologyChange (SSO + sizing)", () => {
 				userSettingsYaml: newYaml,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		// the diff names the target + a length delta, but NEVER the YAML body
 		expect(result.proposedDiff).toContain("elasticsearch_config");
@@ -375,8 +371,7 @@ describe("draftChange -> proposeTopologyChange (SSO + sizing)", () => {
 				componentSize: "2g",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedDiff).toContain('"size": "2g"');
 	});
@@ -393,8 +388,7 @@ describe("draftChange -> proposeTopologyChange (SSO + sizing)", () => {
 				componentZoneCount: 9,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("zone_count");
 	});
 });
@@ -413,8 +407,7 @@ describe("reviewPlan — topology SSO", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-919 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("COULD LOCK OUT LOGIN");
 		expect(result.risks?.[0]).toContain("HUMAN REVIEW");
 		// the shared-state line is still present, just below the login warning

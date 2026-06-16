@@ -1,7 +1,9 @@
 // agent/src/iac/dataview-clusterdefault.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, parseIntentJson, reviewPlan, setClusterDefaultShards, setDataviewFields } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 const DATAVIEW = JSON.stringify(
 	{
@@ -192,8 +194,7 @@ describe("draftChange -> proposeDataviewChange", () => {
 				runtimeFieldScript: "emit('h')",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/dataviews/logs.json");
 		expect(result.proposedDiff).toContain("runtime_field_map");
@@ -211,8 +212,7 @@ describe("draftChange -> proposeDataviewChange", () => {
 		const state = {
 			iacRequest: { workflow: "dataview-edit" as const, isProd: false, cluster: "eu-b2b", dataviewName: "logs" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("at least one of runtime field");
 	});
 
@@ -228,8 +228,7 @@ describe("draftChange -> proposeDataviewChange", () => {
 				runtimeFieldName: "x",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("not found");
 	});
 });
@@ -257,8 +256,7 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 				totalShardsPerNode: 3,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/cluster-defaults/logs.json");
 		expect(result.shardsLowered).toBe(false);
@@ -284,8 +282,7 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 				totalShardsPerNode: 1,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.shardsLowered).toBe(true); // 2 -> 1
 	});
 
@@ -301,8 +298,7 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 				totalShardsPerNode: 0,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("Invalid total_shards_per_node");
 	});
 
@@ -322,8 +318,7 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 				totalShardsPerNode: 2,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has total_shards_per_node");
 	});
 });
@@ -342,8 +337,7 @@ describe("reviewPlan — dataview + cluster-default", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("logs");
 		expect(result.planReview?.title).toContain("dataview-edit");
@@ -364,8 +358,7 @@ describe("reviewPlan — dataview + cluster-default", () => {
 			precheckPassed: true,
 			shardsLowered: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-917 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("LOWERED");
 	});
 });

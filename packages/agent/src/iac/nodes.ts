@@ -1399,6 +1399,20 @@ export function isUnchangedConfig(updatedContent: string, originalJson: string):
 	}
 }
 
+// SIO-921: classify a callTool() result for a GitLab call. callTool returns "[<status>] <json>"
+// on a real API call and "[gitlab token not configured ...]" / "[<tool> error: ...]" /
+// "[<tool> unavailable - ...]" placeholders on failure (none of which start with "[4"/"[5").
+// A read must be a clean 2xx (file present) or 404 (absent); anything else (token/timeout/5xx/
+// placeholder) is an UNKNOWN result that must block -- never silently treated as "exists" or
+// "committed". (Pure; unit-tested. Mirrors proposeDashboardChange, SIO-920.)
+export function isGitlabSuccess(result: string): boolean {
+	return /^\[2\d\d\]/.test(result);
+}
+
+export function isGitlabNotFound(result: string): boolean {
+	return result.startsWith("[404");
+}
+
 // version-upgrade: propose the change as a GitLab config edit + branch + commit via
 // the API (no clone, no terraform, no local git). CI computes the plan on the MR.
 async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
@@ -1412,6 +1426,14 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 		return {
 			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) blocks
+	// with a clear message rather than failing as a confusing "did not parse as JSON" downstream.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
 		};
 	}
 	let updated: { content: string; previous?: string };
@@ -1444,7 +1466,15 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 		content: updated.content,
 		commit_message: `${cluster}: upgrade Elasticsearch ${updated.previous ?? "?"} -> ${version}`,
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const diff = `${filePath}\n- "version": "${updated.previous ?? "?"}"\n+ "version": "${version}"`;
 	return {
@@ -1476,6 +1506,14 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 		return {
 			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) blocks
+	// with a clear message rather than failing as a confusing "did not parse as JSON" downstream.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
 		};
 	}
 	let updated: { content: string; previousSize?: string; previousMax?: string };
@@ -1514,7 +1552,15 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 		content: updated.content,
 		commit_message: `${cluster}: resize ${tier} tier (${target})`,
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const diffLines = [`${filePath} (elasticsearch.${tier})`];
 	if (req.newSizeGb != null)
@@ -1563,6 +1609,14 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 	// path and surface as a JSON-parse edit failure, exactly as before.
 	let updated: { content: string; previous: Record<string, unknown> };
 	let policyCreated = false;
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		policyCreated = true;
 		updated = mergeIlmPhases(JSON.stringify({ name: policy }), patch);
@@ -1604,7 +1658,15 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		// mismatch), but pass the right action up front to skip the wasted first attempt.
 		action: policyCreated ? "create" : "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	// Human diff: one -/+ pair per touched leaf, walking the previous mirror against patch.
 	// A created policy has no prior values, so every leaf renders as an addition ("?"->value).
@@ -1668,6 +1730,14 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 	}
 	// A 404 means this deployment has no integrations.json (not a content-bearing deployment for
 	// Fleet). Don't invent the aggregate file -- ask the user to confirm the deployment.
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `No fleet-integrations file for '${cluster}' (${filePath} not found).`,
@@ -1718,7 +1788,15 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 		commit_message: `${cluster}: pin ${alias} integration to ${version}`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const forceLine =
 		req.force !== undefined && req.force !== updated.previousForce
@@ -1773,6 +1851,14 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `SLO '${slo}' not found on '${cluster}' (${filePath}).`,
@@ -1819,7 +1905,15 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 			`${cluster}: SLO ${slo} ${target !== undefined ? `target -> ${target}` : ""}${req.sloWindow ? ` window -> ${req.sloWindow}` : ""}`.trim(),
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	// A target LOWERING (looser SLO) is worth flagging -- it relaxes the reliability bar.
 	const targetLowered = target !== undefined && updated.previousTarget !== undefined && target < updated.previousTarget;
@@ -1879,6 +1973,14 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `Alert rule '${rule}' not found on '${cluster}' (${filePath}).`,
@@ -1926,7 +2028,15 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 		commit_message: `${cluster}: alert ${rule}${req.alertThreshold !== undefined ? ` threshold -> ${req.alertThreshold}` : ""}${req.alertEnabled === false ? " (disabled)" : req.alertEnabled === true ? " (enabled)" : ""}`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	// Disabling a rule silences its alerts -- the higher-risk change.
 	const alertDisabled = req.alertEnabled === false && updated.previousEnabled !== false;
@@ -2001,6 +2111,14 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `Data view '${dataview}' not found on '${cluster}' (${filePath}).`,
@@ -2046,7 +2164,15 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 		commit_message: `${cluster}: data view ${dataview}${runtimeField ? ` ${updated.runtimeFieldExisted ? "update" : "add"} runtime field ${runtimeField.name}` : ""}`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const diffLines: string[] = [`${filePath} (data view ${dataview})`];
 	if (runtimeField) {
@@ -2099,6 +2225,14 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `Cluster-defaults template '${template}' not found on '${cluster}' (${filePath}).`,
@@ -2140,7 +2274,15 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 		commit_message: `${cluster}: cluster-defaults ${template} total_shards_per_node -> ${req.totalShardsPerNode}`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	// Lowering total_shards_per_node concentrates shards on fewer nodes (can unbalance) -- flag.
 	const shardsLowered = updated.previous !== undefined && req.totalShardsPerNode < updated.previous;
@@ -2188,6 +2330,14 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `Space '${space}' not found on '${cluster}' (${filePath}).`,
@@ -2233,7 +2383,15 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 		commit_message: `${cluster}: space ${space} update`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const diffLines: string[] = [`${filePath} (space ${space})`];
 	if (req.spaceDisplayName !== undefined) {
@@ -2297,6 +2455,14 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
 		};
 	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
 	if (raw.startsWith("[404")) {
 		return {
 			blockedReason: `No security file for '${cluster}' (${filePath}).`,
@@ -2345,7 +2511,15 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 		commit_message: `${cluster}: security role ${roleName} grant privileges`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	const escalation = isPrivilegeEscalation({
 		cluster: grant.cluster,
@@ -2419,6 +2593,14 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		return {
 			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
 			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404 -- token/timeout/5xx/error placeholder) must
+	// block rather than fall through; only a real 404 carries the per-stack handling below.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
 		};
 	}
 	if (raw.startsWith("[404")) {
@@ -2558,7 +2740,15 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		commit_message: `${cluster}: deployment topology edit`,
 		action: "update",
 	});
-	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
+	// or non-2xx must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+	const committed = true;
 
 	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
 }
