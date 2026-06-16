@@ -574,5 +574,49 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		pipelineStatus: z.string().optional(),
 		note: z.string().optional(),
 	}),
+	// SIO-913 / SIO-922: Fleet agent binary-upgrade sub-flow. The preview report (from
+	// detectFleetUpgrade), the single operator approve/decline gate (fleetUpgradeGate), and the
+	// apply outcome (applyFleetUpgrade). Mirrors the synthetics push trio.
+	z.object({
+		type: z.literal("fleet_upgrade_preview_report"),
+		deployment: z.string(),
+		targetVersion: z.string(),
+		resolvedCount: z.number(),
+		versionAvailable: z.boolean(),
+		rolloutSeconds: z.number(),
+		crosstab: z.object({
+			upgradeable: z.number(),
+			notUpgradeable: z.number(),
+			byReason: z.array(z.object({ reason: z.string(), count: z.number() })),
+		}),
+		planError: z.boolean().optional(),
+		planErrorReason: z.string().optional(),
+	}),
+	// The single operator apply approve/decline interrupt, surfaced with the thread's id.
+	z.object({
+		type: z.literal("fleet_upgrade_choice"),
+		threadId: z.string(),
+		deployment: z.string(),
+		targetVersion: z.string(),
+		resolvedCount: z.number(),
+		upgradeableCount: z.number(),
+		notUpgradeableCount: z.number(),
+		rolloutSeconds: z.number(),
+		byReason: z.array(z.object({ reason: z.string(), count: z.number() })),
+		message: z.string(),
+	}),
+	// The single apply outcome (from applyFleetUpgrade). failedSilent is the verify-sweep
+	// UPG_FAILED ground truth (Fleet action_status undercounts).
+	z.object({
+		type: z.literal("fleet_upgrade_apply_result"),
+		status: z.enum(["applied", "skipped", "blocked", "failed"]),
+		actionId: z.string().optional(),
+		pollStatus: z.string().optional(),
+		acked: z.number().optional(),
+		created: z.number().optional(),
+		failedSilent: z.number().optional(),
+		pipelineId: z.number().optional(),
+		note: z.string().optional(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

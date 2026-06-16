@@ -189,4 +189,53 @@ describe("applyStreamEvent", () => {
 		const cleared = applyStreamEvent(promoted, { type: "topic_shift_resolved" });
 		expect(cleared.topicShiftPrompt).toBeNull();
 	});
+
+	// SIO-922: the fleet-upgrade gate was emitted by the backend but dropped by the UI; these
+	// pin the report -> choice -> result chain that renders the card and clears it on apply.
+	test("fleet_upgrade_preview_report populates the preview and clears any prior result", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_apply_result",
+			status: "applied",
+			acked: 1,
+		});
+		expect(state.fleetUpgradeResult).not.toBeNull();
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_preview_report",
+			deployment: "eu-b2b",
+			targetVersion: "9.4.2",
+			resolvedCount: 232,
+			versionAvailable: true,
+			rolloutSeconds: 600,
+			crosstab: { upgradeable: 4, notUpgradeable: 228, byReason: [{ reason: "wolfi", count: 228 }] },
+		});
+		expect(state.fleetUpgradePreview?.crosstab.upgradeable).toBe(4);
+		expect(state.fleetUpgradeResult).toBeNull(); // a fresh preview clears the prior outcome
+	});
+
+	test("fleet_upgrade_choice sets the gate prompt; apply_result clears it", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_choice",
+			threadId: "t-fleet",
+			deployment: "eu-b2b",
+			targetVersion: "9.4.2",
+			resolvedCount: 232,
+			upgradeableCount: 4,
+			notUpgradeableCount: 228,
+			rolloutSeconds: 600,
+			byReason: [{ reason: "wolfi", count: 228 }],
+			message: "Approve?",
+		});
+		expect(state.fleetUpgradeChoice?.upgradeableCount).toBe(4);
+		expect(state.threadId).toBe("t-fleet");
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_apply_result",
+			status: "applied",
+			acked: 4,
+			failedSilent: 0,
+		});
+		expect(state.fleetUpgradeChoice).toBeNull(); // the gate clears once the apply lands
+		expect(state.fleetUpgradeResult?.status).toBe("applied");
+	});
 });

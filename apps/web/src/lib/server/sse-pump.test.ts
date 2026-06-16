@@ -2,7 +2,7 @@
 // SIO-775: verify pumpEventStream emits datasource_result events with typed
 // findings when extractFindings completes.
 import { describe, expect, test } from "bun:test";
-import { pumpEventStream } from "./sse-pump.ts";
+import { emitIacInterrupt, pumpEventStream } from "./sse-pump.ts";
 
 type LangGraphEvent = {
 	event?: string;
@@ -136,5 +136,40 @@ describe("pumpEventStream datasource_result", () => {
 
 		const resultEvents = captured.filter((e) => e.type === "datasource_result");
 		expect(resultEvents).toHaveLength(0);
+	});
+});
+
+// SIO-922: the fleet-upgrade gate interrupt was never translated by emitIacInterrupt, so the UI
+// got no event and rendered no card. This pins the translation that was missing.
+describe("emitIacInterrupt fleet_upgrade_choice", () => {
+	test("translates the gate interrupt into a fleet_upgrade_choice SSE event", () => {
+		const sent: Array<Record<string, unknown>> = [];
+		const handled = emitIacInterrupt((e) => sent.push(e as Record<string, unknown>), "t-fleet", {
+			type: "fleet_upgrade_choice",
+			deployment: "eu-b2b",
+			targetVersion: "9.4.2",
+			resolvedCount: 232,
+			upgradeableCount: 4,
+			notUpgradeableCount: 228,
+			rolloutSeconds: 600,
+			byReason: [{ reason: "wolfi", count: 228 }],
+			message: "Approve?",
+		});
+		expect(handled).toBe(true);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toMatchObject({
+			type: "fleet_upgrade_choice",
+			threadId: "t-fleet",
+			deployment: "eu-b2b",
+			targetVersion: "9.4.2",
+			upgradeableCount: 4,
+			notUpgradeableCount: 228,
+		});
+	});
+
+	test("returns false for an unknown interrupt type (unchanged passthrough)", () => {
+		const sent: unknown[] = [];
+		expect(emitIacInterrupt((e) => sent.push(e), "t", { type: "totally_unknown" })).toBe(false);
+		expect(sent).toHaveLength(0);
 	});
 });

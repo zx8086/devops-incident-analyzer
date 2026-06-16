@@ -5,6 +5,9 @@ import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 import {
 	applyStreamEvent,
 	type DataSourceFindings,
+	type FleetUpgradeChoice,
+	type FleetUpgradePreview,
+	type FleetUpgradeResultRow,
 	type IacClarifyPrompt,
 	type IacDriftReport,
 	type IacPlanReviewPrompt,
@@ -91,6 +94,10 @@ function createAgentStore() {
 	let syntheticsDriftReport = $state<SyntheticsDriftReport | null>(null);
 	let syntheticsPushChoice = $state<SyntheticsPushChoice | null>(null);
 	let syntheticsPushResult = $state<SyntheticsPushResultRow | null>(null);
+	// SIO-913 / SIO-922: fleet upgrade sub-flow UI state.
+	let fleetUpgradePreview = $state<FleetUpgradePreview | null>(null);
+	let fleetUpgradeChoice = $state<FleetUpgradeChoice | null>(null);
+	let fleetUpgradeResult = $state<FleetUpgradeResultRow | null>(null);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -123,6 +130,10 @@ function createAgentStore() {
 		syntheticsDriftReport = null;
 		syntheticsPushChoice = null;
 		syntheticsPushResult = null;
+		// SIO-913 / SIO-922: same for the fleet upgrade sub-flow.
+		fleetUpgradePreview = null;
+		fleetUpgradeChoice = null;
+		fleetUpgradeResult = null;
 
 		abortController = new AbortController();
 
@@ -221,6 +232,9 @@ function createAgentStore() {
 			syntheticsDriftReport,
 			syntheticsPushChoice,
 			syntheticsPushResult,
+			fleetUpgradePreview,
+			fleetUpgradeChoice,
+			fleetUpgradeResult,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -247,6 +261,9 @@ function createAgentStore() {
 		syntheticsDriftReport = next.syntheticsDriftReport;
 		syntheticsPushChoice = next.syntheticsPushChoice;
 		syntheticsPushResult = next.syntheticsPushResult;
+		fleetUpgradePreview = next.fleetUpgradePreview;
+		fleetUpgradeChoice = next.fleetUpgradeChoice;
+		fleetUpgradeResult = next.fleetUpgradeResult;
 	}
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
@@ -399,6 +416,9 @@ function createAgentStore() {
 		syntheticsDriftReport = null;
 		syntheticsPushChoice = null;
 		syntheticsPushResult = null;
+		fleetUpgradePreview = null;
+		fleetUpgradeChoice = null;
+		fleetUpgradeResult = null;
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -481,6 +501,13 @@ function createAgentStore() {
 	function approveSyntheticsPush(approve: boolean) {
 		if (!syntheticsPushChoice) return;
 		return resumeIac({ approve }, syntheticsPushChoice.threadId);
+	}
+
+	// SIO-913 / SIO-922: answer the single fleet-upgrade apply gate (approve / decline). On approve
+	// the agent runs the imperative bulk_upgrade via CI; on decline it stops without applying.
+	function approveFleetUpgrade(approve: boolean) {
+		if (!fleetUpgradeChoice) return;
+		return resumeIac({ approve }, fleetUpgradeChoice.threadId);
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
@@ -637,6 +664,15 @@ function createAgentStore() {
 		get syntheticsPushResult() {
 			return syntheticsPushResult;
 		},
+		get fleetUpgradePreview() {
+			return fleetUpgradePreview;
+		},
+		get fleetUpgradeChoice() {
+			return fleetUpgradeChoice;
+		},
+		get fleetUpgradeResult() {
+			return fleetUpgradeResult;
+		},
 		sendMessage,
 		setFeedback,
 		cancelStream,
@@ -651,6 +687,7 @@ function createAgentStore() {
 		submitIacClarify,
 		resolveReconcileChoice,
 		approveSyntheticsPush,
+		approveFleetUpgrade,
 	};
 }
 

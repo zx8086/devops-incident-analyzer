@@ -299,6 +299,73 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				});
 			}
 		}
+
+		// SIO-913 / SIO-922: forward detectFleetUpgrade's preview report (the fleet-upgrade card).
+		if (event.event === "on_custom_event" && event.name === "fleet_upgrade_preview_report") {
+			const data = event.data as {
+				deployment?: unknown;
+				targetVersion?: unknown;
+				resolvedCount?: unknown;
+				versionAvailable?: unknown;
+				rolloutSeconds?: unknown;
+				crosstab?: unknown;
+				planError?: unknown;
+				planErrorReason?: unknown;
+			};
+			const ct = data?.crosstab as { upgradeable?: unknown; notUpgradeable?: unknown; byReason?: unknown } | undefined;
+			if (typeof data?.deployment === "string" && ct) {
+				send({
+					type: "fleet_upgrade_preview_report",
+					deployment: data.deployment,
+					targetVersion: typeof data.targetVersion === "string" ? data.targetVersion : "",
+					resolvedCount: typeof data.resolvedCount === "number" ? data.resolvedCount : 0,
+					versionAvailable: data.versionAvailable === true,
+					rolloutSeconds: typeof data.rolloutSeconds === "number" ? data.rolloutSeconds : 0,
+					crosstab: {
+						upgradeable: typeof ct.upgradeable === "number" ? ct.upgradeable : 0,
+						notUpgradeable: typeof ct.notUpgradeable === "number" ? ct.notUpgradeable : 0,
+						byReason: Array.isArray(ct.byReason)
+							? ct.byReason.map((r) => {
+									const x = r as { reason?: unknown; count?: unknown };
+									return {
+										reason: typeof x.reason === "string" ? x.reason : "",
+										count: typeof x.count === "number" ? x.count : 0,
+									};
+								})
+							: [],
+					},
+					...(data.planError === true && { planError: true }),
+					...(typeof data.planErrorReason === "string" && { planErrorReason: data.planErrorReason }),
+				});
+			}
+		}
+
+		// SIO-913 / SIO-922: forward the single fleet-upgrade apply outcome.
+		if (event.event === "on_custom_event" && event.name === "fleet_upgrade_apply_result") {
+			const data = event.data as {
+				status?: unknown;
+				actionId?: unknown;
+				pollStatus?: unknown;
+				acked?: unknown;
+				created?: unknown;
+				failedSilent?: unknown;
+				pipelineId?: unknown;
+				note?: unknown;
+			};
+			if (typeof data?.status === "string") {
+				send({
+					type: "fleet_upgrade_apply_result",
+					status: data.status as "applied" | "skipped" | "blocked" | "failed",
+					...(typeof data.actionId === "string" && { actionId: data.actionId }),
+					...(typeof data.pollStatus === "string" && { pollStatus: data.pollStatus }),
+					...(typeof data.acked === "number" && { acked: data.acked }),
+					...(typeof data.created === "number" && { created: data.created }),
+					...(typeof data.failedSilent === "number" && { failedSilent: data.failedSilent }),
+					...(typeof data.pipelineId === "number" && { pipelineId: data.pipelineId }),
+					...(typeof data.note === "string" && { note: data.note }),
+				});
+			}
+		}
 	}
 
 	return { toolsUsed: [...toolsUsed], responseContent };
@@ -354,6 +421,13 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		command?: unknown;
 		pushMonitors?: unknown;
 		extraMonitors?: unknown;
+		// SIO-913 / SIO-922: fleet upgrade apply gate fields.
+		targetVersion?: unknown;
+		resolvedCount?: unknown;
+		upgradeableCount?: unknown;
+		notUpgradeableCount?: unknown;
+		rolloutSeconds?: unknown;
+		byReason?: unknown;
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -459,6 +533,33 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 			pushMonitors: monitorsOf(obj.pushMonitors),
 			extraMonitors: monitorsOf(obj.extraMonitors),
 			message: typeof obj.message === "string" ? obj.message : "Approve the synthetics push to Kibana, or decline.",
+		});
+		return true;
+	}
+
+	// SIO-913 / SIO-922: the single fleet-upgrade apply approve/decline gate. The UI POSTs
+	// { approve } to the resume endpoint; the agent then runs the imperative bulk_upgrade via CI.
+	if (obj.type === "fleet_upgrade_choice") {
+		send({
+			type: "fleet_upgrade_choice",
+			threadId,
+			deployment: typeof obj.deployment === "string" ? obj.deployment : "",
+			targetVersion: typeof obj.targetVersion === "string" ? obj.targetVersion : "",
+			resolvedCount: typeof obj.resolvedCount === "number" ? obj.resolvedCount : 0,
+			upgradeableCount: typeof obj.upgradeableCount === "number" ? obj.upgradeableCount : 0,
+			notUpgradeableCount: typeof obj.notUpgradeableCount === "number" ? obj.notUpgradeableCount : 0,
+			rolloutSeconds: typeof obj.rolloutSeconds === "number" ? obj.rolloutSeconds : 0,
+			byReason: Array.isArray(obj.byReason)
+				? obj.byReason.map((r) => {
+						const x = r as { reason?: unknown; count?: unknown };
+						return {
+							reason: typeof x.reason === "string" ? x.reason : "",
+							count: typeof x.count === "number" ? x.count : 0,
+						};
+					})
+				: [],
+			message:
+				typeof obj.message === "string" ? obj.message : "Approve the Fleet agent upgrade (runs via CI), or decline.",
 		});
 		return true;
 	}
