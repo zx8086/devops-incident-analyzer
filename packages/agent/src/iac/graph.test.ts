@@ -55,4 +55,13 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("syntheticsPushGate");
 		expect(nodeNames).toContain("pushSynthetics");
 	});
+
+	// SIO-913: Fleet agent binary-upgrade sub-flow (preview -> gate -> apply).
+	test("graph contains the fleet-upgrade detect + gate + apply nodes", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("detectFleetUpgrade");
+		expect(nodeNames).toContain("fleetUpgradeGate");
+		expect(nodeNames).toContain("applyFleetUpgrade");
+	});
 });

@@ -204,6 +204,50 @@ export interface SyntheticsPushResult {
 	note?: string;
 }
 
+// SIO-913: Fleet agent BINARY upgrade is imperative (POST /api/fleet/agents/bulk_upgrade),
+// NOT Terraform -- so it runs through an on-demand CI pipeline (preview -> HITL gate ->
+// apply), mirroring the synthetics push sub-flow. The repo's fleet-bulk-upgrade.sh emits a
+// `fleet-upgrade-report.json` (contract: experiments/HANDOFF-2026-06-16-SIO-913-...md,
+// "fleet-upgrade-report/v1"). This is the parsed preview report. snake_case in the artifact
+// is mapped to camelCase here (same idiom as SyntheticsDriftReport).
+export interface FleetUpgradeCrosstab {
+	upgradeable: number;
+	notUpgradeable: number; // Wolfi/container agents (upgradeable:false) -> image-tag bump, not this flow
+	byReason: Array<{ reason: string; count: number }>;
+}
+
+export interface FleetUpgradeReport {
+	deployment: string;
+	targetVersion: string;
+	rolloutSeconds: number;
+	selector: string;
+	resolvedCount: number; // agents matched by the selector
+	versionAvailable: boolean; // target present in /api/fleet/agents/available_versions
+	maxAgents: number;
+	crosstab: FleetUpgradeCrosstab;
+	generatedAt: string;
+	// NOT assessed -- the preview pipeline could not be read (trigger lock / failed / unreadable
+	// report). Mirrors SyntheticsDriftReport.planError: neither upgradeable nor confirmed-empty.
+	planError?: boolean;
+	planErrorReason?: string;
+}
+
+// Outcome of the operator-approved apply (single). applied = the bulk_upgrade ran to a
+// terminal poll; skipped = operator declined; blocked = could not trigger (lock/error);
+// failed = apply pipeline failed/timed out. failedSilent is the verify-sweep UPG_FAILED
+// count (Fleet action_status undercounts -- the 2026-05-17 ground truth); it leads the report.
+export interface FleetUpgradeResult {
+	status: "applied" | "skipped" | "blocked" | "failed";
+	pipelineId?: number | null;
+	pipelineStatus?: string;
+	actionId?: string;
+	pollStatus?: string; // COMPLETE | ROLLOUT_PASSED | FAILED | ...
+	acked?: number;
+	created?: number;
+	failedSilent?: number;
+	note?: string;
+}
+
 // Outcome of reconciling one stack (one independent, idempotent MR or a skip/block).
 export interface ReconcileResult {
 	stack: string;
@@ -229,7 +273,8 @@ export const IacState = Annotation.Root({
 	// plan / check my MR") that re-enters watchPipeline using the thread's persisted MR.
 	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
 	// SIO-902: "synthetics-drift" enters the synthetics monitor drift + operator-approved push sub-flow.
-	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | null>({
+	// SIO-913: "fleet-upgrade" enters the Fleet agent binary-upgrade sub-flow (preview -> gate -> apply).
+	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | null>({
 		reducer: last,
 		default: () => null,
 	}),
@@ -285,6 +330,13 @@ export const IacState = Annotation.Root({
 	syntheticsDriftReport: Annotation<SyntheticsDriftReport | null>({ reducer: last, default: () => null }),
 	syntheticsPushApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	syntheticsPushResult: Annotation<SyntheticsPushResult | null>({ reducer: last, default: () => null }),
+	// SIO-913: Fleet agent binary-upgrade sub-flow. fleetUpgradeReport holds the parsed preview
+	// (or a planError stub); fleetUpgradeApproved is the operator's apply decision (read by the
+	// gate->worker edge); fleetUpgradeResult is the single apply outcome. targetDeployment (above)
+	// is reused for the resolved deployment.
+	fleetUpgradeReport: Annotation<FleetUpgradeReport | null>({ reducer: last, default: () => null }),
+	fleetUpgradeApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
+	fleetUpgradeResult: Annotation<FleetUpgradeResult | null>({ reducer: last, default: () => null }),
 });
 
 export type IacStateType = typeof IacState.State;

@@ -14,6 +14,8 @@ import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
 import type {
 	DriftReport,
+	FleetUpgradeReport,
+	FleetUpgradeResult,
 	IacApprovalState,
 	IacPlanReport,
 	IacPlanReview,
@@ -132,10 +134,16 @@ export function capabilityMessage(): string {
 }
 
 // Map a raw classifier reply to an intent. "gitops", "pipeline-status", "synthetics-drift",
-// and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested directly.)
-export function intentFromText(raw: string): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" {
+// "fleet-upgrade", and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested.)
+export function intentFromText(
+	raw: string,
+): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
+	// SIO-913: a Fleet agent BINARY upgrade (imperative bulk_upgrade) is distinct from a cluster
+	// version-upgrade config edit. The classifier emits "fleet-upgrade"; this also catches direct
+	// phrasings. Checked before synthetics/drift but it does not overlap their keywords.
+	if (r.includes("fleet-upgrade") || r.includes("fleet_upgrade") || r.includes("fleet upgrade")) return "fleet-upgrade";
 	// SIO-902: synthetics drift must be checked BEFORE plain drift -- a synthetics request also
 	// contains "drift"/"reconcile" (e.g. "reconcile the synthetics monitors"), so "synthetic"
 	// has to win the tiebreak.
@@ -157,8 +165,13 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"Classify the user's Elastic Cloud request into exactly one word:\n" +
 		"- 'info': a read-only question answerable by reading state (versions, topology, plan history, " +
 		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
-		"- 'gitops': a request to CHANGE one specific thing (resize, downsize, add/modify ILM, upgrade a version, " +
-		"open an MR) -- a single targeted Terraform diff.\n" +
+		"- 'gitops': a request to CHANGE one specific thing (resize, downsize, add/modify ILM, upgrade a cluster/stack " +
+		"VERSION, open an MR) -- a single targeted config edit. NOTE: 'upgrade eu-b2b to 9.4.2' (the DEPLOYMENT/cluster " +
+		"version) is gitops, NOT fleet-upgrade.\n" +
+		"- 'fleet-upgrade': upgrade the Fleet AGENT BINARIES (the elastic-agents enrolled on hosts) to a version -- " +
+		"'upgrade the agents on X to 9.4.2', 'upgrade all Elastic agents for X', 'bulk-upgrade fleet agents'. This is an " +
+		"imperative Fleet bulk_upgrade (NOT Terraform, NOT a cluster version change). The tell is the words 'agent(s)' " +
+		"or 'fleet' being what is upgraded.\n" +
 		"- 'drift': a request to DETECT or RECONCILE Terraform configuration drift for a deployment -- 'check X for drift', " +
 		"'what has drifted', 'reconcile X with live', 'compare the repo with the live cluster', 'show drift by stack'. " +
 		"This audits ALL Terraform stacks of one deployment and offers a per-stack reconcile choice.\n" +
@@ -168,7 +181,7 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"operator-approved push (NOT a per-stack Terraform reconcile).\n" +
 		"- 'pipeline-status': a follow-up about a merge request the agent already opened -- 'did the pipeline " +
 		"pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's the CI status'.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', 'drift', 'synthetics-drift', or 'pipeline-status'. " +
+		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', or 'pipeline-status'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
 	const intent = intentFromText(String(res.content));
@@ -2410,6 +2423,15 @@ async function openReconcileMr(
 	return { stack: stack.stack, direction, status: "opened", mrUrl, branch };
 }
 
+// SIO-913: extract a target agent version (e.g. "9.4.2", "8.15", "9.4.2-SNAPSHOT") from free
+// text for the Fleet upgrade flow. Prefers the request's parsed version when present; else the
+// first semver-ish token in the user's message. "" when none found. (Pure; unit-tested.)
+export function parseTargetVersion(text: string, requestVersion?: string): string {
+	if (requestVersion?.trim()) return requestVersion.trim();
+	const m = text.match(/\b\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?\b/);
+	return m ? m[0] : "";
+}
+
 // Resolve the target deployment for a drift audit from the user's text, matched against the
 // live Elastic Cloud deployment names (no local clone).
 async function resolveDriftDeployment(state: IacStateType): Promise<string> {
@@ -2877,6 +2899,10 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	// synthetics report lives on a different channel).
 	if (state.intent === "synthetics-drift") {
 		return { messages: [new AIMessage(formatSyntheticsSummary(state))] };
+	}
+	// SIO-913: the fleet-upgrade flow renders its own preview/apply summary.
+	if (state.intent === "fleet-upgrade") {
+		return { messages: [new AIMessage(formatFleetUpgradeSummary(state))] };
 	}
 	// SIO-882: the drift flow renders its own per-stack reconcile summary.
 	if (state.intent === "drift") {
@@ -3374,4 +3400,351 @@ export function formatSyntheticsSummary(state: IacStateType): string {
 	}
 	// blocked | failed
 	return `Synthetics push ${result.status}: ${result.note ?? "see logs"}.${extraReminder}`;
+}
+
+// ============================================================================
+// SIO-913: Fleet agent BINARY upgrade sub-flow (preview -> operator gate -> apply).
+// Imperative POST /api/fleet/agents/bulk_upgrade, NOT Terraform. Mirrors the synthetics
+// push sub-flow: a preview CI pipeline resolves the agent count + upgradeable crosstab,
+// the operator approves, an apply CI pipeline issues the bulk_upgrade + verify sweep.
+// Contract: fleet-upgrade-report/v1 (experiments/HANDOFF-2026-06-16-SIO-913-...md).
+// ============================================================================
+
+// Parse the fleet-upgrade-report.json artifact (snake_case -> camelCase). Tolerant: a
+// malformed/empty body returns null (caller emits a planError stub). (Pure; unit-tested.)
+export function parseFleetUpgradeReport(raw: string): FleetUpgradeReport | null {
+	try {
+		const o = JSON.parse(raw) as Record<string, unknown>;
+		if (typeof o !== "object" || o === null) return null;
+		const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+		const str = (v: unknown): string => (typeof v === "string" ? v : "");
+		const xt = (o.upgradeable_crosstab ?? {}) as Record<string, unknown>;
+		const byReason = Array.isArray(xt.by_reason)
+			? (xt.by_reason as Array<Record<string, unknown>>)
+					.map((r) => ({ reason: str(r.reason), count: num(r.count) }))
+					.filter((r) => r.reason)
+			: [];
+		return {
+			deployment: str(o.deployment),
+			targetVersion: str(o.target_version),
+			rolloutSeconds: num(o.rollout_seconds),
+			selector: str(o.selector),
+			resolvedCount: num(o.resolved_count),
+			versionAvailable: o.version_available === true,
+			maxAgents: num(o.max_agents),
+			crosstab: {
+				upgradeable: num(xt.upgradeable),
+				notUpgradeable: num(xt.not_upgradeable),
+				byReason,
+			},
+			generatedAt: str(o.generated_at),
+		};
+	} catch {
+		return null;
+	}
+}
+
+// Parse the apply-mode report's `apply` + `action_id` block for the result summary. Returns
+// the fields needed for FleetUpgradeResult; absent/preview reports yield zeros. (Pure.)
+export function parseFleetApplyOutcome(raw: string): {
+	actionId: string;
+	pollStatus: string;
+	acked: number;
+	created: number;
+	failedSilent: number;
+} {
+	const empty = { actionId: "", pollStatus: "", acked: 0, created: 0, failedSilent: 0 };
+	try {
+		const o = JSON.parse(raw) as Record<string, unknown>;
+		const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+		const a = (o.apply ?? {}) as Record<string, unknown>;
+		return {
+			actionId: typeof o.action_id === "string" ? o.action_id : "",
+			pollStatus: typeof a.poll_status === "string" ? a.poll_status : "",
+			acked: num(a.acked),
+			created: num(a.created),
+			failedSilent: num(a.failed_silent),
+		};
+	} catch {
+		return empty;
+	}
+}
+
+// Graph-edge predicate: is there an applicable Fleet upgrade worth the apply gate? True only
+// when the preview was assessed (no planError), the target version is available, and >=1 agent
+// is upgradeable. resolvedCount==0 or notUpgradeable-only -> false (nothing to apply). (Pure.)
+export function hasApplicableFleetUpgrade(report: FleetUpgradeReport | null): boolean {
+	if (!report || report.planError) return false;
+	if (!report.versionAvailable) return false;
+	return report.crosstab.upgradeable > 0;
+}
+
+// A zeroed preview report carrying a planError (mirror SyntheticsDriftReport.planError): the
+// preview was NOT assessed -- never a false "0 agents".
+function emptyFleetReport(deployment: string, version: string, reason: string): FleetUpgradeReport {
+	return {
+		deployment,
+		targetVersion: version,
+		rolloutSeconds: 0,
+		selector: "",
+		resolvedCount: 0,
+		versionAvailable: false,
+		maxAgents: 0,
+		crosstab: { upgradeable: 0, notUpgradeable: 0, byReason: [] },
+		generatedAt: new Date().toISOString(),
+		planError: true,
+		planErrorReason: reason,
+	};
+}
+
+async function emitFleetReport(report: FleetUpgradeReport): Promise<void> {
+	await dispatchCustomEvent("fleet_upgrade_preview_report", {
+		deployment: report.deployment,
+		targetVersion: report.targetVersion,
+		resolvedCount: report.resolvedCount,
+		versionAvailable: report.versionAvailable,
+		rolloutSeconds: report.rolloutSeconds,
+		crosstab: report.crosstab,
+		planError: report.planError ?? false,
+		...(report.planErrorReason && { planErrorReason: report.planErrorReason }),
+	});
+}
+
+async function emitFleetResult(r: FleetUpgradeResult): Promise<void> {
+	await dispatchCustomEvent("fleet_upgrade_apply_result", {
+		status: r.status,
+		...(r.actionId && { actionId: r.actionId }),
+		...(r.pollStatus && { pollStatus: r.pollStatus }),
+		...(r.acked != null && { acked: r.acked }),
+		...(r.created != null && { created: r.created }),
+		...(r.failedSilent != null && { failedSilent: r.failedSilent }),
+		...(r.pipelineId != null && { pipelineId: r.pipelineId }),
+		...(r.note && { note: r.note }),
+	});
+}
+
+// Detect the Fleet upgrade scope for one deployment: resolve deployment + target version
+// (interrupt if missing), trigger the FLEET_UPGRADE_PREVIEW pipeline, poll, parse, emit the
+// preview report. Read-only -- no bulk_upgrade POST happens here.
+export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<IacStateType>> {
+	let deployment = await resolveDriftDeployment(state);
+	if (!deployment) {
+		const answer = interrupt({
+			type: "iac_clarify",
+			question: "Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
+			message: "Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
+		}) as { answer?: string };
+		deployment = (answer?.answer ?? "").trim();
+	}
+	const version = parseTargetVersion(lastHumanText(state), state.iacRequest?.version);
+	if (!deployment || !version) {
+		return {
+			messages: [
+				new AIMessage(
+					'I need a deployment and a target version to upgrade Fleet agents. Try: "upgrade Fleet agents on eu-b2b to 9.4.2".',
+				),
+			],
+		};
+	}
+
+	log.info({ deployment, version }, "iac fleet upgrade: triggering preview");
+	const trig = parseTriggerResult(await callTool("gitlab_trigger_fleet_upgrade_preview", { deployment, version }));
+	if (trig.pipelineId === null) {
+		const reason =
+			trig.status === "locked"
+				? "A fleet-upgrade pipeline is already running; re-check once it clears."
+				: `Could not trigger the fleet-upgrade preview${trig.note ? `: ${trig.note}` : "."}`;
+		log.warn({ deployment, status: trig.status, note: trig.note }, "iac fleet upgrade: preview trigger did not start");
+		await dispatchCustomEvent("iac_pipeline_progress", {
+			pipelineId: null,
+			status: `fleet: ${trig.status === "locked" ? "locked" : "trigger failed"}`,
+		});
+		const report = emptyFleetReport(deployment, version, reason);
+		await emitFleetReport(report);
+		return { targetDeployment: deployment, fleetUpgradeReport: report };
+	}
+
+	log.info({ deployment, pipelineId: trig.pipelineId }, "iac fleet upgrade: preview triggered; polling");
+	const result = parseDriftCheckResult(
+		await callTool("gitlab_get_fleet_upgrade_preview_result", { pipelineId: trig.pipelineId }),
+	);
+	if (result.status !== "success" || !result.report) {
+		const reason =
+			result.status === "failed" || result.status === "canceled"
+				? `Fleet-upgrade preview pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog, result.stateLocked)}`
+				: result.status !== "success"
+					? "Fleet-upgrade preview did not finish within the poll budget; retry."
+					: "The fleet-upgrade preview produced no report.";
+		log.warn(
+			{ deployment, pipelineId: trig.pipelineId, status: result.status, hasReport: Boolean(result.report) },
+			"iac fleet upgrade: preview not authoritative (planError)",
+		);
+		const report = emptyFleetReport(deployment, version, reason);
+		await emitFleetReport(report);
+		return { targetDeployment: deployment, fleetUpgradeReport: report };
+	}
+
+	const parsed = parseFleetUpgradeReport(result.report);
+	if (parsed === null) {
+		log.warn({ deployment, pipelineId: trig.pipelineId }, "iac fleet upgrade: unreadable preview report (planError)");
+		const report = emptyFleetReport(deployment, version, "The fleet-upgrade preview report could not be parsed.");
+		await emitFleetReport(report);
+		return { targetDeployment: deployment, fleetUpgradeReport: report };
+	}
+
+	const report: FleetUpgradeReport = { ...parsed, generatedAt: parsed.generatedAt || new Date().toISOString() };
+	log.info(
+		{
+			deployment,
+			pipelineId: trig.pipelineId,
+			resolved: report.resolvedCount,
+			upgradeable: report.crosstab.upgradeable,
+			versionAvailable: report.versionAvailable,
+		},
+		"iac fleet upgrade: preview assessed",
+	);
+	await dispatchCustomEvent("iac_pipeline_progress", {
+		pipelineId: trig.pipelineId,
+		status: `fleet: ${report.crosstab.upgradeable} upgradeable / ${report.resolvedCount} resolved`,
+	});
+	await emitFleetReport(report);
+	return { targetDeployment: deployment, fleetUpgradeReport: report };
+}
+
+// The single operator approve/decline interrupt. Only reached when hasApplicableFleetUpgrade
+// is true (graph edge enforces). Surfaces the resolved/upgradeable counts + the not-upgradeable
+// (Wolfi/container) agents that will be SKIPPED. Resume payload {approve: boolean}.
+export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
+	const report = state.fleetUpgradeReport;
+	if (!report) return { fleetUpgradeApproved: false };
+	const { upgradeable, notUpgradeable } = report.crosstab;
+	const skipNote =
+		notUpgradeable > 0
+			? `${notUpgradeable} agent(s) are NOT Fleet-upgradeable (Wolfi/container; upgradeable:false) and will be SKIPPED -- bump their image tag upstream instead. `
+			: "";
+	const choice = interrupt({
+		type: "fleet_upgrade_choice",
+		deployment: report.deployment,
+		targetVersion: report.targetVersion,
+		resolvedCount: report.resolvedCount,
+		upgradeableCount: upgradeable,
+		notUpgradeableCount: notUpgradeable,
+		rolloutSeconds: report.rolloutSeconds,
+		byReason: report.crosstab.byReason,
+		message:
+			`${report.deployment}: ${upgradeable} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
+			`over ${report.rolloutSeconds}s. ${skipNote}` +
+			"This is an imperative bulk_upgrade (not Terraform). Approve to run it via CI, or decline.",
+	}) as { approve?: boolean };
+	return { fleetUpgradeApproved: choice?.approve === true };
+}
+
+// Trigger the operator-approved apply (FLEET_UPGRADE_APPLY) with the SAME deployment/version
+// that were previewed, poll to terminal, and parse the apply outcome (incl. the verify-sweep
+// failed_silent ground truth). The apply job runs bulk_upgrade + the verify sweep in CI.
+export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<IacStateType>> {
+	const report = state.fleetUpgradeReport;
+	if (!report) return {};
+	const { deployment, targetVersion } = report;
+
+	log.info({ deployment, version: targetVersion }, "iac fleet upgrade: triggering apply");
+	const trig = parseTriggerResult(
+		await callTool("gitlab_trigger_fleet_upgrade_apply", { deployment, version: targetVersion }),
+	);
+	if (trig.pipelineId === null) {
+		const note =
+			trig.status === "locked"
+				? "A fleet-upgrade pipeline is already running; re-try the apply later."
+				: `Could not trigger the apply${trig.note ? `: ${trig.note}` : "."}`;
+		log.warn({ deployment, status: trig.status, note: trig.note }, "iac fleet upgrade: apply blocked");
+		const result: FleetUpgradeResult = { status: "blocked", pipelineId: null, note };
+		await emitFleetResult(result);
+		return { fleetUpgradeResult: result };
+	}
+
+	log.info({ deployment, pipelineId: trig.pipelineId }, "iac fleet upgrade: apply triggered; polling");
+	const res = parseDriftCheckResult(
+		await callTool("gitlab_get_fleet_upgrade_apply_result", { pipelineId: trig.pipelineId }),
+	);
+	const outcome = res.report ? parseFleetApplyOutcome(res.report) : null;
+	// success => applied; the verify sweep result rides in the report's failed_silent.
+	const result: FleetUpgradeResult =
+		res.status === "success"
+			? {
+					status: "applied",
+					pipelineId: trig.pipelineId,
+					pipelineStatus: res.status,
+					...(outcome && {
+						actionId: outcome.actionId,
+						pollStatus: outcome.pollStatus,
+						acked: outcome.acked,
+						created: outcome.created,
+						failedSilent: outcome.failedSilent,
+					}),
+				}
+			: {
+					status: "failed",
+					pipelineId: trig.pipelineId,
+					pipelineStatus: res.status,
+					...(outcome && {
+						actionId: outcome.actionId,
+						pollStatus: outcome.pollStatus,
+						acked: outcome.acked,
+						created: outcome.created,
+						failedSilent: outcome.failedSilent,
+					}),
+					note:
+						res.status === "failed" || res.status === "canceled"
+							? `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`
+							: "Apply did not finish within the poll budget; re-check the pipeline in GitLab.",
+				};
+	log.info(
+		{ deployment, pipelineId: trig.pipelineId, status: result.status, failedSilent: result.failedSilent },
+		"iac fleet upgrade: apply result",
+	);
+	await emitFleetResult(result);
+	return { fleetUpgradeResult: result };
+}
+
+// Final message for the fleet-upgrade flow. Branches: planError, version-unavailable, nothing
+// upgradeable, declined, applied (leads with the failed_silent ground truth), blocked/failed.
+// (Pure; unit-tested.)
+export function formatFleetUpgradeSummary(state: IacStateType): string {
+	const report = state.fleetUpgradeReport;
+	const dep = state.targetDeployment || "(unknown)";
+	if (!report) return `Could not assess a Fleet upgrade for ${dep}.`;
+	if (report.planError) {
+		return `Fleet-upgrade preview for ${dep} could not be completed: ${report.planErrorReason ?? "unknown error"}`;
+	}
+	const skipNote =
+		report.crosstab.notUpgradeable > 0
+			? ` ${report.crosstab.notUpgradeable} non-upgradeable agent(s) (Wolfi/container) were left for an upstream image-tag bump.`
+			: "";
+	if (!report.versionAvailable) {
+		return (
+			`Target version ${report.targetVersion} is not in ${dep}'s available_versions list; ` +
+			"refusing to upgrade. Confirm the target is a valid forward step."
+		);
+	}
+	if (report.crosstab.upgradeable === 0) {
+		return `No Fleet agents on ${dep} are upgradeable to ${report.targetVersion} (resolved ${report.resolvedCount}).${skipNote}`;
+	}
+	const result = state.fleetUpgradeResult;
+	if (!result || result.status === "skipped") {
+		return (
+			`Fleet upgrade declined. No agents were upgraded. ${report.crosstab.upgradeable} agent(s) on ${dep} ` +
+			`remain eligible for ${report.targetVersion}.${skipNote}`
+		);
+	}
+	if (result.status === "applied") {
+		const pid = result.pipelineId ? ` Pipeline #${result.pipelineId}.` : "";
+		const silent =
+			result.failedSilent && result.failedSilent > 0
+				? ` WARNING: ${result.failedSilent} agent(s) reached UPG_FAILED (verify sweep -- Fleet action_status undercounts these). Investigate before declaring success.`
+				: " Verify sweep clean (0 UPG_FAILED).";
+		const counts = result.created != null ? ` ${result.acked ?? 0}/${result.created} acked.` : "";
+		return `Fleet upgrade to ${report.targetVersion} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${pid}${skipNote}`;
+	}
+	// blocked | failed
+	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${skipNote}`;
 }
