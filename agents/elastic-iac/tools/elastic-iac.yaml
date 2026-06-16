@@ -1,17 +1,19 @@
 name: elastic-iac
 description: >
-  Elastic Cloud Infrastructure-as-Code maker tools (unified mcp-server-elastic-iac):
-  read live cluster/Cloud state, draft a Terraform diff on a branch, run fmt/validate/plan,
-  and open a GitLab merge request. Plan is read-only; apply/destroy/state-surgery and
-  MR merge/approve are intentionally absent -- a human applies from GitLab.
+  Elastic Cloud Infrastructure-as-Code proposer tools (unified mcp-server-elastic-iac):
+  read live cluster/Cloud state, read the GitLab repo, propose a config edit by committing
+  a branch + opening a merge request via the GitLab REST API, and review the MR's CI
+  pipeline. The agent never clones, never runs terraform, never pushes from a local
+  checkout -- CI computes the plan on the MR and a human merges + applies from GitLab.
+  apply/destroy/state-surgery and MR merge/approve are intentionally absent.
 version: 1.0.0
 input_schema:
   type: object
   properties:
     action:
       type: string
-      enum: [read_state, read_repo, draft, propose, plan, open_mr, review_pipeline, status]
-      description: Stage of the IaC maker workflow to perform
+      enum: [read_state, read_repo, propose, open_mr, review_pipeline, status]
+      description: Stage of the IaC proposer workflow to perform
     cluster:
       type: string
       description: Target Elastic Cloud deployment name (e.g. eu-b2b, gl-testing)
@@ -24,7 +26,7 @@ input_schema:
     paths:
       type: array
       items: { type: string }
-      description: Terraform file paths under stacks/<cluster>/ to read or modify
+      description: Repo file paths under environments/<cluster>/ to read or propose edits to
   required: [action]
 output_schema:
   type: object
@@ -36,20 +38,20 @@ annotations:
   cost: medium
 
 prompt_template: >
-  Drive the Elastic Cloud IaC maker workflow against the unified elastic-iac server.
+  Drive the Elastic Cloud IaC proposer workflow against the unified elastic-iac server.
   {{#if compliance_tier}}Compliance tier: {{compliance_tier}} -- all actions are logged; human_in_the_loop is always.{{/if}}
   Never run terraform apply/destroy, never merge or approve an MR, never push to main.
 
 related_tools:
-  - "Use read_state before draft to ground the change in live deployment topology and plan history"
-  - "Use plan to produce the terraform plan output surfaced to the human for review"
-  - "Use open_mr only after the human approves the reviewed plan"
+  - "Use read_state before propose to ground the change in live deployment topology and plan history"
+  - "Use review_pipeline to surface the CI-computed terraform plan to the human for review"
+  - "Use open_mr only after the proposed config edit is committed to the branch"
 
 tool_mapping:
   mcp_server: elastic-iac
+  # Propose-only (SIO-912 removed the local-terraform path; SIO-925 pruned the dead
+  # routing): no git_* (no clone/checkout/push) and no terraform_* (CI runs the plan).
   mcp_patterns:
-    - "terraform_*"
-    - "git_*"
     - "gitlab_*"
     - "elastic_*"
     - "iac_*"
@@ -65,25 +67,11 @@ tool_mapping:
     read_repo:
       - gitlab_get_repository_tree
       - gitlab_get_file_content
-      - git_clone
-      - git_checkout
-      - git_status
-      - git_diff
-    draft:
-      - git_create_branch
-      - git_commit
-      - terraform_fmt
-      - terraform_search_modules
-      - terraform_search_providers
-    plan:
-      - terraform_validate
-      - terraform_plan
     propose:
       - gitlab_get_file_content
       - gitlab_create_branch
       - gitlab_commit_file
     open_mr:
-      - git_push
       - gitlab_create_merge_request
     review_pipeline:
       - gitlab_get_merge_request
@@ -103,16 +91,18 @@ tool_mapping:
       - iac_output
       - iac_state_list
   action_descriptions:
-    read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before drafting
-    read_repo: when reading the IaC repository tree or Terraform file blobs to locate the stack module to edit
-    draft: when creating the working branch and writing the minimal Terraform diff (fmt + module/provider search to get it right)
-    propose: when proposing a config change via the GitLab API -- read the deployment JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
-    plan: when running terraform validate + plan to produce the plan output the human reviews before any MR
-    open_mr: when the human has approved the reviewed plan and the branch is pushed and the merge request is opened
-    review_pipeline: when reading an existing MR or its pipelines to report GitOps status, or triggering and reading on-demand per-stack drift-check results (gitlab_trigger_drift_check and gitlab_get_drift_check_result) -- read-only; never merge/approve
+    read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before proposing
+    read_repo: when reading the IaC repository tree or config-file blobs (environments/<cluster>/**) to locate the file to edit
+    propose: when proposing a config change via the GitLab API -- read the config JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
+    open_mr: when the proposed config edit is committed to the branch and the merge request is opened for human review
+    review_pipeline: >-
+      when reading an existing MR or its pipelines to report GitOps status (incl. the
+      CI-computed terraform plan), or triggering and reading on-demand per-stack
+      drift-check results (gitlab_trigger_drift_check and gitlab_get_drift_check_result)
+      -- read-only; never merge/approve
     status: when reporting IaC reconcile status, what a stack owns, or its outputs via the repo's read-only task helpers -- read and report, no change required
   action_keywords:
     read_state: [state, deployment, topology, plan history, health, ilm, version, versions, running, list]
-    plan: [plan, terraform plan, validate, diff]
+    propose: [change, edit, resize, downsize, bump, set, add policy, update]
     open_mr: [mr, merge request, open mr, raise mr]
     status: [status, reconcile, drift, what's deployed, what does it own, state list, output, list stacks, list deployments]
