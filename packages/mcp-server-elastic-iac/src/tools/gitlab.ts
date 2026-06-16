@@ -835,19 +835,24 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	// CI variables[] for a fleet-upgrade pipeline. varKey is the activating flag
 	// (FLEET_UPGRADE_PREVIEW or FLEET_UPGRADE_APPLY); the rest scope the bulk_upgrade. SELECTOR
-	// is omitted when absent (the repo script defaults to all enrolled agents). (Pure.)
+	// is omitted when absent (the repo script defaults to all enrolled agents). SIO-927: MAX_AGENTS
+	// raises the apply script's blast-radius cap (default 500; the apply REFUSES count > cap). The
+	// CI apply job forwards it as --max-agents; preview is uncapped so callers pass it only on apply.
+	// (Pure.)
 	const buildFleetPipelineVars = (
 		varKey: string,
 		deployment: string,
 		version: string,
 		rolloutSeconds?: number,
 		selector?: string,
+		maxAgents?: number,
 	): Array<{ key: string; value: string }> => [
 		{ key: varKey, value: "true" },
 		{ key: "DEPLOYMENT", value: deployment },
 		{ key: "VERSION", value: version },
 		...(rolloutSeconds != null ? [{ key: "ROLLOUT_SECONDS", value: String(rolloutSeconds) }] : []),
 		...(selector ? [{ key: "SELECTOR", value: selector }] : []),
+		...(maxAgents != null ? [{ key: "MAX_AGENTS", value: String(maxAgents) }] : []),
 	];
 
 	// Shared trigger: POST a fleet-upgrade pipeline and return the normalized
@@ -860,13 +865,17 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		rolloutSeconds: number | undefined,
 		selector: string | undefined,
 		ref: string,
+		maxAgents?: number,
 	): Promise<string> => {
-		log.info({ phase, deployment, version, rolloutSeconds, ref }, `gitlab_trigger_fleet_upgrade_${phase}: triggering`);
+		log.info(
+			{ phase, deployment, version, rolloutSeconds, maxAgents, ref },
+			`gitlab_trigger_fleet_upgrade_${phase}: triggering`,
+		);
 		const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline`, {
 			method: "POST",
 			body: JSON.stringify({
 				ref,
-				variables: buildFleetPipelineVars(varKey, deployment, version, rolloutSeconds, selector),
+				variables: buildFleetPipelineVars(varKey, deployment, version, rolloutSeconds, selector, maxAgents),
 			}),
 		});
 		if (res.startsWith("[409")) {
@@ -1022,17 +1031,27 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	server.tool(
 		"gitlab_trigger_fleet_upgrade_apply",
 		"Trigger the operator-approved Fleet agent-binary-upgrade APPLY pipeline: POST a pipeline with FLEET_UPGRADE_APPLY=true, " +
-			"DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR. This issues the bulk_upgrade POST in CI and runs the verify " +
-			"sweep. Use the SAME deployment/version/selector that were previewed. Returns {deployment,version,pipelineId,status}. " +
-			"Then poll gitlab_get_fleet_upgrade_apply_result.",
+			"DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR/MAX_AGENTS. This issues the bulk_upgrade POST in CI and runs " +
+			"the verify sweep. Use the SAME deployment/version/selector that were previewed. Returns " +
+			"{deployment,version,pipelineId,status}. Then poll gitlab_get_fleet_upgrade_apply_result.",
 		{
 			deployment: z.string(),
 			version: z.string().describe("Target agent version, e.g. '9.4.2' (must match the previewed version)."),
 			rolloutSeconds: z.number().optional(),
 			selector: z.string().optional().describe("Fleet KQL (must match the previewed selector)."),
+			// SIO-927: the apply script REFUSES when resolved_count exceeds its blast-radius cap (default 500).
+			// Pass the previewed resolved_count to authorize a fleet-wide apply; explicit operator approval ==
+			// accepting that blast radius. Omit to keep the script default. (Fleet's hard cap of 10000 is separate.)
+			maxAgents: z
+				.number()
+				.optional()
+				.describe(
+					"Apply-path blast-radius cap override (CI MAX_AGENTS -> --max-agents). Pass the previewed resolved_count " +
+						"to apply fleet-wide past the script's 500 default; omit for the default.",
+				),
 			ref: z.string().optional(),
 		},
-		async ({ deployment, version, rolloutSeconds, selector, ref }) =>
+		async ({ deployment, version, rolloutSeconds, selector, maxAgents, ref }) =>
 			text(
 				await triggerFleetPipeline(
 					"apply",
@@ -1042,6 +1061,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					rolloutSeconds,
 					selector,
 					ref ?? fleetPipelineRef,
+					maxAgents,
 				),
 			),
 	);

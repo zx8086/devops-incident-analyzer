@@ -439,3 +439,73 @@ describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
 		expect(out.fleetApplyPipelineId).toBeNull();
 	});
 });
+
+// SIO-927: an operator-approved apply must carry MAX_AGENTS = the previewed resolved_count so the
+// CI script's blast-radius cap (default 500) does not refuse a fleet-wide upgrade. Approval at the
+// gate == accepting that blast radius. The PREVIEW must stay uncapped (never send MAX_AGENTS), or
+// it would refuse to report the true count for large fleets.
+describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
+	test("applyFleetUpgrade passes maxAgents = report.resolvedCount to the apply trigger", async () => {
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		const applyArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: (args) => {
+				applyArgs.push(args);
+				return '[201] {"deployment":"eu-cld","version":"9.4.2","pipelineId":2606400810,"status":"created"}';
+			},
+			// Terminal on the first status read -> the live-progress poll loop exits before any sleep.
+			gitlab_get_pipeline: () => '[200] {"id":2606400810,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({
+					pipelineId: 2606400810,
+					status: "success",
+					report: JSON.stringify({
+						mode: "apply",
+						action_id: "act-1",
+						apply: { poll_status: "COMPLETE", acked: 1608, created: 1608, failed_silent: 0 },
+					}),
+				})}`,
+		});
+		// resolved_count 1793 > the script's 500 default -> without the override CI would refuse.
+		const state = stateWith({
+			fleetUpgradeReport: report({
+				deployment: "eu-cld",
+				resolvedCount: 1793,
+				maxAgents: 500,
+				crosstab: { upgradeable: 1608, notUpgradeable: 185, byReason: [{ reason: "wolfi_container", count: 3 }] },
+			}),
+		});
+
+		const out = await applyFleetUpgrade(state);
+
+		expect(applyArgs).toHaveLength(1);
+		expect(applyArgs[0]?.deployment).toBe("eu-cld");
+		expect(applyArgs[0]?.version).toBe("9.4.2");
+		// the whole point of the ticket: the resolved set's size is forwarded as the cap override
+		expect(applyArgs[0]?.maxAgents).toBe(1793);
+		expect(out.fleetUpgradeResult?.status).toBe("applied");
+	});
+
+	test("detectFleetUpgrade never sends maxAgents on the PREVIEW trigger (preview stays uncapped)", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const previewArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			// Short-circuit right after the trigger: a locked (no pipelineId) result returns a planError
+			// report without polling -- enough to inspect what the preview trigger was called with.
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				previewArgs.push(args);
+				return '[423] {"status":"locked","note":"a fleet pipeline is already running"}';
+			},
+		});
+		const state = {
+			messages: [{ getType: () => "human", content: "upgrade all the fleet agents in eu-cld to 9.4.2" }],
+			iacRequest: { workflow: "fleet-upgrade", isProd: false, cluster: "eu-cld", version: "9.4.2" },
+		} as unknown as IacStateType;
+
+		await detectFleetUpgrade(state);
+
+		expect(previewArgs).toHaveLength(1);
+		expect(previewArgs[0]?.deployment).toBe("eu-cld");
+		expect(previewArgs[0]).not.toHaveProperty("maxAgents");
+	});
+});
