@@ -1,7 +1,7 @@
 # Elastic-IaC ↔ observability-elastic-iac alignment — design
 
 - **Date:** 2026-06-16
-- **Status:** Approved (brainstorming complete; ready for implementation plan)
+- **Status:** Shipped — SIO-925, PR #219 (model-id bump deferred to a follow-up; see Out of scope)
 - **Repo:** `zx8086/devops-incident-analyzer`, branch `claude/magical-bohr-9c8d91`
 - **Target GitOps repo:** `gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac` (project id **82850717**)
 
