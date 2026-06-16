@@ -101,7 +101,7 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | `ELASTIC_IAC_MCP_PORT` | No | `9086` | Server listen port |
 | `ELASTIC_IAC_MCP_HOST` | No | `0.0.0.0` | Server bind host |
 | `ELASTIC_IAC_MCP_PATH` | No | `/mcp` | HTTP path prefix |
-| `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `71488350` | GitLab project ID of the `observability-elasticcloud-deployments-terraform` IaC repo |
+| `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `82850717` | GitLab project ID of the `observability-elastic-iac` IaC repo |
 | `ELASTIC_IAC_WORKSPACE_DIR` | No | `/tmp/elastic-iac-workspace` | Local directory the git/terraform tools clone and operate inside (never the agent's CWD) |
 | `TERRAFORM_BIN` | No | `terraform` | Path to the Terraform binary the `terraform_*` tools invoke |
 | `GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base for MRs, file blobs, and repository tree |

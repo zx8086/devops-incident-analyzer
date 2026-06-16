@@ -629,7 +629,7 @@ All seven MCP servers share the same transport abstraction. The transport mode i
 **Transport:** `http` (default) or `stdio`
 **Tool count:** 23 (5 terraform + 7 git + 5 gitlab + 6 elastic)
 
-This server backs the **Elastic IaC agent**, a peer to the incident-analyzer that turns natural-language requests into reviewed Terraform merge requests against the `observability-elasticcloud-deployments-terraform` repo. It is deliberately **read/plan/branch-only** -- there are no `apply` or `destroy` tools. See the [Elastic IaC Agent design](../superpowers/specs/2026-06-02-elastic-iac-agent-design.md) for the full agent + maker-graph + HITL flow.
+This server backs the **Elastic IaC agent**, a peer to the incident-analyzer that turns natural-language requests into reviewed merge requests against the `observability-elastic-iac` repo (`gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac`, project id `82850717`). It is deliberately **read/propose-only** -- there are no `apply` or `destroy` tools, and CI computes the Terraform plan on the MR. See the [Elastic IaC Agent design](../superpowers/specs/2026-06-02-elastic-iac-agent-design.md) for the full agent + maker-graph + HITL flow.
 
 ### Configuration Schema
 
@@ -642,7 +642,7 @@ Config
     path: string          # /mcp
   repository:
     gitlabBaseUrl: string # https://gitlab.com
-    projectId: string     # 71488350
+    projectId: string     # 82850717 (observability-elastic-iac)
     workspaceDir: string  # /tmp/elastic-iac-workspace (clone target for git/terraform tools)
   terraformBin: string    # terraform
   gitlabToken?: string         # GITLAB_PERSONAL_ACCESS_TOKEN (optional)
