@@ -62,7 +62,7 @@ let {
     {/if}
 
     <p class="mt-3 text-xs font-semibold text-amber-700">
-      Approving runs a LIVE bulk_upgrade via CI now &mdash; this applies immediately (there is no MR for a binary upgrade). You can track the apply pipeline here.
+      Approving starts a LIVE bulk_upgrade via CI now (there is no MR for a binary upgrade). It rolls out over ~{prompt.rolloutSeconds}s &mdash; I won't block on the full rollout; you can track the apply pipeline here or ask me to check on it.
     </p>
     <div class="mt-3 flex flex-wrap gap-2">
       <button
