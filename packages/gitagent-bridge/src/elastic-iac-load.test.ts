@@ -22,6 +22,8 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 			"edit-alert-rule",
 			"edit-dataview",
 			"edit-cluster-default",
+			"edit-space",
+			"grant-security-role",
 			"pre-check-gl-testing",
 			"open-mr",
 			"validate-cluster-state",

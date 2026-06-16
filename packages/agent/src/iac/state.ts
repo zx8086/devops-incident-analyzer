@@ -12,6 +12,8 @@ export interface IacRequest {
 		| "alerting-edit"
 		| "dataview-edit"
 		| "cluster-default-edit"
+		| "space-edit"
+		| "security-edit"
 		| "other";
 	cluster?: string;
 	tier?: string;
@@ -56,6 +58,19 @@ export interface IacRequest {
 	dataviewDisplayName?: string;
 	templateName?: string;
 	totalShardsPerNode?: number;
+	// SIO-918: space-edit -- the per-space file basename + name/description/color. security-edit
+	// -- the role name + ADDITIVE privilege grants (cluster / index names+privileges / Kibana
+	// application+privileges). role_mappings + api_keys are never touched.
+	spaceName?: string;
+	spaceDisplayName?: string;
+	spaceDescription?: string;
+	spaceColor?: string;
+	roleName?: string;
+	grantCluster?: string[];
+	grantIndexNames?: string[];
+	grantIndexPrivileges?: string[];
+	grantKibanaApplication?: string;
+	grantKibanaPrivileges?: string[];
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
@@ -360,6 +375,9 @@ export const IacState = Annotation.Root({
 	// SIO-917: a cluster-default-edit LOWERED total_shards_per_node -- surfaced as a risk line
 	// (concentrates shards on fewer nodes, can unbalance allocation).
 	shardsLowered: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-918: a security-edit granted cluster-level / superuser privileges -- surfaced as the
+	// HIGHEST risk line + "recommend human security review".
+	privilegeEscalation: Annotation<boolean>({ reducer: last, default: () => false }),
 	planReport: Annotation<IacPlanReport | null>({ reducer: last, default: () => null }),
 	approvalState: Annotation<IacApprovalState | null>({ reducer: last, default: () => null }),
 	// false when the unified mcp-server-elastic-iac is not connected; surfaced to the UI.
