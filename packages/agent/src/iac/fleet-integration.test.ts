@@ -1,7 +1,9 @@
 // agent/src/iac/fleet-integration.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, isMajorVersionBump, parseIntentJson, reviewPlan, setIntegrationVersion } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 const INTEGRATIONS = JSON.stringify(
 	{
@@ -149,8 +151,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 				integrationVersion: "6.15.0",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/fleet-integrations/integrations.json");
 		expect(result.proposedDiff).toContain('"version"');
@@ -178,8 +179,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 				integrationVersion: "7.0.0",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.integrationMajorBump).toBe(true);
 	});
 
@@ -189,8 +189,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 		const state = {
 			iacRequest: { workflow: "fleet-integration" as const, isProd: false, cluster: "eu-b2b", integration: "aws" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("target version");
 	});
 
@@ -210,8 +209,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 				integrationVersion: "1.0.0",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("nginx");
 		expect(result.precheckPassed).toBeUndefined();
 	});
@@ -232,8 +230,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 				integrationVersion: "6.14.2", // already the current value
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already at 6.14.2");
 	});
 
@@ -251,8 +248,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 				integrationVersion: "6.15.0",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("No fleet-integrations file");
 	});
 });
@@ -272,8 +268,7 @@ describe("reviewPlan — fleet-integration", () => {
 			precheckPassed: true,
 			integrationMajorBump: false,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("aws -> 6.15.0");
 		expect(result.planReview?.title).toContain("fleet-integration");
@@ -294,8 +289,7 @@ describe("reviewPlan — fleet-integration", () => {
 			precheckPassed: true,
 			integrationMajorBump: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-914 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("MAJOR version bump");
 	});
 });

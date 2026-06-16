@@ -8,7 +8,9 @@ import {
 	reviewPlan,
 	setSpaceFields,
 } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 const SPACE = JSON.stringify(
 	{
@@ -213,8 +215,7 @@ describe("draftChange -> proposeSpaceChange", () => {
 				spaceDescription: "new",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/spaces/developer-experience.json");
 	});
@@ -231,8 +232,7 @@ describe("draftChange -> proposeSpaceChange", () => {
 				spaceColor: "#111",
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("not found");
 	});
 });
@@ -261,8 +261,7 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 				grantIndexPrivileges: ["read"],
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.privilegeEscalation).toBe(false);
 		// the diff lists added privileges, NOT any secret VALUE (the header may say "api_keys
@@ -293,8 +292,7 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 				grantCluster: ["manage_security"],
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.privilegeEscalation).toBe(true);
 	});
 
@@ -314,8 +312,7 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 				grantCluster: ["monitor"],
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("ghost");
 	});
 
@@ -325,8 +322,7 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 		const state = {
 			iacRequest: { workflow: "security-edit" as const, isProd: false, cluster: "eu-b2b", roleName: "developer" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("at least one privilege grant");
 	});
 
@@ -347,8 +343,7 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 				grantKibanaPrivileges: ["feature_discover.read"],
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has the requested privileges");
 	});
 });
@@ -367,8 +362,7 @@ describe("reviewPlan — space + security", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("apps");
 	});
@@ -380,11 +374,9 @@ describe("reviewPlan — space + security", () => {
 			proposedDiff: "(diff)",
 			precheckPassed: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const plain = await reviewPlan({ ...base, privilegeEscalation: false } as any);
+		const plain = await reviewPlan(asIacState({ ...base, privilegeEscalation: false }));
 		expect(plain.risks?.[0]).toContain("privilege GRANT");
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-918 - partial IacState test stub
-		const esc = await reviewPlan({ ...base, privilegeEscalation: true } as any);
+		const esc = await reviewPlan(asIacState({ ...base, privilegeEscalation: true }));
 		expect(esc.risks?.[0]).toContain("PRIVILEGE ESCALATION");
 		expect(esc.risks?.[0]).toContain("HUMAN SECURITY REVIEW");
 	});

@@ -1,7 +1,9 @@
 // agent/src/iac/alerting-edit.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { branchSlug, parseIntentJson, reviewPlan, setAlertingFields } from "./nodes.ts";
-import type { IacRequest } from "./state.ts";
+import type { IacRequest, IacStateType } from "./state.ts";
+
+const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
 
 // A real-shaped apm.transaction_error_rate rule.
 const RULE = JSON.stringify(
@@ -156,8 +158,7 @@ describe("draftChange -> proposeAlertingChange", () => {
 				alertThreshold: 5,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe(
 			"environments/eu-b2b/alerting/default__martech_add_to_wallet_transactions_failed_status_prd.json",
@@ -185,8 +186,7 @@ describe("draftChange -> proposeAlertingChange", () => {
 				alertEnabled: false,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.alertDisabled).toBe(true);
 	});
 
@@ -196,8 +196,7 @@ describe("draftChange -> proposeAlertingChange", () => {
 		const state = {
 			iacRequest: { workflow: "alerting-edit" as const, isProd: false, cluster: "eu-b2b", ruleName: "default__x" },
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("at least one of threshold");
 	});
 
@@ -213,8 +212,7 @@ describe("draftChange -> proposeAlertingChange", () => {
 				alertThreshold: 5,
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("not found");
 	});
 
@@ -234,8 +232,7 @@ describe("draftChange -> proposeAlertingChange", () => {
 				alertThreshold: 1, // already the current value
 			},
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await draftChange(state as any);
+		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has the requested values");
 	});
 });
@@ -255,8 +252,7 @@ describe("reviewPlan — alerting-edit", () => {
 			precheckPassed: true,
 			alertDisabled: false,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("default__cart_failed");
 		expect(result.planReview?.title).toContain("alerting-edit");
@@ -277,8 +273,7 @@ describe("reviewPlan — alerting-edit", () => {
 			precheckPassed: true,
 			alertDisabled: true,
 		};
-		// biome-ignore lint/suspicious/noExplicitAny: SIO-916 - partial IacState test stub
-		const result = await reviewPlan(state as any);
+		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("DISABLED");
 	});
 });
