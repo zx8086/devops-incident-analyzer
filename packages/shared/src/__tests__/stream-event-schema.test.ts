@@ -162,3 +162,50 @@ describe("StreamEventSchema synthetics events", () => {
 		expect(parsed.projectScope).toBeNull();
 	});
 });
+
+describe("StreamEventSchema fleet_upgrade events (SIO-922)", () => {
+	test("parses fleet_upgrade_preview_report", () => {
+		const parsed = StreamEventSchema.parse({
+			type: "fleet_upgrade_preview_report",
+			deployment: "eu-b2b",
+			targetVersion: "9.4.2",
+			resolvedCount: 232,
+			versionAvailable: true,
+			rolloutSeconds: 600,
+			crosstab: { upgradeable: 4, notUpgradeable: 228, byReason: [{ reason: "wolfi", count: 228 }] },
+		});
+		expect(parsed.type).toBe("fleet_upgrade_preview_report");
+		if (parsed.type !== "fleet_upgrade_preview_report") throw new Error("narrow");
+		expect(parsed.crosstab.upgradeable).toBe(4);
+	});
+
+	test("parses fleet_upgrade_choice", () => {
+		expect(
+			StreamEventSchema.parse({
+				type: "fleet_upgrade_choice",
+				threadId: "t1",
+				deployment: "eu-b2b",
+				targetVersion: "9.4.2",
+				resolvedCount: 232,
+				upgradeableCount: 4,
+				notUpgradeableCount: 228,
+				rolloutSeconds: 600,
+				byReason: [{ reason: "wolfi", count: 228 }],
+				message: "Approve?",
+			}).type,
+		).toBe("fleet_upgrade_choice");
+	});
+
+	test("parses fleet_upgrade_apply_result and rejects a wrong status", () => {
+		expect(
+			StreamEventSchema.parse({
+				type: "fleet_upgrade_apply_result",
+				status: "applied",
+				acked: 4,
+				failedSilent: 0,
+			}).type,
+		).toBe("fleet_upgrade_apply_result");
+		// "pushed" is a synthetics status, not a fleet-apply status
+		expect(() => StreamEventSchema.parse({ type: "fleet_upgrade_apply_result", status: "pushed" })).toThrow();
+	});
+});

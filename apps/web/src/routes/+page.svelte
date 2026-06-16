@@ -7,6 +7,7 @@ import ChatMessage from "$lib/components/ChatMessage.svelte";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
 import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
+import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
@@ -402,6 +403,16 @@ function handleSuggestionClick(suggestion: string) {
       disabled={agentStore.isStreaming}
       onApprove={() => agentStore.approveSyntheticsPush(true)}
       onDecline={() => agentStore.approveSyntheticsPush(false)}
+    />
+  {/if}
+
+  {#if agentStore.fleetUpgradeChoice}
+    <!-- SIO-913 / SIO-922: single fleet-upgrade apply approve/decline gate. -->
+    <FleetUpgradeChoiceCard
+      prompt={agentStore.fleetUpgradeChoice}
+      disabled={agentStore.isStreaming}
+      onApprove={() => agentStore.approveFleetUpgrade(true)}
+      onDecline={() => agentStore.approveFleetUpgrade(false)}
     />
   {/if}
 

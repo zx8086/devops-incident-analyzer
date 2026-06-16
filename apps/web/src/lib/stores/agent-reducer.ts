@@ -207,6 +207,42 @@ export interface SyntheticsPushResultRow {
 	note?: string;
 }
 
+// SIO-913 / SIO-922: Fleet agent binary-upgrade sub-flow. The preview report (shown before the
+// gate), the single operator apply approve/decline interrupt, and the apply outcome.
+export interface FleetUpgradePreview {
+	deployment: string;
+	targetVersion: string;
+	resolvedCount: number;
+	versionAvailable: boolean;
+	rolloutSeconds: number;
+	crosstab: { upgradeable: number; notUpgradeable: number; byReason: Array<{ reason: string; count: number }> };
+	planError?: boolean;
+	planErrorReason?: string;
+}
+
+export interface FleetUpgradeChoice {
+	threadId: string;
+	deployment: string;
+	targetVersion: string;
+	resolvedCount: number;
+	upgradeableCount: number;
+	notUpgradeableCount: number;
+	rolloutSeconds: number;
+	byReason: Array<{ reason: string; count: number }>;
+	message: string;
+}
+
+export interface FleetUpgradeResultRow {
+	status: "applied" | "skipped" | "blocked" | "failed";
+	actionId?: string;
+	pollStatus?: string;
+	acked?: number;
+	created?: number;
+	failedSilent?: number;
+	pipelineId?: number;
+	note?: string;
+}
+
 // SIO-775: typed findings keyed by bare dataSourceId (e.g. "kafka", "gitlab",
 // "couchbase"). Populated by datasource_result events emitted from the
 // extractFindings node. Absence of an entry = sub-agent didn't run or had
@@ -258,6 +294,11 @@ export interface ReducerState {
 	syntheticsDriftReport: SyntheticsDriftReport | null;
 	syntheticsPushChoice: SyntheticsPushChoice | null;
 	syntheticsPushResult: SyntheticsPushResultRow | null;
+	// SIO-913 / SIO-922: fleet upgrade sub-flow. The preview (overview), the single apply
+	// approve/decline prompt (interrupt), and the single apply outcome.
+	fleetUpgradePreview: FleetUpgradePreview | null;
+	fleetUpgradeChoice: FleetUpgradeChoice | null;
+	fleetUpgradeResult: FleetUpgradeResultRow | null;
 }
 
 export function initialReducerState(): ReducerState {
@@ -286,6 +327,9 @@ export function initialReducerState(): ReducerState {
 		syntheticsDriftReport: null,
 		syntheticsPushChoice: null,
 		syntheticsPushResult: null,
+		fleetUpgradePreview: null,
+		fleetUpgradeChoice: null,
+		fleetUpgradeResult: null,
 	};
 }
 
@@ -464,6 +508,54 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					project: event.project,
 					pipelineId: event.pipelineId,
 					pipelineStatus: event.pipelineStatus,
+					note: event.note,
+				},
+			};
+		// SIO-913 / SIO-922: fleet upgrade sub-flow events.
+		case "fleet_upgrade_preview_report":
+			// A fresh preview clears any prior apply outcome.
+			return {
+				...state,
+				fleetUpgradePreview: {
+					deployment: event.deployment,
+					targetVersion: event.targetVersion,
+					resolvedCount: event.resolvedCount,
+					versionAvailable: event.versionAvailable,
+					rolloutSeconds: event.rolloutSeconds,
+					crosstab: event.crosstab,
+					planError: event.planError,
+					planErrorReason: event.planErrorReason,
+				},
+				fleetUpgradeResult: null,
+			};
+		case "fleet_upgrade_choice":
+			return {
+				...state,
+				threadId: event.threadId,
+				fleetUpgradeChoice: {
+					threadId: event.threadId,
+					deployment: event.deployment,
+					targetVersion: event.targetVersion,
+					resolvedCount: event.resolvedCount,
+					upgradeableCount: event.upgradeableCount,
+					notUpgradeableCount: event.notUpgradeableCount,
+					rolloutSeconds: event.rolloutSeconds,
+					byReason: event.byReason,
+					message: event.message,
+				},
+			};
+		case "fleet_upgrade_apply_result":
+			return {
+				...state,
+				fleetUpgradeChoice: null,
+				fleetUpgradeResult: {
+					status: event.status,
+					actionId: event.actionId,
+					pollStatus: event.pollStatus,
+					acked: event.acked,
+					created: event.created,
+					failedSilent: event.failedSilent,
+					pipelineId: event.pipelineId,
 					note: event.note,
 				},
 			};
