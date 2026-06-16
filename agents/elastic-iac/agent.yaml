@@ -28,6 +28,7 @@ skills:
   - id: edit-space
   - id: grant-security-role
   - id: edit-deployment-topology
+  - id: edit-dashboard
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state

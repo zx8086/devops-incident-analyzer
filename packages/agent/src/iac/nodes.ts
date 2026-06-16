@@ -76,6 +76,7 @@ const IntentSchema = z.object({
 			"space-edit",
 			"security-edit",
 			"topology-edit",
+			"dashboard-edit",
 			"other",
 		])
 		.default("other"),
@@ -127,6 +128,10 @@ const IntentSchema = z.object({
 	sizeComponent: z.enum(["integrations_server", "kibana"]).nullish(),
 	componentSize: z.string().nullish(),
 	componentZoneCount: z.number().nullish(),
+	dashboardSpace: z.string().nullish(),
+	dashboardName: z.string().nullish(),
+	dashboardNdjson: z.string().nullish(),
+	dashboardAction: z.enum(["add", "replace", "delete"]).nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -194,6 +199,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					sizeComponent: nn(p.sizeComponent),
 					componentSize: nn(p.componentSize),
 					componentZoneCount: nn(p.componentZoneCount),
+					dashboardSpace: nn(p.dashboardSpace),
+					dashboardName: nn(p.dashboardName),
+					dashboardNdjson: nn(p.dashboardNdjson),
+					dashboardAction: nn(p.dashboardAction),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -228,11 +237,11 @@ export function capabilityMessage(): string {
 		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-b2b"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
-		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n\n' +
+		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
+		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
-		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
-		"upgrade trigger are on the roadmap."
+		"yet. The Fleet upgrade trigger is on the roadmap."
 	);
 }
 
@@ -320,7 +329,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
-		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'other'), cluster, tier, " +
+		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'dashboard-edit'|'other'), " +
+		"cluster, tier, " +
 		"resource, newSizeGb, " +
 		"newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
 		"sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, " +
@@ -328,7 +338,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
 		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
 		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, sizeComponent, componentSize, " +
-		"componentZoneCount, reason, isProd (true only if the user explicitly named a production " +
+		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, reason, isProd (true only if " +
+		"the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
@@ -399,6 +410,16 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"raw YAML string verbatim; and (b) component sizing -- to resize the integrations_server or kibana node, set " +
 		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. Set at " +
 		"least one topology field. NEVER propose deleting a deployment. " +
+		"For a DASHBOARD change ('add this dashboard to the developer-experience space on eu-b2b', 'replace the kong " +
+		"dashboard on eu-b2b' followed by a pasted Kibana export) -- adding or replacing a WHOLE Kibana dashboard NDJSON " +
+		"saved-object export, NOT editing panels inside an existing one -- set workflow to 'dashboard-edit', cluster to the " +
+		"named deployment, dashboardSpace to the Kibana space the dashboard belongs to (e.g. 'default', " +
+		"'developer-experience'; it becomes the '<space>__' filename prefix and MUST be an existing space), dashboardName to " +
+		"the dashboard file slug (the part after '<space>__' and before .ndjson, e.g. 'amazon_bedrock_token_usage'), " +
+		"dashboardAction ('add' for a new file, 'replace' for an existing one; 'delete' is not supported yet), and " +
+		"dashboardNdjson to the user-pasted/Kibana-exported NDJSON payload VERBATIM (newline-delimited; do NOT reformat, " +
+		"re-indent, or wrap it -- pass the exact text). Take the NDJSON as an opaque multi-line string; never merge or " +
+		"rewrite individual panels. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -862,7 +883,11 @@ export function branchSlug(req: IacRequest): string {
 											? req.roleName
 											: req.workflow === "topology-edit"
 												? req.topologyTier
-												: (req.tier ?? req.resource);
+												: req.workflow === "dashboard-edit"
+													? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
+														// include space + action so same-day edits don't collide on one branch.
+														[req.dashboardSpace, req.dashboardName, req.dashboardAction].filter(Boolean).join("-")
+													: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -1198,6 +1223,22 @@ function spaceTemplate(): string {
 // literal placeholder. ONE aggregate file (roles + role_mappings + api_keys) per deployment.
 function securityTemplate(): string {
 	return process.env.ELASTIC_IAC_SECURITY_TEMPLATE ?? "environments/${cluster}/security/security.json";
+}
+
+// SIO-920: agent-side path for a Kibana dashboard NDJSON export. ${cluster}/${space}/${name} are
+// literal placeholders. One NDJSON file per dashboard; the filename is <space>__<name>.ndjson.
+// Lazy process.env read (no module-scope Bun.env; the web app runs Vite SSR where a top-level
+// Bun.env reference throws "Bun is not defined").
+function dashboardNdjsonTemplate(): string {
+	return process.env.ELASTIC_IAC_DASHBOARD_TEMPLATE ?? "environments/${cluster}/dashboards/${space}__${name}.ndjson";
+}
+
+// SIO-920: resolve the dashboard NDJSON path. Substitutes ${cluster} via deploymentJsonPath, then
+// the ${space}/${name} placeholders (mirrors proposeSpaceChange's ${space} replace). (Pure.)
+function dashboardNdjsonPath(template: string, cluster: string, space: string, name: string): string {
+	return deploymentJsonPath(template, cluster)
+		.replace(/\$\{space\}/g, space)
+		.replace(/\$\{name\}/g, name);
 }
 
 // SIO-918: read-modify-write a per-space JSON: set name / description / color. Preserves
@@ -2522,6 +2563,216 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
 }
 
+// SIO-920: validate a Kibana dashboard NDJSON payload WITHOUT parsing the whole file as one JSON
+// object -- it is newline-delimited (N saved-object lines + a trailing export-summary line). We
+// split on \n, drop blank lines, and JSON.parse EACH line independently (validation only -- the
+// caller commits the ORIGINAL string verbatim, never a re-serialized one). objectCount is the
+// number of saved-object lines (every non-blank line except the trailing export-summary line, which
+// is the object carrying excludedObjects/exportedCount and no `type`). Returns ok:false with the
+// 1-based line number of the first unparseable line. (Pure; unit-tested.)
+export function validateNdjsonLines(
+	ndjson: string,
+): { ok: true; objectCount: number } | { ok: false; badLine: number } {
+	const lines = ndjson.split("\n");
+	let nonBlank = 0;
+	let summaryLines = 0;
+	for (const [i, rawLine] of lines.entries()) {
+		const line = rawLine.trim();
+		if (line === "") continue;
+		nonBlank++;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			return { ok: false, badLine: i + 1 };
+		}
+		// The export-summary line has no `type` and carries the exportedCount/excludedObjects keys.
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			!("type" in parsed) &&
+			("exportedCount" in parsed || "excludedObjects" in parsed)
+		) {
+			summaryLines++;
+		}
+	}
+	return { ok: true, objectCount: Math.max(0, nonBlank - summaryLines) };
+}
+
+// SIO-920: propose a WHOLE-FILE Kibana dashboard NDJSON add/replace -- commit the user's exported
+// NDJSON verbatim to environments/<dep>/dashboards/<space>__<name>.ndjson and open an MR. MEDIUM
+// risk (dashboards are display-only; a malformed NDJSON fails CI's saved-objects import job, not
+// production). The NDJSON is treated as an opaque multi-line string -- never JSON.parsed as one
+// object, never panel-edited. `delete` is parsed but not supported yet (the GitLab MCP exposes no
+// delete-file tool; gitlab_commit_file is a create/update upsert) -- it blocks as a follow-up.
+async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const space = req.dashboardSpace ?? "";
+	const name = req.dashboardName ?? "";
+	const action = req.dashboardAction;
+
+	if (!cluster || !space || !name || !action) {
+		return {
+			blockedReason: "Dashboard change needs a deployment, a space, a dashboard name, and an action (add|replace).",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the deployment, the space, the dashboard, and whether to add or replace it.",
+				),
+			],
+		};
+	}
+
+	// SIO-920: cluster/space/name are LLM-derived and get interpolated into a GitLab file path.
+	// Reject path separators and dot segments so a dashboard-edit can only ever target
+	// environments/<dep>/dashboards/<space>__<name>.ndjson, never escape the dashboards dir.
+	const isSafePathSegment = (value: string): boolean =>
+		value.length > 0 && !value.includes("\0") && !/[\\/]/.test(value) && value !== "." && value !== "..";
+	if (!isSafePathSegment(cluster) || !isSafePathSegment(space) || !isSafePathSegment(name)) {
+		return {
+			blockedReason: "Dashboard change contains an invalid deployment, space, or dashboard path segment.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: the deployment, space, and dashboard name must be plain file-name segments (no path separators or '.' / '..').",
+				),
+			],
+		};
+	}
+
+	// delete is not supported yet: there is no delete-file tool, and gitlab_commit_file only
+	// creates/updates. Surface it as a follow-up rather than silently doing nothing.
+	if (action === "delete") {
+		return {
+			blockedReason: "Dashboard delete is not supported yet (follow-up).",
+			messages: [
+				new AIMessage(
+					"I can't delete a dashboard yet -- I can only add or replace one. Removing a dashboard NDJSON is a planned follow-up; for now delete it in Kibana / the repo directly.",
+				),
+			],
+		};
+	}
+
+	const ndjson = req.dashboardNdjson ?? "";
+	if (ndjson.trim() === "") {
+		return {
+			blockedReason: "Dashboard add/replace needs the exported NDJSON payload.",
+			messages: [
+				new AIMessage("Cannot propose the change: paste the Kibana dashboard export (the NDJSON) to add or replace."),
+			],
+		};
+	}
+
+	// Validate per-line (NEVER whole-file JSON.parse -- NDJSON is line-delimited). A malformed
+	// payload blocks with a clarifying message rather than committing a broken file.
+	const validated = validateNdjsonLines(ndjson);
+	if (!validated.ok) {
+		return {
+			blockedReason: `Dashboard NDJSON is malformed (line ${validated.badLine} is not valid JSON).`,
+			messages: [
+				new AIMessage(
+					`Cannot propose the change: the NDJSON payload is malformed (line ${validated.badLine} is not valid JSON). Re-export the dashboard from Kibana and paste the full file.`,
+				),
+			],
+		};
+	}
+
+	const filePath = dashboardNdjsonPath(dashboardNdjsonTemplate(), cluster, space, name);
+	const branch = branchName(req);
+
+	// SIO-920: classify GitLab tool responses. callTool returns "[<status>] <json>" on a real API
+	// call and "[gitlab ...]"/"[<tool> error: ...]" placeholders on failure. A read must be a clean
+	// 2xx (file present) or 404 (absent); anything else (token/timeout/5xx/placeholder) is an
+	// UNKNOWN read and must block -- never silently treated as "exists" or "absent".
+	const isGitlabSuccess = (result: string): boolean => /^\[2\d\d\]/.test(result);
+	const isGitlabNotFound = (result: string): boolean => result.startsWith("[404");
+
+	// Cross-check the space exists (the <space>__ prefix must match a real space on this deployment).
+	const spacePath = deploymentJsonPath(spaceTemplate(), cluster).replace(/\$\{space\}/g, space);
+	const spaceRaw = await callTool("gitlab_get_file_content", { filePath: spacePath });
+	if (spaceRaw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (!isGitlabSuccess(spaceRaw) && !isGitlabNotFound(spaceRaw)) {
+		return {
+			blockedReason: `Could not verify space '${space}' on '${cluster}' (${spacePath}): ${spaceRaw.slice(0, 120)}.`,
+			messages: [
+				new AIMessage("Cannot propose the change: I could not read the target Kibana space from the GitOps repo."),
+			],
+		};
+	}
+	if (isGitlabNotFound(spaceRaw)) {
+		return {
+			blockedReason: `'${space}' is not a space on '${cluster}' (${spacePath}).`,
+			messages: [
+				new AIMessage(
+					`'${space}' is not a Kibana space on '${cluster}'. A dashboard's '<space>__' prefix must match an existing space; check the space name and try again.`,
+				),
+			],
+		};
+	}
+
+	// Check the target file: add expects it absent (404 ok), replace expects it present. An UNKNOWN
+	// read (neither 2xx nor 404) blocks -- we must not guess existence from an error placeholder.
+	const fileRaw = await callTool("gitlab_get_file_content", { filePath });
+	if (!isGitlabSuccess(fileRaw) && !isGitlabNotFound(fileRaw)) {
+		return {
+			blockedReason: `Could not check dashboard '${space}__${name}' on '${cluster}' (${filePath}): ${fileRaw.slice(0, 120)}.`,
+			messages: [
+				new AIMessage("Cannot propose the change: I could not verify whether the dashboard file already exists."),
+			],
+		};
+	}
+	const fileExists = isGitlabSuccess(fileRaw);
+	if (action === "add" && fileExists) {
+		return {
+			blockedReason: `Dashboard '${space}__${name}' already exists on '${cluster}'; use replace to overwrite it.`,
+			messages: [
+				new AIMessage(
+					`A dashboard '${space}__${name}.ndjson' already exists on '${cluster}'. Ask to "replace" it if you want to overwrite it; I won't silently clobber it on an "add".`,
+				),
+			],
+		};
+	}
+	if (action === "replace" && !fileExists) {
+		return {
+			blockedReason: `No dashboard '${space}__${name}' on '${cluster}' to replace (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`There's no dashboard '${space}__${name}.ndjson' on '${cluster}' to replace. Use "add" to create it.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		// Commit the ORIGINAL NDJSON string verbatim -- no re-serialization, no reformatting.
+		content: ndjson,
+		commit_message: `${cluster}: ${action} dashboard ${space}__${name}`,
+		action: action === "add" ? "create" : "update",
+	});
+	// A clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]") or non-2xx
+	// must NOT reach the review gate as a committed change.
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit dashboard '${space}__${name}' to ${filePath}: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the dashboard file commit failed.")],
+		};
+	}
+
+	// Diff is a SUMMARY (filename + action + object count + byte size) -- NEVER the NDJSON body
+	// (a dashboard export can be 1.9 MB). objectCount counts saved-object lines (excludes the
+	// trailing export-summary line).
+	const proposedDiff = `${filePath} (dashboard ${action}): ${validated.objectCount} saved object${validated.objectCount === 1 ? "" : "s"} + export summary, ${Buffer.byteLength(ndjson, "utf8")} bytes`;
+
+	// The commit returned 2xx (non-2xx returned early above), so the change is on the branch.
+	return { branch, proposedFilePath: filePath, proposedDiff, precheckPassed: true };
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -2540,6 +2791,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
 	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
 	if (req.workflow === "topology-edit") return proposeTopologyChange(state, req);
+	if (req.workflow === "dashboard-edit") return proposeDashboardChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -2678,6 +2930,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	if (req?.workflow === "dashboard-edit") {
+		// SIO-920: dashboards are display-only; a malformed NDJSON fails CI's saved-objects import
+		// job, not production. Whole-file replace -- panel-level changes are not reviewed here.
+		risks.push(
+			"Dashboard NDJSON change (display-only); a malformed export fails CI's saved-objects import job, not production. This is a WHOLE-FILE add/replace -- individual panels are not reviewed; verify the export is the intended dashboard.",
+		);
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -2708,7 +2967,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 											? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
 											: req?.workflow === "topology-edit"
 												? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
-												: (req?.tier ?? req?.resource ?? "change");
+												: req?.workflow === "dashboard-edit"
+													? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
+													: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -2807,6 +3068,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "topology-edit"
 				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}.`
 				: "",
+			req?.workflow === "dashboard-edit"
+				? `Dashboard ${req?.dashboardAction ?? "?"} '${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}.ndjson' (whole-file Kibana NDJSON export; committed verbatim, no panel edits). ${review?.diff ?? ""}`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -2837,7 +3101,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 												? `Category security, Risk ${state.privilegeEscalation ? "HIGH (escalation)" : "HIGH"}`
 												: req?.workflow === "topology-edit"
 													? "Category deployment-topology, Risk HIGH"
-													: "Category version-bump, Risk LOW";
+													: req?.workflow === "dashboard-edit"
+														? "Category dashboard, Risk MEDIUM"
+														: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +

@@ -15,6 +15,7 @@ export interface IacRequest {
 		| "space-edit"
 		| "security-edit"
 		| "topology-edit"
+		| "dashboard-edit"
 		| "other";
 	cluster?: string;
 	tier?: string;
@@ -85,6 +86,16 @@ export interface IacRequest {
 	sizeComponent?: "integrations_server" | "kibana";
 	componentSize?: string;
 	componentZoneCount?: number;
+	// SIO-920: dashboard-edit -- whole-file add/replace of a Kibana NDJSON saved-object export
+	// at environments/<dep>/dashboards/<space>__<name>.ndjson. MEDIUM risk (display-only; a
+	// malformed NDJSON fails CI's import job, not prod). Whole-file only -- no surgical panel edits.
+	// The NDJSON is committed verbatim (never JSON.parsed as one object -- it is line-delimited).
+	// delete is parsed but blocked as a follow-up (the GitLab MCP exposes no delete-file tool;
+	// gitlab_commit_file is a create/update upsert).
+	dashboardSpace?: string;
+	dashboardName?: string;
+	dashboardNdjson?: string;
+	dashboardAction?: "add" | "replace" | "delete";
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
