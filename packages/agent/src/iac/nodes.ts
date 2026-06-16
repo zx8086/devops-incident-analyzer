@@ -75,6 +75,7 @@ const IntentSchema = z.object({
 			"cluster-default-edit",
 			"space-edit",
 			"security-edit",
+			"topology-edit",
 			"other",
 		])
 		.default("other"),
@@ -117,6 +118,15 @@ const IntentSchema = z.object({
 	grantIndexPrivileges: z.array(z.string()).nullish(),
 	grantKibanaApplication: z.string().nullish(),
 	grantKibanaPrivileges: z.array(z.string()).nullish(),
+	autoscaleEnabled: z.boolean().nullish(),
+	topologyTier: z.string().nullish(),
+	tierZoneCount: z.number().nullish(),
+	tierAutoscale: z.boolean().nullish(),
+	userSettingsTarget: z.enum(["elasticsearch_config", "kibana"]).nullish(),
+	userSettingsYaml: z.string().nullish(),
+	sizeComponent: z.enum(["integrations_server", "kibana"]).nullish(),
+	componentSize: z.string().nullish(),
+	componentZoneCount: z.number().nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -175,6 +185,15 @@ export function parseIntentJson(raw: string): IacRequest {
 					grantIndexPrivileges: nn(p.grantIndexPrivileges),
 					grantKibanaApplication: nn(p.grantKibanaApplication),
 					grantKibanaPrivileges: nn(p.grantKibanaPrivileges),
+					autoscaleEnabled: nn(p.autoscaleEnabled),
+					topologyTier: nn(p.topologyTier),
+					tierZoneCount: nn(p.tierZoneCount),
+					tierAutoscale: nn(p.tierAutoscale),
+					userSettingsTarget: nn(p.userSettingsTarget),
+					userSettingsYaml: nn(p.userSettingsYaml),
+					sizeComponent: nn(p.sizeComponent),
+					componentSize: nn(p.componentSize),
+					componentZoneCount: nn(p.componentZoneCount),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -208,7 +227,8 @@ export function capabilityMessage(): string {
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on eu-b2b"\n' +
 		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-b2b"\n' +
-		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n\n' +
+		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
+		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. More config stacks (SLOs, integrations, alerting, spaces, dashboards, ...) and the Fleet " +
@@ -300,13 +320,16 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
-		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'other'), cluster, tier, resource, newSizeGb, " +
+		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'other'), cluster, tier, " +
+		"resource, newSizeGb, " +
 		"newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
 		"sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, " +
 		"runtimeFieldName, runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, " +
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
-		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, reason, isProd (true only if " +
-		"the user explicitly named a production cluster), and clarification. " +
+		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
+		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, sizeComponent, componentSize, " +
+		"componentZoneCount, reason, isProd (true only if the user explicitly named a production " +
+		"cluster), and clarification. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
@@ -364,6 +387,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"(array of index patterns like ['logs-*']) + grantIndexPrivileges (array like ['read','view_index_metadata']), " +
 		"and/or grantKibanaApplication (e.g. 'kibana-.kibana') + grantKibanaPrivileges (array like ['feature_discover.read']). " +
 		"Set at least one grant. NEVER include users, api_keys, or any secret. " +
+		"For a DEPLOYMENT TOPOLOGY change ('turn on autoscaling for eu-onboarding', 'set the hot tier zone_count to 3 on " +
+		"eu-b2b', 'disable autoscale on the warm tier of ap-cld') -- toggling autoscale or setting a tier's zone_count, NOT " +
+		"a version upgrade (use version-upgrade) and NOT a tier size/max resize (use tier-resize) -- set workflow to " +
+		"'topology-edit', cluster to the named deployment, autoscaleEnabled (true/false for the GLOBAL elasticsearch " +
+		"autoscale toggle), and/or topologyTier (hot|warm|cold|frozen|master|ml|coordinating) with tierZoneCount (integer " +
+		"1-3) and/or tierAutoscale (true/false for that tier). " +
+		"topology-edit ALSO covers two more surfaces of the same _deployments JSON: (a) the SSO/OIDC login config -- if the " +
+		"user gives a new user_settings_yaml block (SAML/OIDC realm or Kibana auth providers), set userSettingsTarget " +
+		"('elasticsearch_config' for the ES SAML realm, 'kibana' for the Kibana auth providers) and userSettingsYaml to the " +
+		"raw YAML string verbatim; and (b) component sizing -- to resize the integrations_server or kibana node, set " +
+		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. Set at " +
+		"least one topology field. NEVER propose deleting a deployment. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -563,6 +598,120 @@ export function setDeploymentTierSize(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousMax };
 }
 
+// SIO-919: read-modify-write topology fields in the _deployments JSON beyond version/size (which
+// version-upgrade/tier-resize already own): the global elasticsearch.autoscale toggle, and a tier's
+// zone_count and/or per-tier autoscale. Preserves size/max_size/instance_configuration + the raw
+// user_settings_yaml block byte-for-byte. Captures previous values for the diff. Throws on bad JSON,
+// a missing elasticsearch block, or an unknown tier (when a tier field is requested). The
+// deployments stack is a single shared state across all 10 clusters -- the proposer always flags
+// that + the long apply window. (Pure; unit-tested.)
+export function setDeploymentTopology(
+	json: string,
+	changes: { autoscale?: boolean; tier?: string; zoneCount?: number; tierAutoscale?: boolean },
+): {
+	content: string;
+	previousAutoscale?: boolean;
+	previousZoneCount?: number;
+	previousTierAutoscale?: boolean;
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as { elasticsearch?: Record<string, unknown> };
+	const es = obj.elasticsearch;
+	if (!es || typeof es !== "object") throw new Error("deployment JSON has no elasticsearch block");
+	let changed = false;
+
+	const previousAutoscale = typeof es.autoscale === "boolean" ? es.autoscale : undefined;
+	if (changes.autoscale !== undefined) {
+		es.autoscale = changes.autoscale;
+		changed = true;
+	}
+
+	let previousZoneCount: number | undefined;
+	let previousTierAutoscale: boolean | undefined;
+	if (changes.tier !== undefined && (changes.zoneCount !== undefined || changes.tierAutoscale !== undefined)) {
+		const t = es[changes.tier];
+		if (!t || typeof t !== "object") throw new Error(`unknown or unsized tier '${changes.tier}'`);
+		const tierObj = t as Record<string, unknown>;
+		previousZoneCount = typeof tierObj.zone_count === "number" ? tierObj.zone_count : undefined;
+		previousTierAutoscale = typeof tierObj.autoscale === "boolean" ? tierObj.autoscale : undefined;
+		if (changes.zoneCount !== undefined) {
+			tierObj.zone_count = changes.zoneCount;
+			changed = true;
+		}
+		if (changes.tierAutoscale !== undefined) {
+			tierObj.autoscale = changes.tierAutoscale;
+			changed = true;
+		}
+	}
+
+	return {
+		content: `${JSON.stringify(obj, null, 2)}\n`,
+		previousAutoscale,
+		previousZoneCount,
+		previousTierAutoscale,
+		changed,
+	};
+}
+
+// SIO-919: set elasticsearch_config.user_settings_yaml OR kibana.user_settings_yaml to a new raw
+// YAML string (SSO/OIDC realms, Kibana auth providers). The value is a JSON-escaped string -- we
+// replace it wholesale with the caller's string and NEVER reformat or parse it. Captures the
+// previous string for the MR (length only is surfaced upstream; the value never enters the diff,
+// since SSO config can contain idp/sp identifiers). Preserves every sibling field + trailing
+// newline. Throws on bad JSON or a missing target block. (Pure; unit-tested.)
+export function setDeploymentUserSettings(
+	json: string,
+	target: "elasticsearch_config" | "kibana",
+	yaml: string,
+): { content: string; previousYaml?: string; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const block = obj[target];
+	if (!block || typeof block !== "object") throw new Error(`deployment JSON has no ${target} block`);
+	const blockObj = block as Record<string, unknown>;
+	const previousYaml = typeof blockObj.user_settings_yaml === "string" ? blockObj.user_settings_yaml : undefined;
+	const changed = previousYaml !== yaml;
+	blockObj.user_settings_yaml = yaml;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousYaml, changed };
+}
+
+// SIO-919: set the size / zone_count of a non-data component (integrations_server or kibana) in the
+// _deployments JSON. Captures previous values, preserves other fields + trailing newline. Throws on
+// bad JSON or a missing component. (Pure; unit-tested.)
+export function setComponentSize(
+	json: string,
+	component: "integrations_server" | "kibana",
+	changes: { size?: string; zoneCount?: number },
+): { content: string; previousSize?: string; previousZoneCount?: number; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const block = obj[component];
+	if (!block || typeof block !== "object") throw new Error(`deployment JSON has no ${component} block`);
+	const blockObj = block as Record<string, unknown>;
+	const previousSize = typeof blockObj.size === "string" ? blockObj.size : undefined;
+	const previousZoneCount = typeof blockObj.zone_count === "number" ? blockObj.zone_count : undefined;
+	let changed = false;
+	if (changes.size !== undefined && blockObj.size !== changes.size) {
+		blockObj.size = changes.size;
+		changed = true;
+	}
+	if (changes.zoneCount !== undefined && blockObj.zone_count !== changes.zoneCount) {
+		blockObj.zone_count = changes.zoneCount;
+		changed = true;
+	}
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousZoneCount, changed };
+}
+
 // reconcile-to-live: rewrite the deployment JSON's elasticsearch block to match the live cluster's
 // per-tier sizing. Sets max_size ("<N>g") + zone_count for each tier present in BOTH the JSON and
 // `topo`; never invents a tier the repo doesn't manage. The live "size" is the autoscaling ceiling
@@ -711,7 +860,9 @@ export function branchSlug(req: IacRequest): string {
 										? req.spaceName
 										: req.workflow === "security-edit"
 											? req.roleName
-											: (req.tier ?? req.resource);
+											: req.workflow === "topology-edit"
+												? req.topologyTier
+												: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -2185,6 +2336,192 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 	};
 }
 
+// SIO-919: propose a deployments-topology change -- toggle elasticsearch.autoscale and/or set a
+// tier's zone_count / per-tier autoscale in the _deployments JSON (version + size are owned by
+// version-upgrade / tier-resize). Mirrors proposeVersionUpgrade (same _deployments file path) but
+// edits topology scalars. ALWAYS HIGH risk: the deployments stack is one shared state across all 10
+// clusters and applies can take hours. Never proposes a deployment delete.
+async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+
+	const hasChange =
+		req.autoscaleEnabled !== undefined ||
+		(req.topologyTier !== undefined && (req.tierZoneCount !== undefined || req.tierAutoscale !== undefined)) ||
+		(req.userSettingsTarget !== undefined && req.userSettingsYaml !== undefined) ||
+		(req.sizeComponent !== undefined && (req.componentSize !== undefined || req.componentZoneCount !== undefined));
+	if (!cluster || !hasChange) {
+		return {
+			blockedReason:
+				"Topology change needs a cluster and at least one of autoscale / tier zone_count / tier autoscale / user_settings_yaml / component size.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: name the deployment and what to change (autoscale, a tier's zone_count/autoscale, an SSO user_settings_yaml block, or integrations_server/kibana sizing).",
+				),
+			],
+		};
+	}
+	if (
+		req.tierZoneCount !== undefined &&
+		(!Number.isInteger(req.tierZoneCount) || req.tierZoneCount < 1 || req.tierZoneCount > 3)
+	) {
+		return {
+			blockedReason: `Invalid zone_count ${req.tierZoneCount}.`,
+			messages: [new AIMessage("Cannot propose the change: zone_count must be an integer 1-3.")],
+		};
+	}
+
+	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Deployment '${cluster}' not found (${filePath}).`,
+			messages: [
+				new AIMessage(`I couldn't find a deployment file for '${cluster}' (${filePath}). Check the deployment name.`),
+			],
+		};
+	}
+
+	// Apply the requested surfaces in sequence over the same file content. Each pure helper is a
+	// read-modify-write; we thread `content` through so a request can touch autoscale + a tier + SSO
+	// + sizing in one MR. The diff lists only changed scalars (and for SSO, only the target + a
+	// "updated" marker -- the YAML value never enters the diff, since it can carry idp/sp identifiers).
+	let content = extractFileContent(raw);
+	let anyChange = false;
+	const diffLines: string[] = [`${filePath} (deployment topology ${cluster})`];
+
+	if (
+		req.autoscaleEnabled !== undefined ||
+		(req.topologyTier !== undefined && (req.tierZoneCount !== undefined || req.tierAutoscale !== undefined))
+	) {
+		let topo: ReturnType<typeof setDeploymentTopology>;
+		try {
+			topo = setDeploymentTopology(content, {
+				autoscale: req.autoscaleEnabled,
+				tier: req.topologyTier,
+				zoneCount: req.tierZoneCount,
+				tierAutoscale: req.tierAutoscale,
+			});
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			const isUnknownTier = reason.startsWith("unknown or unsized tier");
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [
+					new AIMessage(
+						isUnknownTier
+							? `'${req.topologyTier}' is not a managed tier on ${cluster}. Check the tier (hot|warm|cold|frozen|master|ml|coordinating) and try again.`
+							: `Cannot propose the change: ${reason}.`,
+					),
+				],
+			};
+		}
+		content = topo.content;
+		anyChange = anyChange || topo.changed;
+		if (req.autoscaleEnabled !== undefined) {
+			diffLines.push(
+				`[elasticsearch] - "autoscale": ${JSON.stringify(topo.previousAutoscale ?? "?")}\n+ "autoscale": ${JSON.stringify(req.autoscaleEnabled)}`,
+			);
+		}
+		if (req.topologyTier && req.tierZoneCount !== undefined) {
+			diffLines.push(
+				`[elasticsearch.${req.topologyTier}] - "zone_count": ${JSON.stringify(topo.previousZoneCount ?? "?")}\n+ "zone_count": ${JSON.stringify(req.tierZoneCount)}`,
+			);
+		}
+		if (req.topologyTier && req.tierAutoscale !== undefined) {
+			diffLines.push(
+				`[elasticsearch.${req.topologyTier}] - "autoscale": ${JSON.stringify(topo.previousTierAutoscale ?? "?")}\n+ "autoscale": ${JSON.stringify(req.tierAutoscale)}`,
+			);
+		}
+	}
+
+	if (req.userSettingsTarget !== undefined && req.userSettingsYaml !== undefined) {
+		let sso: ReturnType<typeof setDeploymentUserSettings>;
+		try {
+			sso = setDeploymentUserSettings(content, req.userSettingsTarget, req.userSettingsYaml);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
+		content = sso.content;
+		anyChange = anyChange || sso.changed;
+		// NEVER echo the YAML (SSO/OIDC can contain idp/sp identifiers); show only the target + size delta.
+		diffLines.push(
+			`[${req.userSettingsTarget}] user_settings_yaml updated (SSO/login config; ${sso.previousYaml?.length ?? 0} -> ${req.userSettingsYaml.length} chars; value withheld)`,
+		);
+	}
+
+	if (req.sizeComponent !== undefined && (req.componentSize !== undefined || req.componentZoneCount !== undefined)) {
+		if (
+			req.componentZoneCount !== undefined &&
+			(!Number.isInteger(req.componentZoneCount) || req.componentZoneCount < 1 || req.componentZoneCount > 3)
+		) {
+			return {
+				blockedReason: `Invalid zone_count ${req.componentZoneCount}.`,
+				messages: [new AIMessage("Cannot propose the change: component zone_count must be an integer 1-3.")],
+			};
+		}
+		let comp: ReturnType<typeof setComponentSize>;
+		try {
+			comp = setComponentSize(content, req.sizeComponent, {
+				size: req.componentSize,
+				zoneCount: req.componentZoneCount,
+			});
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
+		content = comp.content;
+		anyChange = anyChange || comp.changed;
+		if (req.componentSize !== undefined) {
+			diffLines.push(
+				`[${req.sizeComponent}] - "size": ${JSON.stringify(comp.previousSize ?? "?")}\n+ "size": ${JSON.stringify(req.componentSize)}`,
+			);
+		}
+		if (req.componentZoneCount !== undefined) {
+			diffLines.push(
+				`[${req.sizeComponent}] - "zone_count": ${JSON.stringify(comp.previousZoneCount ?? "?")}\n+ "zone_count": ${JSON.stringify(req.componentZoneCount)}`,
+			);
+		}
+	}
+
+	if (!anyChange || isUnchangedConfig(content, extractFileContent(raw))) {
+		return {
+			blockedReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: deployment '${cluster}' already has the requested topology values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content,
+		commit_message: `${cluster}: deployment topology edit`,
+		action: "update",
+	});
+	const committed = !commit.startsWith("[4") && !commit.startsWith("[5");
+
+	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -2202,6 +2539,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "cluster-default-edit") return proposeClusterDefaultChange(state, req);
 	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
 	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
+	if (req.workflow === "topology-edit") return proposeTopologyChange(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -2320,6 +2658,26 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	if (req?.workflow === "topology-edit") {
+		// SIO-919: the deployments stack is one SHARED state across all 10 clusters; applies can take
+		// hours. Always HIGH -- surface the blast radius + apply window first.
+		risks.unshift(
+			"DEPLOYMENTS STACK: this is a SINGLE shared Terraform state across all 10 clusters -- CI's plan evaluates every deployment, and a deployments apply can take hours (up to 4-8h on the largest). Apply off-peak and confirm no other deployment change is in flight.",
+		);
+		// SSO/login config is the most acute failure mode here -- a bad realm/provider block can lock
+		// every user out of Kibana. Lead the risk list with it (unshift AFTER the shared-state line so
+		// it sorts above), and recommend a human review the YAML.
+		if (req?.userSettingsYaml !== undefined) {
+			risks.unshift(
+				"COULD LOCK OUT LOGIN: this edits the SSO/OIDC user_settings_yaml (SAML realm / Kibana auth providers). A malformed or wrong block can break authentication for ALL users. RECOMMEND HUMAN REVIEW of the YAML before merge; have a break-glass path ready.",
+			);
+		}
+		if (req?.autoscaleEnabled === true || req?.tierAutoscale === true) {
+			risks.push(
+				"Enabling autoscale lets the cluster grow toward its max_size ceiling automatically -- confirm the ceiling and the cost envelope.",
+			);
+		}
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -2348,7 +2706,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 										? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
 										: req?.workflow === "security-edit"
 											? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
-											: (req?.tier ?? req?.resource ?? "change");
+											: req?.workflow === "topology-edit"
+												? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
+												: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -2444,6 +2804,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "security-edit"
 				? `Security role '${req?.roleName}' ADDITIVE privilege grant${state.privilegeEscalation ? " (PRIVILEGE ESCALATION -- recommend human security review)" : ""}. role_mappings + api_keys untouched.`
 				: "",
+			req?.workflow === "topology-edit"
+				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}.`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			`File diff:\n${review?.diff ?? "(none)"}`,
@@ -2472,7 +2835,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 											? "Category spaces, Risk MEDIUM"
 											: req?.workflow === "security-edit"
 												? `Category security, Risk ${state.privilegeEscalation ? "HIGH (escalation)" : "HIGH"}`
-												: "Category version-bump, Risk LOW";
+												: req?.workflow === "topology-edit"
+													? "Category deployment-topology, Risk HIGH"
+													: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
