@@ -58,6 +58,10 @@ Both agents keep durable cross-session **live memory**, distinct from the checkp
 
 The backend is a direct REST client in `packages/shared/src/agent-memory.ts` (no MCP server, no LLM tool surface). It is wired through the `lifecycle.ts` registration seams (`registerMemoryRecaller` / `registerMemoryFlusher`, installed by `installAgentMemory()` in `apps/web/src/lib/server/agent.ts`). A **write-behind queue** in `memory-backend.ts` bridges the synchronous writer to async REST and drains at session teardown, so the writer signatures and the default file path are unchanged when the backend is unset. Env: `AGENT_MEMORY_BASE_URL`, `AGENT_MEMORY_ENABLED`, `AGENT_MEMORY_BEARER_TOKEN` (OIDC). Spec: `docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md`.
 
+### Checkpointer state pruning (SIO-476)
+
+The LangGraph checkpointer's `messages` array is bounded per turn so long-lived threads do not grow unboundedly. `packages/agent/src/state-pruning.ts` is a pure pair: `needsPruning(messages, config)` (gate: non-system count > `maxMessages`, default 20) and `pruneState(messages, config)` returning `{ removeIds }` — keeps the last N non-system messages, always preserves system messages, and drops **orphaned `ToolMessage`s** (a kept tool result whose matching AIMessage `tool_call` fell outside the window — a dangling tool result breaks Bedrock pairing). `pruneThreadState(threadId, agentName)` in `apps/web/src/lib/server/agent.ts` reads the checkpoint via `graph.getState`, filters `removeIds` to ids actually present (idempotent — `messagesStateReducer` THROWS on an unknown id and `updateState` is atomic), and writes removals back via `graph.updateState` with `RemoveMessage` entries + `dataSourceResults: []` (a shorter array would MERGE, not truncate). Called after every completed turn from all three completion points (`/api/agent/stream`, `iac/resume`, `topic-shift`), and deliberately NOT on interrupt/pause early-returns (a paused turn keeps its state for resume). Best-effort: failures are logged, never break the response. Spec: `docs/superpowers/specs/2026-06-17-state-pruning-design.md`.
+
 ### Sub-Agents (named by MCP server)
 
 | Agent | MCP Port | Config Pattern |
@@ -162,6 +166,7 @@ ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket refe
 - Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Atlassian MCP: 9085 | AWS MCP (SigV4 proxy): 3001 | Elastic IaC MCP: 9086 | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
 - Kill background processes after testing
+- `/health` (SIO-482, `apps/web/src/routes/health/+server.ts`): always HTTP 200 (liveness/info, not a k8s readiness gate); `status` is `"ok"` or `"degraded"` (any probed MCP server not `"ready"`). Reports live MCP states (`getServerStates`/`getConnectedServers`), graph readiness + checkpointer type (`getAgentRuntimeStatus()` in `apps/web/src/lib/server/agent.ts`), and `activeSseConnections` (counter inc/dec in the stream route's ReadableStream start/close/cancel). `status`/`timestamp`/`services` (env-presence) preserved for backward compat.
 
 ### Testing
 - Run `bun run typecheck`, `bun run lint`, and relevant `bun test` after every change
