@@ -28,7 +28,7 @@ import {
 	reconcileBranch,
 	shortAddress,
 } from "./nodes.ts";
-import type { IacStateType, LeafChange, StackDrift } from "./state.ts";
+import type { IacStateType, StackDrift } from "./state.ts";
 
 // Build a fake tool set so callTool() inside nodes.ts resolves against our stubs.
 function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
