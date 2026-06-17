@@ -412,19 +412,33 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
+		"Extract `cluster` ONLY from the deployment the user names in this request; NEVER default to a cluster that " +
+		"appears only in these instruction examples. If the user names no cluster, set clarification to ask which " +
+		"deployment. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
 		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
-		"For an ILM lifecycle-policy change ('set eu-b2b 30-days retention to 60 days', 'forcemerge warm to 1 " +
+		"For an ILM lifecycle-policy change ('set us-cld 30-days retention to 60 days', 'forcemerge warm to 1 " +
 		"segment on eu-cld logs', 'add a delete phase to .alerts-ilm-policy'), set workflow to 'ilm-rollout', cluster " +
-		"to the named deployment, policyName to the policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', " +
-		"'.alerts-ilm-policy'), and phasesPatch to a nested object whose top-level keys are phases (hot|warm|cold|delete). " +
-		"Use the repo's FLAT phase DSL, NOT Elasticsearch's native phases/actions form -- e.g. " +
-		'{ "hot": { "max_age": "30d", "max_primary_shard_size": "50gb", "rollover": true }, "delete": { "min_age": "90d" } } ' +
-		"(durations are strings like '90d'; retention is delete.min_age). Patch ONLY the fields to change for an existing " +
-		"policy; if the policy may be new or untracked, include EVERY phase it should have (the full intended lifecycle) " +
-		"so the created file is complete. " +
+		"to the named deployment, policyName to the policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs@lifecycle', " +
+		"'.alerts-ilm-policy'). If the user asks to COPY / clone / mirror / 'same as' / 'exact copy of' an existing " +
+		"policy, set sourcePolicy to that reference policy's filename VERBATIM and put ONLY the explicit overrides (if " +
+		"any) in phasesPatch. Otherwise set phasesPatch to the fields to change. " +
+		"phasesPatch uses the repo's NESTED phase shape (top-level keys hot|warm|cold|frozen|delete), matching the " +
+		"existing policy JSON files EXACTLY -- e.g. " +
+		'{ "hot": { "priority": 100, "max_age": "7d", "max_primary_shard_size": "10gb", "rollover": true }, ' +
+		'"warm": { "min_age": "6h", "priority": 50, "allocate": { "number_of_replicas": 0 }, "forcemerge": ' +
+		'{ "max_num_segments": 1 }, "shrink": { "number_of_shards": 1 } }, "cold": { "min_age": "2d", "priority": 25, ' +
+		'"allocate": { "number_of_replicas": 0 } }, "frozen": { "min_age": "7d", "searchable_snapshot": ' +
+		'{ "snapshot_repository": "found-snapshots", "force_merge_index": true } }, "delete": { "min_age": "60d", ' +
+		'"delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } } }. ' +
+		"CRITICAL nesting rules (the module rejects the flat forms): use `priority` (a number on the phase), NEVER " +
+		"`set_priority`; replicas go in `allocate: { number_of_replicas }`, never a bare number_of_replicas; use " +
+		"nested `forcemerge: { max_num_segments }`, `shrink: { number_of_shards }`, `searchable_snapshot: " +
+		"{ snapshot_repository, force_merge_index }`, and `wait_for_snapshot: { policy }` -- never the flattened " +
+		"underscore forms. Durations are strings like '60d'; retention is delete.min_age. Patch ONLY the fields to " +
+		"change for an existing policy; for a copy, prefer sourcePolicy over restating every field. " +
 		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-b2b to 6.15.0', 'pin kafka to " +
 		"1.28.0 on eu-cld', 'update the system integration package to 2.18.0') -- note this is the integration PACKAGE " +
 		"version, NOT a Fleet AGENT binary upgrade and NOT a cluster version -- set workflow to 'fleet-integration', cluster " +
