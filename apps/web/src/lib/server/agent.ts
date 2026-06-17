@@ -122,6 +122,36 @@ export function ensureMcpConnected(): Promise<void> {
 	return mcpReady;
 }
 
+// SIO-482: active SSE connection count for the /health endpoint. The stream
+// route increments on ReadableStream start and decrements on close/cancel.
+let activeSseConnections = 0;
+export function incrementSseConnections(): void {
+	activeSseConnections += 1;
+}
+export function decrementSseConnections(): void {
+	activeSseConnections = Math.max(0, activeSseConnections - 1);
+}
+export function getActiveSseConnections(): number {
+	return activeSseConnections;
+}
+
+// SIO-482: runtime status for /health, without leaking module internals.
+// graphReady/iacGraphReady reflect whether each compiled graph singleton has
+// been initialized (lazily, on first invoke); mcpReady reflects the MCP client.
+export function getAgentRuntimeStatus(): {
+	graphReady: boolean;
+	iacGraphReady: boolean;
+	mcpInitialized: boolean;
+	checkpointerType: "memory" | "sqlite";
+} {
+	return {
+		graphReady: graphPromise !== null,
+		iacGraphReady: iacGraphPromise !== null,
+		mcpInitialized: mcpReady !== null,
+		checkpointerType: resolveCheckpointerType(),
+	};
+}
+
 export async function getGraph() {
 	await ensureMcpConnected();
 

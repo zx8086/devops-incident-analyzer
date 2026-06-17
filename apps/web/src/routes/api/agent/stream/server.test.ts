@@ -68,6 +68,9 @@ mock.module("$lib/server/agent", () => ({
 	getIacTurnOutcome: mock(async () => "completed"),
 	// SIO-476: stream/+server.ts calls this after each completed turn.
 	pruneThreadState: mock(() => Promise.resolve()),
+	// SIO-482: stream/+server.ts tracks active SSE connections for /health.
+	incrementSseConnections: mock(() => undefined),
+	decrementSseConnections: mock(() => undefined),
 }));
 
 const { POST } = await import("./+server.ts");
