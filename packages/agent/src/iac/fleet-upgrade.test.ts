@@ -48,6 +48,13 @@ describe("parseFleetUpgradeReport", () => {
 			not_upgradeable: 8,
 			by_reason: [{ reason: "wolfi_container", count: 8 }],
 		},
+		// SIO-935: version partition. 100 already on target + 28 outdated == 128 resolved.
+		version_crosstab: {
+			already_on_target: 100,
+			outdated: 28,
+			version_unknown: 0,
+			upgradeable_outdated: 6,
+		},
 		action_id: null,
 		generated_at: "2026-06-16T00:00:00Z",
 	});
@@ -63,6 +70,29 @@ describe("parseFleetUpgradeReport", () => {
 		expect(r?.crosstab.upgradeable).toBe(120);
 		expect(r?.crosstab.notUpgradeable).toBe(8);
 		expect(r?.crosstab.byReason).toEqual([{ reason: "wolfi_container", count: 8 }]);
+		// SIO-935: the version partition is mapped snake_case -> camelCase.
+		expect(r?.versionCrosstab).toEqual({
+			alreadyOnTarget: 100,
+			outdated: 28,
+			versionUnknown: 0,
+			upgradeableOutdated: 6,
+		});
+	});
+
+	// SIO-935: back-compat invariant -- an OLD v1 report (no version_crosstab) parses with the
+	// field undefined, never a false all-zero block. This is what lets the agent PR merge before
+	// the elastic-iac MR lands.
+	test("a report without version_crosstab leaves versionCrosstab undefined (back-compat)", () => {
+		const r = parseFleetUpgradeReport(
+			JSON.stringify({
+				deployment: "eu-b2b",
+				target_version: "9.4.2",
+				resolved_count: 10,
+				upgradeable_crosstab: { upgradeable: 8, not_upgradeable: 2, by_reason: [] },
+			}),
+		);
+		expect(r).not.toBeNull();
+		expect(r?.versionCrosstab).toBeUndefined();
 	});
 
 	test("version_available is strictly boolean true (missing -> false)", () => {
@@ -188,6 +218,19 @@ describe("formatFleetUpgradeSummary", () => {
 	test("declined (no result) -> reports eligible count remaining", () => {
 		const s = stateWith({ fleetUpgradeReport: report({}) });
 		expect(formatFleetUpgradeSummary(s)).toContain("declined");
+	});
+
+	// SIO-935: with the version partition present, the summary states how many were already on
+	// target. Absent (the default report()), the clause must NOT appear (back-compat).
+	test("version partition present -> notes how many were already on target", () => {
+		const withVc = stateWith({
+			fleetUpgradeReport: report({
+				versionCrosstab: { alreadyOnTarget: 100, outdated: 28, versionUnknown: 0, upgradeableOutdated: 6 },
+			}),
+		});
+		expect(formatFleetUpgradeSummary(withVc)).toContain("100 were already on 9.4.2");
+		// default report() has no versionCrosstab -> no "already on" clause.
+		expect(formatFleetUpgradeSummary(stateWith({ fleetUpgradeReport: report({}) }))).not.toContain("already on");
 	});
 
 	test("applied + clean verify sweep -> notes 0 UPG_FAILED", () => {

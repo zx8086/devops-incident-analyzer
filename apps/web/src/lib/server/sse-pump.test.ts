@@ -139,6 +139,34 @@ describe("pumpEventStream datasource_result", () => {
 	});
 });
 
+// SIO-935: the fleet-upgrade nodes were missing from PIPELINE_NODES, so their on_chain_start/
+// on_chain_end events were dropped and the tracing pills never lit up. This pins the emission.
+describe("pumpEventStream fleet-upgrade node progress", () => {
+	test("emits node_start/node_end for the three fleet-upgrade nodes", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{ event: "on_chain_start", name: "detectFleetUpgrade" },
+				{ event: "on_chain_end", name: "detectFleetUpgrade", data: { output: {} } },
+				{ event: "on_chain_start", name: "fleetUpgradeGate" },
+				{ event: "on_chain_end", name: "fleetUpgradeGate", data: { output: {} } },
+				{ event: "on_chain_start", name: "applyFleetUpgrade" },
+				{ event: "on_chain_end", name: "applyFleetUpgrade", data: { output: {} } },
+			]),
+			send,
+		);
+
+		const starts = captured.filter((e) => e.type === "node_start").map((e) => e.nodeId);
+		const ends = captured.filter((e) => e.type === "node_end").map((e) => e.nodeId);
+		expect(starts).toEqual(["detectFleetUpgrade", "fleetUpgradeGate", "applyFleetUpgrade"]);
+		expect(ends).toEqual(["detectFleetUpgrade", "fleetUpgradeGate", "applyFleetUpgrade"]);
+	});
+});
+
 // SIO-922: the fleet-upgrade gate interrupt was never translated by emitIacInterrupt, so the UI
 // got no event and rendered no card. This pins the translation that was missing.
 describe("emitIacInterrupt fleet_upgrade_choice", () => {

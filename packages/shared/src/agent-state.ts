@@ -313,6 +313,15 @@ export const DataSourceContextSchema = z.object({
 });
 export type DataSourceContext = z.infer<typeof DataSourceContextSchema>;
 
+// SIO-935: version partition of a fleet-upgrade preview's resolved set. Optional on the two fleet
+// events below so old CI reports (no version_crosstab) still validate.
+export const FleetVersionCrosstabSchema = z.object({
+	alreadyOnTarget: z.number(),
+	outdated: z.number(),
+	versionUnknown: z.number(),
+	upgradeableOutdated: z.number(),
+});
+
 export const StreamEventSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("message"), content: z.string() }),
 	z.object({
@@ -592,6 +601,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 			notUpgradeable: z.number(),
 			byReason: z.array(z.object({ reason: z.string(), count: z.number() })),
 		}),
+		versionCrosstab: FleetVersionCrosstabSchema.optional(), // SIO-935
 		planError: z.boolean().optional(),
 		planErrorReason: z.string().optional(),
 	}),
@@ -606,6 +616,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		notUpgradeableCount: z.number(),
 		rolloutSeconds: z.number(),
 		byReason: z.array(z.object({ reason: z.string(), count: z.number() })),
+		versionCrosstab: FleetVersionCrosstabSchema.optional(), // SIO-935
 		message: z.string(),
 	}),
 	// The single apply outcome (from applyFleetUpgrade). failedSilent is the verify-sweep

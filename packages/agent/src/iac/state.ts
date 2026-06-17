@@ -309,6 +309,19 @@ export interface FleetUpgradeCrosstab {
 	byReason: Array<{ reason: string; count: number }>;
 }
 
+// SIO-935: version partition of the resolved selector set. Additive + OPTIONAL -- the
+// upgradeable_crosstab above is computed purely from Fleet's upgradeable:false boolean (Wolfi
+// detection via os.name) and says NOTHING about version, so "already on target" was invisible
+// (agents fell into the opaque unknown/other reason buckets). This block is emitted by the CI
+// script's new pre-flight version queries; an old v1 report without it yields undefined here.
+// Invariant (CI-enforced): alreadyOnTarget + outdated + versionUnknown === resolvedCount.
+export interface FleetUpgradeVersionCrosstab {
+	alreadyOnTarget: number; // resolved agents whose version == target (bulk_upgrade no-ops them)
+	outdated: number; // resolved agents strictly below target (the genuine backlog)
+	versionUnknown: number; // resolved agents whose version could not be read
+	upgradeableOutdated: number; // Fleet-upgradeable AND outdated == what THIS flow actually moves
+}
+
 export interface FleetUpgradeReport {
 	deployment: string;
 	targetVersion: string;
@@ -318,6 +331,7 @@ export interface FleetUpgradeReport {
 	versionAvailable: boolean; // target present in /api/fleet/agents/available_versions
 	maxAgents: number;
 	crosstab: FleetUpgradeCrosstab;
+	versionCrosstab?: FleetUpgradeVersionCrosstab; // SIO-935: present only when CI emits version_crosstab
 	generatedAt: string;
 	// NOT assessed -- the preview pipeline could not be read (trigger lock / failed / unreadable
 	// report). Mirrors SyntheticsDriftReport.planError: neither upgradeable nor confirmed-empty.

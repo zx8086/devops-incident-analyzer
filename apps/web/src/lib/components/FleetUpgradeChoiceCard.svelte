@@ -13,6 +13,22 @@ let {
 	onApprove: () => void;
 	onDecline: () => void;
 } = $props();
+
+// SIO-935: the version partition (present once the CI report carries version_crosstab). When
+// present, the headline "will upgrade" count is the upgradeable-AND-outdated set -- the raw
+// upgradeableCount can include agents already on target that bulk_upgrade would no-op. Pre-CI
+// reports have no partition, so we fall back to the old upgradeableCount and the old 3-stat row.
+const vc = $derived(prompt.versionCrosstab);
+const willUpgrade = $derived(vc ? vc.upgradeableOutdated : prompt.upgradeableCount);
+
+// SIO-935: the by_reason buckets are Fleet's upgradeable:false reasons (Wolfi detection via
+// os.name), NOT version facts. "unknown"/"other" just means os.name didn't match the heuristic;
+// render an honest label instead of the bare "unknown" that confused operators.
+function reasonLabel(reason: string): string {
+	if (reason === "unknown" || reason === "other") return "other OS / not detected";
+	if (reason === "wolfi_container") return "Wolfi container";
+	return reason;
+}
 </script>
 
 <div
@@ -29,20 +45,42 @@ let {
     </div>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
 
-    <div class="mt-2 grid grid-cols-3 gap-2">
-      <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
-        <p class="text-lg font-semibold text-tommy-navy">{prompt.upgradeableCount}</p>
-        <p class="text-xs text-tommy-navy/70">will upgrade</p>
+    {#if vc}
+      <!-- Version-aware story: already-on-target (no action) / will upgrade / not Fleet-upgradeable. -->
+      <div class="mt-2 grid grid-cols-3 gap-2">
+        <div class="rounded-md bg-white/70 border border-gray-200 p-2 text-center">
+          <p class="text-lg font-semibold text-gray-600">{vc.alreadyOnTarget}</p>
+          <p class="text-xs text-gray-500">already on {prompt.targetVersion}</p>
+        </div>
+        <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
+          <p class="text-lg font-semibold text-tommy-navy">{willUpgrade}</p>
+          <p class="text-xs text-tommy-navy/70">will upgrade</p>
+        </div>
+        <div class="rounded-md bg-gray-50 border border-gray-200 p-2 text-center">
+          <p class="text-lg font-semibold text-gray-600">{prompt.notUpgradeableCount}</p>
+          <p class="text-xs text-gray-500">not Fleet-upgradeable</p>
+        </div>
       </div>
-      <div class="rounded-md bg-gray-50 border border-gray-200 p-2 text-center">
-        <p class="text-lg font-semibold text-gray-600">{prompt.notUpgradeableCount}</p>
-        <p class="text-xs text-gray-500">skipped (not upgradeable)</p>
+      <p class="mt-1.5 text-xs text-tommy-navy/60">
+        {prompt.resolvedCount} agents matched &middot; {vc.outdated} outdated total{#if vc.versionUnknown > 0} &middot; {vc.versionUnknown} version unknown{/if}
+      </p>
+    {:else}
+      <!-- Back-compat (pre version_crosstab): the original three stats. -->
+      <div class="mt-2 grid grid-cols-3 gap-2">
+        <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
+          <p class="text-lg font-semibold text-tommy-navy">{prompt.upgradeableCount}</p>
+          <p class="text-xs text-tommy-navy/70">will upgrade</p>
+        </div>
+        <div class="rounded-md bg-gray-50 border border-gray-200 p-2 text-center">
+          <p class="text-lg font-semibold text-gray-600">{prompt.notUpgradeableCount}</p>
+          <p class="text-xs text-gray-500">skipped (not upgradeable)</p>
+        </div>
+        <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
+          <p class="text-lg font-semibold text-tommy-navy">{prompt.resolvedCount}</p>
+          <p class="text-xs text-tommy-navy/70">agents matched</p>
+        </div>
       </div>
-      <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
-        <p class="text-lg font-semibold text-tommy-navy">{prompt.resolvedCount}</p>
-        <p class="text-xs text-tommy-navy/70">agents matched</p>
-      </div>
-    </div>
+    {/if}
 
     <p class="mt-2 text-xs text-tommy-navy/70">
       Rollout window: {prompt.rolloutSeconds}s &middot; imperative bulk_upgrade run via CI (not Terraform).
@@ -55,7 +93,7 @@ let {
         </p>
         <ul class="mt-1 space-y-0.5 text-xs">
           {#each prompt.byReason as r (r.reason)}
-            <li class="text-gray-500"><span class="font-medium">{r.count}</span> &times; {r.reason}</li>
+            <li class="text-gray-500"><span class="font-medium">{r.count}</span> &times; {reasonLabel(r.reason)}</li>
           {/each}
         </ul>
       </div>
@@ -68,7 +106,7 @@ let {
       <button
         type="button"
         onclick={() => onApprove()}
-        disabled={disabled || prompt.upgradeableCount === 0}
+        disabled={disabled || willUpgrade === 0}
         class="px-3 py-1.5 text-sm font-medium rounded-md bg-tommy-navy text-white hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Approve & apply now

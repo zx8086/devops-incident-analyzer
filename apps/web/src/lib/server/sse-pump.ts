@@ -61,6 +61,13 @@ const PIPELINE_NODES = new Set([
 	"detectSyntheticsDrift",
 	"syntheticsPushGate",
 	"pushSynthetics",
+	// SIO-935: elastic-iac fleet-upgrade sub-flow nodes. Without these the on_chain_start/
+	// on_chain_end gate below drops fleet node events, so the tracing pills never light up
+	// during a fleet upgrade (two-leg flow: detectFleetUpgrade -> PAUSE at fleetUpgradeGate
+	// -> applyFleetUpgrade on resume).
+	"detectFleetUpgrade",
+	"fleetUpgradeGate",
+	"applyFleetUpgrade",
 ]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
@@ -69,6 +76,22 @@ const PARTIAL_FAILURE_SOURCES = new Set([
 	"aggregateMitigation",
 	"followUp",
 ]);
+
+// SIO-935: tolerant pass-through of the fleet-upgrade version partition. Returns undefined unless
+// the block is a present object (old CI reports omit it), so the downstream event stays back-compatible.
+function parseFleetVersionCrosstab(
+	v: unknown,
+): { alreadyOnTarget: number; outdated: number; versionUnknown: number; upgradeableOutdated: number } | undefined {
+	if (typeof v !== "object" || v === null) return undefined;
+	const o = v as Record<string, unknown>;
+	const n = (x: unknown): number => (typeof x === "number" ? x : 0);
+	return {
+		alreadyOnTarget: n(o.alreadyOnTarget),
+		outdated: n(o.outdated),
+		versionUnknown: n(o.versionUnknown),
+		upgradeableOutdated: n(o.upgradeableOutdated),
+	};
+}
 
 export interface PumpResult {
 	toolsUsed: string[];
@@ -314,11 +337,13 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				versionAvailable?: unknown;
 				rolloutSeconds?: unknown;
 				crosstab?: unknown;
+				versionCrosstab?: unknown;
 				planError?: unknown;
 				planErrorReason?: unknown;
 			};
 			const ct = data?.crosstab as { upgradeable?: unknown; notUpgradeable?: unknown; byReason?: unknown } | undefined;
 			if (typeof data?.deployment === "string" && ct) {
+				const vct = parseFleetVersionCrosstab(data.versionCrosstab); // SIO-935
 				send({
 					type: "fleet_upgrade_preview_report",
 					deployment: data.deployment,
@@ -339,6 +364,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 								})
 							: [],
 					},
+					...(vct && { versionCrosstab: vct }),
 					...(data.planError === true && { planError: true }),
 					...(typeof data.planErrorReason === "string" && { planErrorReason: data.planErrorReason }),
 				});
@@ -435,6 +461,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		notUpgradeableCount?: unknown;
 		rolloutSeconds?: unknown;
 		byReason?: unknown;
+		versionCrosstab?: unknown; // SIO-935
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -547,6 +574,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 	// SIO-913 / SIO-922: the single fleet-upgrade apply approve/decline gate. The UI POSTs
 	// { approve } to the resume endpoint; the agent then runs the imperative bulk_upgrade via CI.
 	if (obj.type === "fleet_upgrade_choice") {
+		const vct = parseFleetVersionCrosstab(obj.versionCrosstab); // SIO-935
 		send({
 			type: "fleet_upgrade_choice",
 			threadId,
@@ -565,6 +593,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 						};
 					})
 				: [],
+			...(vct && { versionCrosstab: vct }),
 			message:
 				typeof obj.message === "string" ? obj.message : "Approve the Fleet agent upgrade (runs via CI), or decline.",
 		});
