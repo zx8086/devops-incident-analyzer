@@ -15,7 +15,7 @@
 import type { BootstrapStep, TeardownStep } from "@devops-agent/gitagent-bridge";
 import { getLogger, traceSpan } from "@devops-agent/observability";
 import { appendDailyLog, type DailyLogEntry, readLiveMemory } from "./memory-writer.ts";
-import { getAgent } from "./prompt-context.ts";
+import { getAgentByName } from "./prompt-context.ts";
 
 const logger = getLogger("agent:lifecycle");
 
@@ -106,7 +106,7 @@ async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ct
 			break;
 		}
 		case "load_wiki_index": {
-			result.wikiIndex = getAgent().memory?.wiki.indexMd;
+			result.wikiIndex = getAgentByName(ctx.agentName).memory?.wiki.indexMd;
 			break;
 		}
 		case "warm_knowledge_graph": {
@@ -134,7 +134,9 @@ async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ct
 // Runs the agent's bootstrap hooks in declared order. Returns the gathered
 // context. No hooks configured -> returns an empty result without a span.
 export async function runBootstrap(ctx: BootstrapContext): Promise<BootstrapResult> {
-	const hooks = getAgent().hooks;
+	// SIO-938: resolve hooks for the INVOKED agent (incident-analyzer vs
+	// elastic-iac), not the default — each agent has its own hooks.yaml.
+	const hooks = getAgentByName(ctx.agentName).hooks;
 	const steps = hooks?.bootstrap?.steps ?? [];
 	const result: BootstrapResult = { stepsRun: [] };
 	if (steps.length === 0) return result;
@@ -192,7 +194,8 @@ async function runTeardownStep(step: TeardownStep, ctx: TeardownContext): Promis
 
 // Runs the agent's teardown hooks in declared order. No hooks -> no-op.
 export async function runTeardown(ctx: TeardownContext = {}): Promise<TeardownStep[]> {
-	const hooks = getAgent().hooks;
+	// SIO-938: resolve hooks for the invoked agent (defaults to incident-analyzer).
+	const hooks = getAgentByName(ctx.agentName ?? "incident-analyzer").hooks;
 	const steps = hooks?.teardown?.steps ?? [];
 	if (steps.length === 0) return [];
 

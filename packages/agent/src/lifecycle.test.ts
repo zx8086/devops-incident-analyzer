@@ -15,8 +15,12 @@ const HOOKS_STUB = {
 };
 
 function installPromptContextMock(): void {
+	const stub = { manifest: {}, hooks: HOOKS_STUB, memory: { wiki: { indexMd: "" } } };
+	// lifecycle.ts resolves hooks via getAgentByName(ctx.agentName) (SIO-938); the
+	// stub is returned for any agent name so both runners read HOOKS_STUB.
 	mock.module("./prompt-context.ts", () => ({
-		getAgent: () => ({ manifest: {}, hooks: HOOKS_STUB, memory: { wiki: { indexMd: "" } } }),
+		getAgent: () => stub,
+		getAgentByName: () => stub,
 	}));
 }
 installPromptContextMock();

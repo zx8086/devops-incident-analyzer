@@ -98,6 +98,7 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 			.join(" ");
 		enqueueMessage(
 			{ user_content: summary || "incident investigation", assistant_content: assistant },
+			new Date().toISOString(),
 			dailyLogTtlSeconds(),
 		);
 		logger.info({ requestId: entry.requestId, backend: "agent-memory" }, "Appended dailylog entry");
@@ -149,7 +150,7 @@ export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void
 		const fact = decision.rationale
 			? `${redactPiiContent(decision.decision)} (rationale: ${redactPiiContent(decision.rationale)})`
 			: redactPiiContent(decision.decision);
-		enqueueFact(fact);
+		enqueueFact(fact, new Date().toISOString());
 		logger.info({ requestId: decision.requestId, backend: "agent-memory" }, "Recorded key decision");
 		return;
 	}

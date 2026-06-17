@@ -6,13 +6,23 @@
 // "agent-memory", so the default file backend is untouched.
 
 import { registerMemoryFlusher, registerMemoryRecaller } from "./lifecycle.ts";
-import { endAgentMemorySession, recallAgentMemory, selectedBackend, setActiveMemorySession } from "./memory-backend.ts";
+import {
+	agentMemoryHealthy,
+	endAgentMemorySession,
+	recallAgentMemory,
+	selectedBackend,
+	setActiveMemorySession,
+} from "./memory-backend.ts";
 
 export function installAgentMemory(): void {
 	registerMemoryRecaller(async ({ agentName, threadId, query }) => {
 		if (selectedBackend() !== "agent-memory") return undefined;
-		// Bind the active session so subsequent writer enqueues attach to it.
+		// Bind the active session so subsequent writer enqueues attach to it even
+		// when the service is unreachable now (writes queue for a later retry).
 		setActiveMemorySession(agentName, threadId);
+		// Skip recall against a dead/saturated service rather than emit a noisy
+		// per-turn failure; this turn just runs without recalled context.
+		if (!(await agentMemoryHealthy())) return undefined;
 		return recallAgentMemory(agentName, threadId, query ?? "recent incidents, decisions, and in-flight work");
 	});
 
