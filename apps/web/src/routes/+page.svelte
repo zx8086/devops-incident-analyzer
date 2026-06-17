@@ -64,6 +64,18 @@ const syntheticsSummaryIndex = $derived.by(() => {
 	return isSyntheticsSummary ? idx : -1;
 });
 
+// SIO-941: the fleet-upgrade Pipeline log is a snapshot of the live ticker captured on the
+// fleet_upgrade_apply_result event; it belongs ABOVE the result message (chronological: the
+// pipeline ran, then the turn completed). fleetUpgradeResult is reset each sendMessage, so it
+// only describes the latest turn, whose result is the trailing assistant message. -1 = nothing.
+const fleetLogIndex = $derived.by(() => {
+	if (agentStore.isStreaming) return -1;
+	if (!agentStore.fleetUpgradeResult?.progressLog?.length) return -1;
+	if (agentStore.messages.length === 0) return -1;
+	const idx = agentStore.messages.length - 1;
+	return agentStore.messages[idx]?.role === "assistant" ? idx : -1;
+});
+
 function toggleAgent() {
 	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
 }
@@ -193,6 +205,11 @@ function handleSuggestionClick(suggestion: string) {
       {#each agentStore.messages as msg, i}
         <!-- SIO-901: skip the trailing drift summary here; it is re-rendered below the drift card. -->
         {#if i !== driftSummaryIndex}
+          <!-- SIO-941: render the collapsed pipeline log ABOVE the fleet-upgrade result message so
+               the timeline reads chronologically (pipeline ran -> then completed). -->
+          {#if i === fleetLogIndex}
+            <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult?.progressLog ?? []} />
+          {/if}
           <ChatMessage
             message={msg}
             index={i}
@@ -243,12 +260,6 @@ function handleSuggestionClick(suggestion: string) {
             </div>
           </div>
         {/if}
-      {/if}
-
-      <!-- SIO-928: after the apply completes, the live ticker is cleared; surface the captured
-           timeline as a collapsed "pipeline log" inline under the result so it stays auditable. -->
-      {#if !agentStore.isStreaming && agentStore.fleetUpgradeResult?.progressLog?.length}
-        <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult.progressLog} />
       {/if}
 
       <!-- SIO-882: drift overview. Persists across the interrupt pauses (outside the isStreaming
