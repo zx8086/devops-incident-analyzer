@@ -247,6 +247,273 @@ describe("draftChange -> proposeIlmChange", () => {
 	});
 });
 
+// SIO-932: one request naming >=2 policy files -> ONE branch + ONE MR with all files.
+describe("parseIntentJson — multi-file ilm (SIO-932)", () => {
+	test("keeps the ilmPolicies array and nulls the singular policyName when >=2 entries", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			ilmPolicies: [
+				{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+				{ policyName: "logs", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+			],
+		});
+		const req = parseIntentJson(raw);
+		expect(req.workflow).toBe("ilm-rollout");
+		expect(req.cluster).toBe("eu-b2b");
+		expect(req.ilmPolicies?.length).toBe(2);
+		expect(req.ilmPolicies?.map((e) => e.policyName)).toEqual(["metrics", "logs"]);
+		// singular fields stay empty on the multi path (draftChange dispatches on ilmPolicies.length)
+		expect(req.policyName).toBeUndefined();
+		expect(req.phasesPatch).toBeUndefined();
+	});
+
+	test("folds a single-entry ilmPolicies array back to the singular path (back-compat)", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			ilmPolicies: [{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } }],
+		});
+		const req = parseIntentJson(raw);
+		expect(req.ilmPolicies).toBeUndefined();
+		expect(req.policyName).toBe("metrics");
+		expect(req.phasesPatch).toEqual({ warm: { allocate: { number_of_replicas: 0 } } });
+	});
+
+	test("normalizes an explicit-null ilmPolicies to undefined (uses singular fields)", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			policyName: "logs",
+			phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } },
+			ilmPolicies: null,
+		});
+		const req = parseIntentJson(raw);
+		expect(req.ilmPolicies).toBeUndefined();
+		expect(req.policyName).toBe("logs");
+	});
+
+	// SIO-932: users name the file with the extension ("set X in metrics.json"); the template already
+	// appends .json, so a doubled metrics.json.json would 404 and onboard a bogus policy. Strip it.
+	test("strips a trailing .json from each ilmPolicies entry's policyName", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			ilmPolicies: [
+				{ policyName: "metrics.json", phasesPatch: { cold: { priority: 30 } } },
+				{ policyName: "logs.json", phasesPatch: { cold: { priority: 30 } } },
+			],
+		});
+		const req = parseIntentJson(raw);
+		expect(req.ilmPolicies?.map((e) => e.policyName)).toEqual(["metrics", "logs"]);
+	});
+
+	test("strips a trailing .json from the singular policyName + sourcePolicy (ilm-rollout)", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			policyName: "metrics.json",
+			sourcePolicy: "logs.json",
+		});
+		const req = parseIntentJson(raw);
+		expect(req.policyName).toBe("metrics");
+		expect(req.sourcePolicy).toBe("logs");
+	});
+
+	test("preserves @lifecycle basenames and only removes the .json suffix", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-b2b",
+			policyName: "30-days@lifecycle.json",
+			phasesPatch: { delete: { min_age: "60d" } },
+		});
+		const req = parseIntentJson(raw);
+		expect(req.policyName).toBe("30-days@lifecycle");
+	});
+});
+
+describe("branchSlug — multi-file ilm (SIO-932)", () => {
+	test("joins the policy names into one descriptor", () => {
+		const req: IacRequest = {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-b2b",
+			ilmPolicies: [
+				{ policyName: "metrics", phasesPatch: { warm: {} } },
+				{ policyName: "logs", phasesPatch: { warm: {} } },
+			],
+		};
+		expect(branchSlug(req)).toBe("eu-b2b-metrics-logs-ilm-rollout");
+	});
+});
+
+describe("draftChange -> proposeIlmChanges (multi-file, SIO-932)", () => {
+	// The exact failing case from the bug report: metrics.json AND logs.json, replicas -> 0.
+	const policyFor = (name: string) => JSON.stringify({ name, warm: { allocate: { number_of_replicas: 1 } } }, null, 2);
+
+	test("commits BOTH files to ONE branch and aggregates files + diff", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const branchesCreated: string[] = [];
+		const commits: Array<{ branch: string; file_path: string }> = [];
+		mockTools({
+			gitlab_get_file_content: (args) => {
+				const fp = String(args.filePath);
+				const name = fp.includes("/metrics.json") ? "metrics" : "logs";
+				return `[200] ${JSON.stringify({ content: Buffer.from(policyFor(name)).toString("base64"), encoding: "base64" })}`;
+			},
+			gitlab_create_branch: (args) => {
+				branchesCreated.push(String(args.branch));
+				return "[201] {}";
+			},
+			gitlab_commit_file: (args) => {
+				commits.push({ branch: String(args.branch), file_path: String(args.file_path) });
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				ilmPolicies: [
+					{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+					{ policyName: "logs", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+
+		expect(result.blockedReason).toBeUndefined();
+		expect(result.precheckPassed).toBe(true);
+		// ONE branch created, used for BOTH commits.
+		expect(branchesCreated.length).toBe(1);
+		expect(commits.length).toBe(2);
+		expect(commits.every((c) => c.branch === branchesCreated[0])).toBe(true);
+		expect(commits.map((c) => c.file_path).sort()).toEqual([
+			"environments/eu-b2b/lifecycle-policies/logs.json",
+			"environments/eu-b2b/lifecycle-policies/metrics.json",
+		]);
+		// proposedFiles is the authoritative list; combined diff names both files.
+		expect(result.proposedFiles?.length).toBe(2);
+		expect(result.proposedFiles).toEqual([
+			"environments/eu-b2b/lifecycle-policies/metrics.json",
+			"environments/eu-b2b/lifecycle-policies/logs.json",
+		]);
+		expect(result.proposedDiff).toContain("metrics.json");
+		expect(result.proposedDiff).toContain("logs.json");
+	});
+
+	test("ATOMIC: a per-file failure blocks the whole batch (no MR-ready result)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const commits: string[] = [];
+		mockTools({
+			gitlab_get_file_content: (args) => {
+				const fp = String(args.filePath);
+				if (fp.includes("/metrics.json")) {
+					return `[200] ${JSON.stringify({ content: Buffer.from(policyFor("metrics")).toString("base64"), encoding: "base64" })}`;
+				}
+				// logs.json read fails (token/5xx) -> the helper blocks -> the whole batch blocks.
+				return "[500] internal error";
+			},
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				commits.push(String(args.file_path));
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				ilmPolicies: [
+					{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+					{ policyName: "logs", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		// Blocked, names the offending file, and is NOT MR-ready (precheckPassed stays falsy).
+		expect(result.blockedReason).toContain("logs");
+		expect(result.precheckPassed).toBeFalsy();
+		// graph.ts routes a blockedReason straight to END, so openMr never runs.
+	});
+
+	test("blocks when an entry has neither a phasesPatch nor a sourcePolicy, naming the file", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({});
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				ilmPolicies: [
+					{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+					{ policyName: "logs" },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("logs");
+		expect(result.blockedReason).toContain("phase field");
+	});
+
+	test("single-entry ilmPolicies path still produces a single-file MR (folded by parseIntentJson)", async () => {
+		// parseIntentJson folds 1 entry to the singular fields, so draftChange sees the single path.
+		const { draftChange } = await import("./nodes.ts");
+		const policy = JSON.stringify({ name: "metrics", warm: { allocate: { number_of_replicas: 1 } } }, null, 2);
+		const commits: string[] = [];
+		mockTools({
+			gitlab_get_file_content: () =>
+				`[200] ${JSON.stringify({ content: Buffer.from(policy).toString("base64"), encoding: "base64" })}`,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				commits.push(String(args.file_path));
+				return "[201] {}";
+			},
+		});
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "ilm-rollout",
+				cluster: "eu-b2b",
+				ilmPolicies: [{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } }],
+			}),
+		);
+		const result = await draftChange(asIacState({ iacRequest: req }));
+		expect(result.blockedReason).toBeUndefined();
+		expect(commits.length).toBe(1);
+		expect(result.proposedFiles).toEqual(["environments/eu-b2b/lifecycle-policies/metrics.json"]);
+		expect(result.proposedFilePath).toBe("environments/eu-b2b/lifecycle-policies/metrics.json");
+	});
+});
+
+describe("reviewPlan — multi-file ilm (SIO-932)", () => {
+	test("descriptor reads 'N ILM policies: <fields>'", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		const state = {
+			iacRequest: {
+				workflow: "ilm-rollout" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				ilmPolicies: [
+					{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+					{ policyName: "logs", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+				],
+			},
+			branch: "agent/eu-b2b-metrics-logs-ilm-rollout-20260617",
+			proposedFiles: [
+				"environments/eu-b2b/lifecycle-policies/metrics.json",
+				"environments/eu-b2b/lifecycle-policies/logs.json",
+			],
+			proposedDiff: "diff",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.planReview?.title).toContain("2 ILM policies");
+		expect(result.planReview?.title).toContain("warm");
+	});
+});
+
 describe("reviewPlan — ilm-rollout", () => {
 	const baseState = (retentionChange: { from: string; to: string } | null) => ({
 		iacRequest: {
