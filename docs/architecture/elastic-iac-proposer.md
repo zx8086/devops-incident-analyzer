@@ -1,6 +1,6 @@
 # Elastic IaC GitOps Proposer
 
-> **Last updated:** 2026-06-17 (post SIO-932)
+> **Last updated:** 2026-06-17 (post SIO-933)
 > **Code:** `packages/agent/src/iac/` (graph) + `packages/mcp-server-elastic-iac/` (MCP, :9086)
 > **Supersedes:** the original Terraform-maker design (`../superpowers/specs/2026-06-02-elastic-iac-agent-design.md`), which described the pre-SIO-873 9-node local-terraform graph. This document is the canonical reference for the current agent.
 
@@ -78,6 +78,7 @@ A change is a JSON config edit (config-edit `kind`) committed via the API; CI co
 
 - **Copy-from-reference (SIO-931):** a `sourcePolicy` field supports "exact copy of X with overrides"; from-scratch policies inherit structure from a sibling policy in the same cluster or a canonical fallback.
 - **Multi-file in one MR (SIO-932):** a request naming N ILM policies opens **one** branch / **one** MR with all files (`ilmPolicies[]` array + `commitOneIlmPolicy` in an atomic batch); previously only the first file was committed and the rest were silently dropped.
+- **Component-template bind (SIO-933):** an optional `bindTemplate` field (a cluster-defaults file basename, no `.json`) re-points that template's `settings.index.lifecycle.name` at the created/edited policy **in the same MR** — set it only when the user explicitly asks to bind/point/attach a template's lifecycle. A missing bind target 404s and blocks; bind works with a **single** policy only (not the multi-file path). A copied policy now diffs full-file on `policyCreated`, so the renamed `name` + inherited phases are visible in the review (previously the diff walked only the patch object and hid them).
 
 > The legacy `agents/elastic-iac/skills/add-ilm-policy/SKILL.md` and `knowledge/iac-repo-map.md` describe an older `stacks/<cluster>/ilm.tf` (Terraform HCL) layout and are **stale**; the repo uses per-env JSON config.
 
