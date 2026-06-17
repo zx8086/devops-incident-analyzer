@@ -48,6 +48,9 @@ mock.module("@devops-agent/observability", () => ({
 		error: () => undefined,
 		debug: () => undefined,
 	}),
+	runWithRequestContext: (_ctx: unknown, fn: () => unknown) => fn(),
+	traceSpan: async (_name: string, _op: string, fn: () => Promise<unknown>) => fn(),
+	getCurrentRequestContext: () => undefined,
 }));
 
 mock.module("@devops-agent/agent", () => ({
