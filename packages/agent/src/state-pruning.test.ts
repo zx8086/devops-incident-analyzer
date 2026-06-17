@@ -50,9 +50,7 @@ describe("pruneState", () => {
 		const msgs = [human("old1"), ai, tool, human("z"), human("y")];
 		const { removeIds } = pruneState(msgs, cfg);
 		// keep last 3 = tool,z,y; ai is outside -> tool is orphaned -> also removed
-		expect(removeIds).toContain("ai");
-		expect(removeIds).toContain("old1");
-		expect(removeIds).toContain("tm");
+		expect(removeIds.sort()).toEqual(["ai", "old1", "tm"]);
 	});
 
 	test("keeps a tool-call pair intact when both are in-window", () => {
@@ -78,5 +76,19 @@ describe("pruneState", () => {
 
 	test("DEFAULT_PRUNING_CONFIG keeps 20 non-system messages", () => {
 		expect(DEFAULT_PRUNING_CONFIG).toEqual({ maxMessages: 20, preserveSystemMessages: true });
+	});
+
+	test("preserveSystemMessages: false removes system messages along with old non-system messages", () => {
+		const msgs = [
+			new SystemMessage({ id: "sys", content: "s" }),
+			human("a"),
+			human("b"),
+			human("c"),
+			human("d"),
+			human("e"),
+		];
+		const { removeIds } = pruneState(msgs, { maxMessages: 3, preserveSystemMessages: false });
+		// keep last 3 non-system (c,d,e); sys and a,b are both removed
+		expect(removeIds.sort()).toEqual(["a", "b", "sys"]);
 	});
 });
