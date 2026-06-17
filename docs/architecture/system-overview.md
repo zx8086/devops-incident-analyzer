@@ -1,7 +1,7 @@
 # System Overview
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-06-17
 
 The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, Atlassian (Jira/Confluence) ticket and runbook metadata, and AWS infrastructure (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.) across multiple accounts. A LangGraph supervisor orchestrates seven specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
@@ -42,12 +42,12 @@ The agent is strictly read-only. It observes production systems but never mutate
          |
          | Send API (parallel fan-out)
          v
-+--------+---------+---------+---------+---------+---------+
-|        |         |         |         |         |         |
-| elastic| kafka   | capella | konnect | gitlab  |atlassian|
-| -agent | -agent  | -agent  | -agent  | -agent  | -agent  |
-|        |         |         |         |         |         |
-+---+----+---+-----+---+-----+---+----+---+-----+---+-----+
++--------+---------+---------+---------+---------+---------+---------+
+|        |         |         |         |         |         |         |
+| elastic| kafka   | capella | konnect | gitlab  |atlassian|   aws   |
+| -agent | -agent  | -agent  | -agent  | -agent  | -agent  | -agent  |
+|        |         |         |         |         |         |         |
++---+----+---+-----+---+-----+---+----+---+-----+---+-----+---+-----+
     |        |          |         |         |         |
     v        v          v         v         v         v
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
@@ -226,13 +226,13 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 +------------+
 | supervisor |
 | (fan-out)  |
-+-+--+--+--+-+--+
-  |  |  |  |  |  |
-  v  v  v  v  v  v
-elastic kafka capella konnect gitlab atlassian
--agent  -agent -agent  -agent  -agent -agent
-  |  |  |  |  |  |
-  +--+--+--+--+--+
++-+--+--+--+-+--+--+
+  |  |  |  |  |  |  |
+  v  v  v  v  v  v  v
+elastic kafka capella konnect gitlab atlassian aws
+-agent  -agent -agent  -agent  -agent -agent   -agent
+  |  |  |  |  |  |  |
+  +--+--+--+--+--+--+
         |
         v
 +-------+------+
@@ -356,3 +356,4 @@ The system enforces several security boundaries:
 | 2026-04-23 | Added Atlassian (Jira/Confluence) as 6th datasource/MCP server (port 9085, OAuth callback 9185) |
 | 2026-05-28 | added AWS as 7th datasource/MCP server (multi-estate via cross-account AssumeRole, AgentCore SigV4 proxy on port 3001, `awsEstateRouter` pre-fan-out node); updated pipeline from 13 to 20 nodes (extractFindings, mitigation split into investigate/monitor/escalate + aggregateMitigation, detectTopicShift); refreshed Elastic tool count from ~84 to ~93 after the cloud/billing additions |
 | 2026-06-02 | Added the Elastic IaC MCP server (port 9086) to Port Assignments; it backs the peer Elastic IaC maker agent. Full design: `docs/superpowers/specs/2026-06-02-elastic-iac-agent-design.md`. |
+| 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |

@@ -1,19 +1,27 @@
 # Elastic IaC GitOps Proposer
 
-> **Last updated:** 2026-06-03 (post SIO-880)
+> **Last updated:** 2026-06-17 (post SIO-932)
 > **Code:** `packages/agent/src/iac/` (graph) + `packages/mcp-server-elastic-iac/` (MCP, :9086)
 > **Supersedes:** the original Terraform-maker design (`../superpowers/specs/2026-06-02-elastic-iac-agent-design.md`), which described the pre-SIO-873 9-node local-terraform graph. This document is the canonical reference for the current agent.
 
-The `elastic-iac` agent is a peer to the incident-analyzer (selected by the UI agent toggle; `agentName === "elastic-iac"` routes to `buildIacGraph()` instead of the incident `buildGraph()`). It answers **"change it"** for Elastic Cloud infrastructure, as a **pure GitOps proposer**: it classifies intent, answers read-only questions, and for a change it edits the deployment/policy JSON, commits a branch, and opens a GitLab merge request **entirely via the GitLab REST API** — no local clone, no `terraform`, no local git. CI computes the Terraform plan on the MR; a human merges and triggers the apply.
+The `elastic-iac` agent is a peer to the incident-analyzer (selected by the UI agent toggle; `agentName === "elastic-iac"` routes to `buildIacGraph()` instead of the incident `buildGraph()`). It answers **"change it"** for Elastic Cloud infrastructure, as a **pure GitOps proposer**: it classifies intent, answers read-only questions, and for a change it edits the deployment/policy JSON, commits a branch, and opens a GitLab merge request **entirely via the GitLab REST API** — no local clone, no `terraform`, no local git. CI computes the Terraform plan on the MR; a human merges and triggers the apply. Beyond config edits it also handles imperative operations through CI pipeline triggers (drift reconciliation, synthetics push, Fleet binary upgrade) — always propose-only, behind a human approval gate.
 
 The governing principle (deck "Elastic Cloud Observability · IaC Monorepo", p.18): **agent proposes, GitOps disposes.** The agent never merges, approves, or applies — that is the human/CI side of a maker/checker separation of duties.
 
-## Graph (12 nodes)
+## Graph (24 nodes)
 
 ```text
 START -> bootstrap -> {connected? classifyIacIntent : END}
   classifyIacIntent --(info)----------> answerInfo -> END
+  classifyIacIntent --(converse)------> converseIac -> END        (follow-up turns only, SIO-930)
   classifyIacIntent --(pipeline-status)-> watchPipeline -> teardown -> END
+  classifyIacIntent --(drift)---------> detectDrift -> explainDrift -> reconcileGate [HITL]
+       reconcileGate --(approved)--> reconcileStack -> advanceDrift -> ... -> teardown -> END
+       reconcileGate --(declined)--> teardown -> END
+  classifyIacIntent --(synthetics-drift)-> detectSyntheticsDrift -> syntheticsPushGate [HITL]
+       syntheticsPushGate --(approved)--> pushSynthetics -> teardown -> END
+  classifyIacIntent --(fleet-upgrade)-> detectFleetUpgrade -> fleetUpgradeGate [HITL]
+       fleetUpgradeGate --(approved)--> applyFleetUpgrade -> teardown -> END
   classifyIacIntent --(gitops)--------> parseIntent [iac_clarify interrupt]
     -> readClusterState -> guard
        guard --(blocked)--> END
@@ -24,15 +32,16 @@ START -> bootstrap -> {connected? classifyIacIntent : END}
              reviewGate --(rejected)--> teardown -> END
 ```
 
-`buildIacGraph()` lives in `packages/agent/src/iac/graph.ts`; state in `state.ts`; nodes in `nodes.ts`. It has its own `IacState` annotation and checkpointer thread, separate from the incident pipeline. HITL pauses use `interrupt`; the UI resumes through `POST /api/agent/iac/resume`.
+`buildIacGraph()` lives in `packages/agent/src/iac/graph.ts`; state in `state.ts`; nodes in `nodes.ts`. It has its own `IacState` annotation and checkpointer thread, separate from the incident pipeline. HITL pauses use `interrupt`; the UI resumes through `POST /api/agent/iac/resume`. There are five distinct flows off `classifyIacIntent`: read-only Q&A (`info`/`converse`), the GitOps config-edit path (`gitops`), and three imperative CI-triggered sub-flows (`drift`, `synthetics-drift`, `fleet-upgrade`), plus `pipeline-status` follow-ups.
 
 ### Node responsibilities
 
 | Node | Responsibility |
 |------|----------------|
 | `bootstrap` | Verify the `elastic-iac-mcp` server (:9086) is connected; surface a message and stop if not. |
-| `classifyIacIntent` | LLM one-word classify: `info` (read-only Q) / `gitops` (a change) / `pipeline-status` (follow-up on an open MR). |
+| `classifyIacIntent` | LLM one-word classify: `info` (read-only Q) / `converse` (follow-up about a prior proposal, follow-up turns only) / `gitops` (a config change) / `drift` / `synthetics-drift` / `fleet-upgrade` (imperative CI-triggered ops) / `pipeline-status` (follow-up on an open MR or pipeline). |
 | `answerInfo` | Bounded read-only tool loop over a whitelisted read subset; never drafts/branches/MRs. Terminal for `info`. |
+| `converseIac` | (SIO-930) Answers follow-up questions about a prior proposal using full conversation history + read-only Elastic tools. Explain-only guardrail; coerced to `info` on the first turn. |
 | `parseIntent` | LLM extracts a structured `IacRequest` (workflow + fields). Asks one clarify question via `iac_clarify` interrupt when a required field is missing. |
 | `readClusterState` | Reads live Elastic Cloud topology + ILM + `.alerts` state before drafting. |
 | `guard` | Deterministic, mechanical safety guards only (`guards.ts`). Judgment calls go to the human, not here. |
@@ -41,21 +50,50 @@ START -> bootstrap -> {connected? classifyIacIntent : END}
 | `reviewGate` | The `iac_plan_review` HITL interrupt — the only path to opening an MR. Resumes with `approved` / `rejected`. |
 | `openMr` | Opens the MR via the API. For a config edit the branch + commit already exist (created in `draftChange`), so no `git_push`. Body filled by the LLM from `knowledge/mr-template.md`. |
 | `watchPipeline` | Polls the MR pipeline (bounded budget), walks parent→child to the plan job's terraform report, reports pass/fail + the real plan + approval. Streams `iac_pipeline_progress` live. |
-| `teardown` | Final message: MR link + pipeline status + plan + approval (+ a failure hint on failure). |
+| `teardown` | Final message: MR link + pipeline status + plan + approval (+ a failure hint on failure). Emits a per-outcome completion chip (`IacTurnOutcome`: `completed`/`rejected`/`declined`/`blocked`/`unsupported`/`pipeline-failed`) so the UI renders the right icon/colour instead of a hardcoded green "Completed" (SIO-930). |
+| `detectDrift` / `explainDrift` / `reconcileGate` / `reconcileStack` / `advanceDrift` | Drift sub-flow: detect config drift per stack, explain it, gate human approval, then trigger the reconcile CI pipeline and advance to the next stack. |
+| `detectSyntheticsDrift` / `syntheticsPushGate` / `pushSynthetics` | Synthetics drift sub-flow (SIO-902): audit one deployment's monitors (source YAML vs live Kibana), gate approval, push via a single remote `SYNTH_PUSH` CI job (no repo write). |
+| `detectFleetUpgrade` / `fleetUpgradeGate` / `applyFleetUpgrade` | Fleet binary upgrade sub-flow (SIO-913). See [Fleet upgrade](#fleet-upgrade) below. |
 
 ## Workflows
 
-A change is a JSON config edit (config-edit `kind`) committed via the API; CI computes the plan. Three workflows are on the proposer; everything else falls through to the legacy local-terraform draft path.
+A change is a JSON config edit (config-edit `kind`) committed via the API; CI computes the plan. The `gitops` intent fans out to one of the workflows below. The legacy local-terraform draft path was **removed** in SIO-912; an unhandled request (`workflow === "other"`) now returns a capability-aware message instead of falling through to dead terraform code.
 
-| Workflow | Edits | Helper | Category / Risk |
-|----------|-------|--------|-----------------|
-| **version-upgrade** (SIO-873) | `.version` in `environments/_deployments/<cluster>.json` | `setDeploymentVersion` | version-bump / LOW |
-| **tier-resize** (SIO-879) | `elasticsearch.<tier>.size` / `.max_size` (string `"<N>g"`) in `_deployments/<cluster>.json` | `setDeploymentTierSize` | tier-resize / MEDIUM |
-| **ilm-rollout** (SIO-880) | a nested phase patch into `environments/<cluster>/lifecycle-policies/<policy>.json` | `mergeIlmPhases` | ilm / MEDIUM, **HIGH on retention reduction** |
+| Workflow | Edits | Category / Risk |
+|----------|-------|-----------------|
+| **version-upgrade** (SIO-873) | `.version` in `environments/_deployments/<cluster>.json` | version-bump / LOW |
+| **tier-resize** (SIO-879) | `elasticsearch.<tier>.size` / `.max_size` (string `"<N>g"`) in `_deployments/<cluster>.json` | tier-resize / MEDIUM |
+| **ilm-rollout** (SIO-880/931/932) | nested phase patch(es) into `environments/<cluster>/lifecycle-policies/<policy>.json` | ilm / MEDIUM, **HIGH on retention reduction** |
+| **topology-edit** (SIO-919) | autoscale toggle, tier `zone_count`, per-tier autoscale, SSO/OIDC `user_settings_yaml` in `_deployments/<cluster>.json` | deployments-topology / MEDIUM (shared state) |
+| **slo-edit** (SIO-915) | SLO objective target, time-window duration, tags | slo / LOW |
+| **alerting-edit** (SIO-916) | threshold, `windowSize`, `windowUnit`, `enabled`, `interval` | alerting / LOW |
+| **dataview-edit** (SIO-917) | runtime fields, title/displayName | dataview / LOW |
+| **cluster-default-edit** (SIO-917) | `total_shards_per_node` | cluster-default / LOW |
+| **space-edit** (SIO-918) | space displayName, description, color (roles/disabled_features untouched) | space / LOW |
+| **security-edit** (SIO-918) | **additive** privilege grants (cluster/index/kibana; no removal, secrets untouched) | security / MEDIUM (privilege escalation surfaced) |
+| **fleet-integration** (SIO-914) | integration package version pins (major-version bump flagged) | fleet-integration / LOW-MEDIUM |
+| **dashboard-edit** (SIO-920) | whole-file NDJSON add/replace (display-only) | dashboard / LOW |
 
-**ILM specifics (SIO-880):** policies are per-environment JSON with phase keys (`hot`/`warm`/`cold`/`delete`) at the top level; retention is `delete.min_age`. `parseIntent` extracts `policyName` (the filename verbatim, e.g. `30-days@lifecycle`) + `phasesPatch` (a nested object of only the changed fields). `proposeIlmChange` resolves the path, deep-merges the patch (`mergeIlmPhases`), and `detectRetentionReduction` flags a shorter `delete.min_age` (cross-unit) as **HIGH risk surfaced first in the review and MR body — but never auto-blocked** (the human approves at the gate; CODEOWNERS gates merge). Single-MR per invocation: multi-wave rollout (gl-testing→dev→stg→prod) is the human re-invoking per cluster, not graph choreography.
+**ILM specifics (SIO-880/931/932):** policies are per-environment JSON with phase keys (`hot`/`warm`/`cold`/`delete`); retention is `delete.min_age`. `parseIntent` extracts `policyName` (the filename verbatim, e.g. `30-days@lifecycle`) + `phasesPatch` (a nested object of only the changed fields). Policies use the **repo-verified nested shape**, validated by a structural validator before commit (SIO-931) — e.g. a `set_priority` mistake errors with a message naming `priority` as the nested field. `detectRetentionReduction` flags a shorter `delete.min_age` (cross-unit) as **HIGH risk surfaced first in the review and MR body — but never auto-blocked** (the human approves at the gate; CODEOWNERS gates merge).
+
+- **Copy-from-reference (SIO-931):** a `sourcePolicy` field supports "exact copy of X with overrides"; from-scratch policies inherit structure from a sibling policy in the same cluster or a canonical fallback.
+- **Multi-file in one MR (SIO-932):** a request naming N ILM policies opens **one** branch / **one** MR with all files (`ilmPolicies[]` array + `commitOneIlmPolicy` in an atomic batch); previously only the first file was committed and the rest were silently dropped.
 
 > The legacy `agents/elastic-iac/skills/add-ilm-policy/SKILL.md` and `knowledge/iac-repo-map.md` describe an older `stacks/<cluster>/ilm.tf` (Terraform HCL) layout and are **stale**; the repo uses per-env JSON config.
+
+## Fleet upgrade
+
+The Fleet binary upgrade (SIO-913) is an imperative operation, not a config edit, so it runs through CI pipeline triggers rather than an MR: **preview → HITL gate → apply**, propose-only throughout.
+
+- `detectFleetUpgrade` triggers a preview pipeline and parses the upgradeable / not-upgradeable crosstab plus the rollout window. Wolfi/container agents are not Fleet-upgradeable and are reported as skipped.
+- `fleetUpgradeGate` is the `iac` HITL interrupt — counts + skip note; the only path to apply.
+- `applyFleetUpgrade` triggers the bulk-upgrade apply and streams live progress, signing off with one of three outcomes:
+  - **`applied`** — the rollout completed within the poll budget.
+  - **`dispatched`** (SIO-926) — started but still rolling at the budget boundary; signs off honestly as dispatched (not "failed") with an expected duration computed from `rolloutSeconds`. `fleetApplyPipelineId` is persisted so a follow-up "how's the upgrade?" re-polls live progress (routed to `pipeline-status`, SIO-929) **without re-triggering** the apply.
+  - **`failed`** — a real pipeline failure (`failed_silent`/`UPG_FAILED` is the ground truth; `action_status` undercounts).
+- The apply passes `MAX_AGENTS=resolvedCount` to clear Fleet's 500-agent cap (SIO-927). For an "all agents" request the agent omits the selector and the repo defaults `SELECTOR="*"`.
+
+CI contract `fleet-upgrade-report/v1`: jobs `fleet-upgrade-{preview,apply}-on-demand`, vars `FLEET_UPGRADE_{PREVIEW,APPLY}`, artifact `fleet-upgrade-report.json`.
 
 ## Configuration
 

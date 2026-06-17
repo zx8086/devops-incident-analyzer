@@ -1,9 +1,9 @@
 # Documentation Index
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-06-03
+> **Last updated:** 2026-06-17
 
-Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools.
+Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools, plus a peer **elastic-iac** GitOps proposer agent (an 8th MCP server) for Elastic Cloud infrastructure changes.
 
 ---
 
@@ -38,8 +38,8 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | [System Overview](architecture/system-overview.md) | High-level architecture, data flow, and component relationships |
 | [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 20-node StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, query (fan-out), align, aggregate, extractFindings, enforceCorrelations, checkConfidence, validate, mitigation split (investigate/monitor/escalate + aggregate), followUp, detectTopicShift |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
-| [MCP Integration](architecture/mcp-integration.md) | 7 MCP server connections, tool scoping, health monitoring, trace propagation |
-| [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 12-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; three workflows (version-upgrade / tier-resize / ilm-rollout). Agent proposes, CI + human dispose. |
+| [MCP Integration](architecture/mcp-integration.md) | 8 MCP server connections (7 datasource + elastic-iac), tool scoping, health monitoring, trace propagation |
+| [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 24-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; config-edit workflows (version-upgrade / tier-resize / ilm-rollout / topology / slo / alerting / dataview / cluster-default / space / security / fleet-integration / dashboard) plus drift, synthetics-drift, and Fleet-upgrade CI sub-flows. Agent proposes, CI + human dispose. |
 
 ### Configuration
 
@@ -106,3 +106,4 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | 2026-05-28 | docs drift sweep: AWS MCP (7th datasource) for multi-estate added across architecture, configuration, deployment; expanded elastic cloud/billing tool catalog; corrected pipeline node count (14→20); indexed `runbooks/aws-estate-onboarding.md` |
 | 2026-06-02 | Documented the Elastic IaC agent (peer maker agent): design spec under `superpowers/specs/`, `elastic-iac-mcp` (:9086) in MCP-server config + environment variables, the maker graph in agent-pipeline, and the port + peer-agent note in system-overview |
 | 2026-06-03 | Added canonical [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) doc reflecting the SIO-870..880 re-architecture (Terraform maker → 12-node GitOps proposer; version-upgrade / tier-resize / ilm-rollout). Replaced the stale 9-node summary in agent-pipeline.md; repointed the README links from the original design spec. Noted the post-merge apply-tracking gap (SIO-881). |
+| 2026-06-17 | docs sync for the SIO-911..932 elastic-iac expansion: nine config-edit proposers (slo / alerting / dataview / cluster-default / space / security / fleet-integration / topology / dashboard), Fleet-upgrade sub-flow (preview/gate/apply with `applied`/`dispatched`/`failed` outcomes), conversational follow-ups + per-outcome chip, ILM nested shape + copy-from-reference + multi-file MR. Brought the root README into sync (6→7 datasources, 13→20 pipeline nodes, added AWS + elastic-iac MCP rows); refreshed monorepo-structure package list (added knowledge-graph / memory-pr / skillflow / mcp-server-elastic-iac); proposer graph 12→24 nodes. |
