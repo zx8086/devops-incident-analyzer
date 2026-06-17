@@ -13,6 +13,7 @@ export { buildGraph } from "./graph.ts";
 export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEntities } from "./graph-knowledge.ts";
 export { buildIacGraph } from "./iac/graph.ts";
 export { evaluateGuards } from "./iac/guards.ts";
+export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {

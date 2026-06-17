@@ -5,6 +5,9 @@ import {
 	createMcpClient,
 	getAgent,
 	getAgentByName,
+	type IacStateType,
+	type IacTurnOutcome,
+	iacTurnOutcome,
 	installGraphWarmer,
 	installMemoryPromotion,
 	runBootstrap,
@@ -177,7 +180,7 @@ export async function invokeAgent(
 	if (agentName === "elastic-iac") {
 		const iacGraph = await getIacGraph();
 		return iacGraph.streamEvents(
-			{ messages: langchainMessages, requestId },
+			{ messages: langchainMessages, requestId, isFollowUp: options.isFollowUp ?? false },
 			{
 				configurable: {
 					thread_id: options.threadId,
@@ -311,4 +314,17 @@ export async function getLastAssistantText(threadId: string, agentName = "incide
 		}
 	}
 	return "";
+}
+
+// SIO-930: the IaC graph streams its final message through the checkpointer (no output-node token
+// stream), so the SSE handlers read terminal state here to label the completion chip. Mirrors
+// getLastAssistantText's state access. Defaults to "completed" if state can't be read.
+export async function getIacTurnOutcome(threadId: string): Promise<IacTurnOutcome> {
+	try {
+		const graph = await getIacGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+		return iacTurnOutcome(snapshot.values as IacStateType);
+	} catch {
+		return "completed";
+	}
 }

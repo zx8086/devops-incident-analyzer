@@ -45,6 +45,9 @@ const resumeAgentMock = mock(
 mock.module("$lib/server/agent", () => ({
 	resumeAgent: resumeAgentMock,
 	getPendingInterrupt: mock(async () => undefined),
+	// SIO-930: keep the process-global $lib/server/agent mock link-compatible with the stream
+	// route test (last-wins mock cache); stream/+server.ts imports getIacTurnOutcome.
+	getIacTurnOutcome: mock(async () => "completed"),
 }));
 
 mock.module("$lib/server/sse-pump", () => ({

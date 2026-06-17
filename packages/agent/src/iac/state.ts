@@ -360,7 +360,12 @@ export const IacState = Annotation.Root({
 	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
 	// SIO-902: "synthetics-drift" enters the synthetics monitor drift + operator-approved push sub-flow.
 	// SIO-913: "fleet-upgrade" enters the Fleet agent binary-upgrade sub-flow (preview -> gate -> apply).
-	intent: Annotation<"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | null>({
+	// SIO-930: "converse" answers a conversational follow-up ABOUT the agent's own prior answer
+	// (explain/critique), with full conversation history, over the read-only tool subset. Selectable
+	// only on a follow-up turn (see coerceConverseIntent).
+	intent: Annotation<
+		"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | "converse" | null
+	>({
 		reducer: last,
 		default: () => null,
 	}),
@@ -442,6 +447,9 @@ export const IacState = Annotation.Root({
 	// (pipeline-status intent) re-polls THIS imperative pipeline -- there is no MR for a binary
 	// upgrade, so watchPipeline's MR-recovery path can't find it. Set when the apply is dispatched.
 	fleetApplyPipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
+	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
+	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
+	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),
 });
 
 export type IacStateType = typeof IacState.State;

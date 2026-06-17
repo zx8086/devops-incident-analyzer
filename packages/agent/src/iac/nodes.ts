@@ -249,7 +249,7 @@ export function capabilityMessage(): string {
 // "fleet-upgrade", and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested.)
 export function intentFromText(
 	raw: string,
-): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" {
+): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | "converse" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
 	// SIO-913: a Fleet agent BINARY upgrade (imperative bulk_upgrade) is distinct from a cluster
@@ -264,6 +264,8 @@ export function intentFromText(
 	// SIO-882: "drift" enters the drift-detection + per-stack reconcile sub-flow.
 	if (r.includes("drift") || r.includes("reconcile")) return "drift";
 	if (r.includes("gitops")) return "gitops";
+	// SIO-930: conversational follow-up about the agent's own prior answer.
+	if (r.includes("converse")) return "converse";
 	return "info";
 }
 
@@ -300,6 +302,16 @@ export function looksLikeFleetStatusCheck(text: string): boolean {
 		"rollout",
 	];
 	return STATUS_CUES.some((cue) => r.includes(cue));
+}
+
+// SIO-930: "converse" answers a follow-up ABOUT the agent's own prior answer, so it is only
+// meaningful when there IS a prior turn. The classifier LLM can occasionally emit "converse" on a
+// first message (mistaking a fresh question for a follow-up); coerce it back to the safe read-only
+// "info" path in that case. This is the deterministic guard half of the converse gate (the LLM is
+// still told converse exists). (Pure; unit-tested.)
+export function coerceConverseIntent<T extends string>(intent: T, isFollowUp: boolean): T | "info" {
+	if (intent === "converse" && !isFollowUp) return "info";
+	return intent;
 }
 
 // Classify the request: read-only info, a gitops change, or a follow-up about in-flight work
@@ -344,10 +356,16 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"upgrade going', 'check on it', 'watch the pipeline', 'is the upgrade done', 'any progress on the agents'). " +
 		"Use this for ANY 'how is it going / check on it / is it done' follow-up to an in-flight change, even with " +
 		"no merge request.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', or 'pipeline-status'. " +
+		"- 'converse': a CONVERSATIONAL follow-up about the agent's OWN previous answer or proposal -- " +
+		"asking why it did something, to explain or justify it, to critique it, or reacting to it -- NOT a " +
+		"request to change infrastructure. Examples: 'why was that wrong?', 'explain that', 'what would you " +
+		"change about that policy?', 'I don't think that config is complete'. If the user instead asks for a " +
+		"NEW change (even right after a proposal), that is 'gitops', not 'converse'.\n" +
+		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', 'pipeline-status', or 'converse'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
-	const intent = intentFromText(String(res.content));
+	// SIO-930: gate converse on a real follow-up turn (the LLM can mis-emit it on a first message).
+	const intent = coerceConverseIntent(intentFromText(String(res.content)), state.isFollowUp);
 	// SIO-877: pipeline-status resolves even without a thread-local mrIid -- watchPipeline
 	// falls back to the latest open agent MR (so "check my MR" survives a page reload).
 	log.info({ intent, query, hasMr: state.mrIid !== null }, "classified IaC intent");
@@ -567,6 +585,53 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 	const final = await createLlm("iacReader", AGENT).invoke([
 		...convo,
 		new HumanMessage("Summarize the answer now using what you've gathered."),
+	]);
+	return { messages: [new AIMessage(String(final.content))] };
+}
+
+// SIO-930: conversational follow-up lane. Unlike every other IaC node (which reads only the latest
+// human message via lastHumanText), this passes the FULL conversation history so it can explain or
+// justify the agent's own prior answer -- mirroring the incident graph's responder.ts. Explain-only:
+// it binds ONLY the read-only INFO_TOOL_NAMES subset (physically cannot draft/branch/open an MR). If
+// the user wants a change made, it tells them to ask directly (which re-enters the gitops gate).
+// Reuses the iacReader LLM role (same read-only bounded-loop semantics as answerInfo).
+const CONVERSE_GUARDRAIL =
+	"This is a conversational follow-up about your previous answer in the conversation above. Explain, " +
+	"justify, or critique it directly and concisely. You MAY use the read-only Elastic tools to ground " +
+	"your answer in live state. You must NOT draft Terraform, edit configuration, create a branch, or open " +
+	"a merge request. If the user wants a change made, tell them to ask for it directly and it will go " +
+	"through the normal review-gated proposal flow.";
+
+export async function converseIac(state: IacStateType): Promise<Partial<IacStateType>> {
+	const tools = infoTools();
+	const sys = `${buildSystemPrompt(getAgentByName(AGENT))}\n\n${CONVERSE_GUARDRAIL}`;
+
+	// No read tools available: answer from history alone (still useful -- it's an explanation).
+	if (tools.length === 0) {
+		const res = await createLlm("iacReader", AGENT).invoke([new SystemMessage(sys), ...state.messages]);
+		return { messages: [new AIMessage(String(res.content))] };
+	}
+
+	const llm = createLlmWithTools("iacReader", tools, AGENT);
+	const toolNames = new Set(tools.map((t) => t.name));
+	const convo: BaseMessage[] = [new SystemMessage(sys), ...state.messages];
+
+	const MAX_STEPS = 5;
+	for (let step = 0; step < MAX_STEPS; step++) {
+		const ai = (await llm.invoke(convo)) as AIMessage;
+		convo.push(ai);
+		const calls = ai.tool_calls ?? [];
+		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		for (const call of calls) {
+			const result = toolNames.has(call.name)
+				? await callTool(call.name, (call.args ?? {}) as Record<string, unknown>)
+				: `[${call.name} is not an allowed read tool]`;
+			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
+		}
+	}
+	const final = await createLlm("iacReader", AGENT).invoke([
+		...convo,
+		new HumanMessage("Answer the user's follow-up now using what you've gathered."),
 	]);
 	return { messages: [new AIMessage(String(final.content))] };
 }
@@ -3469,6 +3534,23 @@ export function parseApprovalState(toolResult: string): IacApprovalState | null 
 // A pipeline status is terminal when CI has stopped running.
 export function isTerminalPipelineStatus(status: string): boolean {
 	return ["success", "failed", "canceled", "skipped"].includes(status);
+}
+
+// SIO-930: the user-facing outcome of one IaC turn, derived from terminal state, so the UI chip
+// reflects what actually happened instead of an unconditional "Completed". Precedence: explicit human
+// decisions (reject/decline) > a request we have no proposer for (unsupported) > a mechanical guard
+// block > a failed CI pipeline > completed. (Pure; unit-tested.)
+export type IacTurnOutcome = "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+
+export function iacTurnOutcome(state: IacStateType): IacTurnOutcome {
+	if (state.reviewDecision === "rejected") return "rejected";
+	if (state.syntheticsPushApproved === false && state.syntheticsDriftReport) return "declined";
+	if (state.fleetUpgradeApproved === false && state.fleetUpgradeReport) return "declined";
+	if (state.blockedReason) {
+		return state.iacRequest?.workflow === "other" ? "unsupported" : "blocked";
+	}
+	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") return "pipeline-failed";
+	return "completed";
 }
 
 // SIO-924: parse a single pipeline's {status, web_url} from gitlab_get_pipeline's

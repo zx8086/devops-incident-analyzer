@@ -8,6 +8,7 @@ import {
 	applyFleetUpgrade,
 	bootstrapIac,
 	classifyIacIntent,
+	converseIac,
 	detectDrift,
 	detectFleetUpgrade,
 	detectSyntheticsDrift,
@@ -41,6 +42,7 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("bootstrap", bootstrapIac)
 		.addNode("classifyIacIntent", classifyIacIntent)
 		.addNode("answerInfo", answerInfo)
+		.addNode("converseIac", converseIac)
 		.addNode("parseIntent", parseIntent)
 		.addNode("readClusterState", readClusterState)
 		.addNode("guard", guardNode)
@@ -91,10 +93,21 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 								? "detectDrift"
 								: s.intent === "pipeline-status"
 									? "watchPipeline"
-									: "answerInfo",
-			["parseIntent", "detectFleetUpgrade", "detectSyntheticsDrift", "detectDrift", "answerInfo", "watchPipeline"],
+									: s.intent === "converse"
+										? "converseIac"
+										: "answerInfo",
+			[
+				"parseIntent",
+				"detectFleetUpgrade",
+				"detectSyntheticsDrift",
+				"detectDrift",
+				"answerInfo",
+				"watchPipeline",
+				"converseIac",
+			],
 		)
 		.addEdge("answerInfo", END)
+		.addEdge("converseIac", END)
 		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow
 		// "other") with a capability message + blockedReason -> stop before reading cluster
 		// state or drafting. Otherwise proceed to the maker pipeline.

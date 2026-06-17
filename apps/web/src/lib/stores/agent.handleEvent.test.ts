@@ -59,6 +59,21 @@ describe("applyStreamEvent", () => {
 		expect(next.lastToolsUsed).toEqual(["elastic_search"]);
 	});
 
+	test("captures the IaC turn outcome from done (SIO-930)", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "done",
+			threadId: "t-1",
+			responseTime: 100,
+			outcome: "rejected",
+		});
+		expect(next.lastOutcome).toBe("rejected");
+	});
+
+	test("defaults outcome to completed when absent (SIO-930)", () => {
+		const next = applyStreamEvent(initialReducerState(), { type: "done", threadId: "t-1", responseTime: 100 });
+		expect(next.lastOutcome).toBe("completed");
+	});
+
 	test("appends error message to current content", () => {
 		const next = applyStreamEvent(initialReducerState(), {
 			type: "error",

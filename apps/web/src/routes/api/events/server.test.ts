@@ -22,6 +22,8 @@ mock.module("@devops-agent/agent", () => ({
 	getConnectedServers: () => [] as string[],
 	getServerStates: () => ({}) as Record<string, string>,
 	getLastAssistantText: async () => "",
+	// SIO-930: $lib/server/agent.ts imports iacTurnOutcome; keep the shared mock link-compatible.
+	iacTurnOutcome: () => "completed",
 	processAttachments: () => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] }),
 	mcpEvents,
 }));

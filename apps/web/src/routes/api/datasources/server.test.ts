@@ -12,6 +12,9 @@ mock.module("@devops-agent/agent", () => ({
 	flushLangSmithCallbacks: () => Promise.resolve(),
 	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	// SIO-930: $lib/server/agent.ts imports iacTurnOutcome from this module; the mock must export it
+	// (process-global mock cache must stay link-compatible across sibling files).
+	iacTurnOutcome: () => "completed",
 	getConnectedServers: () => ["elastic-mcp", "kafka-mcp"],
 	getServerStates: () => ({
 		"elastic-mcp": "ready",
@@ -30,6 +33,8 @@ mock.module("$lib/server/agent", () => ({
 	invokeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
 	resumeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
 	getPendingInterrupt: async () => undefined,
+	// SIO-930: keep the process-global mock link-compatible with the stream route test.
+	getIacTurnOutcome: async () => "completed",
 }));
 
 const { GET } = await import("./+server.ts");

@@ -47,6 +47,9 @@ mock.module("@devops-agent/agent", () => ({
 	createMcpClient: mock(() => Promise.resolve()),
 	getAgent: () => mockAgentDef,
 	getAgentByName: () => mockAgentDef,
+	// SIO-930: agent.ts imports iacTurnOutcome (used by getIacTurnOutcome). The mock must export it
+	// or the namespace import throws "Export named 'getIacTurnOutcome' not found" downstream.
+	iacTurnOutcome: mock(() => "completed" as const),
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
 	// SIO-846: agent.ts now runs session bootstrap/teardown via these.
