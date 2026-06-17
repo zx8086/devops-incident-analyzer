@@ -15,6 +15,7 @@ import {
 	getPendingInterrupt,
 	pruneThreadState,
 	resumeAgent,
+	runPostTurn,
 } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, pumpEventStream } from "$lib/server/sse-pump";
@@ -106,6 +107,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							// SIO-930: label the completion chip with the real turn outcome (rejected/declined/etc.).
 							const outcome = await getIacTurnOutcome(body.threadId);
 							await pruneThreadState(body.threadId, "elastic-iac");
+							// SIO-942: persist this turn's live-memory blocks (best-effort).
+							await runPostTurn({ agentName: AGENT, threadId: body.threadId });
 							const responseTime = Date.now() - startTime;
 							log.info({ responseTime, toolsUsed: toolsUsed.length, outcome }, "agent.iac.resume.end");
 							send({ type: "done", threadId: body.threadId, responseTime, toolsUsed, outcome });

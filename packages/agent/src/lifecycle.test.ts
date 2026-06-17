@@ -30,7 +30,9 @@ import {
 	registerMemoryFlusher,
 	registerMemoryPrOpener,
 	registerMemoryRecaller,
+	registerPostTurnFlusher,
 	runBootstrap,
+	runPostTurn,
 	runTeardown,
 } from "./lifecycle.ts";
 
@@ -53,6 +55,7 @@ afterEach(() => {
 	registerMemoryPrOpener(async () => {});
 	registerMemoryRecaller(async () => undefined);
 	registerMemoryFlusher(async () => {});
+	registerPostTurnFlusher(async () => {});
 });
 
 describe("runBootstrap", () => {
@@ -145,5 +148,25 @@ describe("agent-memory seams", () => {
 		});
 		const steps = await runTeardown({ agentName: "incident-analyzer", threadId: "t-1" });
 		expect(steps).toContain("flush_daily_log");
+	});
+});
+
+// SIO-942: per-turn flush seam.
+describe("runPostTurn", () => {
+	test("invokes a registered post-turn flusher with session identity", async () => {
+		const captured: { ctx: { agentName: string; threadId: string } | null } = { ctx: null };
+		registerPostTurnFlusher(async (ctx) => {
+			captured.ctx = ctx;
+		});
+		await runPostTurn({ agentName: "elastic-iac", threadId: "t-iac" });
+		expect(captured.ctx).toEqual({ agentName: "elastic-iac", threadId: "t-iac" });
+	});
+
+	test("tolerates a post-turn flusher that throws (turn completion continues)", async () => {
+		registerPostTurnFlusher(async () => {
+			throw new Error("flush failed");
+		});
+		// Must resolve, not reject -- a memory flush must never break turn completion.
+		await runPostTurn({ agentName: "incident-analyzer", threadId: "t-1" });
 	});
 });

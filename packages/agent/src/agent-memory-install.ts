@@ -5,10 +5,11 @@
 // process startup. Both registrations are no-ops unless LIVE_MEMORY_BACKEND is
 // "agent-memory", so the default file backend is untouched.
 
-import { registerMemoryFlusher, registerMemoryRecaller } from "./lifecycle.ts";
+import { registerMemoryFlusher, registerMemoryRecaller, registerPostTurnFlusher } from "./lifecycle.ts";
 import {
 	agentMemoryHealthy,
 	endAgentMemorySession,
+	flushAgentMemoryAfterTurn,
 	recallAgentMemory,
 	selectedBackend,
 	setActiveMemorySession,
@@ -29,5 +30,13 @@ export function installAgentMemory(): void {
 	registerMemoryFlusher(async () => {
 		if (selectedBackend() !== "agent-memory") return;
 		await endAgentMemorySession();
+	});
+
+	// SIO-942: persist this turn's blocks without ending the session, so live
+	// memory survives even when teardown never fires (the common case for sessions
+	// closed by a process restart rather than the teardown endpoint).
+	registerPostTurnFlusher(async ({ agentName, threadId }) => {
+		if (selectedBackend() !== "agent-memory") return;
+		await flushAgentMemoryAfterTurn(agentName, threadId);
 	});
 }
