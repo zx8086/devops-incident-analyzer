@@ -52,6 +52,14 @@ export function registerMemoryFlusher(fn: (ctx: { agentName: string; threadId: s
 	memoryFlusher = fn;
 }
 
+// SIO-942: post-turn flush seam. Unlike memoryFlusher (teardown: drain + end +
+// clear), this drains the write-behind queue while keeping the session open, so
+// blocks persist after every completed turn even when teardown never fires.
+let postTurnFlusher: ((ctx: { agentName: string; threadId: string }) => Promise<void>) | null = null;
+export function registerPostTurnFlusher(fn: (ctx: { agentName: string; threadId: string }) => Promise<void>): void {
+	postTurnFlusher = fn;
+}
+
 // Per-session context threaded through bootstrap/teardown. agentName -> Agent
 // Memory user; threadId -> session; firstUserQuery seeds semantic recall.
 export interface BootstrapContext {
@@ -208,4 +216,20 @@ export async function runTeardown(ctx: TeardownContext = {}): Promise<TeardownSt
 		logger.info({ steps: run }, "Agent session teardown complete");
 		return run;
 	});
+}
+
+// SIO-942: drains live-memory writes after a completed turn without ending the
+// session. Called from each turn-completion point (mirrors pruneThreadState).
+// No-op when no post-turn flusher is registered (e.g. file backend). Best-effort:
+// failures are logged, never surfaced to the turn.
+export async function runPostTurn(ctx: { agentName: string; threadId: string }): Promise<void> {
+	if (!postTurnFlusher) return;
+	try {
+		await postTurnFlusher(ctx);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"post-turn memory flush failed; turn completion continues",
+		);
+	}
 }

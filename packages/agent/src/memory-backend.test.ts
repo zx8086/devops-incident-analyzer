@@ -14,6 +14,7 @@ import {
 	endAgentMemorySession,
 	enqueueMessage,
 	flushAgentMemory,
+	flushAgentMemoryAfterTurn,
 	pendingWriteCount,
 	recallAgentMemory,
 	resolveUserId,
@@ -152,6 +153,55 @@ describe("writer -> agent-memory backend", () => {
 		enqueueMessage({ user_content: "x", assistant_content: "y" }, "2026-06-17T00:00:00Z");
 		await flushAgentMemory();
 		expect(rec.messages).toHaveLength(0); // dropped, no throw
+	});
+});
+
+describe("flushAgentMemoryAfterTurn (SIO-942 per-turn flush)", () => {
+	test("posts queued blocks mid-session and keeps the session open", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+
+		enqueueMessage({ user_content: "q1", assistant_content: "a1" }, "2026-06-17T00:00:00Z");
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-1");
+		expect(rec.messages).toHaveLength(1);
+		expect(rec.ended).toHaveLength(0); // session NOT ended
+
+		// A second turn on the same session still posts (activeRef survived).
+		enqueueMessage({ user_content: "q2", assistant_content: "a2" }, "2026-06-17T00:01:00Z");
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-1");
+		expect(rec.messages).toHaveLength(2);
+		expect(rec.sessions).toContain("t-1");
+	});
+
+	test("defensive rebind persists blocks even when no session was bound", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		// No setActiveMemorySession: simulates a turn whose bootstrap recall failed.
+		clearActiveMemorySession();
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
+
+		await flushAgentMemoryAfterTurn("elastic-iac", "t-iac");
+
+		// Bare flushAgentMemory would have DROPPED this (see "drops writes" test);
+		// the rebind binds elastic-iac/t-iac first, so the block is posted instead.
+		expect(rec.messages).toHaveLength(1);
+		expect(rec.users).toContain("elastic-iac");
+		expect(rec.sessions).toContain("t-iac");
+	});
+
+	test("file backend: per-turn flush is a no-op (never touches the client)", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND; // default file
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
+
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-1");
+
+		expect(rec.messages).toHaveLength(0);
+		expect(rec.users).toHaveLength(0);
+		expect(pendingWriteCount()).toBe(1); // queue untouched (gate returned early)
 	});
 });
 

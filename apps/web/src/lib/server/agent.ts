@@ -14,6 +14,7 @@ import {
 	needsPruning,
 	pruneState,
 	runBootstrap,
+	runPostTurn,
 	runTeardown,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
@@ -354,6 +355,11 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 		);
 	}
 }
+
+// SIO-942: re-export the post-turn live-memory flush so the completion routes
+// import it from the same module as pruneThreadState (they run side by side after
+// every turn). Best-effort; no-op unless the agent-memory backend is selected.
+export { runPostTurn };
 
 // SIO-751: after a stream completes, check whether the graph paused on an
 // interrupt rather than finishing. If so, return the interrupt payload so the

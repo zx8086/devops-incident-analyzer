@@ -24,7 +24,9 @@ export {
 	registerMemoryFlusher,
 	registerMemoryPrOpener,
 	registerMemoryRecaller,
+	registerPostTurnFlusher,
 	runBootstrap,
+	runPostTurn,
 	runTeardown,
 	type TeardownContext,
 } from "./lifecycle.ts";

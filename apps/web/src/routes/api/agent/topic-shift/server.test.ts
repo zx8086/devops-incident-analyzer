@@ -46,6 +46,9 @@ mock.module("$lib/server/agent", () => ({
 	resumeAgent: resumeAgentMock,
 	getPendingInterrupt: mock(async () => undefined),
 	pruneThreadState: mock(() => Promise.resolve()),
+	// SIO-942: topic-shift/+server.ts calls this after the resumed turn (live-memory flush).
+	// Also keeps the process-global mock link-compatible with the stream route test.
+	runPostTurn: mock(() => Promise.resolve()),
 	// SIO-930: keep the process-global $lib/server/agent mock link-compatible with the stream
 	// route test (last-wins mock cache); stream/+server.ts imports getIacTurnOutcome.
 	getIacTurnOutcome: mock(async () => "completed"),

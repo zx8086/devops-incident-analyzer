@@ -158,6 +158,19 @@ export async function flushAgentMemory(): Promise<void> {
 	}
 }
 
+// SIO-942: per-turn drain. Persists this turn's enqueued blocks without ending
+// the session (contrast endAgentMemorySession, which also closes it and clears
+// activeRef). Rebinds the active session first so blocks still flush when the
+// bootstrap recall failed and activeRef was never set (e.g. service was down at
+// session start). Best-effort: flushAgentMemory early-returns on an empty queue
+// and swallows/requeues its own errors, so this is cheap and safe to call after
+// every completed turn.
+export async function flushAgentMemoryAfterTurn(agentName: string, threadId: string): Promise<void> {
+	if (selectedBackend() !== "agent-memory") return;
+	setActiveMemorySession(agentName, threadId);
+	await flushAgentMemory();
+}
+
 // Semantic recall across the agent's past sessions for the given query.
 // Returns undefined on any failure or empty result (caller degrades gracefully).
 export async function recallAgentMemory(

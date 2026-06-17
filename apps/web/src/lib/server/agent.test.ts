@@ -80,6 +80,8 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-846: agent.ts now runs session bootstrap/teardown via these.
 	runBootstrap: mock(() => Promise.resolve({ stepsRun: [] })),
 	runTeardown: mock(() => Promise.resolve([])),
+	// SIO-942: agent.ts imports + re-exports runPostTurn (per-turn live-memory flush).
+	runPostTurn: mock(() => Promise.resolve()),
 	// SIO-862: agent.ts calls these at module load (installMemoryPromotion/installGraphWarmer
 	// register lifecycle seams). The mock must export them or the namespace import throws.
 	installMemoryPromotion: mock(() => undefined),
