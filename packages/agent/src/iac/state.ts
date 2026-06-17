@@ -69,6 +69,9 @@ export interface IacRequest {
 	dataviewDisplayName?: string;
 	templateName?: string;
 	totalShardsPerNode?: number;
+	// SIO-933: ilm-rollout optional bind -- point a cluster-defaults component-template's
+	// settings.index.lifecycle.name at the created/edited policy, in the SAME MR. Basename, no .json.
+	bindTemplate?: string;
 	// SIO-918: space-edit -- the per-space file basename + name/description/color. security-edit
 	// -- the role name + ADDITIVE privilege grants (cluster / index names+privileges / Kibana
 	// application+privileges). role_mappings + api_keys are never touched.
@@ -423,6 +426,9 @@ export const IacState = Annotation.Root({
 	// SIO-917: a cluster-default-edit LOWERED total_shards_per_node -- surfaced as a risk line
 	// (concentrates shards on fewer nodes, can unbalance allocation).
 	shardsLowered: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-933: an ilm-rollout re-pointed a component-template's settings.index.lifecycle.name at a
+	// policy -- surfaced as a risk line (data streams switch ILM policy as new indices roll over).
+	lifecycleRetargeted: Annotation<boolean>({ reducer: last, default: () => false }),
 	// SIO-918: a security-edit granted cluster-level / superuser privileges -- surfaced as the
 	// HIGHEST risk line + "recommend human security review".
 	privilegeEscalation: Annotation<boolean>({ reducer: last, default: () => false }),

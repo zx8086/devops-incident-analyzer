@@ -176,6 +176,10 @@ describe("draftChange -> proposeIlmChange", () => {
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/lifecycle-policies/30-days@lifecycle.json");
 		expect(result.proposedDiff).toContain('"min_age"');
+		// SIO-933: a MODIFY diff stays terse -- only the patched leaves. The existing policy has no
+		// `priority`, the patch doesn't set one, so it must NOT appear (proves the modify branch is
+		// unchanged and we did not start dumping the whole file on a modify).
+		expect(result.proposedDiff).not.toContain('"priority"');
 		expect(result.retentionChange).toBeNull(); // 30d -> 60d is an INCREASE, not a reduction
 	});
 
@@ -217,7 +221,11 @@ describe("draftChange -> proposeIlmChange", () => {
 		expect(result.retentionChange).toBeNull();
 		expect(result.proposedDiff).toContain("NEW ILM policy");
 		expect(result.proposedDiff).toContain('"min_age"');
-		// The committed body is a create of the new policy: name + the requested phases.
+		// SIO-933: a CREATE diff renders the FULL resulting policy as additions, so the reviewer can
+		// confirm it -- the `name` and inherited canonical fields (e.g. `priority`, never in the patch)
+		// must be visible, not just the patched leaves.
+		expect(result.proposedDiff).toContain('"name"');
+		expect(result.proposedDiff).toContain('"priority"');
 		expect(committed.action).toBe("create");
 		const written = JSON.parse(String(committed.content)) as { name: string; delete: { min_age: string } };
 		expect(written.name).toBe(".alerts-ilm-policy");
@@ -244,6 +252,174 @@ describe("draftChange -> proposeIlmChange", () => {
 		};
 		const result = await draftChange(asIacState(state));
 		expect(result.retentionChange).toEqual({ from: "90d", to: "30d" });
+	});
+});
+
+// SIO-933: optional component-template bind. The bind file is committed onto the SAME branch as the
+// policy (one MR). Component-template path is environments/<cluster>/cluster-defaults/<template>.json.
+describe("draftChange -> bind component-template (SIO-933)", () => {
+	const SPARSE_TEMPLATE = JSON.stringify(
+		{ name: "logs-generic.otel@custom", settings: { index: { codec: "best_compression" } } },
+		null,
+		2,
+	);
+	const b64 = (s: string) =>
+		`[200] ${JSON.stringify({ content: Buffer.from(s).toString("base64"), encoding: "base64" })}`;
+	const POLICY_PATH = "environments/eu-cld/lifecycle-policies/eu-otel-logs-lifecycle-prod.json";
+	const TEMPLATE_PATH = "environments/eu-cld/cluster-defaults/logs-generic.otel.json";
+
+	test("creates the policy AND binds the template in ONE MR", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const committed: Record<string, { content: string; action?: string }> = {};
+		mockTools({
+			// policy 404s (create-from-scratch, no siblings -> canonical shape); template exists.
+			gitlab_get_file_content: (a) =>
+				String(a.filePath) === TEMPLATE_PATH ? b64(SPARSE_TEMPLATE) : '[404] {"message":"404 File Not Found"}',
+			gitlab_get_repository_tree: () => "[200] []",
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (a) => {
+				committed[String(a.file_path)] = { content: String(a.content), action: a.action as string };
+				return "[201] {}";
+			},
+		});
+		const result = await draftChange(
+			asIacState({
+				iacRequest: {
+					workflow: "ilm-rollout" as const,
+					isProd: false,
+					cluster: "eu-cld",
+					policyName: "eu-otel-logs-lifecycle-prod",
+					phasesPatch: { delete: { min_age: "30d" } },
+					bindTemplate: "logs-generic.otel",
+				},
+			}),
+		);
+		expect(result.blockedReason).toBeUndefined();
+		// BOTH files in the MR, policy first.
+		expect(result.proposedFiles).toEqual([POLICY_PATH, TEMPLATE_PATH]);
+		expect(result.lifecycleRetargeted).toBe(true);
+		// Template commit sets the nested lifecycle.name, preserving the sibling codec setting.
+		const tpl = JSON.parse(committed[TEMPLATE_PATH]?.content ?? "{}");
+		expect(tpl.settings.index.lifecycle.name).toBe("eu-otel-logs-lifecycle-prod");
+		expect(tpl.settings.index.codec).toBe("best_compression");
+		expect(committed[TEMPLATE_PATH]?.action).toBe("update");
+		// Diff carries both the NEW-policy block and the component-template block.
+		expect(result.proposedDiff).toContain("NEW ILM policy");
+		expect(result.proposedDiff).toContain("component-template logs-generic.otel");
+		expect(result.proposedDiff).toContain("settings.index.lifecycle");
+	});
+
+	test("blocks the whole turn (no MR) when the bind target template 404s", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const policy = JSON.stringify({ name: "logs@lifecycle", delete: { min_age: "90d" } }, null, 2);
+		mockTools({
+			// policy exists; template 404s.
+			gitlab_get_file_content: (a) =>
+				String(a.filePath) === TEMPLATE_PATH ? '[404] {"message":"404 File Not Found"}' : b64(policy),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const result = await draftChange(
+			asIacState({
+				iacRequest: {
+					workflow: "ilm-rollout" as const,
+					isProd: false,
+					cluster: "eu-cld",
+					policyName: "logs@lifecycle",
+					phasesPatch: { delete: { min_age: "60d" } },
+					bindTemplate: "logs-generic.otel",
+				},
+			}),
+		);
+		expect(result.blockedReason).toContain("logs-generic.otel");
+		expect(result.blockedReason).toContain("not found");
+		expect(String(result.messages?.[0]?.content)).toContain("partial MR");
+		// No MR fields set -- the turn is blocked atomically.
+		expect(result.proposedFiles).toBeUndefined();
+		expect(result.precheckPassed).toBeUndefined();
+	});
+
+	test("a no-op bind (template already points at the policy) still proposes the policy alone", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const policy = JSON.stringify({ name: "logs@lifecycle", delete: { min_age: "90d" } }, null, 2);
+		const boundTemplate = JSON.stringify({
+			name: "logs-generic.otel@custom",
+			settings: { index: { lifecycle: { name: "logs@lifecycle" } } },
+		});
+		mockTools({
+			gitlab_get_file_content: (a) => (String(a.filePath) === TEMPLATE_PATH ? b64(boundTemplate) : b64(policy)),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const result = await draftChange(
+			asIacState({
+				iacRequest: {
+					workflow: "ilm-rollout" as const,
+					isProd: false,
+					cluster: "eu-cld",
+					policyName: "logs@lifecycle",
+					phasesPatch: { delete: { min_age: "60d" } },
+					bindTemplate: "logs-generic.otel",
+				},
+			}),
+		);
+		expect(result.blockedReason).toBeUndefined();
+		// Only the policy file -- the bind was a no-op and contributes nothing.
+		expect(result.proposedFiles).toEqual(["environments/eu-cld/lifecycle-policies/logs@lifecycle.json"]);
+		expect(result.lifecycleRetargeted).toBe(false);
+	});
+
+	test("bind-only: a no-op policy patch + bindTemplate still opens an MR for the bind", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		// Policy already has delete.min_age 90d, so patching it to 90d is a no-op.
+		const policy = JSON.stringify({ name: "logs@lifecycle", delete: { min_age: "90d" } }, null, 2);
+		const committed: Record<string, string> = {};
+		mockTools({
+			gitlab_get_file_content: (a) => (String(a.filePath) === TEMPLATE_PATH ? b64(SPARSE_TEMPLATE) : b64(policy)),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (a) => {
+				committed[String(a.file_path)] = String(a.content);
+				return "[201] {}";
+			},
+		});
+		const result = await draftChange(
+			asIacState({
+				iacRequest: {
+					workflow: "ilm-rollout" as const,
+					isProd: false,
+					cluster: "eu-cld",
+					policyName: "logs@lifecycle",
+					phasesPatch: { delete: { min_age: "90d" } }, // no-op
+					bindTemplate: "logs-generic.otel",
+				},
+			}),
+		);
+		expect(result.blockedReason).toBeUndefined();
+		// Policy skipped (no-op), only the template file is in the MR.
+		expect(result.proposedFiles).toEqual([TEMPLATE_PATH]);
+		expect(result.lifecycleRetargeted).toBe(true);
+		expect(committed[POLICY_PATH]).toBeUndefined(); // policy was never committed
+	});
+
+	test("blocks a bind combined with a multi-file (>=2) request", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({});
+		const result = await draftChange(
+			asIacState({
+				iacRequest: {
+					workflow: "ilm-rollout" as const,
+					isProd: false,
+					cluster: "eu-cld",
+					bindTemplate: "logs-generic.otel",
+					ilmPolicies: [
+						{ policyName: "metrics", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+						{ policyName: "logs", phasesPatch: { warm: { allocate: { number_of_replicas: 0 } } } },
+					],
+				},
+			}),
+		);
+		expect(result.blockedReason).toContain("multiple ILM policies");
+		expect(result.proposedFiles).toBeUndefined();
 	});
 });
 
@@ -318,6 +494,21 @@ describe("parseIntentJson — multi-file ilm (SIO-932)", () => {
 		const req = parseIntentJson(raw);
 		expect(req.policyName).toBe("metrics");
 		expect(req.sourcePolicy).toBe("logs");
+	});
+
+	// SIO-933: bindTemplate is a cluster-defaults basename; users write it with .json. Strip it for
+	// ilm-rollout (mirrors policyName/sourcePolicy); the @custom suffix lives in the file's name, not
+	// the basename, so it must NOT be stripped.
+	test("strips a trailing .json from bindTemplate for ilm-rollout", () => {
+		const raw = JSON.stringify({
+			workflow: "ilm-rollout",
+			cluster: "eu-cld",
+			policyName: "eu-otel-logs-lifecycle-prod",
+			sourcePolicy: "eu-default-lifecycle-logs-prod",
+			bindTemplate: "logs-generic.otel.json",
+		});
+		const req = parseIntentJson(raw);
+		expect(req.bindTemplate).toBe("logs-generic.otel");
 	});
 
 	test("preserves @lifecycle basenames and only removes the .json suffix", () => {
