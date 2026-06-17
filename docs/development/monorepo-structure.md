@@ -1,9 +1,9 @@
 # Monorepo Structure
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-06-17
 
-Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 11 packages, 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
+Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 16 workspace packages (5 core, 8 MCP servers, and 3 supporting packages: knowledge-graph, memory-pr, skillflow), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
 
 ---
 
@@ -46,7 +46,10 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 20-node pipeline ( correlation enforcement, typed findings, AWS estate router, mitigation branch split)
+    agent/                       LangGraph supervisor and 20-node pipeline (correlation enforcement, typed findings, AWS estate router, mitigation branch split) plus a separate 24-node elastic-iac proposer graph
+    knowledge-graph/             Optional entity + correlation knowledge graph (SIO-850, embedded LadybugDB, off by default)
+    memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
+    skillflow/                   Declarative workflow (DAG) loader + executor (SIO-848)
     mcp-server-elastic/          Elasticsearch MCP server (~93 tools: 77 cluster + 16 conditional cloud/billing on EC_API_KEY)
     mcp-server-kafka/            Kafka MCP server (15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
     mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
@@ -54,6 +57,7 @@ devops-incident-analyzer/
     mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
     mcp-server-atlassian/        Atlassian MCP server (Jira + Confluence Rovo OAuth 2.1 proxy + incident filters)
     mcp-server-aws/              AWS MCP server (~40 read-only tools across CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray + multi-estate via cross-account AssumeRole)
+    mcp-server-elastic-iac/      Elastic IaC MCP server (GitOps proposer tools for terraform/git/gitlab/elastic-cloud, port 9086)
   apps/
     web/                         SvelteKit frontend
   docs/
@@ -119,7 +123,7 @@ Key relationships:
 - **web** depends on **agent** for the LangGraph pipeline and SSE streaming
 - **agent** depends on **gitagent-bridge** (YAML manifest loading), **checkpointer** (state persistence), **observability** (tracing and logging), and **shared** (types and schemas)
 - **gitagent-bridge** reads from the `agents/` directory at runtime
-- All seven MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
+- All eight MCP servers depend on **shared** for the `createMcpApplication` bootstrap, transport abstractions, logger factory, and telemetry initialization
 - MCP servers are independent of each other and of the **agent** package -- the agent connects to them over the network via `@langchain/mcp-adapters`
 
 ---

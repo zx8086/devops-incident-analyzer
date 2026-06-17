@@ -101,10 +101,12 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | `ELASTIC_IAC_MCP_PORT` | No | `9086` | Server listen port |
 | `ELASTIC_IAC_MCP_HOST` | No | `0.0.0.0` | Server bind host |
 | `ELASTIC_IAC_MCP_PATH` | No | `/mcp` | HTTP path prefix |
-| `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `82850717` | GitLab project ID of the `observability-elastic-iac` IaC repo |
-| `ELASTIC_IAC_WORKSPACE_DIR` | No | `/tmp/elastic-iac-workspace` | Local directory the git/terraform tools clone and operate inside (never the agent's CWD) |
-| `TERRAFORM_BIN` | No | `terraform` | Path to the Terraform binary the `terraform_*` tools invoke |
-| `GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base for MRs, file blobs, and repository tree |
+| `ELASTIC_IAC_GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base for MRs, file blobs, and repository tree (SIO-891 migration name; falls back to `GITLAB_BASE_URL`) |
+| `ELASTIC_IAC_GITLAB_PROJECT` | No | `pvhcorp/dhco/observability/observability-elastic-iac` | GitLab project path of the IaC repo |
+| `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `82850717` | GitLab numeric project ID (alternative to the path) |
+| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | GitLab token used to branch/commit/open MRs (SIO-891 migration name; falls back to `GITLAB_PERSONAL_ACCESS_TOKEN`) |
+| `ELASTIC_IAC_WORKSPACE_DIR` | No | `/tmp/elastic-iac-workspace` | Local directory the git/task tools clone and operate inside (never the agent's CWD) |
+| `ELASTIC_IAC_TASK_BIN` | No | `task` | Path to the Task binary the on-demand CI/pipeline tools invoke |
 | `ELASTIC_CLOUD_BASE_URL` | No | `https://api.elastic-cloud.com` | Elastic Cloud API base for deployment / plan-history reads |
 
 ### Credentials (optional; tools degrade with a clear message when absent)
@@ -119,6 +121,27 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ELASTIC_IAC_MCP_URL` | Yes (for the IaC agent) | `http://localhost:9086` | URL the web server/agent connects to (`apps/web/src/lib/server/agent.ts`). Its `/identity` role must be `elastic-iac-mcp`. |
+| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | Agent-side GitLab token for branch/commit/MR; mirrors the MCP-side default so no extra config is needed when shared. |
+
+### Agent-side config-edit JSON path templates
+
+The config-edit proposers resolve repo file paths from templates. `${cluster}`, `${policy}`, etc. are literal placeholders the agent substitutes (config, not JS template literals). All optional with sensible repo-relative defaults; override only if the repo layout changes.
+
+| Variable | Used by |
+|----------|---------|
+| `ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE` | version-upgrade, tier-resize, topology-edit (deployment JSON) |
+| `ELASTIC_IAC_ILM_POLICY_TEMPLATE` / `ELASTIC_IAC_ILM_TEMPLATE_POLICY` | ilm-rollout (policy file path + canonical template fallback) |
+| `ELASTIC_IAC_SLO_TEMPLATE` | slo-edit |
+| `ELASTIC_IAC_ALERTING_TEMPLATE` | alerting-edit |
+| `ELASTIC_IAC_DATAVIEW_TEMPLATE` | dataview-edit |
+| `ELASTIC_IAC_CLUSTER_DEFAULT_TEMPLATE` | cluster-default-edit |
+| `ELASTIC_IAC_SPACE_TEMPLATE` | space-edit |
+| `ELASTIC_IAC_SECURITY_TEMPLATE` | security-edit |
+| `ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE` | fleet-integration |
+| `ELASTIC_IAC_DASHBOARD_TEMPLATE` | dashboard-edit |
+| `ELASTIC_IAC_STACK_CONFIG_TEMPLATE` / `ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE` | drift sub-flow |
+| `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` / `applyFleetUpgrade` poll loop (defaults `90000` / `10000`) |
+| `ELASTIC_IAC_DRIFT_CONCURRENCY`, `ELASTIC_IAC_REPORT_STACKS_EXCLUDE`, `ELASTIC_IAC_CONFIG_DEPLOYMENT_STACKS`, `ELASTIC_IAC_CONFIG_ILM_STACKS` | drift / report stack scoping |
 
 ---
 

@@ -1,7 +1,7 @@
 # Agent Pipeline
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-05-28
+> **Last updated:** 2026-06-17
 
 The agent pipeline is a LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, optional AWS estate expansion, parallel datasource querying, cross-datasource alignment, aggregation, typed-findings extraction, mandatory cross-agent correlation enforcement, confidence gating, validation, branched mitigation proposal (investigate / monitor / escalate), follow-up generation, and topic-shift detection. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence. Current node count (verified via `grep -c addNode packages/agent/src/graph.ts`): 20.
 
@@ -719,19 +719,22 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 
 The pipeline documented above answers "what is wrong?". A second, independent graph -- the **Elastic IaC GitOps proposer** (`packages/agent/src/iac/graph.ts`) -- answers "change it" for Elastic Cloud infrastructure. It is a peer, not a sub-agent: its own `IacState` annotation (`src/iac/state.ts`), its own checkpointer thread, and a separate `buildIacGraph()` entrypoint selected by the UI agent toggle (`agentName === "elastic-iac"`).
 
-It is a **pure GitOps proposer**: for a change it edits the deployment/policy JSON and opens a GitLab MR entirely via the GitLab REST API (no local clone, no `terraform`, no local git); CI computes the plan on the MR and a human merges + applies. 12 nodes:
+It is a **pure GitOps proposer**: for a config change it edits the deployment/policy JSON and opens a GitLab MR entirely via the GitLab REST API (no local clone, no `terraform`, no local git); CI computes the plan on the MR and a human merges + applies. 24 nodes:
 
 ```text
 START -> bootstrap -> {connected? classifyIacIntent : END}
-  classifyIacIntent --(info)----------> answerInfo -> END
+  classifyIacIntent --(info | converse)-> answerInfo | converseIac -> END
   classifyIacIntent --(pipeline-status)-> watchPipeline -> teardown -> END
+  classifyIacIntent --(drift)---------> detectDrift -> explainDrift -> reconcileGate [HITL] -> reconcileStack -> advanceDrift -> ... -> teardown -> END
+  classifyIacIntent --(synthetics-drift)-> detectSyntheticsDrift -> syntheticsPushGate [HITL] -> pushSynthetics -> teardown -> END
+  classifyIacIntent --(fleet-upgrade)-> detectFleetUpgrade -> fleetUpgradeGate [HITL] -> applyFleetUpgrade -> teardown -> END
   classifyIacIntent --(gitops)--------> parseIntent [iac_clarify interrupt]
     -> readClusterState -> guard -> {blocked? END : draftChange}
     -> {blocked? END : reviewPlan} -> reviewGate [iac_plan_review HITL interrupt]
        -> {approved? openMr -> watchPipeline -> teardown : teardown} -> END
 ```
 
-Three workflows ride the proposer -- **version-upgrade** (`.version`), **tier-resize** (`elasticsearch.<tier>.size`/`.max_size`), and **ilm-rollout** (a phase patch into `lifecycle-policies/<policy>.json`) -- each a config-edit `kind` that skips local terraform. `watchPipeline` reports the MR plan + approval and streams `iac_pipeline_progress`. It never applies or merges its own MR (maker/checker SoD). **Full reference: [Elastic IaC GitOps Proposer](elastic-iac-proposer.md).**
+Twelve config-edit workflows ride the `gitops` path -- version-upgrade, tier-resize, ilm-rollout, topology-edit, slo-edit, alerting-edit, dataview-edit, cluster-default-edit, space-edit, security-edit (additive), fleet-integration, dashboard-edit -- each a config-edit `kind` (the legacy local-terraform path was removed in SIO-912). Three imperative sub-flows (drift, synthetics-drift, Fleet binary upgrade) run via CI pipeline triggers behind a HITL gate. `watchPipeline` reports the MR plan + approval and streams `iac_pipeline_progress`. It never applies or merges its own MR (maker/checker SoD). **Full reference: [Elastic IaC GitOps Proposer](elastic-iac-proposer.md).**
 
 ---
 
@@ -749,3 +752,4 @@ Three workflows ride the proposer -- **version-upgrade** (`.version`), **tier-re
 | 2026-05-28 | docs drift sweep: added `awsEstateRouter` between `entityExtractor` and the fan-out; added AWS as the 7th datasource in the fan-out and tool-counts table; replaced single `proposeMitigation` block with the `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` branch + `aggregateMitigation` join; added `detectTopicShift` after `followUp`. Verified total node count is 20. Refreshed elastic and kafka tool-count rows to match current configuration. |
 | 2026-06-02 | Documented the Elastic IaC maker graph (`packages/agent/src/iac/graph.ts`) as an independent peer graph: 9 nodes, two HITL interrupts (`iac_clarify`, `iac_plan_review`), maker/checker SoD, selected via the UI agent toggle. |
 | 2026-06-03 | Replaced the stale 9-node "maker" summary with the current 12-node GitOps proposer (SIO-873/879/880): `classifyIacIntent` + `answerInfo` + `watchPipeline`, three config-edit workflows (version-upgrade / tier-resize / ilm-rollout), JSON-edit-via-GitLab-API model. Full reference moved to [elastic-iac-proposer.md](elastic-iac-proposer.md). |
+| 2026-06-17 | Updated the Elastic IaC proposer summary to 24 nodes (SIO-911..932): twelve config-edit workflows + drift / synthetics-drift / Fleet-upgrade CI sub-flows + `converseIac` follow-ups; legacy local-terraform path removed (SIO-912). |
