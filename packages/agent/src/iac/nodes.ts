@@ -10,6 +10,7 @@ import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
+import { appendDailyLog } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
 import type {
@@ -5958,6 +5959,27 @@ export function formatDriftSummary(state: IacStateType): string {
 
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
+	// SIO-938: record one durable breadcrumb per completed IaC job under the
+	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
+	// job" gap that had no code path). No-op unless LIVE_MEMORY_ENABLED; routes to
+	// the agent-memory backend when selected. Best-effort — never block the turn.
+	try {
+		const cluster = state.iacRequest?.cluster;
+		const summaryParts = [
+			state.intent ? `intent=${state.intent}` : "",
+			state.reviewDecision === "rejected" ? "rejected" : state.mrUrl ? `MR=${state.mrUrl}` : "",
+			state.pipelineStatus && state.pipelineStatus !== "unknown" ? `pipeline=${state.pipelineStatus}` : "",
+		].filter((p) => p.length > 0);
+		appendDailyLog({
+			requestId: state.requestId,
+			services: cluster ? [cluster] : [],
+			datasources: ["elastic-iac"],
+			summary: summaryParts.join(" "),
+		});
+	} catch {
+		// memory-writer already logs; never let a breadcrumb fail the turn.
+	}
+
 	// SIO-902: the synthetics flow renders its own summary (checked before "drift" since the
 	// synthetics report lives on a different channel).
 	if (state.intent === "synthetics-drift") {
