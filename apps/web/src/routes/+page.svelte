@@ -245,6 +245,12 @@ function handleSuggestionClick(suggestion: string) {
         {/if}
       {/if}
 
+      <!-- SIO-928: after the apply completes, the live ticker is cleared; surface the captured
+           timeline as a collapsed "pipeline log" inline under the result so it stays auditable. -->
+      {#if !agentStore.isStreaming && agentStore.fleetUpgradeResult?.progressLog?.length}
+        <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult.progressLog} />
+      {/if}
+
       <!-- SIO-882: drift overview. Persists across the interrupt pauses (outside the isStreaming
            gate) so it stays visible while the user works through the per-stack choices.
            SIO-901: the reconcile summary (MR links) now renders as a block BELOW this card. -->
@@ -407,12 +413,6 @@ function handleSuggestionClick(suggestion: string) {
       onApprove={() => agentStore.approveFleetUpgrade(true)}
       onDecline={() => agentStore.approveFleetUpgrade(false)}
     />
-  {/if}
-
-  <!-- SIO-928: after the apply completes, the live ticker is cleared; surface the captured timeline
-       as a collapsed "pipeline log" under the result so it stays auditable. -->
-  {#if !agentStore.isStreaming && agentStore.fleetUpgradeResult?.progressLog?.length}
-    <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult.progressLog} />
   {/if}
 
   <div class="border-t border-gray-200 bg-white">
