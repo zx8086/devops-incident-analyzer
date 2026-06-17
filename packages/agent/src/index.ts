@@ -66,6 +66,7 @@ export { normalizeIncident } from "./normalizer.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
+export { DEFAULT_PRUNING_CONFIG, needsPruning, type PruningConfig, pruneState } from "./state-pruning.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";
 export { supervise } from "./supervisor.ts";
 export { withRetry } from "./tool-retry.ts";
