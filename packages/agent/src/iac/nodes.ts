@@ -6499,6 +6499,18 @@ export function parseFleetUpgradeReport(raw: string): FleetUpgradeReport | null 
 					.map((r) => ({ reason: str(r.reason), count: num(r.count) }))
 					.filter((r) => r.reason)
 			: [];
+		// SIO-935: optional version partition. Absent in old v1 reports -> undefined (never a false
+		// all-zero block, which would read as "everything already on target").
+		const vc = o.version_crosstab;
+		const versionCrosstab =
+			vc && typeof vc === "object"
+				? {
+						alreadyOnTarget: num((vc as Record<string, unknown>).already_on_target),
+						outdated: num((vc as Record<string, unknown>).outdated),
+						versionUnknown: num((vc as Record<string, unknown>).version_unknown),
+						upgradeableOutdated: num((vc as Record<string, unknown>).upgradeable_outdated),
+					}
+				: undefined;
 		return {
 			deployment: str(o.deployment),
 			targetVersion: str(o.target_version),
@@ -6512,6 +6524,7 @@ export function parseFleetUpgradeReport(raw: string): FleetUpgradeReport | null 
 				notUpgradeable: num(xt.not_upgradeable),
 				byReason,
 			},
+			...(versionCrosstab && { versionCrosstab }),
 			generatedAt: str(o.generated_at),
 		};
 	} catch {
@@ -6580,6 +6593,7 @@ async function emitFleetReport(report: FleetUpgradeReport): Promise<void> {
 		versionAvailable: report.versionAvailable,
 		rolloutSeconds: report.rolloutSeconds,
 		crosstab: report.crosstab,
+		...(report.versionCrosstab && { versionCrosstab: report.versionCrosstab }), // SIO-935
 		planError: report.planError ?? false,
 		...(report.planErrorReason && { planErrorReason: report.planErrorReason }),
 	});
@@ -6700,10 +6714,16 @@ export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
 	const report = state.fleetUpgradeReport;
 	if (!report) return { fleetUpgradeApproved: false };
 	const { upgradeable, notUpgradeable } = report.crosstab;
+	const vc = report.versionCrosstab;
+	// SIO-935: when the version partition is present, the agents this flow ACTUALLY moves are the
+	// upgradeable-AND-outdated ones; the raw `upgradeable` can include agents already on target that
+	// bulk_upgrade would no-op. Prefer it for the headline count; fall back to `upgradeable` pre-CI.
+	const willUpgrade = vc ? vc.upgradeableOutdated : upgradeable;
 	const skipNote =
 		notUpgradeable > 0
 			? `${notUpgradeable} agent(s) are NOT Fleet-upgradeable (Wolfi/container; upgradeable:false) and will be SKIPPED -- bump their image tag upstream instead. `
 			: "";
+	const alreadyNote = vc && vc.alreadyOnTarget > 0 ? `${vc.alreadyOnTarget} are already on ${report.targetVersion} (no action). ` : "";
 	const choice = interrupt({
 		type: "fleet_upgrade_choice",
 		deployment: report.deployment,
@@ -6713,9 +6733,10 @@ export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
 		notUpgradeableCount: notUpgradeable,
 		rolloutSeconds: report.rolloutSeconds,
 		byReason: report.crosstab.byReason,
+		...(vc && { versionCrosstab: vc }), // SIO-935
 		message:
-			`${report.deployment}: ${upgradeable} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
-			`over ${report.rolloutSeconds}s. ${skipNote}` +
+			`${report.deployment}: ${willUpgrade} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
+			`over ${report.rolloutSeconds}s. ${alreadyNote}${skipNote}` +
 			"This is an imperative bulk_upgrade (not Terraform). Approve to run it via CI, or decline.",
 	}) as { approve?: boolean };
 	return { fleetUpgradeApproved: choice?.approve === true };
@@ -6886,6 +6907,10 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 		report.crosstab.notUpgradeable > 0
 			? ` ${report.crosstab.notUpgradeable} non-upgradeable agent(s) (Wolfi/container) were left for an upstream image-tag bump.`
 			: "";
+	// SIO-935: when the version partition is present, state plainly how many were already on the
+	// target (bulk_upgrade no-ops them) so the "will upgrade" count is unambiguous. Empty pre-CI.
+	const vc = report.versionCrosstab;
+	const alreadyNote = vc && vc.alreadyOnTarget > 0 ? ` ${vc.alreadyOnTarget} were already on ${report.targetVersion} (no action needed).` : "";
 	if (!report.versionAvailable) {
 		return (
 			`Target version ${report.targetVersion} is not in ${dep}'s available_versions list; ` +
@@ -6893,13 +6918,13 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 		);
 	}
 	if (report.crosstab.upgradeable === 0) {
-		return `No Fleet agents on ${dep} are upgradeable to ${report.targetVersion} (resolved ${report.resolvedCount}).${skipNote}`;
+		return `No Fleet agents on ${dep} are upgradeable to ${report.targetVersion} (resolved ${report.resolvedCount}).${alreadyNote}${skipNote}`;
 	}
 	const result = state.fleetUpgradeResult;
 	if (!result || result.status === "skipped") {
 		return (
 			`Fleet upgrade declined. No agents were upgraded. ${report.crosstab.upgradeable} agent(s) on ${dep} ` +
-			`remain eligible for ${report.targetVersion}.${skipNote}`
+			`remain eligible for ${report.targetVersion}.${alreadyNote}${skipNote}`
 		);
 	}
 	if (result.status === "applied") {
@@ -6913,7 +6938,7 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 				? ` WARNING: ${result.failedSilent} agent(s) reached UPG_FAILED (verify sweep -- Fleet action_status undercounts these). Investigate before declaring success.`
 				: " Verify sweep clean (0 UPG_FAILED).";
 		const counts = result.created != null ? ` ${result.acked ?? 0}/${result.created} acked.` : "";
-		return `Fleet upgrade to ${report.targetVersion} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${pid}${skipNote}`;
+		return `Fleet upgrade to ${report.targetVersion} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${pid}${alreadyNote}${skipNote}`;
 	}
 	// SIO-926: dispatched -- the apply STARTED and is still running past the status window. This is
 	// not a failure; report it as in-progress, name the expected duration, keep the pipeline link,

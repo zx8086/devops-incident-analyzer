@@ -254,6 +254,42 @@ describe("applyStreamEvent", () => {
 		expect(state.fleetUpgradeResult?.status).toBe("applied");
 	});
 
+	// SIO-935: the version partition flows through both events into state so the card can render
+	// "already on target / will upgrade / not Fleet-upgradeable". (The two tests above cover the
+	// back-compat path where versionCrosstab is absent and stays undefined.)
+	test("versionCrosstab flows through preview_report and choice into state", () => {
+		const vc = { alreadyOnTarget: 196, outdated: 611, versionUnknown: 0, upgradeableOutdated: 6 };
+		let state = initialReducerState();
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_preview_report",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 807,
+			versionAvailable: true,
+			rolloutSeconds: 3600,
+			crosstab: { upgradeable: 6, notUpgradeable: 801, byReason: [{ reason: "unknown", count: 601 }] },
+			versionCrosstab: vc,
+		});
+		expect(state.fleetUpgradePreview?.versionCrosstab?.alreadyOnTarget).toBe(196);
+		expect(state.fleetUpgradePreview?.versionCrosstab?.upgradeableOutdated).toBe(6);
+
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_choice",
+			threadId: "t-fleet",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 807,
+			upgradeableCount: 6,
+			notUpgradeableCount: 801,
+			rolloutSeconds: 3600,
+			byReason: [{ reason: "unknown", count: 601 }],
+			versionCrosstab: vc,
+			message: "Approve?",
+		});
+		expect(state.fleetUpgradeChoice?.versionCrosstab?.alreadyOnTarget).toBe(196);
+		expect(state.fleetUpgradeChoice?.versionCrosstab?.upgradeableOutdated).toBe(6);
+	});
+
 	// SIO-928: the apply result snapshots the live progress lines onto the result row so the
 	// timeline persists as a collapsed log AFTER the `done` handler clears iacPipelineProgress.
 	test("fleet_upgrade_apply_result captures the live progress lines as progressLog", () => {

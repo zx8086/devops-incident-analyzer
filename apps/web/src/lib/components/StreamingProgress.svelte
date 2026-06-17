@@ -39,6 +39,16 @@ const IAC_DRIFT_NODES = [
 	{ id: "pushSynthetics", activeLabel: "Pushing synthetics", completeLabel: "Pushed" },
 ] as const;
 
+// SIO-935: fleet-upgrade (binary bulk_upgrade) sub-flow. A fleet run executes ONLY these three
+// and never the maker/drift nodes, so it is rendered exclusively -- same mutual-exclusion idiom.
+// fleetUpgradeGate is an interrupt (HITL pause): its on_chain_end fires only after resume, so the
+// pill rests in the active "Awaiting approval" state during the pause, then flips to "Approved".
+const IAC_FLEET_NODES = [
+	{ id: "detectFleetUpgrade", activeLabel: "Assessing fleet", completeLabel: "Assessed" },
+	{ id: "fleetUpgradeGate", activeLabel: "Awaiting approval", completeLabel: "Approved" },
+	{ id: "applyFleetUpgrade", activeLabel: "Upgrading", completeLabel: "Upgraded" },
+] as const;
+
 let {
 	activeNodes,
 	completedNodes,
@@ -54,6 +64,8 @@ let {
 // show a half-grey row of irrelevant pills.
 const iacNodes = $derived.by(() => {
 	const seen = (id: string) => activeNodes.has(id) || completedNodes.has(id);
+	// SIO-935: fleet first -- a fleet run executes detect/gate/apply and never the drift or maker nodes.
+	if (IAC_FLEET_NODES.some((n) => seen(n.id))) return IAC_FLEET_NODES;
 	const isDrift = IAC_DRIFT_NODES.some((n) => seen(n.id));
 	return isDrift ? IAC_DRIFT_NODES : IAC_MAKER_NODES;
 });

@@ -196,6 +196,53 @@ describe("StreamEventSchema fleet_upgrade events (SIO-922)", () => {
 		).toBe("fleet_upgrade_choice");
 	});
 
+	// SIO-935: the optional version partition round-trips on both fleet events, and OMITTING it
+	// still parses (the back-compat invariant -- old CI reports carry no versionCrosstab).
+	test("versionCrosstab round-trips on preview_report + choice, and is optional", () => {
+		const vc = { alreadyOnTarget: 196, outdated: 611, versionUnknown: 0, upgradeableOutdated: 6 };
+		const preview = StreamEventSchema.parse({
+			type: "fleet_upgrade_preview_report",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 807,
+			versionAvailable: true,
+			rolloutSeconds: 3600,
+			crosstab: { upgradeable: 6, notUpgradeable: 801, byReason: [{ reason: "unknown", count: 601 }] },
+			versionCrosstab: vc,
+		});
+		if (preview.type !== "fleet_upgrade_preview_report") throw new Error("narrow");
+		expect(preview.versionCrosstab).toEqual(vc);
+
+		const choice = StreamEventSchema.parse({
+			type: "fleet_upgrade_choice",
+			threadId: "t1",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 807,
+			upgradeableCount: 6,
+			notUpgradeableCount: 801,
+			rolloutSeconds: 3600,
+			byReason: [{ reason: "unknown", count: 601 }],
+			versionCrosstab: vc,
+			message: "Approve?",
+		});
+		if (choice.type !== "fleet_upgrade_choice") throw new Error("narrow");
+		expect(choice.versionCrosstab).toEqual(vc);
+
+		// Back-compat: omitting versionCrosstab still parses (and leaves it undefined).
+		const noVc = StreamEventSchema.parse({
+			type: "fleet_upgrade_preview_report",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 807,
+			versionAvailable: true,
+			rolloutSeconds: 3600,
+			crosstab: { upgradeable: 6, notUpgradeable: 801, byReason: [] },
+		});
+		if (noVc.type !== "fleet_upgrade_preview_report") throw new Error("narrow");
+		expect(noVc.versionCrosstab).toBeUndefined();
+	});
+
 	test("parses fleet_upgrade_apply_result and rejects a wrong status", () => {
 		expect(
 			StreamEventSchema.parse({

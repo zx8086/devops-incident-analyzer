@@ -209,6 +209,14 @@ export interface SyntheticsPushResultRow {
 
 // SIO-913 / SIO-922: Fleet agent binary-upgrade sub-flow. The preview report (shown before the
 // gate), the single operator apply approve/decline interrupt, and the apply outcome.
+// SIO-935: version partition of the resolved set (optional -- absent for old CI reports).
+export interface FleetVersionCrosstab {
+	alreadyOnTarget: number;
+	outdated: number;
+	versionUnknown: number;
+	upgradeableOutdated: number;
+}
+
 export interface FleetUpgradePreview {
 	deployment: string;
 	targetVersion: string;
@@ -216,6 +224,7 @@ export interface FleetUpgradePreview {
 	versionAvailable: boolean;
 	rolloutSeconds: number;
 	crosstab: { upgradeable: number; notUpgradeable: number; byReason: Array<{ reason: string; count: number }> };
+	versionCrosstab?: FleetVersionCrosstab;
 	planError?: boolean;
 	planErrorReason?: string;
 }
@@ -229,6 +238,7 @@ export interface FleetUpgradeChoice {
 	notUpgradeableCount: number;
 	rolloutSeconds: number;
 	byReason: Array<{ reason: string; count: number }>;
+	versionCrosstab?: FleetVersionCrosstab;
 	message: string;
 }
 
@@ -535,6 +545,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					versionAvailable: event.versionAvailable,
 					rolloutSeconds: event.rolloutSeconds,
 					crosstab: event.crosstab,
+					versionCrosstab: event.versionCrosstab, // SIO-935
 					planError: event.planError,
 					planErrorReason: event.planErrorReason,
 				},
@@ -553,6 +564,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					notUpgradeableCount: event.notUpgradeableCount,
 					rolloutSeconds: event.rolloutSeconds,
 					byReason: event.byReason,
+					versionCrosstab: event.versionCrosstab, // SIO-935
 					message: event.message,
 				},
 			};
