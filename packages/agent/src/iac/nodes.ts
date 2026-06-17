@@ -3859,6 +3859,21 @@ export function parseRepoTreeDirs(toolResult: string): string[] {
 	}
 }
 
+// SIO-931: file (blob) names from a gitlab_get_repository_tree response, the sibling-policy
+// counterpart to parseRepoTreeDirs. Used to pick a structural template for a from-scratch ILM
+// policy. (Pure; unit-tested.)
+export function parseRepoTreeFiles(toolResult: string): string[] {
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return [];
+	try {
+		const arr = JSON.parse(toolResult.slice(m.index)) as Array<{ name?: unknown; type?: unknown }>;
+		if (!Array.isArray(arr)) return [];
+		return arr.filter((e) => e.type === "blob" && typeof e.name === "string").map((e) => e.name as string);
+	} catch {
+		return [];
+	}
+}
+
 // Deployment names from elastic_cloud_list_deployments' "[status] {deployments:[{name}]}".
 // (Pure; unit-tested.)
 export function parseEcDeploymentNames(toolResult: string): string[] {

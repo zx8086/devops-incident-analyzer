@@ -2,7 +2,7 @@
 // SIO-931: copy-from-reference. parseIntentJson lifts sourcePolicy; proposeIlmChange uses the
 // source policy as the (correctly-shaped) base and merges overrides.
 import { describe, expect, test } from "bun:test";
-import { parseIntentJson } from "./nodes.ts";
+import { parseIntentJson, parseRepoTreeFiles } from "./nodes.ts";
 
 describe("parseIntentJson sourcePolicy (SIO-931)", () => {
 	test("lifts sourcePolicy + policyName from a copy request", () => {
@@ -29,5 +29,20 @@ describe("parseIntentJson sourcePolicy (SIO-931)", () => {
 			}),
 		);
 		expect(req.sourcePolicy).toBeUndefined();
+	});
+});
+
+describe("parseRepoTreeFiles (SIO-931)", () => {
+	test("returns blob names, ignoring trees", () => {
+		const tree = `[200] ${JSON.stringify([
+			{ name: "basic-lifecycle-logs.json", type: "blob" },
+			{ name: "us-default-lifecycle-logs-prod.json", type: "blob" },
+			{ name: "subdir", type: "tree" },
+		])}`;
+		expect(parseRepoTreeFiles(tree)).toEqual(["basic-lifecycle-logs.json", "us-default-lifecycle-logs-prod.json"]);
+	});
+
+	test("empty on unparseable", () => {
+		expect(parseRepoTreeFiles("[404] not found")).toEqual([]);
 	});
 });
