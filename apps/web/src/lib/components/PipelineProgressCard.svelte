@@ -46,11 +46,12 @@ let {
           <Icon name="bot" class="w-3.5 h-3.5 text-tommy-navy" />
         </div>
         <div class="max-w-[85%]">
-          <details class="bg-gray-50 rounded-lg border border-gray-200">
-            <summary class="cursor-pointer select-none px-3 py-2 text-xs text-tommy-navy/70 flex items-center gap-1.5 hover:text-tommy-navy">
-              <Icon name="chevron-down" class="w-3 h-3" />
-              <span>Pipeline log ({lines.length} {lines.length === 1 ? "step" : "steps"})</span>
-            </summary>
+          <!-- SIO-941: post-completion log is always expanded (no collapsible disclosure) so the
+               timeline reads inline above the result without an extra click. -->
+          <div class="bg-gray-50 rounded-lg border border-gray-200">
+            <div class="px-3 py-2 text-xs text-tommy-navy/70">
+              Pipeline log ({lines.length} {lines.length === 1 ? "step" : "steps"})
+            </div>
             <ul class="px-3 pb-2 space-y-0.5 font-mono text-[0.7rem] text-tommy-navy/70">
               {#each lines as line, i (i)}
                 <li class="flex items-start gap-1.5">
@@ -59,7 +60,7 @@ let {
                 </li>
               {/each}
             </ul>
-          </details>
+          </div>
         </div>
       </div>
     </div>
