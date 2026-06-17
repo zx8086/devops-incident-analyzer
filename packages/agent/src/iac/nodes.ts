@@ -6710,20 +6710,40 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 // The single operator approve/decline interrupt. Only reached when hasApplicableFleetUpgrade
 // is true (graph edge enforces). Surfaces the resolved/upgradeable counts + the not-upgradeable
 // (Wolfi/container) agents that will be SKIPPED. Resume payload {approve: boolean}.
-export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
-	const report = state.fleetUpgradeReport;
-	if (!report) return { fleetUpgradeApproved: false };
+// The fleet-upgrade gate card's headline count, scaled rollout window, and prose. Pure + unit-
+// tested (the gate itself throws a GraphInterrupt that can't be introspected outside a graph run).
+// willUpgrade = the upgradeable-AND-outdated set when the version partition (SIO-935) is present,
+// else the raw upgradeable; rollout = SIO-936 dynamic window from that count.
+export function buildFleetGateMessage(report: FleetUpgradeReport): {
+	willUpgrade: number;
+	rollout: number;
+	message: string;
+} {
 	const { upgradeable, notUpgradeable } = report.crosstab;
 	const vc = report.versionCrosstab;
-	// SIO-935: when the version partition is present, the agents this flow ACTUALLY moves are the
-	// upgradeable-AND-outdated ones; the raw `upgradeable` can include agents already on target that
-	// bulk_upgrade would no-op. Prefer it for the headline count; fall back to `upgradeable` pre-CI.
 	const willUpgrade = vc ? vc.upgradeableOutdated : upgradeable;
 	const skipNote =
 		notUpgradeable > 0
 			? `${notUpgradeable} agent(s) are NOT Fleet-upgradeable (Wolfi/container; upgradeable:false) and will be SKIPPED -- bump their image tag upstream instead. `
 			: "";
-	const alreadyNote = vc && vc.alreadyOnTarget > 0 ? `${vc.alreadyOnTarget} are already on ${report.targetVersion} (no action). ` : "";
+	const alreadyNote =
+		vc && vc.alreadyOnTarget > 0 ? `${vc.alreadyOnTarget} are already on ${report.targetVersion} (no action). ` : "";
+	// SIO-936: stagger window scales with the agents this flow actually moves (not the script's
+	// fixed 3600s default), so the card no longer reads "4 agents over 3600s".
+	const rollout = dynamicRolloutSeconds(willUpgrade);
+	const message =
+		`${report.deployment}: ${willUpgrade} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
+		`over ${rollout}s. ${alreadyNote}${skipNote}` +
+		"This is an imperative bulk_upgrade (not Terraform). Approve to run it via CI, or decline.";
+	return { willUpgrade, rollout, message };
+}
+
+export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
+	const report = state.fleetUpgradeReport;
+	if (!report) return { fleetUpgradeApproved: false };
+	const { upgradeable, notUpgradeable } = report.crosstab;
+	const vc = report.versionCrosstab;
+	const { rollout, message } = buildFleetGateMessage(report);
 	const choice = interrupt({
 		type: "fleet_upgrade_choice",
 		deployment: report.deployment,
@@ -6731,13 +6751,10 @@ export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
 		resolvedCount: report.resolvedCount,
 		upgradeableCount: upgradeable,
 		notUpgradeableCount: notUpgradeable,
-		rolloutSeconds: report.rolloutSeconds,
+		rolloutSeconds: rollout,
 		byReason: report.crosstab.byReason,
 		...(vc && { versionCrosstab: vc }), // SIO-935
-		message:
-			`${report.deployment}: ${willUpgrade} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
-			`over ${report.rolloutSeconds}s. ${alreadyNote}${skipNote}` +
-			"This is an imperative bulk_upgrade (not Terraform). Approve to run it via CI, or decline.",
+		message,
 	}) as { approve?: boolean };
 	return { fleetUpgradeApproved: choice?.approve === true };
 }
@@ -6749,13 +6766,17 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	const report = state.fleetUpgradeReport;
 	if (!report) return {};
 	const { deployment, targetVersion } = report;
+	// SIO-936: send the agent-count-scaled stagger window to the bulk_upgrade (the MCP tool forwards
+	// it to ROLLOUT_SECONDS -> the script's rollout_duration_seconds). Same formula the gate showed.
+	const willUpgrade = report.versionCrosstab?.upgradeableOutdated ?? report.crosstab.upgradeable;
+	const rollout = dynamicRolloutSeconds(willUpgrade);
 
 	// SIO-927: the apply CI script refuses when resolved_count exceeds its blast-radius cap (default
 	// 500). The operator has already approved THIS report's resolved set at fleetUpgradeGate, so pass
 	// resolvedCount as MAX_AGENTS -- approval == accepting the full blast radius. Preview stays uncapped
 	// (we never send MAX_AGENTS on the preview trigger). Fleet's separate 10000 hard cap still applies.
 	log.info(
-		{ deployment, version: targetVersion, maxAgents: report.resolvedCount },
+		{ deployment, version: targetVersion, maxAgents: report.resolvedCount, rolloutSeconds: rollout },
 		"iac fleet upgrade: triggering apply",
 	);
 	const trig = parseTriggerResult(
@@ -6763,6 +6784,7 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 			deployment,
 			version: targetVersion,
 			maxAgents: report.resolvedCount,
+			rolloutSeconds: rollout,
 		}),
 	);
 	if (trig.pipelineId === null) {
@@ -6785,7 +6807,7 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 		pipelineId: trig.pipelineId,
 		status:
 			`fleet apply: started -- ${report.crosstab.upgradeable} agent(s) -> ${targetVersion}, ` +
-			`expected ${formatRolloutDuration(report.rolloutSeconds)}`,
+			`expected ${formatRolloutDuration(rollout)}`,
 	});
 
 	// SIO-924: stream live apply progress like watchPipeline, so the user can TRACK the imperative
@@ -6881,6 +6903,19 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	};
 }
 
+// SIO-936: Fleet's rollout_duration_seconds staggers agent restarts to avoid a thundering herd.
+// Scale it with the number of agents this flow actually moves: ~30s/agent, clamped to Fleet's
+// 600s API minimum (the script rejects anything lower) and a 3600s ceiling. A fixed 3600s for a
+// handful of agents reads as a fake hour-long op; too small a window for a large fleet risks a
+// mass simultaneous restart -- the clamp gives both ends a sane value. (Pure; unit-tested.)
+export function dynamicRolloutSeconds(agentCount: number): number {
+	const PER_AGENT = 30;
+	const FLOOR = 600;
+	const CEIL = 3600;
+	if (!Number.isFinite(agentCount) || agentCount <= 0) return FLOOR;
+	return Math.min(CEIL, Math.max(FLOOR, Math.round(agentCount * PER_AGENT)));
+}
+
 // SIO-926: turn a rollout window (seconds) into a human "expected duration" phrase, used both up
 // front at apply time and in the dispatched summary so the user knows how long the bulk_upgrade
 // takes. <2h renders in minutes (the common case: a 3600s rollout reads "~60 min"); >=2h in hours.
@@ -6910,7 +6945,10 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 	// SIO-935: when the version partition is present, state plainly how many were already on the
 	// target (bulk_upgrade no-ops them) so the "will upgrade" count is unambiguous. Empty pre-CI.
 	const vc = report.versionCrosstab;
-	const alreadyNote = vc && vc.alreadyOnTarget > 0 ? ` ${vc.alreadyOnTarget} were already on ${report.targetVersion} (no action needed).` : "";
+	const alreadyNote =
+		vc && vc.alreadyOnTarget > 0
+			? ` ${vc.alreadyOnTarget} were already on ${report.targetVersion} (no action needed).`
+			: "";
 	if (!report.versionAvailable) {
 		return (
 			`Target version ${report.targetVersion} is not in ${dep}'s available_versions list; ` +
