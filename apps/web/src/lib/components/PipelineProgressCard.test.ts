@@ -1,6 +1,7 @@
 // apps/web/src/lib/components/PipelineProgressCard.test.ts
-// SIO-928: the IaC pipeline-progress lines render as an avatar + card (live) or a collapsed
-// <details> log (after completion), never as bare floating text. These lock in both variants.
+// SIO-928: the IaC pipeline-progress lines render as an avatar + card (live) or, after completion,
+// an always-expanded log (SIO-941: no longer a collapsible <details>), never as bare floating text.
+// These lock in both variants.
 import { describe, expect, test } from "bun:test";
 import { render } from "svelte/server";
 import PipelineProgressCard from "./PipelineProgressCard.svelte";
@@ -30,11 +31,11 @@ describe("PipelineProgressCard", () => {
 		expect(body).not.toContain("<details");
 	});
 
-	test("collapsed variant uses a <details> log, closed by default, with a pluralised step count", () => {
+	test("collapsed variant renders an always-expanded log (no <details>) with a pluralised step count", () => {
 		const { body } = render(PipelineProgressCard, { props: { lines, variant: "collapsed" } });
-		expect(body).toContain("<details");
-		// closed by default -> no `open` attribute on the details element
-		expect(body).not.toMatch(/<details[^>]*\sopen/);
+		// SIO-941: the post-completion log is no longer collapsible -- steps show inline.
+		expect(body).not.toContain("<details");
+		expect(body).not.toContain("<summary");
 		expect(body).toContain("Pipeline log (2 steps)");
 		for (const line of lines) expect(body).toContain(line);
 	});
