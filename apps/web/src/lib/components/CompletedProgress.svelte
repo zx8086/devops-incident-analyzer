@@ -3,7 +3,11 @@
 import type { DataSourceFindings } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
 
+// SIO-934: incident-graph + elastic-iac node labels. IaC completed-labels mirror
+// StreamingProgress's IAC_MAKER_NODES/IAC_DRIFT_NODES completeLabels so the live and historical
+// panels read identically. Unmapped ids fall back to the raw id (NODE_LABELS[id] ?? id).
 const NODE_LABELS: Record<string, string> = {
+	// incident pipeline
 	classify: "Classified",
 	entityExtractor: "Extracted",
 	queryDataSource: "Queried",
@@ -11,6 +15,29 @@ const NODE_LABELS: Record<string, string> = {
 	aggregate: "Analyzed",
 	extractFindings: "Findings",
 	validate: "Validated",
+	// elastic-iac maker graph
+	bootstrap: "Bootstrapped",
+	parseIntent: "Parsed",
+	readClusterState: "Read state",
+	guard: "Checked",
+	draftChange: "Drafted",
+	reviewPlan: "Prepared",
+	reviewGate: "Reviewed",
+	openMr: "MR opened",
+	teardown: "Finished",
+	// elastic-iac drift sub-flow
+	detectDrift: "Drift detected",
+	reconcileGate: "Reviewed",
+	reconcileStack: "Reconciled",
+	advanceDrift: "Advanced",
+	// elastic-iac synthetics drift sub-flow
+	detectSyntheticsDrift: "Synthetics checked",
+	syntheticsPushGate: "Reviewed",
+	pushSynthetics: "Pushed",
+	// elastic-iac fleet upgrade sub-flow
+	detectFleetUpgrade: "Upgrade checked",
+	fleetUpgradeGate: "Reviewed",
+	applyFleetUpgrade: "Upgrade applied",
 };
 
 interface DataSourceStatus {

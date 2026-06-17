@@ -1,0 +1,63 @@
+// apps/web/src/lib/components/CompletedProgress.test.ts
+// SIO-934: CompletedProgress is the single source of truth for whether a trace renders
+// (ChatMessage now only gates on !isStreaming). These lock its self-gating (hasContent),
+// the per-outcome chip label, and that completedNodes ALONE is enough to render -- the case
+// that an elastic-iac resume turn produces (nodes carried forward, no other metadata).
+import { describe, expect, test } from "bun:test";
+import { render } from "svelte/server";
+import CompletedProgress from "./CompletedProgress.svelte";
+
+describe("CompletedProgress self-gating (SIO-934)", () => {
+	test("renders the chip from completedNodes alone (no responseTime/tools/findings)", () => {
+		const { body } = render(CompletedProgress, {
+			props: { completedNodes: new Map([["openMr", { duration: 800 }]]) },
+		});
+		expect(body).toContain("Completed");
+	});
+
+	test("renders no chip when there is no content at all", () => {
+		// SSR still emits {#if} comment markers, so assert on the absence of chip text,
+		// not an empty string.
+		const { body } = render(CompletedProgress, { props: {} });
+		expect(body).not.toContain("Completed");
+		expect(body).not.toContain("Pipeline");
+	});
+
+	test("renders no chip for an empty completedNodes map and no other signal", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: new Map() } });
+		expect(body).not.toContain("Completed");
+		expect(body).not.toContain("Pipeline");
+	});
+});
+
+describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
+	const nodes = new Map([["draftChange", { duration: 1224 }]]);
+
+	test("completed -> green 'Completed'", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "completed" } });
+		expect(body).toContain("Completed");
+	});
+
+	test("blocked -> amber 'Blocked'", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "blocked" } });
+		expect(body).toContain("Blocked");
+		expect(body).not.toContain("Completed");
+	});
+
+	test("rejected -> amber 'Plan rejected'", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "rejected" } });
+		expect(body).toContain("Plan rejected");
+	});
+
+	test("pipeline-failed -> red 'Pipeline failed'", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "pipeline-failed" } });
+		expect(body).toContain("Pipeline failed");
+	});
+
+	test("completed chip shows the response time when present", () => {
+		const { body } = render(CompletedProgress, {
+			props: { completedNodes: nodes, responseTime: 13166, outcome: "completed" },
+		});
+		expect(body).toContain("13.2s");
+	});
+});
