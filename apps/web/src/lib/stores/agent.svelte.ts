@@ -106,6 +106,41 @@ function createAgentStore() {
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
+	// SIO-934: build the finalized assistant message from the current live turn state.
+	// Shared by sendMessage / resumeIac / resolveTopicShift so every code path persists the
+	// same trace + outcome + feedback metadata (previously resumeIac dropped responseTime/
+	// outcome/toolsUsed, so resumed turns failed the trace gate and always showed "Completed").
+	function buildAssistantMessage(content: string): ChatMessage {
+		return {
+			role: "assistant",
+			content,
+			suggestions: [...lastSuggestions],
+			responseTime: lastResponseTime,
+			toolsUsed: [...lastToolsUsed],
+			completedNodes: new Map(completedNodes),
+			dataSourceResults: new Map(dataSourceProgress),
+			dataSourceFindings: new Map(dataSourceFindings),
+			feedback: null,
+			runId: lastRunId,
+			confidence: lastConfidence,
+			outcome: lastOutcome,
+		};
+	}
+
+	// SIO-934: an elastic-iac turn that paused on an interrupt (plan-review / clarify /
+	// reconcile / synthetics-push / fleet-upgrade gate) is the SAME logical turn continuing;
+	// the resume leg must keep accumulating onto the pipeline rather than starting blank. Used
+	// to decide whether the stream's finally preserves the live completedNodes ticker.
+	function isPausedOnIacInterrupt(): boolean {
+		return (
+			iacPlanReview !== null ||
+			iacClarify !== null ||
+			iacReconcileChoice !== null ||
+			syntheticsPushChoice !== null ||
+			fleetUpgradeChoice !== null
+		);
+	}
+
 	async function sendMessage(content: string, followUpContext?: FollowUpContext) {
 		if (isStreaming || !content.trim()) return;
 
@@ -184,32 +219,22 @@ function createAgentStore() {
 		} finally {
 			abortController = null;
 			if (currentContent) {
-				messages = [
-					...messages,
-					{
-						role: "assistant",
-						content: currentContent,
-						suggestions: [...lastSuggestions],
-						responseTime: lastResponseTime,
-						toolsUsed: [...lastToolsUsed],
-						completedNodes: new Map(completedNodes),
-						dataSourceResults: new Map(dataSourceProgress),
-						dataSourceFindings: new Map(dataSourceFindings),
-						feedback: null,
-						runId: lastRunId,
-						confidence: lastConfidence,
-						outcome: lastOutcome,
-					},
-				];
+				messages = [...messages, buildAssistantMessage(currentContent)];
 				currentContent = "";
 			}
 			isStreaming = false;
 			activeNodes = new Set();
-			completedNodes = new Map();
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
-			iacPipelineProgress = [];
+			// SIO-934: when this turn paused on an IaC interrupt, the resume leg continues the
+			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
+			// resumeIac accumulates onto it instead of resetting to just the post-resume nodes.
+			// (A brand-new turn resets these at the top of sendMessage, so nothing bleeds over.)
+			if (!isPausedOnIacInterrupt()) {
+				completedNodes = new Map();
+				iacPipelineProgress = [];
+			}
 		}
 	}
 
@@ -461,7 +486,11 @@ function createAgentStore() {
 		isStreaming = true;
 		currentContent = "";
 		activeNodes = new Set();
-		completedNodes = new Map();
+		// SIO-934: do NOT reset completedNodes here -- this resume continues the SAME turn that
+		// paused at the interrupt, so leg 2 (e.g. openMr -> watchPipeline) must accumulate onto the
+		// pipeline already built in leg 1 (parseIntent ... reviewPlan). Resetting here is what made
+		// the live panel show only "MR opened" with all earlier nodes greyed. (iacPipelineProgress
+		// is the separate watch-ticker; it stays per-leg and is reset above, as before.)
 		try {
 			const response = await fetch("/api/agent/iac/resume", {
 				method: "POST",
@@ -481,17 +510,22 @@ function createAgentStore() {
 			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
 		} finally {
 			if (currentContent) {
-				messages = [
-					...messages,
-					{ role: "assistant", content: currentContent, completedNodes: new Map(completedNodes), feedback: null },
-				];
+				// SIO-934: persist the full trace + outcome metadata (was: content + completedNodes
+				// only, which dropped responseTime/outcome/toolsUsed so resumed turns failed the
+				// trace gate and always rendered a green "Completed" chip).
+				messages = [...messages, buildAssistantMessage(currentContent)];
 				currentContent = "";
 			}
 			isStreaming = false;
 			activeNodes = new Set();
-			completedNodes = new Map();
-			// SIO-876: the final status+plan+approval now lives in the message; clear the
-			// live ticker so it doesn't linger.
+			// SIO-934: a chained interrupt (e.g. clarify -> plan-review, or the per-stack reconcile
+			// loop) means the turn pauses again -- keep completedNodes so the next resume leg keeps
+			// building the same pipeline. Only clear once the turn truly ends.
+			if (!isPausedOnIacInterrupt()) {
+				completedNodes = new Map();
+			}
+			// SIO-876: the final status+plan+approval now lives in the message; clear the live
+			// watch-ticker so it doesn't linger (per-leg; unchanged from before SIO-934).
 			iacPipelineProgress = [];
 		}
 	}
@@ -551,23 +585,8 @@ function createAgentStore() {
 			currentContent += `\n\n[Error resuming after topic-shift decision: ${error instanceof Error ? error.message : String(error)}]`;
 		} finally {
 			if (currentContent) {
-				messages = [
-					...messages,
-					{
-						role: "assistant",
-						content: currentContent,
-						suggestions: [...lastSuggestions],
-						responseTime: lastResponseTime,
-						toolsUsed: [...lastToolsUsed],
-						completedNodes: new Map(completedNodes),
-						dataSourceResults: new Map(dataSourceProgress),
-						dataSourceFindings: new Map(dataSourceFindings),
-						feedback: null,
-						runId: lastRunId,
-						confidence: lastConfidence,
-						outcome: lastOutcome,
-					},
-				];
+				// SIO-934: shared finalizer (was an inline literal duplicating sendMessage's).
+				messages = [...messages, buildAssistantMessage(currentContent)];
 				currentContent = "";
 			}
 			isStreaming = false;

@@ -193,3 +193,71 @@ describe("ChatMessage placement", () => {
 		expect(cardIdx).toBeGreaterThan(markdownIdx);
 	});
 });
+
+// SIO-934: the CompletedProgress trace chip must render whenever the message has ANY
+// content for it -- crucially including pipeline nodes alone (an elastic-iac turn carries
+// completedNodes but no responseTime/toolsUsed/dataSources). The old gate omitted
+// completedNodes/outcome, so those turns showed no trace at all. ChatMessage now just
+// gates on !isStreaming and lets CompletedProgress.hasContent decide.
+describe("CompletedProgress trace gate (SIO-934)", () => {
+	test("renders the trace chip for a completedNodes-only message (no responseTime/tools/findings)", () => {
+		const message: ChatMessageType = {
+			role: "assistant",
+			content: "MR opened: https://gitlab.example/mr/1",
+			completedNodes: new Map([
+				["parseIntent", { duration: 1200 }],
+				["openMr", { duration: 800 }],
+			]),
+		};
+		const { body } = render(ChatMessage, { props: { message, index: 0 } });
+		// Default outcome chip label.
+		expect(body).toContain("Completed");
+	});
+
+	test("renders the amber 'Blocked' chip for a blocked outcome with nodes", () => {
+		const message: ChatMessageType = {
+			role: "assistant",
+			content: "No change needed.",
+			completedNodes: new Map([["draftChange", { duration: 1224 }]]),
+			outcome: "blocked",
+		};
+		const { body } = render(ChatMessage, { props: { message, index: 0 } });
+		expect(body).toContain("Blocked");
+		// A blocked turn must NOT show the green "Completed" label.
+		expect(body).not.toContain("Completed");
+	});
+
+	test("renders the 'Plan rejected' chip for a rejected resume turn", () => {
+		// Mirrors a resumeIac turn after the user rejects the plan-review gate.
+		const message: ChatMessageType = {
+			role: "assistant",
+			content: "Plan rejected. No merge request opened.",
+			completedNodes: new Map([
+				["parseIntent", { duration: 900 }],
+				["reviewPlan", { duration: 1500 }],
+			]),
+			responseTime: 8000,
+			outcome: "rejected",
+		};
+		const { body } = render(ChatMessage, { props: { message, index: 0 } });
+		expect(body).toContain("Plan rejected");
+	});
+
+	test("renders NO trace chip for an empty assistant message (no nodes/time/tools/findings)", () => {
+		// Guards against over-loosening the gate: a bare message must not sprout a chip.
+		const message: ChatMessageType = { role: "assistant", content: "Just a sentence." };
+		const { body } = render(ChatMessage, { props: { message, index: 0 } });
+		expect(body).not.toContain("Completed");
+		expect(body).not.toContain("Blocked");
+	});
+
+	test("renders no trace chip while streaming even when nodes exist", () => {
+		const message: ChatMessageType = {
+			role: "assistant",
+			content: "streaming...",
+			completedNodes: new Map([["parseIntent", { duration: 900 }]]),
+		};
+		const { body } = render(ChatMessage, { props: { message, index: 0, isStreaming: true, isLast: true } });
+		expect(body).not.toContain("Completed");
+	});
+});
