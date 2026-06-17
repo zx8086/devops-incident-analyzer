@@ -122,6 +122,8 @@ const IntentSchema = z.object({
 	dataviewDisplayName: z.string().nullish(),
 	templateName: z.string().nullish(),
 	totalShardsPerNode: z.number().nullish(),
+	// SIO-933: ilm-rollout optional component-template bind (cluster-defaults file basename, no .json).
+	bindTemplate: z.string().nullish(),
 	spaceName: z.string().nullish(),
 	spaceDisplayName: z.string().nullish(),
 	spaceDescription: z.string().nullish(),
@@ -219,6 +221,11 @@ export function parseIntentJson(raw: string): IacRequest {
 					dataviewDisplayName: nn(p.dataviewDisplayName),
 					templateName: nn(p.templateName),
 					totalShardsPerNode: nn(p.totalShardsPerNode),
+					// SIO-933: bindTemplate is a cluster-defaults file basename; users write it with .json
+					// ("bind logs-generic.otel.json"), so strip a trailing .json for ilm-rollout (mirrors
+					// policyName/sourcePolicy). The @custom suffix lives in the file's `name`, NOT the
+					// basename, so it is never stripped.
+					bindTemplate: isIlm ? stripJsonExt(nn(p.bindTemplate)) : nn(p.bindTemplate),
 					spaceName: nn(p.spaceName),
 					spaceDisplayName: nn(p.spaceDisplayName),
 					spaceDescription: nn(p.spaceDescription),
@@ -484,6 +491,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"{ snapshot_repository, force_merge_index }`, and `wait_for_snapshot: { policy }` -- never the flattened " +
 		"underscore forms. Durations are strings like '60d'; retention is delete.min_age. Patch ONLY the fields to " +
 		"change for an existing policy; for a copy, prefer sourcePolicy over restating every field. " +
+		"If the user ALSO asks to POINT / BIND / SET / ATTACH a component template (or index template / cluster-defaults " +
+		"template) to the new or changed policy -- e.g. 'create logs@lifecycle and bind the logs-generic.otel template to " +
+		"it', 'point the traces-generic.otel component template at this policy' -- set `bindTemplate` to that template file " +
+		"BASENAME WITHOUT the .json extension and WITHOUT the '@custom' suffix (e.g. 'logs-generic.otel', " +
+		"'traces-generic.otel'). This binds settings.index.lifecycle.name in that one template file to the policy, " +
+		"committed in the SAME merge request. Set bindTemplate ONLY when the user explicitly asks to bind/point/attach a " +
+		"template's lifecycle; a plain policy edit leaves it null. bindTemplate works with a SINGLE policy only -- if the " +
+		"user names multiple policy files AND a bind, do NOT set bindTemplate. " +
 		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-cld to 6.15.0', 'pin kafka to " +
 		"1.28.0 on eu-cld', 'update the system integration package to 2.18.0') -- note this is the integration PACKAGE " +
 		"version, NOT a Fleet AGENT binary upgrade and NOT a cluster version -- set workflow to 'fleet-integration', cluster " +
@@ -515,7 +530,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"ap-cld') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
 		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
 		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
-		"integer the user gave. " +
+		"integer the user gave. cluster-default-edit changes total_shards_per_node ONLY; if the user instead wants to bind " +
+		"a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT cluster-default-edit. " +
 		"For a SPACE change ('rename the developer-experience space description on eu-cld', 'change the apps space color') " +
 		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
 		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
@@ -1505,6 +1521,31 @@ export function setClusterDefaultShards(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== totalShardsPerNode };
 }
 
+// SIO-933: read-modify-write a cluster-defaults component-template JSON: set the nested
+// settings.index.lifecycle.name (the ILM binding). Creates the nested path if absent (the
+// `lifecycle` object often doesn't exist in a sparse template yet). Preserves every other setting +
+// 2-space indent + trailing newline. Captures the previous name for the diff + no-op guard. Throws
+// on bad JSON. Mirrors setClusterDefaultShards. (Pure; unit-tested.)
+export function setComponentTemplateLifecycleName(
+	json: string,
+	policyName: string,
+): { content: string; previous?: string; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("component-template JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const settings = (obj.settings ?? {}) as Record<string, unknown>;
+	const index = (settings.index ?? {}) as Record<string, unknown>;
+	const lifecycle = (index.lifecycle ?? {}) as Record<string, unknown>;
+	const previous = typeof lifecycle.name === "string" ? lifecycle.name : undefined;
+	lifecycle.name = policyName;
+	index.lifecycle = lifecycle;
+	settings.index = index;
+	obj.settings = settings;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== policyName };
+}
+
 // SIO-918: agent-side path for a per-deployment per-space JSON. ${cluster}/${space} are literal
 // placeholders. One file per space under environments/<cluster>/spaces/.
 function spaceTemplate(): string {
@@ -1873,7 +1914,10 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 // union so the caller (single- or multi-policy) handles a block uniformly. On ok=true the file is
 // already committed to `branch`; the caller aggregates filePath/diffLines/retentionChange/policyCreated.
 type IlmCommitResult =
-	| { ok: false; blockedReason: string; message: string }
+	// SIO-933: `noop` marks the "already has the requested values" block specifically (vs a real
+	// failure like a read/parse/commit error). The single-file proposer treats a noop policy + a
+	// pending bindTemplate as "skip the policy, still do the bind"; every other false is a hard block.
+	| { ok: false; blockedReason: string; message: string; noop?: boolean }
 	| {
 			ok: true;
 			filePath: string;
@@ -1998,6 +2042,7 @@ async function commitOneIlmPolicy(
 		if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 			return {
 				ok: false,
+				noop: true, // SIO-933: distinguishes "nothing to change" from a real failure (bind-only path).
 				blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
 				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
 			};
@@ -2005,7 +2050,8 @@ async function commitOneIlmPolicy(
 	}
 
 	// SIO-931: structural gate -- never commit a policy CI's terraform plan would reject.
-	const valid = validateIlmPolicy(JSON.parse(updated.content));
+	const updatedObj = JSON.parse(updated.content) as Record<string, unknown>;
+	const valid = validateIlmPolicy(updatedObj);
 	if (!valid.ok) {
 		return {
 			ok: false,
@@ -2056,12 +2102,117 @@ async function commitOneIlmPolicy(
 			}
 		}
 	};
-	walk(updated.previous, patchObj, "");
+	// SIO-933: a CREATE (copy or from-scratch) has no prior values, and on a copy the committed file
+	// is mostly inherited fields that are NOT in patchObj (the diff used to show only the overrides,
+	// hiding the renamed `name` and every inherited phase -- so the reviewer couldn't confirm the
+	// copy). Walk the FULL resulting policy with an empty `prev` so every leaf renders as an addition.
+	// A MODIFY keeps the terse per-override walk (its prior values are real and only the patch changed).
+	if (policyCreated) {
+		walk({}, updatedObj, "");
+	} else {
+		walk(updated.previous, patchObj, "");
+	}
 
 	return { ok: true, filePath, diffLines, retentionChange, policyCreated };
 }
 
+// SIO-933: bind a cluster-defaults component-template to a policy by setting its nested
+// settings.index.lifecycle.name, committed onto the SAME caller-created branch as the ILM policy
+// (one branch -> one MR). Returns the IlmCommitResult shape so the proposer aggregates it exactly
+// like a policy commit. A 404 on the template BLOCKS the whole turn (atomic -- never open a half
+// MR). A no-op (already bound to this policy) returns ok:true + skipped so the caller keeps a real
+// policy change while skipping only this commit. The bound template is NOT structurally validated
+// (validateIlmPolicy is for ILM policy files); consistent with proposeClusterDefaultChange.
+async function commitBoundTemplate(
+	cluster: string,
+	branch: string,
+	bindTemplate: string,
+	policyName: string,
+): Promise<IlmCommitResult & { skipped?: boolean }> {
+	// clusterDefaultTemplate() carries a ${template} placeholder that deploymentJsonPath does not
+	// substitute (it only does ${cluster}/${policy}), so replace it here exactly as
+	// proposeClusterDefaultChange does.
+	const filePath = deploymentJsonPath(clusterDefaultTemplate(), cluster).replace(/\$\{template\}/g, bindTemplate);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			ok: false,
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			message: "Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.",
+		};
+	}
+	// A real 404 means the bind target isn't tracked in IaC -- block the whole turn (atomic; no MR).
+	if (isGitlabNotFound(raw)) {
+		return {
+			ok: false,
+			blockedReason: `Bind target component-template '${bindTemplate}' not found on '${cluster}' (${filePath}).`,
+			message: `I won't open a partial MR: the component-template to bind ('${bindTemplate}') does not exist on '${cluster}' (${filePath}). Check the template basename, or create it first.`,
+		};
+	}
+	// SIO-921 idiom: an UNKNOWN read (neither 2xx nor 404) must block, not fall through.
+	if (!isGitlabSuccess(raw)) {
+		return {
+			ok: false,
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			message: "Cannot propose the change: I could not read the bind-target template from the GitOps repo.",
+		};
+	}
+
+	let updated: ReturnType<typeof setComponentTemplateLifecycleName>;
+	try {
+		updated = setComponentTemplateLifecycleName(extractFileContent(raw), policyName);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			message: `Cannot propose the change: ${reason}.`,
+		};
+	}
+
+	// No-op: the template already points at this policy. Skip ONLY this commit so a real policy
+	// change in the same turn still opens its MR.
+	if (!updated.changed || isUnchangedConfig(updated.content, extractFileContent(raw))) {
+		return { ok: true, skipped: true, filePath, diffLines: [], retentionChange: null, policyCreated: false };
+	}
+
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: bind ${bindTemplate} lifecycle -> ${policyName}`,
+		action: "update",
+	});
+	if (!isGitlabSuccess(commit)) {
+		return {
+			ok: false,
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			message: "Cannot propose the change: the GitLab commit failed.",
+		};
+	}
+
+	const diffLines = [
+		`${filePath} (component-template ${bindTemplate})`,
+		`[settings.index.lifecycle] - "name": ${JSON.stringify(updated.previous ?? "?")}\n+ "name": ${JSON.stringify(policyName)}`,
+	];
+	return { ok: true, filePath, diffLines, retentionChange: null, policyCreated: false };
+}
+
 export async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	// SIO-933: a component-template's settings.index.lifecycle.name is a single scalar -- it binds to
+	// exactly one policy. A request naming >=2 policies AND a bind target is ambiguous; block early
+	// (before the multi-file fan-out) with guidance rather than silently picking one.
+	if (req.bindTemplate && req.ilmPolicies && req.ilmPolicies.length >= 2) {
+		return {
+			blockedReason: "Cannot bind a component-template to multiple ILM policies in one request.",
+			messages: [
+				new AIMessage(
+					"A component-template's lifecycle binds to exactly one policy. You named multiple policies and a bind target -- split this into one request per policy, or drop the bind.",
+				),
+			],
+		};
+	}
 	// SIO-932: a request naming >=2 policy files fans out to the multi-file orchestrator
 	// (one branch, one MR, all files). parseIntentJson only sets ilmPolicies for >=2 entries.
 	if (req.ilmPolicies && req.ilmPolicies.length >= 2) {
@@ -2078,7 +2229,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 			messages: [new AIMessage("Cannot propose the change: name the policy to change or create.")],
 		};
 	}
-	if (!req.sourcePolicy && (!patch || Object.keys(patch).length === 0)) {
+	// SIO-933: a bind-only request (point a template at an already-correct policy) carries no phase
+	// patch and no sourcePolicy, so the mandatory-phase guard must not fire when bindTemplate is set.
+	if (!req.sourcePolicy && !req.bindTemplate && (!patch || Object.keys(patch).length === 0)) {
 		return {
 			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
 			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
@@ -2089,19 +2242,68 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	// SIO-899: gitlab_create_branch is idempotent (a re-run reuses the branch); create it before
 	// the commit. Kept here (not in the helper) so the multi-file path creates one shared branch.
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy);
-	if (!result.ok) {
-		return { blockedReason: result.blockedReason, messages: [new AIMessage(result.message)] };
+
+	// Commit the policy file. SIO-933: a NO-OP policy (already has the requested values) does NOT
+	// block when a bind is pending -- we skip the policy commit and still open the MR for the bind.
+	// Any other policy failure (read/parse/commit error) is a hard block. A bind-only request (no
+	// patch, no sourcePolicy) is itself a no-op against the unchanged file, so it lands here too.
+	const policyFiles: string[] = [];
+	const policyDiffs: string[] = [];
+	let retentionChange: { from: string; to: string } | null = null;
+	let policyCreated = false;
+	if (patch || req.sourcePolicy) {
+		const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy);
+		if (!result.ok && !(result.noop && req.bindTemplate)) {
+			return { blockedReason: result.blockedReason, messages: [new AIMessage(result.message)] };
+		}
+		if (result.ok) {
+			policyFiles.push(result.filePath);
+			policyDiffs.push(result.diffLines.join("\n"));
+			retentionChange = result.retentionChange;
+			policyCreated = result.policyCreated;
+		}
+	}
+
+	// SIO-933: optional component-template bind onto the SAME branch (one MR). A 404/read/commit
+	// failure here blocks atomically (no MR opened); a no-op bind is skipped (no file added).
+	const boundFiles: string[] = [];
+	const boundDiffs: string[] = [];
+	let lifecycleRetargeted = false;
+	if (req.bindTemplate) {
+		const bind = await commitBoundTemplate(cluster, branch, req.bindTemplate, policy);
+		if (!bind.ok) {
+			return { blockedReason: bind.blockedReason, messages: [new AIMessage(bind.message)] };
+		}
+		if (!bind.skipped) {
+			boundFiles.push(bind.filePath);
+			boundDiffs.push(bind.diffLines.join("\n"));
+			lifecycleRetargeted = true;
+		}
+	}
+
+	const files = [...policyFiles, ...boundFiles];
+	// Nothing changed: the policy was a no-op AND the bind was a no-op (or absent). Surface the
+	// standard "no change needed" block rather than opening an empty MR.
+	if (files.length === 0) {
+		return {
+			blockedReason: `Policy '${policy}' on '${cluster}' already has the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: '${policy}' on '${cluster}' is already as requested. I did not open a merge request.`,
+				),
+			],
+		};
 	}
 
 	return {
 		branch,
-		proposedFilePath: result.filePath,
-		proposedFiles: [result.filePath],
-		proposedDiff: result.diffLines.join("\n"),
+		proposedFilePath: files[0] ?? "",
+		proposedFiles: files,
+		proposedDiff: [...policyDiffs, ...boundDiffs].join("\n\n"),
 		precheckPassed: true,
-		retentionChange: result.retentionChange,
-		policyCreated: result.policyCreated,
+		retentionChange,
+		policyCreated,
+		lifecycleRetargeted,
 	};
 }
 
@@ -3488,6 +3690,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 				"Creates a NEW managed ILM policy file not currently tracked in IaC; CI's plan will show a create. Verify all required phases (e.g. hot rollover + a delete/retention phase) are present, and that adopting the existing live policy will not need a Terraform import.",
 			);
 		}
+		// SIO-933: re-pointing a component-template's lifecycle.name switches which ILM policy governs
+		// that template's data streams as new indices roll over -- a real (MEDIUM) behavior change.
+		if (state.lifecycleRetargeted) {
+			risks.push(
+				`Re-points the '${req?.bindTemplate}' component-template's settings.index.lifecycle.name to '${req?.policyName}'; data streams using that template switch to this ILM policy as new indices roll over -- confirm the policy's retention/rollover is correct for that data.`,
+			);
+		}
 		// SIO-880: a retention REDUCTION is irreversible data loss -- surface as HIGH (first).
 		if (state.retentionChange) {
 			risks.unshift(
@@ -3711,7 +3920,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? req?.ilmPolicies && req.ilmPolicies.length >= 2
 					? // SIO-932: one MR carrying the SAME phase change across multiple policy files.
 						`ILM phase change applied to ${req.ilmPolicies.length} policy files on '${req?.cluster}': ${req.ilmPolicies.map((e) => e.policyName).join(", ")}. Shared overrides: ${JSON.stringify(req.ilmPolicies[0]?.phasesPatch ?? {})}.${state.policyCreated ? " One or more files are CREATEs (new lifecycle-policy files onboarded into IaC)." : ""}${state.retentionChange ? ` At least one file REDUCES retention ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
-					: `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+					: `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}${state.lifecycleRetargeted ? ` Also binds component-template '${req?.bindTemplate}' settings.index.lifecycle.name -> '${req?.policyName}'.` : ""}`
 				: "",
 			req?.workflow === "fleet-integration"
 				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`
