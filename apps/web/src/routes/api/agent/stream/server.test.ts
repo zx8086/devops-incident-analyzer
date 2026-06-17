@@ -66,6 +66,8 @@ mock.module("$lib/server/agent", () => ({
 	getLastAssistantText: mock(async () => ""),
 	// SIO-930: stream/+server.ts imports this to label the elastic-iac done event.
 	getIacTurnOutcome: mock(async () => "completed"),
+	// SIO-476: stream/+server.ts calls this after each completed turn.
+	pruneThreadState: mock(() => Promise.resolve()),
 }));
 
 const { POST } = await import("./+server.ts");

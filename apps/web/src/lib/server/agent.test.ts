@@ -8,6 +8,9 @@ const mockStreamEvents = mock(() => ({
 	},
 }));
 
+const mockUpdateState = mock(() => Promise.resolve());
+const mockGetState = mock(() => Promise.resolve({ values: { messages: [{ id: "old1" }, { id: "a" }, { id: "b" }] } }));
+
 const mockAgentDef = {
 	manifest: {
 		compliance: {
@@ -32,16 +35,38 @@ const mockAgentDef = {
 	knowledge: [],
 };
 
+mock.module("@devops-agent/observability", () => ({
+	getLogger: () => ({
+		info: () => undefined,
+		warn: () => undefined,
+		error: () => undefined,
+		debug: () => undefined,
+	}),
+	getChildLogger: () => ({
+		info: () => undefined,
+		warn: () => undefined,
+		error: () => undefined,
+		debug: () => undefined,
+	}),
+	runWithRequestContext: (_ctx: unknown, fn: () => unknown) => fn(),
+	traceSpan: async (_name: string, _op: string, fn: () => Promise<unknown>) => fn(),
+	getCurrentRequestContext: () => undefined,
+}));
+
 mock.module("@devops-agent/agent", () => ({
 	buildGraph: mock(() =>
 		Promise.resolve({
 			streamEvents: mockStreamEvents,
+			getState: mockGetState,
+			updateState: mockUpdateState,
 		}),
 	),
 	// elastic-iac graph (multi-agent plumbing). agent.ts imports both builders + getAgentByName.
 	buildIacGraph: mock(() =>
 		Promise.resolve({
 			streamEvents: mockStreamEvents,
+			getState: mockGetState,
+			updateState: mockUpdateState,
 		}),
 	),
 	createMcpClient: mock(() => Promise.resolve()),
@@ -62,6 +87,9 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-938: agent.ts calls installAgentMemory() at module load to register the
 	// agent-memory recall/flush seams. Mock must export it or the namespace import throws.
 	installAgentMemory: mock(() => undefined),
+	// SIO-476: state-pruning helpers consumed by pruneThreadState.
+	needsPruning: (msgs: unknown[]) => msgs.length > 2,
+	pruneState: () => ({ removeIds: ["old1"] }),
 	// SIO-780: datasources route test runs later and imports these from the same
 	// @devops-agent/agent module; include them here so the cached namespace has
 	// the symbols when the cross-test mock pollution kicks in.
@@ -107,9 +135,15 @@ mock.module("@langchain/core/messages", () => ({
 			this.content = typeof content === "string" ? content : content.content;
 		}
 	},
+	RemoveMessage: class RemoveMessage {
+		id: string;
+		constructor({ id }: { id: string }) {
+			this.id = id;
+		}
+	},
 }));
 
-const { invokeAgent } = await import("./agent.ts");
+const { invokeAgent, pruneThreadState } = await import("./agent.ts");
 
 describe("invokeAgent", () => {
 	test("merges compliance metadata into streamEvents config", async () => {
@@ -156,5 +190,31 @@ describe("invokeAgent", () => {
 
 		expect(metadata.compliance_risk_tier).toBe("medium");
 		expect(metadata.compliance_hitl).toBe("conditional");
+	});
+});
+
+describe("pruneThreadState", () => {
+	test("pruneThreadState removes ids via updateState when over threshold", async () => {
+		mockUpdateState.mockClear();
+		mockGetState.mockClear();
+		await pruneThreadState("thread-1", "incident-analyzer");
+		expect(mockUpdateState).toHaveBeenCalled();
+		const call0 = mockUpdateState.mock.calls[0] as unknown as [unknown, unknown];
+		const [config, update] = call0;
+		expect(config).toEqual({ configurable: { thread_id: "thread-1" } });
+		// messages is an array of RemoveMessage carrying the pruned ids (not an
+		// empty array or rewritten plain objects); dataSourceResults reset to []
+		const messages = (update as { messages: Array<{ id: string }> }).messages;
+		expect(Array.isArray(messages)).toBe(true);
+		expect(messages.length).toBe(1);
+		expect(messages[0]?.id).toBe("old1");
+		expect((update as { dataSourceResults: unknown[] }).dataSourceResults).toEqual([]);
+	});
+
+	test("pruneThreadState is a no-op when under threshold", async () => {
+		mockUpdateState.mockClear();
+		mockGetState.mockResolvedValueOnce({ values: { messages: [{ id: "a" }] } });
+		await pruneThreadState("thread-2", "incident-analyzer");
+		expect(mockUpdateState).not.toHaveBeenCalled();
 	});
 });
