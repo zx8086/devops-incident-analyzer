@@ -11,13 +11,16 @@ import {
 	installAgentMemory,
 	installGraphWarmer,
 	installMemoryPromotion,
+	needsPruning,
+	pruneState,
 	runBootstrap,
 	runTeardown,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
+import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
-import type { MessageContentComplex } from "@langchain/core/messages";
+import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -27,6 +30,8 @@ installGraphWarmer();
 // SIO-938: wire the agent-memory recall/flush seams. No-op unless
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
+
+const pruneLog = getLogger("agent:state-pruning");
 
 // SIO-751: Command is imported lazily inside resumeAgent() because eager import
 // pulls in @langchain/langgraph's transformer modules which fail to resolve
@@ -286,6 +291,33 @@ export async function resumeAgent(options: {
 		typeof graph.streamEvents
 	>[0];
 	return graph.streamEvents(resumeInput, config);
+}
+
+// SIO-476: prune the persisted checkpoint after a turn. Reads thread state,
+// drops messages beyond the window (RemoveMessage honored by MessagesAnnotation;
+// a shorter array would merge, not truncate), and resets dataSourceResults via
+// its reducer's empty-array reset branch. Best-effort: never breaks the response.
+export async function pruneThreadState(threadId: string, agentName = "incident-analyzer"): Promise<void> {
+	try {
+		const graph = agentName === "elastic-iac" ? await getIacGraph() : await getGraph();
+		const config = { configurable: { thread_id: threadId } };
+		const snapshot = await graph.getState(config);
+		const messages = (snapshot.values?.messages ?? []) as BaseMessage[];
+		if (!needsPruning(messages)) return;
+		const { removeIds } = pruneState(messages);
+		if (removeIds.length === 0) return;
+		const { RemoveMessage } = await import("@langchain/core/messages");
+		await graph.updateState(config, {
+			messages: removeIds.map((id) => new RemoveMessage({ id })),
+			dataSourceResults: [],
+		});
+		pruneLog.info({ threadId, removed: removeIds.length }, "pruned thread state");
+	} catch (error) {
+		pruneLog.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"state pruning failed; continuing",
+		);
+	}
 }
 
 // SIO-751: after a stream completes, check whether the graph paused on an
