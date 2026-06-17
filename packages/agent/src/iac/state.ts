@@ -26,6 +26,9 @@ export interface IacRequest {
 	// SIO-880: nested phase patch for an ilm-rollout change, e.g.
 	// { warm: { forcemerge: { max_num_segments: 1 } }, delete: { min_age: "60d" } }.
 	phasesPatch?: Record<string, unknown>;
+	// SIO-931: ilm-rollout "copy/clone/exact copy of <policy>" -- the reference policy filename to
+	// read from the SAME cluster's lifecycle-policies/ dir and use as the (correctly-shaped) base.
+	sourcePolicy?: string;
 	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
 	version?: string;
 	// SIO-914: fleet-integration workflow -- the integration alias key in integrations.json
