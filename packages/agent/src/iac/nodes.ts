@@ -935,6 +935,116 @@ export function mergeIlmPhases(
 	return { content: `${JSON.stringify(parsed, null, 2)}\n`, previous };
 }
 
+// SIO-931: a canonical correctly-shaped policy skeleton, mirroring the repo's
+// us-default-lifecycle-logs-prod.json. Used as the from-scratch base ONLY when no sibling
+// policy exists in the cluster's lifecycle-policies/ dir to copy the shape from.
+export const CANONICAL_ILM_SHAPE = {
+	hot: { priority: 100, max_age: "7d", max_primary_shard_size: "10gb", rollover: true },
+	warm: {
+		min_age: "1d",
+		priority: 50,
+		allocate: { number_of_replicas: 0 },
+		forcemerge: { max_num_segments: 1 },
+		shrink: { number_of_shards: 1, allow_write_after_shrink: false },
+	},
+	cold: { min_age: "2d", priority: 25, allocate: { number_of_replicas: 0 } },
+	frozen: { min_age: "7d", searchable_snapshot: { snapshot_repository: "found-snapshots", force_merge_index: true } },
+	delete: { min_age: "60d", delete_searchable_snapshot: true, wait_for_snapshot: { policy: "cloud-snapshot-policy" } },
+} as const;
+
+// SIO-931: structural schema mirroring modules/lifecycle/variables.tf. Each phase is optional;
+// within a present phase the nested objects are required where the module requires them, and
+// .strict() rejects unknown keys so the agent's old flat shape (searchable_snapshot_repository,
+// set_priority, bare number_of_replicas, ...) is caught here rather than by CI terraform plan.
+const IlmPolicySchema = z
+	.object({
+		name: z.string(),
+		metadata: z.string().optional(),
+		hot: z
+			.object({
+				max_age: z.string().optional(),
+				max_size: z.string().optional(),
+				max_primary_shard_size: z.string().optional(),
+				min_docs: z.number().optional(),
+				priority: z.number().optional(),
+				rollover: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		warm: z
+			.object({
+				min_age: z.string().optional(),
+				priority: z.number().optional(),
+				allocate: z.object({ number_of_replicas: z.number() }).strict().optional(),
+				forcemerge: z.object({ max_num_segments: z.number() }).strict().optional(),
+				shrink: z
+					.object({ number_of_shards: z.number(), allow_write_after_shrink: z.boolean().optional() })
+					.strict()
+					.optional(),
+				readonly: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		cold: z
+			.object({
+				min_age: z.string().optional(),
+				priority: z.number().optional(),
+				allocate: z.object({ number_of_replicas: z.number() }).strict().optional(),
+				readonly: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		frozen: z
+			.object({
+				min_age: z.string().optional(),
+				searchable_snapshot: z
+					.object({ snapshot_repository: z.string(), force_merge_index: z.boolean().optional() })
+					.strict(),
+			})
+			.strict()
+			.optional(),
+		delete: z
+			.object({
+				min_age: z.string().optional(),
+				delete_searchable_snapshot: z.boolean().optional(),
+				wait_for_snapshot: z.object({ policy: z.string() }).strict().optional(),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict();
+
+// Translate the most common flat-shape mistakes into a targeted nested-fix hint, so the blocked
+// message tells the user EXACTLY what to change instead of a raw Zod path.
+function flatShapeHint(policy: Record<string, unknown>): string | null {
+	const phase = (k: string): Record<string, unknown> =>
+		(typeof policy[k] === "object" && policy[k] !== null ? policy[k] : {}) as Record<string, unknown>;
+	if ("set_priority" in phase("hot") || "set_priority" in phase("warm") || "set_priority" in phase("cold"))
+		return "use `priority` (a number) on the phase, not `set_priority`.";
+	if ("number_of_replicas" in phase("warm") || "number_of_replicas" in phase("cold"))
+		return "set replicas via `allocate: { number_of_replicas }`, not a bare number_of_replicas on the phase.";
+	if ("forcemerge_max_num_segments" in phase("warm"))
+		return "use nested `forcemerge: { max_num_segments }`, not flat forcemerge_max_num_segments.";
+	if ("shrink_number_of_shards" in phase("warm"))
+		return "use nested `shrink: { number_of_shards }`, not flat shrink_number_of_shards.";
+	if ("searchable_snapshot_repository" in phase("frozen") || "force_merge_index" in phase("frozen"))
+		return "use nested `searchable_snapshot: { snapshot_repository, force_merge_index }`, not flat searchable_snapshot_repository / force_merge_index.";
+	if ("wait_for_snapshot_policy" in phase("delete"))
+		return "use nested `wait_for_snapshot: { policy }`, not flat wait_for_snapshot_policy.";
+	return null;
+}
+
+// SIO-931: validate a built ILM policy against the repo/module schema BEFORE commit. (Pure.)
+export function validateIlmPolicy(policy: unknown): { ok: true } | { ok: false; reason: string } {
+	const parsed = IlmPolicySchema.safeParse(policy);
+	if (parsed.success) return { ok: true };
+	const hint = typeof policy === "object" && policy !== null ? flatShapeHint(policy as Record<string, unknown>) : null;
+	const first = parsed.error.issues[0];
+	const where = first ? first.path.join(".") || "(root)" : "(unknown)";
+	const detail = first ? `${where}: ${first.message}` : "invalid policy structure";
+	return { ok: false, reason: hint ? `${detail}. ${hint}` : detail };
+}
+
 // SIO-880: parse an Elastic time string ("30d", "48h", "90m", "30s") to seconds. Returns
 // null for an unrecognized unit/format. ms/micros/nanos are not ILM min_age units.
 function durationToSeconds(value: unknown): number | null {
