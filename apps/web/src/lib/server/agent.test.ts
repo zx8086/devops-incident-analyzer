@@ -199,8 +199,12 @@ describe("pruneThreadState", () => {
 		const call0 = mockUpdateState.mock.calls[0] as unknown as [unknown, unknown];
 		const [config, update] = call0;
 		expect(config).toEqual({ configurable: { thread_id: "thread-1" } });
-		// messages is an array of RemoveMessage; dataSourceResults reset to []
-		expect(Array.isArray((update as { messages: unknown[] }).messages)).toBe(true);
+		// messages is an array of RemoveMessage carrying the pruned ids (not an
+		// empty array or rewritten plain objects); dataSourceResults reset to []
+		const messages = (update as { messages: Array<{ id: string }> }).messages;
+		expect(Array.isArray(messages)).toBe(true);
+		expect(messages.length).toBe(1);
+		expect(messages[0]?.id).toBe("old1");
 		expect((update as { dataSourceResults: unknown[] }).dataSourceResults).toEqual([]);
 	});
 
