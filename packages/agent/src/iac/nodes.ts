@@ -1868,7 +1868,20 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 				],
 			};
 		}
-		const srcObj = JSON.parse(extractFileContent(srcRaw)) as Record<string, unknown>;
+		let srcObj: Record<string, unknown>;
+		try {
+			srcObj = JSON.parse(extractFileContent(srcRaw)) as Record<string, unknown>;
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Reference policy '${req.sourcePolicy}' on '${cluster}' is not valid JSON: ${reason}.`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: reference policy '${req.sourcePolicy}' on '${cluster}' did not parse as JSON.`,
+					),
+				],
+			};
+		}
 		srcObj.name = policy;
 		policyCreated = !isGitlabSuccess(raw); // target is new if it 404s
 		updated = mergeIlmPhases(JSON.stringify(srcObj), patchObj);
@@ -1888,9 +1901,13 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		if (templateFile) {
 			const tplRaw = await callTool("gitlab_get_file_content", { filePath: `${dirPath}/${templateFile}` });
 			if (isGitlabSuccess(tplRaw)) {
-				const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
-				tplObj.name = policy;
-				base = tplObj;
+				try {
+					const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
+					tplObj.name = policy;
+					base = tplObj;
+				} catch {
+					log.warn({ cluster, templateFile }, "ilm template sibling is not valid JSON; using canonical shape");
+				}
 			} else {
 				log.warn({ cluster, templateFile }, "ilm template sibling unreadable; using canonical shape");
 			}
@@ -1939,7 +1956,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	const retentionChange = detectRetentionReduction(updated.previous, patchObj);
 
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const fields = Object.keys(patchObj).join(", ") || "copy";
+	const fields = Object.keys(patchObj).join(", ") || (req.sourcePolicy ? `copy of ${req.sourcePolicy}` : "copy");
 	const commit = await callTool("gitlab_commit_file", {
 		branch,
 		file_path: filePath,
@@ -3523,7 +3540,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
 			req?.workflow === "ilm-rollout"
-				? `ILM policy '${req?.policyName}' ${state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				? `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
 				: "",
 			req?.workflow === "fleet-integration"
 				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`

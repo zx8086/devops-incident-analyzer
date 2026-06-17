@@ -120,4 +120,21 @@ describe("proposeIlmChange copy path (SIO-931)", () => {
 		expect(out.blockedReason).toBeTruthy();
 		expect(String(out.messages?.[0]?.content)).toContain("does-not-exist");
 	});
+
+	test("blocks (does not throw) when the source policy is readable but malformed JSON", async () => {
+		mockBridge({
+			gitlab_get_file_content: () =>
+				`[200] ${JSON.stringify({ content: Buffer.from('{ "name": "x", "hot": { , }').toString("base64"), encoding: "base64" })}`,
+		});
+		const { proposeIlmChange } = await import("./nodes.ts");
+		const out = await proposeIlmChange(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "us-cld",
+			policyName: "logs@lifecycle",
+			sourcePolicy: "broken-policy",
+		});
+		expect(out.blockedReason).toBeTruthy();
+		expect(String(out.blockedReason)).toContain("not valid JSON");
+	});
 });
