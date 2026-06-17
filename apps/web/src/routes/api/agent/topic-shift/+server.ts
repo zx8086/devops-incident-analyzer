@@ -10,7 +10,7 @@ import { flushLangSmithCallbacks } from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getPendingInterrupt, resumeAgent } from "$lib/server/agent";
+import { getPendingInterrupt, pruneThreadState, resumeAgent } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
@@ -76,6 +76,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 							}
 
+							await pruneThreadState(body.threadId);
 							const responseTime = Date.now() - startTime;
 							log.info({ responseTime, toolsUsed: toolsUsed.length, toolNames: toolsUsed }, "agent.request.resume.end");
 							send({

@@ -305,13 +305,18 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 		const messages = (snapshot.values?.messages ?? []) as BaseMessage[];
 		if (!needsPruning(messages)) return;
 		const { removeIds } = pruneState(messages);
-		if (removeIds.length === 0) return;
+		// Only remove ids actually present (messagesStateReducer throws on an
+		// unknown id, and updateState is atomic — a stale id would discard the
+		// whole batch). Filtering makes this idempotent by construction.
+		const present = new Set(messages.map((m) => m.id).filter((id): id is string => id !== undefined));
+		const liveIds = removeIds.filter((id) => present.has(id));
+		if (liveIds.length === 0) return;
 		const { RemoveMessage } = await import("@langchain/core/messages");
 		await graph.updateState(config, {
-			messages: removeIds.map((id) => new RemoveMessage({ id })),
+			messages: liveIds.map((id) => new RemoveMessage({ id })),
 			dataSourceResults: [],
 		});
-		pruneLog.info({ threadId, removed: removeIds.length }, "pruned thread state");
+		pruneLog.info({ threadId, removed: liveIds.length }, "pruned thread state");
 	} catch (error) {
 		pruneLog.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
