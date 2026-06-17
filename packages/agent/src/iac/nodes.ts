@@ -231,13 +231,13 @@ export function capabilityMessage(): string {
 		"Today I can propose:\n" +
 		'- **Version upgrades** -- e.g. "upgrade ap-cld to 9.4.2"\n' +
 		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
-		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
-		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n' +
-		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n' +
-		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n' +
-		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on eu-b2b"\n' +
-		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n' +
-		'- **Space edits** -- e.g. "change the developer-experience space description on eu-b2b"\n' +
+		'- **ILM lifecycle changes** -- e.g. "set us-cld 30-day retention to 60 days"\n' +
+		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-cld to 6.15.0"\n' +
+		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on ap-cld"\n' +
+		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
+		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
+		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld"\n' +
+		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
 		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n\n' +
@@ -439,39 +439,39 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"{ snapshot_repository, force_merge_index }`, and `wait_for_snapshot: { policy }` -- never the flattened " +
 		"underscore forms. Durations are strings like '60d'; retention is delete.min_age. Patch ONLY the fields to " +
 		"change for an existing policy; for a copy, prefer sourcePolicy over restating every field. " +
-		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-b2b to 6.15.0', 'pin kafka to " +
+		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-cld to 6.15.0', 'pin kafka to " +
 		"1.28.0 on eu-cld', 'update the system integration package to 2.18.0') -- note this is the integration PACKAGE " +
 		"version, NOT a Fleet AGENT binary upgrade and NOT a cluster version -- set workflow to 'fleet-integration', cluster " +
 		"to the named deployment, integration to the integration alias key VERBATIM (e.g. 'aws', 'kafka', 'system', 'apm', " +
 		"'elastic-defend'), integrationVersion to the explicit target package version string, and force to true ONLY if the " +
 		"user explicitly asks to force/reinstall it. " +
-		"For an SLO change ('set the DS API Health SLO target to 99.5% on eu-b2b', 'change the eu-b2b ds-authentication SLO " +
+		"For an SLO change ('set the DS API Health SLO target to 99.5% on ap-cld', 'change the ap-cld ds-authentication SLO " +
 		"window to 60 days') -- editing an EXISTING SLO's target/time-window/tags, NOT creating one -- set workflow to " +
 		"'slo-edit', cluster to the named deployment, sloName to the SLO file basename VERBATIM (e.g. 'ds-authentication', " +
 		"'cci-sftpgo'; the part before .json), sloTarget to the numeric target the user gave (a percent like 99.5 or a " +
 		"fraction like 0.995 -- pass it as the user said it), sloWindow to a duration string ('60d', '90d') ONLY if they " +
 		"change the window, and sloTags to the full new tag array ONLY if they change tags. Set at least one of sloTarget/" +
 		"sloWindow/sloTags. " +
-		"For an ALERT RULE change ('raise the MarTech Add-To-Wallet threshold to 5 on eu-b2b', 'disable the cart-failed " +
-		"alert on eu-b2b', 'change the X rule window to 10 minutes') -- editing an EXISTING rule's threshold/window/enabled/" +
+		"For an ALERT RULE change ('raise the MarTech Add-To-Wallet threshold to 5 on eu-cld', 'disable the cart-failed " +
+		"alert on eu-cld', 'change the X rule window to 10 minutes') -- editing an EXISTING rule's threshold/window/enabled/" +
 		"interval, NOT creating one -- set workflow to 'alerting-edit', cluster to the named deployment, ruleName to the " +
 		"rule file basename VERBATIM (it is '<space>__<rule-name>', e.g. 'default__martech_add_to_wallet_transactions_" +
 		"failed_status_prd'; if the user gives only a friendly name, construct the basename with the space prefix, " +
 		"defaulting the space to 'default' when unstated), and the field(s) to change: alertThreshold (number), " +
 		"alertWindowSize (number) + alertWindowUnit ('m'|'h'|'s'|'d'), alertEnabled (false to disable / silence the rule, " +
 		"true to enable), alertInterval (a check-interval string like '5m'). Set at least one of those alert* fields. " +
-		"For a DATA VIEW change ('add a service runtime field to the logs data view on eu-b2b', 'rename the logs data " +
+		"For a DATA VIEW change ('add a service runtime field to the logs data view on us-cld', 'rename the logs data " +
 		"view title to logs-*') -- editing an EXISTING data view, NOT creating one -- set workflow to 'dataview-edit', " +
 		"cluster to the named deployment, dataviewName to the data-view file basename VERBATIM (e.g. 'logs', 'metrics'; the " +
 		"part before .json). To add/replace a runtime field set runtimeFieldName, runtimeFieldType (default 'keyword'), and " +
 		"runtimeFieldScript (the painless source, ONLY when the user gives a script). To change the index pattern set " +
 		"dataviewTitle; to change the display name set dataviewDisplayName. Set at least one of those. " +
 		"For a CLUSTER-DEFAULTS index-template change ('set total_shards_per_node to 3 on the logs@custom template on " +
-		"eu-b2b') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
+		"ap-cld') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
 		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
 		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
 		"integer the user gave. " +
-		"For a SPACE change ('rename the developer-experience space description on eu-b2b', 'change the apps space color') " +
+		"For a SPACE change ('rename the developer-experience space description on eu-cld', 'change the apps space color') " +
 		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
 		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
 		"'apps'; the part before .json), and spaceDisplayName (the human name), spaceDescription, and/or spaceColor (a hex " +
