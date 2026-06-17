@@ -1,6 +1,8 @@
 // agent/src/iac/fleet-upgrade.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import {
+	buildFleetGateMessage,
+	dynamicRolloutSeconds,
 	formatFleetUpgradeSummary,
 	formatRolloutDuration,
 	hasApplicableFleetUpgrade,
@@ -190,6 +192,52 @@ describe("intentFromText — fleet-upgrade vs version-upgrade discrimination", (
 	});
 	test("synthetics still wins its tiebreak (no fleet keyword)", () => {
 		expect(intentFromText("synthetics-drift")).toBe("synthetics-drift");
+	});
+});
+
+describe("dynamicRolloutSeconds (SIO-936)", () => {
+	test("clamps to the 600s Fleet API minimum for small / zero / negative counts", () => {
+		expect(dynamicRolloutSeconds(0)).toBe(600);
+		expect(dynamicRolloutSeconds(-5)).toBe(600);
+		expect(dynamicRolloutSeconds(4)).toBe(600); // 4*30=120 -> floored to 600
+		expect(dynamicRolloutSeconds(20)).toBe(600); // 20*30=600 -> exactly the floor
+	});
+	test("scales at ~30s/agent between the floor and the cap", () => {
+		expect(dynamicRolloutSeconds(25)).toBe(750); // 25*30
+		expect(dynamicRolloutSeconds(100)).toBe(3000); // 100*30
+	});
+	test("caps at 3600s for large fleets (keeps a bounded stagger)", () => {
+		expect(dynamicRolloutSeconds(120)).toBe(3600); // 120*30=3600 -> the cap
+		expect(dynamicRolloutSeconds(801)).toBe(3600);
+		expect(dynamicRolloutSeconds(10000)).toBe(3600);
+	});
+	test("non-finite input degrades to the floor (no NaN)", () => {
+		expect(dynamicRolloutSeconds(Number.NaN)).toBe(600);
+	});
+});
+
+describe("buildFleetGateMessage rollout display (SIO-936)", () => {
+	test("uses the agent-count-scaled window, not the report's fixed 3600", () => {
+		// 4 upgradeable-outdated agents (ap-cld), but the report carries the script default 3600.
+		const { rollout, willUpgrade, message } = buildFleetGateMessage(
+			report({
+				deployment: "ap-cld",
+				rolloutSeconds: 3600,
+				crosstab: { upgradeable: 4, notUpgradeable: 245, byReason: [{ reason: "other", count: 245 }] },
+				versionCrosstab: { alreadyOnTarget: 236, outdated: 13, versionUnknown: 0, upgradeableOutdated: 4 },
+			}),
+		);
+		expect(willUpgrade).toBe(4); // version-aware: upgradeable-and-outdated, not the raw crosstab
+		expect(rollout).toBe(600); // 4 agents -> floored, NOT the report's 3600
+		expect(message).toContain("over 600s");
+		expect(message).not.toContain("over 3600s");
+		expect(message).toContain("236 are already on 9.4.2");
+	});
+	test("a large fleet keeps a long stagger (caps at 3600)", () => {
+		const { rollout } = buildFleetGateMessage(
+			report({ crosstab: { upgradeable: 801, notUpgradeable: 0, byReason: [] } }),
+		);
+		expect(rollout).toBe(3600);
 	});
 });
 
@@ -526,6 +574,9 @@ describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
 		expect(applyArgs[0]?.version).toBe("9.4.2");
 		// the whole point of the ticket: the resolved set's size is forwarded as the cap override
 		expect(applyArgs[0]?.maxAgents).toBe(1793);
+		// SIO-936: the apply also forwards the agent-count-scaled rollout window (1608 upgradeable
+		// -> capped at 3600) so Fleet staggers the bulk_upgrade over the right rollout_duration_seconds.
+		expect(applyArgs[0]?.rolloutSeconds).toBe(3600);
 		expect(out.fleetUpgradeResult?.status).toBe("applied");
 	});
 
