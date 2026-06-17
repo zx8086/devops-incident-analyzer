@@ -2,6 +2,7 @@
 
 export type { MemoryPrProposal, OpenMemoryPrResult } from "@devops-agent/memory-pr";
 export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
+export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
 export { AttachmentError, type ProcessedAttachments, processAttachments } from "./attachment-processor.ts";
@@ -17,9 +18,12 @@ export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {
+	type BootstrapContext,
 	type BootstrapResult,
 	registerGraphWarmer,
+	registerMemoryFlusher,
 	registerMemoryPrOpener,
+	registerMemoryRecaller,
 	runBootstrap,
 	runTeardown,
 	type TeardownContext,
@@ -35,6 +39,12 @@ export {
 	mcpEvents,
 	stopHealthPolling,
 } from "./mcp-bridge.ts";
+export {
+	__setAgentMemoryClient,
+	type LiveMemoryBackend,
+	resolveUserId,
+	selectedBackend,
+} from "./memory-backend.ts";
 export {
 	flushMemoryProposals,
 	installMemoryPromotion,

@@ -8,6 +8,7 @@ import {
 	type IacStateType,
 	type IacTurnOutcome,
 	iacTurnOutcome,
+	installAgentMemory,
 	installGraphWarmer,
 	installMemoryPromotion,
 	runBootstrap,
@@ -23,6 +24,9 @@ import type { MessageContentComplex } from "@langchain/core/messages";
 // feature flag is set.
 installMemoryPromotion();
 installGraphWarmer();
+// SIO-938: wire the agent-memory recall/flush seams. No-op unless
+// LIVE_MEMORY_BACKEND=agent-memory.
+installAgentMemory();
 
 // SIO-751: Command is imported lazily inside resumeAgent() because eager import
 // pulls in @langchain/langgraph's transformer modules which fail to resolve
@@ -68,11 +72,13 @@ function resolveCheckpointerType(): "memory" | "sqlite" {
 // from MCP-server process bootstrap (createMcpApplication) which is per-process.
 const bootstrappedThreads = new Set<string>();
 
-async function sessionBootstrap(threadId: string): Promise<void> {
+async function sessionBootstrap(threadId: string, agentName: string, firstUserQuery?: string): Promise<void> {
 	if (bootstrappedThreads.has(threadId)) return;
 	bootstrappedThreads.add(threadId);
 	try {
-		await runBootstrap();
+		// SIO-938: threadId -> Agent Memory session, agentName -> user, firstUserQuery
+		// seeds semantic recall over the agent's past sessions.
+		await runBootstrap({ threadId, agentName, firstUserQuery });
 	} catch {
 		// Bootstrap is best-effort; a failure must not block the investigation.
 		// runBootstrap already logs its own step failures.
@@ -82,10 +88,10 @@ async function sessionBootstrap(threadId: string): Promise<void> {
 // SIO-846: explicit session-end seam. Called by the teardown endpoint (on
 // "end session"/beforeunload) and the idle-TTL sweep. Clears the run-once guard
 // so a future turn on the same threadId re-bootstraps.
-export async function sessionTeardown(threadId: string): Promise<void> {
+export async function sessionTeardown(threadId: string, agentName = "incident-analyzer"): Promise<void> {
 	bootstrappedThreads.delete(threadId);
 	try {
-		await runTeardown();
+		await runTeardown({ threadId, agentName });
 	} catch {
 		// Teardown is best-effort; never surface to the user. runTeardown logs.
 	}
@@ -155,10 +161,13 @@ export async function invokeAgent(
 	// SIO-637: Kill switch prevents new graph invocations
 	if (isKillSwitchActive()) throw new KillSwitchError();
 
-	// SIO-846: run agent-session bootstrap once per thread before the first turn.
-	await sessionBootstrap(options.threadId);
-
 	const agentName = options.agentName ?? "incident-analyzer";
+
+	// SIO-846/SIO-938: run agent-session bootstrap once per thread before the
+	// first turn. The latest user message seeds agent-memory semantic recall.
+	const latestUserQuery = [...messages].reverse().find((m) => m.role === "user")?.content;
+	await sessionBootstrap(options.threadId, agentName, latestUserQuery);
+
 	const { HumanMessage } = await import("@langchain/core/messages");
 
 	// SIO-610: Attach content blocks (images, PDFs, text) to the last user message

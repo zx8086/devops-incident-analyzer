@@ -35,6 +35,31 @@ export function registerMemoryPrOpener(fn: () => Promise<void>): void {
 	memoryPrOpener = fn;
 }
 
+// SIO-938 seams: the agent-memory backend registers a recaller (semantic search
+// over past sessions at bootstrap) and a flusher (drain the write-behind queue +
+// end the session at teardown) here so lifecycle.ts never imports the backend.
+let memoryRecaller:
+	| ((ctx: { agentName: string; threadId: string; query?: string }) => Promise<string | undefined>)
+	| null = null;
+export function registerMemoryRecaller(
+	fn: (ctx: { agentName: string; threadId: string; query?: string }) => Promise<string | undefined>,
+): void {
+	memoryRecaller = fn;
+}
+
+let memoryFlusher: ((ctx: { agentName: string; threadId: string }) => Promise<void>) | null = null;
+export function registerMemoryFlusher(fn: (ctx: { agentName: string; threadId: string }) => Promise<void>): void {
+	memoryFlusher = fn;
+}
+
+// Per-session context threaded through bootstrap/teardown. agentName -> Agent
+// Memory user; threadId -> session; firstUserQuery seeds semantic recall.
+export interface BootstrapContext {
+	agentName: string;
+	threadId: string;
+	firstUserQuery?: string;
+}
+
 export interface BootstrapResult {
 	// Whichever context the bootstrap steps gathered, for the caller to inject
 	// into the first-turn prompt. Empty when no relevant steps ran.
@@ -46,13 +71,38 @@ export interface BootstrapResult {
 export interface TeardownContext {
 	// The final daily-log breadcrumb for this session, if the caller has one.
 	dailyLogEntry?: DailyLogEntry;
+	// SIO-938: session identity so the agent-memory flusher can end the session.
+	agentName?: string;
+	threadId?: string;
 }
 
-async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult): Promise<void> {
+async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ctx: BootstrapContext): Promise<void> {
 	switch (step) {
 		case "load_live_memory": {
 			const mem = readLiveMemory();
 			result.liveMemoryContext = mem.context;
+			// SIO-938: when an agent-memory recaller is registered, augment the
+			// file-durable context with semantic recall over past sessions, keyed
+			// on the first user message. Best-effort; failures never block a session.
+			if (memoryRecaller) {
+				try {
+					const recalled = await memoryRecaller({
+						agentName: ctx.agentName,
+						threadId: ctx.threadId,
+						query: ctx.firstUserQuery,
+					});
+					if (recalled) {
+						result.liveMemoryContext = result.liveMemoryContext
+							? `${result.liveMemoryContext}\n\n${recalled}`
+							: recalled;
+					}
+				} catch (error) {
+					logger.warn(
+						{ error: error instanceof Error ? error.message : String(error) },
+						"memory recall failed; continuing with file context only",
+					);
+				}
+			}
 			break;
 		}
 		case "load_wiki_index": {
@@ -83,7 +133,7 @@ async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult): P
 
 // Runs the agent's bootstrap hooks in declared order. Returns the gathered
 // context. No hooks configured -> returns an empty result without a span.
-export async function runBootstrap(): Promise<BootstrapResult> {
+export async function runBootstrap(ctx: BootstrapContext): Promise<BootstrapResult> {
 	const hooks = getAgent().hooks;
 	const steps = hooks?.bootstrap?.steps ?? [];
 	const result: BootstrapResult = { stepsRun: [] };
@@ -91,7 +141,7 @@ export async function runBootstrap(): Promise<BootstrapResult> {
 
 	return traceSpan("agent", "agent.session.bootstrap", async () => {
 		for (const step of steps) {
-			await runBootstrapStep(step, result);
+			await runBootstrapStep(step, result, ctx);
 			result.stepsRun.push(step);
 		}
 		logger.info({ steps: result.stepsRun }, "Agent session bootstrap complete");
@@ -103,6 +153,19 @@ async function runTeardownStep(step: TeardownStep, ctx: TeardownContext): Promis
 	switch (step) {
 		case "flush_daily_log":
 			if (ctx.dailyLogEntry) appendDailyLog(ctx.dailyLogEntry);
+			// SIO-938: drain the agent-memory write-behind queue and end the session.
+			// appendDailyLog above only enqueued; this flushes everything written this
+			// session. Best-effort; failures never abort teardown.
+			if (memoryFlusher && ctx.agentName && ctx.threadId) {
+				try {
+					await memoryFlusher({ agentName: ctx.agentName, threadId: ctx.threadId });
+				} catch (error) {
+					logger.warn(
+						{ error: error instanceof Error ? error.message : String(error) },
+						"memory flush failed; session teardown continues",
+					);
+				}
+			}
 			break;
 		case "checkpoint_key_decisions":
 			// Durable decisions are promoted via the PR flow (EPIC 1), batched into

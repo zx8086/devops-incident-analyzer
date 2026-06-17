@@ -68,8 +68,8 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
   agent/                         LangGraph 20-node pipeline (+2 gated knowledge-graph nodes) plus a separate 24-node elastic-iac proposer graph
-  shared/                        Cross-package types and Zod schemas
-  checkpointer/                  State persistence (memory / bun:sqlite)
+  shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
+  checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
   knowledge-graph/               Optional entity + correlation graph (SIO-850, off by default)
   memory-pr/                     PR-based human-in-the-loop for durable agent learnings (SIO-849)
@@ -100,6 +100,17 @@ apps/
 | AWS | 3001 (SigV4 proxy) | multi-estate read-only (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray) | `AWS_MCP_URL`, `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` |
 | Elastic IaC | 9086 | GitOps proposer tools (terraform/git/gitlab/elastic-cloud) | `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` |
 
+## Agent Memory (live-memory backend)
+
+Both agents (incident-analyzer and elastic-iac) keep durable, cross-session **live memory** -- distinct from the LangGraph checkpointer, which holds only transient per-thread state. Live memory is read into the prompt at session bootstrap and appended at safe boundaries through a single writer (`packages/agent/src/memory-writer.ts`: `readLiveMemory` / `appendDailyLog` / `recordKeyDecision`, gated by `LIVE_MEMORY_ENABLED`, always PII-redacted).
+
+The storage behind that writer is swappable via `LIVE_MEMORY_BACKEND` (SIO-938):
+
+- **`file`** (default) -- git-tracked markdown under `agents/<agent>/memory/runtime/{context,key-decisions,dailylog}.md` + `memory/wiki/`. Human-readable, PR-reviewable.
+- **`agent-memory`** -- the [Couchbase Agent Memory](https://docs.couchbase.com/) REST service. Adds semantic recall and TTL decay. Mapping: `context` + `key-decisions` + wiki pages -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL); on bootstrap the agent semantic-searches its past sessions for relevant context. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`); each chat thread is a session.
+
+The backend is a direct REST client in `packages/shared` (no MCP server, no LLM tool surface) wired through the lifecycle bootstrap/teardown seams. Writes are queued behind the synchronous writer and drained at session teardown, so the default file path is unchanged when `LIVE_MEMORY_BACKEND` is unset. See [the design spec](docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md).
+
 ## Commands
 
 ```bash
@@ -124,6 +135,14 @@ See [.env.example](.env.example) for the full list. Minimum required:
 - `ATLASSIAN_UPSTREAM_MCP_URL` -- upstream Atlassian Cloud Rovo endpoint (the local proxy forwards to it); `ATLASSIAN_SITE_NAME` -- your Atlassian Cloud site
 - `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` -- multi-estate AWS config (cross-account AssumeRole)
 - `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` -- elastic-iac agent: IaC MCP server URL and the GitLab token used to open merge requests
+
+Optional (live memory, all off/file by default):
+
+- `LIVE_MEMORY_ENABLED` -- turn live memory on (read at bootstrap, append at teardown)
+- `LIVE_MEMORY_BACKEND` -- `file` (default) or `agent-memory` (Couchbase Agent Memory REST)
+- `AGENT_MEMORY_BASE_URL`, `AGENT_MEMORY_ENABLED` -- the Agent Memory service (used only when `LIVE_MEMORY_BACKEND=agent-memory`)
+- `AGENT_MEMORY_BEARER_TOKEN` -- OIDC bearer token, only if the service runs with `OIDC_AUTH_ENABLED`
+- `AGENT_MEMORY_DAILYLOG_TTL_SECONDS` -- short TTL for dailylog breadcrumbs (omit for no decay; facts are always durable)
 
 See [docs/configuration/environment-variables.md](docs/configuration/environment-variables.md) for the full AWS estate and elastic-iac configuration.
 

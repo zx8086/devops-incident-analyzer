@@ -14,6 +14,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getLogger } from "@devops-agent/observability";
 import { createHashChainDestination, redactPiiContent } from "@devops-agent/shared";
+import { dailyLogTtlSeconds, enqueueFact, enqueueMessage, selectedBackend } from "./memory-backend.ts";
 import { getAgentsDir } from "./paths.ts";
 
 const logger = getLogger("agent:memory-writer");
@@ -78,6 +79,31 @@ export function readLiveMemory(baseDir?: string): LiveMemory {
 // writes directly (not PR-gated) but always redacted. No-op when disabled.
 export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 	if (!isEnabled()) return;
+
+	// Agent Memory backend: a dailylog breadcrumb is a conversational message
+	// block with a short TTL (it decays). Redaction runs before the block leaves
+	// the process. Enqueue is fire-and-forget; the lifecycle teardown drains it.
+	if (selectedBackend() === "agent-memory") {
+		const services = entry.services.length > 0 ? entry.services.join(", ") : "none";
+		const summary = entry.summary ? redactPiiContent(entry.summary) : "";
+		const assistant = [
+			`req=${entry.requestId}`,
+			`services=[${services}]`,
+			`datasources=[${entry.datasources.join(", ") || "none"}]`,
+			entry.severity ? `severity=${entry.severity}` : "",
+			typeof entry.confidence === "number" ? `confidence=${entry.confidence.toFixed(2)}` : "",
+			summary ? `-- ${summary}` : "",
+		]
+			.filter((p) => p.length > 0)
+			.join(" ");
+		enqueueMessage(
+			{ user_content: summary || "incident investigation", assistant_content: assistant },
+			dailyLogTtlSeconds(),
+		);
+		logger.info({ requestId: entry.requestId, backend: "agent-memory" }, "Appended dailylog entry");
+		return;
+	}
+
 	const path = join(runtimeDir(baseDir), "dailylog.md");
 	const date = new Date().toISOString();
 
@@ -116,6 +142,18 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 // the memory-pr package once EPIC 1 lands.
 export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void {
 	if (!isEnabled()) return;
+
+	// Agent Memory backend: a key decision is a durable semantic fact (no TTL).
+	// Redaction runs before the fact leaves the process.
+	if (selectedBackend() === "agent-memory") {
+		const fact = decision.rationale
+			? `${redactPiiContent(decision.decision)} (rationale: ${redactPiiContent(decision.rationale)})`
+			: redactPiiContent(decision.decision);
+		enqueueFact(fact);
+		logger.info({ requestId: decision.requestId, backend: "agent-memory" }, "Recorded key decision");
+		return;
+	}
+
 	const path = join(runtimeDir(baseDir), "key-decisions.md");
 	const date = new Date().toISOString();
 	const lines = [`## ${date} (${decision.requestId})`, "", redactPiiContent(decision.decision)];

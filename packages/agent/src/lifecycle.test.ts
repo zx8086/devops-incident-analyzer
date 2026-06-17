@@ -21,7 +21,16 @@ function installPromptContextMock(): void {
 }
 installPromptContextMock();
 
-import { registerGraphWarmer, registerMemoryPrOpener, runBootstrap, runTeardown } from "./lifecycle.ts";
+import {
+	registerGraphWarmer,
+	registerMemoryFlusher,
+	registerMemoryPrOpener,
+	registerMemoryRecaller,
+	runBootstrap,
+	runTeardown,
+} from "./lifecycle.ts";
+
+const BOOT_CTX = { agentName: "incident-analyzer", threadId: "t-1" };
 
 const prevEnabled = process.env.LIVE_MEMORY_ENABLED;
 
@@ -38,11 +47,13 @@ afterEach(() => {
 	// Reset registered seams to a no-op so tests don't leak into each other.
 	registerGraphWarmer(async () => {});
 	registerMemoryPrOpener(async () => {});
+	registerMemoryRecaller(async () => undefined);
+	registerMemoryFlusher(async () => {});
 });
 
 describe("runBootstrap", () => {
 	test("runs the agent's configured bootstrap steps in order", async () => {
-		const result = await runBootstrap();
+		const result = await runBootstrap(BOOT_CTX);
 		// The production hooks.yaml declares all four bootstrap steps.
 		expect(result.stepsRun).toEqual([
 			"load_live_memory",
@@ -59,7 +70,7 @@ describe("runBootstrap", () => {
 		registerGraphWarmer(async () => {
 			warmed = true;
 		});
-		await runBootstrap();
+		await runBootstrap(BOOT_CTX);
 		expect(warmed).toBe(true);
 	});
 
@@ -68,7 +79,7 @@ describe("runBootstrap", () => {
 			throw new Error("graph unreachable");
 		});
 		// Should not reject; the failure is swallowed and logged.
-		const result = await runBootstrap();
+		const result = await runBootstrap(BOOT_CTX);
 		expect(result.stepsRun).toContain("warm_knowledge_graph");
 	});
 });
@@ -94,5 +105,41 @@ describe("runTeardown", () => {
 		});
 		const steps = await runTeardown();
 		expect(steps).toContain("open_memory_pr");
+	});
+});
+
+// SIO-938: agent-memory recall/flush seams.
+describe("agent-memory seams", () => {
+	test("appends a registered recaller's output to liveMemoryContext", async () => {
+		registerMemoryRecaller(async ({ agentName, threadId, query }) => `recall(${agentName}/${threadId}/${query})`);
+		const result = await runBootstrap({ agentName: "incident-analyzer", threadId: "t-9", firstUserQuery: "kafka lag" });
+		expect(result.liveMemoryContext).toContain("Live Context"); // file context still present
+		expect(result.liveMemoryContext).toContain("recall(incident-analyzer/t-9/kafka lag)");
+	});
+
+	test("tolerates a recaller that throws (file context preserved)", async () => {
+		registerMemoryRecaller(async () => {
+			throw new Error("agent-memory unreachable");
+		});
+		const result = await runBootstrap(BOOT_CTX);
+		expect(result.stepsRun).toContain("load_live_memory");
+		expect(result.liveMemoryContext).toContain("Live Context");
+	});
+
+	test("invokes a registered flusher during flush_daily_log with session identity", async () => {
+		const captured: { ctx: { agentName: string; threadId: string } | null } = { ctx: null };
+		registerMemoryFlusher(async (ctx) => {
+			captured.ctx = ctx;
+		});
+		await runTeardown({ agentName: "elastic-iac", threadId: "t-iac" });
+		expect(captured.ctx).toEqual({ agentName: "elastic-iac", threadId: "t-iac" });
+	});
+
+	test("tolerates a flusher that throws (teardown continues)", async () => {
+		registerMemoryFlusher(async () => {
+			throw new Error("flush failed");
+		});
+		const steps = await runTeardown({ agentName: "incident-analyzer", threadId: "t-1" });
+		expect(steps).toContain("flush_daily_log");
 	});
 });
