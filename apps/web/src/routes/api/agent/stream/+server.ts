@@ -5,7 +5,15 @@ import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/obser
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getIacTurnOutcome, getLastAssistantText, getPendingInterrupt, invokeAgent, pruneThreadState } from "$lib/server/agent";
+import {
+	decrementSseConnections,
+	getIacTurnOutcome,
+	getLastAssistantText,
+	getPendingInterrupt,
+	incrementSseConnections,
+	invokeAgent,
+	pruneThreadState,
+} from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
@@ -53,6 +61,16 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		const encoder = new TextEncoder();
+		// SIO-482: track this SSE connection for /health. Decrement exactly once,
+		// whether the stream closes normally or the client cancels early.
+		let sseCounted = true;
+		incrementSseConnections();
+		const releaseSse = () => {
+			if (sseCounted) {
+				sseCounted = false;
+				decrementSseConnections();
+			}
+		};
 		const stream = new ReadableStream({
 			async start(controller) {
 				const send = (event: Record<string, unknown>) => {
@@ -185,7 +203,12 @@ export const POST: RequestHandler = async ({ request }) => {
 						send({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
 					}
 				});
+				releaseSse();
 				controller.close();
+			},
+			cancel() {
+				// Client disconnected before the stream finished.
+				releaseSse();
 			},
 		});
 
