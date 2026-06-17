@@ -10,28 +10,19 @@ Use when a stream writes \>10 GB/day per shard and has a clear warm
 window where query load drops. This is the default for eu-cld logs and
 us-cld logs.
 
-    PUT _ilm/policy/logs-classic-4phase
     {
-    "policy": {
-    "phases": {
-    "hot": { "actions": { "rollover": { "max_primary_shard_size":
-    "25gb", "max_age": "1d" }, "set_priority": { "priority": 100
-    } } },
-    "warm": { "min_age": "3d", "actions": { "allocate": {
-    "number_of_replicas": 1 }, "forcemerge": { "max_num_segments":
-
-1 }, "shrink": { "number_of_shards": 1 }, "set_priority": {
-
-    "priority": 50 } } },
-    "cold": { "min_age": "10d", "actions": {
-    "searchable_snapshot": { "snapshot_repository":
-    "found-snapshots" }, "set_priority": { "priority": 0 } } },
-    "frozen": { "min_age": "30d", "actions": {
-    "searchable_snapshot": { "snapshot_repository":
-    "found-snapshots" } } },
-    "delete": { "min_age": "90d", "actions": { "delete": {} } }
-    }
-    }
+      "name": "logs-classic-4phase",
+      "hot": { "priority": 100, "max_age": "1d", "max_primary_shard_size": "25gb", "rollover": true },
+      "warm": {
+        "min_age": "3d",
+        "priority": 50,
+        "allocate": { "number_of_replicas": 1 },
+        "forcemerge": { "max_num_segments": 1 },
+        "shrink": { "number_of_shards": 1, "allow_write_after_shrink": false }
+      },
+      "cold": { "min_age": "10d", "priority": 0, "allocate": { "number_of_replicas": 0 } },
+      "frozen": { "min_age": "30d", "searchable_snapshot": { "snapshot_repository": "found-snapshots", "force_merge_index": false } },
+      "delete": { "min_age": "90d", "delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } }
     }
 
 -   Rollover threshold: default to 25 GB primary shard size. Document
@@ -91,14 +82,14 @@ lowered on the top 6 retention policies from 30d → 14d. This shifts the
 oldest 30--50 % of cold data into frozen (partial cache) --- near-zero
 user impact for archival series, large headroom gain.
 
-    PUT _ilm/policy/logs-classic-4phase
-    { "policy": { "phases": {
-    ...,
-    "frozen": { "min_age": "14d", "actions": {
-    "searchable_snapshot": { "snapshot_repository":
-    "found-snapshots" } } },
-    "delete": { "min_age": "90d", "actions": { "delete": {} } }
-    }}}
+    {
+      "name": "logs-classic-4phase",
+      "hot": { "...": "unchanged" },
+      "warm": { "...": "unchanged" },
+      "cold": { "...": "unchanged" },
+      "frozen": { "min_age": "14d", "searchable_snapshot": { "snapshot_repository": "found-snapshots", "force_merge_index": false } },
+      "delete": { "min_age": "90d", "delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } }
+    }
 
 -   Only apply to policies where queries on data \>14d are rare ---
     check search activity before toggling.
@@ -157,25 +148,13 @@ force_merge_index:true on the searchable_snapshot action. This is
 cheaper because snapshot-time merge is done once, on already-mostly-cold
 data, instead of fighting warm-phase writes.
 
-    PUT _ilm/policy/pathb-uniform-4tier
     {
-    "policy": {
-    "phases": {
-    "hot": { "actions": { "rollover": { "max_primary_shard_size":
-    "10gb", "max_age": "1d" }, "set_priority": { "priority": 100
-    } } },
-    "warm": { "min_age": "3d", "actions": { "allocate": {
-    "number_of_replicas": 1 }, "set_priority": { "priority": 50 } }
-    },
-    "cold": { "min_age": "7d", "actions": {
-    "searchable_snapshot": { "snapshot_repository":
-    "found-snapshots" }, "set_priority": { "priority": 0 } } },
-    "frozen": { "min_age": "14d", "actions": {
-    "searchable_snapshot": { "snapshot_repository":
-    "found-snapshots", "force_merge_index": true } } },
-    "delete": { "min_age": "90d", "actions": { "delete": {} } }
-    }
-    }
+      "name": "pathb-uniform-4tier",
+      "hot": { "priority": 100, "max_age": "1d", "max_primary_shard_size": "10gb", "rollover": true },
+      "warm": { "min_age": "3d", "priority": 50, "allocate": { "number_of_replicas": 1 } },
+      "cold": { "min_age": "7d", "priority": 0, "allocate": { "number_of_replicas": 0 } },
+      "frozen": { "min_age": "14d", "searchable_snapshot": { "snapshot_repository": "found-snapshots", "force_merge_index": true } },
+      "delete": { "min_age": "90d", "delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } }
     }
 
 ## §3.6.1 Path B rollout on eu-b2b
@@ -323,9 +302,11 @@ daily rollover (max_age: 1d) on streams that produce far less than 10
 GB per day. The aggressive profile slows rollovers without forcing
 sparse streams to never roll.
 
-    "rollover": {
+    "hot": {
+      "priority": 100,
       "max_age": "14d",
-      "max_primary_shard_size": "50gb"
+      "max_primary_shard_size": "50gb",
+      "rollover": true
     }
 
 -   Use 14d for prod policies (90d retention), 7d for nonprod (30d

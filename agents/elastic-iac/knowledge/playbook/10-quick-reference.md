@@ -77,23 +77,15 @@ Source: Elastic_Optimisation_Playbook_v12 §10 (reference content).
 
 -------------------------------------------------------
 
-    PUT _ilm/policy/<name>
     {
-      "policy": {
-        "phases": {
-          "hot": {
-            "min_age": "0ms",
-            "actions": {
-              "rollover": {
-                "max_age": "14d",
-                "max_primary_shard_size": "50gb"
-              },
-              "set_priority": { "priority": 100 }
-            }
-          },
-          ...
-        }
-      }
+      "name": "<name>",
+      "hot": {
+        "priority": 100,
+        "max_age": "14d",
+        "max_primary_shard_size": "50gb",
+        "rollover": true
+      },
+      "warm": { "...": "other phases as needed" }
     }
 
 Adjust max_age per retention: 14d for 90d retention, 7d for 30d, 3d for
