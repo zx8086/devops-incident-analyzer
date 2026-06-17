@@ -14,6 +14,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Set up from scratch | [Getting Started](development/getting-started.md) |
 | Understand architecture | [System Overview](architecture/system-overview.md) |
 | Understand agent pipeline | [Agent Pipeline](architecture/agent-pipeline.md) |
+| Know what agents persist to memory | [Agent Memory](architecture/agent-memory.md) |
 | Use the Elastic IaC (GitOps proposer) agent | [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) |
 | Add or modify MCP tools | [Adding MCP Tools](development/adding-mcp-tools.md) |
 | Understand action-driven tool filtering | [Action Tool Maps](development/action-tool-maps.md) |
@@ -37,6 +38,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 |----------|-------------|
 | [System Overview](architecture/system-overview.md) | High-level architecture, data flow, and component relationships |
 | [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 20-node StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, query (fan-out), align, aggregate, extractFindings, enforceCorrelations, checkConfidence, validate, mitigation split (investigate/monitor/escalate + aggregate), followUp, detectTopicShift |
+| [Agent Memory](architecture/agent-memory.md) | Live-memory tier (SIO-938): what each agent saves to Couchbase Agent Memory and when — dailylog breadcrumbs as TTL'd conversational messages, key decisions as durable facts, semantic recall at bootstrap, queue-flush at teardown; user-per-agent / thread-per-session mapping |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
 | [MCP Integration](architecture/mcp-integration.md) | 8 MCP server connections (7 datasource + elastic-iac), tool scoping, health monitoring, trace propagation |
 | [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) | The natural-language change agent (peer to the incident-analyzer): 24-node GitOps proposer, `elastic-iac-mcp` (:9086), HITL plan-review, JSON-edit-via-GitLab-API; config-edit workflows (version-upgrade / tier-resize / ilm-rollout / topology / slo / alerting / dataview / cluster-default / space / security / fleet-integration / dashboard) plus drift, synthetics-drift, and Fleet-upgrade CI sub-flows. Agent proposes, CI + human dispose. |
