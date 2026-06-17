@@ -5,6 +5,7 @@ import {
 	type AgentMemoryUserRef,
 	type ChatMessageBlock,
 	redactPiiContent,
+	ServiceUnavailableError,
 } from "@devops-agent/shared";
 import {
 	__resetMemoryQueue,
@@ -13,6 +14,7 @@ import {
 	endAgentMemorySession,
 	enqueueMessage,
 	flushAgentMemory,
+	pendingWriteCount,
 	recallAgentMemory,
 	resolveUserId,
 	selectedBackend,
@@ -53,10 +55,13 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 		},
 		async searchMemory(_ref, query) {
 			rec.searches.push(query);
-			return searchResult;
+			return searchResult.map((text) => ({ text }));
 		},
 		async endSession(ref) {
 			rec.ended.push(ref);
+		},
+		async checkHealth() {
+			return { ok: true, status: "ok" };
 		},
 	};
 	return { client, rec };
@@ -144,7 +149,7 @@ describe("writer -> agent-memory backend", () => {
 		const { client, rec } = makeFakeClient();
 		__setAgentMemoryClient(client);
 		clearActiveMemorySession();
-		enqueueMessage({ user_content: "x", assistant_content: "y" });
+		enqueueMessage({ user_content: "x", assistant_content: "y" }, "2026-06-17T00:00:00Z");
 		await flushAgentMemory();
 		expect(rec.messages).toHaveLength(0); // dropped, no throw
 	});
@@ -191,9 +196,43 @@ describe("recall + endSession", () => {
 		const { client, rec } = makeFakeClient();
 		__setAgentMemoryClient(client);
 		setActiveMemorySession("elastic-iac", "t-iac");
-		enqueueMessage({ user_content: "q", assistant_content: "a" });
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
 		await endAgentMemorySession();
 		expect(rec.messages).toHaveLength(1);
 		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-iac" }]);
+	});
+
+	test("a 503 on flush requeues the batch instead of dropping it", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		setActiveMemorySession("incident-analyzer", "t-1");
+		// First flush: client throws 503 -> batch requeued.
+		let throwOn503 = true;
+		const accepted: string[] = [];
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts(_ref, facts) {
+				if (throwOn503) throw new ServiceUnavailableError("queue full", 5);
+				accepted.push(...facts);
+			},
+			async addMessages() {},
+			async searchMemory() {
+				return [];
+			},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		recordKeyDecision({ requestId: "r1", decision: "scale consumers" });
+		await flushAgentMemory();
+		expect(accepted).toHaveLength(0); // 503 -> nothing accepted yet
+		expect(pendingWriteCount()).toBe(1); // requeued, not dropped
+		// Service recovers; next flush succeeds.
+		throwOn503 = false;
+		await flushAgentMemory();
+		expect(accepted).toEqual(["scale consumers"]);
+		expect(pendingWriteCount()).toBe(0);
 	});
 });

@@ -6,13 +6,17 @@ export {
 	PendingActionSchema,
 } from "./action-types.ts";
 export {
+	type AddOptions,
 	type AgentMemoryClient,
 	type AgentMemoryConfig,
 	AgentMemoryConfigSchema,
+	type AgentMemoryHealth,
 	type AgentMemoryUserRef,
 	type ChatMessageBlock,
 	createFetchAgentMemoryClient,
+	type MemoryHit,
 	resolveAgentMemoryConfig,
+	ServiceUnavailableError,
 } from "./agent-memory.ts";
 export {
 	type AtlassianFindings,
