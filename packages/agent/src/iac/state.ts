@@ -29,6 +29,12 @@ export interface IacRequest {
 	// SIO-931: ilm-rollout "copy/clone/exact copy of <policy>" -- the reference policy filename to
 	// read from the SAME cluster's lifecycle-policies/ dir and use as the (correctly-shaped) base.
 	sourcePolicy?: string;
+	// SIO-932: ilm-rollout naming MORE THAN ONE policy file in one request (e.g. "in metrics.json
+	// and logs.json set warm replicas to 0"). Each entry is an independent {policyName, phasesPatch?,
+	// sourcePolicy?} applied to the SAME cluster; draftChange commits them all to ONE branch and
+	// opens ONE MR. A single-policy request leaves this undefined and uses the singular fields above
+	// (parseIntentJson folds a single-entry array back to the singular path for back-compat).
+	ilmPolicies?: Array<{ policyName: string; phasesPatch?: Record<string, unknown>; sourcePolicy?: string }>;
 	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
 	version?: string;
 	// SIO-914: fleet-integration workflow -- the integration alias key in integrations.json
@@ -379,6 +385,10 @@ export const IacState = Annotation.Root({
 	// SIO-873: GitOps proposer (version-upgrade) — the JSON config file edited and the
 	// version it held before the bump, surfaced in the plan-review payload.
 	proposedFilePath: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-932: all repo file paths committed this turn. A single-file change sets exactly one
+	// entry (mirroring proposedFilePath); a multi-file ilm-rollout sets one per policy. The MR
+	// body lists them under "Files touched"; proposedDiff carries the combined per-file diffs.
+	proposedFiles: Annotation<string[]>({ reducer: last, default: () => [] }),
 	previousVersion: Annotation<string>({ reducer: last, default: () => "" }),
 	terraformPlan: Annotation<string>({ reducer: last, default: () => "" }),
 	risks: Annotation<string[]>({ reducer: last, default: () => [] }),

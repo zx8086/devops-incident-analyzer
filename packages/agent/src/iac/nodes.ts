@@ -88,6 +88,18 @@ const IntentSchema = z.object({
 	policyName: z.string().nullish(),
 	sourcePolicy: z.string().nullish(),
 	phasesPatch: z.record(z.string(), z.unknown()).nullish(),
+	// SIO-932: multiple ILM policy files in one request. Each entry mirrors the singular
+	// policyName/phasesPatch/sourcePolicy. parseIntentJson folds a 0/1-entry array back to the
+	// singular fields so the single-policy path (and its tests) are unchanged.
+	ilmPolicies: z
+		.array(
+			z.object({
+				policyName: z.string(),
+				phasesPatch: z.record(z.string(), z.unknown()).nullish(),
+				sourcePolicy: z.string().nullish(),
+			}),
+		)
+		.nullish(),
 	version: z.string().nullish(),
 	integration: z.string().nullish(),
 	integrationVersion: z.string().nullish(),
@@ -149,6 +161,30 @@ export function parseIntentJson(raw: string): IacRequest {
 				const p = parsed.data;
 				// Normalize the planner's explicit nulls to undefined for the IacRequest shape.
 				const nn = <T>(v: T | null | undefined): T | undefined => v ?? undefined;
+				// SIO-932: the ilm template ends in `${policy}.json`, so policyName must be the basename
+				// WITHOUT the extension. Users naturally name the file with it ("set X in metrics.json"),
+				// and the planner echoes it verbatim -> a doubled `metrics.json.json` path that 404s and
+				// onboards a bogus policy. Strip a single trailing `.json` defensively (covers both the
+				// singular path and every ilmPolicies entry). A policy literally named with a trailing
+				// ".json" segment is not a real ILM policy filename, so this is always safe.
+				const stripJsonExt = (v: string | undefined): string | undefined =>
+					v === undefined ? undefined : v.replace(/\.json$/i, "");
+				// SIO-932: fold the ilmPolicies array. >=2 entries -> keep the array and leave the
+				// singular policyName/phasesPatch/sourcePolicy as the planner set them (draftChange
+				// dispatches on ilmPolicies.length). 0/1 entries -> drop the array and let the single
+				// entry's fields populate the singular path (back-compat: a 1-file request behaves
+				// exactly as before). Entries are mapped to undefined-normalized phasesPatch/sourcePolicy.
+				const ilmEntries = (nn(p.ilmPolicies) ?? []).map((e) => ({
+					policyName: stripJsonExt(e.policyName) ?? e.policyName,
+					phasesPatch: nn(e.phasesPatch),
+					sourcePolicy: stripJsonExt(nn(e.sourcePolicy)),
+				}));
+				const multiIlm = ilmEntries.length >= 2;
+				const soleIlm = ilmEntries.length === 1 ? ilmEntries[0] : undefined;
+				// SIO-932: only strip .json for the ilm-rollout workflow; other workflows' name fields
+				// (sloName, ruleName, dataviewName, ...) are basenames the planner already gives bare,
+				// and a couple legitimately could carry other meanings.
+				const isIlm = p.workflow === "ilm-rollout";
 				return {
 					workflow: p.workflow,
 					isProd: p.isProd,
@@ -157,9 +193,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					resource: nn(p.resource),
 					newSizeGb: nn(p.newSizeGb),
 					newMaxGb: nn(p.newMaxGb),
-					policyName: nn(p.policyName),
-					sourcePolicy: nn(p.sourcePolicy),
-					phasesPatch: nn(p.phasesPatch),
+					policyName: soleIlm?.policyName ?? (isIlm ? stripJsonExt(nn(p.policyName)) : nn(p.policyName)),
+					sourcePolicy: soleIlm?.sourcePolicy ?? (isIlm ? stripJsonExt(nn(p.sourcePolicy)) : nn(p.sourcePolicy)),
+					phasesPatch: soleIlm?.phasesPatch ?? nn(p.phasesPatch),
+					ilmPolicies: multiIlm ? ilmEntries : undefined,
 					version: nn(p.version),
 					integration: nn(p.integration),
 					integrationVersion: nn(p.integrationVersion),
@@ -403,7 +440,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'dashboard-edit'|'other'), " +
 		"cluster, tier, " +
 		"resource, newSizeGb, " +
-		"newMaxGb, policyName, phasesPatch, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
+		"newMaxGb, policyName, phasesPatch, ilmPolicies, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
 		"sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, " +
 		"runtimeFieldName, runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, " +
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
@@ -425,6 +462,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"'.alerts-ilm-policy'). If the user asks to COPY / clone / mirror / 'same as' / 'exact copy of' an existing " +
 		"policy, set sourcePolicy to that reference policy's filename VERBATIM and put ONLY the explicit overrides (if " +
 		"any) in phasesPatch. Otherwise set phasesPatch to the fields to change. " +
+		"policyName is the policy file BASENAME WITHOUT the .json extension: 'metrics.json' -> policyName 'metrics', " +
+		"'30-days@lifecycle.json' -> '30-days@lifecycle'. Never include the .json suffix. " +
+		"If the user names MORE THAN ONE policy file in a single request (e.g. 'in metrics.json AND logs.json set warm " +
+		"replicas to 0', 'on eu-b2b set X on policies A, B and C'), DO NOT pick one and drop the rest: set `ilmPolicies` " +
+		"to an ARRAY with one object per file -- each { policyName: '<basename, no .json>', phasesPatch: { ... same nested " +
+		"shape ... } } (or sourcePolicy for a copy) -- applying the requested change to EACH named file, and leave the " +
+		"top-level policyName/phasesPatch/sourcePolicy null. All entries share the single top-level `cluster`. For a " +
+		"SINGLE policy use the top-level policyName/phasesPatch and omit ilmPolicies. " +
 		"phasesPatch uses the repo's NESTED phase shape (top-level keys hot|warm|cold|frozen|delete), matching the " +
 		"existing policy JSON files EXACTLY -- e.g. " +
 		'{ "hot": { "priority": 100, "max_age": "7d", "max_primary_shard_size": "10gb", "rollover": true }, ' +
@@ -1109,7 +1154,11 @@ export function branchSlug(req: IacRequest): string {
 		req.workflow === "version-upgrade"
 			? req.version
 			: req.workflow === "ilm-rollout"
-				? req.policyName
+				? // SIO-932: a multi-file ilm request joins the policy names (e.g. metrics-logs); the
+					// 40-char slug cap truncates a long list. A single policy keeps the existing slug.
+					req.ilmPolicies && req.ilmPolicies.length >= 2
+					? req.ilmPolicies.map((e) => e.policyName).join("-")
+					: req.policyName
 				: req.workflow === "fleet-integration"
 					? req.integration
 					: req.workflow === "slo-edit"
@@ -1820,32 +1869,39 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 
 // SIO-880: ilm-rollout via the GitOps proposer -- deep-merge a phase patch into the
 // cluster's lifecycle-policy JSON and open an MR via the API. Mirrors proposeTierResize.
-export async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
-	const cluster = req.cluster ?? "";
-	const policy = req.policyName ?? "";
-	const patch = req.phasesPatch;
+// SIO-932: result of committing ONE ILM policy file onto an already-created branch. A discriminated
+// union so the caller (single- or multi-policy) handles a block uniformly. On ok=true the file is
+// already committed to `branch`; the caller aggregates filePath/diffLines/retentionChange/policyCreated.
+type IlmCommitResult =
+	| { ok: false; blockedReason: string; message: string }
+	| {
+			ok: true;
+			filePath: string;
+			diffLines: string[];
+			retentionChange: { from: string; to: string } | null;
+			policyCreated: boolean;
+	  };
 
-	if (!policy) {
-		return {
-			blockedReason: "ILM change needs a policy name.",
-			messages: [new AIMessage("Cannot propose the change: name the policy to change or create.")],
-		};
-	}
-	if (!req.sourcePolicy && (!patch || Object.keys(patch).length === 0)) {
-		return {
-			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
-			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
-		};
-	}
-
+// SIO-932: read -> merge/create -> structural-validate -> commit one ILM policy file onto `branch`,
+// returning the per-file diff + risk flags (or a block reason). Extracted verbatim from the original
+// single-file proposeIlmChange body so the single path is byte-identical and the multi-file
+// orchestrator can loop it onto ONE shared branch. The branch is created by the CALLER (once),
+// never here, so N policies share one branch -> one MR.
+async function commitOneIlmPolicy(
+	cluster: string,
+	branch: string,
+	policy: string,
+	patch: Record<string, unknown> | undefined,
+	sourcePolicy: string | undefined,
+): Promise<IlmCommitResult> {
 	const filePath = deploymentJsonPath(ilmPolicyTemplate(), cluster, policy);
-	const branch = branchName(req);
 
 	const raw = await callTool("gitlab_get_file_content", { filePath });
 	if (raw.startsWith("[gitlab token not configured")) {
 		return {
+			ok: false,
 			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
-			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+			message: "Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.",
 		};
 	}
 	// SIO-899: a 404 means the policy file is not tracked in IaC yet (the policy may exist
@@ -1862,25 +1918,23 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	// block rather than fall through; only a real 404 carries the per-stack handling below.
 	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
 		return {
+			ok: false,
 			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
-			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+			message: "Cannot propose the change: I could not read the target file from the GitOps repo.",
 		};
 	}
 	const patchObj = (patch ?? {}) as Record<string, unknown>;
 
 	// SIO-931 copy-from-reference: the base is the source policy (already correctly shaped). The
 	// source must be readable -- a copy of a policy we can't read is never silently downgraded.
-	if (req.sourcePolicy) {
-		const srcPath = deploymentJsonPath(ilmPolicyTemplate(), cluster, req.sourcePolicy);
+	if (sourcePolicy) {
+		const srcPath = deploymentJsonPath(ilmPolicyTemplate(), cluster, sourcePolicy);
 		const srcRaw = await callTool("gitlab_get_file_content", { filePath: srcPath });
 		if (!isGitlabSuccess(srcRaw)) {
 			return {
-				blockedReason: `Could not read reference policy '${req.sourcePolicy}' on '${cluster}': ${srcRaw.slice(0, 80)}.`,
-				messages: [
-					new AIMessage(
-						`I couldn't read reference policy '${req.sourcePolicy}' on '${cluster}' (${srcRaw.slice(0, 40)}). Name an existing policy to copy, or specify the phases directly.`,
-					),
-				],
+				ok: false,
+				blockedReason: `Could not read reference policy '${sourcePolicy}' on '${cluster}': ${srcRaw.slice(0, 80)}.`,
+				message: `I couldn't read reference policy '${sourcePolicy}' on '${cluster}' (${srcRaw.slice(0, 40)}). Name an existing policy to copy, or specify the phases directly.`,
 			};
 		}
 		let srcObj: Record<string, unknown>;
@@ -1889,12 +1943,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			return {
-				blockedReason: `Reference policy '${req.sourcePolicy}' on '${cluster}' is not valid JSON: ${reason}.`,
-				messages: [
-					new AIMessage(
-						`Cannot propose the change: reference policy '${req.sourcePolicy}' on '${cluster}' did not parse as JSON.`,
-					),
-				],
+				ok: false,
+				blockedReason: `Reference policy '${sourcePolicy}' on '${cluster}' is not valid JSON: ${reason}.`,
+				message: `Cannot propose the change: reference policy '${sourcePolicy}' on '${cluster}' did not parse as JSON.`,
 			};
 		}
 		srcObj.name = policy;
@@ -1936,8 +1987,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			return {
+				ok: false,
 				blockedReason: `Could not edit ${filePath}: ${reason}.`,
-				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+				message: `Cannot propose the change: ${reason}.`,
 			};
 		}
 
@@ -1945,12 +1997,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		// modify can be a no-op; a freshly created file is always a change.
 		if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 			return {
+				ok: false,
 				blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
-				messages: [
-					new AIMessage(
-						`No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
-					),
-				],
+				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
 			};
 		}
 	}
@@ -1959,19 +2008,15 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	const valid = validateIlmPolicy(JSON.parse(updated.content));
 	if (!valid.ok) {
 		return {
+			ok: false,
 			blockedReason: `Proposed ILM policy '${policy}' is structurally invalid: ${valid.reason}`,
-			messages: [
-				new AIMessage(
-					`I won't open an MR: the proposed '${policy}' policy doesn't match the repo schema. ${valid.reason}`,
-				),
-			],
+			message: `I won't open an MR: the proposed '${policy}' policy doesn't match the repo schema. ${valid.reason}`,
 		};
 	}
 
 	const retentionChange = detectRetentionReduction(updated.previous, patchObj);
 
-	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const fields = Object.keys(patchObj).join(", ") || (req.sourcePolicy ? `copy of ${req.sourcePolicy}` : "copy");
+	const fields = Object.keys(patchObj).join(", ") || (sourcePolicy ? `copy of ${sourcePolicy}` : "copy");
 	const commit = await callTool("gitlab_commit_file", {
 		branch,
 		file_path: filePath,
@@ -1985,11 +2030,11 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	// or non-2xx must NOT reach the review gate as a committed change.
 	if (!isGitlabSuccess(commit)) {
 		return {
+			ok: false,
 			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
-			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+			message: "Cannot propose the change: the GitLab commit failed.",
 		};
 	}
-	const committed = true;
 
 	// Human diff: one -/+ pair per touched leaf, walking the previous mirror against patch.
 	// A created policy has no prior values, so every leaf renders as an addition ("?"->value).
@@ -2013,13 +2058,117 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	};
 	walk(updated.previous, patchObj, "");
 
+	return { ok: true, filePath, diffLines, retentionChange, policyCreated };
+}
+
+export async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	// SIO-932: a request naming >=2 policy files fans out to the multi-file orchestrator
+	// (one branch, one MR, all files). parseIntentJson only sets ilmPolicies for >=2 entries.
+	if (req.ilmPolicies && req.ilmPolicies.length >= 2) {
+		return proposeIlmChanges(state, req);
+	}
+
+	const cluster = req.cluster ?? "";
+	const policy = req.policyName ?? "";
+	const patch = req.phasesPatch;
+
+	if (!policy) {
+		return {
+			blockedReason: "ILM change needs a policy name.",
+			messages: [new AIMessage("Cannot propose the change: name the policy to change or create.")],
+		};
+	}
+	if (!req.sourcePolicy && (!patch || Object.keys(patch).length === 0)) {
+		return {
+			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
+			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
+		};
+	}
+
+	const branch = branchName(req);
+	// SIO-899: gitlab_create_branch is idempotent (a re-run reuses the branch); create it before
+	// the commit. Kept here (not in the helper) so the multi-file path creates one shared branch.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+	const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy);
+	if (!result.ok) {
+		return { blockedReason: result.blockedReason, messages: [new AIMessage(result.message)] };
+	}
+
 	return {
 		branch,
-		proposedFilePath: filePath,
-		proposedDiff: diffLines.join("\n"),
-		precheckPassed: committed,
-		retentionChange,
-		policyCreated,
+		proposedFilePath: result.filePath,
+		proposedFiles: [result.filePath],
+		proposedDiff: result.diffLines.join("\n"),
+		precheckPassed: true,
+		retentionChange: result.retentionChange,
+		policyCreated: result.policyCreated,
+	};
+}
+
+// SIO-932: multi-file ILM orchestrator. The user named >=2 policy files in one request; commit
+// each onto ONE shared branch so a single MR carries them all. ATOMIC: if ANY file blocks
+// (unreadable / invalid / no-op), fail the whole turn naming that file -- never open a partial MR
+// (the user said "change nothing else"). Aggregates the per-file diffs into one proposedDiff and
+// OR-reduces the risk flags (retentionChange/policyCreated) so the review card still surfaces them.
+async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const entries = req.ilmPolicies ?? [];
+
+	// Per-entry validation mirrors the singular guards, but names the offending file so the user
+	// knows which one is underspecified.
+	for (const e of entries) {
+		if (!e.policyName) {
+			return {
+				blockedReason: "ILM change needs a policy name for every file.",
+				messages: [new AIMessage("Cannot propose the change: every named policy needs a filename.")],
+			};
+		}
+		if (!e.sourcePolicy && (!e.phasesPatch || Object.keys(e.phasesPatch).length === 0)) {
+			return {
+				blockedReason: `ILM change for '${e.policyName}' needs at least one phase field to change (or a sourcePolicy to copy).`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: policy '${e.policyName}' has no phase field to change and no policy to copy from.`,
+					),
+				],
+			};
+		}
+	}
+
+	const branch = branchName(req);
+	// Create the shared branch ONCE; every policy commits onto it.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+
+	const files: string[] = [];
+	const diffBlocks: string[] = [];
+	let anyRetention: { from: string; to: string } | null = null;
+	let anyCreated = false;
+	for (const e of entries) {
+		const result = await commitOneIlmPolicy(cluster, branch, e.policyName, e.phasesPatch, e.sourcePolicy);
+		if (!result.ok) {
+			// Atomic: one file's failure blocks the whole MR. Any files already committed to the
+			// branch are harmless -- no MR is opened, so the branch is never reviewed or merged.
+			return {
+				blockedReason: `Multi-file ILM change blocked on '${e.policyName}': ${result.blockedReason}`,
+				messages: [new AIMessage(`${result.message} No merge request was opened (the batch is all-or-nothing).`)],
+			};
+		}
+		files.push(result.filePath);
+		diffBlocks.push(result.diffLines.join("\n"));
+		if (result.retentionChange) anyRetention = result.retentionChange;
+		if (result.policyCreated) anyCreated = true;
+	}
+
+	return {
+		branch,
+		// proposedFilePath stays populated (first file) so any single-file consumer keeps working;
+		// proposedFiles is the authoritative list the MR body + review descriptor read.
+		proposedFilePath: files[0] ?? "",
+		proposedFiles: files,
+		proposedDiff: diffBlocks.join("\n\n"),
+		precheckPassed: files.length > 0,
+		retentionChange: anyRetention,
+		policyCreated: anyCreated,
 	};
 }
 
@@ -3463,7 +3612,11 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		: req?.workflow === "tier-resize"
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
 			: req?.workflow === "ilm-rollout"
-				? `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
+				? // SIO-932: a multi-file request reads "N ILM policies: <fields>" (the shared change);
+					// a single policy keeps the "<policy>: <fields>" form.
+					req?.ilmPolicies && req.ilmPolicies.length >= 2
+					? `${req.ilmPolicies.length} ILM policies: ${Object.keys(req.ilmPolicies[0]?.phasesPatch ?? {}).join(", ") || "change"}`
+					: `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
 				: req?.workflow === "fleet-integration"
 					? `${req?.integration ?? "?"} -> ${req?.integrationVersion ?? "?"}`
 					: req?.workflow === "slo-edit"
@@ -3555,7 +3708,10 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
 			req?.workflow === "ilm-rollout"
-				? `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				? req?.ilmPolicies && req.ilmPolicies.length >= 2
+					? // SIO-932: one MR carrying the SAME phase change across multiple policy files.
+						`ILM phase change applied to ${req.ilmPolicies.length} policy files on '${req?.cluster}': ${req.ilmPolicies.map((e) => e.policyName).join(", ")}. Shared overrides: ${JSON.stringify(req.ilmPolicies[0]?.phasesPatch ?? {})}.${state.policyCreated ? " One or more files are CREATEs (new lifecycle-policy files onboarded into IaC)." : ""}${state.retentionChange ? ` At least one file REDUCES retention ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+					: `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
 				: "",
 			req?.workflow === "fleet-integration"
 				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`
@@ -3586,6 +3742,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
+			// SIO-932: list every committed file so the MR's "Files touched" section is complete for a
+			// multi-file change (a single-file change lists the one path, as before).
+			state.proposedFiles.length > 0 ? `Files touched: ${state.proposedFiles.join(", ")}.` : "",
 			`File diff:\n${review?.diff ?? "(none)"}`,
 			`Plan note: ${review?.plan ?? "(none)"}`,
 		]
@@ -5610,10 +5769,19 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
 	}
 	const lines: string[] = [state.mrUrl ? `MR opened: ${state.mrUrl}` : "MR step complete."];
+	// SIO-932: a multi-file ilm change names every file it touched so the user sees both edits in
+	// one MR (the whole point of the batch). policyName is null on the multi path, so read proposedFiles.
+	if (state.intent === "gitops" && (state.iacRequest?.ilmPolicies?.length ?? 0) >= 2) {
+		lines.push(`This MR changes ${state.proposedFiles.length} files: ${state.proposedFiles.join(", ")}.`);
+	}
 	// SIO-899: when onboarding an untracked policy, name the created file + scope it (Step 2 is a runtime apply).
 	if (state.policyCreated) {
+		const created =
+			(state.iacRequest?.ilmPolicies?.length ?? 0) >= 2
+				? `${state.proposedFiles.length} ILM policy files`
+				: `'${state.iacRequest?.policyName ?? "?"}'`;
 		lines.push(
-			`Created a new managed ILM policy '${state.iacRequest?.policyName ?? "?"}' (was untracked in IaC). Attaching it to existing indices is a runtime apply done in GitLab/Elasticsearch, not part of this MR.`,
+			`Created a new managed ILM policy ${created} (was untracked in IaC). Attaching it to existing indices is a runtime apply done in GitLab/Elasticsearch, not part of this MR.`,
 		);
 	}
 
