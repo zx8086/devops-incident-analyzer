@@ -28,8 +28,8 @@ packages/
   mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
   mcp-server-atlassian/    Atlassian MCP server (Jira + Confluence proxy via Rovo OAuth 2.1)
   mcp-server-aws/          AWS MCP server (multi-estate via cross-account AssumeRole; CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.)
-  shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy
-  checkpointer/            LangGraph state persistence (memory + bun:sqlite)
+  shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
+  checkpointer/            Transient per-thread LangGraph state (memory + bun:sqlite)
   observability/           OpenTelemetry + LangSmith, Pino logging
 apps/
   web/                     SvelteKit frontend (Svelte 5 runes, Tailwind, SSE streaming)
@@ -48,6 +48,15 @@ START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
 ```
 
 The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list. SIO-764 added the `extractFindings` node immediately after `aggregate`; it reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (`kafkaFindings`) onto the `DataSourceResult` for the rule engine to consume. SIO-828 added `awsEstateRouter` between `entityExtractor` and the fan-out; when AWS is in `dataSources`, it expands a single AWS dispatch into one Send per target estate (cross-account AssumeRole) so the LLM never sees per-account credentials. SIO-850 added two opt-in knowledge-graph nodes (`recordEntities` + `graphEnrich`) between `entityExtractor` and `awsEstateRouter`, reachable only when `KNOWLEDGE_GRAPH_ENABLED=true` (the SIO-640 edge-gate idiom: registered always, edged only when enabled). Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 22 (20 base + 2 gated).
+
+### Live Memory + Agent Memory backend (SIO-938)
+
+Both agents keep durable cross-session **live memory**, distinct from the checkpointer (which is transient per-thread graph state only). The single writer is `packages/agent/src/memory-writer.ts` (`readLiveMemory` / `appendDailyLog` / `recordKeyDecision`), gated by `LIVE_MEMORY_ENABLED`, always PII-redacted. Storage is swappable via `LIVE_MEMORY_BACKEND`:
+
+- `file` (default): git-tracked markdown under `agents/<agent>/memory/runtime/*.md` + `memory/wiki/`.
+- `agent-memory`: the Couchbase Agent Memory REST service. `context`/`key-decisions`/wiki -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL via `AGENT_MEMORY_DAILYLOG_TTL_SECONDS`); semantic recall over past sessions at bootstrap. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`); threadId = session_id.
+
+The backend is a direct REST client in `packages/shared/src/agent-memory.ts` (no MCP server, no LLM tool surface). It is wired through the `lifecycle.ts` registration seams (`registerMemoryRecaller` / `registerMemoryFlusher`, installed by `installAgentMemory()` in `apps/web/src/lib/server/agent.ts`). A **write-behind queue** in `memory-backend.ts` bridges the synchronous writer to async REST and drains at session teardown, so the writer signatures and the default file path are unchanged when the backend is unset. Env: `AGENT_MEMORY_BASE_URL`, `AGENT_MEMORY_ENABLED`, `AGENT_MEMORY_BEARER_TOKEN` (OIDC). Spec: `docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md`.
 
 ### Sub-Agents (named by MCP server)
 
