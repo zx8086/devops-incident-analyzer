@@ -86,6 +86,7 @@ const IntentSchema = z.object({
 	newSizeGb: z.number().nullish(),
 	newMaxGb: z.number().nullish(),
 	policyName: z.string().nullish(),
+	sourcePolicy: z.string().nullish(),
 	phasesPatch: z.record(z.string(), z.unknown()).nullish(),
 	version: z.string().nullish(),
 	integration: z.string().nullish(),
@@ -157,6 +158,7 @@ export function parseIntentJson(raw: string): IacRequest {
 					newSizeGb: nn(p.newSizeGb),
 					newMaxGb: nn(p.newMaxGb),
 					policyName: nn(p.policyName),
+					sourcePolicy: nn(p.sourcePolicy),
 					phasesPatch: nn(p.phasesPatch),
 					version: nn(p.version),
 					integration: nn(p.integration),
@@ -229,13 +231,13 @@ export function capabilityMessage(): string {
 		"Today I can propose:\n" +
 		'- **Version upgrades** -- e.g. "upgrade ap-cld to 9.4.2"\n' +
 		'- **Tier resizes** -- e.g. "downsize eu-b2b warm to 8 GB"\n' +
-		'- **ILM lifecycle changes** -- e.g. "set eu-b2b 30-day retention to 60 days"\n' +
-		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-b2b to 6.15.0"\n' +
-		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on eu-b2b"\n' +
-		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-b2b"\n' +
-		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on eu-b2b"\n' +
-		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on eu-b2b"\n' +
-		'- **Space edits** -- e.g. "change the developer-experience space description on eu-b2b"\n' +
+		'- **ILM lifecycle changes** -- e.g. "set us-cld 30-day retention to 60 days"\n' +
+		'- **Fleet integration version pins** -- e.g. "bump the aws integration on eu-cld to 6.15.0"\n' +
+		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on ap-cld"\n' +
+		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
+		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
+		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld"\n' +
+		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
 		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n\n' +
@@ -410,52 +412,66 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
+		"Extract `cluster` ONLY from the deployment the user names in this request; NEVER default to a cluster that " +
+		"appears only in these instruction examples. If the user names no cluster, set clarification to ask which " +
+		"deployment. " +
 		"For an Elasticsearch version upgrade ('upgrade X to 9.4.2', 'bump Y to 8.15'), set workflow to " +
 		"'version-upgrade', cluster to the named deployment, and version to the explicit target version string. " +
 		"For a tier resize ('downsize eu-b2b warm to 8 GB', 'set ap-cld cold max to 8GB'), set workflow to " +
 		"'tier-resize', cluster, tier (hot|warm|cold|frozen|...), and newSizeGb and/or newMaxGb as plain GB integers. " +
-		"For an ILM lifecycle-policy change ('set eu-b2b 30-days retention to 60 days', 'forcemerge warm to 1 " +
+		"For an ILM lifecycle-policy change ('set us-cld 30-days retention to 60 days', 'forcemerge warm to 1 " +
 		"segment on eu-cld logs', 'add a delete phase to .alerts-ilm-policy'), set workflow to 'ilm-rollout', cluster " +
-		"to the named deployment, policyName to the policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs', " +
-		"'.alerts-ilm-policy'), and phasesPatch to a nested object whose top-level keys are phases (hot|warm|cold|delete). " +
-		"Use the repo's FLAT phase DSL, NOT Elasticsearch's native phases/actions form -- e.g. " +
-		'{ "hot": { "max_age": "30d", "max_primary_shard_size": "50gb", "rollover": true }, "delete": { "min_age": "90d" } } ' +
-		"(durations are strings like '90d'; retention is delete.min_age). Patch ONLY the fields to change for an existing " +
-		"policy; if the policy may be new or untracked, include EVERY phase it should have (the full intended lifecycle) " +
-		"so the created file is complete. " +
-		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-b2b to 6.15.0', 'pin kafka to " +
+		"to the named deployment, policyName to the policy filename VERBATIM (e.g. '30-days@lifecycle', 'logs@lifecycle', " +
+		"'.alerts-ilm-policy'). If the user asks to COPY / clone / mirror / 'same as' / 'exact copy of' an existing " +
+		"policy, set sourcePolicy to that reference policy's filename VERBATIM and put ONLY the explicit overrides (if " +
+		"any) in phasesPatch. Otherwise set phasesPatch to the fields to change. " +
+		"phasesPatch uses the repo's NESTED phase shape (top-level keys hot|warm|cold|frozen|delete), matching the " +
+		"existing policy JSON files EXACTLY -- e.g. " +
+		'{ "hot": { "priority": 100, "max_age": "7d", "max_primary_shard_size": "10gb", "rollover": true }, ' +
+		'"warm": { "min_age": "6h", "priority": 50, "allocate": { "number_of_replicas": 0 }, "forcemerge": ' +
+		'{ "max_num_segments": 1 }, "shrink": { "number_of_shards": 1 } }, "cold": { "min_age": "2d", "priority": 25, ' +
+		'"allocate": { "number_of_replicas": 0 } }, "frozen": { "min_age": "7d", "searchable_snapshot": ' +
+		'{ "snapshot_repository": "found-snapshots", "force_merge_index": true } }, "delete": { "min_age": "60d", ' +
+		'"delete_searchable_snapshot": true, "wait_for_snapshot": { "policy": "cloud-snapshot-policy" } } }. ' +
+		"CRITICAL nesting rules (the module rejects the flat forms): use `priority` (a number on the phase), NEVER " +
+		"`set_priority`; replicas go in `allocate: { number_of_replicas }`, never a bare number_of_replicas; use " +
+		"nested `forcemerge: { max_num_segments }`, `shrink: { number_of_shards }`, `searchable_snapshot: " +
+		"{ snapshot_repository, force_merge_index }`, and `wait_for_snapshot: { policy }` -- never the flattened " +
+		"underscore forms. Durations are strings like '60d'; retention is delete.min_age. Patch ONLY the fields to " +
+		"change for an existing policy; for a copy, prefer sourcePolicy over restating every field. " +
+		"For a Fleet INTEGRATION PACKAGE version pin ('bump the aws integration on eu-cld to 6.15.0', 'pin kafka to " +
 		"1.28.0 on eu-cld', 'update the system integration package to 2.18.0') -- note this is the integration PACKAGE " +
 		"version, NOT a Fleet AGENT binary upgrade and NOT a cluster version -- set workflow to 'fleet-integration', cluster " +
 		"to the named deployment, integration to the integration alias key VERBATIM (e.g. 'aws', 'kafka', 'system', 'apm', " +
 		"'elastic-defend'), integrationVersion to the explicit target package version string, and force to true ONLY if the " +
 		"user explicitly asks to force/reinstall it. " +
-		"For an SLO change ('set the DS API Health SLO target to 99.5% on eu-b2b', 'change the eu-b2b ds-authentication SLO " +
+		"For an SLO change ('set the DS API Health SLO target to 99.5% on ap-cld', 'change the ap-cld ds-authentication SLO " +
 		"window to 60 days') -- editing an EXISTING SLO's target/time-window/tags, NOT creating one -- set workflow to " +
 		"'slo-edit', cluster to the named deployment, sloName to the SLO file basename VERBATIM (e.g. 'ds-authentication', " +
 		"'cci-sftpgo'; the part before .json), sloTarget to the numeric target the user gave (a percent like 99.5 or a " +
 		"fraction like 0.995 -- pass it as the user said it), sloWindow to a duration string ('60d', '90d') ONLY if they " +
 		"change the window, and sloTags to the full new tag array ONLY if they change tags. Set at least one of sloTarget/" +
 		"sloWindow/sloTags. " +
-		"For an ALERT RULE change ('raise the MarTech Add-To-Wallet threshold to 5 on eu-b2b', 'disable the cart-failed " +
-		"alert on eu-b2b', 'change the X rule window to 10 minutes') -- editing an EXISTING rule's threshold/window/enabled/" +
+		"For an ALERT RULE change ('raise the MarTech Add-To-Wallet threshold to 5 on eu-cld', 'disable the cart-failed " +
+		"alert on eu-cld', 'change the X rule window to 10 minutes') -- editing an EXISTING rule's threshold/window/enabled/" +
 		"interval, NOT creating one -- set workflow to 'alerting-edit', cluster to the named deployment, ruleName to the " +
 		"rule file basename VERBATIM (it is '<space>__<rule-name>', e.g. 'default__martech_add_to_wallet_transactions_" +
 		"failed_status_prd'; if the user gives only a friendly name, construct the basename with the space prefix, " +
 		"defaulting the space to 'default' when unstated), and the field(s) to change: alertThreshold (number), " +
 		"alertWindowSize (number) + alertWindowUnit ('m'|'h'|'s'|'d'), alertEnabled (false to disable / silence the rule, " +
 		"true to enable), alertInterval (a check-interval string like '5m'). Set at least one of those alert* fields. " +
-		"For a DATA VIEW change ('add a service runtime field to the logs data view on eu-b2b', 'rename the logs data " +
+		"For a DATA VIEW change ('add a service runtime field to the logs data view on us-cld', 'rename the logs data " +
 		"view title to logs-*') -- editing an EXISTING data view, NOT creating one -- set workflow to 'dataview-edit', " +
 		"cluster to the named deployment, dataviewName to the data-view file basename VERBATIM (e.g. 'logs', 'metrics'; the " +
 		"part before .json). To add/replace a runtime field set runtimeFieldName, runtimeFieldType (default 'keyword'), and " +
 		"runtimeFieldScript (the painless source, ONLY when the user gives a script). To change the index pattern set " +
 		"dataviewTitle; to change the display name set dataviewDisplayName. Set at least one of those. " +
 		"For a CLUSTER-DEFAULTS index-template change ('set total_shards_per_node to 3 on the logs@custom template on " +
-		"eu-b2b') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
+		"ap-cld') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
 		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
 		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
 		"integer the user gave. " +
-		"For a SPACE change ('rename the developer-experience space description on eu-b2b', 'change the apps space color') " +
+		"For a SPACE change ('rename the developer-experience space description on eu-cld', 'change the apps space color') " +
 		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
 		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
 		"'apps'; the part before .json), and spaceDisplayName (the human name), spaceDescription, and/or spaceColor (a hex " +
@@ -933,6 +949,117 @@ export function mergeIlmPhases(
 	};
 	merge(parsed as Record<string, unknown>, patch, previous);
 	return { content: `${JSON.stringify(parsed, null, 2)}\n`, previous };
+}
+
+// SIO-931: a canonical correctly-shaped policy skeleton, mirroring the repo's
+// us-default-lifecycle-logs-prod.json. Used as the from-scratch base ONLY when no sibling
+// policy exists in the cluster's lifecycle-policies/ dir to copy the shape from.
+export const CANONICAL_ILM_SHAPE = {
+	hot: { priority: 100, max_age: "7d", max_primary_shard_size: "10gb", rollover: true },
+	warm: {
+		min_age: "1d",
+		priority: 50,
+		allocate: { number_of_replicas: 0 },
+		forcemerge: { max_num_segments: 1 },
+		shrink: { number_of_shards: 1, allow_write_after_shrink: false },
+	},
+	cold: { min_age: "2d", priority: 25, allocate: { number_of_replicas: 0 } },
+	frozen: { min_age: "7d", searchable_snapshot: { snapshot_repository: "found-snapshots", force_merge_index: true } },
+	delete: { min_age: "60d", delete_searchable_snapshot: true, wait_for_snapshot: { policy: "cloud-snapshot-policy" } },
+} as const;
+
+// SIO-931: structural schema mirroring modules/lifecycle/variables.tf. Each phase is optional;
+// within a present phase the nested objects are required where the module requires them, and
+// .strict() rejects unknown keys so the agent's old flat shape (searchable_snapshot_repository,
+// set_priority, bare number_of_replicas, ...) is caught here rather than by CI terraform plan.
+const IlmPolicySchema = z
+	.object({
+		name: z.string(),
+		metadata: z.string().optional(),
+		hot: z
+			.object({
+				min_age: z.string().optional(),
+				max_age: z.string().optional(),
+				max_size: z.string().optional(),
+				max_primary_shard_size: z.string().optional(),
+				min_docs: z.number().optional(),
+				priority: z.number().optional(),
+				rollover: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		warm: z
+			.object({
+				min_age: z.string().optional(),
+				priority: z.number().optional(),
+				allocate: z.object({ number_of_replicas: z.number() }).strict().optional(),
+				forcemerge: z.object({ max_num_segments: z.number() }).strict().optional(),
+				shrink: z
+					.object({ number_of_shards: z.number(), allow_write_after_shrink: z.boolean().optional() })
+					.strict()
+					.optional(),
+				readonly: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		cold: z
+			.object({
+				min_age: z.string().optional(),
+				priority: z.number().optional(),
+				allocate: z.object({ number_of_replicas: z.number() }).strict().optional(),
+				readonly: z.boolean().optional(),
+			})
+			.strict()
+			.optional(),
+		frozen: z
+			.object({
+				min_age: z.string().optional(),
+				searchable_snapshot: z
+					.object({ snapshot_repository: z.string(), force_merge_index: z.boolean().optional() })
+					.strict(),
+			})
+			.strict()
+			.optional(),
+		delete: z
+			.object({
+				min_age: z.string().optional(),
+				delete_searchable_snapshot: z.boolean().optional(),
+				wait_for_snapshot: z.object({ policy: z.string() }).strict().optional(),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict();
+
+// Translate the most common flat-shape mistakes into a targeted nested-fix hint, so the blocked
+// message tells the user EXACTLY what to change instead of a raw Zod path.
+function flatShapeHint(policy: Record<string, unknown>): string | null {
+	const phase = (k: string): Record<string, unknown> =>
+		(typeof policy[k] === "object" && policy[k] !== null ? policy[k] : {}) as Record<string, unknown>;
+	if ("set_priority" in phase("hot") || "set_priority" in phase("warm") || "set_priority" in phase("cold"))
+		return "use `priority` (a number) on the phase, not `set_priority`.";
+	if ("number_of_replicas" in phase("warm") || "number_of_replicas" in phase("cold"))
+		return "set replicas via `allocate: { number_of_replicas }`, not a bare number_of_replicas on the phase.";
+	if ("forcemerge_max_num_segments" in phase("warm"))
+		return "use nested `forcemerge: { max_num_segments }`, not flat forcemerge_max_num_segments.";
+	if ("shrink_number_of_shards" in phase("warm"))
+		return "use nested `shrink: { number_of_shards }`, not flat shrink_number_of_shards.";
+	if ("searchable_snapshot_repository" in phase("frozen") || "force_merge_index" in phase("frozen"))
+		return "use nested `searchable_snapshot: { snapshot_repository, force_merge_index }`, not flat searchable_snapshot_repository / force_merge_index.";
+	if ("wait_for_snapshot_policy" in phase("delete"))
+		return "use nested `wait_for_snapshot: { policy }`, not flat wait_for_snapshot_policy.";
+	return null;
+}
+
+// SIO-931: validate a built ILM policy against the repo/module schema BEFORE commit. (Pure.)
+export function validateIlmPolicy(policy: unknown): { ok: true } | { ok: false; reason: string } {
+	const parsed = IlmPolicySchema.safeParse(policy);
+	if (parsed.success) return { ok: true };
+	const hint = typeof policy === "object" && policy !== null ? flatShapeHint(policy as Record<string, unknown>) : null;
+	const first = parsed.error.issues[0];
+	const where = first ? first.path.join(".") || "(root)" : "(unknown)";
+	const detail = first ? `${where}: ${first.message}` : "invalid policy structure";
+	return { ok: false, reason: hint ? `${detail}. ${hint}` : detail };
 }
 
 // SIO-880: parse an Elastic time string ("30d", "48h", "90m", "30s") to seconds. Returns
@@ -1693,15 +1820,21 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 
 // SIO-880: ilm-rollout via the GitOps proposer -- deep-merge a phase patch into the
 // cluster's lifecycle-policy JSON and open an MR via the API. Mirrors proposeTierResize.
-async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+export async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const policy = req.policyName ?? "";
 	const patch = req.phasesPatch;
 
-	if (!policy || !patch || Object.keys(patch).length === 0) {
+	if (!policy) {
 		return {
-			blockedReason: "ILM change needs a policy name and at least one phase field to change.",
-			messages: [new AIMessage("Cannot propose the change: name the policy and at least one phase field to change.")],
+			blockedReason: "ILM change needs a policy name.",
+			messages: [new AIMessage("Cannot propose the change: name the policy to change or create.")],
+		};
+	}
+	if (!req.sourcePolicy && (!patch || Object.keys(patch).length === 0)) {
+		return {
+			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
+			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
 		};
 	}
 
@@ -1733,12 +1866,73 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
 		};
 	}
-	if (raw.startsWith("[404")) {
+	const patchObj = (patch ?? {}) as Record<string, unknown>;
+
+	// SIO-931 copy-from-reference: the base is the source policy (already correctly shaped). The
+	// source must be readable -- a copy of a policy we can't read is never silently downgraded.
+	if (req.sourcePolicy) {
+		const srcPath = deploymentJsonPath(ilmPolicyTemplate(), cluster, req.sourcePolicy);
+		const srcRaw = await callTool("gitlab_get_file_content", { filePath: srcPath });
+		if (!isGitlabSuccess(srcRaw)) {
+			return {
+				blockedReason: `Could not read reference policy '${req.sourcePolicy}' on '${cluster}': ${srcRaw.slice(0, 80)}.`,
+				messages: [
+					new AIMessage(
+						`I couldn't read reference policy '${req.sourcePolicy}' on '${cluster}' (${srcRaw.slice(0, 40)}). Name an existing policy to copy, or specify the phases directly.`,
+					),
+				],
+			};
+		}
+		let srcObj: Record<string, unknown>;
+		try {
+			srcObj = JSON.parse(extractFileContent(srcRaw)) as Record<string, unknown>;
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Reference policy '${req.sourcePolicy}' on '${cluster}' is not valid JSON: ${reason}.`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: reference policy '${req.sourcePolicy}' on '${cluster}' did not parse as JSON.`,
+					),
+				],
+			};
+		}
+		srcObj.name = policy;
+		policyCreated = !isGitlabSuccess(raw); // target is new if it 404s
+		updated = mergeIlmPhases(JSON.stringify(srcObj), patchObj);
+	} else if (raw.startsWith("[404")) {
+		// SIO-931 from-scratch: learn the shape from a sibling policy in this cluster's dir; fall
+		// back to the canonical skeleton when the cluster has no lifecycle-policies/ files yet.
 		policyCreated = true;
-		updated = mergeIlmPhases(JSON.stringify({ name: policy }), patch);
+		const dirPath = `environments/${cluster}/lifecycle-policies`;
+		const siblings = parseRepoTreeFiles(await callTool("gitlab_get_repository_tree", { path: dirPath })).filter(
+			(f) => f.endsWith(".json") && f !== `${policy}.json`,
+		);
+		const preferred = process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY
+			? `${process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY}.json`
+			: "basic-lifecycle-logs.json";
+		const templateFile = siblings.includes(preferred) ? preferred : siblings[0];
+		let base: Record<string, unknown> = { name: policy, ...structuredClone(CANONICAL_ILM_SHAPE) };
+		if (templateFile) {
+			const tplRaw = await callTool("gitlab_get_file_content", { filePath: `${dirPath}/${templateFile}` });
+			if (isGitlabSuccess(tplRaw)) {
+				try {
+					const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
+					tplObj.name = policy;
+					base = tplObj;
+				} catch {
+					log.warn({ cluster, templateFile }, "ilm template sibling is not valid JSON; using canonical shape");
+				}
+			} else {
+				log.warn({ cluster, templateFile }, "ilm template sibling unreadable; using canonical shape");
+			}
+		} else {
+			log.warn({ cluster }, "no sibling ILM policy to template from; using canonical shape");
+		}
+		updated = mergeIlmPhases(JSON.stringify(base), patchObj);
 	} else {
 		try {
-			updated = mergeIlmPhases(extractFileContent(raw), patch);
+			updated = mergeIlmPhases(extractFileContent(raw), patchObj);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			return {
@@ -1761,10 +1955,23 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		}
 	}
 
-	const retentionChange = detectRetentionReduction(updated.previous, patch);
+	// SIO-931: structural gate -- never commit a policy CI's terraform plan would reject.
+	const valid = validateIlmPolicy(JSON.parse(updated.content));
+	if (!valid.ok) {
+		return {
+			blockedReason: `Proposed ILM policy '${policy}' is structurally invalid: ${valid.reason}`,
+			messages: [
+				new AIMessage(
+					`I won't open an MR: the proposed '${policy}' policy doesn't match the repo schema. ${valid.reason}`,
+				),
+			],
+		};
+	}
+
+	const retentionChange = detectRetentionReduction(updated.previous, patchObj);
 
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const fields = Object.keys(patch).join(", ");
+	const fields = Object.keys(patchObj).join(", ") || (req.sourcePolicy ? `copy of ${req.sourcePolicy}` : "copy");
 	const commit = await callTool("gitlab_commit_file", {
 		branch,
 		file_path: filePath,
@@ -1804,7 +2011,7 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			}
 		}
 	};
-	walk(updated.previous, patch, "");
+	walk(updated.previous, patchObj, "");
 
 	return {
 		branch,
@@ -3348,7 +3555,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Tier '${req?.tier}' resize${req?.newSizeGb != null ? ` size -> ${req.newSizeGb}g` : ""}${req?.newMaxGb != null ? ` max -> ${req.newMaxGb}g` : ""}.`
 				: "",
 			req?.workflow === "ilm-rollout"
-				? `ILM policy '${req?.policyName}' ${state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}: ${JSON.stringify(req?.phasesPatch ?? {})}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
+				? `ILM policy '${req?.policyName}' ${req?.sourcePolicy ? `EXACT COPY of '${req.sourcePolicy}'` : state.policyCreated ? "CREATE (new lifecycle-policy file for an untracked/unmanaged policy, onboarding it into IaC)" : "phase change"}${Object.keys(req?.phasesPatch ?? {}).length > 0 ? ` with overrides: ${JSON.stringify(req?.phasesPatch ?? {})}` : ""}.${state.retentionChange ? ` Retention REDUCED ${state.retentionChange.from} -> ${state.retentionChange.to} (irreversible).` : ""}`
 				: "",
 			req?.workflow === "fleet-integration"
 				? `Fleet integration '${req?.integration}' package version -> ${req?.integrationVersion}${req?.force ? " (force reinstall)" : ""}.${state.integrationMajorBump ? " MAJOR version bump (potential breaking changes)." : ""}`
@@ -3742,6 +3949,21 @@ export function parseRepoTreeDirs(toolResult: string): string[] {
 		const arr = JSON.parse(toolResult.slice(m.index)) as Array<{ name?: unknown; type?: unknown }>;
 		if (!Array.isArray(arr)) return [];
 		return arr.filter((e) => e.type === "tree" && typeof e.name === "string").map((e) => e.name as string);
+	} catch {
+		return [];
+	}
+}
+
+// SIO-931: file (blob) names from a gitlab_get_repository_tree response, the sibling-policy
+// counterpart to parseRepoTreeDirs. Used to pick a structural template for a from-scratch ILM
+// policy. (Pure; unit-tested.)
+export function parseRepoTreeFiles(toolResult: string): string[] {
+	const m = toolResult.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return [];
+	try {
+		const arr = JSON.parse(toolResult.slice(m.index)) as Array<{ name?: unknown; type?: unknown }>;
+		if (!Array.isArray(arr)) return [];
+		return arr.filter((e) => e.type === "blob" && typeof e.name === "string").map((e) => e.name as string);
 	} catch {
 		return [];
 	}

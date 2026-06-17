@@ -54,10 +54,9 @@ describe("mergeIlmPhases", () => {
 		expect(content).toContain('\n  "delete": {');
 	});
 
-	test("records undefined in previous for a leaf the policy did not have", () => {
-		const { previous } = mergeIlmPhases(POLICY, { hot: { max_age: "30d", set_priority: { priority: 50 } } });
-		// previous mirrors the patch's nesting; a brand-new leaf records undefined at the leaf.
-		expect((previous as { hot: { set_priority: { priority?: unknown } } }).hot.set_priority.priority).toBeUndefined();
+	test("captures undefined previous for a newly added nested leaf", () => {
+		const { previous } = mergeIlmPhases(POLICY, { hot: { priority: 50 } });
+		expect((previous as { hot: { priority?: unknown } }).hot.priority).toBeUndefined();
 	});
 
 	test("throws on non-object JSON", () => {
