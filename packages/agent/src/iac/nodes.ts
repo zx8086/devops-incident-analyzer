@@ -1805,15 +1805,21 @@ async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<
 
 // SIO-880: ilm-rollout via the GitOps proposer -- deep-merge a phase patch into the
 // cluster's lifecycle-policy JSON and open an MR via the API. Mirrors proposeTierResize.
-async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+export async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const policy = req.policyName ?? "";
 	const patch = req.phasesPatch;
 
-	if (!policy || !patch || Object.keys(patch).length === 0) {
+	if (!policy) {
 		return {
-			blockedReason: "ILM change needs a policy name and at least one phase field to change.",
-			messages: [new AIMessage("Cannot propose the change: name the policy and at least one phase field to change.")],
+			blockedReason: "ILM change needs a policy name.",
+			messages: [new AIMessage("Cannot propose the change: name the policy to change or create.")],
+		};
+	}
+	if (!req.sourcePolicy && (!patch || Object.keys(patch).length === 0)) {
+		return {
+			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
+			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
 		};
 	}
 
@@ -1845,12 +1851,56 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
 		};
 	}
-	if (raw.startsWith("[404")) {
+	const patchObj = (patch ?? {}) as Record<string, unknown>;
+
+	// SIO-931 copy-from-reference: the base is the source policy (already correctly shaped). The
+	// source must be readable -- a copy of a policy we can't read is never silently downgraded.
+	if (req.sourcePolicy) {
+		const srcPath = deploymentJsonPath(ilmPolicyTemplate(), cluster, req.sourcePolicy);
+		const srcRaw = await callTool("gitlab_get_file_content", { filePath: srcPath });
+		if (!isGitlabSuccess(srcRaw)) {
+			return {
+				blockedReason: `Could not read reference policy '${req.sourcePolicy}' on '${cluster}': ${srcRaw.slice(0, 80)}.`,
+				messages: [
+					new AIMessage(
+						`I couldn't read reference policy '${req.sourcePolicy}' on '${cluster}' (${srcRaw.slice(0, 40)}). Name an existing policy to copy, or specify the phases directly.`,
+					),
+				],
+			};
+		}
+		const srcObj = JSON.parse(extractFileContent(srcRaw)) as Record<string, unknown>;
+		srcObj.name = policy;
+		policyCreated = !isGitlabSuccess(raw); // target is new if it 404s
+		updated = mergeIlmPhases(JSON.stringify(srcObj), patchObj);
+	} else if (raw.startsWith("[404")) {
+		// SIO-931 from-scratch: learn the shape from a sibling policy in this cluster's dir; fall
+		// back to the canonical skeleton when the cluster has no lifecycle-policies/ files yet.
 		policyCreated = true;
-		updated = mergeIlmPhases(JSON.stringify({ name: policy }), patch);
+		const dirPath = `environments/${cluster}/lifecycle-policies`;
+		const siblings = parseRepoTreeFiles(await callTool("gitlab_get_repository_tree", { path: dirPath })).filter(
+			(f) => f.endsWith(".json") && f !== `${policy}.json`,
+		);
+		const preferred = process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY
+			? `${process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY}.json`
+			: "basic-lifecycle-logs.json";
+		const templateFile = siblings.includes(preferred) ? preferred : siblings[0];
+		let base: Record<string, unknown> = { name: policy, ...structuredClone(CANONICAL_ILM_SHAPE) };
+		if (templateFile) {
+			const tplRaw = await callTool("gitlab_get_file_content", { filePath: `${dirPath}/${templateFile}` });
+			if (isGitlabSuccess(tplRaw)) {
+				const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
+				tplObj.name = policy;
+				base = tplObj;
+			} else {
+				log.warn({ cluster, templateFile }, "ilm template sibling unreadable; using canonical shape");
+			}
+		} else {
+			log.warn({ cluster }, "no sibling ILM policy to template from; using canonical shape");
+		}
+		updated = mergeIlmPhases(JSON.stringify(base), patchObj);
 	} else {
 		try {
-			updated = mergeIlmPhases(extractFileContent(raw), patch);
+			updated = mergeIlmPhases(extractFileContent(raw), patchObj);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			return {
@@ -1873,10 +1923,23 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 		}
 	}
 
-	const retentionChange = detectRetentionReduction(updated.previous, patch);
+	// SIO-931: structural gate -- never commit a policy CI's terraform plan would reject.
+	const valid = validateIlmPolicy(JSON.parse(updated.content));
+	if (!valid.ok) {
+		return {
+			blockedReason: `Proposed ILM policy '${policy}' is structurally invalid: ${valid.reason}`,
+			messages: [
+				new AIMessage(
+					`I won't open an MR: the proposed '${policy}' policy doesn't match the repo schema. ${valid.reason}`,
+				),
+			],
+		};
+	}
+
+	const retentionChange = detectRetentionReduction(updated.previous, patchObj);
 
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
-	const fields = Object.keys(patch).join(", ");
+	const fields = Object.keys(patchObj).join(", ") || "copy";
 	const commit = await callTool("gitlab_commit_file", {
 		branch,
 		file_path: filePath,
@@ -1916,7 +1979,7 @@ async function proposeIlmChange(state: IacStateType, req: IacRequest): Promise<P
 			}
 		}
 	};
-	walk(updated.previous, patch, "");
+	walk(updated.previous, patchObj, "");
 
 	return {
 		branch,
