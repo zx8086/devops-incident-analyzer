@@ -978,6 +978,7 @@ const IlmPolicySchema = z
 		metadata: z.string().optional(),
 		hot: z
 			.object({
+				min_age: z.string().optional(),
 				max_age: z.string().optional(),
 				max_size: z.string().optional(),
 				max_primary_shard_size: z.string().optional(),

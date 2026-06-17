@@ -70,4 +70,10 @@ describe("validateIlmPolicy (SIO-931)", () => {
 	test("CANONICAL_ILM_SHAPE is itself valid", () => {
 		expect(validateIlmPolicy({ ...CANONICAL_ILM_SHAPE, name: "anything" }).ok).toBe(true);
 	});
+
+	test("accepts hot.min_age (real .alerts-ilm-policy carries it)", () => {
+		expect(
+			validateIlmPolicy({ name: ".alerts-ilm-policy", hot: { min_age: "0ms", rollover: false, max_age: "30d" } }).ok,
+		).toBe(true);
+	});
 });
