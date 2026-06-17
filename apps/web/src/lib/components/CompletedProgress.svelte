@@ -24,12 +24,14 @@ let {
 	completedNodes = new Map(),
 	dataSourceResults,
 	dataSourceFindings,
+	outcome = "completed",
 }: {
 	responseTime?: number;
 	toolsUsed?: string[];
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, DataSourceStatus>;
 	dataSourceFindings?: Map<string, DataSourceFindings>;
+	outcome?: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
 } = $props();
 
 let expanded = $state(false);
@@ -67,6 +69,69 @@ const hasContent = $derived(
 
 const formattedTime = $derived(responseTime !== undefined ? `${(responseTime / 1000).toFixed(1)}s` : undefined);
 
+// SIO-930: the completion chip reflects the real per-turn outcome. Only "completed" stays green +
+// shows timing/data-source counts; rejections/declines/blocks are amber, a failed pipeline is red,
+// and an unsupported request is neutral. Icon names are validated against Icon.svelte's union.
+const outcomeView = $derived.by(() => {
+	switch (outcome) {
+		case "rejected":
+			return {
+				label: "Plan rejected",
+				icon: "x" as const,
+				text: "text-amber-700",
+				bgFrom: "#fffbeb",
+				bgTo: "#fef3c7",
+				border: "#fde68a",
+			};
+		case "declined":
+			return {
+				label: "Declined",
+				icon: "x" as const,
+				text: "text-amber-700",
+				bgFrom: "#fffbeb",
+				bgTo: "#fef3c7",
+				border: "#fde68a",
+			};
+		case "blocked":
+			return {
+				label: "Blocked",
+				icon: "x" as const,
+				text: "text-amber-700",
+				bgFrom: "#fffbeb",
+				bgTo: "#fef3c7",
+				border: "#fde68a",
+			};
+		case "unsupported":
+			return {
+				label: "Not supported yet",
+				icon: "message-square" as const,
+				text: "text-gray-600",
+				bgFrom: "#f9fafb",
+				bgTo: "#f3f4f6",
+				border: "#e5e7eb",
+			};
+		case "pipeline-failed":
+			return {
+				label: "Pipeline failed",
+				icon: "error" as const,
+				text: "text-red-700",
+				bgFrom: "#fef2f2",
+				bgTo: "#fee2e2",
+				border: "#fecaca",
+			};
+		default:
+			return {
+				label: "Completed",
+				icon: "check" as const,
+				text: "text-green-700",
+				bgFrom: "#f0fdf4",
+				bgTo: "#dcfce7",
+				border: "#bbf7d0",
+			};
+	}
+});
+const isCompleted = $derived(outcome === "completed");
+
 const successCount = $derived(dataSources.filter(([, d]) => d.status === "success").length);
 const errorCount = $derived(dataSources.filter(([, d]) => d.status === "error").length);
 
@@ -89,12 +154,12 @@ function statusDotClass(status: string): string {
     <button
       onclick={() => expanded = !expanded}
       class="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-left"
-      style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border: 1px solid #bbf7d0;"
+      style="background: linear-gradient(135deg, {outcomeView.bgFrom}, {outcomeView.bgTo}); border: 1px solid {outcomeView.border};"
     >
-      <Icon name="check" class="w-3.5 h-3.5 text-green-600" />
-      <span class="text-xs font-medium text-green-700">
-        Completed{#if formattedTime} in {formattedTime}{/if}
-        {#if dataSources.length > 0}
+      <Icon name={outcomeView.icon} class="w-3.5 h-3.5 {outcomeView.text}" />
+      <span class="text-xs font-medium {outcomeView.text}">
+        {outcomeView.label}{#if isCompleted && formattedTime} in {formattedTime}{/if}
+        {#if isCompleted && dataSources.length > 0}
           <span class="text-green-500 font-normal">
             -- {dataSources.length} data source{dataSources.length !== 1 ? "s" : ""}
             {#if errorCount > 0}
@@ -105,7 +170,7 @@ function statusDotClass(status: string): string {
       </span>
       <Icon
         name="chevron-down"
-        class="w-3 h-3 text-green-500 ml-auto shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
+        class="w-3 h-3 {outcomeView.text} opacity-70 ml-auto shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
       />
     </button>
 

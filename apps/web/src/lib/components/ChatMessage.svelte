@@ -110,6 +110,7 @@ let {
             completedNodes={message.completedNodes}
             dataSourceResults={message.dataSourceResults}
             dataSourceFindings={message.dataSourceFindings}
+            outcome={message.outcome}
           />
         {/if}
 

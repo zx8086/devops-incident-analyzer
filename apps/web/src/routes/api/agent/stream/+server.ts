@@ -5,7 +5,7 @@ import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/obser
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getLastAssistantText, getPendingInterrupt, invokeAgent } from "$lib/server/agent";
+import { getIacTurnOutcome, getLastAssistantText, getPendingInterrupt, invokeAgent } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
@@ -117,6 +117,8 @@ export const POST: RequestHandler = async ({ request }) => {
 									}
 									const finalText = await getLastAssistantText(threadId, "elastic-iac");
 									if (finalText) send({ type: "message", content: finalText });
+									// SIO-930: label the completion chip with the real turn outcome (rejected/declined/etc.).
+									const outcome = await getIacTurnOutcome(threadId);
 									send({
 										type: "done",
 										threadId,
@@ -124,6 +126,7 @@ export const POST: RequestHandler = async ({ request }) => {
 										runId,
 										responseTime: Date.now() - startTime,
 										toolsUsed,
+										outcome,
 									});
 									return;
 								}

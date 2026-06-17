@@ -20,9 +20,9 @@ describe("iacTurnOutcome (SIO-930)", () => {
 	});
 
 	test("declined when the fleet upgrade was declined", () => {
-		expect(
-			iacTurnOutcome(s({ fleetUpgradeApproved: false, fleetUpgradeReport: { deployment: "x" } as never })),
-		).toBe("declined");
+		expect(iacTurnOutcome(s({ fleetUpgradeApproved: false, fleetUpgradeReport: { deployment: "x" } as never }))).toBe(
+			"declined",
+		);
 	});
 
 	test("unsupported when blocked by a workflow:other capability message", () => {

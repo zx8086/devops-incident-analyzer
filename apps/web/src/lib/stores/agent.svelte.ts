@@ -37,6 +37,8 @@ export interface ChatMessage {
 	feedback?: "up" | "down" | null;
 	runId?: string;
 	confidence?: number;
+	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
+	outcome?: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
 }
 
 export interface FollowUpContext {
@@ -75,6 +77,9 @@ function createAgentStore() {
 	let lastToolsUsed = $state<string[]>([]);
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
+	let lastOutcome = $state<"completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed">(
+		"completed",
+	);
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let pendingAttachments = $state<AttachmentBlock[]>([]);
 	let pendingActions = $state<PendingAction[]>([]);
@@ -120,6 +125,7 @@ function createAgentStore() {
 		lastToolsUsed = [];
 		lastRunId = undefined;
 		lastConfidence = undefined;
+		lastOutcome = "completed";
 		iacPipelineProgress = [];
 		// SIO-882: a new message starts a fresh drift pass (the prompt/report persist
 		// across interrupt pauses, so they're cleared here, not in the stream's finally).
@@ -192,6 +198,7 @@ function createAgentStore() {
 						feedback: null,
 						runId: lastRunId,
 						confidence: lastConfidence,
+						outcome: lastOutcome,
 					},
 				];
 				currentContent = "";
@@ -219,6 +226,7 @@ function createAgentStore() {
 			lastToolsUsed,
 			lastRunId,
 			lastConfidence,
+			lastOutcome,
 			lastDataSourceContext,
 			pendingActions,
 			actionResults,
@@ -248,6 +256,7 @@ function createAgentStore() {
 		lastToolsUsed = next.lastToolsUsed;
 		lastRunId = next.lastRunId;
 		lastConfidence = next.lastConfidence;
+		lastOutcome = next.lastOutcome;
 		lastDataSourceContext = next.lastDataSourceContext;
 		pendingActions = next.pendingActions;
 		actionResults = next.actionResults;
@@ -556,6 +565,7 @@ function createAgentStore() {
 						feedback: null,
 						runId: lastRunId,
 						confidence: lastConfidence,
+						outcome: lastOutcome,
 					},
 				];
 				currentContent = "";

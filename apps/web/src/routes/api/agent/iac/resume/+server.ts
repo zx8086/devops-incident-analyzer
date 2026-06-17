@@ -9,7 +9,7 @@ import { flushLangSmithCallbacks } from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getLastAssistantText, getPendingInterrupt, resumeAgent } from "$lib/server/agent";
+import { getIacTurnOutcome, getLastAssistantText, getPendingInterrupt, resumeAgent } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
@@ -97,9 +97,11 @@ export const POST: RequestHandler = async ({ request }) => {
 							const finalText = await getLastAssistantText(body.threadId, AGENT);
 							if (finalText) send({ type: "message", content: finalText });
 
+							// SIO-930: label the completion chip with the real turn outcome (rejected/declined/etc.).
+							const outcome = await getIacTurnOutcome(body.threadId);
 							const responseTime = Date.now() - startTime;
-							log.info({ responseTime, toolsUsed: toolsUsed.length }, "agent.iac.resume.end");
-							send({ type: "done", threadId: body.threadId, responseTime, toolsUsed });
+							log.info({ responseTime, toolsUsed: toolsUsed.length, outcome }, "agent.iac.resume.end");
+							send({ type: "done", threadId: body.threadId, responseTime, toolsUsed, outcome });
 						},
 						{ "thread.id": body.threadId, "run.id": runId, "request.id": requestId },
 					);

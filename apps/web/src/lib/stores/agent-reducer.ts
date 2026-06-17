@@ -279,6 +279,9 @@ export interface ReducerState {
 	lastToolsUsed: string[];
 	lastRunId: string | undefined;
 	lastConfidence: number | undefined;
+	// SIO-930: per-turn outcome from the IaC done event ("rejected"/"declined"/etc.); drives the
+	// completion chip color/label. "completed" for the incident agent (which omits the field).
+	lastOutcome: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
 	lastDataSourceContext: DataSourceContext | undefined;
 	pendingActions: PendingAction[];
 	actionResults: ActionResult[];
@@ -321,6 +324,7 @@ export function initialReducerState(): ReducerState {
 		lastToolsUsed: [],
 		lastRunId: undefined,
 		lastConfidence: undefined,
+		lastOutcome: "completed",
 		lastDataSourceContext: undefined,
 		pendingActions: [],
 		actionResults: [],
@@ -392,6 +396,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				lastRunId: event.runId,
 				lastConfidence: event.confidence,
 				lastDataSourceContext: event.dataSourceContext,
+				lastOutcome: event.outcome ?? "completed",
 			};
 		case "error":
 			return { ...state, currentContent: `${state.currentContent}\n\n[Error: ${event.message}]` };

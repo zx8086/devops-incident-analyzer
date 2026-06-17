@@ -64,6 +64,8 @@ mock.module("$lib/server/agent", () => ({
 	getPendingInterrupt: mock(async () => undefined),
 	// stream/+server.ts imports this for the elastic-iac final-message path.
 	getLastAssistantText: mock(async () => ""),
+	// SIO-930: stream/+server.ts imports this to label the elastic-iac done event.
+	getIacTurnOutcome: mock(async () => "completed"),
 }));
 
 const { POST } = await import("./+server.ts");
