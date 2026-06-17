@@ -16,6 +16,7 @@ const REDACTION_ACTIVE = redactPiiContent("123-45-6789") !== "123-45-6789";
 let baseDir: string;
 const prevEnabled = process.env.LIVE_MEMORY_ENABLED;
 const prevImmutable = process.env.LIVE_MEMORY_IMMUTABLE;
+const prevBackend = process.env.LIVE_MEMORY_BACKEND;
 
 function runtimeDir(): string {
 	return join(baseDir, "memory", "runtime");
@@ -29,6 +30,10 @@ beforeEach(() => {
 	writeFileSync(join(runtimeDir(), "dailylog.md"), "# Daily Log\n");
 	process.env.LIVE_MEMORY_ENABLED = "true";
 	delete process.env.LIVE_MEMORY_IMMUTABLE;
+	// SIO-938: pin the file backend so a sibling test that sets
+	// LIVE_MEMORY_BACKEND=agent-memory (process-global env) cannot reroute these
+	// file-path assertions to the write-behind queue.
+	delete process.env.LIVE_MEMORY_BACKEND;
 });
 
 afterEach(() => {
@@ -37,6 +42,8 @@ afterEach(() => {
 	else process.env.LIVE_MEMORY_ENABLED = prevEnabled;
 	if (prevImmutable === undefined) delete process.env.LIVE_MEMORY_IMMUTABLE;
 	else process.env.LIVE_MEMORY_IMMUTABLE = prevImmutable;
+	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
 });
 
 describe("readLiveMemory", () => {

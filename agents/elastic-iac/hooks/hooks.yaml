@@ -1,0 +1,10 @@
+bootstrap:
+  instructions_file: bootstrap.md
+  steps:
+    - load_live_memory
+    - emit_session_start
+
+teardown:
+  instructions_file: teardown.md
+  steps:
+    - flush_daily_log
