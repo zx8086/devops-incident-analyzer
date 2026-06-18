@@ -46,6 +46,7 @@ Short-term memory scoped to **1 session**. It captures the flow of the current c
 - **Block kind:** `message` (`{ user_content, assistant_content }`)
 - **Lifecycle:** short TTL via `AGENT_MEMORY_DAILYLOG_TTL_SECONDS`, decays
 - **Written:** appended directly (not PR-gated), always PII-redacted
+- **Per-flow enrichment (SIO-943):** the breadcrumb carries the run's recallable specifics so the service-derived embedding/summary are searchable, not generic. A fleet-upgrade turn, for example, records `deployment`, `version`, `status`, `upgradeable`, `already-on-target`, `non-upgradeable`, `acked/created`, and `pipeline` (`buildFleetMemorySummary` in `iac/nodes.ts`).
 
 ### Profile memory
 
@@ -55,6 +56,7 @@ Long-term memory that spans **multiple sessions**. It stores facts and preferenc
 - **Block kind:** `fact`
 - **Lifecycle:** durable, no TTL
 - **Written:** promoted (human-in-the-loop) or appended, always PII-redacted
+- **Runtime fact (SIO-943):** a *terminal* operational outcome can also write a durable fact directly, without the PR gate, when `LIVE_MEMORY_BACKEND=agent-memory`. The first such path: a completed fleet upgrade (`status` `applied` or `failed`) records `Fleet agents on <deployment> upgraded to <version>` so a future session recalls it (`recordKeyDecision` in `iac/nodes.ts`, agent-memory-only). On the file backend this path is a no-op — `key-decisions.md` stays PR-gated.
 
 ### Semantic memory
 
@@ -64,6 +66,25 @@ Long-term memory that stores **knowledge and facts**. Agents retrieve this infor
 - **Block kind:** `fact`, annotated
 - **Lifecycle:** durable
 - **Written:** compiled, via the PR-gated review path (below)
+
+### Worked example: one completed fleet upgrade
+
+A terminal fleet upgrade writes **two** blocks under the agent's session (`elastic-iac` user) — one per type:
+
+```
+1) Conversational message (short TTL):
+   user_content:      "intent=fleet-upgrade"
+   assistant_content: "... deployment=eu-cld version=9.4.2 status=applied
+                        upgradeable=17 already-on-target=1552 non-upgradeable=1786
+                        acked=0/16 pipeline=2610021206"
+
+2) Profile fact (durable):
+   "Fleet agents on eu-cld upgraded to 9.4.2.
+    17 upgradeable, 1552 already on target, 1786 non-upgradeable (Wolfi/container).
+    Apply pipeline #2610021206."
+```
+
+A non-terminal outcome (`dispatched`/`skipped`/`blocked`) writes only the enriched message. On the file backend, only the breadcrumb is written (no fact).
 
 ## What every block carries
 
