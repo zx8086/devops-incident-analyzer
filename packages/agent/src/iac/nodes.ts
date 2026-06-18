@@ -10,7 +10,8 @@ import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
-import { appendDailyLog } from "../memory-writer.ts";
+import { selectedBackend } from "../memory-backend.ts";
+import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
 import type {
@@ -5958,6 +5959,49 @@ export function formatDriftSummary(state: IacStateType): string {
 }
 
 // Final message: MR link + pipeline status + the real plan + approval state, then stop.
+// SIO-943: fleet-upgrade breadcrumb fields. Pulls the recallable specifics off the report +
+// result so the stored message carries version/deployment/counts/pipeline rather than a generic
+// "intent=fleet-upgrade". Tolerates a missing report/result (returns whatever is present).
+export function buildFleetMemorySummary(state: IacStateType): string[] {
+	const report = state.fleetUpgradeReport;
+	const result = state.fleetUpgradeResult;
+	const dep = state.targetDeployment || state.iacRequest?.cluster;
+	const parts = ["intent=fleet-upgrade"];
+	if (dep) parts.push(`deployment=${dep}`);
+	if (report?.targetVersion) parts.push(`version=${report.targetVersion}`);
+	if (result?.status) parts.push(`status=${result.status}`);
+	if (report?.crosstab) parts.push(`upgradeable=${report.crosstab.upgradeable}`);
+	if (report?.versionCrosstab) parts.push(`already-on-target=${report.versionCrosstab.alreadyOnTarget}`);
+	if (report?.crosstab && report.crosstab.notUpgradeable > 0) parts.push(`non-upgradeable=${report.crosstab.notUpgradeable}`);
+	if (typeof result?.created === "number") parts.push(`acked=${result.acked ?? 0}/${result.created}`);
+	if (result?.failedSilent && result.failedSilent > 0) parts.push(`upg-failed=${result.failedSilent}`);
+	if (result?.pipelineId) parts.push(`pipeline=${result.pipelineId}`);
+	return parts;
+}
+
+// SIO-943: the durable Profile-fact statement for a terminal fleet upgrade. Self-contained (no
+// requestId/threadId) so it reads on its own in a future session's semantic recall.
+export function buildFleetFactDecision(state: IacStateType, result: FleetUpgradeResult): string {
+	const dep = state.targetDeployment || state.iacRequest?.cluster || "unknown deployment";
+	const version = state.fleetUpgradeReport?.targetVersion ?? "?";
+	const verb = result.status === "applied" ? "upgraded to" : "upgrade FAILED to";
+	return `Fleet agents on ${dep} ${verb} ${version}.`;
+}
+
+export function buildFleetFactRationale(state: IacStateType, result: FleetUpgradeResult): string {
+	const report = state.fleetUpgradeReport;
+	const bits: string[] = [];
+	if (report?.crosstab) bits.push(`${report.crosstab.upgradeable} upgradeable`);
+	if (report?.versionCrosstab) bits.push(`${report.versionCrosstab.alreadyOnTarget} already on target`);
+	if (report?.crosstab && report.crosstab.notUpgradeable > 0) {
+		bits.push(`${report.crosstab.notUpgradeable} non-upgradeable (Wolfi/container)`);
+	}
+	if (result.failedSilent && result.failedSilent > 0) bits.push(`${result.failedSilent} reached UPG_FAILED`);
+	if (result.note) bits.push(result.note);
+	const pipeline = result.pipelineId ? ` Apply pipeline #${result.pipelineId}.` : "";
+	return `${bits.join(", ") || "no breakdown available"}.${pipeline}`;
+}
+
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
@@ -5965,17 +6009,40 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	// the agent-memory backend when selected. Best-effort — never block the turn.
 	try {
 		const cluster = state.iacRequest?.cluster;
-		const summaryParts = [
-			state.intent ? `intent=${state.intent}` : "",
-			state.reviewDecision === "rejected" ? "rejected" : state.mrUrl ? `MR=${state.mrUrl}` : "",
-			state.pipelineStatus && state.pipelineStatus !== "unknown" ? `pipeline=${state.pipelineStatus}` : "",
-		].filter((p) => p.length > 0);
+		// SIO-943: a fleet upgrade has no MR/cluster but carries a rich result. Enrich the
+		// breadcrumb with version/deployment/counts/pipeline so the stored message (and the
+		// embedding the service derives from it) is recallable, not a generic "intent=fleet-upgrade".
+		const isFleet = state.intent === "fleet-upgrade" || (state.intent === "pipeline-status" && state.fleetUpgradeResult);
+		const summaryParts = isFleet
+			? buildFleetMemorySummary(state)
+			: [
+					state.intent ? `intent=${state.intent}` : "",
+					state.reviewDecision === "rejected" ? "rejected" : state.mrUrl ? `MR=${state.mrUrl}` : "",
+					state.pipelineStatus && state.pipelineStatus !== "unknown" ? `pipeline=${state.pipelineStatus}` : "",
+				].filter((p) => p.length > 0);
+		const services = cluster ? [cluster] : isFleet && state.targetDeployment ? [state.targetDeployment] : [];
 		appendDailyLog({
 			requestId: state.requestId,
-			services: cluster ? [cluster] : [],
+			services,
 			datasources: ["elastic-iac"],
 			summary: summaryParts.join(" "),
 		});
+
+		// SIO-943: a terminal fleet upgrade (applied|failed) is a durable Profile fact so a
+		// later session recalls "eu-cld fleet -> 9.4.2 (applied)". Agent-memory backend only:
+		// on the file backend durable learnings stay PR-gated (key-decisions.md is untouched).
+		const fleetResult = state.fleetUpgradeResult;
+		if (
+			isFleet &&
+			selectedBackend() === "agent-memory" &&
+			(fleetResult?.status === "applied" || fleetResult?.status === "failed")
+		) {
+			recordKeyDecision({
+				requestId: state.requestId,
+				decision: buildFleetFactDecision(state, fleetResult),
+				rationale: buildFleetFactRationale(state, fleetResult),
+			});
+		}
 	} catch {
 		// memory-writer already logs; never let a breadcrumb fail the turn.
 	}
