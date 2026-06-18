@@ -1,7 +1,10 @@
 // agent/src/iac/fleet-upgrade.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import {
+	buildFleetFactDecision,
+	buildFleetFactRationale,
 	buildFleetGateMessage,
+	buildFleetMemorySummary,
 	dynamicRolloutSeconds,
 	formatFleetUpgradeSummary,
 	formatRolloutDuration,
@@ -631,5 +634,78 @@ describe("classifyIacIntent fleet-status guard (SIO-928)", () => {
 		// -- avoiding a process-global createLlm mock that would pollute sibling tests (SIO-635 class).
 		const { looksLikeFleetStatusCheck } = await import("./nodes.ts");
 		expect(looksLikeFleetStatusCheck("upgrade the agents on eu-cld to 9.5.0")).toBe(false);
+	});
+});
+
+// SIO-943: the breadcrumb + durable-fact content for a fleet upgrade. These are the pure
+// string builders teardownIac feeds to appendDailyLog / recordKeyDecision; the gating (terminal
+// status + agent-memory backend) lives in teardownIac and is exercised by the live flow.
+describe("buildFleetMemorySummary", () => {
+	test("captures version, deployment, counts, acked, and pipeline", () => {
+		const s = stateWith({
+			intent: "fleet-upgrade",
+			targetDeployment: "eu-cld",
+			fleetUpgradeReport: report({
+				targetVersion: "9.4.2",
+				crosstab: { upgradeable: 17, notUpgradeable: 1786, byReason: [] },
+				versionCrosstab: { alreadyOnTarget: 1552, outdated: 17, versionUnknown: 0, upgradeableOutdated: 17 },
+			}),
+			fleetUpgradeResult: { status: "applied", pipelineId: 2610021206, acked: 0, created: 16, failedSilent: 0 },
+		});
+		const summary = buildFleetMemorySummary(s).join(" ");
+		expect(summary).toContain("intent=fleet-upgrade");
+		expect(summary).toContain("deployment=eu-cld");
+		expect(summary).toContain("version=9.4.2");
+		expect(summary).toContain("status=applied");
+		expect(summary).toContain("upgradeable=17");
+		expect(summary).toContain("already-on-target=1552");
+		expect(summary).toContain("non-upgradeable=1786");
+		expect(summary).toContain("acked=0/16");
+		expect(summary).toContain("pipeline=2610021206");
+	});
+
+	test("omits non-upgradeable when zero and degrades gracefully with no report", () => {
+		const withZero = stateWith({
+			intent: "fleet-upgrade",
+			targetDeployment: "eu-b2b",
+			fleetUpgradeReport: report({ crosstab: { upgradeable: 8, notUpgradeable: 0, byReason: [] } }),
+			fleetUpgradeResult: { status: "applied" },
+		});
+		expect(buildFleetMemorySummary(withZero).join(" ")).not.toContain("non-upgradeable");
+
+		const bare = stateWith({ intent: "fleet-upgrade", targetDeployment: "", fleetUpgradeReport: null, fleetUpgradeResult: null });
+		// Never throws; at minimum carries the intent tag.
+		expect(buildFleetMemorySummary(bare)).toContain("intent=fleet-upgrade");
+	});
+});
+
+describe("buildFleetFactDecision / buildFleetFactRationale", () => {
+	test("applied -> durable, self-contained fact statement", () => {
+		const s = stateWith({
+			targetDeployment: "eu-cld",
+			fleetUpgradeReport: report({ targetVersion: "9.4.2" }),
+		});
+		const result: FleetUpgradeResult = { status: "applied", pipelineId: 2610021206, acked: 16, created: 16, failedSilent: 0 };
+		expect(buildFleetFactDecision(s, result)).toBe("Fleet agents on eu-cld upgraded to 9.4.2.");
+		const rationale = buildFleetFactRationale(s, result);
+		expect(rationale).toContain("upgradeable");
+		expect(rationale).toContain("Apply pipeline #2610021206.");
+	});
+
+	test("failed -> states the failure and surfaces UPG_FAILED + note", () => {
+		const s = stateWith({
+			targetDeployment: "eu-cld",
+			fleetUpgradeReport: report({ targetVersion: "9.4.2" }),
+		});
+		const result: FleetUpgradeResult = {
+			status: "failed",
+			pipelineId: 99,
+			failedSilent: 3,
+			note: "Apply pipeline failed. Terraform state lock.",
+		};
+		expect(buildFleetFactDecision(s, result)).toBe("Fleet agents on eu-cld upgrade FAILED to 9.4.2.");
+		const rationale = buildFleetFactRationale(s, result);
+		expect(rationale).toContain("3 reached UPG_FAILED");
+		expect(rationale).toContain("Terraform state lock");
 	});
 });
