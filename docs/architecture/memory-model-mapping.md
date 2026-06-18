@@ -11,15 +11,18 @@ gitagent (file / git-native)                Couchbase Agent Memory
 ----------------------------                ----------------------
 agent (agent.yaml)               --------->  User      (user_id = agent name, one per agent)
   chat thread (LangGraph threadId) ------->  Session   (session_id = threadId; active / ended)
-    memory/runtime/dailylog.md   --------->  message block   (Conversational memory; short TTL, decays)
-    memory/runtime/key-decisions.md ------>  fact block      (Profile memory; durable, no TTL)
-    memory/runtime/context.md    --------->  fact block      (Profile memory; durable, no TTL)
-    memory/wiki/pages/*.md       --------->  fact block      (Semantic memory; durable, annotated)
+
+    Memory Blocks, grouped by memory type:
+    memory/runtime/dailylog.md   --------->  CONVERSATIONAL  message block (short TTL, decays)
+    memory/runtime/key-decisions.md ------>  PROFILE         fact block (durable, no TTL)
+    memory/runtime/context.md    --------->  PROFILE         fact block (durable, no TTL)
+    memory/wiki/pages/*.md       --------->  SEMANTIC        fact block (durable, annotated)
+
   hooks.yaml (bootstrap/teardown) ------->  session create / search / end
 memory-pr (agent/learn/* PR)     --- x --->  (stays in git; NOT in Agent Memory)
 ```
 
-Both models are a three-level hierarchy: an identity that owns everything (agent / user), a per-conversation scope (thread / session), and the unit of stored knowledge (markdown file / memory block).
+Both models are a three-level hierarchy: an identity that owns everything (agent / user), a per-conversation scope (thread / session), and the unit of stored knowledge (markdown file / memory block). On the Agent Memory side those blocks are unified into three memory types — Conversational, Profile, Semantic — detailed below.
 
 ## Structural mapping
 
@@ -33,15 +36,34 @@ User and session are created idempotently on first write or first recall (`ensur
 
 ## Memory-type mapping
 
-This is where gitagent's runtime tiers land on Agent Memory's three unified memory types (per the Couchbase concept docs).
+Agent Memory unifies different memory types into a single retrieval system. gitagent's runtime tiers land on those three types (definitions per the Couchbase concept docs). The split is deliberate: the daily breadcrumb is conversational continuity, the decisions/context are the agent's profile, and the wiki is the semantic knowledge base.
 
-| gitagent file | Agent Memory type | Block kind | Lifecycle | Written |
-|---|---|---|---|---|
-| `memory/runtime/dailylog.md` | **Conversational** (dialog continuity, 1 session) | `message` | short TTL (`AGENT_MEMORY_DAILYLOG_TTL_SECONDS`), decays | append, direct (not PR-gated), PII-redacted |
-| `memory/runtime/key-decisions.md` + `context.md` | **Profile** (facts/preferences across sessions) | `fact` | durable, no TTL | promoted (HITL) / appended, PII-redacted |
-| `memory/wiki/pages/*.md` | **Semantic** (knowledge for factual grounding) | `fact` (annotated) | durable | compiled, PR-gated review |
+### Conversational memory
 
-The split is deliberate: the daily breadcrumb is conversational continuity, the decisions/context are the agent's profile, and the wiki is the semantic knowledge base.
+Short-term memory scoped to **1 session**. It captures the flow of the current conversation to maintain dialog continuity.
+
+- **Source:** `memory/runtime/dailylog.md` (one breadcrumb per completed run)
+- **Block kind:** `message` (`{ user_content, assistant_content }`)
+- **Lifecycle:** short TTL via `AGENT_MEMORY_DAILYLOG_TTL_SECONDS`, decays
+- **Written:** appended directly (not PR-gated), always PII-redacted
+
+### Profile memory
+
+Long-term memory that spans **multiple sessions**. It stores facts and preferences extracted from conversations to personalize future responses.
+
+- **Source:** `memory/runtime/key-decisions.md` + `memory/runtime/context.md` (durable estate facts and prior decisions)
+- **Block kind:** `fact`
+- **Lifecycle:** durable, no TTL
+- **Written:** promoted (human-in-the-loop) or appended, always PII-redacted
+
+### Semantic memory
+
+Long-term memory that stores **knowledge and facts**. Agents retrieve this information for factual grounding.
+
+- **Source:** `memory/wiki/pages/*.md` (compiled, cross-referenced knowledge pages)
+- **Block kind:** `fact`, annotated
+- **Lifecycle:** durable
+- **Written:** compiled, via the PR-gated review path (below)
 
 ## What every block carries
 
