@@ -143,13 +143,16 @@ describe("isUnchangedConfig", () => {
 });
 
 describe("deploymentJsonPath", () => {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster} names the literal placeholder under test
 	test("substitutes the literal ${cluster} placeholder", () => {
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - literal ${cluster} placeholder is the test input
 		expect(deploymentJsonPath("environments/_deployments/${cluster}.json", "ap-cld")).toBe(
 			"environments/_deployments/ap-cld.json",
 		);
 	});
 
 	test("substitutes every occurrence", () => {
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - literal ${cluster} placeholders are the test input
 		expect(deploymentJsonPath("${cluster}/x/${cluster}.json", "eu-b2b")).toBe("eu-b2b/x/eu-b2b.json");
 	});
 });

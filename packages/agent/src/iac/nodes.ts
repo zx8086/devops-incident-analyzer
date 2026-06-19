@@ -1255,6 +1255,7 @@ function branchName(req: IacRequest): string {
 // Read lazily via process.env (works under both Bun and the web app's Vite SSR
 // runtime, where a top-level `Bun.env` reference throws "Bun is not defined").
 function deploymentJsonTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster} is a literal path placeholder substituted by deploymentJsonPath's .replace
 	return process.env.ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE ?? "environments/_deployments/${cluster}.json";
 }
 
@@ -1262,6 +1263,7 @@ function deploymentJsonTemplate(): string {
 // are literal placeholders. Lazy process.env read (no module-scope Bun.env; the web app
 // runs Vite SSR where a top-level Bun.env reference throws "Bun is not defined").
 function ilmPolicyTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${policy} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_ILM_POLICY_TEMPLATE ?? "environments/${cluster}/lifecycle-policies/${policy}.json";
 }
 
@@ -1270,6 +1272,7 @@ function ilmPolicyTemplate(): string {
 function fleetIntegrationsTemplate(): string {
 	return (
 		process.env.ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE ??
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster} is a literal path placeholder substituted by .replace
 		"environments/${cluster}/fleet-integrations/integrations.json"
 	);
 }
@@ -1320,6 +1323,7 @@ export function isMajorVersionBump(from: string | undefined, to: string): boolea
 // SIO-915: agent-side path for a per-deployment SLO JSON. ${cluster}/${slo} are literal
 // placeholders. One file per SLO under environments/<cluster>/slos/.
 function sloTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${slo} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_SLO_TEMPLATE ?? "environments/${cluster}/slos/${slo}.json";
 }
 
@@ -1388,6 +1392,7 @@ export function setSloOverrides(
 // placeholders. One file per rule under environments/<cluster>/alerting/; the filename is
 // <space>__<rule-name>.json (the rule basename the caller supplies VERBATIM).
 function alertingTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${rule} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_ALERTING_TEMPLATE ?? "environments/${cluster}/alerting/${rule}.json";
 }
 
@@ -1467,6 +1472,7 @@ export function setAlertingFields(
 // SIO-917: agent-side path for a per-deployment data-view JSON. ${cluster}/${dataview} are
 // literal placeholders. One file per data view under environments/<cluster>/dataviews/.
 function dataviewTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${dataview} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_DATAVIEW_TEMPLATE ?? "environments/${cluster}/dataviews/${dataview}.json";
 }
 
@@ -1475,6 +1481,7 @@ function dataviewTemplate(): string {
 // environments/<cluster>/cluster-defaults/.
 function clusterDefaultTemplate(): string {
 	return (
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${template} are literal path placeholders substituted by .replace
 		process.env.ELASTIC_IAC_CLUSTER_DEFAULT_TEMPLATE ?? "environments/${cluster}/cluster-defaults/${template}.json"
 	);
 }
@@ -1587,12 +1594,14 @@ export function setComponentTemplateLifecycleName(
 // SIO-918: agent-side path for a per-deployment per-space JSON. ${cluster}/${space} are literal
 // placeholders. One file per space under environments/<cluster>/spaces/.
 function spaceTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${space} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_SPACE_TEMPLATE ?? "environments/${cluster}/spaces/${space}.json";
 }
 
 // SIO-918: agent-side path for a per-deployment security aggregate JSON. ${cluster} is the
 // literal placeholder. ONE aggregate file (roles + role_mappings + api_keys) per deployment.
 function securityTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster} is a literal path placeholder substituted by .replace
 	return process.env.ELASTIC_IAC_SECURITY_TEMPLATE ?? "environments/${cluster}/security/security.json";
 }
 
@@ -1601,6 +1610,7 @@ function securityTemplate(): string {
 // Lazy process.env read (no module-scope Bun.env; the web app runs Vite SSR where a top-level
 // Bun.env reference throws "Bun is not defined").
 function dashboardNdjsonTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${space}/${name} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_DASHBOARD_TEMPLATE ?? "environments/${cluster}/dashboards/${space}__${name}.ndjson";
 }
 
@@ -1700,35 +1710,37 @@ export function addRolePrivileges(
 		r.cluster = [...cur, ...addedCluster];
 	}
 
-	if (grant.index && grant.index.privileges.length > 0) {
+	const indexGrant = grant.index;
+	if (indexGrant && indexGrant.privileges.length > 0) {
 		const indices = Array.isArray(r.indices) ? (r.indices as Array<Record<string, unknown>>) : [];
 		// Find an index entry with the same `names` set; else append a new one.
 		const sameNames = (a: unknown): boolean =>
-			Array.isArray(a) && a.length === grant.index!.names.length && grant.index!.names.every((n) => a.includes(n));
+			Array.isArray(a) && a.length === indexGrant.names.length && indexGrant.names.every((n) => a.includes(n));
 		let entry = indices.find((e) => sameNames(e.names));
 		if (!entry) {
-			entry = { names: [...grant.index.names], privileges: [] };
+			entry = { names: [...indexGrant.names], privileges: [] };
 			indices.push(entry);
 		}
 		const cur = Array.isArray(entry.privileges)
 			? (entry.privileges as unknown[]).filter((x): x is string => typeof x === "string")
 			: [];
-		for (const p of grant.index.privileges) if (!cur.includes(p)) addedIndex.push(p);
+		for (const p of indexGrant.privileges) if (!cur.includes(p)) addedIndex.push(p);
 		entry.privileges = [...cur, ...addedIndex];
 		r.indices = indices;
 	}
 
-	if (grant.kibana && grant.kibana.privileges.length > 0) {
+	const kibanaGrant = grant.kibana;
+	if (kibanaGrant && kibanaGrant.privileges.length > 0) {
 		const apps = Array.isArray(r.applications) ? (r.applications as Array<Record<string, unknown>>) : [];
-		let entry = apps.find((e) => e.application === grant.kibana!.application);
+		let entry = apps.find((e) => e.application === kibanaGrant.application);
 		if (!entry) {
-			entry = { application: grant.kibana.application, privileges: [], resources: grant.kibana.resources ?? ["*"] };
+			entry = { application: kibanaGrant.application, privileges: [], resources: kibanaGrant.resources ?? ["*"] };
 			apps.push(entry);
 		}
 		const cur = Array.isArray(entry.privileges)
 			? (entry.privileges as unknown[]).filter((x): x is string => typeof x === "string")
 			: [];
-		for (const p of grant.kibana.privileges) if (!cur.includes(p)) addedKibana.push(p);
+		for (const p of kibanaGrant.privileges) if (!cur.includes(p)) addedKibana.push(p);
 		entry.privileges = [...cur, ...addedKibana];
 		r.applications = apps;
 	}
@@ -1786,7 +1798,7 @@ export function isGitlabNotFound(result: string): boolean {
 
 // version-upgrade: propose the change as a GitLab config edit + branch + commit via
 // the API (no clone, no terraform, no local git). CI computes the plan on the MR.
-async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const version = req.version ?? "";
 	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
@@ -1859,7 +1871,7 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 
 // SIO-879: tier-resize via the GitOps proposer -- edit elasticsearch.<tier>.size/max_size
 // in the deployment JSON and open an MR via the API. Mirrors proposeVersionUpgrade.
-async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const tier = req.tier ?? "";
 	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
@@ -4635,6 +4647,7 @@ function reportStacksExcluded(): Set<string> {
 // Per-resource config-file template for report-sourced stacks. ${cluster}=deployment, ${stack}=stack
 // name, ${key}=the resource's for_each index key (README convention; override via env).
 function stackConfigPathTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster}/${stack}/${key} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_STACK_CONFIG_TEMPLATE ?? "environments/${cluster}/${stack}/${key}.json";
 }
 function stackResourcePath(template: string, cluster: string, stack: string, key: string): string {
@@ -4871,6 +4884,7 @@ export function extractLiveTopology(deploymentDetail: string): Record<string, { 
 // marker is otherwise plan-neutral: Terraform ignores it (the stack's fileset("*.json") does
 // not recurse into the .agent-reconcile/ subdir). Lazy process.env read (no module-scope Bun.env).
 function reconcileMarkerTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${stack}/${deployment} are literal path placeholders substituted by .replace
 	return process.env.ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE ?? "stacks/${stack}/.agent-reconcile/${deployment}.json";
 }
 function reconcileMarkerPath(deployment: string, stack: string): string {

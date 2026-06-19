@@ -111,9 +111,11 @@ describe("parseIntentJson — ilm-rollout", () => {
 	});
 });
 
+// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${policy} names the literal placeholder under test
 describe("deploymentJsonPath — ${policy} substitution", () => {
 	test("substitutes both cluster and policy, preserving @ and . in the filename", () => {
 		const path = deploymentJsonPath(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - literal ${cluster}/${policy} placeholders are the test input
 			"environments/${cluster}/lifecycle-policies/${policy}.json",
 			"eu-b2b",
 			"30-days@lifecycle",
@@ -122,6 +124,7 @@ describe("deploymentJsonPath — ${policy} substitution", () => {
 	});
 
 	test("still works for a cluster-only template (back-compat)", () => {
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - literal ${cluster} placeholder is the test input
 		expect(deploymentJsonPath("environments/_deployments/${cluster}.json", "ap-cld")).toBe(
 			"environments/_deployments/ap-cld.json",
 		);
