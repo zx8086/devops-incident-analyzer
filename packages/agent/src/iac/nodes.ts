@@ -422,7 +422,11 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 }
 
 // Verify the unified IaC server is connected before any user-facing action (hooks/bootstrap.md).
-export function bootstrapIac(_state: IacStateType): Partial<IacStateType> {
+// SIO-960: on a FRESH session's first turn, proactively surface in-flight work (a dispatched
+// fleet upgrade recovered from durable memory) so the user doesn't have to ask "how's it going?".
+// Implements the hooks/bootstrap.md "Open in-flight items" startup line. Injects a SystemMessage
+// (context the turn's response weaves in), once per session, best-effort, never blocking.
+export async function bootstrapIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	const connected = getConnectedServers().includes(IAC_SERVER);
 	if (!connected) {
 		log.warn({ server: IAC_SERVER }, "elastic-iac server not connected");
@@ -435,7 +439,38 @@ export function bootstrapIac(_state: IacStateType): Partial<IacStateType> {
 			],
 		};
 	}
+
+	// First turn of a fresh session iff the thread has no prior assistant turn yet.
+	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
+	if (firstTurn) {
+		const note = await buildInFlightSessionNote();
+		if (note) {
+			log.info({ note }, "bootstrapIac: surfacing in-flight work at session start");
+			return { connected: true, messages: [new SystemMessage(note)] };
+		}
+	}
 	return { connected: true };
+}
+
+// SIO-960: a one-line "you have work in flight" note from durable memory, or "" when
+// nothing is in flight / recall is unavailable. Best-effort: never throws.
+export async function buildInFlightSessionNote(): Promise<string> {
+	try {
+		const inFlight = await recallInFlightFleetUpgrades("elastic-iac");
+		if (inFlight.length === 0) return "";
+		const items = inFlight.map((u) => {
+			const dep = u.deployment ?? "a deployment";
+			const ver = u.version ? ` to ${u.version}` : "";
+			const pid = u.pipelineId ? ` (pipeline #${u.pipelineId})` : "";
+			return `${dep} fleet upgrade${ver}${pid}`;
+		});
+		return (
+			`In-flight work from a previous session: ${items.join("; ")}. ` +
+			"If relevant, tell the user it is still running and they can ask you to check on it."
+		);
+	} catch {
+		return "";
+	}
 }
 
 // Translate the plain-English request into a structured IacRequest. Asks one direct
