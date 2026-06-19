@@ -1,9 +1,10 @@
 // src/tools/curated.test.ts
 //
-// SIO-967: the curated kg_* tools (promoted from SIO-966's in-process
-// runKnowledgeGraphQuery). We drive them through a real Client <-> McpServer round-trip
-// over an in-memory transport + InMemoryGraphStore, so registration, schemas, the wire
-// shape (tools/call -> content[]), soft-fail wording, and reader wiring are all exercised.
+// SIO-967/SIO-968: the curated kg_* tools. Driven through a real Client <-> McpServer
+// round-trip over an in-memory transport + InMemoryGraphStore, so registration, schemas,
+// the wire shape (tools/call -> content[]), the loud-fail wording, and reader wiring are
+// all exercised. SIO-968: the enabled gate is the registration ARG (the server's startup
+// config), NOT a per-call process.env read.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -12,11 +13,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { registerCuratedTools } from "./curated.ts";
 
-const prevKg = process.env.KNOWLEDGE_GRAPH_ENABLED;
-
-async function connectedClient(): Promise<Client> {
+async function connectedClient(enabled = true): Promise<Client> {
 	const server = new McpServer({ name: "test", version: "0.0.0" });
-	registerCuratedTools(server);
+	registerCuratedTools(server, enabled);
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const client = new Client({ name: "test-client", version: "0.0.0" });
 	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -34,8 +33,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	if (prevKg === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
-	else process.env.KNOWLEDGE_GRAPH_ENABLED = prevKg;
 	_setGraphStoreForTesting(null);
 });
 
@@ -51,37 +48,55 @@ describe("curated kg_* tools", () => {
 		]);
 	});
 
-	test("soft-fail when the graph is disabled", async () => {
+	test("loud-fail when disabled: tells the model not to answer from prose", async () => {
+		const out = await call(await connectedClient(false), "kg_stacks_using_module", { module: "lifecycle" });
+		expect(out).toContain("KNOWLEDGE GRAPH UNAVAILABLE");
+		expect(out).toContain("Do NOT answer from memory");
+	});
+
+	test("SIO-968 regression: enabled via the arg even when process.env is unset", async () => {
+		// The bug: tools re-read process.env per call and reported "disabled" despite the
+		// server booting enabled. Now the arg decides -- so an unset env must NOT disable it.
+		const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
 		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
-		const out = await call(await connectedClient(), "kg_stacks_using_module", { module: "lifecycle" });
-		expect(out).toContain("disabled");
+		try {
+			const store = new InMemoryGraphStore();
+			store.stub("OF_STACK", [{ deployment: "eu-b2b" }]);
+			_setGraphStoreForTesting(store);
+			const out = await call(await connectedClient(true), "kg_deployments_running_stack", { stack: "slos" });
+			expect(out).toContain("eu-b2b");
+			expect(out).not.toContain("UNAVAILABLE");
+		} finally {
+			if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+			else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
+		}
 	});
 
 	test("kg_deployments_running_stack renders the reader rows", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
 		store.stub("OF_STACK", [{ deployment: "eu-cld" }, { deployment: "us-cld" }]);
 		_setGraphStoreForTesting(store);
 		const out = await call(await connectedClient(), "kg_deployments_running_stack", { stack: "slos" });
-		expect(out).toBe("Deployments running the slos stack: eu-cld, us-cld.");
+		expect(out).toContain("Deployments running the slos stack: eu-cld, us-cld.");
 	});
 
-	test("kg_stacks_using_module renders rows; empty -> friendly message", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+	test("empty result is reported as an authoritative graph result, not a guess invite", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_stacks_using_module", { module: "nope" });
+		expect(out).toContain("Graph queried");
+		expect(out).toContain("do not substitute a guess from specs");
+	});
+
+	test("kg_stacks_using_module renders rows", async () => {
 		const store = new InMemoryGraphStore();
 		store.stub("USES_MODULE", [{ stack: "lifecycle-policies" }]);
 		_setGraphStoreForTesting(store);
-		expect(await call(await connectedClient(), "kg_stacks_using_module", { module: "lifecycle" })).toBe(
+		expect(await call(await connectedClient(), "kg_stacks_using_module", { module: "lifecycle" })).toContain(
 			"Stacks using the lifecycle module: lifecycle-policies.",
-		);
-		_setGraphStoreForTesting(new InMemoryGraphStore());
-		expect(await call(await connectedClient(), "kg_stacks_using_module", { module: "nope" })).toContain(
-			"No stacks use",
 		);
 	});
 
 	test("kg_stack_instance_history renders outcome-tagged lines", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
 		store.stub("TARGETS", [
 			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "applied", mrUrl: "u9", createdAt: "x" },

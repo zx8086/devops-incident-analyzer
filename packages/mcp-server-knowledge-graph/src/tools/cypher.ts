@@ -7,7 +7,7 @@
 // When on, a read-only guard rejects any statement that contains a write/DDL
 // keyword, and the agent is told to pass bound $params (never interpolate values).
 
-import { type GraphStore, getGraphStore, isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
+import { type GraphStore, getGraphStore } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { errText, text } from "./shared.ts";
@@ -71,13 +71,24 @@ export function validateReadOnlyCypher(cypher: string): CypherGuardResult {
 	return { ok: true };
 }
 
-async function resolveStore(): Promise<GraphStore | string> {
-	if (!isKnowledgeGraphEnabled()) return "Knowledge graph is disabled (KNOWLEDGE_GRAPH_ENABLED is not set).";
-	try {
-		return await getGraphStore();
-	} catch {
-		return "Knowledge graph is unavailable right now.";
-	}
+// SIO-968: gate on the server's startup config (passed in), not a per-call
+// process.env re-read; loud-fail wording so the model never substitutes prose.
+function makeResolveStore(enabled: boolean): () => Promise<GraphStore | string> {
+	return async () => {
+		if (!enabled)
+			return (
+				"KNOWLEDGE GRAPH UNAVAILABLE (disabled for this process). Do NOT answer from memory, specs, " +
+				"or runbooks -- you have no graph evidence. Tell the user the graph is disabled and the answer is unverified."
+			);
+		try {
+			return await getGraphStore();
+		} catch {
+			return (
+				"KNOWLEDGE GRAPH UNAVAILABLE (store could not be opened). Do NOT answer from memory, specs, " +
+				"or runbooks -- you have no graph evidence. Tell the user the graph is unavailable and the answer is unverified."
+			);
+		}
+	};
 }
 
 // Schema card embedded in the kg_run_cypher description so the agent can write
@@ -107,7 +118,8 @@ const SCHEMA_CARD = [
 	"  Change history for a cell:      MATCH (c:ConfigChange)-[:TARGETS]->(:StackInstance {id:$sid}) RETURN c.summary, c.outcome, c.createdAt ORDER BY c.createdAt DESC LIMIT 5",
 ].join("\n");
 
-export function registerCypherTool(server: McpServer): void {
+export function registerCypherTool(server: McpServer, enabled: boolean): void {
+	const resolveStore = makeResolveStore(enabled);
 	server.tool(
 		"kg_run_cypher",
 		"Run a READ-ONLY Cypher query against the infrastructure knowledge graph. " +
@@ -129,7 +141,11 @@ export function registerCypherTool(server: McpServer): void {
 			if (typeof store === "string") return text(store);
 			try {
 				const rows = await store.run(cypher, params ?? {});
-				return text(rows.length > 0 ? JSON.stringify(rows, null, 2) : "No rows.");
+				return text(
+					rows.length > 0
+						? JSON.stringify(rows, null, 2)
+						: "Graph queried: 0 rows. This is the authoritative result -- report it as-is; do not substitute an answer from specs or memory.",
+				);
 			} catch (err) {
 				return errText(`Query failed: ${err instanceof Error ? err.message : String(err)}`);
 			}

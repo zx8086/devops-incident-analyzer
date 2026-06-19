@@ -17,8 +17,10 @@ export function createServer(config: Config): McpServer {
 			"Read-only knowledge-graph queries: blast radius (deployments running a stack, stacks using a module) and change history (per deployment / per stack-instance). Optional gated read-only Cypher. Never writes.",
 	});
 
-	registerCuratedTools(server);
-	if (config.allowCypher) registerCypherTool(server);
+	// SIO-968: tools gate on the server's startup config, not a per-call process.env
+	// re-read (which diverged under --env-file and falsely reported "disabled").
+	registerCuratedTools(server, config.knowledgeGraphEnabled);
+	if (config.allowCypher) registerCypherTool(server, config.knowledgeGraphEnabled);
 
 	return server;
 }

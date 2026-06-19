@@ -35,7 +35,12 @@ export function loadConfig(): Config {
 			path: Bun.env.KNOWLEDGE_GRAPH_MCP_PATH ?? "/mcp",
 		},
 		graphPath: Bun.env.KNOWLEDGE_GRAPH_PATH || ".data/knowledge-graph",
-		knowledgeGraphEnabled: Bun.env.KNOWLEDGE_GRAPH_ENABLED === "true" || Bun.env.KNOWLEDGE_GRAPH_ENABLED === "1",
+		// SIO-968: default ON. The KG MCP server only runs when it is meant to serve the
+		// graph, so its tools should treat the graph as enabled unless explicitly disabled
+		// (KNOWLEDGE_GRAPH_ENABLED=false/0). This is the server-layer default; the shared
+		// fleet-wide isKnowledgeGraphEnabled() gate (graph WRITES in the pipeline) is left
+		// default-off so lbug-absent deployments keep their safe no-op.
+		knowledgeGraphEnabled: Bun.env.KNOWLEDGE_GRAPH_ENABLED !== "false" && Bun.env.KNOWLEDGE_GRAPH_ENABLED !== "0",
 		// Default ON; only an explicit "false"/"0" disables raw Cypher.
 		allowCypher: Bun.env.KG_MCP_ALLOW_CYPHER !== "false" && Bun.env.KG_MCP_ALLOW_CYPHER !== "0",
 	});
