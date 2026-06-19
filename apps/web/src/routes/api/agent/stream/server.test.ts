@@ -70,8 +70,6 @@ mock.module("$lib/server/agent", () => ({
 	pruneThreadState: mock(() => Promise.resolve()),
 	// SIO-942: stream/+server.ts calls this after each completed turn (live-memory flush).
 	runPostTurn: mock(() => Promise.resolve()),
-	// SIO-952: stream/+server.ts refreshes the idle-TTL clock after each turn.
-	touchSession: mock(() => undefined),
 	// SIO-952: iac/resume route stamps the turn outcome; keep the process-global mock
 	// link-compatible across route tests (last-wins cache).
 	setSessionOutcome: mock(() => undefined),

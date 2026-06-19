@@ -7,6 +7,7 @@ import {
 	type ChatMessageBlock,
 	redactPiiContent,
 	ServiceUnavailableError,
+	SessionAlreadyEndedError,
 } from "@devops-agent/shared";
 import {
 	__resetMemoryQueue,
@@ -325,6 +326,62 @@ describe("recall + endSession", () => {
 		setActiveMemorySession("incident-analyzer", "t-bound");
 		await endAgentMemorySession();
 		expect(rec.ended).toEqual([{ userId: "incident-analyzer", sessionId: "t-bound" }]);
+	});
+
+	test("endAgentMemorySession swallows SESSION_ALREADY_ENDED as idempotent success (SIO-956)", async () => {
+		// pagehide after Clear / re-fired beacon: the session is already ended. A
+		// second end must NOT throw and must clear the ref (no warn, no crash).
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {
+				throw new SessionAlreadyEndedError("already ended");
+			},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-ended");
+		// must resolve, not reject
+		await endAgentMemorySession();
+		expect(true).toBe(true);
+	});
+
+	test("flushAgentMemory discards (does not requeue) writes after the session ended (SIO-956)", async () => {
+		// A late turn's blocks can't land on a closed session; drop them quietly
+		// rather than requeue forever or noisily report 'writes dropped'.
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				throw new SessionAlreadyEndedError("already ended");
+			},
+			async addMessages() {
+				throw new SessionAlreadyEndedError("already ended");
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-ended");
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
+		await flushAgentMemory();
+		expect(pendingWriteCount()).toBe(0); // discarded, NOT requeued
 	});
 
 	test("clearActiveMemorySession resets the outcome so it never leaks to the next session (SIO-952)", async () => {

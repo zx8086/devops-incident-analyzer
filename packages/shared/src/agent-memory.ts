@@ -110,6 +110,11 @@ interface MemoryResponseShape {
 
 class ConflictError extends Error {}
 
+// SIO-956: raised when an end/write targets a session the service has already
+// ended (400 SESSION_ALREADY_ENDED). Benign for teardown (idempotent end) — the
+// caller treats it as success rather than a dropped-write/failed-end error.
+export class SessionAlreadyEndedError extends Error {}
+
 // Raised on 503 (extraction queue saturated); carries the service's retry hint.
 class ServiceUnavailableError extends Error {
 	constructor(
@@ -131,6 +136,12 @@ async function amFetch<T>(config: AgentMemoryConfig, method: string, path: strin
 	if (!res.ok) {
 		const text = await res.text().catch(() => "");
 		if (res.status === 409) throw new ConflictError(text);
+		// SIO-956: the service returns 400 {"error":"SESSION_ALREADY_ENDED"} on an
+		// end/write to an already-ended session. Surface a typed error so teardown
+		// can treat it as idempotent success instead of a noisy failure.
+		if (res.status === 400 && text.includes("SESSION_ALREADY_ENDED")) {
+			throw new SessionAlreadyEndedError(text);
+		}
 		if (res.status === 503) {
 			// retry_after_seconds may arrive in the body (preferred) or the header.
 			let retry: number | undefined;

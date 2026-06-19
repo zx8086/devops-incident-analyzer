@@ -17,7 +17,6 @@ import {
 	resumeAgent,
 	runPostTurn,
 	setSessionOutcome,
-	touchSession,
 } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, pumpEventStream } from "$lib/server/sse-pump";
@@ -109,9 +108,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							// SIO-930: label the completion chip with the real turn outcome (rejected/declined/etc.).
 							const outcome = await getIacTurnOutcome(body.threadId);
 							// SIO-952: carry the turn outcome onto the session (last-wins; stamped at
-							// conversation-close via updateSession). Refresh the idle clock too.
+							// conversation-close via updateSession when the user starts a new conversation).
 							setSessionOutcome(outcome);
-							touchSession(body.threadId, AGENT);
 							await pruneThreadState(body.threadId, "elastic-iac");
 							// SIO-942: persist this turn's live-memory blocks (best-effort).
 							await runPostTurn({ agentName: AGENT, threadId: body.threadId });

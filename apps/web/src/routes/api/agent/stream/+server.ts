@@ -14,7 +14,6 @@ import {
 	invokeAgent,
 	pruneThreadState,
 	runPostTurn,
-	touchSession,
 } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitIacInterrupt, emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
@@ -143,9 +142,6 @@ export const POST: RequestHandler = async ({ request }) => {
 									await pruneThreadState(threadId, body.agentName);
 									// SIO-942: persist this turn's live-memory blocks (best-effort).
 									await runPostTurn({ agentName: body.agentName, threadId });
-									// SIO-952: refresh the idle-TTL clock so a long conversation is not
-									// swept mid-flight (resume turns do not re-bootstrap).
-									touchSession(threadId, body.agentName);
 									send({
 										type: "done",
 										threadId,
@@ -190,8 +186,6 @@ export const POST: RequestHandler = async ({ request }) => {
 								// SIO-942: persist this turn's live-memory blocks (best-effort). Default
 								// matches invokeAgent/pruneThreadState when agentName is omitted.
 								await runPostTurn({ agentName: body.agentName ?? "incident-analyzer", threadId });
-								// SIO-952: refresh the idle-TTL clock (see the IaC completion above).
-								touchSession(threadId, body.agentName ?? "incident-analyzer");
 								send({
 									type: "done",
 									threadId,

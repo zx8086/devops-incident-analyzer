@@ -97,21 +97,18 @@ onMount(() => {
 		});
 	})();
 
-	// SIO-952: a session = one conversation; end it (beacon) when the user leaves
-	// or hides the page so the Agent Memory session's end_time is set. pagehide
-	// covers tab close/navigation; visibilitychange->hidden covers mobile/bfcache
-	// backgrounding. The server idle-TTL sweep is the backstop for dropped beacons.
-	const endOnLeave = () => agentStore.endCurrentSession();
-	const onVisibility = () => {
-		if (document.visibilityState === "hidden") endOnLeave();
-	};
-	window.addEventListener("pagehide", endOnLeave);
-	document.addEventListener("visibilitychange", onVisibility);
+	// SIO-956: a session = one conversation, ended when the user starts a new one
+	// (Clear / switch agent / new conversation -> store teardownSession) or on a
+	// real page unload. Only `pagehide` (genuine tab-close / navigation / app
+	// close) ends it here. NO `visibilitychange` listener: tab-switch / minimize /
+	// screen-lock is not the end of a conversation, and firing teardown then ended
+	// sessions mid-turn (dropping live-memory writes, SESSION_ALREADY_ENDED storm).
+	const endOnUnload = () => agentStore.endCurrentSession();
+	window.addEventListener("pagehide", endOnUnload);
 
 	return () => {
 		es?.close();
-		window.removeEventListener("pagehide", endOnLeave);
-		document.removeEventListener("visibilitychange", onVisibility);
+		window.removeEventListener("pagehide", endOnUnload);
 	};
 });
 

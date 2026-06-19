@@ -16,6 +16,7 @@ import {
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
+	SessionAlreadyEndedError,
 } from "@devops-agent/shared";
 
 const logger = getLogger("agent:memory-backend");
@@ -198,6 +199,14 @@ export async function flushAgentMemory(): Promise<void> {
 			);
 			return;
 		}
+		if (error instanceof SessionAlreadyEndedError) {
+			// SIO-956: the conversation's session is closed; these late writes cannot
+			// land and there is nothing to retry. Clear the stale ref and move on
+			// quietly — this is expected after a conversation ends, not a failure.
+			clearActiveMemorySession();
+			logger.debug({ dropped: batch.length }, "agent-memory flush after session end; writes discarded");
+			return;
+		}
 		logger.warn(
 			{ dropped: batch.length, error: error instanceof Error ? error.message : String(error) },
 			"agent-memory flush failed; writes dropped",
@@ -261,7 +270,14 @@ export async function endAgentMemorySession(agentName?: string, threadId?: strin
 		}
 		await c.endSession(ref);
 	} catch (error) {
-		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory endSession failed");
+		// SIO-956: ending an already-ended session is idempotent success, not a
+		// failure — a second teardown (pagehide after Clear, re-fired beacon) is
+		// expected. Log at debug; only real failures warn.
+		if (error instanceof SessionAlreadyEndedError) {
+			logger.debug({ sessionId: ref.sessionId }, "agent-memory session already ended; teardown is a no-op");
+		} else {
+			logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory endSession failed");
+		}
 	} finally {
 		clearActiveMemorySession();
 	}
