@@ -719,4 +719,25 @@ describe("buildFleetFactDecision / buildFleetFactRationale", () => {
 		expect(rationale).toContain("3 reached UPG_FAILED");
 		expect(rationale).toContain("Terraform state lock");
 	});
+
+	// SIO-957: a dispatched (still-running) upgrade gets a durable fact too, worded
+	// as in-flight, so a later session recalls work the user kicked off even though
+	// the apply pipeline outlived the dispatching turn.
+	test("dispatched -> durable fact reads as in-flight (DISPATCHED), carries the pipeline", () => {
+		const s = stateWith({
+			targetDeployment: "us-cld",
+			fleetUpgradeReport: report({ targetVersion: "9.4.2" }),
+		});
+		const result: FleetUpgradeResult = {
+			status: "dispatched",
+			pipelineId: 2614422047,
+			note: "Upgrade started and running; not finished within the status window.",
+		};
+		expect(buildFleetFactDecision(s, result)).toBe("Fleet agents on us-cld upgrade DISPATCHED to 9.4.2.");
+		const rationale = buildFleetFactRationale(s, result);
+		expect(rationale).toContain("Apply pipeline #2614422047.");
+		// never the terminal copy
+		expect(buildFleetFactDecision(s, result)).not.toContain("upgraded to");
+		expect(buildFleetFactDecision(s, result)).not.toContain("FAILED");
+	});
 });

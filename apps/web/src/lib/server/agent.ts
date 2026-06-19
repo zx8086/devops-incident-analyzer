@@ -34,6 +34,8 @@ installGraphWarmer();
 installAgentMemory();
 
 const pruneLog = getLogger("agent:state-pruning");
+// SIO-958: session lifecycle visibility (why/when a conversation's session ends).
+const sessionLog = getLogger("agent:session-lifecycle");
 
 // SIO-751: Command is imported lazily inside resumeAgent() because eager import
 // pulls in @langchain/langgraph's transformer modules which fail to resolve
@@ -104,8 +106,15 @@ async function sessionBootstrap(threadId: string, agentName: string, firstUserQu
 // user starts a new conversation (Clear / switch agent / new conversation) or on
 // a real page unload (pagehide). Clears the run-once guard so a future turn on
 // the same threadId re-bootstraps.
-export async function sessionTeardown(threadId: string, agentName = "incident-analyzer"): Promise<void> {
+// SIO-958: `reason` records WHY the session ended (the frontend trigger) so an
+// "unexpected" end is diagnosable from the backend log, not silent.
+export async function sessionTeardown(
+	threadId: string,
+	agentName = "incident-analyzer",
+	reason = "unspecified",
+): Promise<void> {
 	bootstrappedThreads.delete(threadId);
+	sessionLog.info({ threadId, agentName, reason }, "agent session ending");
 	try {
 		await runTeardown({ threadId, agentName });
 	} catch {
