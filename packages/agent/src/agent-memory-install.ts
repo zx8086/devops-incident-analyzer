@@ -27,9 +27,12 @@ export function installAgentMemory(): void {
 		return recallAgentMemory(agentName, threadId, query ?? "recent incidents, decisions, and in-flight work");
 	});
 
-	registerMemoryFlusher(async () => {
+	registerMemoryFlusher(async ({ agentName, threadId }) => {
 		if (selectedBackend() !== "agent-memory") return;
-		await endAgentMemorySession();
+		// SIO-955: pass the thread explicitly so cold teardown (unload beacon /
+		// idle-TTL sweep, where no in-process turn bound activeRef) still ends the
+		// right session instead of silently no-opping.
+		await endAgentMemorySession(agentName, threadId);
 	});
 
 	// SIO-942: persist this turn's blocks without ending the session, so live

@@ -294,6 +294,39 @@ describe("recall + endSession", () => {
 		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-iac" }]);
 	});
 
+	test("endAgentMemorySession(agentName, threadId) ends a session it never bound in-process (SIO-955)", async () => {
+		// The cold-teardown path: the unload beacon / idle-TTL sweep calls teardown
+		// in a process (or after a clear) where no turn ran, so activeRef is null.
+		// Before SIO-955 endAgentMemorySession() took no args, read the null
+		// activeRef, and early-returned -> end_time stayed null (reproduced live).
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		clearActiveMemorySession(); // no in-process turn bound a session
+		await endAgentMemorySession("elastic-iac", "t-cold");
+		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-cold" }]);
+	});
+
+	test("endAgentMemorySession(agentName, threadId) ends the GIVEN thread, not a stale bound one (SIO-955)", async () => {
+		// Idle-TTL sweep: activeRef may point at a different (already-handled) thread.
+		// The explicit args must win so the sweep ends the thread it intends to.
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-other");
+		await endAgentMemorySession("elastic-iac", "t-stale");
+		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-stale" }]);
+	});
+
+	test("endAgentMemorySession() still ends the bound session when called with no args (back-compat)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-bound");
+		await endAgentMemorySession();
+		expect(rec.ended).toEqual([{ userId: "incident-analyzer", sessionId: "t-bound" }]);
+	});
+
 	test("clearActiveMemorySession resets the outcome so it never leaks to the next session (SIO-952)", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		const { client, rec } = makeFakeClient();

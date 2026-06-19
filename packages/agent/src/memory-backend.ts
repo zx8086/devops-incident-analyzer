@@ -242,7 +242,15 @@ export async function recallAgentMemory(
 // Drain + end the session. Called at teardown. SIO-952: stamps the final
 // outcome annotation (best-effort) before closing so the conversation's result
 // is queryable, then POSTs the corrected /sessions/{id}/end endpoint.
-export async function endAgentMemorySession(): Promise<void> {
+//
+// SIO-955: bind the session from the explicit (agentName, threadId) when given,
+// mirroring flushAgentMemoryAfterTurn's defensive rebind. The unload-beacon and
+// idle-TTL-sweep teardown paths run cold (no in-process turn bound activeRef, or
+// it points at a different thread), so relying on the module-global activeRef
+// alone silently no-ops and end_time stays null. The caller always knows the
+// thread to end; honour it. Falls back to activeRef when args are omitted.
+export async function endAgentMemorySession(agentName?: string, threadId?: string): Promise<void> {
+	if (agentName && threadId) setActiveMemorySession(agentName, threadId);
 	await flushAgentMemory();
 	const ref = activeRef;
 	if (!ref) return;
