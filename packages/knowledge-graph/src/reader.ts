@@ -56,6 +56,41 @@ export async function similarIncidents(store: GraphStore, embedding: number[], l
 	}
 }
 
+// SIO-954: recent IaC change history for one deployment, most-recent first.
+// createdAt is an ISO string so a lexicographic ORDER BY DESC is chronological.
+export interface IacChange {
+	id: string;
+	workflow: string;
+	summary: string;
+	mrUrl: string;
+	createdAt: string;
+}
+
+export async function priorChangesForDeployment(
+	store: GraphStore,
+	deployment: string,
+	limit = 5,
+): Promise<IacChange[]> {
+	if (!deployment) return [];
+	const rows = await store.run<{
+		id: string;
+		workflow: string;
+		summary: string;
+		mrUrl: string | null;
+		createdAt: string;
+	}>(
+		"MATCH (d:ElasticDeployment {name: $name})-[:CHANGED_BY]->(c:ConfigChange) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		{ name: deployment, limit },
+	);
+	return rows.map((r) => ({
+		id: String(r.id),
+		workflow: String(r.workflow ?? ""),
+		summary: String(r.summary ?? ""),
+		mrUrl: r.mrUrl ? String(r.mrUrl) : "",
+		createdAt: String(r.createdAt ?? ""),
+	}));
+}
+
 export interface TopologyEdge {
 	from: string;
 	to: string;
@@ -81,6 +116,20 @@ export function buildGraphContext(deps: ServiceDependency[], similar: SimilarInc
 	if (similar.length > 0) {
 		lines.push("### Similar prior incidents");
 		for (const s of similar) lines.push(`- [${s.severity}] ${s.summary} (id ${s.id})`);
+	}
+	return lines.join("\n");
+}
+
+// SIO-954: renders the deployment's recent change history into a compact prompt
+// section. Empty string when there is no history, so the proposer prompt is
+// unchanged on a deployment's first-ever turn or when the graph is disabled.
+export function buildIacGraphContext(deployment: string, changes: IacChange[]): string {
+	if (changes.length === 0) return "";
+	const lines: string[] = ["\n\n---\n\n## Knowledge Graph", `### Recent changes to ${deployment}`];
+	for (const c of changes) {
+		const workflow = c.workflow ? `${c.workflow}: ` : "";
+		const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
+		lines.push(`- ${workflow}${c.summary}${mr}`);
 	}
 	return lines.join("\n");
 }

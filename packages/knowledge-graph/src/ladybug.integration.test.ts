@@ -11,9 +11,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { priorRelationshipsForServices, topology } from "./reader.ts";
+import { priorChangesForDeployment, priorRelationshipsForServices, topology } from "./reader.ts";
 import { LadybugStore } from "./store.ts";
-import { recordIncident, upsertEntities } from "./writer.ts";
+import { recordIacChange, recordIncident, upsertEntities } from "./writer.ts";
 
 // Detect whether the lbug native module is actually loadable (installed AND its
 // entry points materialized). Skip the suite otherwise.
@@ -67,6 +67,30 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			name: "svc-x",
 		});
 		expect(Number(rows[0]?.n)).toBe(1);
+		await store.close();
+	});
+
+	// SIO-954: IaC change-history round-trip against the real engine.
+	test("recordIacChange -> priorChangesForDeployment round-trip", async () => {
+		const store = new LadybugStore(join(dir, "db3"));
+		await store.init();
+		await recordIacChange(store, {
+			id: "req-1",
+			deployment: "eu-b2b",
+			workflow: "ilm-rollout",
+			filePaths: ["lifecycle-policies/metrics.json"],
+			summary: "metrics warm replicas 0",
+			mrUrl: "https://gitlab.com/x/-/merge_requests/9",
+			createdAt: "2026-06-19T00:00:00.000Z",
+		});
+		const changes = await priorChangesForDeployment(store, "eu-b2b");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]).toMatchObject({
+			id: "req-1",
+			workflow: "ilm-rollout",
+			summary: "metrics warm replicas 0",
+			mrUrl: "https://gitlab.com/x/-/merge_requests/9",
+		});
 		await store.close();
 	});
 });

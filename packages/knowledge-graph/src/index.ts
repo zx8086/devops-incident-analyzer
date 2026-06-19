@@ -2,6 +2,9 @@
 
 export {
 	buildGraphContext,
+	buildIacGraphContext,
+	type IacChange,
+	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	type ServiceDependency,
 	type SimilarIncident,
@@ -10,6 +13,10 @@ export {
 	topology,
 } from "./reader.ts";
 export {
+	type ConfigChangeNode,
+	ConfigChangeNodeSchema,
+	type DeploymentNode,
+	DeploymentNodeSchema,
 	EMBEDDING_DIM,
 	type FindingNode,
 	type IncidentNode,
@@ -34,9 +41,11 @@ export {
 export {
 	type CorrelationLink,
 	type EntityGraph,
+	type IacChangeRecord,
 	type IncidentRecord,
 	linkCorrelation,
 	linkResolution,
+	recordIacChange,
 	recordIncident,
 	upsertEntities,
 } from "./writer.ts";

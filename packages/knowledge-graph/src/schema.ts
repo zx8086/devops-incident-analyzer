@@ -24,6 +24,12 @@ export const NODE_LABELS = [
 	"Finding",
 	"Runbook",
 	"WikiPage",
+	// SIO-954: IaC (elastic-iac) concepts. An ElasticDeployment is a cluster
+	// (distinct from a microservice Service); a ConfigChange is one maker turn's
+	// proposed edit; a MergeRequest is the GitLab MR that carries it.
+	"ElasticDeployment",
+	"ConfigChange",
+	"MergeRequest",
 ] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
@@ -37,6 +43,10 @@ export const REL_TYPES = [
 	"RESOLVED_BY",
 	"DOCUMENTED_IN",
 	"DEPLOYED_AS",
+	// SIO-954: IaC change history. CHANGED_BY links a deployment to a config
+	// change; PROPOSED_IN links a config change to the MR that carries it.
+	"CHANGED_BY",
+	"PROPOSED_IN",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
 
@@ -53,9 +63,22 @@ export const IncidentNodeSchema = z
 export const FindingNodeSchema = z
 	.object({ id: z.string().min(1), kind: z.string(), summary: z.string().optional() })
 	.strict();
+// SIO-954: IaC writer boundary shapes.
+export const DeploymentNodeSchema = z.object({ name: z.string().min(1) }).strict();
+export const ConfigChangeNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		workflow: z.string().optional(),
+		filePath: z.string().optional(),
+		summary: z.string().optional(),
+		createdAt: z.string().optional(),
+	})
+	.strict();
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
+export type DeploymentNode = z.infer<typeof DeploymentNodeSchema>;
+export type ConfigChangeNode = z.infer<typeof ConfigChangeNodeSchema>;
 
 // Schema DDL. Kuzu/Ladybug node & rel tables, idempotent (IF NOT EXISTS). The
 // embedding column on Incident backs the native vector index (see VECTOR_INDEX).
@@ -81,6 +104,12 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
 	"CREATE REL TABLE IF NOT EXISTS DOCUMENTED_IN(FROM Service TO WikiPage)",
 	"CREATE REL TABLE IF NOT EXISTS DEPLOYED_AS(FROM Service TO Deployment)",
+	// SIO-954: IaC change-history tables.
+	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, PRIMARY KEY(name))",
+	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, PRIMARY KEY(url))",
+	"CREATE REL TABLE IF NOT EXISTS CHANGED_BY(FROM ElasticDeployment TO ConfigChange)",
+	"CREATE REL TABLE IF NOT EXISTS PROPOSED_IN(FROM ConfigChange TO MergeRequest)",
 ];
 
 // Native vector index over Incident.embedding. Requires Ladybug's vector
