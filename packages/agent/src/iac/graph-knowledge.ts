@@ -22,7 +22,7 @@ import {
 	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
+import { dedupeHitsBy, type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
 import { iacTurnOutcome, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -154,7 +154,9 @@ export async function graphEnrichIac(state: IacStateType): Promise<Partial<IacSt
 // card. "" for no hits (the UI block stays hidden). Tags mirror runMemorySearch (local-tools.ts).
 function renderLearnings(hits: MemorySearchHit[]): string {
 	if (hits.length === 0) return "";
-	return hits
+	// SIO-973: a re-recorded change (same config_change_id / mr_url) returns as multiple hits;
+	// collapse to one bullet per change so the plan-review card doesn't repeat the same learning.
+	return dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url)
 		.map((h) => {
 			const a = h.annotations;
 			const tags = [a.workflow, a.version, a.outcome].filter(Boolean).join(" ");

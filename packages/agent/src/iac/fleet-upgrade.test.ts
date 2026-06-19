@@ -1046,6 +1046,19 @@ describe("recallPriorFleetUpgrades (SIO-971)", () => {
 		reset();
 	});
 
+	// SIO-973: a re-recorded upgrade (same pipeline_id) must render ONCE, not twice.
+	test("dedups recall hits sharing a pipeline_id into a single bullet", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withTerminalFacts([
+			{ deployment: "us-cld", version: "9.3.0", outcome: "applied", pipelineId: 2600000001 },
+			{ deployment: "us-cld", version: "9.3.0", outcome: "applied", pipelineId: 2600000001 },
+		]);
+		const out = await recallPriorFleetUpgrades("us-cld", "9.4.2");
+		expect(out.split("\n")).toHaveLength(1);
+		expect(out).toContain("[9.3.0 applied pipeline 2600000001]");
+		reset();
+	});
+
 	test("returns '' when the agent-memory backend is not selected", async () => {
 		delete process.env.LIVE_MEMORY_BACKEND;
 		expect(await recallPriorFleetUpgrades("us-cld", "9.4.2")).toBe("");

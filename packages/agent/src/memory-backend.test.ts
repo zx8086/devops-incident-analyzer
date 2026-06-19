@@ -13,6 +13,7 @@ import {
 	__resetMemoryQueue,
 	__setAgentMemoryClient,
 	clearActiveMemorySession,
+	dedupeHitsBy,
 	endAgentMemorySession,
 	enqueueFact,
 	enqueueMessage,
@@ -451,5 +452,35 @@ describe("annotations + metadata (SIO-952)", () => {
 		await flushAgentMemory();
 		expect(accepted).toEqual(["scale consumers"]);
 		expect(pendingWriteCount()).toBe(0);
+	});
+});
+
+// SIO-973: dedup recall hits by a stable annotation key so a re-recorded fact (durable +
+// undeletable -> permanently doubled) renders once.
+describe("dedupeHitsBy (SIO-973)", () => {
+	const hit = (text: string, annotations: Record<string, string>) => ({ text, annotations });
+
+	test("collapses hits sharing the same key, keeping the first (highest-ranked)", () => {
+		const hits = [
+			hit("US cloud upgraded to 9.3.0.", { pipeline_id: "2600000001", version: "9.3.0" }),
+			hit("The US cloud was upgraded to 9.3.0 smoothly.", { pipeline_id: "2600000001", version: "9.3.0" }),
+		];
+		const out = dedupeHitsBy(hits, (h) => h.annotations.pipeline_id);
+		expect(out).toHaveLength(1);
+		expect(out.at(0)?.text).toBe("US cloud upgraded to 9.3.0.");
+	});
+
+	test("keeps genuinely distinct upgrades (different keys)", () => {
+		const hits = [hit("upgraded to 9.3.0", { pipeline_id: "1" }), hit("upgraded to 9.4.2", { pipeline_id: "2" })];
+		expect(dedupeHitsBy(hits, (h) => h.annotations.pipeline_id)).toHaveLength(2);
+	});
+
+	test("never collapses distinct keyless hits together", () => {
+		const hits = [hit("a", {}), hit("b", {})];
+		expect(dedupeHitsBy(hits, (h) => h.annotations.pipeline_id)).toHaveLength(2);
+	});
+
+	test("empty in -> empty out", () => {
+		expect(dedupeHitsBy([], (h) => h.annotations.pipeline_id)).toEqual([]);
 	});
 });

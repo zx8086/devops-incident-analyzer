@@ -13,6 +13,7 @@ import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import {
+	dedupeHitsBy,
 	type MemorySearchHit,
 	recallInFlightFleetUpgrades,
 	searchAgentMemory,
@@ -7035,7 +7036,9 @@ async function emitFleetResult(r: FleetUpgradeResult): Promise<void> {
 // renderLearnings shape but tags on version/outcome (fleet facts have no workflow key).
 function renderFleetLearnings(hits: MemorySearchHit[]): string {
 	if (hits.length === 0) return "";
-	return hits
+	// SIO-973: a re-recorded terminal upgrade (same pipeline_id) returns as multiple hits; collapse
+	// to one bullet per pipeline so the gate card doesn't show the same upgrade twice.
+	return dedupeHitsBy(hits, (h) => h.annotations.pipeline_id)
 		.map((h) => {
 			const a = h.annotations;
 			const tags = [a.version, a.outcome, a.pipeline_id && `pipeline ${a.pipeline_id}`].filter(Boolean).join(" ");
