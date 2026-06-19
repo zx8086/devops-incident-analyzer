@@ -16,7 +16,7 @@ import { recallInFlightFleetUpgrades, selectedBackend } from "../memory-backend.
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
-import { createQueryKnowledgeGraphTool, createSearchMemoryTool } from "./local-tools.ts";
+import { createSearchMemoryTool } from "./local-tools.ts";
 import type {
 	DriftReport,
 	FleetUpgradeReport,
@@ -670,15 +670,18 @@ const INFO_TOOL_NAMES = [
 	"elastic_ilm_get_lifecycle",
 ] as const;
 
-// SIO-966: the read path also gets two LOCAL (non-MCP) query tools so the LLM can
-// PULL from the knowledge graph + durable memory on demand. They are appended to the
-// MCP read subset; both soft-fail when their backend is disabled. Built per call (the
-// memory tool closes over the agent name) -- cheap, and keeps infoTools() pure.
-// Exported for SIO-966 tests: asserts the local query tools are bound into the read loop.
+// SIO-967: the read path's knowledge-graph access now comes through the STANDARD MCP
+// surface -- the curated kg_* tools served by the in-process knowledge-graph-mcp server
+// (supersedes SIO-966's local createQueryKnowledgeGraphTool). They are read-only by
+// construction, so the whole kg_* set is bound (no allowlist needed). Durable-memory
+// recall stays a LOCAL tool (search_memory): agent memory is REST infrastructure, not
+// MCP-exposed. Built per call (the memory tool closes over the agent name) -- cheap, and
+// keeps infoTools() pure. Exported for tests: asserts kg_* + search_memory are bound.
 export function infoTools(): StructuredToolInterface[] {
 	const allowed = new Set<string>(INFO_TOOL_NAMES);
-	const mcp = getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
-	return [...mcp, createQueryKnowledgeGraphTool(), createSearchMemoryTool(AGENT)];
+	const elasticReads = getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
+	const kgTools = getToolsForDataSource("knowledge-graph");
+	return [...elasticReads, ...kgTools, createSearchMemoryTool(AGENT)];
 }
 
 // SIO-966: invoke a tool the LLM called, resolving it from the in-scope tools array

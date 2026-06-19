@@ -1,49 +1,46 @@
 // agent/src/iac/info-local-tools.test.ts
 //
-// SIO-966: the local query tools are bound into the read path (answerInfo /
-// converseIac) via infoTools(), so the LLM can call them. We assert membership +
-// that the bound tool runs end-to-end against a stubbed graph -- deterministic and
-// free of the ../llm.ts mock-pollution that a full node-loop test would suffer in
-// the combined suite (mock.module is process-global, last-wins).
+// SIO-967: infoTools() now sources the knowledge-graph query tools from the STANDARD
+// MCP surface (the curated kg_* tools served by the in-process knowledge-graph-mcp
+// server, via getToolsForDataSource("knowledge-graph")), and keeps search_memory as
+// the one LOCAL tool. We stub the MCP bridge so the elastic-iac read subset is empty
+// and the knowledge-graph datasource returns a fake kg_* tool -- proving both the MCP
+// kg_* tools and the local memory tool are bound. The kg_* query handlers themselves
+// are tested in packages/mcp-server-knowledge-graph/src/tools/curated.test.ts.
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
+import { tool as createTool } from "@langchain/core/tools";
+import { z } from "zod";
 
-const prevKg = process.env.KNOWLEDGE_GRAPH_ENABLED;
+const fakeKgTool = createTool(async () => "Stacks using the lifecycle module: lifecycle-policies.", {
+	name: "kg_stacks_using_module",
+	description: "fake kg tool",
+	schema: z.object({ module: z.string() }),
+});
 
-beforeEach(() => {
-	// infoTools() reads the MCP bridge; stub it to no tools so only the two LOCAL
-	// tools remain -- proving they are appended independently of the MCP set.
+beforeEach(async () => {
+	// elastic-iac read subset -> empty; knowledge-graph datasource -> one kg_* tool.
+	// SIO-862: own a COMPLETE mock (spread the real module) so a sibling test reading
+	// other mcp-bridge exports (e.g. MCP_SERVER_TO_ROLE in the boot-strict suite) isn't
+	// poisoned by this process-global, last-wins mock.module override.
+	const real = await import("../mcp-bridge.ts");
 	mock.module("../mcp-bridge.ts", () => ({
-		getToolsForDataSource: () => [],
-		getConnectedServers: () => ["elastic-iac-mcp"],
+		...real,
+		getToolsForDataSource: (ds: string) => (ds === "knowledge-graph" ? [fakeKgTool] : []),
+		getConnectedServers: () => ["elastic-iac-mcp", "knowledge-graph-mcp"],
 	}));
-	_setGraphStoreForTesting(null);
 });
 
 afterEach(() => {
 	mock.restore();
-	if (prevKg === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
-	else process.env.KNOWLEDGE_GRAPH_ENABLED = prevKg;
-	_setGraphStoreForTesting(null);
 });
 
-describe("infoTools binds the local query tools (SIO-966)", () => {
-	test("query_knowledge_graph + search_memory are present in the read tool set", async () => {
+describe("infoTools binds the MCP kg_* tools + local memory tool (SIO-967)", () => {
+	test("kg_* MCP tools + search_memory are present in the read tool set", async () => {
 		const { infoTools } = await import("./nodes.ts");
 		const names = infoTools().map((t) => t.name);
-		expect(names).toContain("query_knowledge_graph");
+		expect(names).toContain("kg_stacks_using_module");
 		expect(names).toContain("search_memory");
-	});
-
-	test("the bound query_knowledge_graph tool runs end-to-end against the graph", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		const store = new InMemoryGraphStore();
-		store.stub("USES_MODULE", [{ stack: "lifecycle-policies" }]);
-		_setGraphStoreForTesting(store);
-		const { infoTools } = await import("./nodes.ts");
-		const kg = infoTools().find((t) => t.name === "query_knowledge_graph");
-		expect(kg).toBeDefined();
-		const out = (await kg?.invoke({ query_type: "stacks_using_module", module: "lifecycle" })) as string;
-		expect(out).toContain("lifecycle-policies");
+		// the retired SIO-966 local tool name must be gone
+		expect(names).not.toContain("query_knowledge_graph");
 	});
 });

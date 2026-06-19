@@ -12,7 +12,7 @@ input_schema:
   properties:
     action:
       type: string
-      enum: [read_state, read_repo, propose, open_mr, review_pipeline, status]
+      enum: [read_state, read_repo, propose, open_mr, review_pipeline, status, query_context]
       description: Stage of the IaC proposer workflow to perform
     cluster:
       type: string
@@ -51,10 +51,14 @@ tool_mapping:
   mcp_server: elastic-iac
   # Propose-only (SIO-912 removed the local-terraform path; SIO-925 pruned the dead
   # routing): no git_* (no clone/checkout/push) and no terraform_* (CI runs the plan).
+  # SIO-967: kg_* are served by the in-process knowledge-graph MCP server (not the
+  # elastic-iac server). The read path binds them directly via infoTools(); listing the
+  # pattern here keeps the facade from filtering them out and documents the surface.
   mcp_patterns:
     - "gitlab_*"
     - "elastic_*"
     - "iac_*"
+    - "kg_*"
   action_tool_map:
     read_state:
       - elastic_cloud_list_deployment_versions
@@ -90,6 +94,11 @@ tool_mapping:
       - iac_list_deployments
       - iac_output
       - iac_state_list
+    query_context:
+      - kg_deployments_running_stack
+      - kg_stacks_using_module
+      - kg_stack_instance_history
+      - kg_deployment_history
   action_descriptions:
     read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before proposing
     read_repo: when reading the IaC repository tree or config-file blobs (environments/<cluster>/**) to locate the file to edit
