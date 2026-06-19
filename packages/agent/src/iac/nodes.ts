@@ -16,6 +16,7 @@ import { recallInFlightFleetUpgrades, selectedBackend } from "../memory-backend.
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
+import { createQueryKnowledgeGraphTool, createSearchMemoryTool } from "./local-tools.ts";
 import type {
 	DriftReport,
 	FleetUpgradeReport,
@@ -669,9 +670,33 @@ const INFO_TOOL_NAMES = [
 	"elastic_ilm_get_lifecycle",
 ] as const;
 
-function infoTools(): StructuredToolInterface[] {
+// SIO-966: the read path also gets two LOCAL (non-MCP) query tools so the LLM can
+// PULL from the knowledge graph + durable memory on demand. They are appended to the
+// MCP read subset; both soft-fail when their backend is disabled. Built per call (the
+// memory tool closes over the agent name) -- cheap, and keeps infoTools() pure.
+// Exported for SIO-966 tests: asserts the local query tools are bound into the read loop.
+export function infoTools(): StructuredToolInterface[] {
 	const allowed = new Set<string>(INFO_TOOL_NAMES);
-	return getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
+	const mcp = getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
+	return [...mcp, createQueryKnowledgeGraphTool(), createSearchMemoryTool(AGENT)];
+}
+
+// SIO-966: invoke a tool the LLM called, resolving it from the in-scope tools array
+// (which holds BOTH MCP and local tools) -- callTool() only resolves MCP tools, so a
+// name lookup there would miss the local query tools. Unknown names are rejected.
+async function dispatchInfoToolCall(
+	tools: StructuredToolInterface[],
+	name: string,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const tool = tools.find((t) => t.name === name);
+	if (!tool) return `[${name} is not an allowed read tool]`;
+	try {
+		const res = await tool.invoke(args);
+		return typeof res === "string" ? res : JSON.stringify(res);
+	} catch (err) {
+		return `[${name} error: ${err instanceof Error ? err.message : String(err)}]`;
+	}
 }
 
 // Answer a read-only question via a bounded tool-calling loop over the read subset.
@@ -687,7 +712,6 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		`${buildSystemPrompt(getAgentByName(AGENT))}\n\n` +
 		"This is a READ-ONLY question. Use the elastic read tools to answer it precisely. " +
 		"Never draft Terraform, never open an MR, never create a branch. Answer concisely with the facts.";
-	const toolNames = new Set(tools.map((t) => t.name));
 	const convo: BaseMessage[] = [new SystemMessage(sys), new HumanMessage(query)];
 
 	const MAX_STEPS = 5;
@@ -697,9 +721,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		const calls = ai.tool_calls ?? [];
 		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
 		for (const call of calls) {
-			const result = toolNames.has(call.name)
-				? await callTool(call.name, (call.args ?? {}) as Record<string, unknown>)
-				: `[${call.name} is not an allowed read tool]`;
+			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
 		}
 	}
@@ -735,7 +757,6 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 	}
 
 	const llm = createLlmWithTools("iacReader", tools, AGENT);
-	const toolNames = new Set(tools.map((t) => t.name));
 	const convo: BaseMessage[] = [new SystemMessage(sys), ...state.messages];
 
 	const MAX_STEPS = 5;
@@ -745,9 +766,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 		const calls = ai.tool_calls ?? [];
 		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
 		for (const call of calls) {
-			const result = toolNames.has(call.name)
-				? await callTool(call.name, (call.args ?? {}) as Record<string, unknown>)
-				: `[${call.name} is not an allowed read tool]`;
+			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
 		}
 	}

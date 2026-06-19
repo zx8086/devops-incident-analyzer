@@ -248,6 +248,42 @@ export async function recallAgentMemory(
 	}
 }
 
+// SIO-966: on-demand semantic recall for the LLM-callable search_memory tool. Like
+// recallAgentMemory but (a) spans all sessions for the agent without needing the
+// current threadId, (b) accepts an optional annotations filter ({deployment, stack,
+// kind, ...}) that joins to the knowledge-graph node keys, and (c) returns the hit
+// text WITH its annotations so the model sees the structured labels. Agent-memory
+// backend only; returns [] on any failure or when the backend is the file default.
+export interface MemorySearchHit {
+	text: string;
+	annotations: AnnotationMap;
+}
+
+export async function searchAgentMemory(
+	agentName: string,
+	query: string,
+	filter?: AnnotationMap,
+	limit = 8,
+): Promise<MemorySearchHit[]> {
+	if (selectedBackend() !== "agent-memory") return [];
+	const userId = resolveUserId(agentName);
+	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	try {
+		const c = client();
+		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
+		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		const hits = await c.searchMemory(ref, query, {
+			allSessions: true,
+			relevantK: limit,
+			...(filter && Object.keys(filter).length > 0 ? { annotations: filter } : {}),
+		});
+		return hits.map((h) => ({ text: h.text, annotations: h.annotations ?? {} }));
+	} catch (error) {
+		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory search failed");
+		return [];
+	}
+}
+
 // SIO-959: a dispatched fleet upgrade recovered from durable memory across sessions.
 export interface InFlightFleetUpgrade {
 	deployment?: string;
