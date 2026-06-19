@@ -3,7 +3,8 @@ import { createCheckpointer } from "@devops-agent/checkpointer";
 import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
-import { graphEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
+import { selectedBackend } from "../memory-backend.ts";
+import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
 import {
 	advanceDrift,
 	answerInfo,
@@ -48,7 +49,13 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 	// conditional edge whose `ends` list always names the KG node (keeping it reachable for
 	// compilation) but whose router only selects it when the flag is on.
 	const knowledgeGraphEnabled = isKnowledgeGraphEnabled();
-	const enrichTarget = () => (knowledgeGraphEnabled ? "graphEnrichIac" : "guard");
+	// SIO-970: agent-memory recall is an INDEPENDENT enrich, gated on its own backend (not the
+	// KG flag). memoryEnrichIac is spliced after the optional graphEnrichIac and before guard so
+	// the two enrichments compose; both gates are build-time constants and always name the node
+	// in their `ends` list (keeps it reachable for compilation) -- the SIO-640 edge-gate idiom.
+	const memoryEnrichEnabled = selectedBackend() === "agent-memory";
+	const enrichTarget = () => (knowledgeGraphEnabled ? "graphEnrichIac" : memoryTarget());
+	const memoryTarget = () => (memoryEnrichEnabled ? "memoryEnrichIac" : "guard");
 	const recordTarget = () => (knowledgeGraphEnabled ? "recordIacEntities" : "watchPipeline");
 	// SIO-965: recordIacOutcome (Pipeline + terminal ConfigChange.outcome) runs after
 	// watchPipeline when the KG is enabled, for both the gitops MR flow and the
@@ -92,6 +99,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("applyFleetUpgrade", applyFleetUpgrade)
 		// SIO-954: KG read/write nodes (registered always; reached only when enabled).
 		.addNode("graphEnrichIac", graphEnrichIac)
+		// SIO-970: agent-memory recall node (registered always; reached only when the
+		// agent-memory backend is selected, independent of the KG flag).
+		.addNode("memoryEnrichIac", memoryEnrichIac)
 		.addNode("recordIacEntities", recordIacEntities)
 		// SIO-965: KG outcome node (Pipeline + terminal outcome), registered always.
 		.addNode("recordIacOutcome", recordIacOutcome)
@@ -134,9 +144,12 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// "other") with a capability message + blockedReason -> stop before reading cluster
 		// state or drafting. Otherwise proceed to the maker pipeline.
 		.addConditionalEdges("parseIntent", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
-		// SIO-954: readClusterState -> guard, with graphEnrichIac spliced in when the KG is enabled.
-		.addConditionalEdges("readClusterState", enrichTarget, ["graphEnrichIac", "guard"])
-		.addEdge("graphEnrichIac", "guard")
+		// SIO-954/SIO-970: readClusterState -> guard, with graphEnrichIac (KG) and memoryEnrichIac
+		// (agent-memory recall) spliced in before guard when their respective backends are enabled.
+		// Each enrich routes onward via memoryTarget so the two compose independently.
+		.addConditionalEdges("readClusterState", enrichTarget, ["graphEnrichIac", "memoryEnrichIac", "guard"])
+		.addConditionalEdges("graphEnrichIac", memoryTarget, ["memoryEnrichIac", "guard"])
+		.addEdge("memoryEnrichIac", "guard")
 		// Blocked by a mechanical safety guard -> stop before any write.
 		.addConditionalEdges("guard", (s) => (s.blockedReason ? END : "draftChange"), ["draftChange", END])
 		// SIO-873: the GitOps proposer (draftChange) can block too (e.g. missing token,

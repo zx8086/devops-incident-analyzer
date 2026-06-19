@@ -39,6 +39,11 @@ export interface IacReview {
 	// undefined when the graph is off/empty. The server always passed it on the review
 	// payload; the field was just missing here, so the card couldn't render it.
 	recentChanges?: string;
+	// SIO-970: agent-memory recall -- prior learnings/decisions for this deployment/stack cell,
+	// markdown. Undefined when the agent-memory backend is off or recall found nothing. Like
+	// recentChanges, the server passes it on the review payload; this field must exist here or
+	// the card can't read it (the SIO-969 silent-drop gotcha).
+	priorLearnings?: string;
 }
 
 export interface IacPlanReviewPrompt {

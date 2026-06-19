@@ -1,7 +1,8 @@
 // agent/src/iac/graph-knowledge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
-import { graphEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
+import { __setAgentMemoryClient } from "../memory-backend.ts";
+import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
 import { stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -143,6 +144,63 @@ describe("graphEnrichIac", () => {
 			iacState({ proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"] }),
 		);
 		expect(result.lastStackInstanceOutcome).toEqual({ outcome: "failed", mrUrl: "u2", summary: "warm 30d" });
+	});
+});
+
+// SIO-970: cross-session agent-memory recall node. Independent of the KG flag -- gated
+// only on LIVE_MEMORY_BACKEND=agent-memory.
+describe("memoryEnrichIac", () => {
+	const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+	afterEach(() => {
+		__setAgentMemoryClient(null);
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	});
+
+	test("is a no-op when the agent-memory backend is not selected", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND;
+		const result = await memoryEnrichIac(
+			iacState({ proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"] }),
+		);
+		expect(result).toEqual({});
+	});
+
+	test("recalls prior learnings filtered by stack_instance + kind, rendered as markdown", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+				// proves the change-path annotation key is the recall filter
+				expect(opts?.annotations).toEqual({ stack_instance: "eu-b2b/lifecycle-policies", kind: "iac-change" });
+				return [
+					{
+						text: "Set metrics warm to 14d; 30d failed CI on shard count.",
+						score: 0.9,
+						annotations: { workflow: "ilm-rollout", outcome: "applied" },
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: SIO-970 - test stub for the AgentMemoryClient surface
+		} as any);
+		const result = await memoryEnrichIac(
+			iacState({ proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"] }),
+		);
+		expect(result.priorLearnings).toContain("Set metrics warm to 14d");
+		expect(result.priorLearnings).toContain("[ilm-rollout applied]");
+	});
+
+	test("is a no-op when no stack-instance can be resolved from the proposed paths", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const result = await memoryEnrichIac(iacState({ proposedFiles: ["modules/slo/main.tf"] }));
+		expect(result).toEqual({});
 	});
 });
 
