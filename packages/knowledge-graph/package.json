@@ -8,7 +8,8 @@
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit",
 		"knowledge-graph:migrate": "bun run src/migrate.ts migrate",
-		"knowledge-graph:seed": "bun run src/migrate.ts seed"
+		"knowledge-graph:seed": "bun run src/migrate.ts seed",
+		"knowledge-graph:seed-iac": "bun run src/seed-iac.ts"
 	},
 	"dependencies": {
 		"@devops-agent/observability": "workspace:*",

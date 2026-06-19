@@ -91,6 +91,65 @@ export async function priorChangesForDeployment(
 	}));
 }
 
+// SIO-965: change history scoped to one (deployment, stack) cell. createdAt is an
+// ISO string so a lexicographic ORDER BY DESC is chronological.
+export interface StackInstanceChange {
+	id: string;
+	workflow: string;
+	summary: string;
+	outcome: string;
+	mrUrl: string;
+	createdAt: string;
+}
+
+export async function changeHistoryForStackInstance(
+	store: GraphStore,
+	stackInstanceId: string,
+	limit = 5,
+): Promise<StackInstanceChange[]> {
+	if (!stackInstanceId) return [];
+	const rows = await store.run<{
+		id: string;
+		workflow: string;
+		summary: string;
+		outcome: string | null;
+		mrUrl: string | null;
+		createdAt: string;
+	}>(
+		"MATCH (c:ConfigChange)-[:TARGETS]->(si:StackInstance {id: $sid}) OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) RETURN c.id AS id, c.workflow AS workflow, c.summary AS summary, c.outcome AS outcome, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		{ sid: stackInstanceId, limit },
+	);
+	return rows.map((r) => ({
+		id: String(r.id),
+		workflow: String(r.workflow ?? ""),
+		summary: String(r.summary ?? ""),
+		// Pre-SIO-965 rows have no outcome column value -> coalesce to "proposed".
+		outcome: r.outcome ? String(r.outcome) : "proposed",
+		mrUrl: r.mrUrl ? String(r.mrUrl) : "",
+		createdAt: String(r.createdAt ?? ""),
+	}));
+}
+
+// SIO-965: blast radius -- which stacks wire a given module (cross-stack reuse).
+export async function stacksUsingModule(store: GraphStore, module: string): Promise<string[]> {
+	if (!module) return [];
+	const rows = await store.run<{ stack: string }>(
+		"MATCH (s:Stack)-[:USES_MODULE]->(m:Module {name: $name}) RETURN s.name AS stack ORDER BY s.name",
+		{ name: module },
+	);
+	return rows.map((r) => String(r.stack));
+}
+
+// SIO-965: blast radius -- which deployments run a given stack (cross-deployment).
+export async function deploymentsRunningStack(store: GraphStore, stack: string): Promise<string[]> {
+	if (!stack) return [];
+	const rows = await store.run<{ deployment: string }>(
+		"MATCH (d:ElasticDeployment)<-[:ON_DEPLOYMENT]-(si:StackInstance)-[:OF_STACK]->(s:Stack {name: $name}) RETURN DISTINCT d.name AS deployment ORDER BY deployment",
+		{ name: stack },
+	);
+	return rows.map((r) => String(r.deployment));
+}
+
 export interface TopologyEdge {
 	from: string;
 	to: string;
@@ -120,16 +179,43 @@ export function buildGraphContext(deps: ServiceDependency[], similar: SimilarInc
 	return lines.join("\n");
 }
 
-// SIO-954: renders the deployment's recent change history into a compact prompt
-// section. Empty string when there is no history, so the proposer prompt is
-// unchanged on a deployment's first-ever turn or when the graph is disabled.
-export function buildIacGraphContext(deployment: string, changes: IacChange[]): string {
-	if (changes.length === 0) return "";
-	const lines: string[] = ["\n\n---\n\n## Knowledge Graph", `### Recent changes to ${deployment}`];
-	for (const c of changes) {
-		const workflow = c.workflow ? `${c.workflow}: ` : "";
-		const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
-		lines.push(`- ${workflow}${c.summary}${mr}`);
+// SIO-965: optional richer sections appended after the deployment change history.
+export interface IacGraphExtra {
+	// Per-(deployment,stack) recent changes, with outcome.
+	stackInstanceChanges?: StackInstanceChange[];
+	// Blast radius: other deployments that also run the targeted stack.
+	alsoRunningStack?: { stack: string; deployments: string[] };
+}
+
+// SIO-954/SIO-965: renders the deployment's recent change history into a compact
+// prompt section. Empty string when there is nothing to show, so the proposer
+// prompt is unchanged on a deployment's first-ever turn or when the graph is
+// disabled. The two-arg form (extra omitted) renders identically to SIO-954.
+export function buildIacGraphContext(deployment: string, changes: IacChange[], extra?: IacGraphExtra): string {
+	const stackChanges = extra?.stackInstanceChanges ?? [];
+	const alsoRunning = extra?.alsoRunningStack;
+	const hasExtra = stackChanges.length > 0 || (alsoRunning?.deployments.length ?? 0) > 0;
+	if (changes.length === 0 && !hasExtra) return "";
+	const lines: string[] = ["\n\n---\n\n## Knowledge Graph"];
+	if (changes.length > 0) {
+		lines.push(`### Recent changes to ${deployment}`);
+		for (const c of changes) {
+			const workflow = c.workflow ? `${c.workflow}: ` : "";
+			const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
+			lines.push(`- ${workflow}${c.summary}${mr}`);
+		}
+	}
+	if (stackChanges.length > 0) {
+		lines.push("### Recent changes to this stack");
+		for (const c of stackChanges) {
+			const workflow = c.workflow ? `${c.workflow}: ` : "";
+			const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
+			lines.push(`- [${c.outcome}] ${workflow}${c.summary}${mr}`);
+		}
+	}
+	if (alsoRunning && alsoRunning.deployments.length > 0) {
+		lines.push(`### Other deployments running the ${alsoRunning.stack} stack`);
+		lines.push(`- ${alsoRunning.deployments.join(", ")}`);
 	}
 	return lines.join("\n");
 }

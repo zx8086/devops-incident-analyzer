@@ -11,12 +11,18 @@
 
 import {
 	buildIacGraphContext,
+	type ChangeOutcome,
+	changeHistoryForStackInstance,
+	deploymentsRunningStack,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	priorChangesForDeployment,
 	recordIacChange,
+	recordPipeline,
+	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import { iacTurnOutcome, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const logger = getLogger("agent:iac:graph-knowledge");
@@ -25,6 +31,24 @@ const logger = getLogger("agent:iac:graph-knowledge");
 // drift/synthetics/fleet flows; a gitops maker turn carries it on iacRequest.cluster.
 function targetDeploymentName(state: IacStateType): string {
 	return state.targetDeployment || state.iacRequest?.cluster || "";
+}
+
+// SIO-965: "<deployment>/<stack>" StackInstance id, or "" when either is unknown.
+function stackInstanceId(state: IacStateType): string {
+	const deployment = targetDeploymentName(state);
+	const stack = stackFromPaths(state.proposedFiles);
+	return deployment && stack ? `${deployment}/${stack}` : "";
+}
+
+// SIO-965: map the user-facing turn outcome to the graph's ChangeOutcome. Only a
+// terminally-successful pipeline counts as "applied" (a human still merges, but
+// pipeline success is the best automatic proxy the maker observes).
+function changeOutcome(state: IacStateType): ChangeOutcome {
+	const outcome = iacTurnOutcome(state);
+	if (outcome === "rejected") return "rejected";
+	if (outcome === "pipeline-failed") return "failed";
+	if (state.pipelineStatus === "success") return "applied";
+	return "proposed";
 }
 
 // Compact one-line summary of the change, reused as the ConfigChange.summary.
@@ -49,12 +73,42 @@ export async function recordIacEntities(state: IacStateType): Promise<Partial<Ia
 			filePaths: state.proposedFiles,
 			summary: changeSummary(state),
 			mrUrl: state.mrUrl || undefined,
+			// SIO-965: three-layer attachments. Each is optional in the writer, so a turn
+			// missing any of them degrades to the SIO-954 behaviour.
+			stackInstanceId: stackInstanceId(state) || undefined,
+			threadId: state.threadId || undefined,
+			outcome: "proposed", // promoted to applied/failed by recordIacOutcome after watchPipeline
 		});
 		return {};
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"recordIacEntities graph write failed; continuing",
+		);
+		return {};
+	}
+}
+
+// SIO-965: recordIacOutcome node: after watchPipeline, record the MR's CI pipeline
+// and promote the change's outcome to its terminal value. Runs for both the gitops
+// MR flow and the pipeline-status re-check; the writes no-op without an mrUrl/requestId.
+export async function recordIacOutcome(state: IacStateType): Promise<Partial<IacStateType>> {
+	if (!isKnowledgeGraphEnabled()) return {};
+	try {
+		const store = await getGraphStore();
+		if (state.mrUrl && state.pipelineId != null) {
+			await recordPipeline(store, {
+				mrUrl: state.mrUrl,
+				pipelineId: state.pipelineId,
+				status: state.pipelineStatus,
+			});
+		}
+		if (state.requestId) await setChangeOutcome(store, state.requestId, changeOutcome(state));
+		return {};
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"recordIacOutcome graph write failed; continuing",
 		);
 		return {};
 	}
@@ -68,7 +122,16 @@ export async function graphEnrichIac(state: IacStateType): Promise<Partial<IacSt
 	try {
 		const store = await getGraphStore();
 		const changes = await priorChangesForDeployment(store, deployment);
-		return { iacGraphContext: buildIacGraphContext(deployment, changes) };
+		// SIO-965: per-(deployment,stack) history + blast radius (other deployments
+		// running the same stack). Both are best-effort additions to the SIO-954 view.
+		const stack = stackFromPaths(state.proposedFiles);
+		const siId = stack ? `${deployment}/${stack}` : "";
+		const stackInstanceChanges = siId ? await changeHistoryForStackInstance(store, siId) : [];
+		const otherDeployments = stack ? (await deploymentsRunningStack(store, stack)).filter((d) => d !== deployment) : [];
+		const alsoRunningStack = otherDeployments.length > 0 ? { stack, deployments: otherDeployments } : undefined;
+		return {
+			iacGraphContext: buildIacGraphContext(deployment, changes, { stackInstanceChanges, alsoRunningStack }),
+		};
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

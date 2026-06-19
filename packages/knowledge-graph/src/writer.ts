@@ -100,6 +100,10 @@ export async function recordIncident(store: GraphStore, incident: IncidentRecord
 	}
 }
 
+// SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the
+// recordIacOutcome node later promotes it to applied/rejected/failed.
+export type ChangeOutcome = "proposed" | "applied" | "rejected" | "failed";
+
 // SIO-954: one elastic-iac maker turn's proposed change. filePaths is collapsed
 // to a single filePath property on the ConfigChange node (the first path, or a
 // "N files" marker for multi-file rollouts) so the node stays single-valued; the
@@ -112,6 +116,11 @@ export interface IacChangeRecord {
 	summary?: string;
 	mrUrl?: string;
 	createdAt?: string;
+	// SIO-965: three-layer attachments. stackInstanceId is "<deployment>/<stack>";
+	// threadId groups turns of one conversation; outcome defaults to "proposed".
+	stackInstanceId?: string;
+	threadId?: string;
+	outcome?: ChangeOutcome;
 }
 
 function summariseFilePaths(filePaths: string[] | undefined): string {
@@ -126,13 +135,14 @@ export async function recordIacChange(store: GraphStore, change: IacChangeRecord
 	if (!change.id || !change.deployment) return;
 	await store.run("MERGE (d:ElasticDeployment {name: $name})", { name: change.deployment });
 	await store.run(
-		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = $workflow, c.filePath = $filePath, c.summary = $summary, c.createdAt = $createdAt",
+		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = $workflow, c.filePath = $filePath, c.summary = $summary, c.createdAt = $createdAt, c.outcome = $outcome",
 		{
 			id: change.id,
 			workflow: change.workflow ?? "",
 			filePath: summariseFilePaths(change.filePaths),
 			summary: change.summary ?? "",
 			createdAt: change.createdAt ?? new Date().toISOString(),
+			outcome: change.outcome ?? "proposed",
 		},
 	);
 	await store.run(
@@ -145,6 +155,126 @@ export async function recordIacChange(store: GraphStore, change: IacChangeRecord
 			id: change.id,
 			url: change.mrUrl,
 		});
+	}
+	// SIO-965: three-layer attachments. Each is independently optional so older
+	// callers (and the SIO-954 tests) that pass none get the unchanged behaviour.
+	if (change.workflow) {
+		await store.run("MERGE (w:Workflow {name: $name})", { name: change.workflow });
+		await store.run("MATCH (c:ConfigChange {id: $id}), (w:Workflow {name: $name}) MERGE (c)-[:VIA_WORKFLOW]->(w)", {
+			id: change.id,
+			name: change.workflow,
+		});
+	}
+	if (change.threadId) {
+		await store.run("MERGE (s:Session {threadId: $tid})", { tid: change.threadId });
+		await store.run("MATCH (c:ConfigChange {id: $id}), (s:Session {threadId: $tid}) MERGE (c)-[:IN_SESSION]->(s)", {
+			id: change.id,
+			tid: change.threadId,
+		});
+	}
+	if (change.stackInstanceId) {
+		await store.run("MERGE (si:StackInstance {id: $sid})", { sid: change.stackInstanceId });
+		await store.run("MATCH (c:ConfigChange {id: $id}), (si:StackInstance {id: $sid}) MERGE (c)-[:TARGETS]->(si)", {
+			id: change.id,
+			sid: change.stackInstanceId,
+		});
+	}
+}
+
+// SIO-965: record (or update) the GitLab CI pipeline for an MR. pipelineId is the
+// numeric GitLab id; it is stringified for primary-key uniformity.
+export interface PipelineRecord {
+	mrUrl: string;
+	pipelineId: number | string;
+	status?: string;
+	url?: string;
+}
+
+export async function recordPipeline(store: GraphStore, pipeline: PipelineRecord): Promise<void> {
+	const id = String(pipeline.pipelineId ?? "");
+	if (!pipeline.mrUrl || !id) return;
+	await store.run("MERGE (pl:Pipeline {id: $id}) SET pl.status = $status, pl.url = $url", {
+		id,
+		status: pipeline.status ?? "",
+		url: pipeline.url ?? "",
+	});
+	await store.run("MERGE (m:MergeRequest {url: $url})", { url: pipeline.mrUrl });
+	await store.run("MATCH (m:MergeRequest {url: $mr}), (pl:Pipeline {id: $id}) MERGE (m)-[:RAN]->(pl)", {
+		mr: pipeline.mrUrl,
+		id,
+	});
+}
+
+// SIO-965: promote a change's outcome once its pipeline reaches a terminal state.
+export async function setChangeOutcome(store: GraphStore, changeId: string, outcome: ChangeOutcome): Promise<void> {
+	if (!changeId) return;
+	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
+}
+
+// --- SIO-965 repo-structure seeders -----------------------------------------
+//
+// Pure, network-free, idempotent (all MERGE). The seed-iac CLI owns all GitLab
+// I/O and feeds these already-parsed lists, so the package stays dependency-free.
+
+export interface DeploymentSeed {
+	name: string;
+	ecId?: string;
+	region?: string;
+}
+
+export async function seedModules(store: GraphStore, modules: string[]): Promise<void> {
+	await mergeNodes(store, "Module", "name", modules);
+}
+
+export async function seedStacks(store: GraphStore, stacks: string[]): Promise<void> {
+	await mergeNodes(store, "Stack", "name", stacks);
+}
+
+// One Stack -> Module edge (a stack can wire several modules, e.g. `deployments`).
+export async function linkStackModule(store: GraphStore, stack: string, module: string): Promise<void> {
+	if (!stack || !module) return;
+	await store.run("MERGE (s:Stack {name: $stack})", { stack });
+	await store.run("MERGE (m:Module {name: $module})", { module });
+	await store.run("MATCH (s:Stack {name: $stack}), (m:Module {name: $module}) MERGE (s)-[:USES_MODULE]->(m)", {
+		stack,
+		module,
+	});
+}
+
+export async function seedDeployments(store: GraphStore, deployments: DeploymentSeed[]): Promise<void> {
+	for (const d of deployments) {
+		if (!d.name) continue;
+		await store.run("MERGE (d:ElasticDeployment {name: $name}) SET d.ecId = $ecId, d.region = $region", {
+			name: d.name,
+			ecId: d.ecId ?? "",
+			region: d.region ?? "",
+		});
+	}
+}
+
+// Each StackInstance is the (deployment, stack) state cell; id is "<dep>/<stack>".
+export async function seedStackInstances(
+	store: GraphStore,
+	instances: Array<{ deployment: string; stack: string }>,
+): Promise<void> {
+	for (const inst of instances) {
+		if (!inst.deployment || !inst.stack) continue;
+		const id = `${inst.deployment}/${inst.stack}`;
+		await store.run("MERGE (si:StackInstance {id: $id}) SET si.deployment = $deployment, si.stack = $stack", {
+			id,
+			deployment: inst.deployment,
+			stack: inst.stack,
+		});
+		await store.run("MERGE (s:Stack {name: $stack})", { stack: inst.stack });
+		await store.run("MERGE (d:ElasticDeployment {name: $deployment})", { deployment: inst.deployment });
+		await store.run("MATCH (si:StackInstance {id: $id}), (s:Stack {name: $stack}) MERGE (si)-[:OF_STACK]->(s)", {
+			id,
+			stack: inst.stack,
+		});
+		await store.run(
+			"MATCH (si:StackInstance {id: $id}), (d:ElasticDeployment {name: $deployment}) MERGE (si)-[:ON_DEPLOYMENT]->(d)",
+			{ id, deployment: inst.deployment },
+		);
 	}
 }
 

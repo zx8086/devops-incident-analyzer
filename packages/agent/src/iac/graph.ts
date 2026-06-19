@@ -3,7 +3,7 @@ import { createCheckpointer } from "@devops-agent/checkpointer";
 import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
-import { graphEnrichIac, recordIacEntities } from "./graph-knowledge.ts";
+import { graphEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
 import {
 	advanceDrift,
 	answerInfo,
@@ -50,6 +50,10 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 	const knowledgeGraphEnabled = isKnowledgeGraphEnabled();
 	const enrichTarget = () => (knowledgeGraphEnabled ? "graphEnrichIac" : "guard");
 	const recordTarget = () => (knowledgeGraphEnabled ? "recordIacEntities" : "watchPipeline");
+	// SIO-965: recordIacOutcome (Pipeline + terminal ConfigChange.outcome) runs after
+	// watchPipeline when the KG is enabled, for both the gitops MR flow and the
+	// pipeline-status re-check. Same edge-gate idiom as the SIO-954 nodes above.
+	const outcomeTarget = () => (knowledgeGraphEnabled ? "recordIacOutcome" : "teardown");
 
 	const graph = new StateGraph(IacState)
 		.addNode("bootstrap", bootstrapIac)
@@ -89,6 +93,8 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-954: KG read/write nodes (registered always; reached only when enabled).
 		.addNode("graphEnrichIac", graphEnrichIac)
 		.addNode("recordIacEntities", recordIacEntities)
+		// SIO-965: KG outcome node (Pipeline + terminal outcome), registered always.
+		.addNode("recordIacOutcome", recordIacOutcome)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
@@ -146,7 +152,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-954: openMr -> watchPipeline, with recordIacEntities spliced in when the KG is enabled.
 		.addConditionalEdges("openMr", recordTarget, ["recordIacEntities", "watchPipeline"])
 		.addEdge("recordIacEntities", "watchPipeline")
-		.addEdge("watchPipeline", "teardown")
+		// SIO-965: watchPipeline -> teardown, with recordIacOutcome spliced in when the KG is enabled.
+		.addConditionalEdges("watchPipeline", outcomeTarget, ["recordIacOutcome", "teardown"])
+		.addEdge("recordIacOutcome", "teardown")
 		// SIO-882: drift sub-flow. Early exit (no deployment/stacks) -> END (the message is
 		// already set); otherwise explainDrift attaches explanations + emits the report.
 		.addConditionalEdges("detectDrift", (s) => (s.driftReport ? "explainDrift" : END), ["explainDrift", END])

@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { getLogger } from "@devops-agent/observability";
-import { MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
+import { ALTER_MIGRATIONS, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 
 const logger = getLogger("knowledge-graph:store");
 
@@ -94,6 +94,20 @@ export class LadybugStore implements GraphStore {
 		const conn = await this.connection();
 		for (const ddl of MIGRATIONS) {
 			await conn.query(ddl);
+		}
+		// SIO-965: additive column migrations for pre-existing graphs. Best-effort:
+		// a bare ALTER throws "property already exists" once the column is present,
+		// which is the steady state on every run after the first -- tolerate it so
+		// init() stays idempotent. Same idiom as the vector-index loop below.
+		for (const stmt of ALTER_MIGRATIONS) {
+			try {
+				await conn.query(stmt);
+			} catch (error) {
+				logger.debug(
+					{ stmt, error: error instanceof Error ? error.message : String(error) },
+					"alter migration skipped (column already exists?)",
+				);
+			}
 		}
 		// Vector index is best-effort: a build without the extension still gets a
 		// working graph, just no similarity search.
