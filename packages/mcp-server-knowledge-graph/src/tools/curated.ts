@@ -12,7 +12,6 @@ import {
 	deploymentsRunningStack,
 	type GraphStore,
 	getGraphStore,
-	isKnowledgeGraphEnabled,
 	priorChangesForDeployment,
 	stacksUsingModule,
 } from "@devops-agent/knowledge-graph";
@@ -20,21 +19,37 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { text } from "./shared.ts";
 
-const GRAPH_DISABLED = "Knowledge graph is disabled (KNOWLEDGE_GRAPH_ENABLED is not set).";
-const GRAPH_UNAVAILABLE = "Knowledge graph is unavailable right now.";
+// SIO-968: loud-fail strings. When the graph cannot answer, the model MUST NOT
+// silently substitute prose from loaded specs/runbooks -- the disabled/unavailable
+// state is surfaced as an explicit instruction so the agent reports the answer as
+// unverified instead of fabricating a confident one.
+const GRAPH_DISABLED =
+	"KNOWLEDGE GRAPH UNAVAILABLE (disabled for this process). Do NOT answer from memory, " +
+	"specs, or runbooks -- you have no graph evidence. Tell the user the knowledge graph is " +
+	"disabled and the answer cannot be verified.";
+const GRAPH_UNAVAILABLE =
+	"KNOWLEDGE GRAPH UNAVAILABLE (store could not be opened). Do NOT answer from memory, " +
+	"specs, or runbooks -- you have no graph evidence. Tell the user the knowledge graph is " +
+	"unavailable and the answer cannot be verified.";
 
-// Resolve the in-process store singleton (the one lbug lock holder). Returns a
-// friendly string instead of throwing when the graph is off/unavailable.
-async function resolveStore(): Promise<GraphStore | string> {
-	if (!isKnowledgeGraphEnabled()) return GRAPH_DISABLED;
-	try {
-		return await getGraphStore();
-	} catch {
-		return GRAPH_UNAVAILABLE;
-	}
+// SIO-968: gate on the SERVER'S STARTUP CONFIG, not a per-call process.env re-read.
+// The earlier per-call isKnowledgeGraphEnabled() read process.env at request time,
+// which diverged from the value the server booted with (e.g. a --env-file launch that
+// repopulated process.env without the flag), so tools reported "disabled" even though
+// the server was started enabled. Capturing `enabled` at registration removes that skew.
+function makeResolveStore(enabled: boolean): () => Promise<GraphStore | string> {
+	return async () => {
+		if (!enabled) return GRAPH_DISABLED;
+		try {
+			return await getGraphStore();
+		} catch {
+			return GRAPH_UNAVAILABLE;
+		}
+	};
 }
 
-export function registerCuratedTools(server: McpServer): void {
+export function registerCuratedTools(server: McpServer, enabled: boolean): void {
+	const resolveStore = makeResolveStore(enabled);
 	server.tool(
 		"kg_deployments_running_stack",
 		"Blast radius: which Elastic deployments run a given stack (cross-deployment). Read-only; no Cypher.",
@@ -45,8 +60,8 @@ export function registerCuratedTools(server: McpServer): void {
 			const rows = await deploymentsRunningStack(store, stack);
 			return text(
 				rows.length > 0
-					? `Deployments running the ${stack} stack: ${rows.join(", ")}.`
-					: `No deployments run the ${stack} stack (or none recorded yet).`,
+					? `Deployments running the ${stack} stack: ${rows.join(", ")}. (Graph result -- authoritative.)`
+					: `Graph queried: no deployment runs the ${stack} stack (the stack may not exist or is unseeded). Report this graph result; do not substitute a guess from specs.`,
 			);
 		},
 	);
@@ -61,8 +76,8 @@ export function registerCuratedTools(server: McpServer): void {
 			const rows = await stacksUsingModule(store, module);
 			return text(
 				rows.length > 0
-					? `Stacks using the ${module} module: ${rows.join(", ")}.`
-					: `No stacks use the ${module} module (or none recorded yet).`,
+					? `Stacks using the ${module} module: ${rows.join(", ")}. (Graph result -- authoritative.)`
+					: `Graph queried: no stack uses the ${module} module (the module may not exist or is unseeded). Report this graph result; do not substitute a guess from specs.`,
 			);
 		},
 	);
@@ -79,7 +94,8 @@ export function registerCuratedTools(server: McpServer): void {
 			if (typeof store === "string") return text(store);
 			const id = `${deployment}/${stack}`;
 			const rows = await changeHistoryForStackInstance(store, id);
-			if (rows.length === 0) return text(`No recorded changes for ${id}.`);
+			if (rows.length === 0)
+				return text(`Graph queried: no recorded changes for ${id}. Report this; do not invent a history from specs.`);
 			const lines = rows.map((c) => {
 				const wf = c.workflow ? `${c.workflow}: ` : "";
 				const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
@@ -97,7 +113,10 @@ export function registerCuratedTools(server: McpServer): void {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
 			const rows = await priorChangesForDeployment(store, deployment);
-			if (rows.length === 0) return text(`No recorded changes for ${deployment}.`);
+			if (rows.length === 0)
+				return text(
+					`Graph queried: no recorded changes for ${deployment}. Report this; do not invent a history from specs.`,
+				);
 			const lines = rows.map((c) => {
 				const wf = c.workflow ? `${c.workflow}: ` : "";
 				const mr = c.mrUrl ? ` (${c.mrUrl})` : "";
