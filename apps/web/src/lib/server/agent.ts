@@ -19,6 +19,7 @@ import {
 	setSessionOutcome,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
+import { startKnowledgeGraphServer } from "@devops-agent/mcp-server-knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
@@ -32,6 +33,29 @@ installGraphWarmer();
 // SIO-938: wire the agent-memory recall/flush seams. No-op unless
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
+
+// SIO-967: mount the knowledge-graph MCP server IN-PROCESS. Embedded lbug takes an
+// exclusive file lock, so the graph can only be opened by ONE process -- and the agent
+// pipeline's record* nodes already open it here. Running the server in this same
+// process lets its kg_* tools reuse the single getGraphStore() singleton while still
+// being reachable over localhost like every other MCP server. Gated on
+// KNOWLEDGE_GRAPH_ENABLED; best-effort so a start failure never blocks the app.
+const kgMcpLog = getLogger("agent:knowledge-graph-mcp");
+let knowledgeGraphMcpUrl: string | undefined;
+if (process.env.KNOWLEDGE_GRAPH_ENABLED === "true" || process.env.KNOWLEDGE_GRAPH_ENABLED === "1") {
+	const host = process.env.KNOWLEDGE_GRAPH_MCP_HOST ?? "127.0.0.1";
+	const port = process.env.KNOWLEDGE_GRAPH_MCP_PORT ?? "9087";
+	knowledgeGraphMcpUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+	startKnowledgeGraphServer()
+		.then(() => kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started"))
+		.catch((err: unknown) => {
+			knowledgeGraphMcpUrl = undefined;
+			kgMcpLog.warn(
+				{ error: err instanceof Error ? err.message : String(err) },
+				"in-process knowledge-graph MCP server failed to start; kg_* tools unavailable",
+			);
+		});
+}
 
 const pruneLog = getLogger("agent:state-pruning");
 // SIO-958: session lifecycle visibility (why/when a conversation's session ends).
@@ -132,6 +156,9 @@ function getMcpConfig() {
 		atlassianUrl: process.env.ATLASSIAN_MCP_URL,
 		awsUrl: process.env.AWS_MCP_URL,
 		elasticIacUrl: process.env.ELASTIC_IAC_MCP_URL,
+		// SIO-967: in-process server started above; undefined when KG is disabled or
+		// the server failed to start, so the bridge simply registers no kg_* tools.
+		knowledgeGraphUrl: knowledgeGraphMcpUrl,
 	};
 }
 

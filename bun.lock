@@ -15,6 +15,7 @@
       "dependencies": {
         "@devops-agent/agent": "workspace:*",
         "@devops-agent/gitagent-bridge": "workspace:*",
+        "@devops-agent/mcp-server-knowledge-graph": "workspace:*",
         "@devops-agent/memory-pr": "workspace:*",
         "@devops-agent/observability": "workspace:*",
         "@devops-agent/shared": "workspace:*",
@@ -252,6 +253,24 @@
         "@opentelemetry/api": "^1.9.0",
         "@platformatic/kafka": "^2.0.1",
         "aws-msk-iam-sasl-signer-js": "^1.0.3",
+        "pino": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@biomejs/biome": "catalog:dev",
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
+    "packages/mcp-server-knowledge-graph": {
+      "name": "@devops-agent/mcp-server-knowledge-graph",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/knowledge-graph": "workspace:*",
+        "@devops-agent/shared": "workspace:*",
+        "@modelcontextprotocol/sdk": "catalog:",
+        "@opentelemetry/api": "^1.9.0",
         "pino": "catalog:",
         "zod": "catalog:",
       },
@@ -599,6 +618,8 @@
     "@devops-agent/mcp-server-gitlab": ["@devops-agent/mcp-server-gitlab@workspace:packages/mcp-server-gitlab"],
 
     "@devops-agent/mcp-server-kafka": ["@devops-agent/mcp-server-kafka@workspace:packages/mcp-server-kafka"],
+
+    "@devops-agent/mcp-server-knowledge-graph": ["@devops-agent/mcp-server-knowledge-graph@workspace:packages/mcp-server-knowledge-graph"],
 
     "@devops-agent/mcp-server-konnect": ["@devops-agent/mcp-server-konnect@workspace:packages/mcp-server-konnect"],
 

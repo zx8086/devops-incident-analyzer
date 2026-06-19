@@ -1,85 +1,16 @@
 // agent/src/iac/local-tools.test.ts
 //
-// SIO-966: the LLM-callable knowledge-graph + memory query tools.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
-import {
-	createQueryKnowledgeGraphTool,
-	createSearchMemoryTool,
-	runKnowledgeGraphQuery,
-	runMemorySearch,
-} from "./local-tools.ts";
+// SIO-966 / SIO-967: the LOCAL durable-memory query tool. The knowledge-graph query
+// tool moved to the MCP surface in SIO-967; its handler is now tested in
+// packages/mcp-server-knowledge-graph/src/tools/curated.test.ts.
+import { afterEach, describe, expect, test } from "bun:test";
+import { createSearchMemoryTool, runMemorySearch } from "./local-tools.ts";
 
-const prevKg = process.env.KNOWLEDGE_GRAPH_ENABLED;
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
 
-beforeEach(() => {
-	_setGraphStoreForTesting(null);
-});
-
 afterEach(() => {
-	if (prevKg === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
-	else process.env.KNOWLEDGE_GRAPH_ENABLED = prevKg;
 	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
 	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
-	_setGraphStoreForTesting(null);
-});
-
-describe("runKnowledgeGraphQuery", () => {
-	test("soft-fails when the graph is disabled", async () => {
-		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
-		const out = await runKnowledgeGraphQuery({ query_type: "stacks_using_module", module: "lifecycle" });
-		expect(out).toContain("disabled");
-	});
-
-	test("deployments_running_stack renders the reader rows", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		const store = new InMemoryGraphStore();
-		store.stub("OF_STACK", [{ deployment: "eu-cld" }, { deployment: "us-cld" }]);
-		_setGraphStoreForTesting(store);
-		const out = await runKnowledgeGraphQuery({ query_type: "deployments_running_stack", stack: "slos" });
-		expect(out).toBe("Deployments running the slos stack: eu-cld, us-cld.");
-	});
-
-	test("stacks_using_module renders rows; empty -> friendly message", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		const store = new InMemoryGraphStore();
-		store.stub("USES_MODULE", [{ stack: "lifecycle-policies" }]);
-		_setGraphStoreForTesting(store);
-		expect(await runKnowledgeGraphQuery({ query_type: "stacks_using_module", module: "lifecycle" })).toBe(
-			"Stacks using the lifecycle module: lifecycle-policies.",
-		);
-		const empty = new InMemoryGraphStore();
-		_setGraphStoreForTesting(empty);
-		expect(await runKnowledgeGraphQuery({ query_type: "stacks_using_module", module: "nope" })).toContain(
-			"No stacks use",
-		);
-	});
-
-	test("stack_instance_history renders outcome-tagged lines", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		const store = new InMemoryGraphStore();
-		store.stub("TARGETS", [
-			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "applied", mrUrl: "u9", createdAt: "x" },
-		]);
-		_setGraphStoreForTesting(store);
-		const out = await runKnowledgeGraphQuery({
-			query_type: "stack_instance_history",
-			deployment: "eu-cld",
-			stack: "slos",
-		});
-		expect(out).toContain("Recent changes to eu-cld/slos");
-		expect(out).toContain("[applied] slo-edit: tighten (u9)");
-	});
-
-	test("validates required params per query type", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		_setGraphStoreForTesting(new InMemoryGraphStore());
-		expect(await runKnowledgeGraphQuery({ query_type: "deployments_running_stack" })).toContain("needs a stack");
-		expect(await runKnowledgeGraphQuery({ query_type: "stack_instance_history", deployment: "eu-cld" })).toContain(
-			"needs both",
-		);
-	});
 });
 
 describe("runMemorySearch", () => {
@@ -128,22 +59,9 @@ describe("runMemorySearch", () => {
 });
 
 describe("tool factories", () => {
-	test("expose the documented names + zod schemas", () => {
-		const kg = createQueryKnowledgeGraphTool();
+	test("expose the documented name + zod schema", () => {
 		const mem = createSearchMemoryTool("elastic-iac");
-		expect(kg.name).toBe("query_knowledge_graph");
 		expect(mem.name).toBe("search_memory");
-		expect(kg.description).toContain("knowledge graph");
 		expect(mem.description.toLowerCase()).toContain("memory");
-	});
-
-	test("the KG tool invokes end-to-end through the LangChain tool surface", async () => {
-		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-		const store = new InMemoryGraphStore();
-		store.stub("USES_MODULE", [{ stack: "slos" }]);
-		_setGraphStoreForTesting(store);
-		const kg = createQueryKnowledgeGraphTool();
-		const out = (await kg.invoke({ query_type: "stacks_using_module", module: "slo" })) as string;
-		expect(out).toContain("slos");
 	});
 });

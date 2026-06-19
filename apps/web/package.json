@@ -12,6 +12,7 @@
 	"dependencies": {
 		"@devops-agent/agent": "workspace:*",
 		"@devops-agent/gitagent-bridge": "workspace:*",
+		"@devops-agent/mcp-server-knowledge-graph": "workspace:*",
 		"@devops-agent/memory-pr": "workspace:*",
 		"@devops-agent/observability": "workspace:*",
 		"@devops-agent/shared": "workspace:*",
