@@ -5,6 +5,7 @@ import {
 	buildFleetFactRationale,
 	buildFleetGateMessage,
 	buildFleetMemorySummary,
+	classifyFleetApplyResult,
 	dynamicRolloutSeconds,
 	formatFleetUpgradeSummary,
 	formatRolloutDuration,
@@ -188,6 +189,84 @@ describe("parseFleetApplyOutcome", () => {
 		});
 		expect(out.failedAgents).toHaveLength(2);
 		expect(out.failedAgents[0]).toMatchObject({ hostname: "BWO-DT23-SHPT07", error: "binary not found" });
+	});
+
+	// SIO-975: the report's top-level CI failure reason (error_reason || error).
+	test("captures error_reason (falls back to error) for a true infra failure", () => {
+		expect(parseFleetApplyOutcome(JSON.stringify({ error_reason: "plan job OOM-killed" })).errorReason).toBe(
+			"plan job OOM-killed",
+		);
+		expect(parseFleetApplyOutcome(JSON.stringify({ error: "raw stderr blob" })).errorReason).toBe("raw stderr blob");
+		expect(parseFleetApplyOutcome(JSON.stringify({})).errorReason).toBe("");
+	});
+});
+
+// SIO-975: the single source of truth shared by the main apply path and the SIO-926 follow-up
+// re-poll. Before, the follow-up path produced a bare "failed for another reason" and dropped the
+// rich report; now both classify identically.
+describe("classifyFleetApplyResult (SIO-975)", () => {
+	const outcome = (over: Partial<ReturnType<typeof parseFleetApplyOutcome>> = {}) => ({
+		actionId: "act-1",
+		pollStatus: "ROLLOUT_PASSED",
+		acked: 3,
+		created: 6,
+		failedSilent: 3,
+		succeeded: 0,
+		failed: 3,
+		rolledBack: 3,
+		unsettled: 0,
+		failedAgents: [
+			{
+				hostname: "BWO-DT23-SHPT07",
+				agentId: "a1",
+				failedState: "UPG_DOWNLOADING",
+				error: "not enough space on the disk",
+			},
+		],
+		errorReason: "",
+		...over,
+	});
+
+	test("success -> applied (no note)", () => {
+		expect(classifyFleetApplyResult("success", null, "", false)).toEqual({ status: "applied" });
+	});
+
+	// the live us-cld case: CI failed, but agents were actioned with disk-space failures -> partial
+	test("failed CI with actioned agents -> partial with the per-agent breakdown", () => {
+		const r = classifyFleetApplyResult("failed", outcome(), "", false);
+		expect(r.status).toBe("partial");
+		expect(r.note).toContain("not enough space on the disk");
+		expect(r.note).toContain("BWO-DT23-SHPT07");
+	});
+
+	test("infra failure (created:0) names the report error_reason when present", () => {
+		const r = classifyFleetApplyResult(
+			"failed",
+			outcome({ created: 0, errorReason: "plan job OOM-killed" }),
+			"",
+			false,
+		);
+		expect(r.status).toBe("failed");
+		expect(r.note).toContain("plan job OOM-killed");
+		expect(r.note).not.toContain("review the job log");
+	});
+
+	test("state lock -> failed via classifyPipelineFailure (no report error_reason)", () => {
+		const r = classifyFleetApplyResult("failed", outcome({ created: 0 }), "Error acquiring the state lock", true);
+		expect(r.status).toBe("failed");
+		expect(r.note).toContain("state-lock");
+	});
+
+	test("failed with no report and a non-empty unclassified log -> generic 'review the job log'", () => {
+		const r = classifyFleetApplyResult("failed", null, "some job output with no recognised pattern", false);
+		expect(r.status).toBe("failed");
+		expect(r.note).toContain("review the job log");
+	});
+
+	test("failed with no report and no log -> 'log was not available'", () => {
+		const r = classifyFleetApplyResult("failed", null, "", false);
+		expect(r.status).toBe("failed");
+		expect(r.note).toContain("not available");
 	});
 });
 

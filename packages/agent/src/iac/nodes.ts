@@ -4302,6 +4302,30 @@ export function classifyPipelineFailure(planLog: string, stateLocked?: boolean):
 	return "The plan job failed for another reason -- review the job log.";
 }
 
+// SIO-975: classify a TERMINAL fleet-apply outcome into applied | partial | failed + a note.
+// Single source of truth shared by the main apply path (detectFleetUpgrade) and the SIO-926
+// follow-up re-poll (checkFleetApplyStatus) so both surface the SAME rich detail. ciStatus is the
+// CI job status ("success"/"failed"/"canceled"); outcome is the parsed apply report (null when the
+// report was unreadable). Mirrors SIO-961: a failed CI job that actioned agents (created>0) with
+// agent-side failures is PARTIAL (rendered via buildFleetPartialNote), not a bare failure; a true
+// infra failure (state lock / nothing actioned) is failed -- and now names the report's CI-side
+// error_reason when present, falling back to classifyPipelineFailure only when it isn't.
+export function classifyFleetApplyResult(
+	ciStatus: string,
+	outcome: FleetApplyOutcome | null,
+	failureLog: string,
+	stateLocked: boolean,
+): { status: "applied" | "partial" | "failed"; note?: string } {
+	if (ciStatus === "success") return { status: "applied" };
+	const actioned = outcome != null && outcome.created > 0;
+	const infraFailure = stateLocked || outcome == null || outcome.created === 0;
+	if (actioned && !infraFailure && outcome) {
+		return { status: "partial", note: buildFleetPartialNote(outcome) };
+	}
+	const reason = outcome?.errorReason ? `${outcome.errorReason}` : classifyPipelineFailure(failureLog, stateLocked);
+	return { status: "failed", note: `Apply pipeline ${ciStatus}. ${reason}` };
+}
+
 // SIO-926: re-poll an already-dispatched fleet-apply pipeline on a follow-up turn. READ-ONLY:
 // gitlab_get_pipeline for the live status, and on a terminal run gitlab_get_fleet_upgrade_apply_result
 // for the verify-sweep outcome. Never re-triggers. Refreshes fleetUpgradeResult; clears the persisted
@@ -4342,14 +4366,16 @@ async function checkFleetApplyStatus(state: IacStateType, pipelineId: number): P
 			failedSilent: outcome.failedSilent,
 		}),
 	};
-	const result: FleetUpgradeResult =
-		res.status === "success" || status === "success"
-			? { status: "applied", ...common }
-			: {
-					status: "failed",
-					...common,
-					note: `Apply pipeline ${res.status || status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`,
-				};
+	// SIO-975: classify via the SAME helper the main apply path uses, so a follow-up "how's it
+	// going?" surfaces the full partial breakdown (counts + per-agent disk/download errors) or the
+	// report's CI error_reason -- not the bare "failed for another reason" the old branch produced.
+	const ciStatus = res.status === "success" || status === "success" ? "success" : res.status || status;
+	const classified = classifyFleetApplyResult(ciStatus, outcome, res.failureLog, res.stateLocked);
+	const result: FleetUpgradeResult = {
+		status: classified.status,
+		...common,
+		...(classified.note && { note: classified.note }),
+	};
 	await emitFleetResult(result);
 	// Clear the in-flight id now that it reached terminal.
 	return { fleetUpgradeResult: result, fleetApplyPipelineId: null };
@@ -6929,6 +6955,9 @@ export interface FleetApplyOutcome {
 	rolledBack: number;
 	unsettled: number;
 	failedAgents: FleetFailedAgent[];
+	// SIO-975: the report's top-level CI-side failure reason (error_reason || error), present
+	// on a true infra failure (e.g. plan job failed before any agent was actioned). "" when absent.
+	errorReason: string;
 }
 
 export function parseFleetApplyOutcome(raw: string): FleetApplyOutcome {
@@ -6943,6 +6972,7 @@ export function parseFleetApplyOutcome(raw: string): FleetApplyOutcome {
 		rolledBack: 0,
 		unsettled: 0,
 		failedAgents: [],
+		errorReason: "",
 	};
 	try {
 		const o = JSON.parse(raw) as Record<string, unknown>;
@@ -6966,6 +6996,8 @@ export function parseFleetApplyOutcome(raw: string): FleetApplyOutcome {
 				failedState: str(ag.failed_state),
 				error: str(ag.error),
 			})),
+			// SIO-975: prefer the human-readable error_reason; fall back to the raw error string.
+			errorReason: str(o.error_reason) || str(o.error),
 		};
 	} catch {
 		return empty;
@@ -7335,28 +7367,13 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 		}),
 	};
 	let result: FleetUpgradeResult;
-	if (res.status === "success") {
-		result = { status: "applied", ...common };
-	} else if (res.status === "failed" || res.status === "canceled") {
-		// SIO-961: a failed/canceled CI job is NOT necessarily a failed upgrade. Fleet actioned
-		// agents (created > 0) and the failures are agent/env-side (download, disk, health-check
-		// rollback) with most agents unsettled-offline -> "partial", not "failed". A genuine infra
-		// failure (state lock, or nothing actioned at all) stays "failed".
-		const actioned = outcome != null && outcome.created > 0;
-		const infraFailure = res.stateLocked || outcome == null || outcome.created === 0;
-		if (actioned && !infraFailure) {
-			result = {
-				status: "partial",
-				...common,
-				note: buildFleetPartialNote(outcome),
-			};
-		} else {
-			result = {
-				status: "failed",
-				...common,
-				note: `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`,
-			};
-		}
+	if (res.status === "success" || res.status === "failed" || res.status === "canceled") {
+		// SIO-961/SIO-975: terminal CI status. classifyFleetApplyResult is the single source of
+		// truth (shared with the SIO-926 follow-up re-poll): a failed/canceled job that actioned
+		// agents (created>0) with agent-side failures is PARTIAL, not failed; a true infra failure
+		// names the report's error_reason or the state-lock/generic classifier.
+		const classified = classifyFleetApplyResult(res.status, outcome, res.failureLog, res.stateLocked);
+		result = { status: classified.status, ...common, ...(classified.note && { note: classified.note }) };
 	} else {
 		// Running past the status window: the bulk_upgrade is in flight (a long rollout we chose not
 		// to block on). Report it as dispatched with the expected duration + the pipeline to track.
