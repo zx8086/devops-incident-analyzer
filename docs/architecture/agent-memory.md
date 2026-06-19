@@ -10,9 +10,64 @@ This is the **live-memory tier** — durable, cross-session knowledge the agent 
 
 When `LIVE_MEMORY_BACKEND=agent-memory`, that tier is stored in Couchbase Agent Memory instead of git-tracked markdown. Per the Couchbase concept docs, Agent Memory is the persistence layer (storage + semantic retrieval); it does not provide reasoning over the memories — our pipeline decides when to read and write.
 
-## Embeddings are service-side
+> See also: [Agent Concepts](agent-concepts.md) for how live memory relates to the other agent-architecture concepts (LLM Wiki, SkillsFlow, Knowledge Tree, lifecycle hooks, SOD, shared context). This doc is the deep-dive for the memory tier specifically.
 
-We do not generate, store, or send vectors. There is no embedding/vector field on any write request. When a block is written, the **service** generates its vector embedding and an LLM summary using the configured Model Service. Recall sends a natural-language `query`; the service embeds the query and runs FTS-KNN over the stored embeddings. So `searchMemory(query)` *is* the embedding-powered semantic search — the client's job is only to write good text and issue queries. Blocks only enter the vector index once `status: "ready"` (see freshness below).
+## The Agent Memory service model
+
+This section describes the **Couchbase Agent Memory service itself** — its data model and retrieval semantics — independent of how our agents use it. The next sections cover our usage. If you are integrating a different agent against the same service, this is the part that generalizes.
+
+Agent Memory is a standalone REST service backed by Couchbase. It owns three things our pipeline does not reimplement: a hierarchical store, server-side embeddings, and TTL-based decay. The REST contract we use is documented in the design spec (`docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md`) and implemented in `packages/shared/src/agent-memory.ts`.
+
+### Data model: user -> session -> block
+
+```
+User (user_id)                  one per agent identity
+  └── Session (session_id)      one per conversation thread
+        └── Memory block        one fact OR one conversational message
+```
+
+- **User** — a top-level namespace. Created idempotently via `POST /users` (409-conflict tolerant).
+- **Session** — a thread of activity under a user, created via `POST /users/{uid}/sessions`. Search can be scoped to one session or across all of a user's sessions (`filters.session_ids: "all"`).
+- **Memory block** — the unit of storage. Two flavors:
+  - **Fact** (semantic / profile memory): a durable statement. Written via `facts: string[]`. No TTL by default.
+  - **Message** (conversational memory): a `{ user_content, assistant_content }` turn. Written via `messages: ChatMessage[]`, typically with a `memory_block_ttl` so it decays.
+
+Blocks are written with `POST /users/{uid}/sessions/{sid}/memory` and a body of `{ messages?, facts?, annotations?, memory_block_ttl?, async_processing? }`.
+
+### Retrieval: semantic search, not keyword lookup
+
+Recall is `POST /users/{uid}/sessions/{sid}/memory/search` with `{ query, filters: { session_ids?, relevant_k? } }`. The service:
+
+1. embeds the natural-language `query` with its configured embedding model,
+2. runs FTS-KNN (vector nearest-neighbour) over stored block embeddings,
+3. returns the top `relevant_k` blocks ranked by **`rel_score`** (the relevance score), `count`-bounded.
+
+There is no keyword/exact-match query mode in the subset we use — retrieval is semantic. The caller's only job is to write good text and issue a good natural-language query; the ranking is the service's.
+
+### Server-side embeddings and async extraction
+
+Clients never generate, send, or store vectors — there is no embedding field on any write. On write, the **service** generates the block's vector embedding and an LLM summary using its configured Model Service. This extraction is **asynchronous by default**: a freshly written block is not in the vector index (and so not searchable) until it reaches `status: "ready"`. Search only ever returns `ready` blocks. A write can opt into synchronous extraction (`async_processing=false`) to block until the result is searchable — see the freshness section below for how we expose this.
+
+### Decay and conflict resolution (service-owned)
+
+- **Decay** is per-block TTL (`memory_block_ttl`). Expired blocks drop out of the cluster automatically; there is no client-side sweep.
+- **Conflict resolution** between contradictory blocks is ordered by timestamp. Clients send `created_at` (when the information was *true*, not when it was ingested) so the service resolves conflicts by data-time. We never re-rank or merge conflicting memories client-side.
+
+### REST contract (the subset we use)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /users` | create user (swallow 409) |
+| `POST /users/{uid}/sessions` | create session (swallow 409) |
+| `POST /users/{uid}/sessions/{sid}/memory` | write blocks (`messages` / `facts`) |
+| `POST /users/{uid}/sessions/{sid}/memory/search` | semantic recall (returns `ready` blocks only) |
+| `POST /users/{uid}/sessions/{sid}/end` | end session |
+| `GET /health` | readiness probe (gates recall; 503 carries `retry_after_seconds`) |
+| `PUT /users/{uid}/ttl` | bulk TTL (reserved; not on the hot path) |
+
+Auth is optional OIDC (`Authorization: Bearer <jwt>`, when the service runs with `OIDC_AUTH_ENABLED`). The base URL is **required config** with no default (the service docs are inconsistent between ports 8070 and 8080).
+
+On our side, the client method `searchMemory(query)` *is* this embedding-powered semantic search — there is no separate "embed" call. The rest of this doc covers how the incident-analyzer and elastic-iac agents map onto the model above.
 
 ## Identity mapping
 
@@ -63,10 +118,12 @@ Every memory operation is best-effort: a recall or flush failure is logged and n
 - **Relevance (`rel_score`)**: `searchMemory` returns `MemoryHit { text, score }` ranked by the service's relevance score; an optional `minScore` drops weak matches. The recaller currently keeps the service ranking and joins the text.
 - **Resilience (health + 503)**: `checkHealth()` (`GET /health`) gates recall. On a 503 (extraction queue saturated) the client raises `ServiceUnavailableError` carrying `retry_after_seconds`, and the flush **requeues the batch** (front of queue) rather than dropping it, so the next flush or session teardown retries. Non-503 failures are logged and dropped (best-effort).
 
-## Conflict resolution and decay (handled by the service)
+## Conflict resolution and decay (our settings)
 
-- **Decay**: block TTL. We set a short TTL on dailylog messages and none on facts; expired blocks drop out of the cluster automatically.
-- **Conflict resolution**: Agent Memory orders contradictory memories by timestamp. We send `created_at` (the data-creation time) on every write so the service can resolve conflicts by when the information was true, not merely by ingestion order. We never re-rank or resolve conflicts client-side.
+The mechanism is service-owned (see [Decay and conflict resolution](#decay-and-conflict-resolution-service-owned) above). Our choices on top of it:
+
+- **Decay**: short TTL on dailylog **messages** (`AGENT_MEMORY_DAILYLOG_TTL_SECONDS`), none on **facts** — so resolved-incident noise expires while durable decisions persist.
+- **Conflict resolution**: we send `created_at` (data-creation time) on every write so the service resolves contradictions by when the information was true, not by ingestion order. We never re-rank client-side.
 
 ## Configuration
 

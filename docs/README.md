@@ -1,7 +1,7 @@
 # Documentation Index
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-06-17
+> **Last updated:** 2026-06-19
 
 Project-specific documentation for the DevOps Incident Analyzer monorepo. This index covers architecture, configuration, deployment, development, and operations for a LangGraph supervisor agent that orchestrates seven MCP server sub-agents (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS) to correlate DevOps incidents across 210+ tools, plus a peer **elastic-iac** GitOps proposer agent (an 8th MCP server) for Elastic Cloud infrastructure changes.
 
@@ -13,6 +13,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 |------------|----------|
 | Set up from scratch | [Getting Started](development/getting-started.md) |
 | Understand architecture | [System Overview](architecture/system-overview.md) |
+| Map the agent concepts (Wiki, Memory, SkillsFlow, Knowledge Tree, Hooks, SOD, Shared Context) | [Agent Concepts](architecture/agent-concepts.md) |
 | Understand agent pipeline | [Agent Pipeline](architecture/agent-pipeline.md) |
 | Know what agents persist to memory | [Agent Memory](architecture/agent-memory.md) |
 | Use the Elastic IaC (GitOps proposer) agent | [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) |
@@ -37,6 +38,7 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | Document | Description |
 |----------|-------------|
 | [System Overview](architecture/system-overview.md) | High-level architecture, data flow, and component relationships |
+| [Agent Concepts](architecture/agent-concepts.md) | Concept map for the seven agent-architecture ideas — GitAgent definitions, LLM Wiki, Live Agent Memory, SkillsFlow (DAG workflows), Knowledge Tree, Agent Lifecycle/Hooks, Segregation of Duties, Shared Context & Skills — with code locations and links to each deep-dive doc |
 | [Agent Pipeline](architecture/agent-pipeline.md) | LangGraph 20-node StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, query (fan-out), align, aggregate, extractFindings, enforceCorrelations, checkConfidence, validate, mitigation split (investigate/monitor/escalate + aggregate), followUp, detectTopicShift |
 | [Agent Memory](architecture/agent-memory.md) | Live-memory tier (SIO-938): what each agent saves to Couchbase Agent Memory and when — dailylog breadcrumbs as TTL'd conversational messages, key decisions as durable facts, semantic recall (rel_score-ranked) at bootstrap, queue-flush at teardown; service-side embeddings, sync-write freshness, created_at conflict resolution, health/503 resilience; user-per-agent / thread-per-session mapping |
 | [Gitagent Bridge](architecture/gitagent-bridge.md) | YAML-to-LangGraph adapter: manifest loading, model factory, skill and tool resolution |
@@ -108,4 +110,5 @@ Project-specific documentation for the DevOps Incident Analyzer monorepo. This i
 | 2026-05-28 | docs drift sweep: AWS MCP (7th datasource) for multi-estate added across architecture, configuration, deployment; expanded elastic cloud/billing tool catalog; corrected pipeline node count (14→20); indexed `runbooks/aws-estate-onboarding.md` |
 | 2026-06-02 | Documented the Elastic IaC agent (peer maker agent): design spec under `superpowers/specs/`, `elastic-iac-mcp` (:9086) in MCP-server config + environment variables, the maker graph in agent-pipeline, and the port + peer-agent note in system-overview |
 | 2026-06-03 | Added canonical [Elastic IaC GitOps Proposer](architecture/elastic-iac-proposer.md) doc reflecting the SIO-870..880 re-architecture (Terraform maker → 12-node GitOps proposer; version-upgrade / tier-resize / ilm-rollout). Replaced the stale 9-node summary in agent-pipeline.md; repointed the README links from the original design spec. Noted the post-merge apply-tracking gap (SIO-881). |
+| 2026-06-19 | Added [Agent Concepts](architecture/agent-concepts.md) — a concept-map landing page for the seven agent-architecture ideas (GitAgent, LLM Wiki, Live Memory, SkillsFlow, Knowledge Tree, Lifecycle/Hooks, SOD, Shared Context), with full inline coverage for the four that lacked a dedicated doc (SkillsFlow, Knowledge Tree, Hooks, Shared Context) and links to the rest. Extended [agent-memory.md](architecture/agent-memory.md) with a service-model section (user/session/block, semantic search, server-side embeddings, TTL/conflict resolution) describing the Couchbase Agent Memory service independent of our usage. |
 | 2026-06-17 | docs sync for the SIO-911..932 elastic-iac expansion: nine config-edit proposers (slo / alerting / dataview / cluster-default / space / security / fleet-integration / topology / dashboard), Fleet-upgrade sub-flow (preview/gate/apply with `applied`/`dispatched`/`failed` outcomes), conversational follow-ups + per-outcome chip, ILM nested shape + copy-from-reference + multi-file MR. Brought the root README into sync (6→7 datasources, 13→20 pipeline nodes, added AWS + elastic-iac MCP rows); refreshed monorepo-structure package list (added knowledge-graph / memory-pr / skillflow / mcp-server-elastic-iac); proposer graph 12→24 nodes. |
