@@ -259,6 +259,28 @@ export interface MemorySearchHit {
 	annotations: AnnotationMap;
 }
 
+// SIO-973: dedup recall hits by a stable identity key (e.g. pipeline_id, config_change_id)
+// before rendering. Facts are durable + undeletable from the agent side, so any re-record
+// (retried write, re-run, re-index) permanently doubles a fact; searchAgentMemory(allSessions)
+// then returns both copies. keyFn returns undefined when the hit has no stable key -- those
+// are kept as-is (deduped only against each other by a per-hit unique fallback). Order-preserving:
+// the first (highest-ranked) hit for a key wins.
+export function dedupeHitsBy(
+	hits: MemorySearchHit[],
+	keyFn: (hit: MemorySearchHit) => string | undefined,
+): MemorySearchHit[] {
+	const seen = new Set<string>();
+	const out: MemorySearchHit[] = [];
+	for (const [i, hit] of hits.entries()) {
+		// no stable key -> unique fallback so distinct keyless hits are never collapsed together
+		const key = keyFn(hit) ?? ` nokey:${i}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(hit);
+	}
+	return out;
+}
+
 export async function searchAgentMemory(
 	agentName: string,
 	query: string,
