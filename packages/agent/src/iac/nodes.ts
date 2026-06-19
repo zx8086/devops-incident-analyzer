@@ -3784,6 +3784,16 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 
 	const risks: string[] = [];
 	if (req?.tier === "hot") risks.push("Hot-tier change can trigger shard relocation; apply off-peak.");
+	// SIO-969: if the knowledge graph says the LAST change to this exact (deployment, stack)
+	// failed, surface it as a HIGH risk (first) so the reviewer knows they may be repeating a
+	// failed attempt. Best-effort: only when KG enrichment ran and recorded a terminal outcome.
+	if (state.lastStackInstanceOutcome?.outcome === "failed") {
+		const mr = state.lastStackInstanceOutcome.mrUrl ? ` (${state.lastStackInstanceOutcome.mrUrl})` : "";
+		risks.unshift(
+			`The previous change to this stack FAILED${mr}: "${state.lastStackInstanceOutcome.summary}". ` +
+				"Confirm what failed and whether this proposal addresses it before approving.",
+		);
+	}
 	if (req?.workflow === "ilm-rollout") {
 		risks.push(
 			"ILM phase change can trigger force-merge load / frozen pull-in; transitions take effect as each index rolls over, not immediately.",

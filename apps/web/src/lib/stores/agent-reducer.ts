@@ -34,6 +34,11 @@ export interface IacReview {
 	plan: string;
 	risks: string[];
 	precheckPassed: boolean;
+	// SIO-969: knowledge-graph change history for this deployment/stack -- prior changes
+	// (with pass/fail outcome) + blast radius. Markdown built by buildIacGraphContext;
+	// undefined when the graph is off/empty. The server always passed it on the review
+	// payload; the field was just missing here, so the card couldn't render it.
+	recentChanges?: string;
 }
 
 export interface IacPlanReviewPrompt {
