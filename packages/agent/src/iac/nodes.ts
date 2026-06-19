@@ -12,7 +12,12 @@ import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
-import { recallInFlightFleetUpgrades, selectedBackend } from "../memory-backend.ts";
+import {
+	type MemorySearchHit,
+	recallInFlightFleetUpgrades,
+	searchAgentMemory,
+	selectedBackend,
+} from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
@@ -7024,6 +7029,44 @@ async function emitFleetResult(r: FleetUpgradeResult): Promise<void> {
 // Detect the Fleet upgrade scope for one deployment: resolve deployment + target version
 // (interrupt if missing), trigger the FLEET_UPGRADE_PREVIEW pipeline, poll, parse, emit the
 // preview report. Read-only -- no bulk_upgrade POST happens here.
+// SIO-971: render recalled fleet-upgrade facts as a markdown bullet list for the gate card.
+// "" for no hits (the UI block stays hidden). Local to the fleet path to avoid a circular
+// import with graph-knowledge.ts (which already imports from this module); mirrors that file's
+// renderLearnings shape but tags on version/outcome (fleet facts have no workflow key).
+function renderFleetLearnings(hits: MemorySearchHit[]): string {
+	if (hits.length === 0) return "";
+	return hits
+		.map((h) => {
+			const a = h.annotations;
+			const tags = [a.version, a.outcome, a.pipeline_id && `pipeline ${a.pipeline_id}`].filter(Boolean).join(" ");
+			return tags ? `- ${h.text} [${tags}]` : `- ${h.text}`;
+		})
+		.join("\n");
+}
+
+// SIO-971: deployment-scoped recall of prior TERMINAL fleet upgrades for the gate card -- the
+// fleet-path twin of memoryEnrichIac (SIO-970). Filters on the SAME keys the fleet write stamps
+// (buildFleetFactAnnotations -> kind:"fleet-upgrade-terminal", deployment). Soft-fails to "" so a
+// memory outage never blocks the preview. Distinct from recallInFlightFleetUpgrades, which reads
+// the DISPATCHED (in-flight) facts to resume a running pipeline.
+// SIO-971: exported for unit testing (the full detectFleetUpgrade needs gitlab preview mocks).
+export async function recallPriorFleetUpgrades(deployment: string, version: string): Promise<string> {
+	if (selectedBackend() !== "agent-memory" || !deployment) return "";
+	try {
+		const hits = await searchAgentMemory("elastic-iac", `fleet upgrade ${deployment} ${version}`, {
+			deployment,
+			kind: "fleet-upgrade-terminal",
+		});
+		return renderFleetLearnings(hits);
+	} catch (error) {
+		log.warn(
+			{ error: error instanceof Error ? error.message : String(error), deployment },
+			"iac fleet upgrade: prior-upgrade recall failed; continuing without it",
+		);
+		return "";
+	}
+}
+
 export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<IacStateType>> {
 	// SIO-923: prefer the deployment the planner already parsed (state.iacRequest.cluster) over
 	// re-deriving it from the raw text. resolveDriftDeployment matches the WHOLE user message against
@@ -7096,7 +7139,14 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 		return { targetDeployment: deployment, fleetUpgradeReport: report };
 	}
 
-	const report: FleetUpgradeReport = { ...parsed, generatedAt: parsed.generatedAt || new Date().toISOString() };
+	// SIO-971: recall prior terminal fleet upgrades for this deployment (best-effort) and fold them
+	// onto the report so the gate card surfaces "we've upgraded this deployment before".
+	const priorUpgrades = await recallPriorFleetUpgrades(deployment, version);
+	const report: FleetUpgradeReport = {
+		...parsed,
+		generatedAt: parsed.generatedAt || new Date().toISOString(),
+		...(priorUpgrades && { priorUpgrades }),
+	};
 	log.info(
 		{
 			deployment,
@@ -7104,6 +7154,7 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 			resolved: report.resolvedCount,
 			upgradeable: report.crosstab.upgradeable,
 			versionAvailable: report.versionAvailable,
+			hasPriorUpgrades: Boolean(priorUpgrades),
 		},
 		"iac fleet upgrade: preview assessed",
 	);
@@ -7162,6 +7213,7 @@ export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
 		rolloutSeconds: rollout,
 		byReason: report.crosstab.byReason,
 		...(vc && { versionCrosstab: vc }), // SIO-935
+		...(report.priorUpgrades && { priorUpgrades: report.priorUpgrades }), // SIO-971
 		message,
 	}) as { approve?: boolean };
 	return { fleetUpgradeApproved: choice?.approve === true };

@@ -462,6 +462,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		rolloutSeconds?: unknown;
 		byReason?: unknown;
 		versionCrosstab?: unknown; // SIO-935
+		priorUpgrades?: unknown; // SIO-971
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -594,6 +595,7 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 					})
 				: [],
 			...(vct && { versionCrosstab: vct }),
+			...(typeof obj.priorUpgrades === "string" && obj.priorUpgrades ? { priorUpgrades: obj.priorUpgrades } : {}), // SIO-971
 			message:
 				typeof obj.message === "string" ? obj.message : "Approve the Fleet agent upgrade (runs via CI), or decline.",
 		});

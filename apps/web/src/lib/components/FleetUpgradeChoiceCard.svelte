@@ -1,5 +1,6 @@
 <script lang="ts">
 // apps/web/src/lib/components/FleetUpgradeChoiceCard.svelte
+import MarkdownRenderer from "$lib/components/MarkdownRenderer.svelte";
 import type { FleetUpgradeChoice } from "$lib/stores/agent-reducer.ts";
 
 let {
@@ -97,6 +98,18 @@ function reasonLabel(reason: string): string {
           {/each}
         </ul>
       </div>
+    {/if}
+
+    <!-- SIO-971: cross-session agent-memory recall of prior fleet upgrades for this deployment,
+         so the operator sees "we've upgraded this deployment before" (and how it went) before
+         approving. The fleet-path twin of SIO-970's plan-review "Prior learnings" block. -->
+    {#if prompt.priorUpgrades}
+      <details class="mt-2" open>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Prior upgrades (memory)</summary>
+        <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <MarkdownRenderer content={prompt.priorUpgrades} />
+        </div>
+      </details>
     {/if}
 
     <p class="mt-3 text-xs font-semibold text-amber-700">

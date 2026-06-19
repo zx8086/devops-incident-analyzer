@@ -14,6 +14,7 @@ import {
 	parseFleetUpgradeReport,
 	parseSinglePipeline,
 	parseTargetVersion,
+	recallPriorFleetUpgrades,
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
 
@@ -989,5 +990,78 @@ describe("buildFleetFactDecision / buildFleetFactRationale", () => {
 		// never the terminal copy
 		expect(buildFleetFactDecision(s, result)).not.toContain("upgraded to");
 		expect(buildFleetFactDecision(s, result)).not.toContain("FAILED");
+	});
+});
+
+// SIO-971: deployment-scoped recall of prior TERMINAL fleet upgrades for the gate card -- the
+// fleet-path twin of SIO-970's memoryEnrichIac. Reads kind:"fleet-upgrade-terminal" (NOT the
+// dispatched/in-flight facts that recallInFlightFleetUpgrades reads).
+describe("recallPriorFleetUpgrades (SIO-971)", () => {
+	const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+	function withTerminalFacts(
+		rows: Array<{ deployment: string; version: string; outcome: string; pipelineId: number }>,
+	) {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+				// proves the recall filters on the SAME keys the fleet write stamps
+				expect(opts?.annotations).toEqual({ deployment: "us-cld", kind: "fleet-upgrade-terminal" });
+				return rows.map((u) => ({
+					text: `Fleet agents on ${u.deployment} upgraded to ${u.version}.`,
+					score: 0.9,
+					annotations: {
+						kind: "fleet-upgrade-terminal",
+						deployment: u.deployment,
+						version: u.version,
+						outcome: u.outcome,
+						pipeline_id: String(u.pipelineId),
+					},
+				}));
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: SIO-971 - test stub for the AgentMemoryClient surface
+		} as any);
+	}
+	function reset() {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	}
+
+	test("renders prior terminal upgrades as markdown with version/outcome/pipeline tags", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withTerminalFacts([{ deployment: "us-cld", version: "9.3.0", outcome: "applied", pipelineId: 2600000001 }]);
+		const out = await recallPriorFleetUpgrades("us-cld", "9.4.2");
+		expect(out).toContain("Fleet agents on us-cld upgraded to 9.3.0");
+		expect(out).toContain("[9.3.0 applied pipeline 2600000001]");
+		reset();
+	});
+
+	test("returns '' when the agent-memory backend is not selected", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND;
+		expect(await recallPriorFleetUpgrades("us-cld", "9.4.2")).toBe("");
+		reset();
+	});
+
+	test("returns '' when no deployment is resolved", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		expect(await recallPriorFleetUpgrades("", "9.4.2")).toBe("");
+		reset();
+	});
+
+	test("returns '' (no hits) when nothing prior exists", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withTerminalFacts([]);
+		expect(await recallPriorFleetUpgrades("us-cld", "9.4.2")).toBe("");
+		reset();
 	});
 });

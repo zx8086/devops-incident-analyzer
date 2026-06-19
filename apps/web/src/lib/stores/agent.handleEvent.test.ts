@@ -254,6 +254,25 @@ describe("applyStreamEvent", () => {
 		expect(state.fleetUpgradeResult?.status).toBe("applied");
 	});
 
+	// SIO-971: prior-upgrade recall flows through the choice event onto the gate card.
+	test("fleet_upgrade_choice carries priorUpgrades onto the gate prompt", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_choice",
+			threadId: "t-fleet",
+			deployment: "us-cld",
+			targetVersion: "9.4.2",
+			resolvedCount: 232,
+			upgradeableCount: 4,
+			notUpgradeableCount: 228,
+			rolloutSeconds: 600,
+			byReason: [{ reason: "wolfi", count: 228 }],
+			priorUpgrades: "- Fleet agents on us-cld upgraded to 9.3.0. [9.3.0 applied]",
+			message: "Approve?",
+		});
+		expect(state.fleetUpgradeChoice?.priorUpgrades).toContain("upgraded to 9.3.0");
+	});
+
 	// SIO-935: the version partition flows through both events into state so the card can render
 	// "already on target / will upgrade / not Fleet-upgradeable". (The two tests above cover the
 	// back-compat path where versionCrosstab is absent and stays undefined.)
