@@ -68,6 +68,27 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.tools[0]?.name).toBe("elastic-iac");
 		expect(agent.tools[0]?.tool_mapping?.mcp_server).toBe("elastic-iac");
 	});
+
+	// SIO-953: lifecycle hooks activate the wiki + key-decision-checkpoint steps.
+	test("hooks enable load_wiki_index (bootstrap) + checkpoint_key_decisions (teardown)", () => {
+		expect(agent.hooks?.bootstrap?.steps).toContain("load_live_memory");
+		expect(agent.hooks?.bootstrap?.steps).toContain("load_wiki_index");
+		expect(agent.hooks?.teardown?.steps).toContain("flush_daily_log");
+		expect(agent.hooks?.teardown?.steps).toContain("checkpoint_key_decisions");
+	});
+
+	// SIO-953: the LLM Wiki (persistent knowledge base) is provisioned, so
+	// load_wiki_index has an index to read at bootstrap.
+	test("memory wiki index + seed pages are provisioned", () => {
+		expect(agent.memory?.wiki.indexMd).toBeDefined();
+		expect(agent.memory?.wiki.indexMd).toContain("cluster-topology");
+		// the three seed pages load from memory/wiki/pages/
+		expect(agent.memory?.wiki.pagePaths.length).toBeGreaterThanOrEqual(3);
+		const pages = new Set(agent.memory?.wiki.pagePaths.map((p) => p.split("/").pop()));
+		expect(pages.has("cluster-topology.md")).toBe(true);
+		expect(pages.has("iac-repo-layout.md")).toBe(true);
+		expect(pages.has("maker-checker-workflow.md")).toBe(true);
+	});
 });
 
 // Regression guard: the existing array-form agent must be unaffected by the GAP changes.

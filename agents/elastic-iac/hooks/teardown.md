@@ -16,4 +16,10 @@ Run at the end of every job, success or failure.
 
 3. If a previously in-flight MR was merged or closed, move it from `## in-flight` to `## recently-shipped`.
 
-4. Do not write secrets, redacted log payloads, or cluster credentials to memory under any circumstance.
+4. Checkpoint key decisions. If this turn made a durable decision worth recalling
+   in a future session (a gate raised, a risk accepted, a cluster-specific lesson,
+   a non-obvious "why we did X"), record it via `recordKeyDecision` so it persists
+   as a durable fact (agent-memory backend) or in `memory/runtime/key-decisions.md`
+   (file backend). Routine status updates belong in the daily log, not here.
+
+5. Do not write secrets, redacted log payloads, or cluster credentials to memory under any circumstance.
