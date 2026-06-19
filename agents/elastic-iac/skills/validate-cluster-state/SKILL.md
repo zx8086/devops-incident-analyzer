@@ -12,7 +12,7 @@ outputs:
 
 # Validate cluster state
 
-Source of truth: `knowledge/operating-guide.md` §3 durability layers, `knowledge/playbook/9-validation-checklists.md`, `knowledge/issues/cross-cluster.md` IR-174.
+Source of truth: `knowledge/reference/operating-guide.md` §3 durability layers, `knowledge/playbook/9-validation-checklists.md`, `knowledge/issues/cross-cluster.md` IR-174.
 
 ## What to fetch
 

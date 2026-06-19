@@ -1,7 +1,7 @@
 ---
 sources:
-  - knowledge/cluster-inventory.md
-  - knowledge/conventions.md
+  - knowledge/reference/cluster-inventory.md
+  - knowledge/reference/conventions.md
 updated: 2026-06-19T00:00:00.000Z
 ---
 

@@ -3897,7 +3897,7 @@ export function extractMrUrl(toolResult: string): string {
 }
 
 // Minimal deterministic MR body, used as the fallback when the LLM step fails so the
-// MR never blocks. Real bodies follow knowledge/mr-template.md (filled by the LLM).
+// MR never blocks. Real bodies follow knowledge/reference/mr-template.md (filled by the LLM).
 function fallbackMrDescription(review: IacPlanReview | null): string {
 	return `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`;
 }
@@ -3988,7 +3988,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 														? "Category dashboard, Risk MEDIUM"
 														: "Category version-bump, Risk LOW";
 		const instruction =
-			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
+			"Write the GitLab merge request description using knowledge/reference/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
 			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: tier-resize', " +
 			"'Cluster(s) affected: eu-b2b', 'Risk: MEDIUM') -- never list the unselected options or empty `- [ ]` boxes. " +

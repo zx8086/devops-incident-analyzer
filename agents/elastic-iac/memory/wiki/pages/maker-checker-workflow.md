@@ -2,7 +2,7 @@
 sources:
   - RULES.md
   - DUTIES.md
-  - knowledge/iac-repo-map.md
+  - knowledge/reference/iac-repo-map.md
 updated: 2026-06-19T00:00:00.000Z
 ---
 

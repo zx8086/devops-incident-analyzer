@@ -7,18 +7,19 @@ version: 0.1.0
 # the categories below (manifest paths are ignored), and each category loads the
 # *.md files DIRECTLY under its `path` (subdirectories are not recursed).
 #
-# The `root` category (path ".") preserves the top-level knowledge files
-# (iac-repo-map, conventions, cluster-inventory, stack-modules, mr-template,
-# operating-guide) that the manifest auto-discovery loaded -- without it they
-# would silently stop loading into the prompt.
+# The `reference` category holds the foundational facts that used to sit loose at
+# the knowledge/ root (repo map, conventions/gotchas, cluster inventory, stack
+# modules, MR template, operating guide). They were moved into reference/ so the
+# root holds only category directories and the human-only `_INDEX.md` inventory
+# is not loaded into the prompt.
 #
 # No runbook_selection: that wires incident-analyzer's selectRunbooks node, which
 # the IaC graph (buildIacGraph) does not have. The runbooks here are eu-cld
 # incident references, loaded as plain knowledge.
 categories:
-  root:
-    path: .
-    description: Top-level facts -- repo map, conventions/gotchas, cluster inventory, stack modules, MR template, operating guide
+  reference:
+    path: reference/
+    description: Foundational facts -- repo map, conventions/gotchas, cluster inventory, stack modules, MR template, operating guide
   issues:
     path: issues/
     description: Per-cluster issue register entries

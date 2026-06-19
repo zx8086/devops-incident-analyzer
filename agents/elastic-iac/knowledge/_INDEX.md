@@ -2,13 +2,14 @@
 
 Every file under `knowledge/` and any new skills promoted from the source corpus, grouped by category.
 
-## operating-guide
+## reference/ (foundational facts; the `reference` index.yaml category)
 
-- `operating-guide.md` — canonical "start here" (verbatim copy of source `reference_elastic_iac_operating_guide.md`)
-
-## mr-template
-
-- `mr-template.md` — GitLab MR body template (verbatim copy of source `mr_template_v1.md`). Referenced by `skills/open-mr/SKILL.md`.
+- `reference/iac-repo-map.md` — GitOps repo path/id + the environments/ vs stacks/ tree
+- `reference/conventions.md` — local lore / standing gotchas
+- `reference/cluster-inventory.md` — live cluster set + per-cluster notes
+- `reference/stack-modules.md` — Terraform module map
+- `reference/operating-guide.md` — canonical "start here" (verbatim copy of source `reference_elastic_iac_operating_guide.md`)
+- `reference/mr-template.md` — GitLab MR body template (verbatim copy of source `mr_template_v1.md`). Referenced by `skills/open-mr/SKILL.md`.
 
 ## issues/ (per-cluster, sourced from Consolidated_Issue_Register_v21)
 

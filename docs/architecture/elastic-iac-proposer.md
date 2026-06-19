@@ -48,7 +48,7 @@ START -> bootstrap -> {connected? classifyIacIntent : END}
 | `draftChange` | Routes by workflow to a proposer; config edits commit JSON via the GitLab API. Can block (missing token, 404, unparseable JSON). |
 | `reviewPlan` | Assembles the plan-review payload: `kind` (config-edit / terraform), diff, risks, descriptor/title. Config edits skip local terraform (CI plans on the MR). |
 | `reviewGate` | The `iac_plan_review` HITL interrupt — the only path to opening an MR. Resumes with `approved` / `rejected`. |
-| `openMr` | Opens the MR via the API. For a config edit the branch + commit already exist (created in `draftChange`), so no `git_push`. Body filled by the LLM from `knowledge/mr-template.md`. |
+| `openMr` | Opens the MR via the API. For a config edit the branch + commit already exist (created in `draftChange`), so no `git_push`. Body filled by the LLM from `knowledge/reference/mr-template.md`. |
 | `watchPipeline` | Polls the MR pipeline (bounded budget), walks parent→child to the plan job's terraform report, reports pass/fail + the real plan + approval. Streams `iac_pipeline_progress` live. |
 | `teardown` | Final message: MR link + pipeline status + plan + approval (+ a failure hint on failure). Emits a per-outcome completion chip (`IacTurnOutcome`: `completed`/`rejected`/`declined`/`blocked`/`unsupported`/`pipeline-failed`) so the UI renders the right icon/colour instead of a hardcoded green "Completed" (SIO-930). |
 | `detectDrift` / `explainDrift` / `reconcileGate` / `reconcileStack` / `advanceDrift` | Drift sub-flow: detect config drift per stack, explain it, gate human approval, then trigger the reconcile CI pipeline and advance to the next stack. |
@@ -80,7 +80,7 @@ A change is a JSON config edit (config-edit `kind`) committed via the API; CI co
 - **Multi-file in one MR (SIO-932):** a request naming N ILM policies opens **one** branch / **one** MR with all files (`ilmPolicies[]` array + `commitOneIlmPolicy` in an atomic batch); previously only the first file was committed and the rest were silently dropped.
 - **Component-template bind (SIO-933):** an optional `bindTemplate` field (a cluster-defaults file basename, no `.json`) re-points that template's `settings.index.lifecycle.name` at the created/edited policy **in the same MR** — set it only when the user explicitly asks to bind/point/attach a template's lifecycle. A missing bind target 404s and blocks; bind works with a **single** policy only (not the multi-file path). A copied policy now diffs full-file on `policyCreated`, so the renamed `name` + inherited phases are visible in the review (previously the diff walked only the patch object and hid them).
 
-> The legacy `agents/elastic-iac/skills/add-ilm-policy/SKILL.md` and `knowledge/iac-repo-map.md` describe an older `stacks/<cluster>/ilm.tf` (Terraform HCL) layout and are **stale**; the repo uses per-env JSON config.
+> The legacy `agents/elastic-iac/skills/add-ilm-policy/SKILL.md` and `knowledge/reference/iac-repo-map.md` describe an older `stacks/<cluster>/ilm.tf` (Terraform HCL) layout and are **stale**; the repo uses per-env JSON config.
 
 ## Fleet upgrade
 

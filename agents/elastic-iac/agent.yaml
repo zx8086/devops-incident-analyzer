@@ -38,12 +38,12 @@ tools:
   - id: elastic-iac
 
 knowledge:
-  - knowledge/iac-repo-map.md
-  - knowledge/stack-modules.md
-  - knowledge/cluster-inventory.md
-  - knowledge/conventions.md
-  - knowledge/operating-guide.md
-  - knowledge/mr-template.md
+  - knowledge/reference/iac-repo-map.md
+  - knowledge/reference/stack-modules.md
+  - knowledge/reference/cluster-inventory.md
+  - knowledge/reference/conventions.md
+  - knowledge/reference/operating-guide.md
+  - knowledge/reference/mr-template.md
   - knowledge/issues/
   - knowledge/runbooks/
   - knowledge/specs/

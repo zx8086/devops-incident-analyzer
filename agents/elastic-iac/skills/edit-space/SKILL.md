@@ -36,4 +36,4 @@ Source of truth: `environments/<cluster>/spaces/<space>.json` -- ONE file per sp
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `spaces`. Risk: MEDIUM. State the resolved change (`developer-experience: description updated`), the single file touched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `spaces`. Risk: MEDIUM. State the resolved change (`developer-experience: description updated`), the single file touched, and the rollback (revert the MR).

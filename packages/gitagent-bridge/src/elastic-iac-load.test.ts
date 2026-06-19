@@ -42,20 +42,24 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.duties.length).toBeGreaterThan(0);
 	});
 
-	// SIO-953: knowledge now loads via knowledge/index.yaml (Knowledge Tree),
-	// which replaces the manifest auto-discovery. The `root` category (path ".")
-	// preserves the top-level files; subdir categories load their *.md.
-	test("knowledge loads via index.yaml: top-level files + directory categories", () => {
+	// SIO-953: knowledge loads via knowledge/index.yaml (Knowledge Tree), which
+	// replaces the manifest auto-discovery. The foundational files were moved from
+	// the knowledge/ root into reference/ and load via the `reference` category
+	// (so the human-only _INDEX.md is no longer pulled into the prompt).
+	test("knowledge loads via index.yaml: reference category + directory categories", () => {
 		const filenames = new Set(agent.knowledge.map((k) => k.filename));
-		// top-level files still load (via the `root` category) -- not dropped
+		// foundational files still load (via the `reference` category) -- not dropped
 		expect(filenames.has("iac-repo-map.md")).toBe(true);
 		expect(filenames.has("conventions.md")).toBe(true);
 		expect(filenames.has("cluster-inventory.md")).toBe(true);
+		expect(filenames.has("mr-template.md")).toBe(true);
 		// directory categories load too
 		const categories = new Set(agent.knowledge.map((k) => k.category));
 		expect(categories.has("runbooks")).toBe(true);
 		expect(categories.has("specs")).toBe(true);
-		expect(categories.has("root")).toBe(true);
+		expect(categories.has("reference")).toBe(true);
+		// the human-only inventory is NOT loaded (lives at the root, no category)
+		expect(filenames.has("_INDEX.md")).toBe(false);
 	});
 
 	test("GAP map-form workflows convert to canonical WorkflowDef", () => {

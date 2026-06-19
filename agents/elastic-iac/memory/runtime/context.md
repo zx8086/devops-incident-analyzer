@@ -23,5 +23,5 @@ Seed file. The agent appends/updates here.
 
 ## known gotchas to re-read before acting
 
-- See `knowledge/conventions.md` — frozen tier capacity, single-node Fleet YELLOW, plan_history > trackers, optimisation turbulence.
+- See `knowledge/reference/conventions.md` — frozen tier capacity, single-node Fleet YELLOW, plan_history > trackers, optimisation turbulence.
 - See `RULES.md` — autoscaling Current-before-Max, `.alerts` gate on hot downsize, no apply, no self-merge.

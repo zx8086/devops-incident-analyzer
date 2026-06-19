@@ -69,10 +69,10 @@ memory/
 
 Your existing register + playbook map cleanly to `knowledge/`:
 
-- **Issue register rows** → `knowledge/cluster-inventory.md` per-cluster gotchas + `memory/runtime/context.md` in-flight items
+- **Issue register rows** → `knowledge/reference/cluster-inventory.md` per-cluster gotchas + `memory/runtime/context.md` in-flight items
 - **Playbook procedures** → become individual `skills/*/SKILL.md` files (one skill per procedure)
-- **Conventions / lore** → `knowledge/conventions.md`
-- **Repo map** → `knowledge/iac-repo-map.md`
+- **Conventions / lore** → `knowledge/reference/conventions.md`
+- **Repo map** → `knowledge/reference/iac-repo-map.md`
 
 Pattern: when the playbook adds a procedure, add a skill. When the register adds a recurring issue, add a row to `cluster-inventory.md`. The agent re-reads these on every bootstrap, so updates are zero-deploy.
 
@@ -97,7 +97,7 @@ Approach is grounded in:
 
 1. Decide the runtime (Claude Code subagent vs CI service).
 2. Drop this directory into a new branch of the IaC repo (or a sibling repo).
-3. Add real Terraform paths to `knowledge/stack-modules.md` after one `gitlab_get_repository_tree` pass.
+3. Add real Terraform paths to `knowledge/reference/stack-modules.md` after one `gitlab_get_repository_tree` pass.
 4. Run one dry workflow end-to-end against gl-testing only.
 5. After 2–3 successful gl-testing pre-checks, allow it on dev clusters.
 6. Promote to staging/prod only after CODEOWNERS-approved MRs from the agent show clean diffs over a 2-week window.

@@ -1,7 +1,7 @@
 ---
 sources:
-  - knowledge/iac-repo-map.md
-  - knowledge/conventions.md
+  - knowledge/reference/iac-repo-map.md
+  - knowledge/reference/conventions.md
 updated: 2026-06-19T00:00:00.000Z
 ---
 
