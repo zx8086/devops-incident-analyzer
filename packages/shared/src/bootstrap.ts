@@ -4,6 +4,7 @@ import type pino from "pino";
 import { OAuthRequiresInteractiveAuthError } from "./oauth/errors.ts";
 import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
+import { installToolCallLogging } from "./tool-call-logging.ts";
 import { buildIdentityCard, type IdentityCard, type McpRole } from "./transport/identity.ts";
 
 export type { TelemetryConfig };
@@ -103,14 +104,17 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		const innerFactory =
 			mode === "proxy" || !options.createServerFactory ? undefined : options.createServerFactory(datasource);
 		const readOnlyConfig = options.readOnly;
-		const serverFactory: (() => McpServer) | undefined =
-			innerFactory && readOnlyConfig
-				? () => {
-						const server = innerFactory();
-						installReadOnlyChokepoint(server, readOnlyConfig.manager);
-						return server;
-					}
-				: innerFactory;
+		// SIO-974: every server gets tools/call lifecycle logging; read-only enforcement is
+		// still opt-in. Install order matters: read-only INNER, logging OUTER, so a blocked
+		// call (read-only handler short-circuits) is still logged by the outer wrap.
+		const serverFactory: (() => McpServer) | undefined = innerFactory
+			? () => {
+					const server = innerFactory();
+					if (readOnlyConfig) installReadOnlyChokepoint(server, readOnlyConfig.manager);
+					installToolCallLogging(server, logger);
+					return server;
+				}
+			: innerFactory;
 
 		// Step 4b: Build IdentityCard for /identity route consumers (Phase A: SIO-780)
 		const identityCard = buildIdentityCard({

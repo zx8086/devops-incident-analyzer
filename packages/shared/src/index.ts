@@ -217,6 +217,7 @@ export {
 	type TelemetryConfig,
 	traceSpan,
 } from "./telemetry/telemetry.ts";
+export { installToolCallLogging, type ToolCallLogger } from "./tool-call-logging.ts";
 export {
 	type ConnectionContext,
 	createSessionContext,
