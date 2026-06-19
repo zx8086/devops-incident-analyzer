@@ -2,9 +2,12 @@ bootstrap:
   instructions_file: bootstrap.md
   steps:
     - load_live_memory
+    - load_wiki_index
+    - warm_knowledge_graph
     - emit_session_start
 
 teardown:
   instructions_file: teardown.md
   steps:
     - flush_daily_log
+    - checkpoint_key_decisions

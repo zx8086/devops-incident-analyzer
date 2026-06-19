@@ -49,4 +49,4 @@ The `modules/slo` module shallow-merges PER nested block: `objective = merge(def
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `slo`. Risk: MEDIUM (HIGH framing if lowering the bar materially). State the resolved override (`ds-authentication: objective.target 0.99 -> 0.995`), the single file touched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `slo`. Risk: MEDIUM (HIGH framing if lowering the bar materially). State the resolved override (`ds-authentication: objective.target 0.99 -> 0.995`), the single file touched, and the rollback (revert the MR).

@@ -96,7 +96,10 @@ describe("createFetchAgentMemoryClient", () => {
 			"POST /users/incident-analyzer/sessions/t-1/memory": { status: 200, body: { block_ids: ["b1"] } },
 		});
 		const client = createFetchAgentMemoryClient(CONFIG);
-		await client.addMessages(REF, [{ user_content: "q", assistant_content: "a" }], { ttlSeconds: 3600, createdAt: "2026-06-17T00:00:00Z" });
+		await client.addMessages(REF, [{ user_content: "q", assistant_content: "a" }], {
+			ttlSeconds: 3600,
+			createdAt: "2026-06-17T00:00:00Z",
+		});
 		await client.addFacts(REF, ["a durable fact"], { createdAt: "2026-06-17T01:00:00Z" });
 		expect(calls[0]?.body).toMatchObject({
 			messages: [{ user_content: "q" }],
@@ -159,6 +162,43 @@ describe("createFetchAgentMemoryClient", () => {
 		await client.endSession(REF);
 		expect(captured.auth).toBe("Bearer jwt-123");
 		globalThis.fetch = original;
+	});
+
+	test("endSession POSTs to /sessions/{id}/end, not /memory/end (SIO-952)", async () => {
+		const { calls, restore } = stubFetch({});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.endSession(REF);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.method).toBe("POST");
+		expect(calls[0]?.url).toBe("http://mem.test/users/incident-analyzer/sessions/t-1/end");
+		restore();
+	});
+
+	test("updateSession PUTs annotations + metadata to the session (SIO-952)", async () => {
+		const { calls, restore } = stubFetch({});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.updateSession(REF, { annotations: { outcome: "mr-opened" } });
+		expect(calls[0]?.method).toBe("PUT");
+		expect(calls[0]?.url).toBe("http://mem.test/users/incident-analyzer/sessions/t-1");
+		expect(calls[0]?.body).toMatchObject({ annotations: { outcome: "mr-opened" }, metadata: null });
+		restore();
+	});
+
+	test("ensureUser/ensureSession/writes carry annotations + metadata when provided (SIO-952)", async () => {
+		const { calls, restore } = stubFetch({});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.ensureUser("elastic-iac", "elastic-iac", { agent: "elastic-iac", role: "iac-maker" });
+		await client.ensureSession("elastic-iac", "t-1", {
+			annotations: { agent: "elastic-iac", datasources: "elastic-iac" },
+		});
+		await client.addFacts(REF, ["f"], { annotations: { intent: "fleet-upgrade", kind: "key-decision" } });
+		expect(calls[0]?.body).toMatchObject({ metadata: { agent: "elastic-iac", role: "iac-maker" } });
+		expect(calls[1]?.body).toMatchObject({
+			annotations: { agent: "elastic-iac", datasources: "elastic-iac" },
+			metadata: null,
+		});
+		expect(calls[2]?.body).toMatchObject({ annotations: { intent: "fleet-upgrade", kind: "key-decision" } });
+		restore();
 	});
 
 	test("503 throws ServiceUnavailableError carrying retry_after_seconds (from body)", async () => {

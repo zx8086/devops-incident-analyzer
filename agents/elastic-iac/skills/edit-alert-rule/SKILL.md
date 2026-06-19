@@ -56,4 +56,4 @@ NEVER touch: `actions[]` (connector wiring — changing `id` silently breaks not
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `alerting`. Risk: MEDIUM (HIGH when disabling). State the resolved change (`default__...: params.threshold 1 -> 5`), the single file touched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `alerting`. Risk: MEDIUM (HIGH when disabling). State the resolved change (`default__...: params.threshold 1 -> 5`), the single file touched, and the rollback (revert the MR).

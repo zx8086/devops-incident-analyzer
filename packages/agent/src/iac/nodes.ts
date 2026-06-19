@@ -3897,7 +3897,7 @@ export function extractMrUrl(toolResult: string): string {
 }
 
 // Minimal deterministic MR body, used as the fallback when the LLM step fails so the
-// MR never blocks. Real bodies follow knowledge/mr-template.md (filled by the LLM).
+// MR never blocks. Real bodies follow knowledge/reference/mr-template.md (filled by the LLM).
 function fallbackMrDescription(review: IacPlanReview | null): string {
 	return `${review?.diff ?? ""}\n\n## Plan\n\n${review?.plan ?? ""}\n\n## Risks\n\n${(review?.risks ?? []).map((r) => `- ${r}`).join("\n")}`;
 }
@@ -3988,7 +3988,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 														? "Category dashboard, Risk MEDIUM"
 														: "Category version-bump, Risk LOW";
 		const instruction =
-			"Write the GitLab merge request description using knowledge/mr-template.md's SECTION HEADINGS, but as an " +
+			"Write the GitLab merge request description using knowledge/reference/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
 			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: tier-resize', " +
 			"'Cluster(s) affected: eu-b2b', 'Risk: MEDIUM') -- never list the unselected options or empty `- [ ]` boxes. " +
@@ -5972,7 +5972,8 @@ export function buildFleetMemorySummary(state: IacStateType): string[] {
 	if (result?.status) parts.push(`status=${result.status}`);
 	if (report?.crosstab) parts.push(`upgradeable=${report.crosstab.upgradeable}`);
 	if (report?.versionCrosstab) parts.push(`already-on-target=${report.versionCrosstab.alreadyOnTarget}`);
-	if (report?.crosstab && report.crosstab.notUpgradeable > 0) parts.push(`non-upgradeable=${report.crosstab.notUpgradeable}`);
+	if (report?.crosstab && report.crosstab.notUpgradeable > 0)
+		parts.push(`non-upgradeable=${report.crosstab.notUpgradeable}`);
 	if (typeof result?.created === "number") parts.push(`acked=${result.acked ?? 0}/${result.created}`);
 	if (result?.failedSilent && result.failedSilent > 0) parts.push(`upg-failed=${result.failedSilent}`);
 	if (result?.pipelineId) parts.push(`pipeline=${result.pipelineId}`);
@@ -6012,7 +6013,8 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		// SIO-943: a fleet upgrade has no MR/cluster but carries a rich result. Enrich the
 		// breadcrumb with version/deployment/counts/pipeline so the stored message (and the
 		// embedding the service derives from it) is recallable, not a generic "intent=fleet-upgrade".
-		const isFleet = state.intent === "fleet-upgrade" || (state.intent === "pipeline-status" && state.fleetUpgradeResult);
+		const isFleet =
+			state.intent === "fleet-upgrade" || (state.intent === "pipeline-status" && state.fleetUpgradeResult);
 		const summaryParts = isFleet
 			? buildFleetMemorySummary(state)
 			: [

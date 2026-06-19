@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	type AgentMemoryClient,
 	type AgentMemoryUserRef,
+	type AnnotationMap,
 	type ChatMessageBlock,
 	redactPiiContent,
 	ServiceUnavailableError,
@@ -12,6 +13,7 @@ import {
 	__setAgentMemoryClient,
 	clearActiveMemorySession,
 	endAgentMemorySession,
+	enqueueFact,
 	enqueueMessage,
 	flushAgentMemory,
 	flushAgentMemoryAfterTurn,
@@ -20,6 +22,8 @@ import {
 	resolveUserId,
 	selectedBackend,
 	setActiveMemorySession,
+	setSessionDatasources,
+	setSessionOutcome,
 } from "./memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "./memory-writer.ts";
 
@@ -32,31 +36,55 @@ const REDACTION_ACTIVE = redactPiiContent("123-45-6789") !== "123-45-6789";
 
 interface Recorded {
 	users: string[];
+	userMetadata: (AnnotationMap | undefined)[];
 	sessions: string[];
+	sessionAnnotations: (AnnotationMap | undefined)[];
 	facts: string[];
+	factAnnotations: (AnnotationMap | undefined)[];
 	messages: ChatMessageBlock[];
+	messageAnnotations: (AnnotationMap | undefined)[];
 	searches: string[];
+	updated: { ref: AgentMemoryUserRef; annotations?: AnnotationMap }[];
 	ended: AgentMemoryUserRef[];
 }
 
 function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClient; rec: Recorded } {
-	const rec: Recorded = { users: [], sessions: [], facts: [], messages: [], searches: [], ended: [] };
+	const rec: Recorded = {
+		users: [],
+		userMetadata: [],
+		sessions: [],
+		sessionAnnotations: [],
+		facts: [],
+		factAnnotations: [],
+		messages: [],
+		messageAnnotations: [],
+		searches: [],
+		updated: [],
+		ended: [],
+	};
 	const client: AgentMemoryClient = {
-		async ensureUser(userId) {
+		async ensureUser(userId, _name, metadata) {
 			rec.users.push(userId);
+			rec.userMetadata.push(metadata);
 		},
-		async ensureSession(_userId, sessionId) {
+		async ensureSession(_userId, sessionId, opts) {
 			rec.sessions.push(sessionId);
+			rec.sessionAnnotations.push(opts?.annotations);
 		},
-		async addFacts(_ref, facts) {
+		async addFacts(_ref, facts, opts) {
 			rec.facts.push(...facts);
+			rec.factAnnotations.push(opts?.annotations);
 		},
-		async addMessages(_ref, messages) {
+		async addMessages(_ref, messages, opts) {
 			rec.messages.push(...messages);
+			rec.messageAnnotations.push(opts?.annotations);
 		},
 		async searchMemory(_ref, query) {
 			rec.searches.push(query);
 			return searchResult.map((text) => ({ text }));
+		},
+		async updateSession(ref, patch) {
+			rec.updated.push({ ref, annotations: patch.annotations });
 		},
 		async endSession(ref) {
 			rec.ended.push(ref);
@@ -252,6 +280,54 @@ describe("recall + endSession", () => {
 		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-iac" }]);
 	});
 
+	test("endAgentMemorySession stamps the outcome annotation before ending (SIO-952)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-iac");
+		setSessionOutcome("mr-opened");
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
+		await endAgentMemorySession();
+		expect(rec.updated).toEqual([
+			{ ref: { userId: "elastic-iac", sessionId: "t-iac" }, annotations: { outcome: "mr-opened" } },
+		]);
+		expect(rec.ended).toEqual([{ userId: "elastic-iac", sessionId: "t-iac" }]);
+	});
+
+	test("clearActiveMemorySession resets the outcome so it never leaks to the next session (SIO-952)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-1");
+		setSessionOutcome("rejected");
+		await endAgentMemorySession(); // ends + clears
+		// New session, no outcome set -> updateSession must NOT be called.
+		setActiveMemorySession("elastic-iac", "t-2");
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
+		await endAgentMemorySession();
+		expect(rec.updated).toHaveLength(1); // only the first session stamped an outcome
+	});
+});
+
+describe("annotations + metadata (SIO-952)", () => {
+	test("flush stamps user metadata, session annotations, and block kind", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-iac");
+		setSessionDatasources("elastic-iac");
+		enqueueFact("decided to resize warm tier", "2026-06-17T00:00:00Z", { intent: "fleet-upgrade" });
+		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:01:00Z", undefined, {
+			intent: "fleet-upgrade",
+		});
+		await flushAgentMemory();
+
+		expect(rec.userMetadata[0]).toMatchObject({ agent: "elastic-iac", role: "iac-maker" });
+		expect(rec.sessionAnnotations[0]).toMatchObject({ agent: "elastic-iac", datasources: "elastic-iac" });
+		expect(rec.factAnnotations[0]).toMatchObject({ kind: "key-decision", intent: "fleet-upgrade" });
+		expect(rec.messageAnnotations[0]).toMatchObject({ kind: "daily-log", intent: "fleet-upgrade" });
+	});
+
 	test("a 503 on flush requeues the batch instead of dropping it", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		setActiveMemorySession("incident-analyzer", "t-1");
@@ -269,6 +345,7 @@ describe("recall + endSession", () => {
 			async searchMemory() {
 				return [];
 			},
+			async updateSession() {},
 			async endSession() {},
 			async checkHealth() {
 				return { ok: true };

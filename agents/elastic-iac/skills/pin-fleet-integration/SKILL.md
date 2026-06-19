@@ -46,4 +46,4 @@ This is the integration **package** (EPM) version, distinct from:
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `fleet-integration`. Risk: MEDIUM (minor/patch) or HIGH (major). State the resolved version transition (`aws: 6.14.2 -> 6.15.0`), the single file touched, and the rollback (revert the MR; re-pin the prior version).
+Use `knowledge/reference/mr-template.md` headings. Category: `fleet-integration`. Risk: MEDIUM (minor/patch) or HIGH (major). State the resolved version transition (`aws: 6.14.2 -> 6.15.0`), the single file touched, and the rollback (revert the MR; re-pin the prior version).

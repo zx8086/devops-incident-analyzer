@@ -52,4 +52,4 @@ A whole-file add/replace commits the user's exported NDJSON VERBATIM and never h
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `dashboard`. Risk: MEDIUM. State the resolved change (`eu-b2b: add dashboard developer-experience__amazon_bedrock_token_usage`), the single file touched (`<space>__<name>.ndjson`), that this is a whole-file Kibana export imported by CI's saved-objects import job (not a production change), and the rollback (revert the MR). NEVER paste the NDJSON body.
+Use `knowledge/reference/mr-template.md` headings. Category: `dashboard`. Risk: MEDIUM. State the resolved change (`eu-b2b: add dashboard developer-experience__amazon_bedrock_token_usage`), the single file touched (`<space>__<name>.ndjson`), that this is a whole-file Kibana export imported by CI's saved-objects import job (not a production change), and the rollback (revert the MR). NEVER paste the NDJSON body.

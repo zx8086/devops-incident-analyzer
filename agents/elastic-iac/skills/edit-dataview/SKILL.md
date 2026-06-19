@@ -51,4 +51,4 @@ ALWAYS write the **config form** (`script_source`). NEVER copy state-form (`scri
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `dataview`. Risk: LOW. State the resolved change (`logs: add runtime field service`), the single file touched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `dataview`. Risk: LOW. State the resolved change (`logs: add runtime field service`), the single file touched, and the rollback (revert the MR).

@@ -673,7 +673,12 @@ describe("buildFleetMemorySummary", () => {
 		});
 		expect(buildFleetMemorySummary(withZero).join(" ")).not.toContain("non-upgradeable");
 
-		const bare = stateWith({ intent: "fleet-upgrade", targetDeployment: "", fleetUpgradeReport: null, fleetUpgradeResult: null });
+		const bare = stateWith({
+			intent: "fleet-upgrade",
+			targetDeployment: "",
+			fleetUpgradeReport: null,
+			fleetUpgradeResult: null,
+		});
 		// Never throws; at minimum carries the intent tag.
 		expect(buildFleetMemorySummary(bare)).toContain("intent=fleet-upgrade");
 	});
@@ -685,7 +690,13 @@ describe("buildFleetFactDecision / buildFleetFactRationale", () => {
 			targetDeployment: "eu-cld",
 			fleetUpgradeReport: report({ targetVersion: "9.4.2" }),
 		});
-		const result: FleetUpgradeResult = { status: "applied", pipelineId: 2610021206, acked: 16, created: 16, failedSilent: 0 };
+		const result: FleetUpgradeResult = {
+			status: "applied",
+			pipelineId: 2610021206,
+			acked: 16,
+			created: 16,
+			failedSilent: 0,
+		};
 		expect(buildFleetFactDecision(s, result)).toBe("Fleet agents on eu-cld upgraded to 9.4.2.");
 		const rationale = buildFleetFactRationale(s, result);
 		expect(rationale).toContain("upgradeable");

@@ -36,7 +36,7 @@ stacks/<cluster>/ilm.tf            # ILM policies
 modules/elastic-cloud-deployment/  # shared module
 ```
 
-The MR-template category for this skill is `tier-resize`. See `knowledge/mr-template.md`.
+The MR-template category for this skill is `tier-resize`. See `knowledge/reference/mr-template.md`.
 
 ## Build the diff — autoscaling-aware
 
@@ -56,7 +56,7 @@ When a tier needs temporary capacity during an incident (e.g. ILM phase-shift ca
 
 ## Open the MR
 
-Use the `open-mr` skill. Title format from `knowledge/mr-template.md`: `[<cluster>] <tier> tier: <up|down>size — <old>GB → <new>GB`. Body is built from `mr-template.md` with:
+Use the `open-mr` skill. Title format from `knowledge/reference/mr-template.md`: `[<cluster>] <tier> tier: <up|down>size — <old>GB → <new>GB`. Body is built from `mr-template.md` with:
 
 - **Category**: `tier-resize`
 - **Risk**: MEDIUM by default; **HIGH** for hot-tier downsize, any prod cold tier change, or any change to coord on us-cld (cluster-shape-dependent — see IR-114).

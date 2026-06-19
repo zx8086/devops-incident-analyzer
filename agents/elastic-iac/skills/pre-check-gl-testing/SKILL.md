@@ -1,9 +1,9 @@
 ---
 name: pre-check-gl-testing
-description: Run any stack module change through the gl-testing single-node sandbox first. Mandatory for tier-resize, ccs-ccr, ilm, integration, kibana-config categories per knowledge/mr-template.md.
+description: Run any stack module change through the gl-testing single-node sandbox first. Mandatory for tier-resize, ccs-ccr, ilm, integration, kibana-config categories per knowledge/reference/mr-template.md.
 inputs:
   branch: { type: string, required: true }
-  mr_category: { type: string, required: true }   # see knowledge/mr-template.md
+  mr_category: { type: string, required: true }   # see knowledge/reference/mr-template.md
 outputs:
   plan_pipeline_url: { type: string }
   apply_pipeline_url: { type: string }
@@ -12,7 +12,7 @@ outputs:
 
 # gl-testing pre-check
 
-Source of truth: `knowledge/mr-template.md` ("Tested in gl-testing first?" section), `knowledge/playbook/9-validation-checklists.md` §9.3.
+Source of truth: `knowledge/reference/mr-template.md` ("Tested in gl-testing first?" section), `knowledge/playbook/9-validation-checklists.md` §9.3.
 
 ## When this is mandatory (from mr-template.md)
 

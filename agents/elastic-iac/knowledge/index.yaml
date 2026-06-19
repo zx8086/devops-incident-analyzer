@@ -1,0 +1,43 @@
+name: pvh-elastic-iac-knowledge
+description: Domain knowledge for the elastic-iac change agent (cluster facts, repo map, conventions, runbooks, specs, cost plans, playbook)
+version: 0.1.0
+
+# SIO-953: explicit Knowledge Tree. Replaces GAP auto-discovery from the
+# manifest `knowledge:` list. When index.yaml exists, loadKnowledge() loads ONLY
+# the categories below (manifest paths are ignored), and each category loads the
+# *.md files DIRECTLY under its `path` (subdirectories are not recursed).
+#
+# The `reference` category holds the foundational facts that used to sit loose at
+# the knowledge/ root (repo map, conventions/gotchas, cluster inventory, stack
+# modules, MR template, operating guide). They were moved into reference/ so the
+# root holds only category directories and the human-only `_INDEX.md` inventory
+# is not loaded into the prompt.
+#
+# No runbook_selection: that wires incident-analyzer's selectRunbooks node, which
+# the IaC graph (buildIacGraph) does not have. The runbooks here are eu-cld
+# incident references, loaded as plain knowledge.
+categories:
+  reference:
+    path: reference/
+    description: Foundational facts -- repo map, conventions/gotchas, cluster inventory, stack modules, MR template, operating guide
+  issues:
+    path: issues/
+    description: Per-cluster issue register entries
+  runbooks:
+    path: runbooks/
+    description: eu-cld incident runbooks (reference; loaded as plain knowledge)
+  specs:
+    path: specs/
+    description: Change specifications
+  cost-plans:
+    path: cost-plans/
+    description: Cost analysis and right-sizing plans
+  playbook:
+    path: playbook/
+    description: Operational playbook chapters
+  health-snapshots:
+    path: health-snapshots/
+    description: Point-in-time cluster health snapshots
+  _archive:
+    path: _archive/
+    description: Archived knowledge retained for traceability (matches prior manifest auto-discovery)

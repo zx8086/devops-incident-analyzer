@@ -51,4 +51,4 @@ Source of truth: `environments/<cluster>/security/security.json` -- ONE aggregat
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `security`. Risk: HIGH (note escalation if cluster/superuser). State the resolved grant (`developer: +cluster[monitor], +indices(logs-*)[read]`), the single file touched, that role_mappings + api_keys are untouched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `security`. Risk: HIGH (note escalation if cluster/superuser). State the resolved grant (`developer: +cluster[monitor], +indices(logs-*)[read]`), the single file touched, that role_mappings + api_keys are untouched, and the rollback (revert the MR).

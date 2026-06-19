@@ -37,4 +37,4 @@ The file basename is the part before `.json` and WITHOUT the `@custom` suffix (e
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `cluster-defaults`. Risk: LOW (MEDIUM when lowering). State the resolved change (`logs@custom: total_shards_per_node 2 -> 3`), the single file touched, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `cluster-defaults`. Risk: LOW (MEDIUM when lowering). State the resolved change (`logs@custom: total_shards_per_node 2 -> 3`), the single file touched, and the rollback (revert the MR).

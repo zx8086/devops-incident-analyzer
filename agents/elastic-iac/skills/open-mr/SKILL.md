@@ -22,14 +22,14 @@ outputs:
 
 ## Action
 
-Body template lives in `knowledge/mr-template.md` — load and fill per the category-driven rules there.
+Body template lives in `knowledge/reference/mr-template.md` — load and fill per the category-driven rules there.
 
 Call `gitlab_create_merge_request` with:
 
 - source: `<branch>`
 - target: `main`
 - title: `<title>`
-- description: `<body>` (built from `knowledge/mr-template.md`) + auto-appended footer:
+- description: `<body>` (built from `knowledge/reference/mr-template.md`) + auto-appended footer:
 
 ```
 ---

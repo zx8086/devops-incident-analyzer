@@ -63,4 +63,4 @@ Source of truth: `environments/_deployments/<cluster>.json` -- the per-deploymen
 
 ## MR body
 
-Use `knowledge/mr-template.md` headings. Category: `deployment-topology`. Risk: HIGH (lead with the login-lockout line when SSO is touched). State the resolved change (`eu-b2b: autoscale on; hot.zone_count 2 -> 3`, or `eu-onboarding: kibana.user_settings_yaml updated (SSO; value withheld)`), the single file touched, that this is a shared-state file with a long apply, and the rollback (revert the MR).
+Use `knowledge/reference/mr-template.md` headings. Category: `deployment-topology`. Risk: HIGH (lead with the login-lockout line when SSO is touched). State the resolved change (`eu-b2b: autoscale on; hot.zone_count 2 -> 3`, or `eu-onboarding: kibana.user_settings_yaml updated (SSO; value withheld)`), the single file touched, that this is a shared-state file with a long apply, and the rollback (revert the MR).
