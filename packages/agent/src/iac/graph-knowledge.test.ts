@@ -111,6 +111,39 @@ describe("graphEnrichIac", () => {
 		const result = await graphEnrichIac(iacState());
 		expect(result).toEqual({});
 	});
+
+	// SIO-969: the latest prior change to the targeted (deployment, stack) cell is exposed
+	// structurally so reviewPlan can raise a "previous attempt failed" risk.
+	test("exposes lastStackInstanceOutcome from the most-recent stack-instance change", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		// reader returns most-recent-first; [0] is the latest attempt
+		store.stub("TARGETS", [
+			{
+				id: "c2",
+				workflow: "ilm-rollout",
+				summary: "warm 30d",
+				outcome: "failed",
+				mrUrl: "u2",
+				createdAt: "2026-06-18",
+			},
+			{
+				id: "c1",
+				workflow: "ilm-rollout",
+				summary: "warm 14d",
+				outcome: "applied",
+				mrUrl: "u1",
+				createdAt: "2026-06-10",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		// proposedFiles must hit the environments/<dep>/<stack>/ layout so stackFromPaths resolves
+		// a stack-instance id and changeHistoryForStackInstance (the TARGETS reader) runs.
+		const result = await graphEnrichIac(
+			iacState({ proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"] }),
+		);
+		expect(result.lastStackInstanceOutcome).toEqual({ outcome: "failed", mrUrl: "u2", summary: "warm 30d" });
+	});
 });
 
 // SIO-965: pipeline + terminal-outcome writer node.

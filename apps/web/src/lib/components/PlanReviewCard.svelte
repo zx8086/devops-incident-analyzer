@@ -1,6 +1,7 @@
 <script lang="ts">
 // apps/web/src/lib/components/PlanReviewCard.svelte
 import type { IacPlanReviewPrompt } from "$lib/stores/agent-reducer.ts";
+import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
 let {
 	prompt,
@@ -50,6 +51,18 @@ const planLabel = "How this applies";
             {/each}
           </ul>
         </div>
+      {/if}
+
+      <!-- SIO-969: knowledge-graph history for this deployment/stack -- prior changes with
+           their pass/fail outcome + blast radius, so the reviewer sees whether a similar
+           change applied or failed last time before approving. -->
+      {#if review.recentChanges}
+        <details class="mt-2" open>
+          <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Recent changes (knowledge graph)</summary>
+          <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+            <MarkdownRenderer content={review.recentChanges} />
+          </div>
+        </details>
       {/if}
 
       <details class="mt-2" open>

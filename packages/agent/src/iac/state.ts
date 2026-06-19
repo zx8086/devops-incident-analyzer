@@ -504,6 +504,14 @@ export const IacState = Annotation.Root({
 	// history), produced by graphEnrichIac and surfaced in the plan-review payload. Empty
 	// when KNOWLEDGE_GRAPH_ENABLED is off or the deployment has no recorded history.
 	iacGraphContext: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-969: the most-recent prior change's outcome for the targeted (deployment, stack)
+	// cell, from the knowledge graph. Lets reviewPlan raise a HIGH risk when the last
+	// attempt on this exact stack-instance FAILED. undefined when the graph is off/empty or
+	// the stack can't be resolved from the proposed paths.
+	lastStackInstanceOutcome: Annotation<{ outcome: string; mrUrl: string; summary: string } | undefined>({
+		reducer: last,
+		default: () => undefined,
+	}),
 });
 
 export type IacStateType = typeof IacState.State;

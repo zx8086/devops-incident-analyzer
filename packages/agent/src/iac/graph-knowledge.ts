@@ -129,8 +129,16 @@ export async function graphEnrichIac(state: IacStateType): Promise<Partial<IacSt
 		const stackInstanceChanges = siId ? await changeHistoryForStackInstance(store, siId) : [];
 		const otherDeployments = stack ? (await deploymentsRunningStack(store, stack)).filter((d) => d !== deployment) : [];
 		const alsoRunningStack = otherDeployments.length > 0 ? { stack, deployments: otherDeployments } : undefined;
+		// SIO-969: the latest prior change to this exact (deployment, stack) cell. The reader
+		// returns most-recent-first, so [0] is the last attempt; reviewPlan raises a HIGH risk
+		// when its outcome is "failed".
+		const latest = stackInstanceChanges[0];
+		const lastStackInstanceOutcome = latest
+			? { outcome: latest.outcome, mrUrl: latest.mrUrl, summary: latest.summary }
+			: undefined;
 		return {
 			iacGraphContext: buildIacGraphContext(deployment, changes, { stackInstanceChanges, alsoRunningStack }),
+			lastStackInstanceOutcome,
 		};
 	} catch (error) {
 		logger.warn(

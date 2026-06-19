@@ -706,6 +706,38 @@ describe("reviewPlan — multi-file ilm (SIO-932)", () => {
 		expect(result.planReview?.title).toContain("2 ILM policies");
 		expect(result.planReview?.title).toContain("warm");
 	});
+
+	// SIO-969: a failed prior attempt on the same stack-instance surfaces as a HIGH risk (first).
+	test("raises a HIGH 'previous change FAILED' risk when the graph says the last attempt failed", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		const state = {
+			iacRequest: { workflow: "ilm-rollout" as const, isProd: false, cluster: "eu-b2b" },
+			branch: "agent/eu-b2b-metrics-ilm-rollout-20260619",
+			proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"],
+			proposedDiff: "diff",
+			precheckPassed: true,
+			lastStackInstanceOutcome: { outcome: "failed", mrUrl: "https://gitlab/mr/7", summary: "warm 30d" },
+		};
+		const result = await reviewPlan(asIacState(state));
+		const risks = result.planReview?.risks ?? [];
+		expect(risks[0]).toContain("previous change to this stack FAILED");
+		expect(risks[0]).toContain("https://gitlab/mr/7");
+	});
+
+	test("no graph risk when the last attempt did not fail", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		const state = {
+			iacRequest: { workflow: "ilm-rollout" as const, isProd: false, cluster: "eu-b2b" },
+			branch: "agent/eu-b2b-metrics-ilm-rollout-20260619",
+			proposedFiles: ["environments/eu-b2b/lifecycle-policies/metrics.json"],
+			proposedDiff: "diff",
+			precheckPassed: true,
+			lastStackInstanceOutcome: { outcome: "applied", mrUrl: "https://gitlab/mr/6", summary: "warm 14d" },
+		};
+		const result = await reviewPlan(asIacState(state));
+		const risks = result.planReview?.risks ?? [];
+		expect(risks.some((r) => r.includes("previous change to this stack FAILED"))).toBe(false);
+	});
 });
 
 describe("reviewPlan — ilm-rollout", () => {
