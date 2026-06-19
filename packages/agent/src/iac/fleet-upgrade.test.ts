@@ -122,7 +122,7 @@ describe("parseFleetApplyOutcome", () => {
 			action_id: "abc-123",
 			apply: { poll_status: "COMPLETE", acked: 120, created: 128, failed_silent: 2 },
 		});
-		expect(parseFleetApplyOutcome(raw)).toEqual({
+		expect(parseFleetApplyOutcome(raw)).toMatchObject({
 			actionId: "abc-123",
 			pollStatus: "COMPLETE",
 			acked: 120,
@@ -133,13 +133,60 @@ describe("parseFleetApplyOutcome", () => {
 
 	test("a preview report (no apply block) yields zeros", () => {
 		const raw = JSON.stringify({ mode: "preview", action_id: null });
-		expect(parseFleetApplyOutcome(raw)).toEqual({
+		expect(parseFleetApplyOutcome(raw)).toMatchObject({
 			actionId: "",
 			pollStatus: "",
 			acked: 0,
 			created: 0,
 			failedSilent: 0,
+			succeeded: 0,
+			failed: 0,
+			rolledBack: 0,
+			unsettled: 0,
+			failedAgents: [],
 		});
+	});
+
+	// SIO-961: the real us-cld result -- the apply block carries the full breakdown
+	// (succeeded/failed/rolled_back/unsettled) + per-agent failures. parseFleetApplyOutcome
+	// must capture them, not just acked/created/failed_silent.
+	test("captures the full count breakdown + per-agent failures (SIO-961)", () => {
+		const raw = JSON.stringify({
+			mode: "apply",
+			action_id: "e67a5d4f-0a56-49d2-9cbd-baf72435da30",
+			apply: {
+				poll_status: "ROLLOUT_PASSED",
+				acked: 7,
+				created: 75,
+				succeeded: 0,
+				failed: 3,
+				rolled_back: 3,
+				in_progress: 69,
+				unsettled: 69,
+				failed_silent: 3,
+				failed_agents: [
+					{ hostname: "BWO-DT23-SHPT07", agent_id: "a508", failed_state: "UPG_DOWNLOADING", error: "binary not found" },
+					{
+						hostname: "mn1prdnetskope2",
+						agent_id: "5c99",
+						failed_state: "UPG_DOWNLOADING",
+						error: "insufficient disk space",
+					},
+				],
+			},
+		});
+		const out = parseFleetApplyOutcome(raw);
+		expect(out).toMatchObject({
+			actionId: "e67a5d4f-0a56-49d2-9cbd-baf72435da30",
+			pollStatus: "ROLLOUT_PASSED",
+			succeeded: 0,
+			failed: 3,
+			rolledBack: 3,
+			unsettled: 69,
+			failedSilent: 3,
+		});
+		expect(out.failedAgents).toHaveLength(2);
+		expect(out.failedAgents[0]).toMatchObject({ hostname: "BWO-DT23-SHPT07", error: "binary not found" });
 	});
 });
 
@@ -348,6 +395,36 @@ describe("formatFleetUpgradeSummary", () => {
 		expect(msg.toLowerCase()).toContain("check");
 		// pipeline link preserved for tracking
 		expect(msg).toContain("2605468937");
+	});
+
+	// SIO-961: a deadline/env-failure apply is "partial", NOT "failed". The summary must lead with
+	// the in-flight/pending majority, name the few agent-side failures, and offer the action re-check.
+	test("partial -> reads as partial/in-progress with the breakdown, not a flat 'failed'", () => {
+		const result: FleetUpgradeResult = {
+			status: "partial",
+			pipelineId: 2614422047,
+			actionId: "e67a5d4f-0a56-49d2-9cbd-baf72435da30",
+			created: 75,
+			succeeded: 0,
+			failed: 3,
+			rolledBack: 3,
+			unsettled: 69,
+			failedSilent: 3,
+			failedAgents: [
+				{ hostname: "BWO-DT23-SHPT07", agentId: "a508", failedState: "UPG_DOWNLOADING", error: "binary not found" },
+			],
+			note:
+				"Partial: 0/75 upgraded, 69 still pending (offline; upgrade when they reconnect), 3 failed, " +
+				"3 rolled back (failed post-upgrade health check). The failures are agent-side (binary download / " +
+				"disk / health check), not a bad upgrade. Re-check with action e67a5d4f-0a56-49d2-9cbd-baf72435da30 (valid ~30d).",
+		};
+		const s = stateWith({ fleetUpgradeReport: report({ deployment: "us-cld" }), fleetUpgradeResult: result });
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).toContain("69 still pending");
+		expect(msg).toContain("agent-side");
+		expect(msg).toContain("e67a5d4f-0a56-49d2-9cbd-baf72435da30"); // re-check action id
+		// must NOT present as a flat failure
+		expect(msg).not.toMatch(/Fleet upgrade failed:/);
 	});
 });
 

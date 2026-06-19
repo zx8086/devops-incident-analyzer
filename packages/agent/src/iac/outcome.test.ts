@@ -51,6 +51,14 @@ describe("iacTurnOutcome (SIO-930)", () => {
 		expect(iacTurnOutcome(s({ pipelineStatus: "failed" }))).toBe("pipeline-failed");
 	});
 
+	// SIO-961: a partial fleet apply rides on a CI job that exited 1 (pipelineStatus "failed"), but
+	// the upgrade is in-progress with only agent-side failures -- the chip must NOT read pipeline-failed.
+	test("partial fleet apply is NOT pipeline-failed even though the CI pipeline failed", () => {
+		expect(iacTurnOutcome(s({ pipelineStatus: "failed", fleetUpgradeResult: { status: "partial" } as never }))).toBe(
+			"completed",
+		);
+	});
+
 	test("completed by default (MR opened / info answered / converse)", () => {
 		expect(iacTurnOutcome(s({ mrUrl: "https://gitlab/mr/1", pipelineStatus: "success" }))).toBe("completed");
 		expect(iacTurnOutcome(s({}))).toBe("completed");

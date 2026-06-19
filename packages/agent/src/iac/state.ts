@@ -346,7 +346,11 @@ export interface FleetUpgradeReport {
 // failedSilent is the verify-sweep UPG_FAILED count (Fleet action_status undercounts -- the
 // 2026-05-17 ground truth); it leads the report.
 export interface FleetUpgradeResult {
-	status: "applied" | "dispatched" | "skipped" | "blocked" | "failed";
+	// SIO-961: "partial" = the rollout reached its deadline / the job exited non-zero, but
+	// the failures are agent/env-side (download, disk, health-check rollback) and most agents
+	// are unsettled-offline (will upgrade when they reconnect). Distinct from "failed", which
+	// is a genuine pipeline/infra failure (state lock, plan error) where nothing was applied.
+	status: "applied" | "partial" | "dispatched" | "skipped" | "blocked" | "failed";
 	pipelineId?: number | null;
 	// SIO-924: the apply pipeline's GitLab web_url, so the UI can render a clickable link to the
 	// live bulk_upgrade run (parity with how config edits surface the MR link).
@@ -357,6 +361,12 @@ export interface FleetUpgradeResult {
 	acked?: number;
 	created?: number;
 	failedSilent?: number;
+	// SIO-961: full per-agent breakdown so the summary reports a partial outcome honestly.
+	succeeded?: number;
+	failed?: number;
+	rolledBack?: number;
+	unsettled?: number;
+	failedAgents?: { hostname: string; agentId: string; failedState: string; error: string }[];
 	note?: string;
 }
 
