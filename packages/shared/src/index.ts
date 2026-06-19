@@ -12,6 +12,7 @@ export {
 	AgentMemoryConfigSchema,
 	type AgentMemoryHealth,
 	type AgentMemoryUserRef,
+	type AnnotationMap,
 	type ChatMessageBlock,
 	createFetchAgentMemoryClient,
 	type MemoryHit,

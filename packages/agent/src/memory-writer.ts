@@ -14,7 +14,13 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getLogger } from "@devops-agent/observability";
 import { createHashChainDestination, redactPiiContent } from "@devops-agent/shared";
-import { dailyLogTtlSeconds, enqueueFact, enqueueMessage, selectedBackend } from "./memory-backend.ts";
+import {
+	dailyLogTtlSeconds,
+	enqueueFact,
+	enqueueMessage,
+	selectedBackend,
+	setSessionDatasources,
+} from "./memory-backend.ts";
 import { getAgentsDir } from "./paths.ts";
 
 const logger = getLogger("agent:memory-writer");
@@ -84,6 +90,9 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 	// block with a short TTL (it decays). Redaction runs before the block leaves
 	// the process. Enqueue is fire-and-forget; the lifecycle teardown drains it.
 	if (selectedBackend() === "agent-memory") {
+		// SIO-952: label the conversation with the datasources it spans (set once
+		// per session at first write; the backend merges into ensureSession).
+		if (entry.datasources.length > 0) setSessionDatasources(entry.datasources.join(", "));
 		const services = entry.services.length > 0 ? entry.services.join(", ") : "none";
 		const summary = entry.summary ? redactPiiContent(entry.summary) : "";
 		const assistant = [

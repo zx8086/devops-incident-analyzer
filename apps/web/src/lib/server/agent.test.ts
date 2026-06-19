@@ -82,6 +82,9 @@ mock.module("@devops-agent/agent", () => ({
 	runTeardown: mock(() => Promise.resolve([])),
 	// SIO-942: agent.ts imports + re-exports runPostTurn (per-turn live-memory flush).
 	runPostTurn: mock(() => Promise.resolve()),
+	// SIO-952: agent.ts imports + re-exports setSessionOutcome (stamps the turn
+	// outcome onto the Agent Memory session at conversation-close).
+	setSessionOutcome: mock(() => undefined),
 	// SIO-862: agent.ts calls these at module load (installMemoryPromotion/installGraphWarmer
 	// register lifecycle seams). The mock must export them or the namespace import throws.
 	installMemoryPromotion: mock(() => undefined),

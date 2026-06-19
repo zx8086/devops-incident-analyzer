@@ -427,7 +427,40 @@ function createAgentStore() {
 		}
 	}
 
+	// SIO-952: a session = one conversation. End the prior conversation's Agent
+	// Memory session deterministically (so end_time gets set) whenever the user
+	// starts a new conversation or leaves the page. Uses sendBeacon so it survives
+	// page unload; no-ops when there is no live thread. The server endpoint and
+	// runTeardown are best-effort, so a dropped beacon only loses the explicit
+	// trigger -- the server idle-TTL sweep is the backstop.
+	function teardownSession(tid: string, agentName: AgentId): void {
+		if (!tid) return;
+		const body = JSON.stringify({ threadId: tid, agentName });
+		try {
+			if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+				navigator.sendBeacon("/api/agent/session/teardown", new Blob([body], { type: "application/json" }));
+				return;
+			}
+		} catch {
+			// fall through to fetch
+		}
+		// keepalive lets the request outlive the page in browsers without sendBeacon.
+		void fetch("/api/agent/session/teardown", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+			keepalive: true,
+		}).catch(() => {});
+	}
+
+	// SIO-952: public seam for the page's unload/visibility listeners.
+	function endCurrentSession(): void {
+		teardownSession(threadId, currentAgent);
+	}
+
 	function clearChat() {
+		// End the conversation we are leaving before its thread id is cleared.
+		teardownSession(threadId, currentAgent);
 		messages = [];
 		threadId = "";
 		currentContent = "";
@@ -459,6 +492,11 @@ function createAgentStore() {
 	// starts a fresh conversation (each agent has its own graph + checkpointer).
 	function switchAgent(agent: AgentId) {
 		if (agent === currentAgent || isStreaming) return;
+		// SIO-952: end the outgoing agent's conversation with ITS name before we
+		// flip currentAgent (clearChat tears down with currentAgent; flipping first
+		// would attribute the teardown to the wrong agent/user).
+		teardownSession(threadId, currentAgent);
+		threadId = "";
 		currentAgent = agent;
 		clearChat();
 	}
@@ -718,6 +756,7 @@ function createAgentStore() {
 		loadDataSources,
 		stopHealthPolling,
 		clearChat,
+		endCurrentSession,
 		resolveTopicShift,
 		switchAgent,
 		resolveIacPlanReview,

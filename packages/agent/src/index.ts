@@ -46,6 +46,7 @@ export {
 	type LiveMemoryBackend,
 	resolveUserId,
 	selectedBackend,
+	setSessionOutcome,
 } from "./memory-backend.ts";
 export {
 	flushMemoryProposals,

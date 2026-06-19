@@ -39,11 +39,18 @@ export interface ChatMessageBlock {
 	assistant_content: string;
 }
 
+// String-valued key/value labels for annotation-based filtering and access
+// control (the service types annotations/metadata as free-form objects; we
+// constrain to flat string maps so they stay queryable and PII-safe).
+export type AnnotationMap = Record<string, string>;
+
 // Per-write options. createdAt feeds the service's timestamp-based conflict
 // resolution (the original data-creation time, distinct from ingestion time).
+// SIO-952: annotations label the block (e.g. { intent, kind }) for recall.
 export interface AddOptions {
 	ttlSeconds?: number;
 	createdAt?: string;
+	annotations?: AnnotationMap;
 }
 
 // A semantic-search hit: the recalled text plus the service's relevance score
@@ -62,8 +69,14 @@ export interface AgentMemoryHealth {
 
 export interface AgentMemoryClient {
 	// create-if-missing; swallows 409 conflict so callers can call freely.
-	ensureUser(userId: string, name: string): Promise<void>;
-	ensureSession(userId: string, sessionId: string): Promise<void>;
+	// SIO-952: metadata stamps which agent owns the user (e.g. { agent, role }).
+	ensureUser(userId: string, name: string, metadata?: AnnotationMap): Promise<void>;
+	// SIO-952: annotations/metadata label the conversation (e.g. { agent, datasources }).
+	ensureSession(
+		userId: string,
+		sessionId: string,
+		opts?: { annotations?: AnnotationMap; metadata?: AnnotationMap },
+	): Promise<void>;
 	addFacts(ref: AgentMemoryUserRef, facts: string[], opts?: AddOptions): Promise<void>;
 	addMessages(ref: AgentMemoryUserRef, messages: ChatMessageBlock[], opts?: AddOptions): Promise<void>;
 	// Semantic search; returns ready blocks ranked by rel_score (processing/failed
@@ -73,6 +86,11 @@ export interface AgentMemoryClient {
 		query: string,
 		opts?: { allSessions?: boolean; relevantK?: number; minScore?: number },
 	): Promise<MemoryHit[]>;
+	// SIO-952: stamp final annotations/metadata on the session (e.g. { outcome }).
+	updateSession(
+		ref: AgentMemoryUserRef,
+		patch: { annotations?: AnnotationMap; metadata?: AnnotationMap },
+	): Promise<void>;
 	endSession(ref: AgentMemoryUserRef): Promise<void>;
 	// Readiness probe (GET /health). Never throws; returns ok:false on any failure.
 	checkHealth(): Promise<AgentMemoryHealth>;
@@ -141,17 +159,21 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 	const memoryPath = (ref: AgentMemoryUserRef) => `/users/${enc(ref.userId)}/sessions/${enc(ref.sessionId)}/memory`;
 
 	return {
-		async ensureUser(userId, name) {
+		async ensureUser(userId, name, metadata) {
 			try {
-				await amFetch(config, "POST", "/users", { user_id: userId, name });
+				await amFetch(config, "POST", "/users", { user_id: userId, name, metadata: metadata ?? null });
 			} catch (error) {
 				if (!(error instanceof ConflictError)) throw error;
 			}
 		},
 
-		async ensureSession(userId, sessionId) {
+		async ensureSession(userId, sessionId, opts) {
 			try {
-				await amFetch(config, "POST", `/users/${enc(userId)}/sessions`, { session_id: sessionId });
+				await amFetch(config, "POST", `/users/${enc(userId)}/sessions`, {
+					session_id: sessionId,
+					annotations: opts?.annotations ?? null,
+					metadata: opts?.metadata ?? null,
+				});
 			} catch (error) {
 				if (!(error instanceof ConflictError)) throw error;
 			}
@@ -161,6 +183,7 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 			if (facts.length === 0) return;
 			await amFetch(config, "POST", memoryPath(ref), {
 				facts,
+				annotations: opts?.annotations ?? null,
 				memory_block_ttl: opts?.ttlSeconds ?? null,
 				created_at: opts?.createdAt ?? null,
 				async_processing: asyncProcessing,
@@ -171,6 +194,7 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 			if (messages.length === 0) return;
 			await amFetch(config, "POST", memoryPath(ref), {
 				messages,
+				annotations: opts?.annotations ?? null,
 				memory_block_ttl: opts?.ttlSeconds ?? null,
 				created_at: opts?.createdAt ?? null,
 				async_processing: asyncProcessing,
@@ -192,8 +216,16 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 				.filter((h) => h.text.length > 0 && (minScore === undefined || (h.score ?? 0) >= minScore));
 		},
 
+		async updateSession(ref, patch) {
+			await amFetch(config, "PUT", `/users/${enc(ref.userId)}/sessions/${enc(ref.sessionId)}`, {
+				annotations: patch.annotations ?? null,
+				metadata: patch.metadata ?? null,
+			});
+		},
+
 		async endSession(ref) {
-			await amFetch(config, "POST", `${memoryPath(ref)}/end`);
+			// SIO-952: the end endpoint is on the session, not nested under /memory.
+			await amFetch(config, "POST", `/users/${enc(ref.userId)}/sessions/${enc(ref.sessionId)}/end`);
 		},
 
 		async checkHealth() {

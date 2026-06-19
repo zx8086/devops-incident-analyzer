@@ -16,6 +16,7 @@ import {
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
+	setSessionOutcome,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
@@ -78,7 +79,48 @@ function resolveCheckpointerType(): "memory" | "sqlite" {
 // from MCP-server process bootstrap (createMcpApplication) which is per-process.
 const bootstrappedThreads = new Set<string>();
 
+// SIO-952: a session = one conversation (long-lived across turns). HTTP has no
+// reliable conversation-end signal, so beyond the explicit teardown endpoint
+// (frontend beacon) we run an idle-TTL sweep: each thread records its last
+// activity; a periodic sweep ends sessions idle past the TTL so end_time is set
+// even when the unload beacon is dropped. Backstop, not the primary trigger.
+const lastActivityAt = new Map<string, { at: number; agentName: string }>();
+const sessionLog = getLogger("agent:session-lifecycle");
+
+const DEFAULT_IDLE_TTL_S = 1800;
+function idleTtlMs(): number {
+	const raw = process.env.AGENT_MEMORY_SESSION_IDLE_TTL_SECONDS;
+	const n = raw ? Number(raw) : Number.NaN;
+	return (Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_IDLE_TTL_S) * 1000;
+}
+
+// Touch a thread's activity clock. Called at bootstrap and after every turn so
+// the idle sweep measures silence since the last turn, not since session start.
+export function touchSession(threadId: string, agentName = "incident-analyzer"): void {
+	lastActivityAt.set(threadId, { at: Date.now(), agentName });
+	ensureIdleSweep();
+}
+
+let idleSweepTimer: ReturnType<typeof setInterval> | null = null;
+function ensureIdleSweep(): void {
+	if (idleSweepTimer) return;
+	// Sweep at most once per minute; unref so the timer never keeps the process
+	// alive on its own.
+	idleSweepTimer = setInterval(() => void sweepIdleSessions(), 60_000);
+	(idleSweepTimer as { unref?: () => void }).unref?.();
+}
+
+async function sweepIdleSessions(): Promise<void> {
+	const cutoff = Date.now() - idleTtlMs();
+	for (const [threadId, info] of [...lastActivityAt]) {
+		if (info.at > cutoff) continue;
+		sessionLog.info({ threadId }, "ending idle agent session (idle-TTL sweep)");
+		await sessionTeardown(threadId, info.agentName);
+	}
+}
+
 async function sessionBootstrap(threadId: string, agentName: string, firstUserQuery?: string): Promise<void> {
+	touchSession(threadId, agentName);
 	if (bootstrappedThreads.has(threadId)) return;
 	bootstrappedThreads.add(threadId);
 	try {
@@ -92,10 +134,12 @@ async function sessionBootstrap(threadId: string, agentName: string, firstUserQu
 }
 
 // SIO-846: explicit session-end seam. Called by the teardown endpoint (on
-// "end session"/beforeunload) and the idle-TTL sweep. Clears the run-once guard
-// so a future turn on the same threadId re-bootstraps.
+// "end session"/beforeunload) and the idle-TTL sweep (SIO-952). Clears the
+// run-once guard so a future turn on the same threadId re-bootstraps, and drops
+// the activity clock so the sweep does not re-end an already-ended session.
 export async function sessionTeardown(threadId: string, agentName = "incident-analyzer"): Promise<void> {
 	bootstrappedThreads.delete(threadId);
+	lastActivityAt.delete(threadId);
 	try {
 		await runTeardown({ threadId, agentName });
 	} catch {
@@ -359,7 +403,11 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 // SIO-942: re-export the post-turn live-memory flush so the completion routes
 // import it from the same module as pruneThreadState (they run side by side after
 // every turn). Best-effort; no-op unless the agent-memory backend is selected.
-export { runPostTurn };
+// SIO-952: re-export the session-outcome setter so completion routes can stamp
+// the turn outcome onto the Agent Memory session (last-wins; applied at
+// conversation-close via updateSession). No-op unless the agent-memory backend
+// is selected.
+export { runPostTurn, setSessionOutcome };
 
 // SIO-751: after a stream completes, check whether the graph paused on an
 // interrupt rather than finishing. If so, return the interrupt payload so the
