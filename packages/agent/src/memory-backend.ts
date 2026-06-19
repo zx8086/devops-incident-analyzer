@@ -248,6 +248,53 @@ export async function recallAgentMemory(
 	}
 }
 
+// SIO-959: a dispatched fleet upgrade recovered from durable memory across sessions.
+export interface InFlightFleetUpgrade {
+	deployment?: string;
+	version?: string;
+	pipelineId?: number;
+	text: string;
+}
+
+// SIO-959: recover fleet upgrades the agent dispatched in ANY past session that are
+// still in flight, so a new conversation can re-poll them ("how's the us-cld upgrade
+// going?") and surface them at session start. Reads the structured annotations
+// (kind=fleet-upgrade-dispatched) the teardown writer stamped -- no prose parsing.
+// Best-effort: agent-memory backend only; returns [] on any failure or when disabled.
+export async function recallInFlightFleetUpgrades(agentName: string): Promise<InFlightFleetUpgrade[]> {
+	if (selectedBackend() !== "agent-memory") return [];
+	const userId = resolveUserId(agentName);
+	// allSessions search needs a session ref; bind a transient one (any session id
+	// works -- the filter spans all sessions for the user).
+	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	try {
+		const c = client();
+		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
+		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		const hits = await c.searchMemory(ref, "in-flight fleet upgrades", {
+			allSessions: true,
+			relevantK: 8,
+			annotations: { kind: "fleet-upgrade-dispatched" },
+		});
+		return hits.map((h) => {
+			const a = h.annotations ?? {};
+			const pid = a.pipeline_id ? Number(a.pipeline_id) : undefined;
+			return {
+				deployment: a.deployment,
+				version: a.version,
+				pipelineId: Number.isFinite(pid) ? pid : undefined,
+				text: h.text,
+			};
+		});
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"agent-memory in-flight fleet recall failed",
+		);
+		return [];
+	}
+}
+
 // Drain + end the session. Called at teardown. SIO-952: stamps the final
 // outcome annotation (best-effort) before closing so the conversation's result
 // is queryable, then POSTs the corrected /sessions/{id}/end endpoint.

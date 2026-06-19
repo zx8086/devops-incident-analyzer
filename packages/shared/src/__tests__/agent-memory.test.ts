@@ -144,11 +144,51 @@ describe("createFetchAgentMemoryClient", () => {
 		});
 		const client = createFetchAgentMemoryClient(CONFIG);
 		const hits = await client.searchMemory(REF, "kafka lag", { allSessions: true, relevantK: 5, minScore: 0.4 });
-		expect(hits).toEqual([
+		expect(hits).toMatchObject([
 			{ text: "strong", score: 0.9 },
 			{ text: "mid", score: 0.5 },
 		]);
 		expect(calls[0]?.body).toMatchObject({ query: "kafka lag", filters: { session_ids: "all", relevant_k: 5 } });
+		restore();
+	});
+
+	// SIO-959: annotation-filtered search -- the filter is sent, and each hit carries
+	// back its annotations so a structured (not prose) lookup can read pipeline_id etc.
+	test("searchMemory sends an annotations filter and returns block annotations per hit", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/elastic-iac/sessions/t-iac/memory/search": {
+				status: 200,
+				body: {
+					count: 1,
+					memory_blocks: [
+						{
+							status: "ready",
+							fact: "Fleet agents on us-cld upgrade DISPATCHED to 9.4.2.",
+							rel_score: 0.8,
+							annotations: {
+								kind: "fleet-upgrade-dispatched",
+								deployment: "us-cld",
+								version: "9.4.2",
+								pipeline_id: "2614422047",
+							},
+						},
+					],
+				},
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const ref = { userId: "elastic-iac", sessionId: "t-iac" };
+		const hits = await client.searchMemory(ref, "in-flight fleet upgrades", {
+			allSessions: true,
+			annotations: { kind: "fleet-upgrade-dispatched" },
+		});
+		// filter reached the request body
+		expect(calls[0]?.body).toMatchObject({
+			filters: { session_ids: "all", annotations: { kind: "fleet-upgrade-dispatched" } },
+		});
+		// annotations come back on the hit
+		expect(hits).toHaveLength(1);
+		expect(hits[0]?.annotations).toMatchObject({ deployment: "us-cld", pipeline_id: "2614422047" });
 		restore();
 	});
 

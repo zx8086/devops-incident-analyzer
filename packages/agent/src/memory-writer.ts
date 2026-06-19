@@ -13,7 +13,7 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getLogger } from "@devops-agent/observability";
-import { createHashChainDestination, redactPiiContent } from "@devops-agent/shared";
+import { type AnnotationMap, createHashChainDestination, redactPiiContent } from "@devops-agent/shared";
 import {
 	dailyLogTtlSeconds,
 	enqueueFact,
@@ -44,6 +44,10 @@ export interface KeyDecision {
 	requestId: string;
 	decision: string;
 	rationale?: string;
+	// SIO-959: structured labels on the durable fact (agent-memory backend) so a
+	// later session can retrieve it by filter -- e.g. a dispatched fleet upgrade
+	// carries { kind, deployment, version, pipeline_id } for cross-session recovery.
+	annotations?: AnnotationMap;
 }
 
 // Base agent dir is overridable for hermetic tests; production callers use the
@@ -159,7 +163,8 @@ export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void
 		const fact = decision.rationale
 			? `${redactPiiContent(decision.decision)} (rationale: ${redactPiiContent(decision.rationale)})`
 			: redactPiiContent(decision.decision);
-		enqueueFact(fact, new Date().toISOString());
+		// SIO-959: forward structured annotations so the fact is retrievable by filter.
+		enqueueFact(fact, new Date().toISOString(), decision.annotations);
 		logger.info({ requestId: decision.requestId, backend: "agent-memory" }, "Recorded key decision");
 		return;
 	}

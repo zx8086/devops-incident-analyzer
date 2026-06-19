@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
+import type { AnnotationMap } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -10,7 +11,7 @@ import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
-import { selectedBackend } from "../memory-backend.ts";
+import { recallInFlightFleetUpgrades, selectedBackend } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
@@ -4238,6 +4239,30 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		return await checkFleetApplyStatus(state, state.fleetApplyPipelineId);
 	}
 
+	// SIO-959: the thread has no fleet pipeline id, but the user may have dispatched
+	// the upgrade in a DIFFERENT conversation ("how's the us-cld upgrade going?" in a
+	// fresh session). A fleet upgrade has no MR, so the MR fallback below can't help.
+	// Recover the dispatched pipeline id from durable memory (structured annotations)
+	// and re-poll THAT pipeline. Prefer the deployment named in the query/state; else
+	// take the sole in-flight upgrade. Best-effort -- no recall -> fall through.
+	{
+		const inFlight = await recallInFlightFleetUpgrades("elastic-iac");
+		const withId = inFlight.filter((u) => u.pipelineId != null);
+		if (withId.length > 0) {
+			const query = lastHumanText(state).toLowerCase();
+			const named = withId.find((u) => u.deployment && query.includes(u.deployment.toLowerCase()));
+			const chosen = named ?? (withId.length === 1 ? withId[0] : undefined);
+			if (chosen?.pipelineId != null) {
+				log.info(
+					{ pipelineId: chosen.pipelineId, deployment: chosen.deployment },
+					"recovered dispatched fleet pipeline from memory for cross-session status check",
+				);
+				const recoveredState = chosen.deployment ? { ...state, targetDeployment: chosen.deployment } : state;
+				return await checkFleetApplyStatus(recoveredState, chosen.pipelineId);
+			}
+		}
+	}
+
 	// SIO-877: when the thread no longer holds the MR (e.g. a follow-up after a page
 	// reload), fall back to the latest OPEN agent MR so "check my MR" still works.
 	let iid = state.mrIid;
@@ -6011,6 +6036,24 @@ export function buildFleetFactRationale(state: IacStateType, result: FleetUpgrad
 	return `${bits.join(", ") || "no breakdown available"}.${pipeline}`;
 }
 
+// SIO-959: structured labels on the durable fleet fact so a later session can
+// retrieve it by filter (recallInFlightFleetUpgrades) instead of parsing prose.
+// kind distinguishes an in-flight ("fleet-upgrade-dispatched", re-pollable) record
+// from a terminal one ("fleet-upgrade-terminal") -- a terminal status-check writes
+// a terminal-kind fact that no longer matches the in-flight filter, superseding the
+// dispatched record so a finished upgrade is never reported as still running.
+export function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
+	const a: AnnotationMap = {
+		kind: result.status === "dispatched" ? "fleet-upgrade-dispatched" : "fleet-upgrade-terminal",
+		status: result.status,
+	};
+	const dep = state.targetDeployment || state.iacRequest?.cluster;
+	if (dep) a.deployment = dep;
+	if (state.fleetUpgradeReport?.targetVersion) a.version = state.fleetUpgradeReport.targetVersion;
+	if (result.pipelineId != null) a.pipeline_id = String(result.pipelineId);
+	return a;
+}
+
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
@@ -6054,6 +6097,8 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 				requestId: state.requestId,
 				decision: buildFleetFactDecision(state, fleetResult),
 				rationale: buildFleetFactRationale(state, fleetResult),
+				// SIO-959: structured labels for cross-session recovery (kind/deployment/pipeline_id).
+				annotations: buildFleetFactAnnotations(state, fleetResult),
 			});
 			// SIO-958: make the durable-write decision visible (terminal vs in-flight).
 			log.info(

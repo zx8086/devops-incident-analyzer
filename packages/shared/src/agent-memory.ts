@@ -56,9 +56,12 @@ export interface AddOptions {
 // A semantic-search hit: the recalled text plus the service's relevance score
 // (rel_score from the FTS KNN ranking). Higher is more relevant; undefined when
 // the result was filter-only (no query).
+// SIO-959: annotations are returned so callers can read structured fields (e.g. a
+// dispatched fleet upgrade's pipeline_id) instead of parsing them out of the text.
 export interface MemoryHit {
 	text: string;
 	score?: number;
+	annotations?: AnnotationMap;
 }
 
 export interface AgentMemoryHealth {
@@ -81,10 +84,13 @@ export interface AgentMemoryClient {
 	addMessages(ref: AgentMemoryUserRef, messages: ChatMessageBlock[], opts?: AddOptions): Promise<void>;
 	// Semantic search; returns ready blocks ranked by rel_score (processing/failed
 	// excluded). minScore drops weak matches; relevantK caps the KNN candidate pool.
+	// SIO-959: `annotations` adds a structured filter (FilterOptions.annotations) so
+	// callers can retrieve, e.g., only in-flight fleet upgrades. `query` may be empty
+	// for a pure filter-driven lookup.
 	searchMemory(
 		ref: AgentMemoryUserRef,
 		query: string,
-		opts?: { allSessions?: boolean; relevantK?: number; minScore?: number },
+		opts?: { allSessions?: boolean; relevantK?: number; minScore?: number; annotations?: AnnotationMap },
 	): Promise<MemoryHit[]>;
 	// SIO-952: stamp final annotations/metadata on the session (e.g. { outcome }).
 	updateSession(
@@ -102,6 +108,7 @@ interface MemoryBlockShape {
 	summary?: string | null;
 	status?: string;
 	rel_score?: number | null;
+	annotations?: AnnotationMap | null;
 }
 interface MemoryResponseShape {
 	memory_blocks: MemoryBlockShape[];
@@ -218,12 +225,19 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 				filters: {
 					session_ids: opts?.allSessions ? "all" : undefined,
 					relevant_k: opts?.relevantK ?? null,
+					// SIO-959: structured annotation filter (e.g. { kind: "fleet-upgrade-dispatched" }).
+					annotations: opts?.annotations ?? undefined,
 				},
 			});
 			const minScore = opts?.minScore;
 			return (res?.memory_blocks ?? [])
 				.filter((b) => b.status === undefined || b.status === "ready")
-				.map((b) => ({ text: b.summary ?? b.fact ?? "", score: b.rel_score ?? undefined }))
+				.map((b) => ({
+					text: b.summary ?? b.fact ?? "",
+					score: b.rel_score ?? undefined,
+					// SIO-959: surface annotations so callers read structured fields (pipeline_id, ...).
+					annotations: b.annotations ?? undefined,
+				}))
 				.filter((h) => h.text.length > 0 && (minScore === undefined || (h.score ?? 0) >= minScore));
 		},
 
