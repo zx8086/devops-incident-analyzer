@@ -16,9 +16,11 @@ export const ConfigSchema = z.object({
 	// and identity fingerprint. The store itself reads KNOWLEDGE_GRAPH_PATH.
 	graphPath: z.string(),
 	knowledgeGraphEnabled: z.boolean(),
-	// SIO-967: raw Cypher is OFF by default. When true, the kg_run_cypher tool is
-	// registered with a read-only keyword guard (rejects CREATE/MERGE/SET/DELETE/
-	// DETACH/DROP/ALTER/COPY/CALL). Curated tools are always registered.
+	// SIO-967: raw Cypher is ON by default (set KG_MCP_ALLOW_CYPHER=false to disable).
+	// The kg_run_cypher tool carries a read-only keyword guard (rejects CREATE/MERGE/
+	// SET/DELETE/DETACH/DROP/ALTER/COPY/CALL + multi-statement payloads), binds all
+	// values as params, and its description embeds the graph schema so the agent can
+	// write correct queries. Curated kg_* tools are always registered regardless.
 	allowCypher: z.boolean(),
 });
 
@@ -34,6 +36,7 @@ export function loadConfig(): Config {
 		},
 		graphPath: Bun.env.KNOWLEDGE_GRAPH_PATH || ".data/knowledge-graph",
 		knowledgeGraphEnabled: Bun.env.KNOWLEDGE_GRAPH_ENABLED === "true" || Bun.env.KNOWLEDGE_GRAPH_ENABLED === "1",
-		allowCypher: Bun.env.KG_MCP_ALLOW_CYPHER === "true" || Bun.env.KG_MCP_ALLOW_CYPHER === "1",
+		// Default ON; only an explicit "false"/"0" disables raw Cypher.
+		allowCypher: Bun.env.KG_MCP_ALLOW_CYPHER !== "false" && Bun.env.KG_MCP_ALLOW_CYPHER !== "0",
 	});
 }

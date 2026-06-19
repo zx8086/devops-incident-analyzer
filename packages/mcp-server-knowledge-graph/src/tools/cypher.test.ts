@@ -1,7 +1,8 @@
 // src/tools/cypher.test.ts
 //
-// SIO-967: the read-only Cypher guard. The tool is OFF by default; this exercises the
-// pure validator that gates it when KG_MCP_ALLOW_CYPHER=true.
+// SIO-967: the read-only Cypher guard. kg_run_cypher is ON by default
+// (KG_MCP_ALLOW_CYPHER=false to disable); this exercises the pure validator that
+// gates every call.
 import { describe, expect, test } from "bun:test";
 import { validateReadOnlyCypher } from "./cypher.ts";
 

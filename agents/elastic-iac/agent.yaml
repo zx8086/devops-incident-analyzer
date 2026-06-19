@@ -32,6 +32,7 @@ skills:
   - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state
+  - id: query-knowledge-graph
 
 tools:
   # Single facade onto the unified mcp-server-elastic-iac (terraform + git + gitlab + elastic reads).

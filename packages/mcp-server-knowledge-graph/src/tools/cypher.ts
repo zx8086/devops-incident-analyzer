@@ -80,14 +80,40 @@ async function resolveStore(): Promise<GraphStore | string> {
 	}
 }
 
+// Schema card embedded in the kg_run_cypher description so the agent can write
+// correct queries WITHOUT a memory round-trip. Mirrors packages/knowledge-graph/
+// src/schema.ts exactly -- keep in sync when the IaC subgraph changes. Scoped to the
+// IaC layer the elastic-iac agent queries (the incident-side nodes are omitted).
+const SCHEMA_CARD = [
+	"GRAPH SCHEMA (lbug/Kuzu, table-typed). IaC subgraph:",
+	"Nodes:",
+	"  ElasticDeployment(name, ecId, region)   -- a cluster, e.g. eu-b2b. PK name.",
+	"  Stack(name)                              -- a root module, e.g. slos. PK name.",
+	"  Module(name, howto)                      -- reusable logic, e.g. slo. PK name.",
+	"  StackInstance(id, deployment, stack)     -- a (deployment,stack) cell; id='<dep>/<stack>'. SPARSE. PK id.",
+	"  ConfigChange(id, workflow, filePath, summary, createdAt, outcome)  -- one maker turn's edit. createdAt is ISO; outcome in {proposed,applied,...}.",
+	"  MergeRequest(url)  Workflow(name)  Session(threadId)  Pipeline(id, status, url)",
+	"Relationships (direction matters):",
+	"  (Stack)-[:USES_MODULE]->(Module)",
+	"  (StackInstance)-[:OF_STACK]->(Stack)        (StackInstance)-[:ON_DEPLOYMENT]->(ElasticDeployment)",
+	"  (ElasticDeployment)-[:CHANGED_BY]->(ConfigChange)   (ConfigChange)-[:TARGETS]->(StackInstance)",
+	"  (ConfigChange)-[:PROPOSED_IN]->(MergeRequest)  (ConfigChange)-[:VIA_WORKFLOW]->(Workflow)  (ConfigChange)-[:IN_SESSION]->(Session)",
+	"  (MergeRequest)-[:RAN]->(Pipeline)",
+	"lbug binder quirks: a variable does NOT carry across two separate MATCH clauses -- chain patterns in ONE MATCH;",
+	"  and ORDER BY after RETURN DISTINCT must reference the PROJECTED alias, not the source property.",
+	"Examples:",
+	"  Which deployments run a stack:  MATCH (d:ElasticDeployment)<-[:ON_DEPLOYMENT]-(:StackInstance)-[:OF_STACK]->(s:Stack {name:$stack}) RETURN DISTINCT d.name AS deployment ORDER BY deployment",
+	"  Change history for a cell:      MATCH (c:ConfigChange)-[:TARGETS]->(:StackInstance {id:$sid}) RETURN c.summary, c.outcome, c.createdAt ORDER BY c.createdAt DESC LIMIT 5",
+].join("\n");
+
 export function registerCypherTool(server: McpServer): void {
 	server.tool(
 		"kg_run_cypher",
 		"Run a READ-ONLY Cypher query against the infrastructure knowledge graph. " +
+			"Prefer the curated kg_* tools for common questions; use this for ad-hoc graph queries. " +
 			"Pass values via the params object as bound $name placeholders -- never string-interpolate. " +
-			"Write/DDL keywords (CREATE/MERGE/SET/DELETE/...) are rejected. " +
-			"lbug binder quirks: variables do not cross two MATCH clauses (chain in one); " +
-			"ORDER BY after RETURN DISTINCT must reference the projected alias.",
+			"Write/DDL keywords (CREATE/MERGE/SET/DELETE/...) and multi-statement payloads are rejected.\n\n" +
+			SCHEMA_CARD,
 		{
 			cypher: z.string().min(1).describe("A single read-only Cypher statement using $param placeholders."),
 			params: z
