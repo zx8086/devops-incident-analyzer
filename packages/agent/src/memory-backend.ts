@@ -11,6 +11,7 @@ import { getLogger } from "@devops-agent/observability";
 import {
 	type AgentMemoryClient,
 	type AgentMemoryUserRef,
+	type AnnotationMap,
 	type ChatMessageBlock,
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
@@ -28,6 +29,13 @@ export function selectedBackend(): LiveMemoryBackend {
 // Agent identity -> Agent Memory user_id. One user per agent (SIO-938 decision 3).
 export function resolveUserId(agentName: string): string {
 	return agentName === "elastic-iac" ? "elastic-iac" : "incident-analyzer";
+}
+
+// SIO-952: the agent's role, recorded as user metadata for annotation-based
+// attribution/access control. elastic-iac is the IaC maker; the orchestrator
+// correlates incidents.
+function resolveRole(agentName: string): string {
+	return agentName === "elastic-iac" ? "iac-maker" : "incident-correlator";
 }
 
 // Short TTL (seconds) for dailylog breadcrumb messages, read defensively from
@@ -73,24 +81,52 @@ export function setActiveMemorySession(agentName: string, threadId: string): voi
 }
 export function clearActiveMemorySession(): void {
 	activeRef = null;
+	activeDatasources = undefined;
+	activeOutcome = undefined;
+}
+
+// SIO-952: conversation-scoped annotations. datasources labels the session at
+// creation; outcome is stamped at teardown via updateSession. Both are best-effort
+// context the graph knows (intent/datasources/outcome already exist in state).
+let activeDatasources: string | undefined;
+let activeOutcome: string | undefined;
+export function setSessionDatasources(datasources: string | undefined): void {
+	if (datasources) activeDatasources = datasources;
+}
+export function setSessionOutcome(outcome: string | undefined): void {
+	if (outcome) activeOutcome = outcome;
 }
 
 type QueuedWrite =
-	| { kind: "fact"; text: string; createdAt: string }
-	| { kind: "message"; message: ChatMessageBlock; ttlSeconds?: number; createdAt: string };
+	| { kind: "fact"; text: string; createdAt: string; annotations?: AnnotationMap }
+	| { kind: "message"; message: ChatMessageBlock; ttlSeconds?: number; createdAt: string; annotations?: AnnotationMap };
 const queue: QueuedWrite[] = [];
 
 // Drain when the queue grows large so a long session does not accumulate
 // unboundedly; failures are swallowed (best-effort, never block the agent).
 const FLUSH_THRESHOLD = 25;
 
-export function enqueueFact(text: string, createdAt: string): void {
-	queue.push({ kind: "fact", text, createdAt });
+// SIO-952: stamp block kind so recall can filter daily-log noise from durable
+// key-decisions; merge any caller-supplied annotations (e.g. { intent }).
+function factAnnotations(extra?: AnnotationMap): AnnotationMap {
+	return { kind: "key-decision", ...extra };
+}
+function messageAnnotations(extra?: AnnotationMap): AnnotationMap {
+	return { kind: "daily-log", ...extra };
+}
+
+export function enqueueFact(text: string, createdAt: string, annotations?: AnnotationMap): void {
+	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations) });
 	maybeFlush();
 }
 
-export function enqueueMessage(message: ChatMessageBlock, createdAt: string, ttlSeconds?: number): void {
-	queue.push({ kind: "message", message, ttlSeconds, createdAt });
+export function enqueueMessage(
+	message: ChatMessageBlock,
+	createdAt: string,
+	ttlSeconds?: number,
+	annotations?: AnnotationMap,
+): void {
+	queue.push({ kind: "message", message, ttlSeconds, createdAt, annotations: messageAnnotations(annotations) });
 	maybeFlush();
 }
 
@@ -117,6 +153,13 @@ function maybeFlush(): void {
 // 503 (extraction queue saturated) the batch is REQUEUED rather than dropped so
 // the next flush (or session teardown) retries it; live memory must never block
 // or fail a session, but transient saturation should not silently lose writes.
+// SIO-952: which agent owns the conversation + which datasources it spans.
+function sessionAnnotations(): AnnotationMap {
+	const a: AnnotationMap = { agent: activeAgentName };
+	if (activeDatasources) a.datasources = activeDatasources;
+	return a;
+}
+
 export async function flushAgentMemory(): Promise<void> {
 	if (queue.length === 0) return;
 	const ref = activeRef;
@@ -127,17 +170,21 @@ export async function flushAgentMemory(): Promise<void> {
 	}
 	try {
 		const c = client();
-		await c.ensureUser(ref.userId, activeAgentName);
-		await c.ensureSession(ref.userId, ref.sessionId);
+		await c.ensureUser(ref.userId, activeAgentName, { agent: activeAgentName, role: resolveRole(activeAgentName) });
+		await c.ensureSession(ref.userId, ref.sessionId, { annotations: sessionAnnotations() });
 		// Per-block createdAt feeds the service's conflict resolution, so send each
 		// block with its own timestamp rather than batching across timestamps.
 		let facts = 0;
 		for (const w of batch) {
 			if (w.kind === "fact") {
-				await c.addFacts(ref, [w.text], { createdAt: w.createdAt });
+				await c.addFacts(ref, [w.text], { createdAt: w.createdAt, annotations: w.annotations });
 				facts++;
 			} else {
-				await c.addMessages(ref, [w.message], { ttlSeconds: w.ttlSeconds, createdAt: w.createdAt });
+				await c.addMessages(ref, [w.message], {
+					ttlSeconds: w.ttlSeconds,
+					createdAt: w.createdAt,
+					annotations: w.annotations,
+				});
 			}
 		}
 		logger.info({ facts, total: batch.length, sync: syncWritesEnabled() }, "flushed agent-memory writes");
@@ -181,8 +228,8 @@ export async function recallAgentMemory(
 	const ref: AgentMemoryUserRef = { userId: resolveUserId(agentName), sessionId: threadId };
 	try {
 		const c = client();
-		await c.ensureUser(ref.userId, agentName);
-		await c.ensureSession(ref.userId, ref.sessionId);
+		await c.ensureUser(ref.userId, agentName, { agent: agentName, role: resolveRole(agentName) });
+		await c.ensureSession(ref.userId, ref.sessionId, { annotations: { agent: agentName } });
 		const hits = await c.searchMemory(ref, query, { allSessions: true, relevantK: 8 });
 		// hits are ranked by rel_score; keep the service order and join the text.
 		return hits.length > 0 ? hits.map((h) => h.text).join("\n") : undefined;
@@ -192,13 +239,19 @@ export async function recallAgentMemory(
 	}
 }
 
-// Drain + end the session. Called at teardown.
+// Drain + end the session. Called at teardown. SIO-952: stamps the final
+// outcome annotation (best-effort) before closing so the conversation's result
+// is queryable, then POSTs the corrected /sessions/{id}/end endpoint.
 export async function endAgentMemorySession(): Promise<void> {
 	await flushAgentMemory();
 	const ref = activeRef;
 	if (!ref) return;
 	try {
-		await client().endSession(ref);
+		const c = client();
+		if (activeOutcome) {
+			await c.updateSession(ref, { annotations: { outcome: activeOutcome } });
+		}
+		await c.endSession(ref);
 	} catch (error) {
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory endSession failed");
 	} finally {

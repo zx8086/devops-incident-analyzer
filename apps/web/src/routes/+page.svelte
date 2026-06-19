@@ -96,7 +96,23 @@ onMount(() => {
 			console.log("[mcp_replaced]", JSON.parse((e as MessageEvent).data));
 		});
 	})();
-	return () => es?.close();
+
+	// SIO-952: a session = one conversation; end it (beacon) when the user leaves
+	// or hides the page so the Agent Memory session's end_time is set. pagehide
+	// covers tab close/navigation; visibilitychange->hidden covers mobile/bfcache
+	// backgrounding. The server idle-TTL sweep is the backstop for dropped beacons.
+	const endOnLeave = () => agentStore.endCurrentSession();
+	const onVisibility = () => {
+		if (document.visibilityState === "hidden") endOnLeave();
+	};
+	window.addEventListener("pagehide", endOnLeave);
+	document.addEventListener("visibilitychange", onVisibility);
+
+	return () => {
+		es?.close();
+		window.removeEventListener("pagehide", endOnLeave);
+		document.removeEventListener("visibilitychange", onVisibility);
+	};
 });
 
 onDestroy(() => {
