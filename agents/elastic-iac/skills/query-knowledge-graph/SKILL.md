@@ -49,6 +49,7 @@ Relationships (direction matters):
 
 1. A variable does **not** carry across two separate `MATCH` clauses. Chain the whole pattern in ONE `MATCH` (use `OPTIONAL MATCH` only for genuinely optional legs).
 2. `ORDER BY` after `RETURN DISTINCT` must reference the **projected alias**, not the source property.
+3. A node's label is `label(n)` — **singular, returns a STRING**. The Neo4j idiom `labels(n)[0]` silently returns an empty string here (it does not error), so never use it; `label(n)` (or bare `labels(n)`) gives the real label.
 
 ### Worked examples
 
