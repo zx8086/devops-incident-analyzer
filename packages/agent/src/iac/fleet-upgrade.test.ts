@@ -532,6 +532,74 @@ describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
 		// reached terminal -> clear the in-flight id so we don't keep re-checking
 		expect(out.fleetApplyPipelineId).toBeNull();
 	});
+
+	// SIO-959: "how's the us-cld upgrade going?" in a NEW conversation -- no thread-local
+	// fleetApplyPipelineId, and a fleet upgrade has no MR. watchPipeline must recover the
+	// dispatched pipeline id from durable memory (structured annotations) and re-poll it,
+	// instead of falling through to the (useless) MR lookup.
+	test("recovers the dispatched pipeline from memory cross-session and re-polls it", async () => {
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		// Fake memory client: a search filtered to fleet-upgrade-dispatched returns the
+		// us-cld upgrade with its pipeline id in the annotations.
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory(_ref, _query, opts) {
+				if (opts?.annotations?.kind !== "fleet-upgrade-dispatched") return [];
+				return [
+					{
+						text: "Fleet agents on us-cld upgrade DISPATCHED to 9.4.2.",
+						score: 0.9,
+						annotations: {
+							kind: "fleet-upgrade-dispatched",
+							deployment: "us-cld",
+							version: "9.4.2",
+							pipeline_id: "2614422047",
+						},
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		});
+		const { watchPipeline } = await import("./nodes.ts");
+		const seen: string[] = [];
+		mockTools({
+			gitlab_get_pipeline: (args) => {
+				seen.push(`gitlab_get_pipeline:${args.pipelineId}`);
+				return '[200] {"id":2614422047,"status":"running","web_url":"https://gitlab.com/x/-/pipelines/2614422047"}';
+			},
+			gitlab_list_agent_merge_requests: () => {
+				seen.push("gitlab_list_agent_merge_requests");
+				return "[200] []";
+			},
+		});
+		// New conversation: no thread-local fleet id, no MR. Query names us-cld.
+		const state = {
+			intent: "pipeline-status",
+			fleetApplyPipelineId: null,
+			mrIid: null,
+			messages: [{ getType: () => "human", content: "how is the us-cld upgrade going?" }],
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		// re-polled the RECOVERED pipeline id, never hunted for an MR
+		expect(seen).toContain("gitlab_get_pipeline:2614422047");
+		expect(seen).not.toContain("gitlab_list_agent_merge_requests");
+		expect(out.fleetUpgradeResult?.status).toBe("dispatched");
+
+		__setAgentMemoryClient(null);
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	});
 });
 
 // SIO-927: an operator-approved apply must carry MAX_AGENTS = the previewed resolved_count so the
