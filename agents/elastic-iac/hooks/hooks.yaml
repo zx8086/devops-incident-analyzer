@@ -3,6 +3,7 @@ bootstrap:
   steps:
     - load_live_memory
     - load_wiki_index
+    - warm_knowledge_graph
     - emit_session_start
 
 teardown:

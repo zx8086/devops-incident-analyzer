@@ -42,14 +42,20 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.duties.length).toBeGreaterThan(0);
 	});
 
-	test("knowledge auto-discovers files + directories without index.yaml", () => {
+	// SIO-953: knowledge now loads via knowledge/index.yaml (Knowledge Tree),
+	// which replaces the manifest auto-discovery. The `root` category (path ".")
+	// preserves the top-level files; subdir categories load their *.md.
+	test("knowledge loads via index.yaml: top-level files + directory categories", () => {
 		const filenames = new Set(agent.knowledge.map((k) => k.filename));
+		// top-level files still load (via the `root` category) -- not dropped
 		expect(filenames.has("iac-repo-map.md")).toBe(true);
 		expect(filenames.has("conventions.md")).toBe(true);
-		// directory entries load too
+		expect(filenames.has("cluster-inventory.md")).toBe(true);
+		// directory categories load too
 		const categories = new Set(agent.knowledge.map((k) => k.category));
 		expect(categories.has("runbooks")).toBe(true);
 		expect(categories.has("specs")).toBe(true);
+		expect(categories.has("root")).toBe(true);
 	});
 
 	test("GAP map-form workflows convert to canonical WorkflowDef", () => {
@@ -69,10 +75,13 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.tools[0]?.tool_mapping?.mcp_server).toBe("elastic-iac");
 	});
 
-	// SIO-953: lifecycle hooks activate the wiki + key-decision-checkpoint steps.
-	test("hooks enable load_wiki_index (bootstrap) + checkpoint_key_decisions (teardown)", () => {
+	// SIO-953: lifecycle hooks activate the wiki, knowledge-graph warm, and
+	// key-decision-checkpoint steps. warm_knowledge_graph is a safe no-op until
+	// KNOWLEDGE_GRAPH_ENABLED + lbug are turned on (see agents/elastic-iac/knowledge-graph.md).
+	test("hooks enable load_wiki_index + warm_knowledge_graph (bootstrap) + checkpoint_key_decisions (teardown)", () => {
 		expect(agent.hooks?.bootstrap?.steps).toContain("load_live_memory");
 		expect(agent.hooks?.bootstrap?.steps).toContain("load_wiki_index");
+		expect(agent.hooks?.bootstrap?.steps).toContain("warm_knowledge_graph");
 		expect(agent.hooks?.teardown?.steps).toContain("flush_daily_log");
 		expect(agent.hooks?.teardown?.steps).toContain("checkpoint_key_decisions");
 	});
