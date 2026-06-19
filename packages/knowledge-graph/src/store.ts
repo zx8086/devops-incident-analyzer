@@ -123,7 +123,14 @@ export class LadybugStore implements GraphStore {
 	}
 
 	async close(): Promise<void> {
-		await this.db?.close?.();
+		// SIO-954: deliberately do NOT call the native db.close(). lbug's Database
+		// destructor segfaults Bun's runtime at teardown (the panic reproduces with
+		// the raw lbug API too -- it is a Bun + native-addon finalizer crash, not our
+		// code). Embedded lbug flushes writes on every query, so durability does not
+		// depend on an explicit close (verified: data survives a full re-open without
+		// it). Dropping the references is enough; the OS reclaims the file handle on
+		// process exit. Re-introducing db.close() crashes the migrate CLI and any
+		// process that opens the graph -- this is why the feature stays usable.
 		this.db = null;
 		this.conn = null;
 	}
