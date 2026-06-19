@@ -392,6 +392,10 @@ const last = <T>(_current: T, update: T): T => update;
 export const IacState = Annotation.Root({
 	...MessagesAnnotation.spec,
 	requestId: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-965: the checkpointer thread id, captured in bootstrapIac from the runnable
+	// config (configurable.thread_id). Survives the resume leg (it is checkpointed on
+	// leg 1) and backs the knowledge-graph Session node grouping a conversation's turns.
+	threadId: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-870: read-vs-write routing. "info" answers from Elastic Cloud reads and
 	// stops; "gitops" enters the maker/HITL/MR pipeline. Set by classifyIacIntent.
 	// SIO-875: "pipeline-status" is a follow-up ("did the pipeline pass / show me the

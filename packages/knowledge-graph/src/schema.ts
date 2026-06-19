@@ -30,6 +30,18 @@ export const NODE_LABELS = [
 	"ElasticDeployment",
 	"ConfigChange",
 	"MergeRequest",
+	// SIO-965: three-layer IaC repo model. The elastic-iac repo is modules/ (pure
+	// logic, one resource type each) -> stacks/ (root modules wiring one module to
+	// one backend state) -> environments/<deployment>/<stack>/ (config data). A
+	// StackInstance is the (deployment, stack) state cell a ConfigChange targets;
+	// it is a SPARSE matrix (not every stack runs on every deployment). Workflow,
+	// Session and Pipeline promote per-turn strings/CI runs to first-class nodes.
+	"Module",
+	"Stack",
+	"StackInstance",
+	"Workflow",
+	"Session",
+	"Pipeline",
 ] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
@@ -47,6 +59,18 @@ export const REL_TYPES = [
 	// change; PROPOSED_IN links a config change to the MR that carries it.
 	"CHANGED_BY",
 	"PROPOSED_IN",
+	// SIO-965: three-layer IaC edges. USES_MODULE is the real HCL Stack->Module
+	// wiring (parsed from stacks/<name>/main.tf, can be many). OF_STACK/ON_DEPLOYMENT
+	// place a StackInstance in the (stack, deployment) matrix. TARGETS gives a
+	// ConfigChange (deployment, stack) precision; VIA_WORKFLOW/IN_SESSION attach the
+	// turn's workflow + conversation; RAN attaches an MR's GitLab CI pipeline.
+	"USES_MODULE",
+	"OF_STACK",
+	"ON_DEPLOYMENT",
+	"TARGETS",
+	"VIA_WORKFLOW",
+	"IN_SESSION",
+	"RAN",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
 
@@ -74,11 +98,30 @@ export const ConfigChangeNodeSchema = z
 		createdAt: z.string().optional(),
 	})
 	.strict();
+// SIO-965: three-layer IaC writer boundary shapes.
+export const ModuleNodeSchema = z.object({ name: z.string().min(1), howto: z.string().optional() }).strict();
+export const StackNodeSchema = z.object({ name: z.string().min(1) }).strict();
+export const StackInstanceNodeSchema = z
+	.object({ id: z.string().min(1), deployment: z.string().min(1), stack: z.string().min(1) })
+	.strict();
+export const WorkflowNodeSchema = z.object({ name: z.string().min(1) }).strict();
+export const SessionNodeSchema = z.object({ threadId: z.string().min(1) }).strict();
+// Pipeline.id is a STRING (the numeric GitLab pipeline id, stringified by the
+// writer) for primary-key uniformity with every other node in the graph.
+export const PipelineNodeSchema = z
+	.object({ id: z.string().min(1), status: z.string().optional(), url: z.string().optional() })
+	.strict();
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
 export type DeploymentNode = z.infer<typeof DeploymentNodeSchema>;
 export type ConfigChangeNode = z.infer<typeof ConfigChangeNodeSchema>;
+export type ModuleNode = z.infer<typeof ModuleNodeSchema>;
+export type StackNode = z.infer<typeof StackNodeSchema>;
+export type StackInstanceNode = z.infer<typeof StackInstanceNodeSchema>;
+export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
+export type SessionNode = z.infer<typeof SessionNodeSchema>;
+export type PipelineNode = z.infer<typeof PipelineNodeSchema>;
 
 // Schema DDL. Kuzu/Ladybug node & rel tables, idempotent (IF NOT EXISTS). The
 // embedding column on Incident backs the native vector index (see VECTOR_INDEX).
@@ -104,12 +147,40 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
 	"CREATE REL TABLE IF NOT EXISTS DOCUMENTED_IN(FROM Service TO WikiPage)",
 	"CREATE REL TABLE IF NOT EXISTS DEPLOYED_AS(FROM Service TO Deployment)",
-	// SIO-954: IaC change-history tables.
-	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, PRIMARY KEY(name))",
-	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, PRIMARY KEY(id))",
+	// SIO-954/SIO-965: IaC change-history tables. ElasticDeployment/ConfigChange
+	// carry the richer SIO-965 columns (ecId/region, outcome) for FRESH graphs;
+	// EXISTING graphs gain those columns via the tolerant ALTER_MIGRATIONS below
+	// (CREATE ... IF NOT EXISTS no-ops on an existing table, so it cannot add them).
+	"CREATE NODE TABLE IF NOT EXISTS ElasticDeployment(name STRING, ecId STRING, region STRING, PRIMARY KEY(name))",
+	"CREATE NODE TABLE IF NOT EXISTS ConfigChange(id STRING, workflow STRING, filePath STRING, summary STRING, createdAt STRING, outcome STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS MergeRequest(url STRING, PRIMARY KEY(url))",
 	"CREATE REL TABLE IF NOT EXISTS CHANGED_BY(FROM ElasticDeployment TO ConfigChange)",
 	"CREATE REL TABLE IF NOT EXISTS PROPOSED_IN(FROM ConfigChange TO MergeRequest)",
+	// SIO-965: three-layer IaC nodes + edges.
+	"CREATE NODE TABLE IF NOT EXISTS Module(name STRING, howto STRING, PRIMARY KEY(name))",
+	"CREATE NODE TABLE IF NOT EXISTS Stack(name STRING, PRIMARY KEY(name))",
+	"CREATE NODE TABLE IF NOT EXISTS StackInstance(id STRING, deployment STRING, stack STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Workflow(name STRING, PRIMARY KEY(name))",
+	"CREATE NODE TABLE IF NOT EXISTS Session(threadId STRING, PRIMARY KEY(threadId))",
+	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, PRIMARY KEY(id))",
+	"CREATE REL TABLE IF NOT EXISTS USES_MODULE(FROM Stack TO Module)",
+	"CREATE REL TABLE IF NOT EXISTS OF_STACK(FROM StackInstance TO Stack)",
+	"CREATE REL TABLE IF NOT EXISTS ON_DEPLOYMENT(FROM StackInstance TO ElasticDeployment)",
+	"CREATE REL TABLE IF NOT EXISTS TARGETS(FROM ConfigChange TO StackInstance)",
+	"CREATE REL TABLE IF NOT EXISTS VIA_WORKFLOW(FROM ConfigChange TO Workflow)",
+	"CREATE REL TABLE IF NOT EXISTS IN_SESSION(FROM ConfigChange TO Session)",
+	"CREATE REL TABLE IF NOT EXISTS RAN(FROM MergeRequest TO Pipeline)",
+];
+
+// SIO-965: best-effort additive column migrations for graphs created before the
+// SIO-965 columns existed. Unlike MIGRATIONS these are NOT idempotent on their
+// own -- a bare ALTER throws "property already exists" on re-run -- so store.init()
+// runs them inside a tolerant try/catch loop (the VECTOR_INDEX_SETUP idiom). A
+// future Neo4jStore skips this array entirely (Neo4j is schema-optional, no ALTER).
+export const ALTER_MIGRATIONS: readonly string[] = [
+	"ALTER TABLE ConfigChange ADD outcome STRING DEFAULT 'proposed'",
+	"ALTER TABLE ElasticDeployment ADD ecId STRING DEFAULT ''",
+	"ALTER TABLE ElasticDeployment ADD region STRING DEFAULT ''",
 ];
 
 // Native vector index over Incident.embedding. Requires Ladybug's vector

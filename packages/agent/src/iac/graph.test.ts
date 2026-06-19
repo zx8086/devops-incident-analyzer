@@ -64,4 +64,14 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("fleetUpgradeGate");
 		expect(nodeNames).toContain("applyFleetUpgrade");
 	});
+
+	// SIO-954/SIO-965: knowledge-graph nodes are registered always (reached only when
+	// KNOWLEDGE_GRAPH_ENABLED is set via the edge-gate idiom), so they exist on the graph.
+	test("graph contains the knowledge-graph read/write/outcome nodes", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("graphEnrichIac");
+		expect(nodeNames).toContain("recordIacEntities");
+		expect(nodeNames).toContain("recordIacOutcome");
+	});
 });

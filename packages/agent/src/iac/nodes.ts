@@ -6,6 +6,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AnnotationMap } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
@@ -426,12 +427,18 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 // fleet upgrade recovered from durable memory) so the user doesn't have to ask "how's it going?".
 // Implements the hooks/bootstrap.md "Open in-flight items" startup line. Injects a SystemMessage
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
-export async function bootstrapIac(state: IacStateType): Promise<Partial<IacStateType>> {
+export async function bootstrapIac(state: IacStateType, config?: RunnableConfig): Promise<Partial<IacStateType>> {
+	// SIO-965: capture the checkpointer thread id for the knowledge-graph Session
+	// node. It is only in the runnable config (configurable.thread_id), not the
+	// state input; checkpointing it here on leg 1 makes it survive the resume leg.
+	const threadId = typeof config?.configurable?.thread_id === "string" ? config.configurable.thread_id : "";
+
 	const connected = getConnectedServers().includes(IAC_SERVER);
 	if (!connected) {
 		log.warn({ server: IAC_SERVER }, "elastic-iac server not connected");
 		return {
 			connected: false,
+			...(threadId && { threadId }),
 			messages: [
 				new AIMessage(
 					"The Elastic IaC server is not connected. Start mcp-server-elastic-iac (:9086) and set ELASTIC_IAC_MCP_URL, then retry.",
@@ -446,10 +453,10 @@ export async function bootstrapIac(state: IacStateType): Promise<Partial<IacStat
 		const note = await buildInFlightSessionNote();
 		if (note) {
 			log.info({ note }, "bootstrapIac: surfacing in-flight work at session start");
-			return { connected: true, messages: [new SystemMessage(note)] };
+			return { connected: true, ...(threadId && { threadId }), messages: [new SystemMessage(note)] };
 		}
 	}
-	return { connected: true };
+	return { connected: true, ...(threadId && { threadId }) };
 }
 
 // SIO-960: a one-line "you have work in flight" note from durable memory, or "" when
@@ -1246,6 +1253,31 @@ export function branchSlug(req: IacRequest): string {
 function branchName(req: IacRequest): string {
 	const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 	return `agent/${branchSlug(req)}-${date}`;
+}
+
+// SIO-965: every agent-opened MR carries these GitLab labels. The MCP tool defaults
+// to the same pair, but the callers pass them explicitly so the contract is visible
+// at the call site and cannot silently regress if the tool default ever changes. The
+// gitlab_list_agent_merge_requests recovery tool filters on "agent-generated".
+export const AGENT_MR_LABELS = ["agent-generated", "iac"] as const;
+
+// SIO-965: derive the stack name from an edited repo path. The elastic-iac repo
+// keeps per-deployment config at environments/<deployment>/<stack>/..., so the
+// segment after the deployment is the stack. environments/_deployments/<cluster>.json
+// (the `deployments` stack's cluster JSON) maps to the "deployments" stack. Lives
+// here (not graph-knowledge.ts) so both the KG nodes AND the memory-annotation
+// builder can share it without a circular import (graph-knowledge.ts -> nodes.ts).
+export function stackFromPaths(paths: string[] | undefined): string {
+	for (const p of paths ?? []) {
+		const parts = p.split("/").filter((s) => s.length > 0);
+		const envIdx = parts.indexOf("environments");
+		if (envIdx === -1) continue;
+		const next = parts[envIdx + 1];
+		if (next === "_deployments") return "deployments";
+		const stack = parts[envIdx + 2];
+		if (next && !next.startsWith("_") && stack) return stack;
+	}
+	return "";
 }
 
 // SIO-873: the agent owns the per-deployment JSON path -- it knows the cluster and
@@ -4070,6 +4102,7 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		target_branch: "main",
 		title: review?.title ?? "Elastic IaC change",
 		description,
+		labels: [...AGENT_MR_LABELS],
 	});
 	return { mrUrl: extractMrUrl(mr), mrIid: extractMrIid(mr) };
 }
@@ -5535,6 +5568,7 @@ async function openReconcileMr(
 		target_branch: "main",
 		title,
 		description,
+		labels: [...AGENT_MR_LABELS],
 	});
 	// Only a 409 (MR already exists for this branch) is a reuse; any other 4xx/5xx is a real
 	// failure and must block (never report a successful reconcile with an empty MR url).
@@ -6126,6 +6160,51 @@ export function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgr
 	return a;
 }
 
+// SIO-965: structured labels on the durable gitops-change fact. These mirror the
+// knowledge-graph node keys so the two durable systems join on the SAME values:
+// thread_id == KG Session.threadId, config_change_id == KG ConfigChange.id (the
+// requestId), plus deployment/stack/workflow/mr_url/pipeline/outcome. A later
+// session can recall "what did we change on eu-b2b/slos" by annotation filter, and
+// the same keys resolve the corresponding KG subgraph.
+export function buildIacChangeAnnotations(state: IacStateType): AnnotationMap {
+	const a: AnnotationMap = { kind: "iac-change", outcome: iacTurnOutcome(state) };
+	a.config_change_id = state.requestId;
+	if (state.threadId) a.thread_id = state.threadId;
+	const dep = state.targetDeployment || state.iacRequest?.cluster;
+	if (dep) a.deployment = dep;
+	const stack = stackFromPaths(state.proposedFiles);
+	if (stack) a.stack = stack;
+	if (dep && stack) a.stack_instance = `${dep}/${stack}`;
+	if (state.iacRequest?.workflow) a.workflow = state.iacRequest.workflow;
+	if (state.iacRequest?.version) a.version = state.iacRequest.version;
+	if (state.mrUrl) a.mr_url = state.mrUrl;
+	if (state.pipelineId != null) a.pipeline_id = String(state.pipelineId);
+	if (state.pipelineStatus && state.pipelineStatus !== "unknown") a.pipeline_status = state.pipelineStatus;
+	return a;
+}
+
+// SIO-965: the durable Profile-fact statement for a gitops config change. Self-
+// contained so a future session's semantic recall reads it without context.
+export function buildIacChangeDecision(state: IacStateType): string {
+	const dep = state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
+	const stack = stackFromPaths(state.proposedFiles);
+	const scope = stack ? `${dep}/${stack}` : dep;
+	const title = state.planReview?.title || state.iacRequest?.workflow || "config change";
+	const outcome = iacTurnOutcome(state);
+	const verb = outcome === "pipeline-failed" ? "change FAILED CI" : "change proposed (MR open)";
+	return `Elastic IaC ${verb} on ${scope}: ${title}.`;
+}
+
+export function buildIacChangeRationale(state: IacStateType): string {
+	const bits: string[] = [];
+	if (state.mrUrl) bits.push(`MR ${state.mrUrl}`);
+	if (state.pipelineId) bits.push(`pipeline #${state.pipelineId} ${state.pipelineStatus || ""}`.trim());
+	if (state.proposedFiles.length > 0) bits.push(`${state.proposedFiles.length} file(s)`);
+	return bits.length > 0
+		? `${bits.join(", ")}. A human reviews, merges, and applies.`
+		: "A human reviews, merges, and applies.";
+}
+
 export function teardownIac(state: IacStateType): Partial<IacStateType> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
@@ -6186,6 +6265,25 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 			log.info(
 				{ deployment: state.targetDeployment, status: fleetResult?.status ?? "none" },
 				"teardownIac: skipped durable fleet fact (non-recordable status)",
+			);
+		}
+
+		// SIO-965: a gitops config change that actually opened an MR is a durable Profile
+		// fact too, annotated with the SAME keys as the knowledge-graph nodes (thread_id,
+		// config_change_id, deployment, stack, mr_url, pipeline, outcome) so the two
+		// systems join on shared values. Only when an MR exists (a rejected/blocked turn
+		// changed nothing) and on the agent-memory backend (file-backend durable
+		// learnings stay PR-gated, mirroring the fleet rule above).
+		if (!isFleet && state.intent === "gitops" && state.mrUrl && selectedBackend() === "agent-memory") {
+			recordKeyDecision({
+				requestId: state.requestId,
+				decision: buildIacChangeDecision(state),
+				rationale: buildIacChangeRationale(state),
+				annotations: buildIacChangeAnnotations(state),
+			});
+			log.info(
+				{ deployment: state.targetDeployment || state.iacRequest?.cluster, mrUrl: state.mrUrl },
+				"teardownIac: recorded durable iac-change fact",
 			);
 		}
 	} catch {

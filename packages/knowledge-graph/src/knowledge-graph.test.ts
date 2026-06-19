@@ -1,21 +1,33 @@
 // knowledge-graph/src/knowledge-graph.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	ALTER_MIGRATIONS,
 	buildGraphContext,
 	buildIacGraphContext,
+	changeHistoryForStackInstance,
+	deploymentsRunningStack,
 	EMBEDDING_DIM,
 	InMemoryGraphStore,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
 	linkResolution,
+	linkStackModule,
 	MIGRATIONS,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	recordIacChange,
 	recordIncident,
+	recordPipeline,
+	seedDeployments,
+	seedModules,
+	seedStackInstances,
+	seedStacks,
+	setChangeOutcome,
 	similarIncidents,
+	stacksUsingModule,
 	upsertEntities,
 } from "./index.ts";
+import { DEPLOYMENT_INVENTORY, parseModuleSources } from "./seed-iac.ts";
 
 describe("schema", () => {
 	test("MIGRATIONS are idempotent node/rel DDL", () => {
@@ -25,6 +37,22 @@ describe("schema", () => {
 		expect(MIGRATIONS.some((m) => m.startsWith("CREATE REL TABLE"))).toBe(true);
 		// embedding column dimension matches the Titan v2 constant
 		expect(MIGRATIONS.some((m) => m.includes(`DOUBLE[${EMBEDDING_DIM}]`))).toBe(true);
+	});
+
+	// SIO-965: three-layer node/rel tables + the tolerant outcome column migration.
+	test("MIGRATIONS include the SIO-965 three-layer tables", () => {
+		for (const label of ["Module", "Stack", "StackInstance", "Workflow", "Session", "Pipeline"]) {
+			expect(MIGRATIONS.some((m) => m.includes(`NODE TABLE IF NOT EXISTS ${label}(`))).toBe(true);
+		}
+		for (const rel of ["USES_MODULE", "OF_STACK", "ON_DEPLOYMENT", "TARGETS", "VIA_WORKFLOW", "IN_SESSION", "RAN"]) {
+			expect(MIGRATIONS.some((m) => m.includes(`REL TABLE IF NOT EXISTS ${rel}(`))).toBe(true);
+		}
+	});
+
+	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcome"))).toBe(true);
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD ecId"))).toBe(true);
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD region"))).toBe(true);
 	});
 });
 
@@ -154,6 +182,75 @@ describe("writer (parameterized, injection-safe)", () => {
 		await recordIacChange(store, { id: "req-3", deployment: "" });
 		expect(store.calls).toEqual([]);
 	});
+
+	// SIO-965: three-layer attachments + outcome on recordIacChange.
+	test("recordIacChange writes the SIO-965 edges when the attachments are present", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacChange(store, {
+			id: "req-9",
+			deployment: "eu-cld",
+			workflow: "slo-edit",
+			filePaths: ["environments/eu-cld/slos/latency.json"],
+			summary: "tighten latency SLO",
+			stackInstanceId: "eu-cld/slos",
+			threadId: "thread-abc",
+			outcome: "proposed",
+		});
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.cypher).toContain("c.outcome = $outcome");
+		expect(change?.params?.outcome).toBe("proposed");
+		expect(store.calls.some((c) => c.cypher.includes("VIA_WORKFLOW") && c.params?.name === "slo-edit")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("IN_SESSION") && c.params?.tid === "thread-abc")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("TARGETS") && c.params?.sid === "eu-cld/slos")).toBe(true);
+	});
+
+	test("recordIacChange defaults outcome to proposed and skips absent attachments", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacChange(store, { id: "req-10", deployment: "eu-cld", filePaths: ["x.json"] });
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.outcome).toBe("proposed");
+		expect(store.calls.some((c) => c.cypher.includes("VIA_WORKFLOW"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("IN_SESSION"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("TARGETS"))).toBe(false);
+	});
+
+	test("recordPipeline merges Pipeline + RAN with a stringified id; no-op without mrUrl/id", async () => {
+		const store = new InMemoryGraphStore();
+		await recordPipeline(store, { mrUrl: "https://gl/mr/1", pipelineId: 148, status: "success" });
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (pl:Pipeline") && c.params?.id === "148")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("RAN"))).toBe(true);
+		const empty = new InMemoryGraphStore();
+		await recordPipeline(empty, { mrUrl: "", pipelineId: 1 });
+		await recordPipeline(empty, { mrUrl: "https://gl/mr/1", pipelineId: "" });
+		expect(empty.calls).toEqual([]);
+	});
+
+	test("setChangeOutcome sets the outcome with bound params; no-op without an id", async () => {
+		const store = new InMemoryGraphStore();
+		await setChangeOutcome(store, "req-1", "applied");
+		expect(store.calls[0]?.cypher).toContain("SET c.outcome = $outcome");
+		expect(store.calls[0]?.params).toEqual({ id: "req-1", outcome: "applied" });
+		const empty = new InMemoryGraphStore();
+		await setChangeOutcome(empty, "", "failed");
+		expect(empty.calls).toEqual([]);
+	});
+
+	test("seed* writers + linkStackModule merge the repo skeleton (idempotent MERGE)", async () => {
+		const store = new InMemoryGraphStore();
+		await seedModules(store, ["slo", "lifecycle"]);
+		await seedStacks(store, ["slos", "lifecycle-policies"]);
+		await linkStackModule(store, "slos", "slo");
+		await seedDeployments(store, [{ name: "eu-cld", ecId: "eda974d", region: "Frankfurt" }]);
+		await seedStackInstances(store, [{ deployment: "eu-cld", stack: "slos" }]);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (n:Module") && c.params?.value === "slo")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (n:Stack") && c.params?.value === "slos")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("USES_MODULE") && c.params?.module === "slo")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("ElasticDeployment") && c.params?.ecId === "eda974d")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("OF_STACK") && c.params?.id === "eu-cld/slos")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("ON_DEPLOYMENT") && c.params?.id === "eu-cld/slos")).toBe(true);
+		// every write is MERGE (re-runnable), never CREATE
+		expect(store.calls.every((c) => !c.cypher.includes("CREATE "))).toBe(true);
+	});
 });
 
 describe("reader", () => {
@@ -203,6 +300,71 @@ describe("reader", () => {
 		expect(ctx).toContain("## Knowledge Graph");
 		expect(ctx).toContain("Recent changes to eu-b2b");
 		expect(ctx).toContain("ilm-rollout: metrics warm (u1)");
+	});
+
+	// SIO-965: the two-arg form must stay byte-identical (back-compat with SIO-954).
+	test("buildIacGraphContext two-arg form is unchanged when extra is omitted", () => {
+		const changes = [
+			{ id: "req-1", workflow: "ilm-rollout", summary: "metrics warm", mrUrl: "u1", createdAt: "2026-06-19" },
+		];
+		expect(buildIacGraphContext("eu-b2b", changes)).toBe(buildIacGraphContext("eu-b2b", changes, {}));
+	});
+
+	test("buildIacGraphContext renders the SIO-965 extra sections", () => {
+		const ctx = buildIacGraphContext("eu-cld", [], {
+			stackInstanceChanges: [
+				{ id: "c1", workflow: "slo-edit", summary: "tighten latency", outcome: "applied", mrUrl: "u9", createdAt: "x" },
+			],
+			alsoRunningStack: { stack: "slos", deployments: ["us-cld", "ap-cld"] },
+		});
+		expect(ctx).toContain("Recent changes to this stack");
+		expect(ctx).toContain("[applied] slo-edit: tighten latency (u9)");
+		expect(ctx).toContain("Other deployments running the slos stack");
+		expect(ctx).toContain("us-cld, ap-cld");
+	});
+
+	test("changeHistoryForStackInstance maps rows, coalesces missing outcome, [] for empty id", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("TARGETS", [
+			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: null, mrUrl: "u9", createdAt: "2026-06-19" },
+		]);
+		const changes = await changeHistoryForStackInstance(store, "eu-cld/slos");
+		expect(changes).toEqual([
+			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "proposed", mrUrl: "u9", createdAt: "2026-06-19" },
+		]);
+		expect(await changeHistoryForStackInstance(store, "")).toEqual([]);
+	});
+
+	test("stacksUsingModule / deploymentsRunningStack map rows, [] for empty input", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("USES_MODULE", [{ stack: "lifecycle-policies" }]);
+		expect(await stacksUsingModule(store, "lifecycle")).toEqual(["lifecycle-policies"]);
+		expect(await stacksUsingModule(store, "")).toEqual([]);
+		const store2 = new InMemoryGraphStore();
+		store2.stub("OF_STACK", [{ deployment: "eu-cld" }, { deployment: "us-cld" }]);
+		expect(await deploymentsRunningStack(store2, "slos")).toEqual(["eu-cld", "us-cld"]);
+		expect(await deploymentsRunningStack(store2, "")).toEqual([]);
+	});
+});
+
+// SIO-965: pure seeder helpers (no network).
+describe("seed-iac helpers", () => {
+	test("parseModuleSources extracts module names, dedupes, handles multi-module stacks", () => {
+		expect(parseModuleSources('module "slos" {\n  source = "../../modules/slo"\n}')).toEqual(["slo"]);
+		expect(
+			parseModuleSources(
+				'module "deployments" {\n  source   = "../../modules/deployment"\n}\nmodule "tf" {\n  source = "../../modules/traffic-filter"\n}',
+			),
+		).toEqual(["deployment", "traffic-filter"]);
+		// a duplicate source line collapses to one
+		expect(parseModuleSources('source = "../../modules/slo"\nsource = "../../modules/slo"')).toEqual(["slo"]);
+		// no module sources -> empty
+		expect(parseModuleSources('resource "x" "y" {}')).toEqual([]);
+	});
+
+	test("DEPLOYMENT_INVENTORY covers the 10 known clusters with ecId + region", () => {
+		expect(Object.keys(DEPLOYMENT_INVENTORY)).toHaveLength(10);
+		expect(DEPLOYMENT_INVENTORY["eu-cld"]).toEqual({ ecId: "eda974d", region: "Frankfurt" });
 	});
 });
 
