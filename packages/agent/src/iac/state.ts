@@ -16,6 +16,7 @@ export interface IacRequest {
 		| "security-edit"
 		| "topology-edit"
 		| "dashboard-edit"
+		| "index-template-create"
 		| "other";
 	cluster?: string;
 	tier?: string;
@@ -108,6 +109,21 @@ export interface IacRequest {
 	dashboardName?: string;
 	dashboardNdjson?: string;
 	dashboardAction?: "add" | "replace" | "delete";
+	// SIO-978: index-template-create -- add one or more NEW index-template JSON files under
+	// environments/<dep>/index-templates/ (each becomes an elasticstack_elasticsearch_index_template
+	// resource via the dedicated index-templates stack). N templates commit to ONE branch / ONE MR.
+	// ILM binding is carried via the template settings (index.lifecycle.name); the provider has no
+	// separate ILM argument. allow_custom_routing is 8.x-only -- emitted only when explicitly true.
+	indexTemplates?: Array<{
+		name: string;
+		indexPatterns: string[];
+		composedOf?: string[];
+		ignoreMissingComponentTemplates?: string[];
+		priority?: number;
+		lifecycleName?: string;
+		dataStreamHidden?: boolean;
+		dataStreamAllowCustomRouting?: boolean;
+	}>;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
