@@ -18,6 +18,7 @@ export {
 	type MemoryHit,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
+	SessionAlreadyEndedError,
 } from "./agent-memory.ts";
 export {
 	type AtlassianFindings,

@@ -5,6 +5,7 @@ import {
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
+	SessionAlreadyEndedError,
 } from "../agent-memory.ts";
 
 const CONFIG: AgentMemoryConfig = { baseUrl: "http://mem.test", enabled: true };
@@ -198,6 +199,24 @@ describe("createFetchAgentMemoryClient", () => {
 			metadata: null,
 		});
 		expect(calls[2]?.body).toMatchObject({ annotations: { intent: "fleet-upgrade", kind: "key-decision" } });
+		restore();
+	});
+
+	test("400 SESSION_ALREADY_ENDED throws SessionAlreadyEndedError (SIO-956)", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/end": {
+				status: 400,
+				body: { error: "SESSION_ALREADY_ENDED", message: "already ended" },
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		let caught: unknown;
+		try {
+			await client.endSession(REF);
+		} catch (e) {
+			caught = e;
+		}
+		expect(caught).toBeInstanceOf(SessionAlreadyEndedError);
 		restore();
 	});
 

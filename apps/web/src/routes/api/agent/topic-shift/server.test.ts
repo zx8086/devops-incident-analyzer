@@ -49,8 +49,6 @@ mock.module("$lib/server/agent", () => ({
 	// SIO-942: topic-shift/+server.ts calls this after the resumed turn (live-memory flush).
 	// Also keeps the process-global mock link-compatible with the stream route test.
 	runPostTurn: mock(() => Promise.resolve()),
-	// SIO-952: topic-shift + stream + iac/resume routes refresh the idle-TTL clock.
-	touchSession: mock(() => undefined),
 	// SIO-952: iac/resume route stamps the turn outcome; keep the process-global mock
 	// link-compatible across route tests (last-wins cache).
 	setSessionOutcome: mock(() => undefined),
