@@ -237,7 +237,7 @@ Source: `packages/agent/src/`
 
 ### @devops-agent/mcp-server-elastic
 
-Elasticsearch MCP server with ~93 tools for querying and managing Elasticsearch deployments. The base set is 77 cluster tools (search, index, ILM, watcher, etc.) and an additional 16 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (��826).
+Elasticsearch MCP server with ~93 tools for querying and managing Elasticsearch deployments. The base set is 77 cluster tools (search, index, ILM, watcher, etc.) and an additional 16 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (SIO-822–826).
 
 | Capability | Details |
 |------------|---------|
