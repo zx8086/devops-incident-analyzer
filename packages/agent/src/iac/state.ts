@@ -344,6 +344,10 @@ export interface FleetUpgradeReport {
 	// report). Mirrors SyntheticsDriftReport.planError: neither upgradeable nor confirmed-empty.
 	planError?: boolean;
 	planErrorReason?: string;
+	// SIO-971: rendered agent-memory recall (prior fleet upgrades for this deployment), the
+	// fleet-path twin of SIO-970's priorLearnings. Undefined when the agent-memory backend is
+	// off or recall found nothing. Carried onto the fleet_upgrade_choice gate card.
+	priorUpgrades?: string;
 }
 
 // Outcome of the operator-approved apply (single). applied = the bulk_upgrade ran to a

@@ -617,6 +617,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		rolloutSeconds: z.number(),
 		byReason: z.array(z.object({ reason: z.string(), count: z.number() })),
 		versionCrosstab: FleetVersionCrosstabSchema.optional(), // SIO-935
+		// SIO-971: rendered agent-memory recall of prior fleet upgrades for this deployment
+		// (markdown). Absent when the agent-memory backend is off or recall found nothing.
+		priorUpgrades: z.string().optional(),
 		message: z.string(),
 	}),
 	// The single apply outcome (from applyFleetUpgrade). failedSilent is the verify-sweep

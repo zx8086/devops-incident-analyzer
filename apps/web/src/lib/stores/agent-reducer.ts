@@ -249,6 +249,10 @@ export interface FleetUpgradeChoice {
 	rolloutSeconds: number;
 	byReason: Array<{ reason: string; count: number }>;
 	versionCrosstab?: FleetVersionCrosstab;
+	// SIO-971: rendered agent-memory recall of prior fleet upgrades for this deployment, markdown.
+	// Undefined when the agent-memory backend is off or recall found nothing. Like SIO-970's
+	// priorLearnings, this field must exist on the client type or the card can't read it.
+	priorUpgrades?: string;
 	message: string;
 }
 
@@ -575,6 +579,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					rolloutSeconds: event.rolloutSeconds,
 					byReason: event.byReason,
 					versionCrosstab: event.versionCrosstab, // SIO-935
+					priorUpgrades: event.priorUpgrades, // SIO-971
 					message: event.message,
 				},
 			};
