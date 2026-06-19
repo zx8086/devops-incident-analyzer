@@ -20,6 +20,10 @@ describe("capabilityMessage", () => {
 		expect(msg).toContain("ILM lifecycle changes");
 	});
 
+	test("advertises index-template creation (SIO-978)", () => {
+		expect(msg).toContain("Index templates");
+	});
+
 	test("explains a Fleet agent BINARY upgrade is a different, not-yet-wired path", () => {
 		expect(msg).toContain("Fleet");
 		// must distinguish the binary upgrade from a Terraform config change

@@ -88,6 +88,7 @@ const IntentSchema = z.object({
 			"security-edit",
 			"topology-edit",
 			"dashboard-edit",
+			"index-template-create",
 			"other",
 		])
 		.default("other"),
@@ -158,6 +159,21 @@ const IntentSchema = z.object({
 	dashboardName: z.string().nullish(),
 	dashboardNdjson: z.string().nullish(),
 	dashboardAction: z.enum(["add", "replace", "delete"]).nullish(),
+	// SIO-978: index-template-create -- one or more NEW index templates committed to ONE MR.
+	indexTemplates: z
+		.array(
+			z.object({
+				name: z.string(),
+				indexPatterns: z.array(z.string()),
+				composedOf: z.array(z.string()).nullish(),
+				ignoreMissingComponentTemplates: z.array(z.string()).nullish(),
+				priority: z.number().nullish(),
+				lifecycleName: z.string().nullish(),
+				dataStreamHidden: z.boolean().nullish(),
+				dataStreamAllowCustomRouting: z.boolean().nullish(),
+			}),
+		)
+		.nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -260,6 +276,17 @@ export function parseIntentJson(raw: string): IacRequest {
 					dashboardName: nn(p.dashboardName),
 					dashboardNdjson: nn(p.dashboardNdjson),
 					dashboardAction: nn(p.dashboardAction),
+					// SIO-978: normalize each index-template entry's nullish fields to undefined.
+					indexTemplates: nn(p.indexTemplates)?.map((e) => ({
+						name: e.name,
+						indexPatterns: e.indexPatterns,
+						composedOf: nn(e.composedOf),
+						ignoreMissingComponentTemplates: nn(e.ignoreMissingComponentTemplates),
+						priority: nn(e.priority),
+						lifecycleName: nn(e.lifecycleName),
+						dataStreamHidden: nn(e.dataStreamHidden),
+						dataStreamAllowCustomRouting: nn(e.dataStreamAllowCustomRouting),
+					})),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -295,7 +322,8 @@ export function capabilityMessage(): string {
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
-		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n\n' +
+		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n' +
+		'- **Index templates** -- add a high-priority index template so an index pattern lands on a short-retention ILM policy; e.g. "route dev/staging metrics and traces to their short-retention policies on eu-b2b" (new-file create; composes component templates + binds the ILM policy via the template settings)\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. The Fleet upgrade trigger is on the roadmap."
@@ -496,7 +524,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
-		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'dashboard-edit'|'other'), " +
+		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'dashboard-edit'|'index-template-create'|'other'), " +
 		"cluster, tier, " +
 		"resource, newSizeGb, " +
 		"newMaxGb, policyName, phasesPatch, ilmPolicies, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
@@ -505,7 +533,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
 		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
 		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, sizeComponent, componentSize, " +
-		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, reason, isProd (true only if " +
+		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"Extract `cluster` ONLY from the deployment the user names in this request; NEVER default to a cluster that " +
@@ -618,6 +646,20 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"dashboardNdjson to the user-pasted/Kibana-exported NDJSON payload VERBATIM (newline-delimited; do NOT reformat, " +
 		"re-indent, or wrap it -- pass the exact text). Take the NDJSON as an opaque multi-line string; never merge or " +
 		"rewrite individual panels. " +
+		"For an INDEX-TEMPLATE creation ('add an index template so dev/staging metrics route to the short-retention " +
+		"policy', 'create a dev-staging-traces-ilm-override index template on eu-b2b', 'route metrics-*.dev-* and " +
+		"metrics-*.stg-* to dev-staging-metrics') -- adding a NEW elasticstack_elasticsearch_index_template (NOT editing " +
+		"an existing template, NOT a cluster-defaults total_shards_per_node change, NOT binding an existing component " +
+		"template) -- set workflow to 'index-template-create', cluster to the named deployment, and indexTemplates to an " +
+		"ARRAY with one object per template the user asks for (multiple templates commit to ONE merge request). Each entry: " +
+		"name (the index-template resource name, e.g. 'dev-staging-metrics-ilm-override'), indexPatterns (array of patterns " +
+		"like ['metrics-*.dev-*','metrics-*.stg-*']), composedOf (array of component-template names to compose, in order, " +
+		"e.g. ['metrics@mappings','data-streams@mappings','metrics@settings','metrics@custom']), " +
+		"ignoreMissingComponentTemplates (subset of composedOf that may be absent, e.g. ['metrics@custom']), priority (the " +
+		"integer template priority, e.g. 350), lifecycleName (the ILM policy this template binds via its settings, e.g. " +
+		"'dev-staging-metrics'), and the data-stream flags dataStreamHidden and dataStreamAllowCustomRouting (booleans; " +
+		"default both false -- set dataStreamAllowCustomRouting true ONLY if the user explicitly asks for custom routing). " +
+		"Pass the user's fields VERBATIM; do not invent component templates or add tsdb/time_series settings unless asked. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -1268,7 +1310,10 @@ export function branchSlug(req: IacRequest): string {
 													? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
 														// include space + action so same-day edits don't collide on one branch.
 														[req.dashboardSpace, req.dashboardName, req.dashboardAction].filter(Boolean).join("-")
-													: (req.tier ?? req.resource);
+													: req.workflow === "index-template-create"
+														? // SIO-978: a multi-template create joins template names; the 40-char cap truncates a long list.
+															(req.indexTemplates ?? []).map((e) => e.name).join("-")
+														: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -1649,6 +1694,54 @@ export function setComponentTemplateLifecycleName(
 	settings.index = index;
 	obj.settings = settings;
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== policyName };
+}
+
+// SIO-978: agent-side path for a per-deployment index-template JSON. ${cluster}/${template} are
+// literal placeholders. One file per index template under environments/<cluster>/index-templates/
+// (consumed by the dedicated index-templates stack -> modules/index-template).
+function indexTemplateTemplate(): string {
+	return (
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-978 - ${cluster}/${template} are literal path placeholders substituted by .replace
+		process.env.ELASTIC_IAC_INDEX_TEMPLATE_TEMPLATE ?? "environments/${cluster}/index-templates/${template}.json"
+	);
+}
+
+// SIO-978: build the index-template config JSON file content from a parsed request entry, in the
+// shape modules/index-template consumes (template-NESTED: settings/mappings live under `template`).
+// ILM binding rides in template.settings.index.lifecycle.name (the elasticstack provider has no
+// separate ILM argument on the index_template resource). The data_stream block is emitted only when
+// a data-stream flag is present; allow_custom_routing is an 8.x-only provider field, so it is
+// included ONLY when explicitly true (eu-b2b is 9.x; false is the ES default). 2-space indent +
+// trailing newline match the repo house style. (Pure; unit-tested.)
+export function buildIndexTemplateConfig(entry: {
+	name: string;
+	indexPatterns: string[];
+	composedOf?: string[];
+	ignoreMissingComponentTemplates?: string[];
+	priority?: number;
+	lifecycleName?: string;
+	dataStreamHidden?: boolean;
+	dataStreamAllowCustomRouting?: boolean;
+}): string {
+	const config: Record<string, unknown> = {
+		name: entry.name,
+		index_patterns: entry.indexPatterns,
+		composed_of: entry.composedOf ?? [],
+		priority: entry.priority ?? 100,
+	};
+	if (entry.ignoreMissingComponentTemplates && entry.ignoreMissingComponentTemplates.length > 0) {
+		config.ignore_missing_component_templates = entry.ignoreMissingComponentTemplates;
+	}
+	// Emit data_stream only when a flag is set. allow_custom_routing is 8.x-only -> only when true.
+	if (entry.dataStreamHidden !== undefined || entry.dataStreamAllowCustomRouting === true) {
+		const dataStream: Record<string, unknown> = { hidden: entry.dataStreamHidden ?? false };
+		if (entry.dataStreamAllowCustomRouting === true) dataStream.allow_custom_routing = true;
+		config.data_stream = dataStream;
+	}
+	if (entry.lifecycleName) {
+		config.template = { settings: { index: { lifecycle: { name: entry.lifecycleName } } } };
+	}
+	return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 // SIO-918: agent-side path for a per-deployment per-space JSON. ${cluster}/${space} are literal
@@ -3747,6 +3840,108 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 	return { branch, proposedFilePath: filePath, proposedDiff, precheckPassed: true };
 }
 
+// SIO-978: propose creating one or more NEW index-template JSON files under
+// environments/<cluster>/index-templates/, committed to ONE branch / ONE MR (mirrors the multi-file
+// ILM batch). This is a CREATE: each file is probed first; an entry whose file already exists is
+// SKIPPED (no overwrite -- editing is a separate, unsupported workflow). If every requested file
+// already exists, the whole request is a no-op and is blocked (no empty MR). The MR is opened later
+// by the resume path, not here -- this returns the committed branch + the full-file diffs.
+async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const entries = req.indexTemplates ?? [];
+
+	if (entries.length === 0) {
+		return {
+			blockedReason: "Index-template change needs at least one index template to create.",
+			messages: [new AIMessage("Cannot propose the change: name at least one index template to create.")],
+		};
+	}
+	// Per-entry validation: a template needs a name and at least one index pattern (the two provider-
+	// required fields). Naming the offending entry helps the user fix the right one.
+	for (const e of entries) {
+		if (!e.name || !e.indexPatterns || e.indexPatterns.length === 0) {
+			return {
+				blockedReason: "Each index template needs a name and at least one index pattern.",
+				messages: [
+					new AIMessage("Cannot propose the change: every index template needs a name and at least one index pattern."),
+				],
+			};
+		}
+	}
+
+	const branch = branchName(req);
+	// Create the shared branch ONCE; every new template commits onto it.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+
+	const files: string[] = [];
+	const diffBlocks: string[] = [];
+	const skipped: string[] = [];
+	for (const e of entries) {
+		const filePath = deploymentJsonPath(indexTemplateTemplate(), cluster).replace(/\$\{template\}/g, e.name);
+
+		// Probe: a real 404 means the file is new -> create it; a 2xx means it already exists -> skip
+		// (this workflow does not overwrite). Any other read (token/timeout/5xx) blocks the batch.
+		const raw = await callTool("gitlab_get_file_content", { filePath });
+		if (raw.startsWith("[gitlab token not configured")) {
+			return {
+				blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+				messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+			};
+		}
+		if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+			return {
+				blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+				messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+			};
+		}
+		if (isGitlabSuccess(raw)) {
+			// Already exists -- skip rather than overwrite (edit is a separate, unsupported workflow).
+			skipped.push(filePath);
+			continue;
+		}
+
+		const content = buildIndexTemplateConfig(e);
+		const commit = await callTool("gitlab_commit_file", {
+			branch,
+			file_path: filePath,
+			content,
+			commit_message: `${cluster}: add index template ${e.name}`,
+			action: "create",
+		});
+		if (!isGitlabSuccess(commit)) {
+			// Atomic: one file's failure blocks the whole MR. Any files already committed are harmless
+			// (no MR is opened, so the branch is never reviewed or merged).
+			return {
+				blockedReason: `Could not commit ${filePath} via the GitLab API: ${commit.slice(0, 120)}.`,
+				messages: [new AIMessage(`Cannot propose the change: the GitLab commit for '${e.name}' failed.`)],
+			};
+		}
+		files.push(filePath);
+		// Full-file diff on create (the whole file is new -- there is no prior version to diff against).
+		diffBlocks.push(`${filePath} (new index template ${e.name})\n+ ${content.replace(/\n/g, "\n+ ").trimEnd()}`);
+	}
+
+	if (files.length === 0) {
+		// Everything requested already exists -- nothing to create, so no MR.
+		return {
+			blockedReason: `Index template(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
+			messages: [
+				new AIMessage(
+					`No change needed: the requested index template file(s) already exist on '${cluster}'. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	return {
+		branch,
+		proposedFilePath: files[0] ?? "",
+		proposedFiles: files,
+		proposedDiff: diffBlocks.join("\n\n"),
+		precheckPassed: files.length > 0,
+	};
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -3766,6 +3961,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
 	if (req.workflow === "topology-edit") return proposeTopologyChange(state, req);
 	if (req.workflow === "dashboard-edit") return proposeDashboardChange(state, req);
+	if (req.workflow === "index-template-create") return proposeIndexTemplateCreate(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -3928,6 +4124,16 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			"Dashboard NDJSON change (display-only); a malformed export fails CI's saved-objects import job, not production. This is a WHOLE-FILE add/replace -- individual panels are not reviewed; verify the export is the intended dashboard.",
 		);
 	}
+	if (req?.workflow === "index-template-create") {
+		// SIO-978: a new index template is a CREATE in CI's plan; it only affects indices created AFTER
+		// apply (existing indices keep their current settings/ILM). A higher-priority template that
+		// overlaps an existing pattern can shadow it for new indices -- the reviewer should confirm the
+		// pattern + priority. composed_of must reference real component templates (those not listed in
+		// ignore_missing_component_templates must already exist on the cluster, or the apply fails).
+		risks.push(
+			"Creates NEW index template(s); CI's plan will show a create. They apply only to indices created AFTER apply -- existing indices are unaffected. Confirm the index_patterns + priority do not unintentionally shadow an existing template, and that every composed_of component template (except those in ignore_missing_component_templates) exists on the cluster.",
+		);
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -3964,7 +4170,10 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 												? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
 												: req?.workflow === "dashboard-edit"
 													? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
-													: (req?.tier ?? req?.resource ?? "change");
+													: req?.workflow === "index-template-create"
+														? // SIO-978: "create N index templates: <first name>[, +K more]".
+															`create ${req?.indexTemplates?.length ?? 0} index template${(req?.indexTemplates?.length ?? 0) === 1 ? "" : "s"}: ${req?.indexTemplates?.[0]?.name ?? "?"}${(req?.indexTemplates?.length ?? 0) > 1 ? `, +${(req?.indexTemplates?.length ?? 0) - 1} more` : ""}`
+														: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
