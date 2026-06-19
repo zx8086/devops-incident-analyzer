@@ -141,6 +141,10 @@ export interface IacPlanReview {
 	// SIO-954: rendered knowledge-graph context (this deployment's recent change
 	// history) surfaced to the reviewer. Empty when the graph is disabled/cold.
 	recentChanges?: string;
+	// SIO-970: rendered agent-memory recall (prior learnings/decisions for this
+	// deployment/stack cell) surfaced to the reviewer. Undefined when the agent-memory
+	// backend is off or recall returned no hits.
+	priorLearnings?: string;
 }
 
 // SIO-875: the actual Terraform plan parsed from the MR pipeline's terraform report.
@@ -512,6 +516,10 @@ export const IacState = Annotation.Root({
 		reducer: last,
 		default: () => undefined,
 	}),
+	// SIO-970: rendered agent-memory recall (prior learnings/decisions for the targeted
+	// (deployment, stack) cell), produced by memoryEnrichIac and surfaced in the plan-review
+	// payload. Empty when LIVE_MEMORY_BACKEND != agent-memory or recall returns no hits.
+	priorLearnings: Annotation<string>({ reducer: last, default: () => "" }),
 });
 
 export type IacStateType = typeof IacState.State;

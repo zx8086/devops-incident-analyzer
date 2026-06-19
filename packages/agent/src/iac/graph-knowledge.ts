@@ -22,6 +22,7 @@ import {
 	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import { type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
 import { iacTurnOutcome, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -144,6 +145,43 @@ export async function graphEnrichIac(state: IacStateType): Promise<Partial<IacSt
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"graphEnrichIac failed; continuing without graph context",
+		);
+		return {};
+	}
+}
+
+// SIO-970: render recalled agent-memory hits as a markdown bullet list for the plan-review
+// card. "" for no hits (the UI block stays hidden). Tags mirror runMemorySearch (local-tools.ts).
+function renderLearnings(hits: MemorySearchHit[]): string {
+	if (hits.length === 0) return "";
+	return hits
+		.map((h) => {
+			const a = h.annotations;
+			const tags = [a.workflow, a.version, a.outcome].filter(Boolean).join(" ");
+			return tags ? `- ${h.text} [${tags}]` : `- ${h.text}`;
+		})
+		.join("\n");
+}
+
+// SIO-970: memoryEnrichIac node: cross-session semantic recall of prior learnings/decisions
+// for the targeted (deployment, stack) cell -> state.priorLearnings, surfaced on the plan-review
+// payload before the user approves. Independent of the knowledge graph: gated only on the
+// agent-memory backend, so recall works whether or not KNOWLEDGE_GRAPH_ENABLED is set. Filters
+// on the SAME annotation key the change path writes (buildIacChangeAnnotations -> stack_instance)
+// plus kind:"iac-change" to suppress daily-log chatter. Soft-fails (never throws) so a memory
+// outage degrades to empty recall and never blocks drafting.
+export async function memoryEnrichIac(state: IacStateType): Promise<Partial<IacStateType>> {
+	if (selectedBackend() !== "agent-memory") return {};
+	const siId = stackInstanceId(state);
+	if (!siId) return {};
+	try {
+		const query = state.iacRequest?.workflow ?? state.planReview?.title ?? siId;
+		const hits = await searchAgentMemory("elastic-iac", query, { stack_instance: siId, kind: "iac-change" });
+		return { priorLearnings: renderLearnings(hits) };
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"memoryEnrichIac failed; continuing without memory recall",
 		);
 		return {};
 	}

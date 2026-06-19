@@ -3972,6 +3972,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		precheckPassed,
 		// SIO-954: surface the deployment's recent change history (empty when the graph is off).
 		recentChanges: state.iacGraphContext || undefined,
+		// SIO-970: surface recalled prior learnings/decisions for this stack-instance (empty
+		// when the agent-memory backend is off or recall found nothing).
+		priorLearnings: state.priorLearnings || undefined,
 	};
 	return { terraformPlan: plan, precheckPassed, risks, planReview: review };
 }

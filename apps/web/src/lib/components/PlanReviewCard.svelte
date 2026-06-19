@@ -65,6 +65,18 @@ const planLabel = "How this applies";
         </details>
       {/if}
 
+      <!-- SIO-970: cross-session agent-memory recall -- prior learnings/decisions for this
+           deployment/stack cell, so the reviewer sees what we learned last time we touched
+           this stack before approving. -->
+      {#if review.priorLearnings}
+        <details class="mt-2" open>
+          <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Prior learnings (memory)</summary>
+          <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+            <MarkdownRenderer content={review.priorLearnings} />
+          </div>
+        </details>
+      {/if}
+
       <details class="mt-2" open>
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{planLabel}</summary>
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(none)"}</pre>
