@@ -211,7 +211,7 @@ If `ELASTIC_DEPLOYMENTS` is unset, the server falls back to legacy single-deploy
 
 ### Per-Call Search Timeout
 
-The `elasticsearch_search` tool uses a separate per-call timeout from the shared client `requestTimeout`. Defaults are conservative for heavy aggregations on multi-billion-doc indices. See [Troubleshooting > Elasticsearch Search Times Out at ~30 Seconds](../operations/troubleshooting.md#elasticsearch-search-times-out-at-30-seconds-sio-708) for the failure mode this addresses.
+The `elasticsearch_search` tool uses a separate per-call timeout from the shared client `requestTimeout`. Defaults are conservative for heavy aggregations on multi-billion-doc indices. See [Troubleshooting > Elasticsearch Search Times Out at ~30 Seconds](../operations/troubleshooting.md#elasticsearch-search-times-out-at-30-seconds) for the failure mode this addresses.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -441,7 +441,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
 | `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
-| `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate-sio-828) for the full AgentCore configuration. |
+| `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate) for the full AgentCore configuration. |
 
 In Docker Compose, these resolve to service names (e.g., `http://elastic-mcp:9080`). In bare-metal development, they resolve to `localhost` with each server's configured port.
 
@@ -479,4 +479,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-05-08 | added Confluent Connect (`CONNECT_ENABLED`, `CONNECT_URL`, `CONNECT_API_KEY`, `CONNECT_API_SECRET`), Schema Registry (`SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET`), ksqlDB (`KSQL_ENDPOINT`, `KSQL_API_KEY`, `KSQL_API_SECRET`), and REST Proxy (`RESTPROXY_ENABLED`, `RESTPROXY_URL`, `RESTPROXY_API_KEY`, `RESTPROXY_API_SECRET`) env vars. Expanded `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` scope description to cover Connect, SR, and REST Proxy gating. |
 | 2026-05-10 | post-log-hygiene sync: added Elasticsearch per-call search tuning (`ELASTIC_SEARCH_REQUEST_TIMEOUT_MS`, `ELASTIC_SEARCH_MAX_RETRIES`) with shared-client `requestTimeout` cap raised to 120 000 ms; added Kafka admin-RPC timeout (`KAFKA_TOOL_TIMEOUT_MS`, default 30 000) replacing the previously dead `requestTimeout` knob; added agent graph and sub-agent timeout overrides (`GRAPH_TIMEOUT_MS` default 720 000, `SUB_AGENT_TIMEOUT_MS` default 360 000). |
 | 2026-05-16 | collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |
-| 2026-05-28 | docs drift sweep: added new "AWS MCP — Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for ��826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |
+| 2026-05-28 | docs drift sweep: added new "AWS MCP — Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for SIO-822–826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |

@@ -209,7 +209,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
-**Tool count:** 77 cluster tools always; +16 cloud/billing tools registered conditionally on `EC_API_KEY` (€“826).
+**Tool count:** 77 cluster tools always; +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822â€“826).
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation

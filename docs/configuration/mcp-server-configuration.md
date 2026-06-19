@@ -112,9 +112,9 @@ An unknown deployment ID returns `McpError(InvalidParams)` listing the valid IDs
 
 ### Per-Call Search Timeout
 
-`elasticsearch_search` wires its own per-call `TransportRequestOptions` instead of inheriting the shared client `requestTimeout`. The helper `searchRequestOptions.ts` mirrors the `discoveryRequestOptions.ts` shape: defaults are 60 000 ms timeout and 0 retries, overridable per environment via `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` and `ELASTIC_SEARCH_MAX_RETRIES`. The shared client `requestTimeout` schema cap also moved from 60 000 to 120 000 ms in the same change, so a single very-heavy aggregation can scale to 2 minutes if necessary. See [Environment Variables > Per-Call Search Timeout](environment-variables.md#per-call-search-timeout-sio-708) for the failure mode the per-call cap addresses (parallel aggregation contention against multi-billion-doc indices).
+`elasticsearch_search` wires its own per-call `TransportRequestOptions` instead of inheriting the shared client `requestTimeout`. The helper `searchRequestOptions.ts` mirrors the `discoveryRequestOptions.ts` shape: defaults are 60 000 ms timeout and 0 retries, overridable per environment via `ELASTIC_SEARCH_REQUEST_TIMEOUT_MS` and `ELASTIC_SEARCH_MAX_RETRIES`. The shared client `requestTimeout` schema cap also moved from 60 000 to 120 000 ms in the same change, so a single very-heavy aggregation can scale to 2 minutes if necessary. See [Environment Variables > Per-Call Search Timeout](environment-variables.md#per-call-search-timeout) for the failure mode the per-call cap addresses (parallel aggregation contention against multi-billion-doc indices).
 
-### Elastic Cloud Deployment + Billing Tools (��826)
+### Elastic Cloud Deployment + Billing Tools (SIO-674, SIO-822–826)
 
 When `EC_API_KEY` is set, the server registers 16 additional org-scoped tools that talk to `https://api.elastic-cloud.com`. These use the org-scoped `EC_API_KEY` credential, which is **distinct** from the per-deployment cluster API keys. When `EC_API_KEY` is unset, the tools do not register and the server boots normally — self-hosted ES users do not need an Elastic Cloud account.
 
@@ -129,7 +129,7 @@ When `EC_API_KEY` is set, the server registers 16 additional org-scoped tools th
 - `elasticsearch_cloud_cancel_pending_plan` — cancel a pending plan; gated on read-only mode (added 2026-05-21, PR #126)
 - `elasticsearch_cloud_list_hardware_profiles` — list available hardware profiles for the region/template (added 2026-05-22,)
 - `elasticsearch_cloud_get_hardware_profile` — full profile spec (instance config, storage ratios) (added 2026-05-22,)
-- `elasticsearch_cloud_simulate_hardware_profile_change` — billing-derived cost simulation for switching profiles. ��826 fixed 7 defects in the cost estimate, the cross-profile null-delta bug, and the operator rate catalog; adds a `rate_source_confidence` field indicating whether the rate came from the live billing API, the cached operator catalog, or a derived approximation.
+- `elasticsearch_cloud_simulate_hardware_profile_change` — billing-derived cost simulation for switching profiles. SIO-822–826 fixed 7 defects in the cost estimate, the cross-profile null-delta bug, and the operator rate catalog; adds a `rate_source_confidence` field indicating whether the rate came from the live billing API, the cached operator catalog, or a derived approximation.
 
 **Billing (6 tools)** — `packages/mcp-server-elastic/src/tools/billing/`:
 
@@ -140,7 +140,7 @@ When `EC_API_KEY` is set, the server registers 16 additional org-scoped tools th
 - `elasticsearch_billing_get_instance_items` — itemized billing for a single instance (added 2026-05-21, PR #126)
 - `elasticsearch_billing_get_instance_charts` — chart-ready time series for a single instance (added 2026-05-21, PR #126)
 
-See [Environment Variables](environment-variables.md#elastic-cloud-deployment--billing-api-sio-674) for the full env-var list.
+See [Environment Variables](environment-variables.md#elastic-cloud-deployment--billing-api) for the full env-var list.
 
 ### Claude Desktop Integration
 
@@ -282,7 +282,7 @@ The `allowDestructive` gate requires `allowWrites` to also be `true`. The config
 
 `@platformatic/kafka`'s `Admin` owns its own `ConnectionPool` (`Base.kConnections`). Before, every tool call constructed a fresh `Admin`, thrashing broker connections under steady-state ReAct iteration and triggering wave-of-timeouts on MSK. The client manager now caches a single `Admin` per process, mirrors the closed-then-rebuild pattern from the Producer, and guards concurrent constructor calls with `adminInitPromise` to prevent thundering-herd ctor races.
 
-Operational consequence: broker-connection metrics will be flatter than before — the agent process holds one long-lived admin connection per cluster instead of churning per-call connections. Per-tool RPC timeouts are governed by `KAFKA_TOOL_TIMEOUT_MS` (see [Environment Variables > Tool Timeouts](environment-variables.md#tool-timeouts-sio-710)).
+Operational consequence: broker-connection metrics will be flatter than before — the agent process holds one long-lived admin connection per cluster instead of churning per-call connections. Per-tool RPC timeouts are governed by `KAFKA_TOOL_TIMEOUT_MS` (see [Environment Variables > Tool Timeouts](environment-variables.md#tool-timeouts)).
 
 ### Schema Registry
 
@@ -680,5 +680,5 @@ Per project rules the schema carries no `.default()`; `loadConfig()` supplies ex
 | 2026-04-13 | Added GitLab MCP server configuration: hybrid proxy + custom tools, token auth, deferred retry |
 | 2026-04-23 | Added Atlassian MCP server configuration: OAuth 2.0, read-only mode, incident-project allowlist, hybrid proxy + custom |
 | 2026-05-10 | documented `elasticsearch_search` per-call `TransportRequestOptions` (helper `searchRequestOptions.ts`, shared `requestTimeout` cap raised to 120 000 ms) and Kafka `Admin` singleton lifecycle (one cached `Admin` per process, `KAFKA_TOOL_TIMEOUT_MS` replacing the dead `requestTimeout` knob). |
-| 2026-05-28 | docs drift sweep: added AWS MCP server section ( multi-estate via cross-account `AssumeRole`, `aws_list_estates`, ~40 read-only tools, AgentCore SigV4 proxy on port 3001); expanded Elastic Cloud + Billing section from 7 to 16 tools (��826 added `get_account`, `get_es_resource`, `cancel_pending_plan`, `list_hardware_profiles`, `get_hardware_profile`, `simulate_hardware_profile_change` with `rate_source_confidence`, `list_instances`, `get_instance_items`, `get_instance_charts`); refreshed Elastic tool count from ~84 to ~93. |
+| 2026-05-28 | docs drift sweep: added AWS MCP server section ( multi-estate via cross-account `AssumeRole`, `aws_list_estates`, ~40 read-only tools, AgentCore SigV4 proxy on port 3001); expanded Elastic Cloud + Billing section from 7 to 16 tools (SIO-822–826 added `get_account`, `get_es_resource`, `cancel_pending_plan`, `list_hardware_profiles`, `get_hardware_profile`, `simulate_hardware_profile_change` with `rate_source_confidence`, `list_instances`, `get_instance_items`, `get_instance_charts`); refreshed Elastic tool count from ~84 to ~93. |
 | 2026-06-02 | Added the Elastic IaC MCP server section (:9086, role `elastic-iac-mcp`, single-file `config.ts`, 23 read/plan/branch-only tools across terraform/git/gitlab/elastic). |
