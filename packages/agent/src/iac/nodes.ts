@@ -4127,6 +4127,10 @@ export function iacTurnOutcome(state: IacStateType): IacTurnOutcome {
 	if (state.blockedReason) {
 		return state.iacRequest?.workflow === "other" ? "unsupported" : "blocked";
 	}
+	// SIO-961: a partial fleet apply rides on a CI job that exited 1 (so pipelineStatus is
+	// "failed"), but the upgrade itself is in-progress with only agent-side failures -- do NOT
+	// flag the turn as pipeline-failed. The message carries the honest breakdown.
+	if (state.fleetUpgradeResult?.status === "partial") return "completed";
 	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") return "pipeline-failed";
 	return "completed";
 }
@@ -6018,7 +6022,9 @@ export function buildFleetFactDecision(state: IacStateType, result: FleetUpgrade
 			? "upgraded to"
 			: result.status === "failed"
 				? "upgrade FAILED to"
-				: "upgrade DISPATCHED to";
+				: result.status === "partial"
+					? "upgrade PARTIALLY applied to"
+					: "upgrade DISPATCHED to";
 	return `Fleet agents on ${dep} ${verb} ${version}.`;
 }
 
@@ -6034,6 +6040,21 @@ export function buildFleetFactRationale(state: IacStateType, result: FleetUpgrad
 	if (result.note) bits.push(result.note);
 	const pipeline = result.pipelineId ? ` Apply pipeline #${result.pipelineId}.` : "";
 	return `${bits.join(", ") || "no breakdown available"}.${pipeline}`;
+}
+
+// SIO-961: human note for a partial apply. Leads with the in-flight/pending majority so the
+// user is not alarmed by the CI "failed" exit, then names the small env-side failure set.
+export function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
+	const parts: string[] = [];
+	parts.push(`${outcome.succeeded}/${outcome.created} upgraded`);
+	if (outcome.unsettled > 0) parts.push(`${outcome.unsettled} still pending (offline; upgrade when they reconnect)`);
+	if (outcome.failed > 0) parts.push(`${outcome.failed} failed`);
+	if (outcome.rolledBack > 0) parts.push(`${outcome.rolledBack} rolled back (failed post-upgrade health check)`);
+	// A couple of sample failures with their reason (hostname + short error), not the full list.
+	const samples = outcome.failedAgents.slice(0, 3).map((a) => `${a.hostname}: ${a.error.slice(0, 80)}`);
+	const detail = samples.length > 0 ? ` Failures: ${samples.join("; ")}.` : "";
+	const recheck = outcome.actionId ? ` Re-check with action ${outcome.actionId} (valid ~30d).` : "";
+	return `Partial: ${parts.join(", ")}. The failures are agent-side (binary download / disk / health check), not a bad upgrade.${detail}${recheck}`;
 }
 
 // SIO-959: structured labels on the durable fleet fact so a later session can
@@ -6091,7 +6112,10 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		// learnings stay PR-gated (key-decisions.md is untouched).
 		const fleetResult = state.fleetUpgradeResult;
 		const recordableStatus =
-			fleetResult?.status === "applied" || fleetResult?.status === "failed" || fleetResult?.status === "dispatched";
+			fleetResult?.status === "applied" ||
+			fleetResult?.status === "failed" ||
+			fleetResult?.status === "partial" ||
+			fleetResult?.status === "dispatched";
 		if (isFleet && selectedBackend() === "agent-memory" && recordableStatus && fleetResult) {
 			recordKeyDecision({
 				requestId: state.requestId,
@@ -6693,24 +6717,65 @@ export function parseFleetUpgradeReport(raw: string): FleetUpgradeReport | null 
 
 // Parse the apply-mode report's `apply` + `action_id` block for the result summary. Returns
 // the fields needed for FleetUpgradeResult; absent/preview reports yield zeros. (Pure.)
-export function parseFleetApplyOutcome(raw: string): {
+// SIO-961: a per-agent failure from the apply report's failed_agents[] (ground truth).
+export interface FleetFailedAgent {
+	hostname: string;
+	agentId: string;
+	failedState: string;
+	error: string;
+}
+
+// SIO-961: the full apply-result breakdown. succeeded/failed/rolledBack/unsettled +
+// per-agent failures let the agent report a partial/in-progress outcome (most agents
+// offline-pending, a few env-side failures) instead of a flat "failed".
+export interface FleetApplyOutcome {
 	actionId: string;
 	pollStatus: string;
 	acked: number;
 	created: number;
 	failedSilent: number;
-} {
-	const empty = { actionId: "", pollStatus: "", acked: 0, created: 0, failedSilent: 0 };
+	succeeded: number;
+	failed: number;
+	rolledBack: number;
+	unsettled: number;
+	failedAgents: FleetFailedAgent[];
+}
+
+export function parseFleetApplyOutcome(raw: string): FleetApplyOutcome {
+	const empty: FleetApplyOutcome = {
+		actionId: "",
+		pollStatus: "",
+		acked: 0,
+		created: 0,
+		failedSilent: 0,
+		succeeded: 0,
+		failed: 0,
+		rolledBack: 0,
+		unsettled: 0,
+		failedAgents: [],
+	};
 	try {
 		const o = JSON.parse(raw) as Record<string, unknown>;
 		const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+		const str = (v: unknown): string => (typeof v === "string" ? v : "");
 		const a = (o.apply ?? {}) as Record<string, unknown>;
+		const rawAgents = Array.isArray(a.failed_agents) ? (a.failed_agents as Record<string, unknown>[]) : [];
 		return {
-			actionId: typeof o.action_id === "string" ? o.action_id : "",
-			pollStatus: typeof a.poll_status === "string" ? a.poll_status : "",
+			actionId: str(o.action_id),
+			pollStatus: str(a.poll_status),
 			acked: num(a.acked),
 			created: num(a.created),
 			failedSilent: num(a.failed_silent),
+			succeeded: num(a.succeeded),
+			failed: num(a.failed),
+			rolledBack: num(a.rolled_back),
+			unsettled: num(a.unsettled),
+			failedAgents: rawAgents.map((ag) => ({
+				hostname: str(ag.hostname),
+				agentId: str(ag.agent_id),
+				failedState: str(ag.failed_state),
+				error: str(ag.error),
+			})),
 		};
 	} catch {
 		return empty;
@@ -7022,17 +7087,37 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 			acked: outcome.acked,
 			created: outcome.created,
 			failedSilent: outcome.failedSilent,
+			// SIO-961: carry the full breakdown so the summary + durable fact are honest.
+			succeeded: outcome.succeeded,
+			failed: outcome.failed,
+			rolledBack: outcome.rolledBack,
+			unsettled: outcome.unsettled,
+			failedAgents: outcome.failedAgents,
 		}),
 	};
 	let result: FleetUpgradeResult;
 	if (res.status === "success") {
 		result = { status: "applied", ...common };
 	} else if (res.status === "failed" || res.status === "canceled") {
-		result = {
-			status: "failed",
-			...common,
-			note: `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`,
-		};
+		// SIO-961: a failed/canceled CI job is NOT necessarily a failed upgrade. Fleet actioned
+		// agents (created > 0) and the failures are agent/env-side (download, disk, health-check
+		// rollback) with most agents unsettled-offline -> "partial", not "failed". A genuine infra
+		// failure (state lock, or nothing actioned at all) stays "failed".
+		const actioned = outcome != null && outcome.created > 0;
+		const infraFailure = res.stateLocked || outcome == null || outcome.created === 0;
+		if (actioned && !infraFailure) {
+			result = {
+				status: "partial",
+				...common,
+				note: buildFleetPartialNote(outcome),
+			};
+		} else {
+			result = {
+				status: "failed",
+				...common,
+				note: `Apply pipeline ${res.status}. ${classifyPipelineFailure(res.failureLog, res.stateLocked)}`,
+			};
+		}
 	} else {
 		// Running past the status window: the bulk_upgrade is in flight (a long rollout we chose not
 		// to block on). Report it as dispatched with the expected duration + the pipeline to track.
@@ -7163,11 +7248,16 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 			"I won't block on the full rollout; ask me to check on it or watch the pipeline."
 		);
 	}
-	// blocked | failed
 	const bfPid = result.pipelineId
 		? result.pipelineUrl
 			? ` Apply pipeline [#${result.pipelineId}](${result.pipelineUrl}).`
 			: ` Apply pipeline #${result.pipelineId}.`
 		: "";
+	// SIO-961: a partial apply -- the rollout ran, most agents are pending-offline, a few had
+	// agent-side failures. Lead with the in-flight reality (note already does), NOT a red "failed".
+	if (result.status === "partial") {
+		return `Fleet upgrade to ${report.targetVersion} on ${dep} -- ${result.note ?? "partial outcome; see logs"}${bfPid}${skipNote}`;
+	}
+	// blocked | failed
 	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${bfPid}${skipNote}`;
 }
