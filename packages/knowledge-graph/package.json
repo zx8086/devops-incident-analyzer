@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@devops-agent/observability": "workspace:*",
+		"lbug": "^0.14.3",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
@@ -19,8 +20,5 @@
 		"bun-types": "catalog:dev",
 		"typescript": "catalog:dev"
 	},
-	"private": true,
-	"optionalDependencies": {
-		"lbug": "^0.14.3"
-	}
+	"private": true
 }
