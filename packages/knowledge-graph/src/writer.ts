@@ -100,6 +100,54 @@ export async function recordIncident(store: GraphStore, incident: IncidentRecord
 	}
 }
 
+// SIO-954: one elastic-iac maker turn's proposed change. filePaths is collapsed
+// to a single filePath property on the ConfigChange node (the first path, or a
+// "N files" marker for multi-file rollouts) so the node stays single-valued; the
+// full list lives in the turn's MR. mrUrl is set only after openMr.
+export interface IacChangeRecord {
+	id: string;
+	deployment: string;
+	workflow?: string;
+	filePaths?: string[];
+	summary?: string;
+	mrUrl?: string;
+	createdAt?: string;
+}
+
+function summariseFilePaths(filePaths: string[] | undefined): string {
+	const paths = (filePaths ?? []).filter((p) => p.length > 0);
+	const first = paths[0];
+	if (!first) return "";
+	if (paths.length === 1) return first;
+	return `${first} (+${paths.length - 1} more)`;
+}
+
+export async function recordIacChange(store: GraphStore, change: IacChangeRecord): Promise<void> {
+	if (!change.id || !change.deployment) return;
+	await store.run("MERGE (d:ElasticDeployment {name: $name})", { name: change.deployment });
+	await store.run(
+		"MERGE (c:ConfigChange {id: $id}) SET c.workflow = $workflow, c.filePath = $filePath, c.summary = $summary, c.createdAt = $createdAt",
+		{
+			id: change.id,
+			workflow: change.workflow ?? "",
+			filePath: summariseFilePaths(change.filePaths),
+			summary: change.summary ?? "",
+			createdAt: change.createdAt ?? new Date().toISOString(),
+		},
+	);
+	await store.run(
+		"MATCH (d:ElasticDeployment {name: $name}), (c:ConfigChange {id: $id}) MERGE (d)-[:CHANGED_BY]->(c)",
+		{ name: change.deployment, id: change.id },
+	);
+	if (change.mrUrl) {
+		await store.run("MERGE (m:MergeRequest {url: $url})", { url: change.mrUrl });
+		await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $url}) MERGE (c)-[:PROPOSED_IN]->(m)", {
+			id: change.id,
+			url: change.mrUrl,
+		});
+	}
+}
+
 export async function linkResolution(store: GraphStore, incidentId: string, runbookFilenames: string[]): Promise<void> {
 	for (const filename of runbookFilenames) {
 		if (!filename) continue;

@@ -3894,6 +3894,8 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		plan,
 		risks,
 		precheckPassed,
+		// SIO-954: surface the deployment's recent change history (empty when the graph is off).
+		recentChanges: state.iacGraphContext || undefined,
 	};
 	return { terraformPlan: plan, precheckPassed, risks, planReview: review };
 }

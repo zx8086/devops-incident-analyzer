@@ -2,13 +2,16 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildGraphContext,
+	buildIacGraphContext,
 	EMBEDDING_DIM,
 	InMemoryGraphStore,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
 	linkResolution,
 	MIGRATIONS,
+	priorChangesForDeployment,
 	priorRelationshipsForServices,
+	recordIacChange,
 	recordIncident,
 	similarIncidents,
 	upsertEntities,
@@ -105,6 +108,52 @@ describe("writer (parameterized, injection-safe)", () => {
 			store.calls.some((c) => c.cypher.includes("RESOLVED_BY") && c.params?.filename === "kafka-consumer-lag.md"),
 		).toBe(true);
 	});
+
+	// SIO-954: IaC change recorder.
+	test("recordIacChange merges deployment, config-change, and MR with bound params", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacChange(store, {
+			id: "req-1",
+			deployment: "eu-b2b",
+			workflow: "ilm-rollout",
+			filePaths: ["lifecycle-policies/metrics.json"],
+			summary: "[eu-b2b] metrics: warm",
+			mrUrl: "https://gitlab.com/x/-/merge_requests/9",
+		});
+		expect(
+			store.calls.some((c) => c.cypher.includes("MERGE (d:ElasticDeployment") && c.params?.name === "eu-b2b"),
+		).toBe(true);
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.id).toBe("req-1");
+		expect(change?.params?.workflow).toBe("ilm-rollout");
+		expect(change?.params?.filePath).toBe("lifecycle-policies/metrics.json");
+		expect(store.calls.some((c) => c.cypher.includes("CHANGED_BY"))).toBe(true);
+		expect(
+			store.calls.some(
+				(c) => c.cypher.includes("PROPOSED_IN") && c.params?.url === "https://gitlab.com/x/-/merge_requests/9",
+			),
+		).toBe(true);
+	});
+
+	test("recordIacChange collapses multi-file paths and skips the MR when absent", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacChange(store, {
+			id: "req-2",
+			deployment: "eu-b2b",
+			workflow: "ilm-rollout",
+			filePaths: ["a.json", "b.json", "c.json"],
+		});
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.filePath).toBe("a.json (+2 more)");
+		expect(store.calls.some((c) => c.cypher.includes("MergeRequest"))).toBe(false);
+	});
+
+	test("recordIacChange is a no-op without an id or deployment", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacChange(store, { id: "", deployment: "eu-b2b" });
+		await recordIacChange(store, { id: "req-3", deployment: "" });
+		expect(store.calls).toEqual([]);
+	});
 });
 
 describe("reader", () => {
@@ -131,6 +180,29 @@ describe("reader", () => {
 		expect(ctx).toContain("## Knowledge Graph");
 		expect(ctx).toContain("svc-a -> svc-b");
 		expect(ctx).toContain("kafka lag outage");
+	});
+
+	// SIO-954: IaC change-history reader.
+	test("priorChangesForDeployment maps rows, [] for an empty deployment", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("CHANGED_BY", [
+			{ id: "req-1", workflow: "ilm-rollout", summary: "metrics warm", mrUrl: "u1", createdAt: "2026-06-19" },
+		]);
+		const changes = await priorChangesForDeployment(store, "eu-b2b");
+		expect(changes).toEqual([
+			{ id: "req-1", workflow: "ilm-rollout", summary: "metrics warm", mrUrl: "u1", createdAt: "2026-06-19" },
+		]);
+		expect(await priorChangesForDeployment(store, "")).toEqual([]);
+	});
+
+	test("buildIacGraphContext renders recent changes, empty when none", () => {
+		expect(buildIacGraphContext("eu-b2b", [])).toBe("");
+		const ctx = buildIacGraphContext("eu-b2b", [
+			{ id: "req-1", workflow: "ilm-rollout", summary: "metrics warm", mrUrl: "u1", createdAt: "2026-06-19" },
+		]);
+		expect(ctx).toContain("## Knowledge Graph");
+		expect(ctx).toContain("Recent changes to eu-b2b");
+		expect(ctx).toContain("ilm-rollout: metrics warm (u1)");
 	});
 });
 

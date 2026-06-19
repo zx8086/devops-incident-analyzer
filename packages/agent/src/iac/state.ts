@@ -138,6 +138,9 @@ export interface IacPlanReview {
 	plan: string;
 	risks: string[];
 	precheckPassed: boolean;
+	// SIO-954: rendered knowledge-graph context (this deployment's recent change
+	// history) surfaced to the reviewer. Empty when the graph is disabled/cold.
+	recentChanges?: string;
 }
 
 // SIO-875: the actual Terraform plan parsed from the MR pipeline's terraform report.
@@ -493,6 +496,10 @@ export const IacState = Annotation.Root({
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
 	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-954: rendered knowledge-graph context for the target deployment (recent change
+	// history), produced by graphEnrichIac and surfaced in the plan-review payload. Empty
+	// when KNOWLEDGE_GRAPH_ENABLED is off or the deployment has no recorded history.
+	iacGraphContext: Annotation<string>({ reducer: last, default: () => "" }),
 });
 
 export type IacStateType = typeof IacState.State;

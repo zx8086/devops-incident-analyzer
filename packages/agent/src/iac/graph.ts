@@ -1,7 +1,9 @@
 // agent/src/iac/graph.ts
 import { createCheckpointer } from "@devops-agent/checkpointer";
+import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
+import { graphEnrichIac, recordIacEntities } from "./graph-knowledge.ts";
 import {
 	advanceDrift,
 	answerInfo,
@@ -38,6 +40,17 @@ import { IacState } from "./state.ts";
 export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sqlite" }) {
 	await initializeLangSmith();
 
+	// SIO-954: knowledge-graph nodes. Registered always (type-safe); reached only when
+	// KNOWLEDGE_GRAPH_ENABLED is set -- the SIO-850/SIO-640 edge-gate idiom. graphEnrichIac
+	// reads the deployment's recent change history before drafting (spliced into
+	// readClusterState -> guard); recordIacEntities writes this turn's change after the MR is
+	// opened (spliced into openMr -> watchPipeline). The splice is done with a build-time-constant
+	// conditional edge whose `ends` list always names the KG node (keeping it reachable for
+	// compilation) but whose router only selects it when the flag is on.
+	const knowledgeGraphEnabled = isKnowledgeGraphEnabled();
+	const enrichTarget = () => (knowledgeGraphEnabled ? "graphEnrichIac" : "guard");
+	const recordTarget = () => (knowledgeGraphEnabled ? "recordIacEntities" : "watchPipeline");
+
 	const graph = new StateGraph(IacState)
 		.addNode("bootstrap", bootstrapIac)
 		.addNode("classifyIacIntent", classifyIacIntent)
@@ -73,6 +86,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("detectFleetUpgrade", detectFleetUpgrade)
 		.addNode("fleetUpgradeGate", fleetUpgradeGate)
 		.addNode("applyFleetUpgrade", applyFleetUpgrade)
+		// SIO-954: KG read/write nodes (registered always; reached only when enabled).
+		.addNode("graphEnrichIac", graphEnrichIac)
+		.addNode("recordIacEntities", recordIacEntities)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
@@ -112,7 +128,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// "other") with a capability message + blockedReason -> stop before reading cluster
 		// state or drafting. Otherwise proceed to the maker pipeline.
 		.addConditionalEdges("parseIntent", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
-		.addEdge("readClusterState", "guard")
+		// SIO-954: readClusterState -> guard, with graphEnrichIac spliced in when the KG is enabled.
+		.addConditionalEdges("readClusterState", enrichTarget, ["graphEnrichIac", "guard"])
+		.addEdge("graphEnrichIac", "guard")
 		// Blocked by a mechanical safety guard -> stop before any write.
 		.addConditionalEdges("guard", (s) => (s.blockedReason ? END : "draftChange"), ["draftChange", END])
 		// SIO-873: the GitOps proposer (draftChange) can block too (e.g. missing token,
@@ -125,7 +143,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"teardown",
 		])
 		// SIO-875: after opening the MR, watch the pipeline (bounded) then render.
-		.addEdge("openMr", "watchPipeline")
+		// SIO-954: openMr -> watchPipeline, with recordIacEntities spliced in when the KG is enabled.
+		.addConditionalEdges("openMr", recordTarget, ["recordIacEntities", "watchPipeline"])
+		.addEdge("recordIacEntities", "watchPipeline")
 		.addEdge("watchPipeline", "teardown")
 		// SIO-882: drift sub-flow. Early exit (no deployment/stacks) -> END (the message is
 		// already set); otherwise explainDrift attaches explanations + emits the report.

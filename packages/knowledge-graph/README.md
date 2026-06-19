@@ -26,9 +26,20 @@ bun run --filter @devops-agent/knowledge-graph knowledge-graph:migrate
 bun run --filter @devops-agent/knowledge-graph knowledge-graph:seed
 ```
 
-The `recordEntities` / `graphEnrich` pipeline nodes and the
+The incident pipeline's `recordEntities` / `graphEnrich` nodes, the elastic-iac
+maker graph's `recordIacEntities` / `graphEnrichIac` nodes (SIO-954), and the
 `warm_knowledge_graph` lifecycle hook all gate on `KNOWLEDGE_GRAPH_ENABLED`; with
-it unset the graph is never opened and the 20-node pipeline runs unchanged.
+it unset the graph is never opened and both pipelines run unchanged.
+
+## IaC change history (SIO-954)
+
+Beyond the incident-correlation model, the schema carries an IaC change-history
+slice for elastic-iac: `ElasticDeployment -[:CHANGED_BY]-> ConfigChange
+-[:PROPOSED_IN]-> MergeRequest`. `recordIacChange` (writer) records each maker
+turn after its MR is opened; `priorChangesForDeployment` + `buildIacGraphContext`
+(reader) surface a deployment's recent changes into the plan-review payload so a
+later turn against the same cluster can reference what changed before. The same
+`migrate` command applies these tables (additive `IF NOT EXISTS`).
 
 ## Vector similarity
 
