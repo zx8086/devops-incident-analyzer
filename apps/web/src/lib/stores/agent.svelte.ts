@@ -427,15 +427,18 @@ function createAgentStore() {
 		}
 	}
 
-	// SIO-952: a session = one conversation. End the prior conversation's Agent
-	// Memory session deterministically (so end_time gets set) whenever the user
-	// starts a new conversation or leaves the page. Uses sendBeacon so it survives
-	// page unload; no-ops when there is no live thread. The server endpoint and
-	// runTeardown are best-effort, so a dropped beacon only loses the explicit
-	// trigger -- the server idle-TTL sweep is the backstop.
-	function teardownSession(tid: string, agentName: AgentId): void {
+	// SIO-952/SIO-956: a session = one conversation. End the prior conversation's
+	// Agent Memory session deterministically (so end_time gets set) when the user
+	// starts a new conversation (Clear / switch agent) or leaves the page
+	// (pagehide). Uses sendBeacon so it survives page unload; no-ops when there is
+	// no live thread. Best-effort: the server end is idempotent (SIO-956), so a
+	// dropped/duplicate beacon is harmless.
+	// SIO-958: `reason` records WHICH action ended the session, logged on both the
+	// client (here) and the server, so an unexpected end is diagnosable.
+	function teardownSession(tid: string, agentName: AgentId, reason: string): void {
 		if (!tid) return;
-		const body = JSON.stringify({ threadId: tid, agentName });
+		console.log("[session] ending", { threadId: tid, agentName, reason });
+		const body = JSON.stringify({ threadId: tid, agentName, reason });
 		try {
 			if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
 				navigator.sendBeacon("/api/agent/session/teardown", new Blob([body], { type: "application/json" }));
@@ -453,14 +456,14 @@ function createAgentStore() {
 		}).catch(() => {});
 	}
 
-	// SIO-952: public seam for the page's unload/visibility listeners.
+	// SIO-952: public seam for the page's pagehide (real unload) listener.
 	function endCurrentSession(): void {
-		teardownSession(threadId, currentAgent);
+		teardownSession(threadId, currentAgent, "pagehide");
 	}
 
 	function clearChat() {
 		// End the conversation we are leaving before its thread id is cleared.
-		teardownSession(threadId, currentAgent);
+		teardownSession(threadId, currentAgent, "clear");
 		messages = [];
 		threadId = "";
 		currentContent = "";
@@ -495,7 +498,7 @@ function createAgentStore() {
 		// SIO-952: end the outgoing agent's conversation with ITS name before we
 		// flip currentAgent (clearChat tears down with currentAgent; flipping first
 		// would attribute the teardown to the wrong agent/user).
-		teardownSession(threadId, currentAgent);
+		teardownSession(threadId, currentAgent, "switch-agent");
 		threadId = "";
 		currentAgent = agent;
 		clearChat();

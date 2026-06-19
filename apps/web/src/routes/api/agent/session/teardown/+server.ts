@@ -19,6 +19,9 @@ const TeardownRequestSchema = z.object({
 	// SIO-938: which agent ran this thread, so teardown ends the right Agent
 	// Memory user's session. Optional; defaults to incident-analyzer.
 	agentName: z.string().min(1).optional(),
+	// SIO-958: which UI action ended the session (clear | switch-agent | pagehide),
+	// for lifecycle diagnosability. Optional free-form string.
+	reason: z.string().min(1).optional(),
 });
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -31,7 +34,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	// Teardown is best-effort and must never error the client; sessionTeardown
 	// already swallows and logs internally.
-	await sessionTeardown(body.threadId, body.agentName);
-	log.info({ threadId: body.threadId }, "agent.session.teardown");
+	await sessionTeardown(body.threadId, body.agentName, body.reason);
+	log.info({ threadId: body.threadId, reason: body.reason ?? "unspecified" }, "agent.session.teardown");
 	return json({ ok: true });
 };

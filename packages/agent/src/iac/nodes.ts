@@ -5980,12 +5980,20 @@ export function buildFleetMemorySummary(state: IacStateType): string[] {
 	return parts;
 }
 
-// SIO-943: the durable Profile-fact statement for a terminal fleet upgrade. Self-contained (no
+// SIO-943: the durable Profile-fact statement for a fleet upgrade. Self-contained (no
 // requestId/threadId) so it reads on its own in a future session's semantic recall.
+// SIO-957: a dispatched (still-running) upgrade also gets a durable fact, worded as
+// in-flight ("upgrade DISPATCHED") so recall reflects "you kicked this off, not yet
+// confirmed complete" -- a long apply pipeline outlives the turn that dispatched it.
 export function buildFleetFactDecision(state: IacStateType, result: FleetUpgradeResult): string {
 	const dep = state.targetDeployment || state.iacRequest?.cluster || "unknown deployment";
 	const version = state.fleetUpgradeReport?.targetVersion ?? "?";
-	const verb = result.status === "applied" ? "upgraded to" : "upgrade FAILED to";
+	const verb =
+		result.status === "applied"
+			? "upgraded to"
+			: result.status === "failed"
+				? "upgrade FAILED to"
+				: "upgrade DISPATCHED to";
 	return `Fleet agents on ${dep} ${verb} ${version}.`;
 }
 
@@ -6030,20 +6038,35 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 			summary: summaryParts.join(" "),
 		});
 
-		// SIO-943: a terminal fleet upgrade (applied|failed) is a durable Profile fact so a
-		// later session recalls "eu-cld fleet -> 9.4.2 (applied)". Agent-memory backend only:
-		// on the file backend durable learnings stay PR-gated (key-decisions.md is untouched).
+		// SIO-943 / SIO-957: a fleet upgrade is a durable Profile fact so a later
+		// session recalls "eu-cld fleet -> 9.4.2 (applied)" OR "us-cld fleet -> 9.4.2
+		// (dispatched, pipeline #...)". Terminal (applied|failed) AND in-flight
+		// (dispatched) all qualify: a long apply pipeline outlives the turn that
+		// dispatched it, so without the dispatched fact a later session recalls
+		// nothing about work the user kicked off. skipped|blocked are not recorded
+		// (nothing happened). Agent-memory backend only: on the file backend durable
+		// learnings stay PR-gated (key-decisions.md is untouched).
 		const fleetResult = state.fleetUpgradeResult;
-		if (
-			isFleet &&
-			selectedBackend() === "agent-memory" &&
-			(fleetResult?.status === "applied" || fleetResult?.status === "failed")
-		) {
+		const recordableStatus =
+			fleetResult?.status === "applied" || fleetResult?.status === "failed" || fleetResult?.status === "dispatched";
+		if (isFleet && selectedBackend() === "agent-memory" && recordableStatus && fleetResult) {
 			recordKeyDecision({
 				requestId: state.requestId,
 				decision: buildFleetFactDecision(state, fleetResult),
 				rationale: buildFleetFactRationale(state, fleetResult),
 			});
+			// SIO-958: make the durable-write decision visible (terminal vs in-flight).
+			log.info(
+				{ deployment: state.targetDeployment, status: fleetResult.status, pipelineId: fleetResult.pipelineId },
+				"teardownIac: recorded durable fleet fact",
+			);
+		} else if (isFleet && selectedBackend() === "agent-memory") {
+			// SIO-958: a fleet turn that did NOT record a durable fact -- say why, so the
+			// recall gap is diagnosable from logs rather than silent.
+			log.info(
+				{ deployment: state.targetDeployment, status: fleetResult?.status ?? "none" },
+				"teardownIac: skipped durable fleet fact (non-recordable status)",
+			);
 		}
 	} catch {
 		// memory-writer already logs; never let a breadcrumb fail the turn.
@@ -6975,12 +6998,23 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 			note: `Upgrade started and running (status ${res.status || "running"}).${eta} Not finished within the status window; ask me to check on it or watch the pipeline.`,
 		};
 	}
+	// SIO-958: name the poll outcome so a reader never mistakes "still running at the
+	// status window" (dispatched -> in flight, healthy) for a pipeline failure. The
+	// raw pipelineStatus alone (e.g. "error"/"running" from an unparseable in-flight
+	// artifact) was misread as a failed deployment; pollOutcome disambiguates.
+	const pollOutcome =
+		result.status === "applied"
+			? "terminal_success"
+			: result.status === "failed"
+				? "pipeline_failed"
+				: "running_at_budget"; // dispatched: started + still in flight, NOT a failure
 	log.info(
 		{
 			deployment,
 			pipelineId: trig.pipelineId,
 			status: result.status,
 			pipelineStatus: res.status,
+			pollOutcome,
 			failedSilent: result.failedSilent,
 		},
 		"iac fleet upgrade: apply result",
