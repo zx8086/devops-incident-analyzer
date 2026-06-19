@@ -515,6 +515,111 @@ describe("parseSinglePipeline (SIO-924)", () => {
 	});
 });
 
+// SIO-960: on a FRESH session's first turn, the IaC agent proactively surfaces in-flight
+// work (a dispatched fleet upgrade recovered from memory) so the user doesn't have to ask.
+// It injects a SystemMessage (context for the turn's response), once per session, and stays
+// silent on later turns and when nothing is in flight.
+describe("bootstrapIac proactive in-flight surfacing (SIO-960)", () => {
+	function withMemory(inFlight: { deployment: string; version: string; pipelineId: number }[]) {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+				if (opts?.annotations?.kind !== "fleet-upgrade-dispatched") return [];
+				return inFlight.map((u) => ({
+					text: `Fleet agents on ${u.deployment} upgrade DISPATCHED to ${u.version}.`,
+					score: 0.9,
+					annotations: {
+						kind: "fleet-upgrade-dispatched",
+						deployment: u.deployment,
+						version: u.version,
+						pipeline_id: String(u.pipelineId),
+					},
+				}));
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		});
+	}
+
+	test("first turn with an in-flight upgrade injects a SystemMessage mentioning it", async () => {
+		mockTools({}); // getConnectedServers -> ["elastic-iac-mcp"], so connected
+		const prev = process.env.LIVE_MEMORY_BACKEND;
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withMemory([{ deployment: "us-cld", version: "9.4.2", pipelineId: 2614422047 }]);
+		const { bootstrapIac } = await import("./nodes.ts");
+		// fresh thread: only the human message, NO prior AIMessage
+		const state = {
+			messages: [{ getType: () => "human", content: "resize eu-b2b warm tier" }],
+		} as unknown as IacStateType;
+
+		const out = await bootstrapIac(state);
+
+		expect(out.connected).toBe(true);
+		const injected = (out.messages ?? []) as { getType?: () => string; content?: unknown }[];
+		const sys = injected.find((m) => m.getType?.() === "system");
+		expect(sys).toBeDefined();
+		expect(String(sys?.content)).toContain("us-cld");
+		expect(String(sys?.content)).toContain("2614422047");
+
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		if (prev === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prev;
+	});
+
+	test("does NOT surface on a later turn (prior AIMessage present)", async () => {
+		mockTools({});
+		const prev = process.env.LIVE_MEMORY_BACKEND;
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withMemory([{ deployment: "us-cld", version: "9.4.2", pipelineId: 2614422047 }]);
+		const { bootstrapIac } = await import("./nodes.ts");
+		// later turn: history already has an assistant reply
+		const state = {
+			messages: [
+				{ getType: () => "human", content: "earlier question" },
+				{ getType: () => "ai", content: "earlier answer" },
+				{ getType: () => "human", content: "resize eu-b2b warm tier" },
+			],
+		} as unknown as IacStateType;
+
+		const out = await bootstrapIac(state);
+		const injected = (out.messages ?? []) as { getType?: () => string }[];
+		expect(injected.find((m) => m.getType?.() === "system")).toBeUndefined();
+
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		if (prev === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prev;
+	});
+
+	test("first turn with NOTHING in flight stays silent (no system message)", async () => {
+		mockTools({});
+		const prev = process.env.LIVE_MEMORY_BACKEND;
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withMemory([]);
+		const { bootstrapIac } = await import("./nodes.ts");
+		const state = {
+			messages: [{ getType: () => "human", content: "resize eu-b2b warm tier" }],
+		} as unknown as IacStateType;
+
+		const out = await bootstrapIac(state);
+		const injected = (out.messages ?? []) as { getType?: () => string }[];
+		expect(injected.find((m) => m.getType?.() === "system")).toBeUndefined();
+
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		if (prev === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prev;
+	});
+});
+
 describe("formatFleetUpgradeSummary — SIO-924 pipeline link", () => {
 	test("applied result renders a clickable apply-pipeline markdown link when pipelineUrl is set", () => {
 		const result: FleetUpgradeResult = {
