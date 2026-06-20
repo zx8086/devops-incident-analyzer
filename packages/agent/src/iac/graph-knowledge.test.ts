@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { __setAgentMemoryClient } from "../memory-backend.ts";
 import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
-import { stackFromPaths } from "./nodes.ts";
+import { stackForWorkflow, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
@@ -197,10 +197,98 @@ describe("memoryEnrichIac", () => {
 		expect(result.priorLearnings).toContain("[ilm-rollout applied]");
 	});
 
-	test("is a no-op when no stack-instance can be resolved from the proposed paths", async () => {
+	test("is a no-op when no stack-instance can be resolved from the proposed paths OR the workflow", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
-		const result = await memoryEnrichIac(iacState({ proposedFiles: ["modules/slo/main.tf"] }));
+		// proposedFiles don't fit the env layout AND the workflow has no stack ("other" is the only
+		// workflow with no proposer -> no stack), so neither source yields a key.
+		const result = await memoryEnrichIac(
+			iacState({
+				proposedFiles: ["modules/slo/main.tf"],
+				iacRequest: { workflow: "other", isProd: false, cluster: "eu-b2b" },
+			}),
+		);
 		expect(result).toEqual({});
+	});
+
+	// SIO-985: the enrich/recall nodes run BEFORE draftChange, so proposedFiles is EMPTY at recall
+	// time. Recall must still resolve the (deployment, stack) key from the PARSED request's workflow,
+	// or cross-session learnings for a repeat (deployment, stack) op never surface.
+	test("recalls using the workflow-derived stack when proposedFiles is empty (pre-draft)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let filterSeen: Record<string, string> | undefined;
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+				filterSeen = opts?.annotations;
+				return [
+					{
+						text: "Bound metrics-custom on eu-b2b cluster-defaults; CI passed.",
+						score: 0.9,
+						annotations: { workflow: "cluster-default-edit", outcome: "applied" },
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: SIO-985 - test stub for the AgentMemoryClient surface
+		} as any);
+		// The exact repeat-op scenario: cluster-default-edit on eu-b2b, BEFORE draftChange (no files yet).
+		const result = await memoryEnrichIac(
+			iacState({
+				proposedFiles: [],
+				iacRequest: { workflow: "cluster-default-edit", isProd: false, cluster: "eu-b2b" },
+			}),
+		);
+		// The recall filter is the SAME key the write path produces post-draft.
+		expect(filterSeen).toEqual({ stack_instance: "eu-b2b/cluster-defaults", kind: "iac-change" });
+		expect(result.priorLearnings).toContain("Bound metrics-custom");
+		expect(result.priorLearnings).toContain("[cluster-default-edit applied]");
+	});
+});
+
+// SIO-985: the verified inverse of stackFromPaths -- so the recall key (derived from the workflow,
+// pre-draft) equals the write key (derived from proposedFiles, post-draft).
+describe("stackForWorkflow (SIO-985)", () => {
+	test("maps each workflow to the stack its proposer writes under", () => {
+		expect(stackForWorkflow("cluster-default-edit")).toBe("cluster-defaults");
+		expect(stackForWorkflow("ilm-rollout")).toBe("lifecycle-policies");
+		expect(stackForWorkflow("slo-edit")).toBe("slos");
+		expect(stackForWorkflow("alerting-edit")).toBe("alerting");
+		expect(stackForWorkflow("dataview-edit")).toBe("dataviews");
+		expect(stackForWorkflow("space-edit")).toBe("spaces");
+		expect(stackForWorkflow("security-edit")).toBe("security");
+		expect(stackForWorkflow("dashboard-edit")).toBe("dashboards");
+		expect(stackForWorkflow("index-template-create")).toBe("index-templates");
+		expect(stackForWorkflow("fleet-integration")).toBe("fleet-integrations");
+	});
+
+	test("deployment-level workflows map to the 'deployments' stack (matches stackFromPaths)", () => {
+		// These edit environments/_deployments/<cluster>.json, which stackFromPaths maps to "deployments".
+		expect(stackForWorkflow("version-upgrade")).toBe("deployments");
+		expect(stackForWorkflow("tier-resize")).toBe("deployments");
+		expect(stackForWorkflow("topology-edit")).toBe("deployments");
+		expect(stackFromPaths(["environments/_deployments/eu-b2b.json"])).toBe("deployments");
+	});
+
+	test("agrees with stackFromPaths for a representative stack-level path", () => {
+		// The write key (file-derived) and the recall key (workflow-derived) must be identical.
+		expect(stackForWorkflow("cluster-default-edit")).toBe(
+			stackFromPaths(["environments/eu-b2b/cluster-defaults/metrics.json"]),
+		);
+		expect(stackForWorkflow("ilm-rollout")).toBe(
+			stackFromPaths(["environments/eu-b2b/lifecycle-policies/metrics.json"]),
+		);
+	});
+
+	test("'other' (no proposer) and undefined resolve to no stack", () => {
+		expect(stackForWorkflow("other")).toBe("");
+		expect(stackForWorkflow(undefined)).toBe("");
 	});
 });
 
