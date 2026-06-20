@@ -236,17 +236,19 @@ stay out of time_series mode:
   "data_stream": {
     "hidden": false
   },
-  "template": {
-    "settings": {
-      "index": {
-        "lifecycle": {
-          "name": "dev-staging-metrics"
-        }
+  "settings": {
+    "index": {
+      "lifecycle": {
+        "name": "dev-staging-metrics"
       }
     }
   }
 }
 ```
+
+> NOTE: `settings` is a TOP-LEVEL key (the module reads `each.value.settings` and wraps it in the
+> resource's `template{}` block itself). A `template`-nested key here is silently dropped by Terraform's
+> object type conversion and the ILM binding is lost — this was caught reviewing MR !180.
 
 `environments/eu-b2b/index-templates/dev-staging-traces-ilm-override.json`:
 ```json
@@ -269,12 +271,10 @@ stay out of time_series mode:
   "data_stream": {
     "hidden": false
   },
-  "template": {
-    "settings": {
-      "index": {
-        "lifecycle": {
-          "name": "dev-staging-traces"
-        }
+  "settings": {
+    "index": {
+      "lifecycle": {
+        "name": "dev-staging-traces"
       }
     }
   }
