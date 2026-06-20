@@ -216,15 +216,21 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		return { text: String(out.messages?.[0]?.content), searchCalls };
 	}
 
-	test("success + approved: ready-to-merge footer, no bare old footer", async () => {
+	test("success + approved: staged-not-applied footer, no bare old footer", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", approvalState: { approved: true, required: 0 } },
 			{ backend: "file" },
 		);
-		expect(text).toContain("ready for you to merge & apply");
+		// SIO-991: the footer makes explicit the change is STAGED, not applied (CI only planned).
+		expect(text).toContain("The CI pipeline succeeded");
+		expect(text).toContain("staged");
+		expect(text).toContain("nothing has been applied yet");
+		expect(text).toContain("Merge & apply in GitLab");
 		expect(text).toContain("I never merge or apply.");
 		// the old unconditional footer must no longer appear verbatim on a clean success
 		expect(text).not.toContain(OLD_FOOTER);
+		// SIO-991: the qualified Pipeline line says "succeeded (plan ready; nothing applied yet)".
+		expect(text).toContain("succeeded (plan ready; nothing applied yet)");
 	});
 
 	test("success + not approved: footer flags missing approval", async () => {
@@ -283,7 +289,8 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 			{ backend: "file" },
 		);
 		expect(text).not.toContain("Change:");
-		expect(text).toContain("ready for you to merge & apply");
+		expect(text).toContain("The CI pipeline succeeded");
+		expect(text).toContain("staged");
 	});
 });
 

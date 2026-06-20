@@ -18,6 +18,7 @@ import {
 	dailyLogTtlSeconds,
 	enqueueFact,
 	enqueueMessage,
+	getActiveMemoryRef,
 	selectedBackend,
 	setSessionDatasources,
 } from "./memory-backend.ts";
@@ -114,7 +115,13 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 			new Date().toISOString(),
 			dailyLogTtlSeconds(),
 		);
-		logger.info({ requestId: entry.requestId, backend: "agent-memory" }, "Appended dailylog entry");
+		// SIO-991: stamp the session coordinates so this enqueue can be tied to the block ids the
+		// flush log later reports (userId = agent, sessionId = threadId -- the Capella keys).
+		const ref = getActiveMemoryRef();
+		logger.info(
+			{ requestId: entry.requestId, backend: "agent-memory", userId: ref?.userId, sessionId: ref?.sessionId },
+			"Appended dailylog entry",
+		);
 		return;
 	}
 
@@ -165,7 +172,12 @@ export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void
 			: redactPiiContent(decision.decision);
 		// SIO-959: forward structured annotations so the fact is retrievable by filter.
 		enqueueFact(fact, new Date().toISOString(), decision.annotations);
-		logger.info({ requestId: decision.requestId, backend: "agent-memory" }, "Recorded key decision");
+		// SIO-991: stamp the session coordinates (Capella keys) for cross-referencing the flush.
+		const ref = getActiveMemoryRef();
+		logger.info(
+			{ requestId: decision.requestId, backend: "agent-memory", userId: ref?.userId, sessionId: ref?.sessionId },
+			"Recorded key decision",
+		);
 		return;
 	}
 

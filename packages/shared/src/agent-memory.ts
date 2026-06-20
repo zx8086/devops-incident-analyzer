@@ -58,10 +58,25 @@ export interface AddOptions {
 // the result was filter-only (no query).
 // SIO-959: annotations are returned so callers can read structured fields (e.g. a
 // dispatched fleet upgrade's pipeline_id) instead of parsing them out of the text.
+// SIO-991: block_id/user_id/session_id are surfaced so a recall can be cross-
+// referenced against the exact Couchbase memory-block document (the service's
+// MemoryBlock carries all three).
 export interface MemoryHit {
 	text: string;
 	score?: number;
 	annotations?: AnnotationMap;
+	blockId?: string;
+	userId?: string;
+	sessionId?: string;
+}
+
+// SIO-991: the service's AddMemoryResponse, surfaced so the writer/backend can log the
+// created block_ids (the Couchbase document keys) alongside the accepted/rejected counts.
+// block_ids is [] when the backend is the file default or the write produced no blocks.
+export interface AddMemoryResult {
+	blockIds: string[];
+	acceptedCount: number;
+	rejectedCount: number;
 }
 
 export interface AgentMemoryHealth {
@@ -80,8 +95,11 @@ export interface AgentMemoryClient {
 		sessionId: string,
 		opts?: { annotations?: AnnotationMap; metadata?: AnnotationMap },
 	): Promise<void>;
-	addFacts(ref: AgentMemoryUserRef, facts: string[], opts?: AddOptions): Promise<void>;
-	addMessages(ref: AgentMemoryUserRef, messages: ChatMessageBlock[], opts?: AddOptions): Promise<void>;
+	// SIO-991: return the service's AddMemoryResponse (block_ids + counts) so callers can log
+	// the created Couchbase block ids. Empty result ({ blockIds: [], accepted: 0, rejected: 0 })
+	// for an empty input.
+	addFacts(ref: AgentMemoryUserRef, facts: string[], opts?: AddOptions): Promise<AddMemoryResult>;
+	addMessages(ref: AgentMemoryUserRef, messages: ChatMessageBlock[], opts?: AddOptions): Promise<AddMemoryResult>;
 	// Semantic search; returns ready blocks ranked by rel_score (processing/failed
 	// excluded). minScore drops weak matches; relevantK caps the KNN candidate pool.
 	// SIO-959: `annotations` adds a structured filter (FilterOptions.annotations) so
@@ -102,8 +120,13 @@ export interface AgentMemoryClient {
 	checkHealth(): Promise<AgentMemoryHealth>;
 }
 
-// Minimal response shapes (subset of migrate/api-docs/types.ts).
+// Minimal response shapes (subset of the AgentMemory OpenAPI schemas).
+// SIO-991: block_id/user_id/session_id are part of the service's MemoryBlock and let a
+// recall point at the exact Couchbase document.
 interface MemoryBlockShape {
+	block_id?: string | null;
+	user_id?: string | null;
+	session_id?: string | null;
 	fact?: string | null;
 	summary?: string | null;
 	status?: string;
@@ -113,6 +136,12 @@ interface MemoryBlockShape {
 interface MemoryResponseShape {
 	memory_blocks: MemoryBlockShape[];
 	count: number;
+}
+// SIO-991: AddMemoryResponse (POST .../memory) — the created block ids + accept/reject counts.
+interface AddMemoryResponseShape {
+	block_ids?: string[] | null;
+	accepted_count?: number | null;
+	rejected_count?: number | null;
 }
 
 class ConflictError extends Error {}
@@ -170,6 +199,17 @@ async function amFetch<T>(config: AgentMemoryConfig, method: string, path: strin
 	return (await res.json().catch(() => undefined)) as T;
 }
 
+// SIO-991: normalize the service's AddMemoryResponse into AddMemoryResult. A null/absent
+// block_ids (older service or non-JSON 201 body) falls back to acceptedCount = input length.
+function toAddResult(res: AddMemoryResponseShape | undefined, inputCount: number): AddMemoryResult {
+	const blockIds = res?.block_ids ?? [];
+	return {
+		blockIds,
+		acceptedCount: res?.accepted_count ?? blockIds.length ?? inputCount,
+		rejectedCount: res?.rejected_count ?? 0,
+	};
+}
+
 export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMemoryClient {
 	const enc = encodeURIComponent;
 	// async_processing=false (sync) only when explicitly enabled; default async.
@@ -198,25 +238,27 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 		},
 
 		async addFacts(ref, facts, opts) {
-			if (facts.length === 0) return;
-			await amFetch(config, "POST", memoryPath(ref), {
+			if (facts.length === 0) return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			const res = await amFetch<AddMemoryResponseShape>(config, "POST", memoryPath(ref), {
 				facts,
 				annotations: opts?.annotations ?? null,
 				memory_block_ttl: opts?.ttlSeconds ?? null,
 				created_at: opts?.createdAt ?? null,
 				async_processing: asyncProcessing,
 			});
+			return toAddResult(res, facts.length);
 		},
 
 		async addMessages(ref, messages, opts) {
-			if (messages.length === 0) return;
-			await amFetch(config, "POST", memoryPath(ref), {
+			if (messages.length === 0) return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			const res = await amFetch<AddMemoryResponseShape>(config, "POST", memoryPath(ref), {
 				messages,
 				annotations: opts?.annotations ?? null,
 				memory_block_ttl: opts?.ttlSeconds ?? null,
 				created_at: opts?.createdAt ?? null,
 				async_processing: asyncProcessing,
 			});
+			return toAddResult(res, messages.length);
 		},
 
 		async searchMemory(ref, query, opts) {
@@ -237,6 +279,10 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 					score: b.rel_score ?? undefined,
 					// SIO-959: surface annotations so callers read structured fields (pipeline_id, ...).
 					annotations: b.annotations ?? undefined,
+					// SIO-991: the Couchbase document coordinates for cross-referencing a recall.
+					blockId: b.block_id ?? undefined,
+					userId: b.user_id ?? undefined,
+					sessionId: b.session_id ?? undefined,
 				}))
 				.filter((h) => h.text.length > 0 && (minScore === undefined || (h.score ?? 0) >= minScore));
 		},

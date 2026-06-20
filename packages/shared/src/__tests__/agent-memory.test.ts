@@ -127,6 +127,40 @@ describe("createFetchAgentMemoryClient", () => {
 		restore();
 	});
 
+	// SIO-991: writes return the service's AddMemoryResponse (block_ids + counts) so the caller
+	// can log the created Couchbase block ids.
+	test("addFacts returns block_ids + accepted/rejected counts from AddMemoryResponse", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory": {
+				status: 201,
+				body: { block_ids: ["blk-1", "blk-2"], accepted_count: 2, rejected_count: 0 },
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const res = await client.addFacts(REF, ["a", "b"]);
+		expect(res).toEqual({ blockIds: ["blk-1", "blk-2"], acceptedCount: 2, rejectedCount: 0 });
+		restore();
+	});
+
+	test("addFacts on empty input returns an empty result without calling the service", async () => {
+		const { calls, restore } = stubFetch({});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const res = await client.addFacts(REF, []);
+		expect(res).toEqual({ blockIds: [], acceptedCount: 0, rejectedCount: 0 });
+		expect(calls).toHaveLength(0);
+		restore();
+	});
+
+	test("addFacts falls back to block_ids length when counts are absent", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory": { status: 201, body: { block_ids: ["b1"] } },
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const res = await client.addFacts(REF, ["x"]);
+		expect(res).toMatchObject({ blockIds: ["b1"], acceptedCount: 1, rejectedCount: 0 });
+		restore();
+	});
+
 	test("search filters non-ready blocks, returns text + rel_score, and applies minScore", async () => {
 		const { calls, restore } = stubFetch({
 			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
@@ -149,6 +183,38 @@ describe("createFetchAgentMemoryClient", () => {
 			{ text: "mid", score: 0.5 },
 		]);
 		expect(calls[0]?.body).toMatchObject({ query: "kafka lag", filters: { session_ids: "all", relevant_k: 5 } });
+		restore();
+	});
+
+	// SIO-991: a hit surfaces the Couchbase document coordinates (block_id/user_id/session_id) so a
+	// recall can be cross-referenced against the exact memory-block document in Capella.
+	test("searchMemory surfaces block_id / user_id / session_id per hit", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
+				status: 200,
+				body: {
+					count: 1,
+					memory_blocks: [
+						{
+							status: "ready",
+							summary: "a change",
+							rel_score: 0.7,
+							block_id: "blk-42",
+							user_id: "elastic-iac",
+							session_id: "thread-xyz",
+						},
+					],
+				},
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const hits = await client.searchMemory(REF, "change");
+		expect(hits[0]).toMatchObject({
+			text: "a change",
+			blockId: "blk-42",
+			userId: "elastic-iac",
+			sessionId: "thread-xyz",
+		});
 		restore();
 	});
 
