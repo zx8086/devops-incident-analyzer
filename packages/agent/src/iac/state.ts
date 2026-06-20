@@ -167,6 +167,10 @@ export interface IacPlanReview {
 	// deployment/stack cell) surfaced to the reviewer. Undefined when the agent-memory
 	// backend is off or recall returned no hits.
 	priorLearnings?: string;
+	// SIO-983: rendered live-parity advisory -- the drafted change diffed against the LIVE
+	// cluster (fields in the draft but not live, value changes, fields live has that the draft
+	// drops). Undefined when no live equivalent was read or the draft matches live.
+	liveParity?: string;
 }
 
 // SIO-875: the actual Terraform plan parsed from the MR pipeline's terraform report.
@@ -475,6 +479,10 @@ export const IacState = Annotation.Root({
 	// SIO-899: an ilm-rollout created a previously-untracked policy file (404 -> onboard);
 	// surfaced in the review card / MR body / final message so the human reviews a CREATE.
 	policyCreated: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-983: rendered live-parity advisory (the drafted change diffed against the LIVE cluster) --
+	// surfaced on the plan-review card. Empty when no live equivalent was read or the draft matches
+	// live. Set by the proposer (which holds both the live read and the drafted object).
+	liveParity: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-914: a fleet-integration bump crossed a major version (leading integer increased) --
 	// surfaced as a higher-risk line in the review card / MR body (can break dashboards/mappings).
 	integrationMajorBump: Annotation<boolean>({ reducer: last, default: () => false }),

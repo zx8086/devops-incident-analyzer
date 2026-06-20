@@ -1,6 +1,11 @@
 // agent/src/iac/classify.test.ts
 import { describe, expect, test } from "bun:test";
-import { intentFromText, looksLikeFleetStatusCheck, resolvePipelinePollBudgetMs } from "./nodes.ts";
+import {
+	intentFromText,
+	looksLikeChangeRequest,
+	looksLikeFleetStatusCheck,
+	resolvePipelinePollBudgetMs,
+} from "./nodes.ts";
 
 // SIO-982: the GitOps pipeline poll budget is per-call. By default it is the (short) configured
 // budget so the turn stays snappy; when the user asks to wait for the pipeline to finish ("watch
@@ -103,5 +108,41 @@ describe("looksLikeFleetStatusCheck (SIO-928)", () => {
 		expect(looksLikeFleetStatusCheck("check eu-b2b for drift")).toBe(false);
 		expect(looksLikeFleetStatusCheck("downsize the warm tier to 8 GB")).toBe(false);
 		expect(looksLikeFleetStatusCheck("what version is ap-cld running")).toBe(false);
+	});
+});
+
+// SIO-983: after a proposal is rejected, the user often re-asks for the change as a REACTION to the
+// rejected proposal ("no, follow my prompt and open the MR"). The classifier LLM tends to emit
+// "converse" for that framing, routing to the read-only converseIac node which cannot open an MR.
+// This deterministic guard short-circuits the LLM: an explicit imperative MR/change request routes
+// straight to gitops (the proposal lane + review gate), even on a follow-up turn.
+describe("looksLikeChangeRequest (SIO-983)", () => {
+	test("matches explicit imperative MR/change phrasings", () => {
+		expect(looksLikeChangeRequest("create the MR as you do!")).toBe(true);
+		expect(looksLikeChangeRequest("open the MR")).toBe(true);
+		expect(looksLikeChangeRequest("open an merge request")).toBe(true);
+		expect(looksLikeChangeRequest("open a merge request")).toBe(true);
+		expect(looksLikeChangeRequest("raise the MR")).toBe(true);
+		expect(looksLikeChangeRequest("now make the change")).toBe(true);
+		expect(looksLikeChangeRequest("go ahead and open the merge request")).toBe(true);
+		expect(looksLikeChangeRequest("go ahead and create the branch and MR")).toBe(true);
+	});
+
+	test("is case-insensitive", () => {
+		expect(looksLikeChangeRequest("CREATE THE MR")).toBe(true);
+	});
+
+	test("does NOT match conversational follow-ups (those stay converse)", () => {
+		expect(looksLikeChangeRequest("why was that config wrong?")).toBe(false);
+		expect(looksLikeChangeRequest("explain that policy")).toBe(false);
+		expect(looksLikeChangeRequest("I don't think that config is complete")).toBe(false);
+		// A question ABOUT not opening the MR is not an imperative to open it.
+		expect(looksLikeChangeRequest("why didn't you just open the mr earlier?")).toBe(false);
+	});
+
+	test("does NOT match read-only / status-check requests", () => {
+		expect(looksLikeChangeRequest("is eu-b2b healthy?")).toBe(false);
+		expect(looksLikeChangeRequest("check my MR")).toBe(false);
+		expect(looksLikeChangeRequest("how is the rollout going?")).toBe(false);
 	});
 });
