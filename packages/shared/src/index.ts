@@ -6,6 +6,7 @@ export {
 	PendingActionSchema,
 } from "./action-types.ts";
 export {
+	type AddMemoryResult,
 	type AddOptions,
 	type AgentMemoryClient,
 	type AgentMemoryConfig,

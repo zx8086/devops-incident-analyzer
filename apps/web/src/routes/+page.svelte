@@ -76,16 +76,10 @@ const fleetLogIndex = $derived.by(() => {
 	return agentStore.messages[idx]?.role === "assistant" ? idx : -1;
 });
 
-// SIO-982: the GitOps MR Pipeline log is the snapshot taken on `done` (iacPipelineLog), shown ABOVE
-// the trailing MR result message exactly like the fleet log. The done handler only populates it for
-// non-fleet turns, so fleetLogIndex and gitopsLogIndex never both fire for the same message. -1 = none.
-const gitopsLogIndex = $derived.by(() => {
-	if (agentStore.isStreaming) return -1;
-	if (!agentStore.iacPipelineLog?.length) return -1;
-	if (agentStore.messages.length === 0) return -1;
-	const idx = agentStore.messages.length - 1;
-	return agentStore.messages[idx]?.role === "assistant" ? idx : -1;
-});
+// SIO-991: the GitOps MR Pipeline log is now pinned per-message (msg.iacPipelineLog), captured in
+// buildAssistantMessage, and rendered inline in the message loop -- so it survives later turns. The
+// old global gitopsLogIndex (last-message-only) was wiped by the next sendMessage. The fleet log
+// (fleetLogIndex) still rides the global fleetUpgradeResult.progressLog (separate path).
 
 function toggleAgent() {
 	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
@@ -234,9 +228,12 @@ function handleSuggestionClick(suggestion: string) {
           {#if i === fleetLogIndex}
             <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult?.progressLog ?? []} />
           {/if}
-          <!-- SIO-982: GitOps MR pipeline log, persisted from the live ticker on `done`. -->
-          {#if i === gitopsLogIndex}
-            <PipelineProgressCard variant="collapsed" lines={agentStore.iacPipelineLog ?? []} />
+          <!-- SIO-982: GitOps MR pipeline log, persisted from the live ticker on `done`.
+               SIO-991: now pinned PER-MESSAGE (msg.iacPipelineLog) so it survives later turns
+               (e.g. a follow-up "check my MR"), instead of the single global field that the next
+               sendMessage cleared. -->
+          {#if msg.iacPipelineLog?.length}
+            <PipelineProgressCard variant="collapsed" lines={msg.iacPipelineLog} />
           {/if}
           <ChatMessage
             message={msg}

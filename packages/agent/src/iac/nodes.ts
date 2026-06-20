@@ -7213,7 +7213,12 @@ export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 		const hits = await searchAgentMemory("elastic-iac", "iac change intent", { kind: "iac-change", mr_url: mrUrl });
 		// SIO-973: a re-recorded change returns as multiple hits; collapse to the first (highest-ranked).
 		const deduped = dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url);
-		return deduped[0]?.text ?? "";
+		const top = deduped[0];
+		// SIO-991: make the recall path observable -- it only runs when the in-turn planReview/iacRequest
+		// is empty (a fresh-thread "check my MR"), and previously logged nothing on success. blockId ties
+		// the recalled fact to its Couchbase document. (searchAgentMemory also logs the raw search.)
+		log.info({ mrUrl, hit: Boolean(top), blockId: top?.blockId }, "recallIacChangeIntent");
+		return top?.text ?? "";
 	} catch {
 		return ""; // searchAgentMemory already logs
 	}
@@ -7268,9 +7273,12 @@ export async function recallLastIacChange(deployment?: string): Promise<Recalled
 export function iacClosingLine(state: IacStateType): string {
 	const merge = "I never merge or apply.";
 	if (state.pipelineStatus === "success") {
+		// SIO-991: "success" = the CI pipeline's `terraform plan` job passed, so the change is STAGED
+		// on the MR -- nothing has been applied. Make that explicit so the headline doesn't read as
+		// "it's live"; a human still merges + applies in GitLab.
 		return state.approvalState && !state.approvalState.approved
-			? `Plan is clean but not yet approved. Review, approve, then merge & apply in GitLab. ${merge}`
-			: `Plan is clean and approved — ready for you to merge & apply in GitLab whenever you are. ${merge}`;
+			? `The CI pipeline succeeded: the plan is clean but not yet approved. The change is staged on the MR — nothing has been applied. Review, approve, then merge & apply in GitLab. ${merge}`
+			: `The CI pipeline succeeded: the plan is clean and approved, so the change is staged and ready to merge — but nothing has been applied yet. Merge & apply in GitLab whenever you are. ${merge}`;
 	}
 	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") {
 		return `Pipeline failed — review the plan log and fix before merging. ${merge}`;
@@ -7401,7 +7409,12 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 
 	if (state.pipelineStatus && state.pipelineStatus !== "unknown") {
 		const pid = state.pipelineId ? `#${state.pipelineId}` : "";
-		lines.push(`Pipeline ${pid}: ${state.pipelineStatus}`);
+		// SIO-991: the MR pipeline only runs `terraform plan` -- "success" means the plan computed
+		// cleanly and the change is STAGED on the MR, not applied. Qualify it so "success" doesn't
+		// read as "the change is live"; non-success statuses render verbatim.
+		const label =
+			state.pipelineStatus === "success" ? "succeeded (plan ready; nothing applied yet)" : state.pipelineStatus;
+		lines.push(`Pipeline ${pid}: ${label}`);
 	}
 	if (state.planReport) {
 		lines.push(`Plan: ${formatPlanSummary(state.planReport)}`);

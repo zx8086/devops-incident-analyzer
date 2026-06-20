@@ -39,6 +39,10 @@ export interface ChatMessage {
 	confidence?: number;
 	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
 	outcome?: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+	// SIO-991: the GitOps MR pipeline-log snapshot for THIS turn (the "Pipeline log (N steps)"
+	// panel). Captured per-message like completedNodes so it survives subsequent turns -- the
+	// global iacPipelineLog is cleared on the next sendMessage, which used to wipe the panel.
+	iacPipelineLog?: string[];
 }
 
 export interface FollowUpContext {
@@ -127,6 +131,10 @@ function createAgentStore() {
 			runId: lastRunId,
 			confidence: lastConfidence,
 			outcome: lastOutcome,
+			// SIO-991: pin the GitOps pipeline-log snapshot to THIS message so it persists across
+			// later turns (the global iacPipelineLog is cleared on the next sendMessage). Only the
+			// snapshot taken at `done` (iacPipelineLog) is per-message; the live ticker is global.
+			...(iacPipelineLog?.length ? { iacPipelineLog: [...iacPipelineLog] } : {}),
 		};
 	}
 

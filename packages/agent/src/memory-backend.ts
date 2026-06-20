@@ -85,6 +85,12 @@ export function clearActiveMemorySession(): void {
 	activeDatasources = undefined;
 	activeOutcome = undefined;
 }
+// SIO-991: the active session's Couchbase coordinates (user_id = agent, session_id = threadId),
+// so the synchronous writer can stamp enqueue-time logs with the keys a flush later resolves to
+// block ids. null when no in-process turn is bound (writes still enqueue; the flush log has the ref).
+export function getActiveMemoryRef(): AgentMemoryUserRef | null {
+	return activeRef;
+}
 
 // SIO-952: conversation-scoped annotations. datasources labels the session at
 // creation; outcome is stamped at teardown via updateSession. Both are best-effort
@@ -176,19 +182,35 @@ export async function flushAgentMemory(): Promise<void> {
 		// Per-block createdAt feeds the service's conflict resolution, so send each
 		// block with its own timestamp rather than batching across timestamps.
 		let facts = 0;
+		// SIO-991: collect the created Couchbase block ids so the flush log can be cross-referenced
+		// against the actual memory-block documents in Capella (keyed by userId/sessionId/blockId).
+		const blockIds: string[] = [];
+		let rejected = 0;
 		for (const w of batch) {
-			if (w.kind === "fact") {
-				await c.addFacts(ref, [w.text], { createdAt: w.createdAt, annotations: w.annotations });
-				facts++;
-			} else {
-				await c.addMessages(ref, [w.message], {
-					ttlSeconds: w.ttlSeconds,
-					createdAt: w.createdAt,
-					annotations: w.annotations,
-				});
-			}
+			const res =
+				w.kind === "fact"
+					? await c.addFacts(ref, [w.text], { createdAt: w.createdAt, annotations: w.annotations })
+					: await c.addMessages(ref, [w.message], {
+							ttlSeconds: w.ttlSeconds,
+							createdAt: w.createdAt,
+							annotations: w.annotations,
+						});
+			if (w.kind === "fact") facts++;
+			blockIds.push(...res.blockIds);
+			rejected += res.rejectedCount;
 		}
-		logger.info({ facts, total: batch.length, sync: syncWritesEnabled() }, "flushed agent-memory writes");
+		logger.info(
+			{
+				userId: ref.userId,
+				sessionId: ref.sessionId,
+				facts,
+				total: batch.length,
+				blockIds,
+				...(rejected > 0 && { rejected }),
+				sync: syncWritesEnabled(),
+			},
+			"flushed agent-memory writes",
+		);
 	} catch (error) {
 		if (error instanceof ServiceUnavailableError) {
 			// Requeue (front) and let the next flush/teardown retry. Don't drop.
@@ -240,6 +262,16 @@ export async function recallAgentMemory(
 		await c.ensureUser(ref.userId, agentName, { agent: agentName, role: resolveRole(agentName) });
 		await c.ensureSession(ref.userId, ref.sessionId, { annotations: { agent: agentName } });
 		const hits = await c.searchMemory(ref, query, { allSessions: true, relevantK: 8 });
+		// SIO-991: trace the bootstrap recall to its Capella documents (userId/sessionId/blockIds).
+		logger.info(
+			{
+				userId: ref.userId,
+				sessionId: ref.sessionId,
+				hitCount: hits.length,
+				blockIds: hits.map((h) => h.blockId).filter((id): id is string => Boolean(id)),
+			},
+			"agent-memory recall",
+		);
 		// hits are ranked by rel_score; keep the service order and join the text.
 		return hits.length > 0 ? hits.map((h) => h.text).join("\n") : undefined;
 	} catch (error) {
@@ -257,6 +289,9 @@ export async function recallAgentMemory(
 export interface MemorySearchHit {
 	text: string;
 	annotations: AnnotationMap;
+	// SIO-991: the Couchbase memory-block document id (when the service returned it), so a recall
+	// log can be cross-referenced against the exact block in Capella.
+	blockId?: string;
 }
 
 // SIO-973: dedup recall hits by a stable identity key (e.g. pipeline_id, config_change_id)
@@ -299,7 +334,25 @@ export async function searchAgentMemory(
 			relevantK: limit,
 			...(filter && Object.keys(filter).length > 0 ? { annotations: filter } : {}),
 		});
-		return hits.map((h) => ({ text: h.text, annotations: h.annotations ?? {} }));
+		// SIO-991: a success log carrying the Couchbase coordinates (userId/sessionId/blockIds) so a
+		// recall can be traced to the exact memory-block documents in Capella, and an empty hit is no
+		// longer silent (previously only errors logged).
+		logger.info(
+			{
+				userId,
+				sessionId: ref.sessionId,
+				query,
+				...(filter && Object.keys(filter).length > 0 && { filter }),
+				hitCount: hits.length,
+				blockIds: hits.map((h) => h.blockId).filter((id): id is string => Boolean(id)),
+			},
+			"agent-memory search",
+		);
+		return hits.map((h) => ({
+			text: h.text,
+			annotations: h.annotations ?? {},
+			...(h.blockId && { blockId: h.blockId }),
+		}));
 	} catch (error) {
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory search failed");
 		return [];

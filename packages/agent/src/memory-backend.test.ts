@@ -76,10 +76,12 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 		async addFacts(_ref, facts, opts) {
 			rec.facts.push(...facts);
 			rec.factAnnotations.push(opts?.annotations);
+			return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
 		},
 		async addMessages(_ref, messages, opts) {
 			rec.messages.push(...messages);
 			rec.messageAnnotations.push(opts?.annotations);
+			return { blockIds: messages.map((_, i) => `msg-${i}`), acceptedCount: messages.length, rejectedCount: 0 };
 		},
 		async searchMemory(_ref, query) {
 			rec.searches.push(query);
@@ -336,8 +338,12 @@ describe("recall + endSession", () => {
 		const client: AgentMemoryClient = {
 			async ensureUser() {},
 			async ensureSession() {},
-			async addFacts() {},
-			async addMessages() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
 			async searchMemory() {
 				return [];
 			},
@@ -431,8 +437,11 @@ describe("annotations + metadata (SIO-952)", () => {
 			async addFacts(_ref, facts) {
 				if (throwOn503) throw new ServiceUnavailableError("queue full", 5);
 				accepted.push(...facts);
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
 			},
-			async addMessages() {},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
 			async searchMemory() {
 				return [];
 			},

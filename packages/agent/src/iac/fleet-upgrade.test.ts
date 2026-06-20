@@ -808,8 +808,12 @@ describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
 		__setAgentMemoryClient({
 			async ensureUser() {},
 			async ensureSession() {},
-			async addFacts() {},
-			async addMessages() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
 			async searchMemory(_ref, _query, opts) {
 				if (opts?.annotations?.kind !== "fleet-upgrade-dispatched") return [];
 				return [
