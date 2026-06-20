@@ -318,6 +318,11 @@ export interface ReducerState {
 	// SIO-876: live pipeline-watch status lines (e.g. "Pipeline #355: running"),
 	// shown in the streaming area; the final status+plan+approval lands as the message.
 	iacPipelineProgress: string[];
+	// SIO-982: a snapshot of iacPipelineProgress taken when a GitOps MR turn ends (the `done`
+	// handler), so the pipeline timeline persists as a collapsed "Pipeline log" panel after
+	// streaming stops -- the GitOps analogue of fleet's fleetUpgradeResult.progressLog (SIO-928).
+	// The fleet flow captures its own log, so this is only populated for non-fleet (GitOps) turns.
+	iacPipelineLog?: string[];
 	// SIO-882: drift sub-flow. The full report (overview), the current per-stack choice
 	// prompt (interrupt), and the accumulating per-stack results.
 	iacDriftReport: IacDriftReport | null;
@@ -421,6 +426,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				lastConfidence: event.confidence,
 				lastDataSourceContext: event.dataSourceContext,
 				lastOutcome: event.outcome ?? "completed",
+				// SIO-982: snapshot the live pipeline progress so a GitOps MR turn keeps a persistent
+				// collapsed "Pipeline log" panel after streaming stops. Fleet captures its own log in
+				// fleetUpgradeResult.progressLog (SIO-928), so skip when a fleet result is present to keep
+				// the two paths independent (no double-render).
+				...(state.iacPipelineProgress.length > 0 &&
+					!state.fleetUpgradeResult && { iacPipelineLog: [...state.iacPipelineProgress] }),
 			};
 		case "error":
 			return { ...state, currentContent: `${state.currentContent}\n\n[Error: ${event.message}]` };

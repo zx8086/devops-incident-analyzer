@@ -1,6 +1,33 @@
 // agent/src/iac/classify.test.ts
 import { describe, expect, test } from "bun:test";
-import { intentFromText, looksLikeFleetStatusCheck } from "./nodes.ts";
+import { intentFromText, looksLikeFleetStatusCheck, resolvePipelinePollBudgetMs } from "./nodes.ts";
+
+// SIO-982: the GitOps pipeline poll budget is per-call. By default it is the (short) configured
+// budget so the turn stays snappy; when the user asks to wait for the pipeline to finish ("watch
+// until done", "wait for it to finish", "watch it to completion"), it extends to the longer budget
+// so the pipeline reaches terminal within the turn. Pure; the watchPipeline node calls it on the
+// latest human text.
+describe("resolvePipelinePollBudgetMs (SIO-982)", () => {
+	test("returns the default budget for an ordinary status check", () => {
+		expect(resolvePipelinePollBudgetMs("check my MR", 90_000, 300_000)).toBe(90_000);
+		expect(resolvePipelinePollBudgetMs("", 90_000, 300_000)).toBe(90_000);
+	});
+
+	test("extends to the longer budget when the user asks to wait for completion", () => {
+		expect(resolvePipelinePollBudgetMs("watch until done", 90_000, 300_000)).toBe(300_000);
+		expect(resolvePipelinePollBudgetMs("wait for it to finish", 90_000, 300_000)).toBe(300_000);
+		expect(resolvePipelinePollBudgetMs("watch it to completion", 90_000, 300_000)).toBe(300_000);
+		expect(resolvePipelinePollBudgetMs("keep watching until it's complete", 90_000, 300_000)).toBe(300_000);
+	});
+
+	test("is case-insensitive", () => {
+		expect(resolvePipelinePollBudgetMs("WATCH UNTIL DONE", 90_000, 300_000)).toBe(300_000);
+	});
+
+	test("a plain 'check on it' does NOT extend (that is a one-shot status check)", () => {
+		expect(resolvePipelinePollBudgetMs("check on it", 90_000, 300_000)).toBe(90_000);
+	});
+});
 
 // SIO-870: the classifier LLM returns a single word; intentFromText maps it to the
 // route. Only an explicit "gitops" mention enters the maker pipeline; everything

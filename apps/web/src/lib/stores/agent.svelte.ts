@@ -92,6 +92,9 @@ function createAgentStore() {
 	let iacClarify = $state<IacClarifyPrompt | null>(null);
 	let iacPlanReview = $state<IacPlanReviewPrompt | null>(null);
 	let iacPipelineProgress = $state<string[]>([]);
+	// SIO-982: snapshot of the pipeline ticker captured on `done`, so a GitOps MR turn keeps a
+	// persistent collapsed pipeline log after streaming (the GitOps analogue of fleet's progressLog).
+	let iacPipelineLog = $state<string[] | undefined>(undefined);
 	// SIO-882: drift sub-flow UI state.
 	let iacDriftReport = $state<IacDriftReport | null>(null);
 	let iacReconcileChoice = $state<IacReconcileChoice | null>(null);
@@ -175,6 +178,7 @@ function createAgentStore() {
 		fleetUpgradePreview = null;
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
+		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
 
 		abortController = new AbortController();
 
@@ -259,6 +263,7 @@ function createAgentStore() {
 			iacClarify,
 			iacPlanReview,
 			iacPipelineProgress,
+			iacPipelineLog,
 			iacDriftReport,
 			iacReconcileChoice,
 			iacReconcileResults,
@@ -289,6 +294,7 @@ function createAgentStore() {
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
 		iacPipelineProgress = next.iacPipelineProgress;
+		iacPipelineLog = next.iacPipelineLog;
 		iacDriftReport = next.iacDriftReport;
 		iacReconcileChoice = next.iacReconcileChoice;
 		iacReconcileResults = next.iacReconcileResults;
@@ -489,6 +495,7 @@ function createAgentStore() {
 		fleetUpgradePreview = null;
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
+		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -723,6 +730,9 @@ function createAgentStore() {
 		},
 		get iacPipelineProgress() {
 			return iacPipelineProgress;
+		},
+		get iacPipelineLog() {
+			return iacPipelineLog;
 		},
 		get iacDriftReport() {
 			return iacDriftReport;
