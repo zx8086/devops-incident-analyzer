@@ -74,6 +74,14 @@ export interface McpApplicationOptions<T> {
 	role: McpRole;
 	version: string;
 	identityFingerprint: (datasource: T) => string;
+	// SIO-986: embedded (in-process) mode. A standalone MCP process IS its server, so a fatal start
+	// error or a stray signal/exception should process.exit(). But the knowledge-graph server is
+	// mounted IN-PROCESS in the web app -- there, process.exit() / process-global SIGINT|SIGTERM|
+	// uncaughtException|unhandledRejection handlers would take the WHOLE app down. When embedded:
+	//   - a startup failure RETHROWS (the host's try/catch handles it) instead of process.exit(1);
+	//   - the process-global signal/exception handlers are NOT installed (the host app owns those).
+	// Default (false) preserves the standalone behaviour for every other server unchanged.
+	embedded?: boolean;
 }
 
 export interface McpApplication<T> {
@@ -189,34 +197,38 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			process.exit(0);
 		};
 
-		// Step 7: Register process-level signal handlers
-		process.on("SIGINT", () => shutdown());
-		process.on("SIGTERM", () => shutdown());
+		// Step 7: Register process-level signal handlers. SIO-986: skip in embedded mode -- these are
+		// process-GLOBAL, so an in-process server would hijack the host app's SIGINT/SIGTERM and call
+		// process.exit() on any uncaught exception/rejection anywhere in the app. The host owns these.
+		if (!options.embedded) {
+			process.on("SIGINT", () => shutdown());
+			process.on("SIGTERM", () => shutdown());
 
-		process.on("uncaughtException", (error) => {
-			logger.error(`Uncaught exception in ${name}`, {
-				error: error.message,
-				stack: error.stack,
-				name: error.name,
-			});
-			if (logger.flush) logger.flush();
-			process.exit(1);
-		});
-
-		process.on("unhandledRejection", (reason) => {
-			if (isBenignStreamCancel(reason)) {
-				logger.warn(`Ignoring benign stream-cancel in ${name}`, {
-					reason: reason instanceof Error ? reason.message : String(reason),
+			process.on("uncaughtException", (error) => {
+				logger.error(`Uncaught exception in ${name}`, {
+					error: error.message,
+					stack: error.stack,
+					name: error.name,
 				});
-				return;
-			}
-			logger.error(`Unhandled rejection in ${name}`, {
-				reason: reason instanceof Error ? reason.message : String(reason),
-				stack: reason instanceof Error ? reason.stack : undefined,
+				if (logger.flush) logger.flush();
+				process.exit(1);
 			});
-			if (logger.flush) logger.flush();
-			process.exit(1);
-		});
+
+			process.on("unhandledRejection", (reason) => {
+				if (isBenignStreamCancel(reason)) {
+					logger.warn(`Ignoring benign stream-cancel in ${name}`, {
+						reason: reason instanceof Error ? reason.message : String(reason),
+					});
+					return;
+				}
+				logger.error(`Unhandled rejection in ${name}`, {
+					reason: reason instanceof Error ? reason.message : String(reason),
+					stack: reason instanceof Error ? reason.stack : undefined,
+				});
+				if (logger.flush) logger.flush();
+				process.exit(1);
+			});
+		}
 
 		// Step 8: Notify startup complete
 		if (options.onStarted) {
@@ -245,6 +257,9 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			stack: error instanceof Error ? error.stack : undefined,
 		});
 		if (logger.flush) logger.flush();
+		// SIO-986: embedded servers must NOT take the host app down. Rethrow so the host's try/catch
+		// (.catch) handles it gracefully; only a standalone process exits.
+		if (options.embedded) throw error;
 		process.exit(1);
 	}
 }

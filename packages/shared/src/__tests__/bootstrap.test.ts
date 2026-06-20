@@ -437,4 +437,38 @@ describe("startup port logging", () => {
 		const infoCalls = logger.calls.filter((c) => c.method === "info");
 		expect(infoCalls.some((c) => (c.args[0] as string).includes("ready (stdio transport, no port)"))).toBe(true);
 	});
+
+	// SIO-986: a standalone MCP process exits on a fatal start error; an EMBEDDED (in-process) server
+	// must rethrow so the host app's catch can degrade gracefully instead of being killed.
+	describe("embedded mode", () => {
+		test("a standalone server process.exit(1)s on a fatal start error (default)", async () => {
+			const { options } = createTestOptions({
+				initDatasource: async () => {
+					throw new Error("datasource boom");
+				},
+			});
+			// The mocked process.exit throws `process.exit(1)`; the original error is swallowed by exit.
+			await expect(createMcpApplication(options)).rejects.toThrow("process.exit(1)");
+		});
+
+		test("an embedded server rethrows the original error instead of exiting", async () => {
+			const { options } = createTestOptions({
+				embedded: true,
+				initDatasource: async () => {
+					throw new Error("datasource boom");
+				},
+			});
+			// Rethrows the real error -> the host's .catch handles it; process.exit is NOT called.
+			await expect(createMcpApplication(options)).rejects.toThrow("datasource boom");
+			expect(exitCode).toBeUndefined();
+		});
+
+		test("an embedded server does not install process-global signal handlers", async () => {
+			const before = process.listenerCount("SIGINT");
+			const { options } = createTestOptions({ embedded: true, initDatasource: async () => ({ id: "x" }) });
+			await createMcpApplication(options);
+			// No new SIGINT listener was added (the host owns process-global handlers).
+			expect(process.listenerCount("SIGINT")).toBe(before);
+		});
+	});
 });

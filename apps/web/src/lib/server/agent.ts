@@ -46,15 +46,24 @@ if (process.env.KNOWLEDGE_GRAPH_ENABLED === "true" || process.env.KNOWLEDGE_GRAP
 	const host = process.env.KNOWLEDGE_GRAPH_MCP_HOST ?? "127.0.0.1";
 	const port = process.env.KNOWLEDGE_GRAPH_MCP_PORT ?? "9087";
 	knowledgeGraphMcpUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
-	startKnowledgeGraphServer()
-		.then(() => kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started"))
-		.catch((err: unknown) => {
-			knowledgeGraphMcpUrl = undefined;
-			kgMcpLog.warn(
-				{ error: err instanceof Error ? err.message : String(err) },
-				"in-process knowledge-graph MCP server failed to start; kg_* tools unavailable",
-			);
-		});
+	const onKgStartFailure = (err: unknown) => {
+		knowledgeGraphMcpUrl = undefined;
+		kgMcpLog.warn(
+			{ error: err instanceof Error ? err.message : String(err) },
+			"in-process knowledge-graph MCP server failed to start; kg_* tools unavailable",
+		);
+	};
+	// SIO-986: truly best-effort. startKnowledgeGraphServer() can throw SYNCHRONOUSLY during eager
+	// module evaluation (loadConfig / transport setup), which the .catch alone does NOT contain -- that
+	// crashed the whole app under Vite SSR. Wrap in try/catch (sync) AND .catch (async) so neither a
+	// thrown error nor a rejected promise propagates past here; a KG start failure only disables kg_*.
+	try {
+		startKnowledgeGraphServer()
+			.then(() => kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started"))
+			.catch(onKgStartFailure);
+	} catch (err) {
+		onKgStartFailure(err);
+	}
 }
 
 const pruneLog = getLogger("agent:state-pruning");
