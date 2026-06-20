@@ -1,6 +1,13 @@
 // agent/src/iac/dataview-clusterdefault.test.ts
 import { describe, expect, mock, test } from "bun:test";
-import { branchSlug, parseIntentJson, reviewPlan, setClusterDefaultShards, setDataviewFields } from "./nodes.ts";
+import {
+	branchSlug,
+	mergeClusterDefaultSettings,
+	parseIntentJson,
+	reviewPlan,
+	setClusterDefaultShards,
+	setDataviewFields,
+} from "./nodes.ts";
 import type { IacRequest, IacStateType } from "./state.ts";
 
 const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
@@ -111,6 +118,72 @@ describe("setClusterDefaultShards", () => {
 	});
 });
 
+// SIO-979: freeform settingsPatch deep-merged into settings.index. The patch is relative to
+// settings.index (the LLM emits `{ refresh_interval: "30s" }`), preserving every other key.
+describe("mergeClusterDefaultSettings", () => {
+	test("adds a top-level index setting, preserving siblings", () => {
+		const { content, previous, changed } = mergeClusterDefaultSettings(CLUSTER_DEFAULT, { refresh_interval: "30s" });
+		const parsed = JSON.parse(content) as {
+			settings: { index: { refresh_interval: string; routing: { allocation: { total_shards_per_node: number } } } };
+		};
+		expect(parsed.settings.index.refresh_interval).toBe("30s");
+		// the existing sibling must survive the merge
+		expect(parsed.settings.index.routing.allocation.total_shards_per_node).toBe(2);
+		expect(previous.refresh_interval).toBeUndefined(); // wasn't set before
+		expect(changed).toBe(true);
+	});
+
+	test("captures the previous value when overwriting an existing setting", () => {
+		const withRefresh = JSON.stringify(
+			{ name: "logs@custom", settings: { index: { refresh_interval: "10s" } } },
+			null,
+			2,
+		);
+		const { content, previous, changed } = mergeClusterDefaultSettings(withRefresh, { refresh_interval: "30s" });
+		expect(
+			(JSON.parse(content) as { settings: { index: { refresh_interval: string } } }).settings.index.refresh_interval,
+		).toBe("30s");
+		expect(previous.refresh_interval).toBe("10s");
+		expect(changed).toBe(true);
+	});
+
+	test("deep-merges a nested patch, preserving unrelated nested keys", () => {
+		const { content } = mergeClusterDefaultSettings(CLUSTER_DEFAULT, {
+			routing: { allocation: { total_shards_per_node: 5 } },
+		});
+		const parsed = JSON.parse(content) as {
+			settings: { index: { routing: { allocation: { total_shards_per_node: number } } } };
+		};
+		expect(parsed.settings.index.routing.allocation.total_shards_per_node).toBe(5);
+	});
+
+	test("creates the settings.index path when absent", () => {
+		const { content } = mergeClusterDefaultSettings(JSON.stringify({ name: "x@custom" }), { refresh_interval: "30s" });
+		expect(
+			(JSON.parse(content) as { settings: { index: { refresh_interval: string } } }).settings.index.refresh_interval,
+		).toBe("30s");
+	});
+
+	test("changed=false when the patch matches current values", () => {
+		const withRefresh = JSON.stringify(
+			{ name: "logs@custom", settings: { index: { refresh_interval: "10s" } } },
+			null,
+			2,
+		);
+		expect(mergeClusterDefaultSettings(withRefresh, { refresh_interval: "10s" }).changed).toBe(false);
+	});
+
+	test("preserves the name + trailing newline", () => {
+		const { content } = mergeClusterDefaultSettings(CLUSTER_DEFAULT, { refresh_interval: "30s" });
+		expect((JSON.parse(content) as { name: string }).name).toBe("logs@custom");
+		expect(content.endsWith("}\n")).toBe(true);
+	});
+
+	test("throws on non-object JSON", () => {
+		expect(() => mergeClusterDefaultSettings("[]", { refresh_interval: "30s" })).toThrow("not an object");
+	});
+});
+
 describe("parseIntentJson — dataview-edit + cluster-default-edit", () => {
 	test("dataview-edit extracts dataviewName + runtime field", () => {
 		const raw = JSON.stringify({
@@ -139,6 +212,50 @@ describe("parseIntentJson — dataview-edit + cluster-default-edit", () => {
 		expect(req.templateName).toBe("logs");
 		expect(req.totalShardsPerNode).toBe(3);
 	});
+
+	// SIO-979: a freeform settingsPatch on a single template.
+	test("cluster-default-edit extracts a freeform settingsPatch", () => {
+		const raw = JSON.stringify({
+			workflow: "cluster-default-edit",
+			cluster: "eu-b2b",
+			templateName: "logs",
+			settingsPatch: { refresh_interval: "30s" },
+		});
+		const req = parseIntentJson(raw);
+		expect(req.workflow).toBe("cluster-default-edit");
+		expect(req.templateName).toBe("logs");
+		expect(req.settingsPatch).toEqual({ refresh_interval: "30s" });
+	});
+
+	// SIO-979: >=2 clusterDefaults entries keep the array (multi-file -> one MR, like ilmPolicies).
+	test("cluster-default-edit keeps a clusterDefaults array with >=2 entries", () => {
+		const raw = JSON.stringify({
+			workflow: "cluster-default-edit",
+			cluster: "eu-b2b",
+			clusterDefaults: [
+				{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } },
+				{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+				{ templateName: "traces-apm.json", settingsPatch: { refresh_interval: "30s" } },
+			],
+		});
+		const req = parseIntentJson(raw);
+		expect(req.clusterDefaults).toHaveLength(3);
+		// trailing .json stripped from the basename (mirrors ilmPolicies / metrics.json.json footgun)
+		expect(req.clusterDefaults?.[2]?.templateName).toBe("traces-apm");
+	});
+
+	// SIO-979: a single-entry clusterDefaults folds back to the singular fields (back-compat path).
+	test("cluster-default-edit folds a 1-entry clusterDefaults to templateName + settingsPatch", () => {
+		const raw = JSON.stringify({
+			workflow: "cluster-default-edit",
+			cluster: "eu-b2b",
+			clusterDefaults: [{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } }],
+		});
+		const req = parseIntentJson(raw);
+		expect(req.clusterDefaults).toBeUndefined();
+		expect(req.templateName).toBe("logs");
+		expect(req.settingsPatch).toEqual({ refresh_interval: "30s" });
+	});
 });
 
 describe("branchSlug — dataview + cluster-default", () => {
@@ -155,6 +272,24 @@ describe("branchSlug — dataview + cluster-default", () => {
 			totalShardsPerNode: 3,
 		};
 		expect(branchSlug(req)).toBe("eu-b2b-logs-cluster-default-edit");
+	});
+
+	// SIO-979: a multi-file clusterDefaults request joins the template names (like ilmPolicies),
+	// capped at 40 chars by branchSlug (so a long list truncates, same as ilm/index-template).
+	test("cluster-default-edit multi-file joins template names in the slug (40-char cap)", () => {
+		const req: IacRequest = {
+			workflow: "cluster-default-edit",
+			isProd: false,
+			cluster: "eu-b2b",
+			clusterDefaults: [
+				{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } },
+				{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+				{ templateName: "traces-apm", settingsPatch: { refresh_interval: "30s" } },
+			],
+		};
+		const slug = branchSlug(req);
+		expect(slug.startsWith("eu-b2b-logs-metrics-traces-apm")).toBe(true);
+		expect(slug.length).toBeLessThanOrEqual(40);
 	});
 });
 
@@ -321,6 +456,110 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already has total_shards_per_node");
 	});
+
+	// SIO-979: a freeform single-template settingsPatch routes to the new proposer and commits
+	// via the atomic multi-file tool (one file here, but the same path).
+	test("freeform settingsPatch on one template: merges + commits via gitlab_commit_files", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_files: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				templateName: "logs",
+				settingsPatch: { refresh_interval: "30s" },
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedFilePath).toBe("environments/eu-b2b/cluster-defaults/logs.json");
+		// one atomic commit carrying one file
+		const files = committed.files as Array<{ file_path: string; content: string }>;
+		expect(files).toHaveLength(1);
+		const written = JSON.parse(files[0]?.content ?? "{}") as {
+			settings: { index: { refresh_interval: string; routing: { allocation: { total_shards_per_node: number } } } };
+		};
+		expect(written.settings.index.refresh_interval).toBe("30s");
+		// preserves the existing sibling setting
+		expect(written.settings.index.routing.allocation.total_shards_per_node).toBe(2);
+		// full-file diff shows the whole resulting file (nothing hidden)
+		expect(result.proposedDiff).toContain("refresh_interval");
+		expect(result.proposedDiff).toContain("total_shards_per_node");
+	});
+
+	// SIO-979: three templates -> ONE branch, ONE atomic commit, three files (reproduces MR !182).
+	test("multi-file clusterDefaults: one atomic commit over three files", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		let branchCreated = 0;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => {
+				branchCreated++;
+				return "[201] {}";
+			},
+			gitlab_commit_files: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				clusterDefaults: [
+					{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } },
+					{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+					{ templateName: "traces-apm", settingsPatch: { refresh_interval: "30s" } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(branchCreated).toBe(1); // ONE shared branch
+		const files = committed.files as Array<{ file_path: string }>;
+		expect(files).toHaveLength(3); // ONE commit, three files
+		expect(result.proposedFiles).toEqual([
+			"environments/eu-b2b/cluster-defaults/logs.json",
+			"environments/eu-b2b/cluster-defaults/metrics.json",
+			"environments/eu-b2b/cluster-defaults/traces-apm.json",
+		]);
+	});
+
+	// SIO-979: atomic all-or-nothing -- a read failure on any file blocks the whole batch, no MR.
+	test("multi-file blocks atomically when one file read fails", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: (args) =>
+				String(args.filePath).includes("metrics") ? '[500] {"message":"server error"}' : fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_files: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				clusterDefaults: [
+					{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } },
+					{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toBeDefined();
+		expect(result.precheckPassed).toBeUndefined();
+	});
 });
 
 describe("reviewPlan — dataview + cluster-default", () => {
@@ -360,5 +599,54 @@ describe("reviewPlan — dataview + cluster-default", () => {
 		};
 		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("LOWERED");
+	});
+
+	// SIO-979: a freeform single-template change titles by the settings keys, NOT
+	// "total_shards_per_node ?" (the hardcoded single-field descriptor).
+	test("cluster-default: freeform settingsPatch title names the settings keys", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				templateName: "logs",
+				settingsPatch: { refresh_interval: "30s" },
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		const title = result.planReview?.title ?? "";
+		expect(title).toContain("logs");
+		expect(title).toContain("refresh_interval");
+		expect(title).not.toContain("total_shards_per_node ?");
+	});
+
+	// SIO-979: a freeform multi-file change titles by all the template names.
+	test("cluster-default: freeform multi-file title names all templates", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				clusterDefaults: [
+					{ templateName: "logs", settingsPatch: { refresh_interval: "30s" } },
+					{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+				],
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			proposedFiles: [
+				"environments/eu-b2b/cluster-defaults/logs.json",
+				"environments/eu-b2b/cluster-defaults/metrics.json",
+			],
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		const title = result.planReview?.title ?? "";
+		expect(title).toContain("logs");
+		expect(title).toContain("metrics");
+		expect(title).toContain("refresh_interval");
 	});
 });

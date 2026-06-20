@@ -27,6 +27,23 @@ export function buildCommitFileBody(input: {
 	};
 }
 
+// SIO-979: build the POST /repository/commits body for an ATOMIC multi-file commit -- several
+// actions in ONE commit, so N files land together (the proven MR !182 shape: one commit, three
+// files). Each file carries its own action (a read-modify-write edit is "update"; a brand-new
+// file is "create"); a file may omit it and defaults to "update", mirroring buildCommitFileBody.
+// (Pure; unit-tested.)
+export function buildCommitFilesBody(input: {
+	branch: string;
+	commitMessage: string;
+	files: Array<{ file_path: string; content: string; action?: "create" | "update" }>;
+}): { branch: string; commit_message: string; actions: Array<{ action: string; file_path: string; content: string }> } {
+	return {
+		branch: input.branch,
+		commit_message: input.commitMessage,
+		actions: input.files.map((f) => ({ action: f.action ?? "update", file_path: f.file_path, content: f.content })),
+	};
+}
+
 // SIO-885: GitLab rejects "update" on a missing file ([400] "A file with this name
 // doesn't exist") and "create" on an existing one ([400] "...already exists").
 // gitlab_commit_file is an upsert: it flips the action and retries ONCE when the response
@@ -232,6 +249,47 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				log.error(
 					{ branch, filePath: file_path, action: flipped ?? initial, response: res.slice(0, 300) },
 					"gitlab_commit_file: commit failed",
+				);
+			}
+			return text(res);
+		},
+	);
+
+	server.tool(
+		"gitlab_commit_files",
+		"Commit MULTIPLE files atomically in ONE commit on a branch via the GitLab API (server-side; no " +
+			"local git). All files land in a single commit. Each file's content is the FULL new body, not a diff. " +
+			"Each file carries its own action ('update' for an existing file, 'create' for a new one); pass the " +
+			"correct action up front -- unlike gitlab_commit_file, a multi-action commit cannot auto-flip per file.",
+		{
+			branch: z.string(),
+			files: z
+				.array(
+					z.object({
+						file_path: z.string(),
+						content: z.string().describe("Full new file content (read-modify-write; not a diff)."),
+						action: z.enum(["create", "update"]).optional().describe("Defaults to 'update'."),
+					}),
+				)
+				.min(1)
+				.describe("Files to commit atomically in one commit."),
+			commit_message: z.string(),
+		},
+		async ({ branch, files, commit_message }) => {
+			log.info(
+				{ branch, fileCount: files.length, files: files.map((f) => f.file_path) },
+				"gitlab_commit_files: committing multiple files atomically",
+			);
+			const res = await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/commits`, {
+				method: "POST",
+				body: JSON.stringify(buildCommitFilesBody({ branch, files, commitMessage: commit_message })),
+			});
+			if (res.startsWith("[2")) {
+				log.info({ branch, fileCount: files.length }, "gitlab_commit_files: commit succeeded");
+			} else {
+				log.error(
+					{ branch, fileCount: files.length, response: res.slice(0, 300) },
+					"gitlab_commit_files: commit failed",
 				);
 			}
 			return text(res);

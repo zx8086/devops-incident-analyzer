@@ -75,6 +75,7 @@ tool_mapping:
       - gitlab_get_file_content
       - gitlab_create_branch
       - gitlab_commit_file
+      - gitlab_commit_files
     open_mr:
       - gitlab_create_merge_request
     review_pipeline:

@@ -53,6 +53,21 @@ function lastHumanText(state: IacStateType): string {
 	return "";
 }
 
+// SIO-981: a turn is a real follow-up when the agent has already answered at least once this
+// thread (a prior AIMessage exists). The classifier derives the converse gate from this rather than
+// trusting only the UI-supplied state.isFollowUp flag (which the client can omit on a reload).
+// (Pure; unit-testable via classifyIacIntent.)
+export function hasPriorAgentTurn(state: IacStateType): boolean {
+	return state.messages.some((m) => m?.getType() === "ai");
+}
+
+// SIO-981: the last N messages, so the classifier LLM can SEE the prior proposal a follow-up
+// refers to ("why that value?", "what changed?") instead of only the latest human line. Bounded to
+// keep token cost flat on long threads. System messages are dropped (the classifier has its own).
+function recentMessages(state: IacStateType, limit = 8): BaseMessage[] {
+	return state.messages.filter((m) => m?.getType() !== "system").slice(-limit);
+}
+
 function findTool(name: string): StructuredToolInterface | undefined {
 	return getToolsForDataSource(AGENT).find((t) => t.name === name);
 }
@@ -134,6 +149,19 @@ const IntentSchema = z.object({
 	dataviewDisplayName: z.string().nullish(),
 	templateName: z.string().nullish(),
 	totalShardsPerNode: z.number().nullish(),
+	// SIO-979: freeform cluster-defaults index settings patch (relative to settings.index, e.g.
+	// `{ refresh_interval: "30s" }`). Any index setting -- validity is enforced by CI's terraform
+	// plan, not a closed field list. Mirrors phasesPatch. clusterDefaults[] is the multi-file form
+	// (one MR over several templates), mirroring ilmPolicies[].
+	settingsPatch: z.record(z.string(), z.unknown()).nullish(),
+	clusterDefaults: z
+		.array(
+			z.object({
+				templateName: z.string(),
+				settingsPatch: z.record(z.string(), z.unknown()),
+			}),
+		)
+		.nullish(),
 	// SIO-933: ilm-rollout optional component-template bind (cluster-defaults file basename, no .json).
 	bindTemplate: z.string().nullish(),
 	spaceName: z.string().nullish(),
@@ -210,6 +238,17 @@ export function parseIntentJson(raw: string): IacRequest {
 				}));
 				const multiIlm = ilmEntries.length >= 2;
 				const soleIlm = ilmEntries.length === 1 ? ilmEntries[0] : undefined;
+				// SIO-979: fold the clusterDefaults array exactly like ilmPolicies. The cluster-defaults
+				// template ends in `${template}.json`, so strip a trailing .json from the basename (the
+				// planner echoes "metrics.json" -> a doubled metrics.json.json path that 404s). >=2 entries
+				// keep the array (proposer commits all files atomically); 0/1 fold to the singular
+				// templateName + settingsPatch (back-compat with the single-file path).
+				const cdEntries = (nn(p.clusterDefaults) ?? []).map((e) => ({
+					templateName: stripJsonExt(e.templateName) ?? e.templateName,
+					settingsPatch: e.settingsPatch,
+				}));
+				const multiCd = cdEntries.length >= 2;
+				const soleCd = cdEntries.length === 1 ? cdEntries[0] : undefined;
 				// SIO-932: only strip .json for the ilm-rollout workflow; other workflows' name fields
 				// (sloName, ruleName, dataviewName, ...) are basenames the planner already gives bare,
 				// and a couple legitimately could carry other meanings.
@@ -246,8 +285,11 @@ export function parseIntentJson(raw: string): IacRequest {
 					runtimeFieldScript: nn(p.runtimeFieldScript),
 					dataviewTitle: nn(p.dataviewTitle),
 					dataviewDisplayName: nn(p.dataviewDisplayName),
-					templateName: nn(p.templateName),
+					templateName: soleCd?.templateName ?? nn(p.templateName),
 					totalShardsPerNode: nn(p.totalShardsPerNode),
+					// SIO-979: a single clusterDefaults entry folds its patch into the singular field.
+					settingsPatch: soleCd?.settingsPatch ?? nn(p.settingsPatch),
+					clusterDefaults: multiCd ? cdEntries : undefined,
 					// SIO-933: bindTemplate is a cluster-defaults file basename; users write it with .json
 					// ("bind logs-generic.otel.json"), so strip a trailing .json for ilm-rollout (mirrors
 					// policyName/sourcePolicy). The @custom suffix lives in the file's `name`, NOT the
@@ -318,7 +360,7 @@ export function capabilityMessage(): string {
 		'- **SLO target/window edits** -- e.g. "set the ds-authentication SLO target to 99.5% on ap-cld"\n' +
 		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
-		'- **Cluster-defaults edits** -- e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld"\n' +
+		'- **Cluster-defaults edits** -- edit the index settings on a template, e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld" or "bump refresh_interval to 30s on logs, metrics and traces-apm on eu-b2b" (any index setting; one MR can span several templates)\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
@@ -448,9 +490,14 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"NEW change (even right after a proposal), that is 'gitops', not 'converse'.\n" +
 		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', 'pipeline-status', or 'converse'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
-	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
-	// SIO-930: gate converse on a real follow-up turn (the LLM can mis-emit it on a first message).
-	const intent = coerceConverseIntent(intentFromText(String(res.content)), state.isFollowUp);
+	// SIO-981: pass recent history (not just the latest line) so the LLM can recognise a follow-up
+	// against the prior proposal it refers to. On a first turn this is just the one human message.
+	const res = await llm.invoke([new SystemMessage(sys), ...recentMessages(state)]);
+	// SIO-930/SIO-981: gate converse on a real follow-up turn. Derive that from the conversation (a
+	// prior AIMessage exists) OR the UI flag, so a follow-up still routes to converse when the client
+	// omits isFollowUp on a reload. The LLM can still mis-emit converse on a first message -> coerce.
+	const isFollowUp = state.isFollowUp || hasPriorAgentTurn(state);
+	const intent = coerceConverseIntent(intentFromText(String(res.content)), isFollowUp);
 	// SIO-877: pipeline-status resolves even without a thread-local mrIid -- watchPipeline
 	// falls back to the latest open agent MR (so "check my MR" survives a page reload).
 	log.info({ intent, query, hasMr: state.mrIid !== null }, "classified IaC intent");
@@ -607,11 +654,17 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"runtimeFieldScript (the painless source, ONLY when the user gives a script). To change the index pattern set " +
 		"dataviewTitle; to change the display name set dataviewDisplayName. Set at least one of those. " +
 		"For a CLUSTER-DEFAULTS index-template change ('set total_shards_per_node to 3 on the logs@custom template on " +
-		"ap-cld') -- editing an EXISTING template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to " +
-		"the named deployment, templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', " +
-		"'metrics-system.cpu'; the part before .json, NOT the '@custom' suffix), and totalShardsPerNode to the positive " +
-		"integer the user gave. cluster-default-edit changes total_shards_per_node ONLY; if the user instead wants to bind " +
-		"a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT cluster-default-edit. " +
+		"ap-cld', 'bump refresh_interval to 30s on logs/metrics/traces-apm') -- editing the index SETTINGS of an EXISTING " +
+		"template, NOT creating one -- set workflow to 'cluster-default-edit', cluster to the named deployment, and " +
+		"templateName to the template file basename VERBATIM (e.g. 'logs', 'metrics', 'metrics-system.cpu'; the part " +
+		"before .json, NOT the '@custom' suffix). Express the settings to change as settingsPatch, a JSON object RELATIVE " +
+		'to settings.index (e.g. { "refresh_interval": "30s" }, or { "routing": { "allocation": ' +
+		'{ "total_shards_per_node": 3 } } }); any index setting is allowed -- CI\'s terraform plan validates it. For the ' +
+		"common total_shards_per_node case you MAY instead set totalShardsPerNode to the integer (back-compat). When the " +
+		"user names SEVERAL templates with the SAME change ('refresh_interval 30s on logs, metrics AND traces-apm'), set " +
+		"clusterDefaults to an array of { templateName, settingsPatch } -- one MR edits all of them. If the user instead " +
+		"wants to bind a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT " +
+		"cluster-default-edit. " +
 		"For a SPACE change ('rename the developer-experience space description on eu-cld', 'change the apps space color') " +
 		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
 		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
@@ -1299,7 +1352,11 @@ export function branchSlug(req: IacRequest): string {
 							: req.workflow === "dataview-edit"
 								? req.dataviewName
 								: req.workflow === "cluster-default-edit"
-									? req.templateName
+									? // SIO-979: a multi-file clusterDefaults request joins the template names (40-char cap
+										// truncates a long list); a single-file request keeps templateName.
+										req.clusterDefaults && req.clusterDefaults.length >= 2
+										? req.clusterDefaults.map((e) => e.templateName).join("-")
+										: req.templateName
 									: req.workflow === "space-edit"
 										? req.spaceName
 										: req.workflow === "security-edit"
@@ -1669,6 +1726,50 @@ export function setClusterDefaultShards(
 	settings.index = index;
 	obj.settings = settings;
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: previous !== totalShardsPerNode };
+}
+
+// SIO-979: read-modify-write a cluster-defaults index-template JSON with a FREEFORM settings patch.
+// The patch is relative to settings.index (the LLM emits `{ refresh_interval: "30s" }`), so any
+// index setting can be set without hard-coding a field per setting -- validity is left to CI's
+// terraform plan (the elasticstack provider passes settings through to ES verbatim). Deep-merges
+// like mergeIlmPhases, capturing the previous leaves for the diff, and preserves every other key +
+// 2-space indent + trailing newline. `changed` is false when the merge is a no-op (empty diff).
+// Throws on bad JSON. (Pure; unit-tested.)
+export function mergeClusterDefaultSettings(
+	json: string,
+	settingsPatch: Record<string, unknown>,
+): { content: string; previous: Record<string, unknown>; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("cluster-defaults JSON is not an object");
+	}
+	const original = `${JSON.stringify(parsed, null, 2)}\n`;
+	const obj = parsed as Record<string, unknown>;
+	const settings = (obj.settings ?? {}) as Record<string, unknown>;
+	const index = (settings.index ?? {}) as Record<string, unknown>;
+
+	const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+		typeof v === "object" && v !== null && !Array.isArray(v);
+	const previous: Record<string, unknown> = {};
+	const merge = (target: Record<string, unknown>, p: Record<string, unknown>, prev: Record<string, unknown>): void => {
+		for (const [key, value] of Object.entries(p)) {
+			const current = target[key];
+			if (isPlainObject(value)) {
+				if (!isPlainObject(current)) target[key] = {};
+				const prevChild: Record<string, unknown> = {};
+				prev[key] = prevChild;
+				merge(target[key] as Record<string, unknown>, value, prevChild);
+			} else {
+				prev[key] = current; // may be undefined if the file lacked this leaf
+				target[key] = value;
+			}
+		}
+	};
+	merge(index, settingsPatch, previous);
+	settings.index = index;
+	obj.settings = settings;
+	const content = `${JSON.stringify(obj, null, 2)}\n`;
+	return { content, previous, changed: content !== original };
 }
 
 // SIO-933: read-modify-write a cluster-defaults component-template JSON: set the nested
@@ -3077,6 +3178,155 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
 }
 
+// SIO-979: read -> merge a freeform settingsPatch into ONE cluster-defaults file, returning the
+// new file content + full-file diff (or a block reason). It does NOT commit -- the orchestrator
+// commits every file atomically in one commit (the proven MR !182 shape), so this only prepares
+// the content. The diff is the FULL resulting file (every line prefixed `+ `) so the reviewer sees
+// the whole settings block, not just the touched keys (mirrors proposeIndexTemplateCreate; the
+// SIO-933 lesson that a patch-only diff hides inherited keys).
+type ClusterDefaultFilePrep =
+	| { ok: false; blockedReason: string; message: string; noop?: boolean }
+	| { ok: true; filePath: string; content: string; diffBlock: string };
+
+async function prepareOneClusterDefaultFile(
+	cluster: string,
+	template: string,
+	settingsPatch: Record<string, unknown>,
+): Promise<ClusterDefaultFilePrep> {
+	const filePath = deploymentJsonPath(clusterDefaultTemplate(), cluster).replace(/\$\{template\}/g, template);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			ok: false,
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			message: "Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.",
+		};
+	}
+	// SIO-921: an UNKNOWN read (neither 2xx nor 404) must block, never silently fall through.
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			ok: false,
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			message: "Cannot propose the change: I could not read the target file from the GitOps repo.",
+		};
+	}
+	if (raw.startsWith("[404")) {
+		// Editing an EXISTING cluster-defaults template only (create is index-template-create).
+		return {
+			ok: false,
+			blockedReason: `Cluster-defaults template '${template}' not found on '${cluster}' (${filePath}).`,
+			message: `I couldn't find a cluster-defaults template file '${template}' on '${cluster}' (${filePath}). Check the template file name (creating a new template is not supported here).`,
+		};
+	}
+
+	let updated: ReturnType<typeof mergeClusterDefaultSettings>;
+	try {
+		updated = mergeClusterDefaultSettings(extractFileContent(raw), settingsPatch);
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			message: `Cannot propose the change: ${reason}.`,
+		};
+	}
+
+	if (!updated.changed) {
+		return {
+			ok: false,
+			noop: true,
+			blockedReason: `Template '${template}' on '${cluster}' already has the requested settings; no change needed.`,
+			message: `No change needed: template '${template}' on '${cluster}' already has the requested settings. I did not open a merge request.`,
+		};
+	}
+
+	// Full-file diff: show the entire resulting file so nothing (inherited keys) is hidden at review.
+	const diffBlock = `${filePath} (cluster-defaults ${template})\n+ ${updated.content.replace(/\n/g, "\n+ ").trimEnd()}`;
+	return { ok: true, filePath, content: updated.content, diffBlock };
+}
+
+// SIO-979: propose a FREEFORM cluster-defaults settings change across one or more templates. Unlike
+// proposeClusterDefaultChange (total_shards_per_node only, single file), this merges an arbitrary
+// settings patch and commits ALL files atomically in ONE commit via gitlab_commit_files -- the
+// proven MR !182 mechanism (one commit, three files). Atomic all-or-nothing: any file's prep
+// failure blocks the whole batch and no MR is opened. Single-entry requests pass settingsPatch +
+// templateName; multi-file requests pass clusterDefaults[].
+async function proposeClusterDefaultChanges(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	// Normalize to an entry list: the singular settingsPatch + templateName is a 1-entry batch.
+	const entries =
+		req.clusterDefaults && req.clusterDefaults.length > 0
+			? req.clusterDefaults
+			: req.templateName && req.settingsPatch
+				? [{ templateName: req.templateName, settingsPatch: req.settingsPatch }]
+				: [];
+
+	if (entries.length === 0) {
+		return {
+			blockedReason: "Cluster-defaults change needs a template name and a settings patch.",
+			messages: [new AIMessage("Cannot propose the change: name the index template and the index settings to change.")],
+		};
+	}
+	for (const e of entries) {
+		if (!e.templateName) {
+			return {
+				blockedReason: "Cluster-defaults change needs a template name for every file.",
+				messages: [new AIMessage("Cannot propose the change: every named template needs a filename.")],
+			};
+		}
+		if (!e.settingsPatch || Object.keys(e.settingsPatch).length === 0) {
+			return {
+				blockedReason: `Cluster-defaults change for '${e.templateName}' needs at least one index setting to change.`,
+				messages: [new AIMessage(`Cannot propose the change: template '${e.templateName}' has no setting to change.`)],
+			};
+		}
+	}
+
+	const branch = branchName(req);
+	// Create the shared branch ONCE; all files commit onto it in a single atomic commit.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+
+	const prepared: Array<{ filePath: string; content: string }> = [];
+	const diffBlocks: string[] = [];
+	const settingKeys = new Set<string>();
+	for (const e of entries) {
+		const result = await prepareOneClusterDefaultFile(cluster, e.templateName, e.settingsPatch);
+		if (!result.ok) {
+			// Atomic: one file's failure blocks the whole MR. The branch was created but no commit
+			// landed and no MR is opened, so it is never reviewed or merged.
+			return {
+				blockedReason: `Multi-file cluster-defaults change blocked on '${e.templateName}': ${result.blockedReason}`,
+				messages: [new AIMessage(`${result.message} No merge request was opened (the batch is all-or-nothing).`)],
+			};
+		}
+		prepared.push({ filePath: result.filePath, content: result.content });
+		diffBlocks.push(result.diffBlock);
+		for (const k of Object.keys(e.settingsPatch)) settingKeys.add(k);
+	}
+
+	const fields = [...settingKeys].join(", ");
+	const commit = await callTool("gitlab_commit_files", {
+		branch,
+		files: prepared.map((f) => ({ file_path: f.filePath, content: f.content, action: "update" })),
+		commit_message: `${cluster}: cluster-defaults ${entries.map((e) => e.templateName).join("/")} (${fields})`,
+	});
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+
+	return {
+		branch,
+		proposedFilePath: prepared[0]?.filePath ?? "",
+		proposedFiles: prepared.map((f) => f.filePath),
+		proposedDiff: diffBlocks.join("\n\n"),
+		precheckPassed: prepared.length > 0,
+	};
+}
+
 // SIO-917: propose a cluster-defaults change -- set total_shards_per_node on an EXISTING
 // index-template file. Mirrors proposeSloChange: single file, read-modify-write, edits only.
 async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
@@ -3962,7 +4212,13 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "slo-edit") return proposeSloChange(state, req);
 	if (req.workflow === "alerting-edit") return proposeAlertingChange(state, req);
 	if (req.workflow === "dataview-edit") return proposeDataviewChange(state, req);
-	if (req.workflow === "cluster-default-edit") return proposeClusterDefaultChange(state, req);
+	// SIO-979: a freeform settings patch (single template) or a multi-file clusterDefaults[] batch
+	// routes to the freeform atomic proposer; a bare total_shards_per_node keeps the original path.
+	if (req.workflow === "cluster-default-edit") {
+		return req.clusterDefaults || req.settingsPatch
+			? proposeClusterDefaultChanges(state, req)
+			: proposeClusterDefaultChange(state, req);
+	}
 	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
 	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
 	if (req.workflow === "topology-edit") return proposeTopologyChange(state, req);
@@ -4167,7 +4423,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 							: req?.workflow === "dataview-edit"
 								? `${req?.dataviewName ?? "?"}: ${[req?.runtimeFieldName ? `runtime ${req.runtimeFieldName}` : "", req?.dataviewTitle ? "title" : "", req?.dataviewDisplayName ? "name" : ""].filter(Boolean).join(", ") || "change"}`
 								: req?.workflow === "cluster-default-edit"
-									? `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
+									? // SIO-979: a freeform settingsPatch (single or multi-file) titles by templates + the
+										// settings keys; a bare total_shards_per_node keeps the original descriptor.
+										req?.clusterDefaults && req.clusterDefaults.length > 0
+										? `${req.clusterDefaults.map((e) => e.templateName).join(", ")}: ${[...new Set(req.clusterDefaults.flatMap((e) => Object.keys(e.settingsPatch)))].join(", ")}`
+										: req?.settingsPatch
+											? `${req?.templateName ?? "?"}: ${Object.keys(req.settingsPatch).join(", ")}`
+											: `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
 									: req?.workflow === "space-edit"
 										? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
 										: req?.workflow === "security-edit"
@@ -4275,7 +4537,13 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Data view '${req?.dataviewName}' edit:${req?.runtimeFieldName ? ` runtime_field_map.${req.runtimeFieldName} (config-form script_source)` : ""}${req?.dataviewTitle ? ` title -> ${req.dataviewTitle}` : ""}${req?.dataviewDisplayName ? ` name -> ${req.dataviewDisplayName}` : ""}.`
 				: "",
 			req?.workflow === "cluster-default-edit"
-				? `Cluster-defaults template '${req?.templateName}': settings.index.routing.allocation.total_shards_per_node -> ${req?.totalShardsPerNode}.${state.shardsLowered ? " LOWERED (can unbalance allocation)." : ""}`
+				? // SIO-979: a freeform settingsPatch (single or multi-file) describes the merged settings per
+					// template; a bare total_shards_per_node keeps the original single-field line.
+					req?.clusterDefaults && req.clusterDefaults.length > 0
+					? `Cluster-defaults settings change on '${req?.cluster}' across ${req.clusterDefaults.length} templates: ${req.clusterDefaults.map((e) => `${e.templateName} (${JSON.stringify(e.settingsPatch)})`).join(", ")}. Merged into settings.index; CI computes the plan.`
+					: req?.settingsPatch
+						? `Cluster-defaults template '${req?.templateName}' on '${req?.cluster}': settings.index merged with ${JSON.stringify(req.settingsPatch)}. CI computes the plan.`
+						: `Cluster-defaults template '${req?.templateName}': settings.index.routing.allocation.total_shards_per_node -> ${req?.totalShardsPerNode}.${state.shardsLowered ? " LOWERED (can unbalance allocation)." : ""}`
 				: "",
 			req?.workflow === "space-edit"
 				? `Space '${req?.spaceName}' edit:${req?.spaceDisplayName ? ` name -> ${req.spaceDisplayName}` : ""}${req?.spaceDescription ? " description (changed)" : ""}${req?.spaceColor ? ` color -> ${req.spaceColor}` : ""}.`

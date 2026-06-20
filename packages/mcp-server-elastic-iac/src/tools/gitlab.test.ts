@@ -1,6 +1,6 @@
 // src/tools/gitlab.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildCommitFileBody, flipCommitAction } from "./gitlab.ts";
+import { buildCommitFileBody, buildCommitFilesBody, flipCommitAction } from "./gitlab.ts";
 
 // SIO-873: the GitLab commits API needs a single action with the FULL new file content
 // (not a diff). This is what gitlab_commit_file POSTs.
@@ -32,6 +32,34 @@ describe("buildCommitFileBody", () => {
 			action: "create",
 		});
 		expect(body.actions[0]?.action).toBe("create");
+	});
+});
+
+// SIO-979: an ATOMIC multi-file commit -- one POST /repository/commits with several actions,
+// so N files land in ONE commit (the proven MR !182 shape). Each file carries its own action
+// because a read-modify-write edit (update) and a brand-new file (create) can share one commit.
+describe("buildCommitFilesBody", () => {
+	test("emits one action per file, preserving per-file action", () => {
+		const body = buildCommitFilesBody({
+			branch: "agent/eu-b2b-cluster-defaults-refresh-interval-20260620",
+			commitMessage: "eu-b2b cluster-defaults: set refresh_interval=10s on logs/metrics/traces-apm",
+			files: [
+				{ file_path: "environments/eu-b2b/cluster-defaults/logs.json", content: '{"a":1}\n', action: "update" },
+				{ file_path: "environments/eu-b2b/cluster-defaults/metrics.json", content: '{"b":2}\n', action: "update" },
+				{ file_path: "environments/eu-b2b/cluster-defaults/traces-apm.json", content: '{"c":3}\n' },
+			],
+		});
+		expect(body.branch).toBe("agent/eu-b2b-cluster-defaults-refresh-interval-20260620");
+		expect(body.commit_message).toContain("refresh_interval=10s");
+		expect(body.actions).toHaveLength(3);
+		expect(body.actions[0]).toEqual({
+			action: "update",
+			file_path: "environments/eu-b2b/cluster-defaults/logs.json",
+			content: '{"a":1}\n',
+		});
+		// defaults to "update" when a file omits its action (matches buildCommitFileBody)
+		expect(body.actions[2]?.action).toBe("update");
+		expect(body.actions[2]?.file_path).toBe("environments/eu-b2b/cluster-defaults/traces-apm.json");
 	});
 });
 
