@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	intentFromText,
 	looksLikeChangeRequest,
+	looksLikeCorrection,
 	looksLikeFleetStatusCheck,
 	resolvePipelinePollBudgetMs,
 } from "./nodes.ts";
@@ -144,5 +145,42 @@ describe("looksLikeChangeRequest (SIO-983)", () => {
 		expect(looksLikeChangeRequest("is eu-b2b healthy?")).toBe(false);
 		expect(looksLikeChangeRequest("check my MR")).toBe(false);
 		expect(looksLikeChangeRequest("how is the rollout going?")).toBe(false);
+	});
+});
+
+// SIO-990: a correction to the change just proposed this session should AMEND it in place (re-commit
+// on the same branch, update the existing MR) rather than re-propose from scratch. looksLikeCorrection
+// is the deterministic guard (the caller gates it on an existing activeChange.branch). It catches the
+// adjust/objection phrasings + bare confirmations the user actually typed in the logged session.
+describe("looksLikeCorrection (SIO-990)", () => {
+	test("matches the corrections the user typed (the 4d->14d session)", () => {
+		expect(looksLikeCorrection("do as instructed -> change delete.min_age to 14d")).toBe(true);
+		expect(looksLikeCorrection("the metrics-apm line is wrong -- 4d will break")).toBe(true);
+		expect(looksLikeCorrection("4d is incorrect, it should be 14d")).toBe(true);
+		expect(looksLikeCorrection("make it 14d")).toBe(true);
+		expect(looksLikeCorrection("set it to 14d instead of 4d")).toBe(true);
+		expect(looksLikeCorrection("follow my prompt")).toBe(true);
+		expect(looksLikeCorrection("actually use 14 days")).toBe(true);
+		expect(looksLikeCorrection("update the MR to 14d")).toBe(true);
+		expect(looksLikeCorrection("amend the change")).toBe(true);
+	});
+
+	test("matches bare confirmations after a proposal", () => {
+		expect(looksLikeCorrection("proceed")).toBe(true);
+		expect(looksLikeCorrection("go ahead")).toBe(true);
+		expect(looksLikeCorrection("yes, do it")).toBe(true);
+		expect(looksLikeCorrection("confirm")).toBe(true);
+	});
+
+	test("is case-insensitive", () => {
+		expect(looksLikeCorrection("DO AS INSTRUCTED")).toBe(true);
+		expect(looksLikeCorrection("Proceed")).toBe(true);
+	});
+
+	test("does NOT match an ordinary read-only / status follow-up", () => {
+		expect(looksLikeCorrection("check my MR")).toBe(false);
+		expect(looksLikeCorrection("is eu-b2b healthy?")).toBe(false);
+		expect(looksLikeCorrection("what is ap-cld running?")).toBe(false);
+		expect(looksLikeCorrection("how is the pipeline going?")).toBe(false);
 	});
 });

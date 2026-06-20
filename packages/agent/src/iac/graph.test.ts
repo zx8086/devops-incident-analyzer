@@ -29,6 +29,14 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("answerInfo");
 	});
 
+	// SIO-990: the correction/amend lane node (gitops-amend -> amendChange -> readClusterState).
+	// Its presence confirms the new node registers and the new conditional edges compile.
+	test("graph contains the amendChange node", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("amendChange");
+	});
+
 	// SIO-875: post-MR pipeline watch node.
 	test("graph contains the watchPipeline node", async () => {
 		const graph = await buildIacGraph({ checkpointerType: "memory" });
