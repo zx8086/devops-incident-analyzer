@@ -15,7 +15,8 @@ const INCIDENT_NODES = [
 ] as const;
 
 // elastic-iac maker happy path (version-upgrade / tier-resize / ilm-rollout). bootstrap,
-// classifyIacIntent, watchPipeline and teardown are plumbing/covered elsewhere and omitted.
+// classifyIacIntent and teardown are plumbing/covered elsewhere and omitted. SIO-984: watchPipeline
+// is now a first-class step (the post-MR poll-to-terminal phase).
 const IAC_MAKER_NODES = [
 	{ id: "parseIntent", activeLabel: "Parsing", completeLabel: "Parsed" },
 	{ id: "readClusterState", activeLabel: "Reading state", completeLabel: "Read state" },
@@ -23,6 +24,7 @@ const IAC_MAKER_NODES = [
 	{ id: "draftChange", activeLabel: "Drafting", completeLabel: "Drafted" },
 	{ id: "reviewPlan", activeLabel: "Preparing review", completeLabel: "Prepared" },
 	{ id: "openMr", activeLabel: "Opening MR", completeLabel: "MR opened" },
+	{ id: "watchPipeline", activeLabel: "Watching pipeline", completeLabel: "Pipeline done" },
 ] as const;
 
 // SIO-903: drift (SIO-882) + synthetics-drift (SIO-902) sub-flow. A drift run never executes

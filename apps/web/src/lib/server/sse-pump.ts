@@ -51,6 +51,10 @@ const PIPELINE_NODES = new Set([
 	"reviewPlan",
 	"reviewGate",
 	"openMr",
+	// SIO-984: the post-MR pipeline watch -- without it the gitops flow shows "MR opened" then a
+	// sudden result with no pill for the (now poll-to-terminal) watch phase. Also fires on the
+	// pipeline-status "check my MR" re-check.
+	"watchPipeline",
 	"teardown",
 	// SIO-882: elastic-iac drift sub-flow nodes.
 	"detectDrift",

@@ -504,6 +504,21 @@ export function resolvePipelinePollBudgetMs(text: string, defaultMs: number, ext
 	return looksLikeWatchUntilDone(text) ? extendedMs : defaultMs;
 }
 
+// SIO-984: pick watchPipeline's budget by HOW it was entered. Straight after openMr (isPostMr, the
+// turn's intent is "gitops") it must poll to terminal so the card shows triggered->...->succeeded in
+// one turn -- the cold-runner CI pipeline (~130s) outlasts the snappy default -- so use the extended
+// budget unconditionally. A "check my MR" follow-up (pipeline-status) stays snappy and only extends
+// on "watch until done". (Pure; unit-tested. The loop still returns early on a terminal status, so
+// the extended budget is a ceiling, not a fixed wait.)
+export function resolveWatchPipelineBudgetMs(
+	isPostMr: boolean,
+	text: string,
+	defaultMs: number,
+	extendedMs: number,
+): number {
+	return isPostMr ? extendedMs : resolvePipelinePollBudgetMs(text, defaultMs, extendedMs);
+}
+
 // SIO-930: "converse" answers a follow-up ABOUT the agent's own prior answer, so it is only
 // meaningful when there IS a prior turn. The classifier LLM can occasionally emit "converse" on a
 // first message (mistaking a fresh question for a follow-up); coerce it back to the safe read-only
@@ -5054,12 +5069,27 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// slow cold-runner pipeline reaches terminal within the turn instead of freezing at "running".
 	const defaultBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
 	const extendedBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED ?? "300000");
-	const budgetMs = resolvePipelinePollBudgetMs(lastHumanText(state), defaultBudgetMs, extendedBudgetMs);
+	// SIO-984: distinguish the two ways watchPipeline is entered. Straight after openMr (intent
+	// "gitops") it should poll to TERMINAL so the card shows triggered->running->succeeded in one turn
+	// (the cold-runner CI pipeline is ~130s, longer than the snappy default) -- use the extended budget
+	// unconditionally there. A "check my MR" follow-up (intent "pipeline-status") stays snappy at the
+	// default and only extends when the user asks to "watch until done". Returns early the instant the
+	// pipeline hits terminal, so the extended budget is a ceiling, not a fixed wait.
+	const isPostMrWatch = state.intent === "gitops";
+	const budgetMs = resolveWatchPipelineBudgetMs(isPostMrWatch, lastHumanText(state), defaultBudgetMs, extendedBudgetMs);
 	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
 	const deadline = Date.now() + budgetMs;
 
 	let pipelineId: number | null = null;
 	let status = "unknown";
+	// SIO-984: on the post-MR watch, emit a synthetic "triggered" step BEFORE the first poll so the
+	// pipeline-log card always shows >=2 steps (triggered -> running -> ... -> succeeded), mirroring
+	// the fleet flow's "fleet apply: started" line. By the first poll GitLab has usually advanced the
+	// pipeline past "created" to "running", so without this the card would show only a lone "running".
+	// A "check my MR" follow-up did not trigger anything this turn, so it skips the synthetic line.
+	if (isPostMrWatch) {
+		await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "triggered" });
+	}
 	while (Date.now() < deadline) {
 		const newest = parseNewestPipeline(await callTool("gitlab_get_merge_request_pipelines", { iid }));
 		if (newest) {
