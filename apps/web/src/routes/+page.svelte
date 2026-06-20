@@ -76,6 +76,17 @@ const fleetLogIndex = $derived.by(() => {
 	return agentStore.messages[idx]?.role === "assistant" ? idx : -1;
 });
 
+// SIO-982: the GitOps MR Pipeline log is the snapshot taken on `done` (iacPipelineLog), shown ABOVE
+// the trailing MR result message exactly like the fleet log. The done handler only populates it for
+// non-fleet turns, so fleetLogIndex and gitopsLogIndex never both fire for the same message. -1 = none.
+const gitopsLogIndex = $derived.by(() => {
+	if (agentStore.isStreaming) return -1;
+	if (!agentStore.iacPipelineLog?.length) return -1;
+	if (agentStore.messages.length === 0) return -1;
+	const idx = agentStore.messages.length - 1;
+	return agentStore.messages[idx]?.role === "assistant" ? idx : -1;
+});
+
 function toggleAgent() {
 	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
 }
@@ -222,6 +233,10 @@ function handleSuggestionClick(suggestion: string) {
                the timeline reads chronologically (pipeline ran -> then completed). -->
           {#if i === fleetLogIndex}
             <PipelineProgressCard variant="collapsed" lines={agentStore.fleetUpgradeResult?.progressLog ?? []} />
+          {/if}
+          <!-- SIO-982: GitOps MR pipeline log, persisted from the live ticker on `done`. -->
+          {#if i === gitopsLogIndex}
+            <PipelineProgressCard variant="collapsed" lines={agentStore.iacPipelineLog ?? []} />
           {/if}
           <ChatMessage
             message={msg}

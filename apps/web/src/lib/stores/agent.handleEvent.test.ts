@@ -28,6 +28,40 @@ describe("applyStreamEvent", () => {
 		expect(next.iacPipelineProgress).toEqual(["Pipeline: pending"]);
 	});
 
+	// SIO-982: the GitOps MR flow has no result event (it ends with a plain message + done), so the
+	// done handler snapshots the live pipeline progress into iacPipelineLog -- the durable field the
+	// UI renders as a persistent collapsed "Pipeline log" panel after the turn (mirrors fleet's
+	// progressLog, SIO-928). The live iacPipelineProgress is only shown while streaming.
+	test("done snapshots iacPipelineProgress into iacPipelineLog (GitOps MR persistence)", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 9, status: "created" });
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 9, status: "running" });
+		state = applyStreamEvent(state, { type: "done", threadId: "t-1", responseTime: 100 });
+		expect(state.iacPipelineLog).toEqual(["Pipeline #9: created", "Pipeline #9: running"]);
+	});
+
+	test("done with no pipeline progress leaves iacPipelineLog empty", () => {
+		const next = applyStreamEvent(initialReducerState(), { type: "done", threadId: "t-1", responseTime: 100 });
+		expect(next.iacPipelineLog ?? []).toEqual([]);
+	});
+
+	// SIO-982: fleet captures its OWN progress into fleetUpgradeResult.progressLog (SIO-928); the
+	// GitOps snapshot must NOT also fire for a fleet turn (no double-capture / independent paths).
+	test("done does NOT snapshot iacPipelineLog when a fleet result already captured it", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "iac_pipeline_progress", pipelineId: 9, status: "running" });
+		state = applyStreamEvent(state, {
+			type: "fleet_upgrade_apply_result",
+			status: "applied",
+			acked: 4,
+			failedSilent: 0,
+		});
+		state = applyStreamEvent(state, { type: "done", threadId: "t-1", responseTime: 100 });
+		// fleet keeps its own progressLog; the GitOps field stays empty so the panel isn't double-rendered.
+		expect(state.fleetUpgradeResult?.progressLog).toEqual(["Pipeline #9: running"]);
+		expect(state.iacPipelineLog ?? []).toEqual([]);
+	});
+
 	test("tracks node_start and node_end transitions", () => {
 		let state = initialReducerState();
 		state = applyStreamEvent(state, { type: "node_start", nodeId: "classify" });

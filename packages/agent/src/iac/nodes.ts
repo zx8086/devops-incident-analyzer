@@ -431,6 +431,37 @@ export function looksLikeFleetStatusCheck(text: string): boolean {
 	return STATUS_CUES.some((cue) => r.includes(cue));
 }
 
+// SIO-982: does the user want watchPipeline to keep polling until the pipeline reaches a terminal
+// status (vs the default one-shot bounded poll)? A cold CI runner can take >90s, so "watch until
+// done"/"wait for it to finish" extends the poll budget for THIS call only. (Pure; unit-tested.)
+export function looksLikeWatchUntilDone(text: string): boolean {
+	const r = text.toLowerCase();
+	const CUES = [
+		"until done",
+		"until it's done",
+		"until its done",
+		"until complete",
+		"until it's complete",
+		"until its complete",
+		"until it finishes",
+		"until finished",
+		"to completion",
+		"wait for it to finish",
+		"wait for it to complete",
+		"wait until it",
+		"wait for the pipeline",
+		"watch it finish",
+		"watch to the end",
+	];
+	return CUES.some((cue) => r.includes(cue));
+}
+
+// SIO-982: resolve watchPipeline's poll budget for one call. Default (short) keeps the turn snappy;
+// when the user asks to wait for completion it extends to the longer budget. (Pure; unit-tested.)
+export function resolvePipelinePollBudgetMs(text: string, defaultMs: number, extendedMs: number): number {
+	return looksLikeWatchUntilDone(text) ? extendedMs : defaultMs;
+}
+
 // SIO-930: "converse" answers a follow-up ABOUT the agent's own prior answer, so it is only
 // meaningful when there IS a prior turn. The classifier LLM can occasionally emit "converse" on a
 // first message (mistaking a fresh question for a follow-up); coerce it back to the safe read-only
@@ -4916,7 +4947,11 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		log.info({ iid }, "recovered latest open agent MR for pipeline-status");
 	}
 
-	const budgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
+	// SIO-982: per-call poll budget. Default keeps the turn snappy; "watch until done" extends it so a
+	// slow cold-runner pipeline reaches terminal within the turn instead of freezing at "running".
+	const defaultBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
+	const extendedBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED ?? "300000");
+	const budgetMs = resolvePipelinePollBudgetMs(lastHumanText(state), defaultBudgetMs, extendedBudgetMs);
 	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
 	const deadline = Date.now() + budgetMs;
 
