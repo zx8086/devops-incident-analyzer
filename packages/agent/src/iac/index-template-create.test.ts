@@ -29,7 +29,7 @@ const TRACES_ENTRY = {
 };
 
 describe("buildIndexTemplateConfig", () => {
-	test("emits the module's template-nested JSON shape for metrics", () => {
+	test("emits the module's TOP-LEVEL settings JSON shape for metrics", () => {
 		const content = buildIndexTemplateConfig(METRICS_ENTRY);
 		const parsed = JSON.parse(content) as {
 			name: string;
@@ -38,7 +38,7 @@ describe("buildIndexTemplateConfig", () => {
 			priority: number;
 			ignore_missing_component_templates: string[];
 			data_stream: Record<string, unknown>;
-			template: { settings: { index: { lifecycle: { name: string } } } };
+			settings: { index: { lifecycle: { name: string } } };
 		};
 		expect(parsed.name).toBe("dev-staging-metrics-ilm-override");
 		expect(parsed.index_patterns).toEqual(["metrics-*.dev-*", "metrics-*.stg-*"]);
@@ -50,8 +50,10 @@ describe("buildIndexTemplateConfig", () => {
 		]);
 		expect(parsed.priority).toBe(350);
 		expect(parsed.ignore_missing_component_templates).toEqual(["metrics@custom"]);
-		// ILM bind is carried via template.settings (no separate provider arg).
-		expect(parsed.template.settings.index.lifecycle.name).toBe("dev-staging-metrics");
+		// SIO-977 MR !180: ILM bind rides in TOP-LEVEL settings (module reads each.value.settings).
+		expect(parsed.settings.index.lifecycle.name).toBe("dev-staging-metrics");
+		// A `template`-nested key would be silently dropped by Terraform's object type conversion.
+		expect(parsed).not.toHaveProperty("template");
 	});
 
 	test("data_stream carries hidden but OMITS allow_custom_routing when false (8.x-only field, eu-b2b is 9.x)", () => {
@@ -76,11 +78,11 @@ describe("buildIndexTemplateConfig", () => {
 		const content = buildIndexTemplateConfig(TRACES_ENTRY);
 		const parsed = JSON.parse(content) as {
 			composed_of: string[];
-			template: { settings: { index: { lifecycle: { name: string } } } };
+			settings: { index: { lifecycle: { name: string } } };
 		};
 		expect(parsed.composed_of).toContain("traces@custom");
 		expect(parsed.composed_of).toContain("ecs@mappings");
-		expect(parsed.template.settings.index.lifecycle.name).toBe("dev-staging-traces");
+		expect(parsed.settings.index.lifecycle.name).toBe("dev-staging-traces");
 	});
 
 	test("preserves 2-space indent + trailing newline (repo house style)", () => {
