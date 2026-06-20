@@ -21,7 +21,7 @@ import {
 } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
-import { evaluateGuards } from "./guards.ts";
+import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
 import {
 	computeIlmLiveParity,
 	esIlmPolicyToFlatDsl,
@@ -33,6 +33,7 @@ import type {
 	DriftReport,
 	FleetUpgradeReport,
 	FleetUpgradeResult,
+	IacActiveChange,
 	IacApprovalState,
 	IacPlanReport,
 	IacPlanReview,
@@ -473,6 +474,46 @@ export function looksLikeChangeRequest(text: string): boolean {
 	return CUES.some((cue) => r.includes(cue));
 }
 
+// SIO-990: does this message correct / adjust the change the agent just proposed this session
+// (so the amend lane should re-commit onto the SAME branch instead of proposing from scratch)?
+// Only meaningful when an activeChange already exists (the caller gates on that). Matches short
+// adjust/objection phrasings and bare proceed/confirm cues; deliberately NOT explicit fresh-MR
+// imperatives (those are a new change -> looksLikeChangeRequest -> gitops). (Pure; unit-tested.)
+export function looksLikeCorrection(text: string): boolean {
+	const r = text.toLowerCase().trim();
+	const CUES = [
+		"do as instructed",
+		"as instructed",
+		"follow my prompt",
+		"follow the prompt",
+		"use the prompt",
+		"is wrong",
+		"that's wrong",
+		"thats wrong",
+		"is incorrect",
+		"should be",
+		"change it to",
+		"change that to",
+		"make it",
+		"set it to",
+		"instead of",
+		"not ",
+		"actually",
+		"correction",
+		"fix it",
+		"fix that",
+		"redo",
+		"amend",
+		"update the mr",
+		"update the change",
+		"adjust",
+	];
+	// Bare confirmations after a proposal ("proceed", "go ahead", "yes do it") also re-enter the
+	// active change rather than starting a new one. Matched as whole words to avoid false hits.
+	const PROCEED = /^(proceed|go ahead|yes,? do it|do it|confirm|continue|carry on)\b/.test(r);
+	return PROCEED || CUES.some((cue) => r.includes(cue));
+}
+
 // SIO-982: does the user want watchPipeline to keep polling until the pipeline reaches a terminal
 // status (vs the default one-shot bounded poll)? A cold CI runner can take >90s, so "watch until
 // done"/"wait for it to finish" extends the poll budget for THIS call only. (Pure; unit-tested.)
@@ -545,6 +586,19 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 			"iac intent: fleet-status guard -> pipeline-status",
 		);
 		return { intent: "pipeline-status" };
+	}
+	// SIO-990: a CORRECTION to the change already proposed this session enters the amend lane, which
+	// re-commits onto the SAME branch (updating the existing MR in place) instead of proposing from
+	// scratch. Gated on an existing activeChange.branch so a first-turn message can never be an amend.
+	// Pre-LLM and BEFORE looksLikeChangeRequest so "make it 14d" / "do as instructed" on a live draft
+	// amends rather than cutting a new branch+MR. An explicit NEW-target change still reaches gitops
+	// below when it doesn't read like a correction of the active change.
+	if (state.activeChange?.branch && looksLikeCorrection(query)) {
+		log.info(
+			{ query, branch: state.activeChange.branch, mrIid: state.activeChange.mrIid ?? null },
+			"iac intent: correction guard -> gitops-amend",
+		);
+		return { intent: "gitops-amend" };
 	}
 	// SIO-983: an explicit imperative MR/change request must enter the gitops proposal lane even on a
 	// follow-up turn. Without this, a post-rejection "no, follow my prompt and open the MR" is often
@@ -641,17 +695,28 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 // nothing is in flight / recall is unavailable. Best-effort: never throws.
 export async function buildInFlightSessionNote(): Promise<string> {
 	try {
+		const items: string[] = [];
+		// In-flight fleet binary upgrades (no MR; re-pollable imperative pipelines).
 		const inFlight = await recallInFlightFleetUpgrades("elastic-iac");
-		if (inFlight.length === 0) return "";
-		const items = inFlight.map((u) => {
+		for (const u of inFlight) {
 			const dep = u.deployment ?? "a deployment";
 			const ver = u.version ? ` to ${u.version}` : "";
 			const pid = u.pipelineId ? ` (pipeline #${u.pipelineId})` : "";
-			return `${dep} fleet upgrade${ver}${pid}`;
-		});
+			items.push(`${dep} fleet upgrade${ver}${pid}`);
+		}
+		// SIO-990: the most recent gitops MR this agent opened (durable iac-change fact), so a fresh
+		// thread after a clear/reload knows the MR exists and a "check my MR" resolves it without
+		// asking "which MR?". One line; the live status is re-fetched on demand by watchPipeline.
+		const lastChange = await recallLastIacChange();
+		if (lastChange?.mrUrl) {
+			const dep = lastChange.deployment ? `${lastChange.deployment} ` : "";
+			const iid = lastChange.mrIid ? ` (MR !${lastChange.mrIid})` : "";
+			items.push(`${dep}config change${iid} -> ${lastChange.mrUrl}`);
+		}
+		if (items.length === 0) return "";
 		return (
-			`In-flight work from a previous session: ${items.join("; ")}. ` +
-			"If relevant, tell the user it is still running and they can ask you to check on it."
+			`In-flight / recent work from a previous session: ${items.join("; ")}. ` +
+			"If relevant, tell the user and offer to check on it (ask you to 'check my MR' or the rollout)."
 		);
 	} catch {
 		return "";
@@ -1479,6 +1544,17 @@ export function branchSlug(req: IacRequest): string {
 function branchName(req: IacRequest): string {
 	const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 	return `agent/${branchSlug(req)}-${date}`;
+}
+
+// SIO-990: the branch a proposer should commit to. On a correction turn (intent "gitops-amend")
+// it pins to the branch the active change already lives on, so the new commit lands on the SAME
+// branch and the EXISTING MR updates in place -- no second branch, no duplicate MR. On a fresh
+// gitops turn it is just branchName(req). branchName is date+slug-derived, so a same-day same-slug
+// correction already resolves here even without an activeChange; the pin makes it deterministic
+// (cross-midnight, or a value change that shifts the slug). (Pure.)
+export function resolveBranch(state: IacStateType, req: IacRequest): string {
+	if (state.intent === "gitops-amend" && state.activeChange?.branch) return state.activeChange.branch;
+	return branchName(req);
 }
 
 // SIO-965: every agent-opened MR carries these GitLab labels. The MCP tool defaults
@@ -2495,6 +2571,20 @@ async function commitOneIlmPolicy(
 		};
 	}
 
+	// SIO-990: semantic gate on the MERGED policy -- phase min_age must not decrease across
+	// hot -> warm -> cold -> frozen -> delete. Catches a typo like delete.min_age=4d below
+	// frozen.min_age=7d that the structural schema and the danger denylist both miss, BEFORE
+	// the commit (so no branch is left with an un-appliable policy). validateIlmPolicy ran first,
+	// so updatedObj is schema-shaped here.
+	const ordering = validateIlmPhaseOrdering(updatedObj);
+	if (!ordering.ok) {
+		return {
+			ok: false,
+			blockedReason: `Proposed ILM policy '${policy}' has an invalid phase ordering: ${ordering.reason}`,
+			message: `I won't open an MR: the proposed '${policy}' policy has an invalid phase ordering. ${ordering.reason}`,
+		};
+	}
+
 	const retentionChange = detectRetentionReduction(updated.previous, patchObj);
 
 	const fields = Object.keys(patchObj).join(", ") || (sourcePolicy ? `copy of ${sourcePolicy}` : "copy");
@@ -2705,7 +2795,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		};
 	}
 
-	const branch = branchName(req);
+	// SIO-990: pin to the active change's branch on an amend so the corrected commit updates the
+	// EXISTING MR in place; branchName(req) on a fresh proposal.
+	const branch = resolveBranch(state, req);
 	// SIO-899: gitlab_create_branch is idempotent (a re-run reuses the branch); create it before
 	// the commit. Kept here (not in the helper) so the multi-file path creates one shared branch.
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
@@ -2782,7 +2874,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 // (unreadable / invalid / no-op), fail the whole turn naming that file -- never open a partial MR
 // (the user said "change nothing else"). Aggregates the per-file diffs into one proposedDiff and
 // OR-reduces the risk flags (retentionChange/policyCreated) so the review card still surfaces them.
-async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeIlmChanges(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const entries = req.ilmPolicies ?? [];
 
@@ -2807,7 +2899,8 @@ async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise
 		}
 	}
 
-	const branch = branchName(req);
+	// SIO-990: pin to the active change's branch on an amend (multi-file too); branchName otherwise.
+	const branch = resolveBranch(state, req);
 	// Create the shared branch ONCE; every policy commits onto it.
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
 
@@ -4361,6 +4454,23 @@ async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest)
 	};
 }
 
+// SIO-990: amend lane entry. A correction to the change just proposed this session (intent
+// "gitops-amend", set by classifyIacIntent's correction guard) re-parses the corrected request from
+// the latest message and routes it through the SAME proposer chain (readClusterState -> guard ->
+// draftChange -> reviewPlan -> reviewGate). The chain re-commits onto the active change's branch
+// (resolveBranch pins it) so the EXISTING MR updates in place, and reviewGate's approved-exit skips
+// the duplicate openMr when activeChange.mrIid is set. This is a thin re-parse wrapper over
+// parseIntent: it preserves intent="gitops-amend" (parseIntent only returns iacRequest) so the
+// downstream pin/skip see the amend. If parseIntent can't resolve the change (clarification /
+// unsupported), it surfaces that exactly as a fresh gitops turn would.
+export async function amendChange(state: IacStateType): Promise<Partial<IacStateType>> {
+	log.info(
+		{ branch: state.activeChange?.branch, mrIid: state.activeChange?.mrIid ?? null, query: lastHumanText(state) },
+		"amendChange: re-parsing correction against the active change",
+	);
+	return parseIntent(state);
+}
+
 // Draft the change. Every actionable workflow is a GitOps config edit (JSON edit via the
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
@@ -4707,7 +4817,31 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		// equivalent was read (deployment not connected) or the draft matches live.
 		liveParity: state.liveParity || undefined,
 	};
-	return { terraformPlan: plan, precheckPassed, risks, planReview: review };
+	// SIO-990: capture the durable active-change context at propose time -- one consolidation point
+	// for every proposer (they all land here via draftChange -> reviewPlan). This survives a
+	// rejected/propose-only turn (mrUrl/mrIid stay undefined until openMr), so a follow-up correction
+	// turn can amend THIS branch in place. openMr/watchPipeline merge in mr*/pipeline* later.
+	// On an amend (intent "gitops-amend"), preserve the existing MR identity so reviewGate skips the
+	// duplicate openMr and a later "check my MR" still resolves the same MR (the new commit already
+	// updated it in place).
+	const isAmend = state.intent === "gitops-amend";
+	const activeChange: IacActiveChange = {
+		deployment: req?.cluster ?? "",
+		stack: stackFromPaths(state.proposedFiles),
+		kind: req?.workflow ?? "other",
+		branch,
+		proposedFiles: state.proposedFiles,
+		title: review.title,
+		...(isAmend && state.activeChange
+			? {
+					mrUrl: state.activeChange.mrUrl,
+					mrIid: state.activeChange.mrIid,
+					pipelineId: state.activeChange.pipelineId,
+				}
+			: {}),
+		updatedAtTurn: state.requestId,
+	};
+	return { terraformPlan: plan, precheckPassed, risks, planReview: review, activeChange };
 }
 
 // HITL gate: surface the plan for human review. The graph pauses here; the resume
@@ -4876,7 +5010,15 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		description,
 		labels: [...AGENT_MR_LABELS],
 	});
-	return { mrUrl: extractMrUrl(mr), mrIid: extractMrIid(mr) };
+	const mrUrl = extractMrUrl(mr);
+	const mrIid = extractMrIid(mr);
+	// SIO-990: merge the opened MR into the durable active-change context (set at propose time by
+	// reviewPlan) so a follow-up "check my MR" and any amend target the right MR. Best-effort: only
+	// when reviewPlan populated activeChange this turn (it always does on the gitops path).
+	const activeChange = state.activeChange
+		? { ...state.activeChange, mrUrl, mrIid: mrIid ?? undefined, updatedAtTurn: state.requestId }
+		: state.activeChange;
+	return { mrUrl, mrIid, ...(activeChange ? { activeChange } : {}) };
 }
 
 // MR iid from callTool's "[status] {json}" create-MR response (for the pipeline watch).
@@ -5147,21 +5289,37 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		}
 	}
 
-	// SIO-877: when the thread no longer holds the MR (e.g. a follow-up after a page
-	// reload), fall back to the latest OPEN agent MR so "check my MR" still works.
+	// SIO-877/SIO-990: when the thread no longer holds the MR (e.g. a follow-up after a clear/reload
+	// minted a fresh threadId), recover it. Order: (1) the thread's own mrIid; (2) SIO-990 the last
+	// durable iac-change fact for THIS deployment from agent-memory -- deterministic, names the exact
+	// MR the session opened; (3) the latest OPEN agent MR as a last resort (which can be the wrong one
+	// when several are open). The recall step is what stops "check my MR" from asking "which MR?".
 	let iid = state.mrIid;
 	let recoveredUrl = "";
 	if (iid === null) {
-		const latest = parseLatestAgentMr(await callTool("gitlab_list_agent_merge_requests", {}));
-		if (!latest) {
-			return {
-				pipelineStatus: "unknown",
-				messages: [new AIMessage("No open agent merge request to check. Propose a change first, then ask again.")],
-			};
+		// Scope the recall to the deployment this turn resolved (active change / target / parsed
+		// cluster); undefined falls back to the most recent iac-change across deployments.
+		const dep = state.activeChange?.deployment || state.targetDeployment || state.iacRequest?.cluster || undefined;
+		const recalled = await recallLastIacChange(dep);
+		if (recalled?.mrIid != null) {
+			iid = recalled.mrIid;
+			if (recalled.mrUrl) recoveredUrl = recalled.mrUrl;
+			log.info(
+				{ iid, deployment: recalled.deployment, source: "agent-memory" },
+				"recovered MR from durable iac-change fact for cross-thread pipeline-status",
+			);
+		} else {
+			const latest = parseLatestAgentMr(await callTool("gitlab_list_agent_merge_requests", {}));
+			if (!latest) {
+				return {
+					pipelineStatus: "unknown",
+					messages: [new AIMessage("No open agent merge request to check. Propose a change first, then ask again.")],
+				};
+			}
+			iid = latest.iid;
+			recoveredUrl = latest.webUrl;
+			log.info({ iid }, "recovered latest open agent MR for pipeline-status");
 		}
-		iid = latest.iid;
-		recoveredUrl = latest.webUrl;
-		log.info({ iid }, "recovered latest open agent MR for pipeline-status");
 	}
 
 	// SIO-982: per-call poll budget. SIO-989: capped at 90s -- both the default and the "extended"
@@ -5212,9 +5370,26 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// when we recovered it (don't clobber an existing mrUrl from this thread's openMr).
 	const recovered: Partial<IacStateType> = { mrIid: iid, ...(recoveredUrl && { mrUrl: recoveredUrl }) };
 
+	// SIO-990: merge the resolved pipeline + (possibly recovered) MR into the durable active-change
+	// context so a later "check my MR" / amend reads the latest status. Best-effort: only when this
+	// session has an activeChange (it does on the gitops/amend path; a bare cross-session "check my
+	// MR" with no prior proposal leaves it null and just relies on mrIid recovery above).
+	const withPipeline = (st: string): Partial<IacStateType> => {
+		if (!state.activeChange) return recovered;
+		const activeChange: IacActiveChange = {
+			...state.activeChange,
+			mrIid: iid ?? state.activeChange.mrIid,
+			...(recoveredUrl && { mrUrl: recoveredUrl }),
+			...(pipelineId != null && { pipelineId }),
+			pipelineStatus: st,
+			updatedAtTurn: state.requestId,
+		};
+		return { ...recovered, activeChange };
+	};
+
 	// Still running at budget: surface the partial result; a follow-up re-checks.
 	if (!isTerminalPipelineStatus(status)) {
-		return { ...recovered, pipelineId, pipelineStatus: status || "running" };
+		return { ...withPipeline(status || "running"), pipelineId, pipelineStatus: status || "running" };
 	}
 
 	// Terminal: fetch the real plan + approval state.
@@ -5228,7 +5403,7 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	if (status === "failed" && pipelineId) {
 		failureHint = classifyPipelineFailure(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
 	}
-	return { ...recovered, pipelineId, pipelineStatus: status, planReport, approvalState, failureHint };
+	return { ...withPipeline(status), pipelineId, pipelineStatus: status, planReport, approvalState, failureHint };
 }
 
 // ============================================================================
@@ -6996,6 +7171,9 @@ export function buildIacChangeAnnotations(state: IacStateType): AnnotationMap {
 	if (state.iacRequest?.workflow) a.workflow = state.iacRequest.workflow;
 	if (state.iacRequest?.version) a.version = state.iacRequest.version;
 	if (state.mrUrl) a.mr_url = state.mrUrl;
+	// SIO-990: persist the MR iid too, so a fresh-thread "check my MR" can re-poll the exact MR via
+	// recall instead of guessing the "latest open agent MR" (which can be the wrong one).
+	if (state.mrIid != null) a.mr_iid = String(state.mrIid);
 	if (state.pipelineId != null) a.pipeline_id = String(state.pipelineId);
 	if (state.pipelineStatus && state.pipelineStatus !== "unknown") a.pipeline_status = state.pipelineStatus;
 	return a;
@@ -7038,6 +7216,48 @@ export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 		return deduped[0]?.text ?? "";
 	} catch {
 		return ""; // searchAgentMemory already logs
+	}
+}
+
+// SIO-990: the structured shape of a recalled gitops-change fact -- the durable cross-thread
+// carrier for "which MR / deployment / pipeline did we last touch". Mirrors buildIacChangeAnnotations.
+export interface RecalledIacChange {
+	mrUrl?: string;
+	mrIid?: number;
+	pipelineId?: number;
+	deployment?: string;
+	stack?: string;
+	text: string;
+}
+
+// SIO-990: recall the most recent durable gitops-change fact (kind:"iac-change"), optionally scoped
+// to a deployment. Backs the cross-thread "check my MR" after a clear/reload mints a fresh threadId
+// (the per-thread mrIid/mrUrl channels don't survive that boundary, but the teardown-written fact
+// does). Reuses the searchAgentMemory + dedupeHitsBy shape of recallIacChangeIntent; dedup on
+// mr_url ?? config_change_id so a re-recorded change doesn't surface twice. Best-effort: agent-memory
+// backend only; null on disable/miss/error.
+export async function recallLastIacChange(deployment?: string): Promise<RecalledIacChange | null> {
+	if (selectedBackend() !== "agent-memory") return null;
+	try {
+		const filter: AnnotationMap = { kind: "iac-change", ...(deployment ? { deployment } : {}) };
+		const query = deployment ? `iac change ${deployment}` : "iac change";
+		const hits = await searchAgentMemory("elastic-iac", query, filter);
+		const deduped = dedupeHitsBy(hits, (h) => h.annotations.mr_url ?? h.annotations.config_change_id);
+		const top = deduped[0];
+		if (!top) return null;
+		const a = top.annotations;
+		const mrIid = a.mr_iid ? Number(a.mr_iid) : undefined;
+		const pipelineId = a.pipeline_id ? Number(a.pipeline_id) : undefined;
+		return {
+			text: top.text,
+			...(a.mr_url ? { mrUrl: a.mr_url } : {}),
+			...(mrIid != null && Number.isFinite(mrIid) ? { mrIid } : {}),
+			...(pipelineId != null && Number.isFinite(pipelineId) ? { pipelineId } : {}),
+			...(a.deployment ? { deployment: a.deployment } : {}),
+			...(a.stack ? { stack: a.stack } : {}),
+		};
+	} catch {
+		return null; // searchAgentMemory already logs
 	}
 }
 

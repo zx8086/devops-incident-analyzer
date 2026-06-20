@@ -417,6 +417,29 @@ export interface ReconcileResult {
 	note?: string;
 }
 
+// SIO-990: the durable "active change context" for one session. Captured at PROPOSE time
+// (draftChange) so it survives a rejected/propose-only turn -- unlike mrUrl/mrIid which only
+// openMr sets. It is the single anchor a follow-up turn reads to (a) amend the change in place
+// on the SAME branch instead of proposing from scratch, and (b) answer "check my MR" with the
+// right deployment/MR/pipeline. deployment/stack/kind/branch/proposedFiles/title are set by the
+// proposer; mr* are merged in by openMr; pipeline* by watchPipeline. module is best-effort (the
+// repo Stack->Module link is not name-derivable; left undefined when not cheaply resolvable).
+export interface IacActiveChange {
+	deployment: string;
+	stack: string;
+	module?: string;
+	kind: IacRequest["workflow"];
+	branch: string;
+	proposedFiles: string[];
+	title?: string;
+	mrUrl?: string;
+	mrIid?: number;
+	pipelineId?: number;
+	pipelineStatus?: string;
+	// requestId of the turn that last wrote this context (debug/trace aid).
+	updatedAtTurn: string;
+}
+
 const last = <T>(_current: T, update: T): T => update;
 
 // Dedicated IaC graph state. Kept separate from AgentState so the maker workflow
@@ -440,8 +463,20 @@ export const IacState = Annotation.Root({
 	// SIO-930: "converse" answers a conversational follow-up ABOUT the agent's own prior answer
 	// (explain/critique), with full conversation history, over the read-only tool subset. Selectable
 	// only on a follow-up turn (see coerceConverseIntent).
+	// SIO-990: "gitops-amend" is a CORRECTION to the change just proposed this session (e.g. "4d is
+	// wrong, use 14d", "do as instructed", "proceed"). Selectable only when an activeChange.branch
+	// exists; routes to amendChange, which re-commits onto that SAME branch (updating the existing MR
+	// in place) instead of proposing from scratch.
 	intent: Annotation<
-		"info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | "converse" | null
+		| "info"
+		| "gitops"
+		| "gitops-amend"
+		| "pipeline-status"
+		| "drift"
+		| "synthetics-drift"
+		| "fleet-upgrade"
+		| "converse"
+		| null
 	>({
 		reducer: last,
 		default: () => null,
@@ -554,6 +589,12 @@ export const IacState = Annotation.Root({
 	// (deployment, stack) cell), produced by memoryEnrichIac and surfaced in the plan-review
 	// payload. Empty when LIVE_MEMORY_BACKEND != agent-memory or recall returns no hits.
 	priorLearnings: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-990: the durable per-session "active change context" -- the change this conversation is
+	// working on. Set at PROPOSE time by draftChange (so it survives a rejected/propose-only turn),
+	// enriched with {mrUrl, mrIid} by openMr and {pipelineId, pipelineStatus} by watchPipeline. Read
+	// by classifyIacIntent (to route a correction to amendChange) and amendChange (to re-commit on the
+	// same branch). null until the first proposal of the session.
+	activeChange: Annotation<IacActiveChange | null>({ reducer: last, default: () => null }),
 });
 
 export type IacStateType = typeof IacState.State;

@@ -7,6 +7,7 @@ import { selectedBackend } from "../memory-backend.ts";
 import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
 import {
 	advanceDrift,
+	amendChange,
 	answerInfo,
 	applyFleetUpgrade,
 	bootstrapIac,
@@ -68,6 +69,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("answerInfo", answerInfo)
 		.addNode("converseIac", converseIac)
 		.addNode("parseIntent", parseIntent)
+		// SIO-990: amend lane -- a correction to the change proposed this session re-parses + re-commits
+		// onto the same branch (updating the existing MR in place) instead of proposing from scratch.
+		.addNode("amendChange", amendChange)
 		.addNode("readClusterState", readClusterState)
 		.addNode("guard", guardNode)
 		.addNode("draftChange", draftChange)
@@ -117,19 +121,22 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			(s) =>
 				s.intent === "gitops"
 					? "parseIntent"
-					: s.intent === "fleet-upgrade"
-						? "detectFleetUpgrade"
-						: s.intent === "synthetics-drift"
-							? "detectSyntheticsDrift"
-							: s.intent === "drift"
-								? "detectDrift"
-								: s.intent === "pipeline-status"
-									? "watchPipeline"
-									: s.intent === "converse"
-										? "converseIac"
-										: "answerInfo",
+					: s.intent === "gitops-amend"
+						? "amendChange"
+						: s.intent === "fleet-upgrade"
+							? "detectFleetUpgrade"
+							: s.intent === "synthetics-drift"
+								? "detectSyntheticsDrift"
+								: s.intent === "drift"
+									? "detectDrift"
+									: s.intent === "pipeline-status"
+										? "watchPipeline"
+										: s.intent === "converse"
+											? "converseIac"
+											: "answerInfo",
 			[
 				"parseIntent",
+				"amendChange",
 				"detectFleetUpgrade",
 				"detectSyntheticsDrift",
 				"detectDrift",
@@ -144,6 +151,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// "other") with a capability message + blockedReason -> stop before reading cluster
 		// state or drafting. Otherwise proceed to the maker pipeline.
 		.addConditionalEdges("parseIntent", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
+		// SIO-990: amendChange re-parses (via parseIntent); same blockedReason short-circuit, then the
+		// shared maker chain (readClusterState -> guard -> draftChange -> reviewPlan -> reviewGate).
+		.addConditionalEdges("amendChange", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
 		// SIO-954/SIO-970: readClusterState -> guard, with graphEnrichIac (KG) and memoryEnrichIac
 		// (agent-memory recall) spliced in before guard when their respective backends are enabled.
 		// Each enrich routes onward via memoryTarget so the two compose independently.
@@ -157,10 +167,18 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addConditionalEdges("draftChange", (s) => (s.blockedReason ? END : "reviewPlan"), ["reviewPlan", END])
 		.addEdge("reviewPlan", "reviewGate")
 		// Human decision from the planReview interrupt routes to MR-open or stop.
-		.addConditionalEdges("reviewGate", (s) => (s.reviewDecision === "approved" ? "openMr" : "teardown"), [
-			"openMr",
-			"teardown",
-		])
+		// SIO-990: on an APPROVED amend that already has an open MR, the corrected commit landed on the
+		// existing branch (resolveBranch pinned it) so the MR is already updated -- skip the duplicate
+		// openMr (GitLab 409s on a second MR for the same source branch) and go straight to watching
+		// the (now re-triggered) pipeline. A first-time gitops approval still opens the MR.
+		.addConditionalEdges(
+			"reviewGate",
+			(s) => {
+				if (s.reviewDecision !== "approved") return "teardown";
+				return s.intent === "gitops-amend" && s.activeChange?.mrIid != null ? "watchPipeline" : "openMr";
+			},
+			["openMr", "watchPipeline", "teardown"],
+		)
 		// SIO-875: after opening the MR, watch the pipeline (bounded) then render.
 		// SIO-954: openMr -> watchPipeline, with recordIacEntities spliced in when the KG is enabled.
 		.addConditionalEdges("openMr", recordTarget, ["recordIacEntities", "watchPipeline"])

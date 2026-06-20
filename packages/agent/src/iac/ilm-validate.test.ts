@@ -1,7 +1,9 @@
 // agent/src/iac/ilm-validate.test.ts
 // SIO-931: the policy JSON the agent writes must match modules/lifecycle/variables.tf (nested
 // objects), or CI terraform plan rejects it. validateIlmPolicy is the pre-commit gate.
+// SIO-990: validateIlmPhaseOrdering is the SEMANTIC pre-commit gate (phase min_age ordering).
 import { describe, expect, test } from "bun:test";
+import { validateIlmPhaseOrdering } from "./guards.ts";
 import { CANONICAL_ILM_SHAPE, validateIlmPolicy } from "./nodes.ts";
 
 const GOOD = {
@@ -75,5 +77,67 @@ describe("validateIlmPolicy (SIO-931)", () => {
 		expect(
 			validateIlmPolicy({ name: ".alerts-ilm-policy", hot: { min_age: "0ms", rollover: false, max_age: "30d" } }).ok,
 		).toBe(true);
+	});
+});
+
+describe("validateIlmPhaseOrdering (SIO-990)", () => {
+	test("accepts a non-decreasing policy (the GOOD shape)", () => {
+		expect(validateIlmPhaseOrdering(GOOD).ok).toBe(true);
+	});
+
+	test("accepts the corrected metrics-apm policy (warm 3d -> cold 5d -> frozen 7d -> delete 14d)", () => {
+		const ok = {
+			name: "metrics-apm",
+			warm: { min_age: "3d" },
+			cold: { min_age: "5d" },
+			frozen: { min_age: "7d", searchable_snapshot: { snapshot_repository: "found-snapshots" } },
+			delete: { min_age: "14d" },
+		};
+		expect(validateIlmPhaseOrdering(ok).ok).toBe(true);
+	});
+
+	test("BLOCKS the 4d typo: delete.min_age 4d below frozen 7d (the logged bug)", () => {
+		const bad = {
+			name: "metrics-apm",
+			warm: { min_age: "3d" },
+			cold: { min_age: "5d" },
+			frozen: { min_age: "7d", searchable_snapshot: { snapshot_repository: "found-snapshots" } },
+			delete: { min_age: "4d" },
+		};
+		const r = validateIlmPhaseOrdering(bad);
+		expect(r.ok).toBe(false);
+		if (!r.ok) {
+			expect(r.reason).toContain("delete");
+			expect(r.reason).toContain("frozen");
+			expect(r.reason).toContain("4d");
+		}
+	});
+
+	test("blocks an earlier-phase inversion (cold below warm)", () => {
+		const bad = { name: "x", warm: { min_age: "5d" }, cold: { min_age: "2d" } };
+		expect(validateIlmPhaseOrdering(bad).ok).toBe(false);
+	});
+
+	test("accepts equal min_ages (non-decreasing, not strictly increasing)", () => {
+		const eq = {
+			name: "x",
+			frozen: { min_age: "7d", searchable_snapshot: { snapshot_repository: "found-snapshots" } },
+			delete: { min_age: "7d" },
+		};
+		expect(validateIlmPhaseOrdering(eq).ok).toBe(true);
+	});
+
+	test("ignores phases with no/unparseable min_age (hot has none; sparse policy is fine)", () => {
+		expect(validateIlmPhaseOrdering({ name: "x", hot: { rollover: true }, delete: { min_age: "30d" } }).ok).toBe(true);
+	});
+
+	test("handles mixed units (48h <= 3d <= 5d)", () => {
+		const ok = { name: "x", warm: { min_age: "48h" }, cold: { min_age: "3d" }, delete: { min_age: "5d" } };
+		expect(validateIlmPhaseOrdering(ok).ok).toBe(true);
+	});
+
+	test("blocks mixed-unit inversion (warm 49h > cold 2d=48h)", () => {
+		const bad = { name: "x", warm: { min_age: "49h" }, cold: { min_age: "2d" } };
+		expect(validateIlmPhaseOrdering(bad).ok).toBe(false);
 	});
 });

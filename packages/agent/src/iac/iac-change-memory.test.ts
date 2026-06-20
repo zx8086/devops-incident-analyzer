@@ -49,6 +49,8 @@ describe("buildIacChangeAnnotations (KG join keys)", () => {
 			stack_instance: "eu-b2b/lifecycle-policies",
 			workflow: "ilm-rollout",
 			mr_url: "https://gitlab.com/x/-/merge_requests/9",
+			// SIO-990: the iid is persisted so cross-thread recall can re-poll the exact MR.
+			mr_iid: "9",
 			pipeline_id: "148",
 			pipeline_status: "success",
 		});
@@ -282,5 +284,94 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		);
 		expect(text).not.toContain("Change:");
 		expect(text).toContain("ready for you to merge & apply");
+	});
+});
+
+// SIO-990: cross-thread MR recall. recallLastIacChange resolves the most recent durable iac-change
+// fact (mr_url + mr_iid + deployment + pipeline_id) so a fresh thread after a clear/reload can answer
+// "check my MR" without asking "which MR?". Deterministic over the searchAgentMemory + dedupeHitsBy
+// shape; agent-memory backend only.
+describe("recallLastIacChange (SIO-990)", () => {
+	afterEach(() => {
+		mock.restore();
+	});
+
+	async function recall(opts: {
+		backend: "agent-memory" | "file";
+		hits?: Array<{ text: string; annotations: Record<string, string> }>;
+		deployment?: string;
+	}) {
+		const searchCalls: Array<{ query: string; filter?: Record<string, string> }> = [];
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => opts.backend,
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async (_agent: string, query: string, filter?: Record<string, string>) => {
+				searchCalls.push({ query, filter });
+				return opts.hits ?? [];
+			},
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { recallLastIacChange } = await import("./nodes.ts");
+		const result = await recallLastIacChange(opts.deployment);
+		return { result, searchCalls };
+	}
+
+	test("returns null on the file backend (no agent-memory recall)", async () => {
+		const { result } = await recall({ backend: "file" });
+		expect(result).toBeNull();
+	});
+
+	test("returns null when no iac-change fact is found", async () => {
+		const { result } = await recall({ backend: "agent-memory", hits: [] });
+		expect(result).toBeNull();
+	});
+
+	test("resolves mr_url + mr_iid + pipeline_id + deployment from the top hit", async () => {
+		const { result, searchCalls } = await recall({
+			backend: "agent-memory",
+			deployment: "eu-b2b",
+			hits: [
+				{
+					text: "Elastic IaC change proposed (MR open) on eu-b2b/lifecycle-policies: ...",
+					annotations: {
+						kind: "iac-change",
+						mr_url: "https://gitlab.com/x/-/merge_requests/189",
+						mr_iid: "189",
+						pipeline_id: "2616365700",
+						deployment: "eu-b2b",
+						stack: "lifecycle-policies",
+					},
+				},
+			],
+		});
+		expect(result).toMatchObject({
+			mrUrl: "https://gitlab.com/x/-/merge_requests/189",
+			mrIid: 189,
+			pipelineId: 2616365700,
+			deployment: "eu-b2b",
+			stack: "lifecycle-policies",
+		});
+		// Scoped the search to the deployment filter.
+		expect(searchCalls[0]?.filter).toMatchObject({ kind: "iac-change", deployment: "eu-b2b" });
+	});
+
+	test("tolerates a fact with no mr_iid (older facts predate the iid annotation)", async () => {
+		const { result } = await recall({
+			backend: "agent-memory",
+			hits: [
+				{
+					text: "older change",
+					annotations: { kind: "iac-change", mr_url: "https://gitlab.com/x/-/merge_requests/7" },
+				},
+			],
+		});
+		expect(result?.mrUrl).toBe("https://gitlab.com/x/-/merge_requests/7");
+		expect(result?.mrIid).toBeUndefined();
+	});
+
+	test("omits the deployment filter when called without one (most-recent across deployments)", async () => {
+		const { searchCalls } = await recall({ backend: "agent-memory", hits: [] });
+		expect(searchCalls[0]?.filter).toMatchObject({ kind: "iac-change" });
+		expect(searchCalls[0]?.filter?.deployment).toBeUndefined();
 	});
 });
