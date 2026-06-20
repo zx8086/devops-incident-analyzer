@@ -24,6 +24,11 @@ export async function startKnowledgeGraphServer(): Promise<McpApplication<Config
 	return createMcpApplication<Config>({
 		name: "knowledge-graph-mcp-server",
 		logger: createBootstrapAdapter(logger),
+		// SIO-986: this server is mounted IN-PROCESS in the web app (the lbug exclusive lock forces it,
+		// see the note above). Embedded mode means a start failure rethrows (the web app's .catch
+		// degrades to kg_* unavailable) instead of process.exit(1), and the process-global signal/
+		// exception handlers are not installed -- both would otherwise take the whole app down.
+		embedded: true,
 
 		initTracing: () => {},
 		telemetry: buildTelemetryConfig("knowledge-graph-mcp-server"),
