@@ -77,6 +77,19 @@ const planLabel = "How this applies";
         </details>
       {/if}
 
+      <!-- SIO-983: live-parity advisory -- the drafted change diffed against the LIVE cluster.
+           Surfaces fields the draft sets that live does not (a stale repo source copied forward),
+           value changes, and fields live has that the draft drops, so the reviewer sees drift
+           before merge. Non-blocking; styled with a warning accent. -->
+      {#if review.liveParity}
+        <details class="mt-2" open>
+          <summary class="text-xs font-semibold text-yellow-900 cursor-pointer">Differs from live cluster</summary>
+          <div class="mt-1 rounded bg-yellow-50 border border-yellow-400/50 px-2 py-1 text-xs text-yellow-900">
+            <MarkdownRenderer content={review.liveParity} />
+          </div>
+        </details>
+      {/if}
+
       <details class="mt-2" open>
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{planLabel}</summary>
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(none)"}</pre>

@@ -406,6 +406,60 @@ describe("POST /api/agent/stream — SIO-739 partial_failure", () => {
 	});
 });
 
+describe("POST /api/agent/stream — SIO-983 closed-controller guard", () => {
+	test("a late emit after the client cancels the stream does not throw", async () => {
+		// Gate the agent stream on an external promise so the route's async body is still
+		// running (and will call send() again) AFTER we cancel the reader. Before the fix,
+		// that late enqueue threw "Invalid state: Controller is already closed" and surfaced
+		// as agent.request.error; with the streamClosed guard it must no-op silently.
+		sharedLogger.error.mockClear();
+		let releaseChunk: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseChunk = resolve;
+		});
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chat_model_stream",
+					tags: ["responder"],
+					metadata: { langgraph_node: "responder" },
+					data: { chunk: { content: "first" } },
+				};
+				await gate; // suspend until the test has cancelled the reader
+				yield {
+					event: "on_chat_model_stream",
+					tags: ["responder"],
+					metadata: { langgraph_node: "responder" },
+					data: { chunk: { content: "after-cancel" } },
+				};
+			},
+		}));
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "x" }] }));
+		const reader = response.body?.getReader();
+		expect(reader).toBeTruthy();
+		if (!reader) return;
+
+		// Read the first chunk, then cancel (fires the stream's cancel() -> streamClosed = true).
+		await reader.read();
+		await reader.cancel();
+
+		// Now let the suspended generator resume and emit again into the closed controller.
+		releaseChunk();
+		// Give the microtask queue a couple of turns for the late send() to run.
+		await new Promise((r) => setTimeout(r, 0));
+		await new Promise((r) => setTimeout(r, 0));
+
+		// The late emit must NOT have been logged as a request error.
+		const errorCalls = sharedLogger.error.mock.calls as unknown as unknown[][];
+		const controllerErr = errorCalls.find((c) => {
+			const meta = c[0] as { err?: { message?: string } } | undefined;
+			return meta?.err?.message?.includes("Controller is already closed");
+		});
+		expect(controllerErr).toBeUndefined();
+	});
+});
+
 describe("POST /api/agent/stream — lifecycle logging", () => {
 	test("emits agent.request.start with correlation IDs via runWithRequestContext", async () => {
 		sharedLogger.info.mockClear();

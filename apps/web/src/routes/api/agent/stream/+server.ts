@@ -65,6 +65,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		// SIO-482: track this SSE connection for /health. Decrement exactly once,
 		// whether the stream closes normally or the client cancels early.
 		let sseCounted = true;
+		// SIO-983: once the controller is closed (normal end) or the client cancels, any further
+		// enqueue throws "Invalid state: Controller is already closed". A late async emit (the
+		// elastic-iac interrupt path, or the catch-block error event) must no-op instead of crashing
+		// the request. Set on close/cancel and self-healed if an enqueue still races a close.
+		let streamClosed = false;
 		incrementSseConnections();
 		const releaseSse = () => {
 			if (sseCounted) {
@@ -75,7 +80,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		const stream = new ReadableStream({
 			async start(controller) {
 				const send = (event: Record<string, unknown>) => {
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+					if (streamClosed) return;
+					try {
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+					} catch {
+						// Controller already closed (client disconnected mid-emit); stop sending.
+						streamClosed = true;
+					}
 				};
 
 				await runWithRequestContext({ threadId, runId, requestId }, async () => {
@@ -210,10 +221,12 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 				});
 				releaseSse();
+				streamClosed = true;
 				controller.close();
 			},
 			cancel() {
 				// Client disconnected before the stream finished.
+				streamClosed = true;
 				releaseSse();
 			},
 		});

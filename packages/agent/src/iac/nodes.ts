@@ -22,6 +22,12 @@ import {
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards } from "./guards.ts";
+import {
+	computeIlmLiveParity,
+	esIlmPolicyToFlatDsl,
+	parseEsIlmPolicyResponse,
+	renderLiveParity,
+} from "./live-parity.ts";
 import { createSearchMemoryTool } from "./local-tools.ts";
 import type {
 	DriftReport,
@@ -431,6 +437,42 @@ export function looksLikeFleetStatusCheck(text: string): boolean {
 	return STATUS_CUES.some((cue) => r.includes(cue));
 }
 
+// SIO-983: is this an explicit imperative request to OPEN THE MR / MAKE THE CHANGE? After a proposal
+// is rejected, the user often re-asks as a reaction to the rejected proposal ("no, follow my prompt
+// and open the MR") and the classifier LLM mis-emits "converse" -- routing to the read-only
+// converseIac node, which cannot open an MR. classifyIacIntent calls this as a deterministic guard
+// (mirrors looksLikeFleetStatusCheck) to force the gitops lane regardless of LLM judgment. An
+// INTERROGATIVE framing ("why didn't you open the mr?") is a question, not an imperative, so a
+// leading question word disqualifies the match. (Pure; unit-tested.)
+export function looksLikeChangeRequest(text: string): boolean {
+	const r = text.toLowerCase().trim();
+	// A question about the change (not an imperative to make it) stays on the conversational path.
+	if (
+		/^(why|what|how|when|where|who|did|didn't|do|does|can|can't|could|couldn't|should|would|is|are|was|were)\b/.test(r)
+	)
+		return false;
+	const CUES = [
+		"create the mr",
+		"open the mr",
+		"open an mr",
+		"open a mr",
+		"raise the mr",
+		"raise an mr",
+		"create the merge request",
+		"open the merge request",
+		"open an merge request",
+		"open a merge request",
+		"raise the merge request",
+		"make the change",
+		"make that change",
+		"apply the change",
+		"go ahead and open",
+		"go ahead and create",
+		"create the branch and",
+	];
+	return CUES.some((cue) => r.includes(cue));
+}
+
 // SIO-982: does the user want watchPipeline to keep polling until the pipeline reaches a terminal
 // status (vs the default one-shot bounded poll)? A cold CI runner can take >90s, so "watch until
 // done"/"wait for it to finish" extends the poll budget for THIS call only. (Pure; unit-tested.)
@@ -488,6 +530,14 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 			"iac intent: fleet-status guard -> pipeline-status",
 		);
 		return { intent: "pipeline-status" };
+	}
+	// SIO-983: an explicit imperative MR/change request must enter the gitops proposal lane even on a
+	// follow-up turn. Without this, a post-rejection "no, follow my prompt and open the MR" is often
+	// classified "converse" by the LLM (it reads as a reaction to the rejected proposal) and routes to
+	// the read-only converseIac node, which physically cannot open an MR. Deterministic, pre-LLM.
+	if (looksLikeChangeRequest(query)) {
+		log.info({ query }, "iac intent: change-request guard -> gitops");
+		return { intent: "gitops" };
 	}
 	const llm = createLlm("iacClassifier", AGENT);
 	const sys =
@@ -2265,6 +2315,9 @@ type IlmCommitResult =
 			diffLines: string[];
 			retentionChange: { from: string; to: string } | null;
 			policyCreated: boolean;
+			// SIO-983: rendered live-parity advisory (draft vs LIVE cluster). "" when the live policy
+			// could not be read (deployment not connected to this MCP) or the draft matches live.
+			liveParity?: string;
 	  };
 
 // SIO-932: read -> merge/create -> structural-validate -> commit one ILM policy file onto `branch`,
@@ -2454,7 +2507,39 @@ async function commitOneIlmPolicy(
 		walk(updated.previous, patchObj, "");
 	}
 
-	return { ok: true, filePath, diffLines, retentionChange, policyCreated };
+	// SIO-983: live-parity advisory. The committed file is the repo source copied forward; if that
+	// source has drifted from the LIVE cluster (e.g. extra forcemerge/shrink/wait_for_snapshot phases
+	// the user never asked for), surface it on the review card. Read the live policy and diff the
+	// normalised live shape against the drafted object. Best-effort: a deployment that isn't connected
+	// to this MCP returns a placeholder -> parseEsIlmPolicyResponse yields null -> no advisory (we do
+	// NOT block; this is a non-blocking nudge). Never throws.
+	const liveParity = await computeIlmLiveParityFromTool(cluster, policy, sourcePolicy, updatedObj);
+
+	return { ok: true, filePath, diffLines, retentionChange, policyCreated, liveParity };
+}
+
+// SIO-983: read the live ILM policy via the elastic-iac MCP and render the parity advisory against a
+// drafted policy object. For a copy/rename the TARGET name isn't live yet, so the meaningful live
+// comparison is the SOURCE policy (the draft is meant to be a like-for-like copy of what the source
+// is LIVE). For a modify, the target's own live state is the right comparison. Returns "" when the
+// live policy can't be read (deployment not connected / 404) or the draft matches live.
+// (Best-effort; never throws -- isolates the live read + normalise + diff from the proposer.)
+async function computeIlmLiveParityFromTool(
+	cluster: string,
+	policy: string,
+	sourcePolicy: string | undefined,
+	draftObj: Record<string, unknown>,
+): Promise<string> {
+	try {
+		const livePolicyName = sourcePolicy ?? policy;
+		const raw = await callTool("elastic_ilm_get_lifecycle", { policy: livePolicyName, deployment: cluster });
+		const live = parseEsIlmPolicyResponse(raw);
+		if (!live) return "";
+		const parity = computeIlmLiveParity(esIlmPolicyToFlatDsl(live), draftObj);
+		return renderLiveParity(parity);
+	} catch {
+		return "";
+	}
 }
 
 // SIO-933: bind a cluster-defaults component-template to a policy by setting its nested
@@ -2592,6 +2677,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	const policyDiffs: string[] = [];
 	let retentionChange: { from: string; to: string } | null = null;
 	let policyCreated = false;
+	let liveParity = ""; // SIO-983: draft-vs-live advisory from the single committed policy.
 	if (patch || req.sourcePolicy) {
 		const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy);
 		if (!result.ok && !(result.noop && req.bindTemplate)) {
@@ -2602,6 +2688,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 			policyDiffs.push(result.diffLines.join("\n"));
 			retentionChange = result.retentionChange;
 			policyCreated = result.policyCreated;
+			liveParity = result.liveParity ?? "";
 		}
 	}
 
@@ -2645,6 +2732,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		retentionChange,
 		policyCreated,
 		lifecycleRetargeted,
+		liveParity,
 	};
 }
 
@@ -2684,6 +2772,7 @@ async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise
 
 	const files: string[] = [];
 	const diffBlocks: string[] = [];
+	const parityBlocks: string[] = []; // SIO-983: per-policy live-parity advisories, labelled by file.
 	let anyRetention: { from: string; to: string } | null = null;
 	let anyCreated = false;
 	for (const e of entries) {
@@ -2700,6 +2789,7 @@ async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise
 		diffBlocks.push(result.diffLines.join("\n"));
 		if (result.retentionChange) anyRetention = result.retentionChange;
 		if (result.policyCreated) anyCreated = true;
+		if (result.liveParity) parityBlocks.push(`_${e.policyName}_\n\n${result.liveParity}`);
 	}
 
 	return {
@@ -2712,6 +2802,7 @@ async function proposeIlmChanges(_state: IacStateType, req: IacRequest): Promise
 		precheckPassed: files.length > 0,
 		retentionChange: anyRetention,
 		policyCreated: anyCreated,
+		liveParity: parityBlocks.join("\n\n"),
 	};
 }
 
@@ -4313,6 +4404,15 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	// SIO-983: the draft differs from the LIVE cluster (the proposer read live and diffed it). A field
+	// present in the draft but NOT live is usually a stale repo source copied forward -- surface as
+	// HIGH (first) so even a collapsed card flags it. The full diff is in the review's liveParity block.
+	if ((state.liveParity ?? "").includes("not in live")) {
+		risks.unshift(
+			"Draft introduces field(s) not present in the LIVE cluster policy (likely copied from a stale repo source). " +
+				"Review the 'Differs from live cluster' section and confirm the source is current before merge.",
+		);
+	}
 	if (isUpgrade) {
 		risks.push(
 			"Version upgrades are rolling and irreversible; confirm the target is a valid forward step and apply off-peak.",
@@ -4489,6 +4589,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		// SIO-970: surface recalled prior learnings/decisions for this stack-instance (empty
 		// when the agent-memory backend is off or recall found nothing).
 		priorLearnings: state.priorLearnings || undefined,
+		// SIO-983: surface the live-parity advisory (draft vs live cluster). Empty when no live
+		// equivalent was read (deployment not connected) or the draft matches live.
+		liveParity: state.liveParity || undefined,
 	};
 	return { terraformPlan: plan, precheckPassed, risks, planReview: review };
 }
