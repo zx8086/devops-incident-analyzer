@@ -252,14 +252,20 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			if (logger.flush) logger.flush();
 			process.exit(1);
 		}
+		// SIO-986: embedded servers must NOT take the host app down. Rethrow so the host's try/catch
+		// (.catch) handles it gracefully; only a standalone process exits.
+		// SIO-987: and do NOT log a level:50 "Fatal" line in embedded mode -- a start failure there is
+		// expected/recoverable (the host logs its own actionable WARN), so a scary Fatal is misleading
+		// noise. A standalone process logs Fatal + exits, unchanged.
+		if (options.embedded) {
+			if (logger.flush) logger.flush();
+			throw error;
+		}
 		logger.error(`Fatal error starting ${name}`, {
 			error: error instanceof Error ? error.message : String(error),
 			stack: error instanceof Error ? error.stack : undefined,
 		});
 		if (logger.flush) logger.flush();
-		// SIO-986: embedded servers must NOT take the host app down. Rethrow so the host's try/catch
-		// (.catch) handles it gracefully; only a standalone process exits.
-		if (options.embedded) throw error;
 		process.exit(1);
 	}
 }
