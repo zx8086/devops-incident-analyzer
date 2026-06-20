@@ -505,6 +505,11 @@ export const IacState = Annotation.Root({
 	mrIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	pipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
 	pipelineStatus: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-992: the MR's lifecycle state read from gitlab_get_merge_request ("opened"|"merged"|
+	// "closed"|""). watchPipeline only sees the pre-merge PLAN pipeline, so without this a merged
+	// MR still reads as "staged and ready to merge". Drives the lifecycle-aware closing line: open
+	// (plan ready, not merged) vs merged (apply runs on main, not visible here). "" = not read.
+	mrState: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-878: when the pipeline failed, a human-readable cause hint (e.g. a Terraform
 	// state-lock on the shared deployments stack) derived from the plan job log.
 	failureHint: Annotation<string>({ reducer: last, default: () => "" }),

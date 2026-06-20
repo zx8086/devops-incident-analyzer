@@ -5105,6 +5105,32 @@ export function parseApprovalState(toolResult: string): IacApprovalState | null 
 	}
 }
 
+// SIO-992: parse the MR lifecycle state from gitlab_get_merge_request's "[status] {json}" body.
+// GitLab's GET /merge_requests/:iid returns state ("opened"|"merged"|"closed") + merged_at +
+// detailed_merge_status. We only need state (+ mergedAt for context) to distinguish "MR open, plan
+// ready" from "MR merged, apply runs on main". null on a non-2xx/unparseable body. (Pure.)
+export function parseMrState(
+	toolResult: string,
+): { state: string; mergedAt?: string; detailedMergeStatus?: string } | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
+	try {
+		const m = JSON.parse(toolResult.slice(jsonStart)) as {
+			state?: unknown;
+			merged_at?: unknown;
+			detailed_merge_status?: unknown;
+		};
+		if (typeof m.state !== "string") return null;
+		return {
+			state: m.state,
+			...(typeof m.merged_at === "string" && m.merged_at ? { mergedAt: m.merged_at } : {}),
+			...(typeof m.detailed_merge_status === "string" ? { detailedMergeStatus: m.detailed_merge_status } : {}),
+		};
+	} catch {
+		return null;
+	}
+}
+
 // A pipeline status is terminal when CI has stopped running.
 export function isTerminalPipelineStatus(status: string): boolean {
 	return ["success", "failed", "canceled", "skipped"].includes(status);
@@ -5397,13 +5423,25 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		? parsePlanReport(await callTool("gitlab_get_pipeline_terraform_report", { pipelineId }))
 		: null;
 	const approvalState = parseApprovalState(await callTool("gitlab_get_merge_request_approvals", { iid }));
+	// SIO-992: read the MR's lifecycle state so the message distinguishes "MR open, plan ready" from
+	// "MR merged, apply runs on main". watchPipeline only sees the pre-merge plan pipeline, so without
+	// this a merged MR still reads as "ready to merge". Best-effort: "" when unreadable.
+	const mrState = parseMrState(await callTool("gitlab_get_merge_request", { iid }))?.state ?? "";
 
 	// SIO-878: on failure, read the plan job log and classify the cause (e.g. state-lock).
 	let failureHint = "";
 	if (status === "failed" && pipelineId) {
 		failureHint = classifyPipelineFailure(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
 	}
-	return { ...withPipeline(status), pipelineId, pipelineStatus: status, planReport, approvalState, failureHint };
+	return {
+		...withPipeline(status),
+		pipelineId,
+		pipelineStatus: status,
+		mrState,
+		planReport,
+		approvalState,
+		failureHint,
+	};
 }
 
 // ============================================================================
@@ -7224,6 +7262,58 @@ export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 	}
 }
 
+// SIO-992: one step of this MR's recalled progression (proposed -> running -> success).
+export interface IacProgressStep {
+	pipelineStatus?: string;
+	outcome?: string;
+}
+
+// SIO-992: rank pipeline statuses so the progression renders in lifecycle order regardless of the
+// order the service returns hits. "running" before terminal; the terminal states sort after.
+const PIPELINE_STATUS_RANK: Record<string, number> = {
+	created: 0,
+	pending: 1,
+	running: 2,
+	success: 3,
+	failed: 3,
+	canceled: 3,
+	skipped: 3,
+};
+
+// SIO-992: recall THIS session's own iac-change history for the open MR so a "check my MR" turn can
+// show a progression (proposed -> running -> success), not just the live status. Session-scoped
+// (allSessions:false) so only this conversation's breadcrumbs return; annotation-keyed (never prose,
+// which the service paraphrases on ingest) and deduped on pipeline_status so a re-check doesn't
+// multiply steps. Best-effort: agent-memory backend only; [] on disable/miss/error.
+export async function recallSessionProgress(mrUrl: string): Promise<IacProgressStep[]> {
+	if (!mrUrl || selectedBackend() !== "agent-memory") return [];
+	try {
+		const hits = await searchAgentMemory(
+			"elastic-iac",
+			"iac change progress",
+			{ kind: "iac-change", mr_url: mrUrl },
+			8,
+			{ allSessions: false },
+		);
+		// One step per distinct pipeline_status (the only annotation that advances as the pipeline
+		// runs). Hits with no pipeline_status fall back to config_change_id so a single proposal step
+		// is kept. Then order by lifecycle rank.
+		const deduped = dedupeHitsBy(hits, (h) => h.annotations.pipeline_status ?? h.annotations.config_change_id);
+		const steps = deduped.map((h) => ({
+			pipelineStatus: h.annotations.pipeline_status,
+			outcome: h.annotations.outcome,
+		}));
+		steps.sort(
+			(a, b) =>
+				(PIPELINE_STATUS_RANK[a.pipelineStatus ?? ""] ?? 99) - (PIPELINE_STATUS_RANK[b.pipelineStatus ?? ""] ?? 99),
+		);
+		log.info({ mrUrl, steps: steps.length }, "recallSessionProgress");
+		return steps;
+	} catch {
+		return []; // searchAgentMemory already logs
+	}
+}
+
 // SIO-990: the structured shape of a recalled gitops-change fact -- the durable cross-thread
 // carrier for "which MR / deployment / pipeline did we last touch". Mirrors buildIacChangeAnnotations.
 export interface RecalledIacChange {
@@ -7273,12 +7363,26 @@ export async function recallLastIacChange(deployment?: string): Promise<Recalled
 export function iacClosingLine(state: IacStateType): string {
 	const merge = "I never merge or apply.";
 	if (state.pipelineStatus === "success") {
-		// SIO-991: "success" = the CI pipeline's `terraform plan` job passed, so the change is STAGED
-		// on the MR -- nothing has been applied. Make that explicit so the headline doesn't read as
-		// "it's live"; a human still merges + applies in GitLab.
+		// SIO-992: the plan pipeline succeeding only means the CI `terraform plan` job ran clean. The
+		// real lifecycle stage is the MR's state. Branch on it FIRST so a MERGED MR never reads as
+		// "ready to merge", and we never claim the change is applied (the apply runs on main, which
+		// watchPipeline can't see). SIO-991: keep "staged, not applied" for the open case.
+		if (state.mrState === "merged") {
+			// Merged: the apply now runs on main on merge -- we don't read that pipeline, so we can't
+			// confirm the change is live. Say so explicitly rather than implying it's done.
+			return `The plan CI succeeded and the MR has since been MERGED. On merge, a separate terraform apply runs on main — I can't see that apply pipeline, so I can't confirm the change is live yet. Check the apply pipeline on main in GitLab. ${merge}`;
+		}
+		if (state.mrState === "closed") {
+			return `The plan CI succeeded but the MR was CLOSED without merging — nothing was applied. ${merge}`;
+		}
+		// MR still open (state "opened" or unread). The plan is ready; nothing is merged or applied.
+		const openNote =
+			state.mrState === "opened"
+				? "The MR is still OPEN — nothing has been merged or applied."
+				: "Nothing has been merged or applied yet.";
 		return state.approvalState && !state.approvalState.approved
-			? `The CI pipeline succeeded: the plan is clean but not yet approved. The change is staged on the MR — nothing has been applied. Review, approve, then merge & apply in GitLab. ${merge}`
-			: `The CI pipeline succeeded: the plan is clean and approved, so the change is staged and ready to merge — but nothing has been applied yet. Merge & apply in GitLab whenever you are. ${merge}`;
+			? `The plan CI succeeded: the plan is clean but not yet approved. ${openNote} Review, approve, then merge in GitLab to trigger the apply. ${merge}`
+			: `The plan CI succeeded: the plan is clean and approved, so the change is staged and ready to merge. ${openNote} Merge in GitLab to trigger the apply. ${merge}`;
 	}
 	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") {
 		return `Pipeline failed — review the plan log and fix before merging. ${merge}`;
@@ -7355,7 +7459,14 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// systems join on shared values. Only when an MR exists (a rejected/blocked turn
 		// changed nothing) and on the agent-memory backend (file-backend durable
 		// learnings stay PR-gated, mirroring the fleet rule above).
-		if (!isFleet && state.intent === "gitops" && state.mrUrl && selectedBackend() === "agent-memory") {
+		// SIO-992: ALSO record on a "pipeline-status" re-check (a "check my MR" turn). The proposal
+		// turn writes pipeline_status="running"; a later re-check writes "success"/"failed", so the
+		// two facts form a recallable progression (proposed -> running -> success) that
+		// recallSessionProgress surfaces. dedupeHitsBy on pipeline_status collapses re-records of the
+		// same status, so re-checking repeatedly does not multiply steps.
+		const recordsIacChangeFact =
+			!isFleet && (state.intent === "gitops" || state.intent === "pipeline-status") && state.mrUrl;
+		if (recordsIacChangeFact && selectedBackend() === "agent-memory") {
 			recordKeyDecision({
 				requestId: state.requestId,
 				decision: buildIacChangeDecision(state),
@@ -7363,7 +7474,7 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 				annotations: buildIacChangeAnnotations(state),
 			});
 			log.info(
-				{ deployment: state.targetDeployment || state.iacRequest?.cluster, mrUrl: state.mrUrl },
+				{ deployment: state.targetDeployment || state.iacRequest?.cluster, mrUrl: state.mrUrl, intent: state.intent },
 				"teardownIac: recorded durable iac-change fact",
 			);
 		}
@@ -7412,9 +7523,24 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// SIO-991: the MR pipeline only runs `terraform plan` -- "success" means the plan computed
 		// cleanly and the change is STAGED on the MR, not applied. Qualify it so "success" doesn't
 		// read as "the change is live"; non-success statuses render verbatim.
+		// SIO-992: once the MR is MERGED the plan pipeline's "success" is stale (the apply runs on
+		// main); say so on the line so it isn't mistaken for the apply succeeding.
 		const label =
-			state.pipelineStatus === "success" ? "succeeded (plan ready; nothing applied yet)" : state.pipelineStatus;
+			state.pipelineStatus === "success"
+				? state.mrState === "merged"
+					? "plan succeeded (MR since MERGED — apply runs on main, not this pipeline)"
+					: "plan succeeded (plan ready; nothing applied yet)"
+				: state.pipelineStatus;
 		lines.push(`Pipeline ${pid}: ${label}`);
+	}
+	// SIO-992: surface the MR lifecycle stage explicitly (open vs merged) when known, so the reader
+	// sees where in proposed -> merged -> applied the change actually is.
+	if (state.mrState === "merged") {
+		lines.push("MR: MERGED (the terraform apply now runs on main; I can't see that pipeline here).");
+	} else if (state.mrState === "opened") {
+		lines.push("MR: OPEN (not merged; merging it in GitLab triggers the apply).");
+	} else if (state.mrState === "closed") {
+		lines.push("MR: CLOSED without merging (nothing applied).");
 	}
 	if (state.planReport) {
 		lines.push(`Plan: ${formatPlanSummary(state.planReport)}`);
@@ -7440,6 +7566,15 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	const intentInTurn = state.planReview?.title || state.iacRequest?.workflow || "";
 	const intent = intentInTurn || (await recallIacChangeIntent(state.mrUrl));
 	if (intent) lines.splice(1, 0, `Change: ${intent}`);
+	// SIO-992: on a "check my MR" re-poll, show where in the lifecycle we are by recalling THIS
+	// session's own progression (proposed -> running -> success), not just the current status. Only
+	// on pipeline-status turns (a fresh post-openMr gitops turn shows the live card and has no prior
+	// history); only when there's an actual trail (>1 step), else the "Change:" line already covers it.
+	if (state.intent === "pipeline-status" && state.mrUrl) {
+		const steps = await recallSessionProgress(state.mrUrl);
+		const trail = steps.map((s) => s.pipelineStatus ?? s.outcome ?? "proposed").join(" -> ");
+		if (steps.length > 1) lines.push("", `Progress so far: proposed -> ${trail}`);
+	}
 	lines.push(iacClosingLine(state));
 	return { messages: [new AIMessage(lines.join("\n"))] };
 }
