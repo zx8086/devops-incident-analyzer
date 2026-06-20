@@ -70,6 +70,12 @@ export interface IacRequest {
 	dataviewDisplayName?: string;
 	templateName?: string;
 	totalShardsPerNode?: number;
+	// SIO-979: cluster-default-edit freeform index settings patch (relative to settings.index, e.g.
+	// `{ refresh_interval: "30s" }`) -- any index setting, validity enforced by CI's terraform plan.
+	// clusterDefaults[] is the multi-file form (one MR over several templates); >=2 entries keep the
+	// array and the proposer commits all files in one atomic commit (mirrors ilmPolicies[]).
+	settingsPatch?: Record<string, unknown>;
+	clusterDefaults?: Array<{ templateName: string; settingsPatch: Record<string, unknown> }>;
 	// SIO-933: ilm-rollout optional bind -- point a cluster-defaults component-template's
 	// settings.index.lifecycle.name at the created/edited policy, in the SAME MR. Basename, no .json.
 	bindTemplate?: string;
