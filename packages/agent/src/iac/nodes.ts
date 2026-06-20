@@ -4396,6 +4396,69 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	};
 }
 
+// SIO-989: compact, one-glance per-field summary of a nested phasesPatch/settingsPatch for the
+// "Change:" line (the reviewPlan title, which also flows into durable memory + the recalled line).
+// Reuses the leaf-walk shape of commitOneIlmPolicy's `walk`: descend objects, emit one token per
+// leaf. The top-level key is the group (an ILM phase like `warm`, or the first settings segment);
+// sub-keys below it render as a dotted path. Strings are unquoted, other scalars stringified, so
+// `{ warm: { forcemerge: { max_num_segments: 1 } } }` -> `warm forcemerge.max_num_segments=1`.
+// Pure/deterministic (no LLM, no emojis). Capped to keep the line short; returns "" on an empty
+// patch so the caller can fall back to the phase-name form (e.g. an ilm copy with no phasesPatch).
+export function summarizeNestedPatch(
+	patch: Record<string, unknown> | undefined,
+	opts?: { maxLeaves?: number },
+): string {
+	if (!patch || Object.keys(patch).length === 0) return "";
+	const maxLeaves = opts?.maxLeaves ?? 4;
+	const fmt = (v: unknown): string => (typeof v === "string" ? v : JSON.stringify(v));
+	// Collect leaves under each top-level group, preserving insertion order.
+	const collectLeaves = (obj: Record<string, unknown>, prefix: string): string[] => {
+		const out: string[] = [];
+		for (const [key, value] of Object.entries(obj)) {
+			const path = prefix ? `${prefix}.${key}` : key;
+			if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+				out.push(...collectLeaves(value as Record<string, unknown>, path));
+			} else {
+				out.push(`${path}=${fmt(value)}`);
+			}
+		}
+		return out;
+	};
+	// One flat, capped list of "<group> <dotpath>=<value>" tokens to enforce the cap globally, then
+	// regroup adjacent same-group leaves so a group's fields read together (`warm a=1 b=2`).
+	const flat: Array<{ group: string; leaf: string }> = [];
+	for (const [group, value] of Object.entries(patch)) {
+		if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+			for (const leaf of collectLeaves(value as Record<string, unknown>, "")) flat.push({ group, leaf });
+		} else {
+			// A bare top-level scalar (flat settingsPatch leaf) has no group prefix.
+			flat.push({ group: "", leaf: `${group}=${fmt(value)}` });
+		}
+	}
+	const kept = flat.slice(0, maxLeaves);
+	const more = flat.length - kept.length;
+	// Render: walk kept leaves, opening a new comma-separated segment whenever the group changes.
+	const segments: string[] = [];
+	let curGroup: string | null = null;
+	let curLeaves: string[] = [];
+	const flush = () => {
+		if (curLeaves.length === 0) return;
+		segments.push(curGroup ? `${curGroup} ${curLeaves.join(" ")}` : curLeaves.join(" "));
+		curLeaves = [];
+	};
+	for (const { group, leaf } of kept) {
+		if (group !== curGroup) {
+			flush();
+			curGroup = group;
+		}
+		curLeaves.push(leaf);
+	}
+	flush();
+	let summary = segments.join(", ");
+	if (more > 0) summary += `, +${more} more`;
+	return summary;
+}
+
 // Assemble the review payload. Every workflow is a GitOps config edit: the change is
 // already committed to a branch via the GitLab API and CI computes the authoritative plan
 // on the MR (deck slide 18). SIO-912: the legacy local-terraform validate/plan branch is
@@ -4582,10 +4645,12 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			? `${req?.tier ?? "?"} -> ${tierTarget || "resize"}`
 			: req?.workflow === "ilm-rollout"
 				? // SIO-932: a multi-file request reads "N ILM policies: <fields>" (the shared change);
-					// a single policy keeps the "<policy>: <fields>" form.
+					// a single policy keeps the "<policy>: <fields>" form. SIO-989: summarize the actual
+					// per-field edits (warm forcemerge/shrink, cold replicas) instead of just phase names,
+					// falling back to the phase-name list / "change" when phasesPatch is empty (e.g. a copy).
 					req?.ilmPolicies && req.ilmPolicies.length >= 2
-					? `${req.ilmPolicies.length} ILM policies: ${Object.keys(req.ilmPolicies[0]?.phasesPatch ?? {}).join(", ") || "change"}`
-					: `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
+					? `${req.ilmPolicies.length} ILM policies: ${summarizeNestedPatch(req.ilmPolicies[0]?.phasesPatch) || Object.keys(req.ilmPolicies[0]?.phasesPatch ?? {}).join(", ") || "change"}`
+					: `${req?.policyName ?? "?"}: ${state.policyCreated ? "create " : ""}${summarizeNestedPatch(req?.phasesPatch) || Object.keys(req?.phasesPatch ?? {}).join(", ") || "change"}`
 				: req?.workflow === "fleet-integration"
 					? `${req?.integration ?? "?"} -> ${req?.integrationVersion ?? "?"}`
 					: req?.workflow === "slo-edit"
@@ -4597,10 +4662,18 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 								: req?.workflow === "cluster-default-edit"
 									? // SIO-979: a freeform settingsPatch (single or multi-file) titles by templates + the
 										// settings keys; a bare total_shards_per_node keeps the original descriptor.
+										// SIO-989: summarize each settingsPatch into key=value tokens (handles nested keys like
+										// routing.allocation.total_shards_per_node), falling back to the key list when empty.
 										req?.clusterDefaults && req.clusterDefaults.length > 0
-										? `${req.clusterDefaults.map((e) => e.templateName).join(", ")}: ${[...new Set(req.clusterDefaults.flatMap((e) => Object.keys(e.settingsPatch)))].join(", ")}`
+										? `${req.clusterDefaults.map((e) => e.templateName).join(", ")}: ${
+												req.clusterDefaults
+													.map((e) => summarizeNestedPatch(e.settingsPatch))
+													.filter(Boolean)
+													.join(", ") ||
+												[...new Set(req.clusterDefaults.flatMap((e) => Object.keys(e.settingsPatch)))].join(", ")
+											}`
 										: req?.settingsPatch
-											? `${req?.templateName ?? "?"}: ${Object.keys(req.settingsPatch).join(", ")}`
+											? `${req?.templateName ?? "?"}: ${summarizeNestedPatch(req.settingsPatch) || Object.keys(req.settingsPatch).join(", ")}`
 											: `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
 									: req?.workflow === "space-edit"
 										? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
@@ -5091,16 +5164,17 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		log.info({ iid }, "recovered latest open agent MR for pipeline-status");
 	}
 
-	// SIO-982: per-call poll budget. Default keeps the turn snappy; "watch until done" extends it so a
-	// slow cold-runner pipeline reaches terminal within the turn instead of freezing at "running".
+	// SIO-982: per-call poll budget. SIO-989: capped at 90s -- both the default and the "extended"
+	// budget are now 90s, so a watch turn never blocks longer than the snappy ceiling.
 	const defaultBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
-	const extendedBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED ?? "300000");
+	const extendedBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED ?? "90000");
 	// SIO-984: distinguish the two ways watchPipeline is entered. Straight after openMr (intent
-	// "gitops") it should poll to TERMINAL so the card shows triggered->running->succeeded in one turn
-	// (the cold-runner CI pipeline is ~130s, longer than the snappy default) -- use the extended budget
-	// unconditionally there. A "check my MR" follow-up (intent "pipeline-status") stays snappy at the
-	// default and only extends when the user asks to "watch until done". Returns early the instant the
-	// pipeline hits terminal, so the extended budget is a ceiling, not a fixed wait.
+	// "gitops") it polls to TERMINAL so the card shows triggered->running->succeeded in one turn; a
+	// "check my MR" follow-up (intent "pipeline-status") only extends when the user asks to "watch
+	// until done". SIO-989: the extended budget is now the same 90s as the default, so a cold-runner
+	// pipeline (~130s) may not reach terminal within the turn -- the card returns at "running" and the
+	// user re-checks with "check my MR". Returns early the instant the pipeline hits terminal, so the
+	// budget is a ceiling, not a fixed wait. Override both via IAC_PIPELINE_POLL_BUDGET_MS[_EXTENDED].
 	const isPostMrWatch = state.intent === "gitops";
 	const budgetMs = resolveWatchPipelineBudgetMs(isPostMrWatch, lastHumanText(state), defaultBudgetMs, extendedBudgetMs);
 	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");

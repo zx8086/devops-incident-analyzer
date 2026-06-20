@@ -108,7 +108,9 @@ The GitOps target is resolved by the MCP server; the JSON paths are agent-side t
 | `ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE` | `environments/_deployments/${cluster}.json` | agent |
 | `ELASTIC_IAC_ILM_POLICY_TEMPLATE` | `environments/${cluster}/lifecycle-policies/${policy}.json` | agent |
 | `IAC_PIPELINE_POLL_BUDGET_MS` | `90000` | agent |
+| `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` | `90000` | agent (SIO-989: capped at the default 90s) |
 | `IAC_PIPELINE_POLL_INTERVAL_MS` | `10000` | agent |
+| `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` | `90000` | MCP (SIO-989: 300s -> 90s; also derives the agent's elastic-iac tool timeout) |
 | `ELASTIC_IAC_MCP_URL` | `http://localhost:9086` | agent (connects to MCP) |
 
 `${cluster}` and `${policy}` are literal placeholders the agent substitutes (config, not JS template literals). See [Environment Variables](../configuration/environment-variables.md).

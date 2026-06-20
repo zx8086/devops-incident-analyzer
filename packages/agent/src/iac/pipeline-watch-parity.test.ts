@@ -1,12 +1,16 @@
 // agent/src/iac/pipeline-watch-parity.test.ts
 // SIO-984: the GitOps MR pipeline card must match the fleet flow -- show a "triggered" step before
-// "running", and poll to a terminal status in one turn (the cold-runner CI pipeline outlasts the
-// snappy default). A "check my MR" follow-up (pipeline-status intent) must stay snappy.
+// "running", and poll to a terminal status in one turn. A "check my MR" follow-up (pipeline-status
+// intent) only extends when the user asks to "watch until done". SIO-989: the extended budget is now
+// capped at the same 90s as the default; resolveWatchPipelineBudgetMs still SELECTS extended-vs-default
+// by intent/phrasing, so these tests inject distinct DEF/EXT args to exercise that selection logic.
 import { describe, expect, mock, test } from "bun:test";
 import { resolveWatchPipelineBudgetMs } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 describe("resolveWatchPipelineBudgetMs (SIO-984)", () => {
+	// Injected test values, NOT the production defaults (both are now 90s in prod per SIO-989) --
+	// kept distinct here so the selection branches remain observable.
 	const DEF = 90_000;
 	const EXT = 300_000;
 

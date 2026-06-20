@@ -430,7 +430,9 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "300000");
+	// SIO-989: capped at 90s (was 300s). A cold k8s runner (~130s+) may not reach terminal within the
+	// budget -- the tool then returns its non-terminal status and the user re-checks. Env-tunable.
+	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "90000");
 	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
 	// SIO-926: a fleet-agent bulk_upgrade rolls out over its ROLLOUT_SECONDS window (e.g. 3600s) --
 	// far longer than the drift budget. We do NOT block for the whole rollout: this is a bounded

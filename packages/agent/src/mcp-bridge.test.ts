@@ -131,7 +131,8 @@ describe("toolTimeoutFor (SIO-893)", () => {
 	});
 
 	test("elastic-iac defaults to poll budget + margin", () => {
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(300_000 + 30_000);
+		// SIO-989: the drift poll budget default dropped 300s -> 90s, so the derived tool timeout is 120s.
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000 + 30_000);
 	});
 
 	test("elastic-iac tracks the configured poll budget + margin", () => {
@@ -147,6 +148,7 @@ describe("toolTimeoutFor (SIO-893)", () => {
 
 	test("a non-positive override is ignored (falls back to budget + margin)", () => {
 		process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = "0";
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(300_000 + 30_000);
+		// SIO-989: budget default is 90s (beforeEach deletes ELASTIC_IAC_DRIFT_POLL_BUDGET_MS).
+		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000 + 30_000);
 	});
 });
