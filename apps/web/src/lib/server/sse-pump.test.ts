@@ -167,6 +167,32 @@ describe("pumpEventStream fleet-upgrade node progress", () => {
 	});
 });
 
+// SIO-984: watchPipeline was missing from PIPELINE_NODES, so the post-MR pipeline-watch phase lit no
+// tracing pill (the gitops card jumped from "MR opened" to the result). This pins the emission.
+describe("pumpEventStream watchPipeline node progress", () => {
+	test("emits node_start/node_end for watchPipeline", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{ event: "on_chain_start", name: "openMr" },
+				{ event: "on_chain_end", name: "openMr", data: { output: {} } },
+				{ event: "on_chain_start", name: "watchPipeline" },
+				{ event: "on_chain_end", name: "watchPipeline", data: { output: {} } },
+			]),
+			send,
+		);
+
+		const starts = captured.filter((e) => e.type === "node_start").map((e) => e.nodeId);
+		const ends = captured.filter((e) => e.type === "node_end").map((e) => e.nodeId);
+		expect(starts).toContain("watchPipeline");
+		expect(ends).toContain("watchPipeline");
+	});
+});
+
 // SIO-922: the fleet-upgrade gate interrupt was never translated by emitIacInterrupt, so the UI
 // got no event and rendered no card. This pins the translation that was missing.
 describe("emitIacInterrupt fleet_upgrade_choice", () => {

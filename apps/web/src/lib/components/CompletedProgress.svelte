@@ -24,6 +24,7 @@ const NODE_LABELS: Record<string, string> = {
 	reviewPlan: "Prepared",
 	reviewGate: "Reviewed",
 	openMr: "MR opened",
+	watchPipeline: "Pipeline", // SIO-984: the post-MR poll-to-terminal watch phase
 	teardown: "Finished",
 	// elastic-iac drift sub-flow
 	detectDrift: "Drift detected",

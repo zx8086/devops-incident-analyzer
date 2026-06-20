@@ -28,6 +28,17 @@ describe("CompletedProgress self-gating (SIO-934)", () => {
 		expect(body).not.toContain("Completed");
 		expect(body).not.toContain("Pipeline");
 	});
+
+	// SIO-984: the post-MR watchPipeline node is now a first-class pill labelled "Pipeline" -- a
+	// watchPipeline-only completedNodes map still renders the outcome chip (the per-node pill list is
+	// behind a client-side expand toggle that SSR can't open, so we assert the chip renders, i.e. the
+	// node is treated as content and not dropped).
+	test("a watchPipeline completedNode still renders the trace chip", () => {
+		const { body } = render(CompletedProgress, {
+			props: { completedNodes: new Map([["watchPipeline", { duration: 130_000 }]]) },
+		});
+		expect(body).toContain("Completed");
+	});
 });
 
 describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
