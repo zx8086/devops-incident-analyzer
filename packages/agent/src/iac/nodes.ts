@@ -1707,12 +1707,15 @@ function indexTemplateTemplate(): string {
 }
 
 // SIO-978: build the index-template config JSON file content from a parsed request entry, in the
-// shape modules/index-template consumes (template-NESTED: settings/mappings live under `template`).
-// ILM binding rides in template.settings.index.lifecycle.name (the elasticstack provider has no
-// separate ILM argument on the index_template resource). The data_stream block is emitted only when
-// a data-stream flag is present; allow_custom_routing is an 8.x-only provider field, so it is
-// included ONLY when explicitly true (eu-b2b is 9.x; false is the ES default). 2-space indent +
-// trailing newline match the repo house style. (Pure; unit-tested.)
+// shape modules/index-template consumes. settings/mappings are TOP-LEVEL object keys (the module's
+// index_templates object type reads each.value.settings and wraps it in the resource's template{}
+// block itself -- a `template`-nested key here would be dropped by Terraform's object type
+// conversion and the ILM binding silently lost; confirmed in the SIO-977 wiring MR !180). ILM binding
+// rides in settings.index.lifecycle.name (the provider has no separate ILM argument on the
+// index_template resource). The data_stream block is emitted only when a data-stream flag is present;
+// allow_custom_routing is an 8.x-only provider field, so it is included ONLY when explicitly true
+// (eu-b2b is 9.x; false is the ES default). 2-space indent + trailing newline match the repo house
+// style. (Pure; unit-tested.)
 export function buildIndexTemplateConfig(entry: {
 	name: string;
 	indexPatterns: string[];
@@ -1739,7 +1742,10 @@ export function buildIndexTemplateConfig(entry: {
 		config.data_stream = dataStream;
 	}
 	if (entry.lifecycleName) {
-		config.template = { settings: { index: { lifecycle: { name: entry.lifecycleName } } } };
+		// SIO-978: settings live at the TOP LEVEL of the object (the module reads each.value.settings,
+		// not each.value.template.settings). A `template`-nested key would be silently dropped by
+		// Terraform's object type conversion -> the ILM binding would be lost (caught in SIO-977 MR !180).
+		config.settings = { index: { lifecycle: { name: entry.lifecycleName } } };
 	}
 	return `${JSON.stringify(config, null, 2)}\n`;
 }
