@@ -1,4 +1,5 @@
 // apps/web/src/lib/server/agent.ts
+import { connect as netConnect } from "node:net";
 import {
 	buildGraph,
 	buildIacGraph,
@@ -34,6 +35,23 @@ installGraphWarmer();
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
 
+// SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
+// -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.
+// Short timeout so module-load is not delayed. Never throws.
+function isPortInUse(host: string, port: number, timeoutMs = 300): Promise<boolean> {
+	return new Promise((resolve) => {
+		const socket = netConnect({ host, port });
+		const done = (inUse: boolean) => {
+			socket.destroy();
+			resolve(inUse);
+		};
+		socket.setTimeout(timeoutMs);
+		socket.once("connect", () => done(true));
+		socket.once("timeout", () => done(false));
+		socket.once("error", () => done(false)); // ECONNREFUSED -> nothing listening
+	});
+}
+
 // SIO-967: mount the knowledge-graph MCP server IN-PROCESS. Embedded lbug takes an
 // exclusive file lock, so the graph can only be opened by ONE process -- and the agent
 // pipeline's record* nodes already open it here. Running the server in this same
@@ -45,7 +63,8 @@ let knowledgeGraphMcpUrl: string | undefined;
 if (process.env.KNOWLEDGE_GRAPH_ENABLED === "true" || process.env.KNOWLEDGE_GRAPH_ENABLED === "1") {
 	const host = process.env.KNOWLEDGE_GRAPH_MCP_HOST ?? "127.0.0.1";
 	const port = process.env.KNOWLEDGE_GRAPH_MCP_PORT ?? "9087";
-	knowledgeGraphMcpUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+	const probeHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+	knowledgeGraphMcpUrl = `http://${probeHost}:${port}`;
 	const onKgStartFailure = (err: unknown) => {
 		knowledgeGraphMcpUrl = undefined;
 		kgMcpLog.warn(
@@ -53,17 +72,34 @@ if (process.env.KNOWLEDGE_GRAPH_ENABLED === "true" || process.env.KNOWLEDGE_GRAP
 			"in-process knowledge-graph MCP server failed to start; kg_* tools unavailable",
 		);
 	};
-	// SIO-986: truly best-effort. startKnowledgeGraphServer() can throw SYNCHRONOUSLY during eager
-	// module evaluation (loadConfig / transport setup), which the .catch alone does NOT contain -- that
-	// crashed the whole app under Vite SSR. Wrap in try/catch (sync) AND .catch (async) so neither a
-	// thrown error nor a rejected promise propagates past here; a KG start failure only disables kg_*.
-	try {
-		startKnowledgeGraphServer()
-			.then(() => kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started"))
-			.catch(onKgStartFailure);
-	} catch (err) {
-		onKgStartFailure(err);
-	}
+	// SIO-987: pre-flight check. If something is ALREADY listening on the KG port, a standalone KG
+	// server is running -- do NOT try to bind (that produced a misleading EADDRINUSE + "Fatal" log).
+	// Skip the in-process start and warn clearly: the agent writes the graph IN-PROCESS via the
+	// getGraphStore() singleton, so a standalone server holding the embedded-lbug exclusive lock will
+	// LOCK OUT those writes (the graph silently never populates). The kg_* read tools still register
+	// against the existing instance (knowledgeGraphMcpUrl stays set). The check runs in a fire-and-
+	// forget async IIFE so module evaluation is never blocked.
+	(async () => {
+		if (await isPortInUse(probeHost, Number(port))) {
+			kgMcpLog.warn(
+				{ url: knowledgeGraphMcpUrl },
+				"a knowledge-graph server is already running on this port (likely started standalone). The agent " +
+					"writes the graph IN-PROCESS and will be LOCKED OUT by a standalone server's exclusive lbug lock -- " +
+					"graph writes will fail silently. Stop the standalone server; the agent starts the KG itself when " +
+					"KNOWLEDGE_GRAPH_ENABLED=true. Registering the existing instance's read-only kg_* tools for now.",
+			);
+			return;
+		}
+		// SIO-986: truly best-effort. startKnowledgeGraphServer() can throw SYNCHRONOUSLY during eager
+		// module evaluation (loadConfig / transport setup), so wrap in try/catch (sync) AND .catch (async)
+		// -- neither a thrown error nor a rejected promise propagates past here; a failure only disables kg_*.
+		try {
+			await startKnowledgeGraphServer();
+			kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started");
+		} catch (err) {
+			onKgStartFailure(err);
+		}
+	})();
 }
 
 const pruneLog = getLogger("agent:state-pruning");

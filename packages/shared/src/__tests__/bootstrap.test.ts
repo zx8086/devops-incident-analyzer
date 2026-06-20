@@ -452,7 +452,7 @@ describe("startup port logging", () => {
 		});
 
 		test("an embedded server rethrows the original error instead of exiting", async () => {
-			const { options } = createTestOptions({
+			const { options, logger } = createTestOptions({
 				embedded: true,
 				initDatasource: async () => {
 					throw new Error("datasource boom");
@@ -461,6 +461,10 @@ describe("startup port logging", () => {
 			// Rethrows the real error -> the host's .catch handles it; process.exit is NOT called.
 			await expect(createMcpApplication(options)).rejects.toThrow("datasource boom");
 			expect(exitCode).toBeUndefined();
+			// SIO-987: embedded mode does NOT log a misleading level:50 "Fatal" line (the host logs its
+			// own actionable WARN); a standalone process still does (asserted in "startup failure" above).
+			const errorCalls = logger.calls.filter((c) => c.method === "error");
+			expect(errorCalls.some((c) => (c.args[0] as string).includes("Fatal error starting"))).toBe(false);
 		});
 
 		test("an embedded server does not install process-global signal handlers", async () => {
