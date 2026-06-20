@@ -23,7 +23,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { dedupeHitsBy, type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
-import { iacTurnOutcome, stackFromPaths } from "./nodes.ts";
+import { iacTurnOutcome, stackForWorkflow, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const logger = getLogger("agent:iac:graph-knowledge");
@@ -34,10 +34,14 @@ function targetDeploymentName(state: IacStateType): string {
 	return state.targetDeployment || state.iacRequest?.cluster || "";
 }
 
-// SIO-965: "<deployment>/<stack>" StackInstance id, or "" when either is unknown.
+// SIO-965/SIO-985: "<deployment>/<stack>" StackInstance id, or "" when either is unknown. The WRITE
+// path (recordIacEntities/teardownIac, post-draft) derives the stack from the precise committed file
+// paths. The RECALL path (graphEnrichIac/memoryEnrichIac) runs BEFORE draftChange, so proposedFiles
+// is still empty -- fall back to the workflow's stack so recall computes the SAME key the write
+// produces. stackForWorkflow is the verified inverse of stackFromPaths, so the two agree.
 function stackInstanceId(state: IacStateType): string {
 	const deployment = targetDeploymentName(state);
-	const stack = stackFromPaths(state.proposedFiles);
+	const stack = stackFromPaths(state.proposedFiles) || stackForWorkflow(state.iacRequest?.workflow);
 	return deployment && stack ? `${deployment}/${stack}` : "";
 }
 
@@ -125,7 +129,9 @@ export async function graphEnrichIac(state: IacStateType): Promise<Partial<IacSt
 		const changes = await priorChangesForDeployment(store, deployment);
 		// SIO-965: per-(deployment,stack) history + blast radius (other deployments
 		// running the same stack). Both are best-effort additions to the SIO-954 view.
-		const stack = stackFromPaths(state.proposedFiles);
+		// SIO-985: this node runs pre-draft (proposedFiles empty), so fall back to the workflow's
+		// stack -- the verified inverse of stackFromPaths -- so the per-stack history actually resolves.
+		const stack = stackFromPaths(state.proposedFiles) || stackForWorkflow(state.iacRequest?.workflow);
 		const siId = stack ? `${deployment}/${stack}` : "";
 		const stackInstanceChanges = siId ? await changeHistoryForStackInstance(store, siId) : [];
 		const otherDeployments = stack ? (await deploymentsRunningStack(store, stack)).filter((d) => d !== deployment) : [];

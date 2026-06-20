@@ -1506,6 +1506,32 @@ export function stackFromPaths(paths: string[] | undefined): string {
 	return "";
 }
 
+// SIO-985: the INVERSE of stackFromPaths -- the repo stack a given gitops workflow writes under.
+// Needed so the (deployment, stack) recall key can be derived from the PARSED request BEFORE
+// draftChange populates proposedFiles (the enrich/recall nodes run pre-draft). Verified against each
+// proposer's path template: every value here equals what stackFromPaths returns for that proposer's
+// committed file. version-upgrade/tier-resize/topology-edit edit environments/_deployments/<c>.json
+// -> "deployments". "other" has no proposer (short-circuited in parseIntent) -> "". (Pure.)
+const WORKFLOW_STACK: Record<string, string> = {
+	"version-upgrade": "deployments",
+	"tier-resize": "deployments",
+	"topology-edit": "deployments",
+	"ilm-rollout": "lifecycle-policies",
+	"fleet-integration": "fleet-integrations",
+	"slo-edit": "slos",
+	"alerting-edit": "alerting",
+	"dataview-edit": "dataviews",
+	"cluster-default-edit": "cluster-defaults",
+	"space-edit": "spaces",
+	"security-edit": "security",
+	"dashboard-edit": "dashboards",
+	"index-template-create": "index-templates",
+};
+
+export function stackForWorkflow(workflow: string | undefined): string {
+	return workflow ? (WORKFLOW_STACK[workflow] ?? "") : "";
+}
+
 // SIO-873: the agent owns the per-deployment JSON path -- it knows the cluster and
 // passes the resolved filePath to the MCP gitlab_* tools, which only own the repo
 // target (base URL + project). Literal "${cluster}" placeholder. The agent edits
