@@ -116,9 +116,14 @@ describe("teardownIac durable iac-change fact (gate)", () => {
 		mock.module("../memory-backend.ts", () => ({
 			selectedBackend: () => backend,
 			recallInFlightFleetUpgrades: async () => [],
+			// SIO-988: teardownIac now recalls the iac-change intent for enrichment; this gate
+			// test only asserts the WRITE, so stub the recall surface to a miss (own the complete
+			// backend mock so a sibling suite's stub can't win -- mock.module is process-global).
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
 		}));
 		const { teardownIac } = await import("./nodes.ts");
-		teardownIac(gitopsState(state));
+		await teardownIac(gitopsState(state));
 		return calls;
 	}
 
@@ -142,5 +147,124 @@ describe("teardownIac durable iac-change fact (gate)", () => {
 
 	test("skips the durable fact when no MR was opened (rejected/blocked turn)", async () => {
 		expect(await runTeardown({ mrUrl: "" }, "agent-memory")).toHaveLength(0);
+	});
+});
+
+// SIO-988: the rendered teardown message -- status-aware footer + the "Change:" intent line
+// (in-turn planReview/iacRequest first, durable-memory recall by mr_url as the fresh-turn fallback).
+describe("teardownIac message (footer + intent enrichment)", () => {
+	afterEach(() => {
+		mock.restore();
+	});
+
+	const OLD_FOOTER = "Review and apply manually in GitLab. I never merge or apply.";
+
+	// Render the teardown message with the memory WRITE path stubbed to a no-op and the READ
+	// path (searchAgentMemory) controllable. searchCalls records the recall filter so a test can
+	// assert it was keyed on mr_url; hits is what the recall returns.
+	async function render(
+		// Loosely typed like gitopsState's input: planReview is given a partial { title } literal
+		// (gitopsState casts the merged state to IacStateType), so don't strict-check each field here.
+		state: Record<string, unknown>,
+		opts: { backend: "agent-memory" | "file"; hits?: Array<{ text: string; annotations: Record<string, string> }> },
+	) {
+		const searchCalls: Array<{ query: string; filter?: Record<string, string> }> = [];
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => opts.backend,
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async (_agent: string, query: string, filter?: Record<string, string>) => {
+				searchCalls.push({ query, filter });
+				return opts.hits ?? [];
+			},
+			dedupeHitsBy: <T extends { annotations: Record<string, string> }>(
+				hits: T[],
+				keyFn: (h: T) => string | undefined,
+			) => {
+				const seen = new Set<string>();
+				return hits.filter((h, i) => {
+					const k = keyFn(h) ?? `nokey:${i}`;
+					if (seen.has(k)) return false;
+					seen.add(k);
+					return true;
+				});
+			},
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		const out = await teardownIac(gitopsState(state as Partial<IacStateType>));
+		return { text: String(out.messages?.[0]?.content), searchCalls };
+	}
+
+	test("success + approved: ready-to-merge footer, no bare old footer", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", approvalState: { approved: true, required: 0 } },
+			{ backend: "file" },
+		);
+		expect(text).toContain("ready for you to merge & apply");
+		expect(text).toContain("I never merge or apply.");
+		// the old unconditional footer must no longer appear verbatim on a clean success
+		expect(text).not.toContain(OLD_FOOTER);
+	});
+
+	test("success + not approved: footer flags missing approval", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", approvalState: { approved: false, required: 1 } },
+			{ backend: "file" },
+		);
+		expect(text).toContain("not yet approved");
+	});
+
+	test("failed: footer says fix before merging", async () => {
+		const { text } = await render({ pipelineStatus: "failed", approvalState: null }, { backend: "file" });
+		expect(text).toContain("Pipeline failed");
+	});
+
+	test("running (non-terminal): keeps the original review-and-apply footer", async () => {
+		const { text } = await render({ pipelineStatus: "running", approvalState: null }, { backend: "file" });
+		expect(text).toContain(OLD_FOOTER);
+	});
+
+	test("enrichment in-turn: uses planReview.title without any memory call", async () => {
+		const { text, searchCalls } = await render(
+			{ planReview: { title: "Bind logs-custom ILM to logs streams" }, pipelineStatus: "success" },
+			{ backend: "file" },
+		);
+		expect(text).toContain("Change: Bind logs-custom ILM to logs streams");
+		expect(searchCalls).toHaveLength(0); // file backend short-circuits the recall
+	});
+
+	test("enrichment fallback: recalls the iac-change fact by mr_url when in-turn context is empty", async () => {
+		const recalled = "Elastic IaC change proposed (MR open) on eu-b2b/cluster-defaults: bind logs-custom ILM.";
+		const { text, searchCalls } = await render(
+			{ iacRequest: null, planReview: null, pipelineStatus: "success" },
+			{ backend: "agent-memory", hits: [{ text: recalled, annotations: { config_change_id: "c1" } }] },
+		);
+		expect(text).toContain(`Change: ${recalled}`);
+		expect(searchCalls).toHaveLength(1);
+		expect(searchCalls[0]?.filter).toEqual({
+			kind: "iac-change",
+			mr_url: "https://gitlab.com/x/-/merge_requests/9",
+		});
+	});
+
+	test("enrichment fallback: dedups hits sharing a key into one Change line", async () => {
+		const dup = { text: "bind logs-custom ILM.", annotations: { config_change_id: "c1" } };
+		const { text } = await render(
+			{ iacRequest: null, planReview: null, pipelineStatus: "success" },
+			{ backend: "agent-memory", hits: [dup, { ...dup, text: "Bind the logs-custom ILM policy." }] },
+		);
+		expect(text.split("\n").filter((l) => l.startsWith("Change:"))).toHaveLength(1);
+	});
+
+	test("memory off + no in-turn context: no Change line, footer still status-aware", async () => {
+		const { text } = await render(
+			{ iacRequest: null, planReview: null, pipelineStatus: "success", approvalState: { approved: true } },
+			{ backend: "file" },
+		);
+		expect(text).not.toContain("Change:");
+		expect(text).toContain("ready for you to merge & apply");
 	});
 });

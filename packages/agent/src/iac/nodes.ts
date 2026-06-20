@@ -6949,7 +6949,42 @@ export function buildIacChangeRationale(state: IacStateType): string {
 		: "A human reviews, merges, and applies.";
 }
 
-export function teardownIac(state: IacStateType): Partial<IacStateType> {
+// SIO-988: recall the intent recorded when this MR was opened (buildIacChangeDecision),
+// so a later "check my MR" turn -- a fresh classify->pipeline-status turn whose state has
+// no iacRequest/planReview (watchPipeline only recovers mrIid + live plan/approval) -- can
+// still say WHAT the change was. Keyed on mr_url, the one annotation stable across turns
+// (the fact was written with pipeline_status="running", so we never filter on status).
+// Best-effort: agent-memory backend only; "" on disable/miss/error.
+export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
+	if (!mrUrl || selectedBackend() !== "agent-memory") return "";
+	try {
+		const hits = await searchAgentMemory("elastic-iac", "iac change intent", { kind: "iac-change", mr_url: mrUrl });
+		// SIO-973: a re-recorded change returns as multiple hits; collapse to the first (highest-ranked).
+		const deduped = dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url);
+		return deduped[0]?.text ?? "";
+	} catch {
+		return ""; // searchAgentMemory already logs
+	}
+}
+
+// SIO-988: status-aware closing line. The agent only ever PROPOSES, so every branch still
+// states "I never merge or apply." -- but a clean success reads as good-news + ready-to-merge
+// instead of the flat "review and apply manually" that fought the actual state. Non-terminal /
+// still-running keeps the original line (a follow-up re-checks).
+export function iacClosingLine(state: IacStateType): string {
+	const merge = "I never merge or apply.";
+	if (state.pipelineStatus === "success") {
+		return state.approvalState && !state.approvalState.approved
+			? `Plan is clean but not yet approved. Review, approve, then merge & apply in GitLab. ${merge}`
+			: `Plan is clean and approved — ready for you to merge & apply in GitLab whenever you are. ${merge}`;
+	}
+	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") {
+		return `Pipeline failed — review the plan log and fix before merging. ${merge}`;
+	}
+	return `Review and apply manually in GitLab. ${merge}`;
+}
+
+export async function teardownIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
 	// job" gap that had no code path). No-op unless LIVE_MEMORY_ENABLED; routes to
@@ -7091,7 +7126,14 @@ export function teardownIac(state: IacStateType): Partial<IacStateType> {
 		const req = state.approvalState.required != null ? ` (${state.approvalState.required} required)` : "";
 		lines.push(`Approval: ${state.approvalState.approved ? `approved${by}` : "not approved"}${req}`);
 	}
-	lines.push("Review and apply manually in GitLab. I never merge or apply.");
+	// SIO-988: surface WHAT the change intended. Prefer in-turn context (a same-turn resume still
+	// has planReview/iacRequest); fall back to durable memory by mr_url for a fresh cross-session
+	// "check my MR" turn where that state is empty. Insert right under "MR opened:" so the user
+	// reads the intent before the mechanics.
+	const intentInTurn = state.planReview?.title || state.iacRequest?.workflow || "";
+	const intent = intentInTurn || (await recallIacChangeIntent(state.mrUrl));
+	if (intent) lines.splice(1, 0, `Change: ${intent}`);
+	lines.push(iacClosingLine(state));
 	return { messages: [new AIMessage(lines.join("\n"))] };
 }
 
