@@ -115,10 +115,17 @@ export class LadybugStore implements GraphStore {
 			try {
 				await conn.query(stmt);
 			} catch (error) {
-				logger.warn(
-					{ stmt, error: error instanceof Error ? error.message : String(error) },
-					"vector index setup skipped (extension unavailable?)",
-				);
+				const message = error instanceof Error ? error.message : String(error);
+				// SIO-992: an "already exists" is the steady state on every run after the first (the
+				// index persists with the graph), exactly like the ALTER loop above -- it is benign and
+				// idempotent, so log it at debug, NOT warn. A warn here read as "extension unavailable?"
+				// every session, implying a real failure that breaks similarity search when nothing was
+				// wrong. Reserve the warn for a GENUINE setup failure (e.g. the extension truly missing).
+				if (/already exists/i.test(message)) {
+					logger.debug({ stmt }, "vector index already present (idempotent re-run)");
+				} else {
+					logger.warn({ stmt, error: message }, "vector index setup skipped (extension unavailable?)");
+				}
 			}
 		}
 	}

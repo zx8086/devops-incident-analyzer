@@ -6,6 +6,7 @@ import {
 	intentFromText,
 	isTerminalPipelineStatus,
 	parseApprovalState,
+	parseMrState,
 	parseNewestPipeline,
 	parsePlanReport,
 } from "./nodes.ts";
@@ -68,6 +69,31 @@ describe("parseApprovalState", () => {
 			required: undefined,
 			approvedBy: [],
 		});
+	});
+});
+
+describe("parseMrState (SIO-992)", () => {
+	test("parses an opened MR", () => {
+		expect(parseMrState('[200] {"state":"opened","detailed_merge_status":"mergeable"}')).toEqual({
+			state: "opened",
+			detailedMergeStatus: "mergeable",
+		});
+	});
+	test("parses a merged MR with merged_at", () => {
+		const body = '[200] {"state":"merged","merged_at":"2026-06-20T22:30:00Z","detailed_merge_status":"merged"}';
+		expect(parseMrState(body)).toEqual({
+			state: "merged",
+			mergedAt: "2026-06-20T22:30:00Z",
+			detailedMergeStatus: "merged",
+		});
+	});
+	test("parses a closed MR", () => {
+		expect(parseMrState('[200] {"state":"closed"}')).toEqual({ state: "closed" });
+	});
+	test("null on a non-JSON / unreadable body", () => {
+		expect(parseMrState("[404] not found")).toBeNull();
+		expect(parseMrState("nope")).toBeNull();
+		expect(parseMrState('[200] {"no_state":true}')).toBeNull();
 	});
 });
 

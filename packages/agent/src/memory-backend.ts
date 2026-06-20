@@ -321,6 +321,11 @@ export async function searchAgentMemory(
 	query: string,
 	filter?: AnnotationMap,
 	limit = 8,
+	// SIO-992: allSessions defaults true (every existing caller does cross-session recall). Pass
+	// false to scope the search to the CURRENT session only (ref.sessionId == threadId) -- the
+	// service maps session_ids: undefined to the current session. Used by recallSessionProgress to
+	// retrieve only THIS conversation's breadcrumbs.
+	opts?: { allSessions?: boolean },
 ): Promise<MemorySearchHit[]> {
 	if (selectedBackend() !== "agent-memory") return [];
 	const userId = resolveUserId(agentName);
@@ -330,7 +335,7 @@ export async function searchAgentMemory(
 		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
 		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
 		const hits = await c.searchMemory(ref, query, {
-			allSessions: true,
+			allSessions: opts?.allSessions ?? true,
 			relevantK: limit,
 			...(filter && Object.keys(filter).length > 0 ? { annotations: filter } : {}),
 		});
@@ -343,6 +348,9 @@ export async function searchAgentMemory(
 				sessionId: ref.sessionId,
 				query,
 				...(filter && Object.keys(filter).length > 0 && { filter }),
+				// SIO-992: scope is visible so a session-scoped progress recall is distinguishable from
+				// the default cross-session recall.
+				scope: (opts?.allSessions ?? true) ? "all-sessions" : "this-session",
 				hitCount: hits.length,
 				blockIds: hits.map((h) => h.blockId).filter((id): id is string => Boolean(id)),
 			},

@@ -166,6 +166,18 @@ describe("teardownIac durable iac-change fact (gate)", () => {
 	test("skips the durable fact when no MR was opened (rejected/blocked turn)", async () => {
 		expect(await runTeardown({ mrUrl: "" }, "agent-memory")).toHaveLength(0);
 	});
+
+	// SIO-992: a "check my MR" (pipeline-status) re-check ALSO records the iac-change fact, so the
+	// success step exists for recallSessionProgress to surface (the proposal turn wrote "running").
+	test("records the fact on a pipeline-status re-check (the success step of the progression)", async () => {
+		const calls = await runTeardown({ intent: "pipeline-status", pipelineStatus: "success" }, "agent-memory");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.annotations).toMatchObject({
+			kind: "iac-change",
+			mr_url: "https://gitlab.com/x/-/merge_requests/9",
+			pipeline_status: "success",
+		});
+	});
 });
 
 // SIO-988: the rendered teardown message -- status-aware footer + the "Change:" intent line
@@ -216,21 +228,47 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		return { text: String(out.messages?.[0]?.content), searchCalls };
 	}
 
-	test("success + approved: staged-not-applied footer, no bare old footer", async () => {
+	test("success + approved, MR state unread: staged + nothing-applied footer, no bare old footer", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", approvalState: { approved: true, required: 0 } },
 			{ backend: "file" },
 		);
-		// SIO-991: the footer makes explicit the change is STAGED, not applied (CI only planned).
-		expect(text).toContain("The CI pipeline succeeded");
+		// SIO-991/SIO-992: the footer makes explicit the plan CI succeeded and the change is STAGED,
+		// not applied (CI only planned). mrState is unread here ("") so it uses the generic open note.
+		expect(text).toContain("The plan CI succeeded");
 		expect(text).toContain("staged");
-		expect(text).toContain("nothing has been applied yet");
-		expect(text).toContain("Merge & apply in GitLab");
+		expect(text).toContain("Nothing has been merged or applied");
 		expect(text).toContain("I never merge or apply.");
 		// the old unconditional footer must no longer appear verbatim on a clean success
 		expect(text).not.toContain(OLD_FOOTER);
-		// SIO-991: the qualified Pipeline line says "succeeded (plan ready; nothing applied yet)".
-		expect(text).toContain("succeeded (plan ready; nothing applied yet)");
+		// SIO-991/SIO-992: the qualified Pipeline line says "plan succeeded (plan ready; nothing applied yet)".
+		expect(text).toContain("plan succeeded (plan ready; nothing applied yet)");
+	});
+
+	// SIO-992: with the MR read as still OPEN, the footer + a dedicated MR line say it's not merged.
+	test("success, MR OPEN: says the MR is open and not merged/applied", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", mrState: "opened", approvalState: { approved: true, required: 0 } },
+			{ backend: "file" },
+		);
+		expect(text).toContain("MR: OPEN (not merged");
+		expect(text).toContain("The MR is still OPEN — nothing has been merged or applied.");
+		expect(text).toContain("Merge in GitLab to trigger the apply");
+	});
+
+	// SIO-992: with the MR read as MERGED, the message must NOT say "ready to merge" and must NOT
+	// claim applied -- it says the apply runs on main and we can't confirm it's live.
+	test("success, MR MERGED: says merged, apply on main, cannot confirm applied", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", mrState: "merged", approvalState: { approved: true, required: 0 } },
+			{ backend: "file" },
+		);
+		expect(text).toContain("MR: MERGED");
+		expect(text).toContain("apply runs on main");
+		expect(text).toContain("can't confirm the change is live");
+		expect(text).not.toContain("ready to merge");
+		expect(text).toContain("MR since MERGED — apply runs on main, not this pipeline");
+		expect(text).toContain("I never merge or apply.");
 	});
 
 	test("success + not approved: footer flags missing approval", async () => {
@@ -289,7 +327,7 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 			{ backend: "file" },
 		);
 		expect(text).not.toContain("Change:");
-		expect(text).toContain("The CI pipeline succeeded");
+		expect(text).toContain("The plan CI succeeded");
 		expect(text).toContain("staged");
 	});
 });
@@ -380,5 +418,78 @@ describe("recallLastIacChange (SIO-990)", () => {
 		const { searchCalls } = await recall({ backend: "agent-memory", hits: [] });
 		expect(searchCalls[0]?.filter).toMatchObject({ kind: "iac-change" });
 		expect(searchCalls[0]?.filter?.deployment).toBeUndefined();
+	});
+});
+
+// SIO-992: session-scoped progression recall. recallSessionProgress retrieves THIS session's own
+// iac-change facts (scoped via allSessions:false), keyed on pipeline_status, deduped + ordered into
+// a proposed -> running -> success trail. Drives the "Progress so far" line on a "check my MR" turn.
+describe("recallSessionProgress (SIO-992)", () => {
+	afterEach(() => {
+		mock.restore();
+	});
+
+	async function recall(opts: {
+		backend: "agent-memory" | "file";
+		hits?: Array<{ text: string; annotations: Record<string, string> }>;
+	}) {
+		const searchCalls: Array<{ query: string; filter?: Record<string, string>; opts?: { allSessions?: boolean } }> = [];
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => opts.backend,
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async (
+				_agent: string,
+				query: string,
+				filter?: Record<string, string>,
+				_limit?: number,
+				searchOpts?: { allSessions?: boolean },
+			) => {
+				searchCalls.push({ query, filter, opts: searchOpts });
+				return opts.hits ?? [];
+			},
+			// real dedup-by-key so a re-recorded status collapses, like the live helper.
+			dedupeHitsBy: <T extends { annotations: Record<string, string> }>(
+				hits: T[],
+				keyFn: (h: T) => string | undefined,
+			) => {
+				const seen = new Set<string>();
+				return hits.filter((h, i) => {
+					const k = keyFn(h) ?? `nokey:${i}`;
+					if (seen.has(k)) return false;
+					seen.add(k);
+					return true;
+				});
+			},
+		}));
+		const { recallSessionProgress } = await import("./nodes.ts");
+		const steps = await recallSessionProgress("https://gitlab.com/x/-/merge_requests/9");
+		return { steps, searchCalls };
+	}
+
+	test("returns [] on the file backend", async () => {
+		const { steps } = await recall({ backend: "file" });
+		expect(steps).toEqual([]);
+	});
+
+	test("scopes the search to the CURRENT session (allSessions:false) and filters by mr_url", async () => {
+		const { searchCalls } = await recall({ backend: "agent-memory", hits: [] });
+		expect(searchCalls[0]?.opts).toMatchObject({ allSessions: false });
+		expect(searchCalls[0]?.filter).toMatchObject({
+			kind: "iac-change",
+			mr_url: "https://gitlab.com/x/-/merge_requests/9",
+		});
+	});
+
+	test("orders steps proposed -> running -> success and dedups repeats", async () => {
+		const { steps } = await recall({
+			backend: "agent-memory",
+			// out of order + a duplicate "success" re-record
+			hits: [
+				{ text: "success again", annotations: { kind: "iac-change", pipeline_status: "success" } },
+				{ text: "running", annotations: { kind: "iac-change", pipeline_status: "running" } },
+				{ text: "success", annotations: { kind: "iac-change", pipeline_status: "success" } },
+			],
+		});
+		expect(steps.map((s) => s.pipelineStatus)).toEqual(["running", "success"]);
 	});
 });
