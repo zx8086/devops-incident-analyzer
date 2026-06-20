@@ -140,7 +140,8 @@ The config-edit proposers resolve repo file paths from templates. `${cluster}`, 
 | `ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE` | fleet-integration |
 | `ELASTIC_IAC_DASHBOARD_TEMPLATE` | dashboard-edit |
 | `ELASTIC_IAC_STACK_CONFIG_TEMPLATE` / `ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE` | drift sub-flow |
-| `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` / `applyFleetUpgrade` poll loop (defaults `90000` / `10000`) |
+| `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` / `applyFleetUpgrade` poll loop (defaults `90000` / `90000` / `10000`; SIO-989 capped the extended budget at 90s — a cold-runner pipeline >90s returns at `running` and the user re-checks) |
+| `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` / `ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS` | MCP drift-check / synthetics poll-to-terminal loop (defaults `90000` / `5000`; SIO-989 dropped the budget 300s -> 90s — also feeds the agent's `elastic-iac-mcp` tool timeout = budget + 30s margin) |
 | `ELASTIC_IAC_DRIFT_CONCURRENCY`, `ELASTIC_IAC_REPORT_STACKS_EXCLUDE`, `ELASTIC_IAC_CONFIG_DEPLOYMENT_STACKS`, `ELASTIC_IAC_CONFIG_ILM_STACKS` | drift / report stack scoping |
 
 ---

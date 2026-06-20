@@ -112,13 +112,14 @@ function connectTimeoutFor(serverName: string): number {
 // SIO-893: per-server tool-call timeout. The @langchain/mcp-adapters default tool
 // timeout is 60s, which is shorter than elastic-iac's drift-check round trip: the
 // gitlab_get_drift_check_result tool polls a CI pipeline internally for up to
-// ELASTIC_IAC_DRIFT_POLL_BUDGET_MS (5 min), and a cold k8s runner takes ~130s+ to
-// queue + install Bun/Terraform + plan. At 60s the client aborts the call before
-// the tool's own poll finishes -> every stack reports a false planError. Give
-// elastic-iac a tool timeout just above its internal poll budget so the tool's
-// poll is the binding constraint, not the transport. Env-tunable; read lazily
-// (no module-scope Bun.env -- the web app imports this under Vite SSR).
-const DRIFT_POLL_BUDGET_DEFAULT_MS = 300_000;
+// ELASTIC_IAC_DRIFT_POLL_BUDGET_MS (SIO-989: now 90s, was 5 min). At 60s the client
+// aborts the call before the tool's own poll finishes -> every stack reports a false
+// planError. Give elastic-iac a tool timeout just above its internal poll budget so the
+// tool's poll is the binding constraint, not the transport. (NOTE: a cold k8s runner
+// takes ~130s+ to queue + install Bun/Terraform + plan, so at the 90s budget a cold
+// drift-check can return non-terminal -- the SIO-989 cap accepts that tradeoff.)
+// Env-tunable; read lazily (no module-scope Bun.env -- web app imports this under Vite SSR).
+const DRIFT_POLL_BUDGET_DEFAULT_MS = 90_000;
 const ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS = 30_000;
 
 function toolTimeoutFor(serverName: string): number | undefined {

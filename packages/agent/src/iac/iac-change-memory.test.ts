@@ -91,6 +91,22 @@ describe("buildIacChangeDecision / Rationale", () => {
 		expect(buildIacChangeDecision(gitopsState({ pipelineStatus: "failed" }))).toContain("change FAILED CI");
 	});
 
+	// SIO-989: the richer per-field title flows verbatim into the durable decision (the fact that is
+	// later recalled on a fresh "check my MR"), and the decision stays a single clean line.
+	test("decision carries the enriched per-field title and stays one line", () => {
+		const decision = buildIacChangeDecision(
+			gitopsState({
+				planReview: {
+					title:
+						"[eu-b2b] metrics: warm forcemerge.max_num_segments=1 shrink.number_of_shards=1, cold allocate.number_of_replicas=0: ilm-rollout",
+				} as IacStateType["planReview"],
+			}),
+		);
+		expect(decision).toContain("warm forcemerge.max_num_segments=1 shrink.number_of_shards=1");
+		expect(decision).toContain("cold allocate.number_of_replicas=0");
+		expect(decision.split("\n")).toHaveLength(1);
+	});
+
 	test("rationale names the MR, pipeline, and file count", () => {
 		const r = buildIacChangeRationale(gitopsState());
 		expect(r).toContain("https://gitlab.com/x/-/merge_requests/9");
