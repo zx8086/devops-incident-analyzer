@@ -24,6 +24,11 @@ describe("capabilityMessage", () => {
 		expect(msg).toContain("Index templates");
 	});
 
+	test("advertises cluster-settings edits (SIO-994)", () => {
+		expect(msg).toContain("Cluster-settings edits");
+		expect(msg).toContain("persistent");
+	});
+
 	test("explains a Fleet agent BINARY upgrade is a different, not-yet-wired path", () => {
 		expect(msg).toContain("Fleet");
 		// must distinguish the binary upgrade from a Terraform config change
