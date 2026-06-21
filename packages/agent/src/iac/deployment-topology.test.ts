@@ -943,13 +943,13 @@ describe("draftChange -> proposeTopologyChange removal no-op (SIO-999)", () => {
 		// no commit was attempted (idempotent no-op)
 		expect(committed).toBe(false);
 		const text = String(result.messages?.[0]?.content ?? "");
-		expect(text).toContain("already absent");
+		expect(text).toContain("found no key matching");
 		expect(text).toContain("monitoring.collection.interval");
-		// the current YAML is shown so the user can confirm (the OIDC realm line)
-		expect(text).toContain("Current [elasticsearch_config].user_settings_yaml");
+		// the current YAML is shown (as a fenced code block) so the user can confirm
+		expect(text).toContain("```yaml");
 		expect(text).toContain("xpack.security.authc.realms.saml.kibana-realm");
 		// honest about not checking live
-		expect(text).toContain("did not check the live cluster");
+		expect(text).toContain("did NOT check the live cluster");
 	});
 
 	test("absent key under xpack.security: WITHHOLDS the current YAML body", async () => {
@@ -970,10 +970,174 @@ describe("draftChange -> proposeTopologyChange removal no-op (SIO-999)", () => {
 		};
 		const result = await draftChange(asIacState(state));
 		const text = String(result.messages?.[0]?.content ?? "");
-		expect(text).toContain("already absent");
+		expect(text).toContain("found no key matching");
 		expect(text).toContain("withheld: the removal targeted xpack.security");
 		// the real SSO body is NOT echoed
 		expect(text).not.toContain("idp.metadata.path");
+	});
+});
+
+// SIO-999: suffix-match resolution -- the real eu-b2b bug. The user types "monitoring.collection.interval"
+// but the repo nests it under xpack (xpack.monitoring.collection.interval). A unique suffix match must
+// resolve + remove it; >1 match is ambiguous (never guess); 0 is absent.
+describe("removeUserSettingsKeys suffix-match (SIO-999)", () => {
+	// The exact live eu-b2b shape: flat OIDC leaf keys + monitoring NESTED under xpack (not top-level).
+	const REAL = [
+		"xpack:",
+		"  security:",
+		"    authc:",
+		"      realms:",
+		"        oidc:",
+		"          oidc-pvh-sso:",
+		"            order: 2",
+		'            rp.client_id: "abc"',
+		'            claims.groups: "groups"',
+		"  monitoring:",
+		"    collection:",
+		'      interval: "60s"',
+		"",
+	].join("\n");
+
+	test("a top-level-looking key resolves to its nested xpack.* location and is removed", () => {
+		const res = removeUserSettingsKeys(REAL, ["monitoring.collection.interval"]);
+		expect(res.changed).toBe(true);
+		// removed reports the FULL resolved path, not the user's shorthand
+		expect(res.removed).toEqual(["xpack.monitoring.collection.interval"]);
+		expect(res.absent).toEqual([]);
+		expect(res.ambiguous).toEqual([]);
+		// the whole inert monitoring subtree is pruned; the OIDC realm survives byte-for-byte
+		expect(res.yaml).not.toContain("monitoring");
+		expect(res.yaml).toContain("oidc-pvh-sso");
+		expect(res.yaml).toContain('rp.client_id: "abc"');
+	});
+
+	test("the user can also remove the whole 'monitoring' subtree by its short name", () => {
+		const res = removeUserSettingsKeys(REAL, ["monitoring"]);
+		expect(res.changed).toBe(true);
+		expect(res.removed).toEqual(["xpack.monitoring"]);
+		expect(res.yaml).not.toContain("monitoring");
+	});
+
+	test("exact path still wins and is reported verbatim", () => {
+		const res = removeUserSettingsKeys(REAL, ["xpack.monitoring.collection.interval"]);
+		expect(res.removed).toEqual(["xpack.monitoring.collection.interval"]);
+		expect(res.changed).toBe(true);
+	});
+
+	test("a suffix match landing inside xpack.security flags touchesSecurity", () => {
+		const res = removeUserSettingsKeys(REAL, ["oidc-pvh-sso.rp.client_id"]);
+		expect(res.changed).toBe(true);
+		expect(res.removed).toEqual(["xpack.security.authc.realms.oidc.oidc-pvh-sso.rp.client_id"]);
+		expect(res.touchesSecurity).toBe(true);
+	});
+
+	test("ambiguous key (matches >1 subtree) is NOT removed; candidates are reported", () => {
+		const twoIntervals = [
+			"a:",
+			"  collection:",
+			'    interval: "1s"',
+			"b:",
+			"  collection:",
+			'    interval: "2s"',
+			"",
+		].join("\n");
+		const res = removeUserSettingsKeys(twoIntervals, ["collection.interval"]);
+		expect(res.changed).toBe(false);
+		expect(res.removed).toEqual([]);
+		expect(res.ambiguous.length).toBe(1);
+		expect(res.ambiguous[0]?.candidates.sort()).toEqual(["a.collection.interval", "b.collection.interval"]);
+	});
+
+	test("genuinely absent key reports absent (no match anywhere)", () => {
+		const res = removeUserSettingsKeys(REAL, ["nope.not.here"]);
+		expect(res.changed).toBe(false);
+		expect(res.absent).toEqual(["nope.not.here"]);
+		expect(res.ambiguous).toEqual([]);
+		expect(res.removed).toEqual([]);
+	});
+});
+
+describe("draftChange -> proposeTopologyChange suffix-match + ambiguity (SIO-999)", () => {
+	// eu-b2b-shaped: monitoring nested under xpack (the live repro).
+	const ES_NESTED_MON = `xpack:\n  security:\n    authc:\n      realms:\n        oidc:\n          oidc-pvh-sso:\n            order: 2\n  monitoring:\n    collection:\n      interval: "60s"\n`;
+	const DEPLOYMENT_NESTED = JSON.stringify(
+		{
+			name: "eu-b2b",
+			elasticsearch: { autoscale: false, hot: { size: "4g", zone_count: 2 } },
+			elasticsearch_config: { plugins: [], user_settings_yaml: ES_NESTED_MON },
+			kibana: { size: "1g", user_settings_yaml: KB_SSO },
+		},
+		null,
+		2,
+	);
+	const fileResult = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT_NESTED).toString("base64"), encoding: "base64" })}`;
+
+	test("shorthand 'monitoring.collection.interval' resolves to xpack.* and commits an MR", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		// the diff names the FULL resolved path
+		expect(result.proposedDiff).toContain("xpack.monitoring.collection.interval");
+		const written = JSON.parse(String(committed.content)) as { elasticsearch_config: { user_settings_yaml: string } };
+		expect(written.elasticsearch_config.user_settings_yaml).not.toContain("monitoring");
+		expect(written.elasticsearch_config.user_settings_yaml).toContain("oidc-pvh-sso");
+	});
+
+	test("ambiguous key blocks with the candidate list (no MR)", async () => {
+		const ambJson = JSON.stringify(
+			{
+				name: "eu-b2b",
+				elasticsearch_config: {
+					user_settings_yaml: 'a:\n  collection:\n    interval: "1s"\nb:\n  collection:\n    interval: "2s"\n',
+				},
+			},
+			null,
+			2,
+		);
+		const ambFile = `[200] ${JSON.stringify({ content: Buffer.from(ambJson).toString("base64"), encoding: "base64" })}`;
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => ambFile,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(false);
+		const text = String(result.messages?.[0]?.content ?? "");
+		expect(text).toContain("match more than one place");
+		expect(text).toContain("a.collection.interval");
+		expect(text).toContain("b.collection.interval");
 	});
 });
 

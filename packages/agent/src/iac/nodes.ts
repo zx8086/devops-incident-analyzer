@@ -1342,12 +1342,31 @@ export function mergeDeploymentUserSettingsKey(
 	};
 }
 
-// SIO-999: resolve a user-supplied dotted key against a user_settings_yaml doc whose maps may use
-// EITHER nested keys (a:\n  b:\n    c:) OR flat dotted keys (a.b.c:) OR a mix (a real eu-b2b realm is a
-// flat key with nested children). Greedy: at each level, match the LONGEST remaining join that is a
-// direct key on the current node, descend, repeat. Returns the concrete node-path (each segment is a
-// real map key) or undefined when no prefix chain reaches the leaf. (Pure; unit-tested via removeUserSettingsKeys.)
-function resolveUserSettingsKeyPath(doc: ReturnType<typeof parseDocument>, dottedKey: string): string[] | undefined {
+// SIO-999: enumerate every node path in a user_settings_yaml doc as dotted-segment arrays (each
+// segment a real map key, which may itself be a flat dotted key like "rp.client_id"). Used by the
+// suffix-match fallback below. (Pure.)
+function allUserSettingsPaths(doc: ReturnType<typeof parseDocument>): string[][] {
+	const out: string[][] = [];
+	const walk = (node: unknown, prefix: string[]): void => {
+		if (!isMap(node)) return;
+		for (const item of node.items) {
+			const rawKey = (item.key as { value?: unknown } | null)?.value ?? item.key;
+			const path = [...prefix, String(rawKey)];
+			out.push(path);
+			walk(item.value, path);
+		}
+	};
+	walk(doc.contents, []);
+	return out;
+}
+
+// SIO-999: exact greedy longest-flat-prefix resolution -- at each level match the LONGEST remaining
+// join that is a direct key on the current node, descend, repeat. Handles flat dotted keys (a.b.c:),
+// nested maps, and mixes. Returns the concrete node-path or undefined. (Pure.)
+function resolveExactUserSettingsKeyPath(
+	doc: ReturnType<typeof parseDocument>,
+	dottedKey: string,
+): string[] | undefined {
 	const parts = dottedKey.split(".");
 	const path: string[] = [];
 	let idx = 0;
@@ -1369,40 +1388,81 @@ function resolveUserSettingsKeyPath(doc: ReturnType<typeof parseDocument>, dotte
 	return path;
 }
 
-// SIO-999: delete the named dotted leaves from a user_settings_yaml string, mirroring removeFlat for
-// the cluster-settings stack. Uses `yaml`'s parseDocument so every untouched node is preserved
-// byte-for-byte (incl. the xpack.security/OIDC SSO realm). Resolves each key across flat/nested map
-// shapes (resolveUserSettingsKeyPath). A key absent from the doc is a genuine no-op (not recorded in
-// `removed`, does not flip `changed`). touchesSecurity flags when any removed key targets xpack.security
-// so the risk message can warn about login lock-out. (Pure; unit-tested.)
+// SIO-999: resolve a user-supplied dotted key for REMOVAL. Exact path wins. If it misses, fall back
+// to a SUFFIX match: a doc path whose flattened dotted form ENDS WITH the requested key (so a user who
+// types "monitoring.collection.interval" still hits "xpack.monitoring.collection.interval"). A unique
+// suffix match resolves; >1 is ambiguous (never guess); 0 is absent. (Pure; unit-tested via
+// removeUserSettingsKeys.)
+type UserSettingsKeyResolution =
+	| { kind: "exact" | "suffix"; path: string[]; resolved: string }
+	| { kind: "ambiguous"; candidates: string[] }
+	| { kind: "absent" };
+function resolveUserSettingsKey(doc: ReturnType<typeof parseDocument>, dottedKey: string): UserSettingsKeyResolution {
+	const exact = resolveExactUserSettingsKeyPath(doc, dottedKey);
+	if (exact) return { kind: "exact", path: exact, resolved: exact.join(".") };
+	const matches = allUserSettingsPaths(doc).filter((path) => {
+		const dotted = path.join(".");
+		return dotted === dottedKey || dotted.endsWith(`.${dottedKey}`);
+	});
+	const first = matches[0];
+	if (first === undefined) return { kind: "absent" };
+	const uniq = Array.from(new Set(matches.map((m) => m.join("."))));
+	if (uniq.length === 1) return { kind: "suffix", path: first, resolved: first.join(".") };
+	return { kind: "ambiguous", candidates: uniq };
+}
+
+// SIO-999: delete the named keys from a user_settings_yaml string, mirroring removeFlat for the
+// cluster-settings stack. Uses `yaml`'s parseDocument so every untouched node is preserved byte-for-byte
+// (incl. the xpack.security/OIDC SSO realm). Each key is resolved exact-first then by unique suffix
+// (resolveUserSettingsKey), so "monitoring.collection.interval" reaches "xpack.monitoring...". `removed`
+// holds the FULL resolved dotted paths (what was actually deleted); `ambiguous` holds keys that matched
+// >1 subtree (NOT removed -- never guess) with their candidates; `absent` holds keys found nowhere.
+// touchesSecurity flags when any RESOLVED path lands inside xpack.security. (Pure; unit-tested.)
 export function removeUserSettingsKeys(
 	currentYaml: string,
 	dottedKeys: string[],
-): { yaml: string; removed: string[]; changed: boolean; touchesSecurity: boolean } {
+): {
+	yaml: string;
+	removed: string[];
+	ambiguous: { key: string; candidates: string[] }[];
+	absent: string[];
+	changed: boolean;
+	touchesSecurity: boolean;
+} {
 	const doc = parseDocument(currentYaml || "");
 	const removed: string[] = [];
+	const ambiguous: { key: string; candidates: string[] }[] = [];
+	const absent: string[] = [];
 	let touchesSecurity = false;
 	for (const dottedKey of dottedKeys) {
-		const path = resolveUserSettingsKeyPath(doc, dottedKey);
-		// Absent key -> no-op (do not record / flip `changed`).
-		if (path === undefined) continue;
+		const res = resolveUserSettingsKey(doc, dottedKey);
+		if (res.kind === "absent") {
+			absent.push(dottedKey);
+			continue;
+		}
+		if (res.kind === "ambiguous") {
+			// More than one subtree ends with this key -- do NOT guess which to delete.
+			ambiguous.push({ key: dottedKey, candidates: res.candidates });
+			continue;
+		}
+		const path = res.path;
 		doc.deleteIn(path);
-		// Prune now-empty ancestor maps so removing a leaf (monitoring.collection.interval) drops the
-		// whole inert subtree instead of leaving `collection: {}` / `monitoring: {}` residue. Stops at
-		// the first ancestor that still holds a sibling key, and never prunes the document root.
+		// Prune now-empty ancestor maps so removing a leaf drops the whole inert subtree instead of
+		// leaving `collection: {}` residue. Stops at the first ancestor that still holds a sibling key,
+		// and never prunes the document root.
 		for (let i = path.length - 1; i >= 1; i--) {
 			const parentPath = path.slice(0, i);
 			const parent = doc.getIn(parentPath, true);
 			if (!isMap(parent) || parent.items.length > 0) break;
 			doc.deleteIn(parentPath);
 		}
-		removed.push(dottedKey);
-		// Base the security signal on the user-supplied dotted key (a flat realm key would make the
-		// resolved path[0] the whole "xpack.security..." string, so path[0] === "xpack" fails for it).
-		if (dottedKey === "xpack.security" || dottedKey.startsWith("xpack.security.")) touchesSecurity = true;
+		removed.push(res.resolved);
+		// Base the security signal on the RESOLVED path (a flat realm key or a suffix-resolved key would
+		// make the user-typed key miss the "xpack.security" prefix check).
+		if (res.resolved === "xpack.security" || res.resolved.startsWith("xpack.security.")) touchesSecurity = true;
 	}
 	const yaml = doc.toString();
-	return { yaml, removed, changed: yaml !== currentYaml, touchesSecurity };
+	return { yaml, removed, ambiguous, absent, changed: yaml !== currentYaml, touchesSecurity };
 }
 
 // SIO-999: read-modify-write a _deployments JSON: delete the named dotted key(s) from the target
@@ -1413,7 +1473,14 @@ export function removeDeploymentUserSettingsKeys(
 	json: string,
 	target: "elasticsearch_config" | "kibana",
 	dottedKeys: string[],
-): { content: string; removed: string[]; changed: boolean; touchesSecurity: boolean } {
+): {
+	content: string;
+	removed: string[];
+	ambiguous: { key: string; candidates: string[] }[];
+	absent: string[];
+	changed: boolean;
+	touchesSecurity: boolean;
+} {
 	const parsed: unknown = JSON.parse(json);
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
 		throw new Error("deployment JSON is not an object");
@@ -1428,6 +1495,8 @@ export function removeDeploymentUserSettingsKeys(
 	return {
 		content: `${JSON.stringify(obj, null, 2)}\n`,
 		removed: result.removed,
+		ambiguous: result.ambiguous,
+		absent: result.absent,
 		changed: result.changed,
 		touchesSecurity: result.touchesSecurity,
 	};
@@ -4554,11 +4623,25 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
 			};
 		}
+		// An ambiguous key (its tail matches more than one subtree) must NOT be guessed -- block and show
+		// the candidates so the user can re-issue with the full path.
+		if (removal.ambiguous.length > 0) {
+			const lines = removal.ambiguous.map((a) => `- "${a.key}" matches: ${a.candidates.join(", ")}`).join("\n");
+			return {
+				blockedReason: `Ambiguous user_settings_yaml key(s) on '${cluster}': more than one subtree matches.`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: these key(s) match more than one place in [${req.userSettingsMergeTarget}].user_settings_yaml, so I won't guess which to remove. Re-issue naming the full path.\n\n${lines}`,
+					),
+				],
+			};
+		}
 		content = removal.content;
 		anyChange = anyChange || removal.changed;
 		// Removing a key under xpack.security can lock out login -- withhold the names; a non-security
-		// operational key (xpack.monitoring, ...) is safe to list. An empty `removed` means every named
-		// key was already absent (a no-op the empty-diff guard upstream catches).
+		// operational key (xpack.monitoring, ...) is safe to list. `removed` carries the FULL resolved
+		// paths (e.g. a "monitoring.collection.interval" request resolves to "xpack.monitoring...").
+		// An empty `removed` means every named key was already absent (a no-op the guard below catches).
 		if (removal.removed.length > 0) {
 			const removedShown = removal.touchesSecurity
 				? `${removal.removed.length} key(s) (names withheld: xpack.security)`
@@ -4623,18 +4706,21 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 			} catch {
 				currentYaml = "";
 			}
-			const yamlShown = touchesSecurity
+			// Render the current YAML as a fenced code block so the chat renderer keeps indentation + does
+			// not auto-link the OIDC URLs into an unreadable wall. Withhold the body for an xpack.security
+			// target (could carry secrets); show "(empty)" when there is no user_settings_yaml at all.
+			const yamlBlock = touchesSecurity
 				? "(current user_settings_yaml withheld: the removal targeted xpack.security)"
 				: currentYaml.trim() === ""
 					? `[${req.userSettingsMergeTarget}].user_settings_yaml is empty / unset.`
-					: `Current [${req.userSettingsMergeTarget}].user_settings_yaml:\n\n${currentYaml.trimEnd()}`;
+					: `Current \`[${req.userSettingsMergeTarget}].user_settings_yaml\`:\n\n\`\`\`yaml\n${currentYaml.trimEnd()}\n\`\`\``;
 			const keyList = keys.join(", ");
 			return {
-				blockedReason: `Deployment '${cluster}' user_settings_yaml already lacks ${keyList}; no change needed.`,
+				blockedReason: `Deployment '${cluster}' user_settings_yaml has no key matching ${keyList}; no change needed.`,
 				messages: [
 					new AIMessage(
-						`No change needed: ${keyList} ${keys.length > 1 ? "are" : "is"} already absent from '${cluster}' user_settings_yaml.\n\n` +
-							`${yamlShown}\n\nI did not open a merge request. (This reflects the repo file on main; I did not check the live cluster.)`,
+						`No change needed: I found no key matching ${keyList} in '${cluster}' user_settings_yaml (searched exact + suffix paths), so there was nothing to remove.\n\n` +
+							`${yamlBlock}\n\nI did not open a merge request. This reflects the repo file on main; I did NOT check the live cluster, so if the running cluster still has this setting applied (config drift), tell me and I can investigate.`,
 					),
 				],
 			};
