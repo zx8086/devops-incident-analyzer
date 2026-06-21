@@ -270,8 +270,29 @@ describe("reviewPlan — topology", () => {
 		const result = await reviewPlan(asIacState(state));
 		expect(result.planReview?.kind).toBe("config-edit");
 		expect(result.planReview?.title).toContain("eu-b2b");
+		// SIO-997: the cluster appears ONCE (the [<cluster>] wrapper), not doubled by the descriptor.
+		expect(result.planReview?.title).not.toContain("eu-b2b] eu-b2b");
 		// the shared-state warning must lead the risk list (highest blast radius in the repo)
 		expect(result.risks?.[0]).toContain("SINGLE shared Terraform state");
+	});
+
+	// SIO-997: the user_settings_yaml merge title names the key+value and is not cluster-doubled.
+	test("user_settings_yaml merge title names the key=value, cluster once", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsMergeKey: "xpack.monitoring.collection.interval",
+				userSettingsMergeValue: "60s",
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.planReview?.title).toBe("[eu-b2b] xpack.monitoring.collection.interval=60s: topology-edit");
 	});
 });
 
