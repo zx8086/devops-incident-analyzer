@@ -14,6 +14,7 @@ import {
 	__setAgentMemoryClient,
 	clearActiveMemorySession,
 	dedupeHitsBy,
+	dedupePreferring,
 	endAgentMemorySession,
 	enqueueFact,
 	enqueueMessage,
@@ -44,6 +45,7 @@ interface Recorded {
 	sessionAnnotations: (AnnotationMap | undefined)[];
 	facts: string[];
 	factAnnotations: (AnnotationMap | undefined)[];
+	factTtls: (number | undefined)[];
 	messages: ChatMessageBlock[];
 	messageAnnotations: (AnnotationMap | undefined)[];
 	searches: string[];
@@ -59,6 +61,7 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 		sessionAnnotations: [],
 		facts: [],
 		factAnnotations: [],
+		factTtls: [],
 		messages: [],
 		messageAnnotations: [],
 		searches: [],
@@ -77,6 +80,7 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 		async addFacts(_ref, facts, opts) {
 			rec.facts.push(...facts);
 			rec.factAnnotations.push(opts?.annotations);
+			rec.factTtls.push(opts?.ttlSeconds);
 			return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
 		},
 		async addMessages(_ref, messages, opts) {
@@ -447,6 +451,18 @@ describe("annotations + metadata (SIO-952)", () => {
 		expect(rec.messageAnnotations[0]).toMatchObject({ kind: "daily-log", intent: "fleet-upgrade" });
 	});
 
+	test("SIO-1005: a fact is durable by default (no TTL) but forwards a TTL when one is given", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-ttl");
+		enqueueFact("durable decision", "2026-06-17T00:00:00Z"); // no TTL -> durable
+		enqueueFact("proposal that decays", "2026-06-17T00:01:00Z", { kind: "iac-change" }, 7_776_000); // 90d
+		await flushAgentMemory();
+		expect(rec.factTtls[0]).toBeUndefined(); // durable fact carries no TTL
+		expect(rec.factTtls[1]).toBe(7_776_000); // proposal fact's TTL is forwarded to addFacts
+	});
+
 	test("a 503 on flush requeues the batch instead of dropping it", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		setActiveMemorySession("incident-analyzer", "t-1");
@@ -513,5 +529,57 @@ describe("dedupeHitsBy (SIO-973)", () => {
 
 	test("empty in -> empty out", () => {
 		expect(dedupeHitsBy([], (h) => h.annotations.pipeline_id)).toEqual([]);
+	});
+});
+
+describe("dedupePreferring (SIO-1005)", () => {
+	const hit = (text: string, annotations: Record<string, string>) => ({ text, annotations });
+	const rank = (h: { annotations: Record<string, string> }) => (h.annotations.lifecycle === "applied" ? 6 : 0);
+
+	test("per MR keeps the higher-rank hit (reconciled wins over proposal)", () => {
+		const hits = [
+			hit("proposed change", { mr_url: "u1" }), // rank 0 (no lifecycle)
+			hit("APPLIED change", { mr_url: "u1", lifecycle: "applied" }), // rank 6
+		];
+		const out = dedupePreferring(hits, (h) => h.annotations.mr_url, rank);
+		expect(out).toHaveLength(1);
+		expect(out.at(0)?.text).toBe("APPLIED change");
+	});
+
+	test("reconciled wins even when it appears BEFORE the proposal (state-based, not order-based)", () => {
+		const hits = [
+			hit("APPLIED change", { mr_url: "u1", lifecycle: "applied" }),
+			hit("proposed change", { mr_url: "u1" }),
+		];
+		const out = dedupePreferring(hits, (h) => h.annotations.mr_url, rank);
+		expect(out).toHaveLength(1);
+		expect(out.at(0)?.text).toBe("APPLIED change");
+	});
+
+	test("ACROSS MRs preserves first-seen order; only each row's winning hit is upgraded", () => {
+		const hits = [
+			hit("MR224 proposed", { mr_url: "u224" }), // newest, still open
+			hit("MR223 proposed", { mr_url: "u223" }),
+			hit("MR223 applied", { mr_url: "u223", lifecycle: "applied" }), // reconciled, arrives later
+			hit("MR218 proposed", { mr_url: "u218" }),
+		];
+		const out = dedupePreferring(hits, (h) => h.annotations.mr_url, rank);
+		// order unchanged: 224, 223, 218 -- and 223 is upgraded to the applied hit in its ORIGINAL slot
+		expect(out.map((h) => h.text)).toEqual(["MR224 proposed", "MR223 applied", "MR218 proposed"]);
+	});
+
+	test("ties keep the earlier hit", () => {
+		const hits = [hit("first", { mr_url: "u1" }), hit("second", { mr_url: "u1" })];
+		const out = dedupePreferring(hits, (h) => h.annotations.mr_url, rank);
+		expect(out.at(0)?.text).toBe("first");
+	});
+
+	test("never collapses distinct keyless hits together", () => {
+		const hits = [hit("a", {}), hit("b", {})];
+		expect(dedupePreferring(hits, (h) => h.annotations.mr_url, rank)).toHaveLength(2);
+	});
+
+	test("empty in -> empty out", () => {
+		expect(dedupePreferring([], (h) => h.annotations.mr_url, rank)).toEqual([]);
 	});
 });

@@ -25,6 +25,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
+import { startIacReconcileCron } from "./iac-reconcile-cron.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -34,6 +35,10 @@ installGraphWarmer();
 // SIO-938: wire the agent-memory recall/flush seams. No-op unless
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
+// SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
+// real terminal state. Shares this process's MCP bridge + memory client. No-op unless
+// IAC_RECONCILE_CRON_ENABLED=true.
+startIacReconcileCron();
 
 // SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
 // -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.

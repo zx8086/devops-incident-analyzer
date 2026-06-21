@@ -15,6 +15,7 @@ import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import {
 	dedupeHitsBy,
+	dedupePreferring,
 	type MemorySearchHit,
 	recallInFlightFleetUpgrades,
 	searchAgentMemory,
@@ -23,6 +24,7 @@ import {
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
+import { classifyLiveState, lifecycleRank, lifecycleTag } from "./lifecycle.ts";
 import {
 	computeIlmLiveParity,
 	esIlmPolicyToFlatDsl,
@@ -30,6 +32,7 @@ import {
 	renderLiveParity,
 } from "./live-parity.ts";
 import { createSearchMemoryTool } from "./local-tools.ts";
+import { iacProposalFactTtlSeconds, reconcileAll } from "./reconcile.ts";
 import type {
 	DriftReport,
 	FleetUpgradeReport,
@@ -724,6 +727,19 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 	// First turn of a fresh session iff the thread has no prior assistant turn yet.
 	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
 	if (firstTurn) {
+		// SIO-1005: opportunistically reconcile a small handful of recent proposed MRs to their true
+		// terminal state BEFORE building the in-flight note, so a returning user sees current state
+		// (applied/failed) rather than the stale "proposed". Bounded + best-effort so session start
+		// stays fast; the Bun.cron sweep does the exhaustive pass. No-op unless agent-memory backend.
+		try {
+			const summary = await reconcileAll({ source: "bootstrap", limit: 8 });
+			if (summary.checked > 0) log.info(summary, "bootstrapIac: opportunistic reconcile sweep");
+		} catch (error) {
+			log.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"bootstrapIac reconcile failed; continuing",
+			);
+		}
 		const note = await buildInFlightSessionNote();
 		if (note) {
 			log.info({ note }, "bootstrapIac: surfacing in-flight work at session start");
@@ -6014,6 +6030,45 @@ export function parseApplyResult(
 	}
 }
 
+export interface MrLiveState {
+	mrState: string; // "opened" | "merged" | "closed" | "" (unread)
+	mergeCommitSha?: string;
+	applyStatus: string; // apply-JOB status; "" when not merged or the apply job hasn't appeared
+	applyPipelineId: number | null;
+	applyPipelineUrl: string;
+}
+
+// SIO-1005: the live MR -> apply-job lookup, extracted from watchPipeline (the SIO-992/SIO-995
+// sequence) so the reconciliation pass (reconcile.ts) re-checks a proposed MR's true state with the
+// EXACT same reads -- read the MR's lifecycle state, and once merged read the apply JOB's status
+// (parent -> child -> apply:* job), never the parent pipeline's. Reuses this module's private
+// callTool so the reconcile module needs no MCP wiring of its own. Best-effort: every field falls
+// back to its empty value when a tool is unavailable or a body is unparseable.
+export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
+	const mrInfo = parseMrState(await callTool("gitlab_get_merge_request", { iid }));
+	const mrState = mrInfo?.state ?? "";
+	let applyStatus = "";
+	let applyPipelineId: number | null = null;
+	let applyPipelineUrl = "";
+	if (mrState === "merged" && mrInfo?.mergeCommitSha) {
+		const apply = parseApplyResult(
+			await callTool("gitlab_get_merge_commit_apply_result", { sha: mrInfo.mergeCommitSha }),
+		);
+		if (apply) {
+			applyStatus = apply.applyStatus;
+			applyPipelineId = apply.pipelineId ?? null;
+			applyPipelineUrl = apply.webUrl ?? "";
+		}
+	}
+	return {
+		mrState,
+		...(mrInfo?.mergeCommitSha ? { mergeCommitSha: mrInfo.mergeCommitSha } : {}),
+		applyStatus,
+		applyPipelineId,
+		applyPipelineUrl,
+	};
+}
+
 // A pipeline status is terminal when CI has stopped running.
 export function isTerminalPipelineStatus(status: string): boolean {
 	return ["success", "failed", "canceled", "skipped"].includes(status);
@@ -8179,8 +8234,14 @@ export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 		const hits = await searchAgentMemory("elastic-iac", "", { kind: "iac-change", mr_url: mrUrl }, 8, {
 			deterministic: true,
 		});
-		// SIO-973: a re-recorded change returns as multiple hits; collapse to the first (highest-ranked).
-		const deduped = dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url);
+		// SIO-973: a re-recorded change returns as multiple hits; collapse per MR.
+		// SIO-1005: prefer the highest-lifecycle hit per MR (the reconciled "applied"/"apply-failed" fact
+		// over the original proposal) so a "check my MR" reads the terminal state, not the stale proposal.
+		const deduped = dedupePreferring(
+			hits,
+			(h) => h.annotations.config_change_id ?? h.annotations.mr_url,
+			(h) => lifecycleRank(h.annotations),
+		);
 		// SIO-996: the same MR yields one fact per turn (config_change_id == per-turn requestId), and only
 		// the PROPOSAL turn's fact carries change_summary (a pipeline-status re-check has no planReview).
 		// Prefer the hit that actually has the verbatim descriptor over the highest-ranked one, which may
@@ -8283,7 +8344,13 @@ export async function recallLastIacChange(deployment?: string): Promise<Recalled
 		// resolved by dedupe + the caller's ordering, not by semantic relevance to a query string.
 		const filter: AnnotationMap = { kind: "iac-change", ...(deployment ? { deployment } : {}) };
 		const hits = await searchAgentMemory("elastic-iac", "", filter, 8, { deterministic: true });
-		const deduped = dedupeHitsBy(hits, (h) => h.annotations.mr_url ?? h.annotations.config_change_id);
+		// SIO-1005: per MR prefer the reconciled (terminal) fact over the proposal so the recovered
+		// mr/pipeline ids + text reflect the latest state, not the original proposal.
+		const deduped = dedupePreferring(
+			hits,
+			(h) => h.annotations.mr_url ?? h.annotations.config_change_id,
+			(h) => lifecycleRank(h.annotations),
+		);
 		const top = deduped[0];
 		if (!top) return null;
 		const a = top.annotations;
@@ -8313,27 +8380,29 @@ export function iacClosingLine(state: IacStateType): string {
 		// real lifecycle stage is the MR's state. Branch on it FIRST so a MERGED MR never reads as
 		// "ready to merge", and we never claim the change is applied (the apply runs on main, which
 		// watchPipeline can't see). SIO-991: keep "staged, not applied" for the open case.
+		// SIO-1005: derive the lifecycle via the shared classifyLiveState so the closing line and the
+		// reconciliation pass (reconcile.ts) describe the SAME taxonomy from the same inputs.
+		const lifecycle = classifyLiveState(state.mrState, state.applyPipelineStatus);
 		if (state.mrState === "merged") {
 			// SIO-993/SIO-995: merged -> the terraform apply runs on main as the apply:* JOB (parent ->
-			// child -> job). We read that JOB's status (NOT the parent pipeline's, which reports success
-			// transiently before the apply job runs/fails -- the SIO-995 false-positive). Only a confirmed
-			// apply-job SUCCESS means the change is live; anything else (running / failed / not-started)
-			// must NOT read as live.
+			// child -> job). classifyLiveState reads that JOB's status (NOT the parent pipeline's, which
+			// reports success transiently before the apply job runs/fails -- the SIO-995 false-positive).
+			// Only a confirmed apply-job SUCCESS (lifecycle "applied") means the change is live.
 			const applyLink = state.applyPipelineUrl ? ` (${state.applyPipelineUrl})` : "";
-			if (state.applyPipelineStatus === "success") {
+			if (lifecycle === "applied") {
 				return `Merged and APPLIED: the apply job on main succeeded${applyLink}, so the change is now live. ${merge}`;
 			}
-			if (state.applyPipelineStatus === "failed" || state.applyPipelineStatus === "canceled") {
-				return `Merged, but the apply on main ${state.applyPipelineStatus.toUpperCase()}${applyLink} — the change is NOT live. Review the apply job log on main in GitLab. ${merge}`;
+			if (lifecycle === "apply-failed") {
+				return `Merged, but the apply on main ${(state.applyPipelineStatus || "did not succeed").toUpperCase()}${applyLink} — the change is NOT live. Review the apply job log on main in GitLab. ${merge}`;
 			}
-			if (state.applyPipelineStatus && !isTerminalPipelineStatus(state.applyPipelineStatus)) {
+			if (lifecycle === "apply-running") {
 				return `Merged — the terraform apply is RUNNING on main${applyLink} (status ${state.applyPipelineStatus}); the change is NOT live until the apply job succeeds. Ask "check my MR" again to see the apply finish. ${merge}`;
 			}
-			// applyPipelineStatus === "" -> the apply job hasn't appeared yet (apply pipeline starting,
-			// or it couldn't be resolved). NOT live, and never reported as success.
+			// apply-not-started: the apply job hasn't appeared yet (apply pipeline starting, or it couldn't
+			// be resolved). NOT live, and never reported as success.
 			return `Merged — the terraform apply on main hasn't started yet (or I couldn't resolve it). The change is NOT live until the apply job succeeds. Ask "check my MR" again shortly. ${merge}`;
 		}
-		if (state.mrState === "closed") {
+		if (lifecycle === "closed") {
 			return `The plan CI succeeded but the MR was CLOSED without merging — nothing was applied. ${merge}`;
 		}
 		// MR still open (state "opened" or unread). The plan is ready; nothing is merged or applied.
@@ -8433,6 +8502,10 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 				decision: buildIacChangeDecision(state),
 				rationale: buildIacChangeRationale(state),
 				annotations: buildIacChangeAnnotations(state),
+				// SIO-1005: give the PROPOSAL fact a TTL so it auto-expires once reconciliation has written
+				// the durable terminal fact -- keeping the append-only store at ~one fact per settled MR.
+				// undefined (durable) unless the reconciliation cron is enabled (see iacProposalFactTtlSeconds).
+				ttlSeconds: iacProposalFactTtlSeconds(),
 			});
 			log.info(
 				{ deployment: state.targetDeployment || state.iacRequest?.cluster, mrUrl: state.mrUrl, intent: state.intent },
@@ -9207,7 +9280,10 @@ function renderFleetLearnings(hits: MemorySearchHit[]): string {
 	return dedupeHitsBy(hits, (h) => h.annotations.pipeline_id)
 		.map((h) => {
 			const a = h.annotations;
-			const tags = [a.version, a.outcome, a.pipeline_id && `pipeline ${a.pipeline_id}`].filter(Boolean).join(" ");
+			// SIO-1005: tag via lifecycleTag for wording consistency. Fleet facts carry no `lifecycle` and
+			// their outcome is applied/partial/failed (never the misleading "completed"), so this is a
+			// passthrough today; it keeps every recall renderer on one tag helper.
+			const tags = [a.version, lifecycleTag(a), a.pipeline_id && `pipeline ${a.pipeline_id}`].filter(Boolean).join(" ");
 			return tags ? `- ${h.text} [${tags}]` : `- ${h.text}`;
 		})
 		.join("\n");

@@ -49,6 +49,10 @@ export interface KeyDecision {
 	// later session can retrieve it by filter -- e.g. a dispatched fleet upgrade
 	// carries { kind, deployment, version, pipeline_id } for cross-session recovery.
 	annotations?: AnnotationMap;
+	// SIO-1005: optional TTL (seconds) for the fact. Omitted -> durable (no decay), the default for
+	// every key decision. The PROPOSAL iac-change fact sets it so it auto-expires once reconciliation
+	// has written the durable terminal fact; the reconciled fact itself is written WITHOUT a TTL.
+	ttlSeconds?: number;
 }
 
 // Base agent dir is overridable for hermetic tests; production callers use the
@@ -171,7 +175,8 @@ export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void
 			? `${redactPiiContent(decision.decision)} (rationale: ${redactPiiContent(decision.rationale)})`
 			: redactPiiContent(decision.decision);
 		// SIO-959: forward structured annotations so the fact is retrievable by filter.
-		enqueueFact(fact, new Date().toISOString(), decision.annotations);
+		// SIO-1005: forward the optional TTL (undefined -> durable, the default).
+		enqueueFact(fact, new Date().toISOString(), decision.annotations, decision.ttlSeconds);
 		// SIO-991: stamp the session coordinates (Capella keys) for cross-referencing the flush.
 		const ref = getActiveMemoryRef();
 		logger.info(
