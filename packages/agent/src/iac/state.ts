@@ -510,6 +510,13 @@ export const IacState = Annotation.Root({
 	// MR still reads as "staged and ready to merge". Drives the lifecycle-aware closing line: open
 	// (plan ready, not merged) vs merged (apply runs on main, not visible here). "" = not read.
 	mrState: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-993: the post-merge terraform APPLY pipeline on main (found via the MR's merge_commit_sha).
+	// applyPipelineStatus is GitLab's pipeline status ("running"|"success"|"failed"|...) or "" when the
+	// apply hasn't started / MR isn't merged; success means the change is LIVE. The message reports
+	// this real status instead of telling the user to go check GitLab.
+	applyPipelineStatus: Annotation<string>({ reducer: last, default: () => "" }),
+	applyPipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
+	applyPipelineUrl: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-878: when the pipeline failed, a human-readable cause hint (e.g. a Terraform
 	// state-lock on the shared deployments stack) derived from the plan job log.
 	failureHint: Annotation<string>({ reducer: last, default: () => "" }),
