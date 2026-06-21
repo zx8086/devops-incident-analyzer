@@ -121,6 +121,12 @@ export interface IacRequest {
 	userSettingsMergeTarget?: "elasticsearch_config" | "kibana";
 	userSettingsMergeKey?: string;
 	userSettingsMergeValue?: string;
+	// SIO-999: SURGICAL key REMOVAL from the existing user_settings_yaml (e.g. drop the appended
+	// xpack.monitoring subtree), mirroring SIO-996's cluster-settings removeKeys*. The named dotted
+	// leaves are deleted in place; every sibling subtree (incl. xpack.security/OIDC) is preserved
+	// byte-for-byte. Distinct from a set-to-null merge (which writes a literal null). Reuses
+	// userSettingsMergeTarget to name the block.
+	userSettingsRemoveKeys?: string[];
 	sizeComponent?: "integrations_server" | "kibana";
 	componentSize?: string;
 	componentZoneCount?: number;
