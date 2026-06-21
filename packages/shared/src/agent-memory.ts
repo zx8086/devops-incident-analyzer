@@ -262,11 +262,20 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 		},
 
 		async searchMemory(ref, query, opts) {
+			// SIO-998: a non-empty query selects SEMANTIC mode (FTS-KNN ranked, top-relevant_k); an empty
+			// query selects DETERMINISTIC mode -- send `filters` ALONE, omitting both `query` and
+			// `relevant_k`, so the annotation filter is the authoritative WHERE clause with no top-k
+			// truncation. Per the service's OpenAPI: only the time bounds pre-filter the KNN candidate
+			// pool; `annotations` post-filters the ranked top-k, so an identifier-keyed lookup under a
+			// query string can be truncated to 0 before the filter applies. See
+			// docs/architecture/agent-memory.md "Retrieval: TWO modes".
+			const deterministic = query.length === 0;
 			const res = await amFetch<MemoryResponseShape>(config, "POST", `${memoryPath(ref)}/search`, {
-				query,
+				...(deterministic ? {} : { query }),
 				filters: {
 					session_ids: opts?.allSessions ? "all" : undefined,
-					relevant_k: opts?.relevantK ?? null,
+					// In deterministic mode relevant_k must be absent (it implies/enables the ranked path).
+					...(deterministic ? {} : { relevant_k: opts?.relevantK ?? null }),
 					// SIO-959: structured annotation filter (e.g. { kind: "fleet-upgrade-dispatched" }).
 					annotations: opts?.annotations ?? undefined,
 				},
