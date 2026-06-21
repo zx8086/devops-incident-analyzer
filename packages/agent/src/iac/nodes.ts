@@ -874,7 +874,9 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		'{ "total_shards_per_node": 3 } } }); any index setting is allowed -- CI\'s terraform plan validates it. For the ' +
 		"common total_shards_per_node case you MAY instead set totalShardsPerNode to the integer (back-compat). When the " +
 		"user names SEVERAL templates with the SAME change ('refresh_interval 30s on logs, metrics AND traces-apm'), set " +
-		"clusterDefaults to an array of { templateName, settingsPatch } -- one MR edits all of them. If the user instead " +
+		"clusterDefaults to an array of { templateName, settingsPatch } -- one MR edits all of them. For a SINGLE template " +
+		"use the top-level templateName + settingsPatch and OMIT clusterDefaults; use clusterDefaults ONLY for 2+ templates " +
+		"(mirrors ilmPolicies for ILM). If the user instead " +
 		"wants to bind a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT " +
 		"cluster-default-edit. " +
 		"For a CLUSTER-SETTINGS change ('set xpack.monitoring.collection.interval to 60s on eu-b2b', 'raise " +
@@ -913,7 +915,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"1-3) and/or tierAutoscale (true/false for that tier). " +
 		"topology-edit ALSO covers more surfaces of the same _deployments JSON. (a) user_settings_yaml -- the raw YAML the " +
 		"EC orchestrator applies with OPERATOR privileges (so it can set operator-only keys the cluster-settings stack 403s " +
-		"on, e.g. xpack.monitoring.collection.interval). There are TWO ways to edit it: " +
+		"on, e.g. xpack.monitoring.collection.interval). There are THREE ways to edit it: " +
 		"(a1) a SINGLE-KEY merge (PREFERRED for an operational setting like 'set xpack.monitoring.collection.interval to 60s " +
 		"on eu-b2b via user_settings_yaml', 'add xpack.indices.recovery.max_bytes_per_sec ...') -- set userSettingsMergeTarget " +
 		"('elasticsearch_config' for ES settings, 'kibana' for Kibana settings), userSettingsMergeKey to the FLAT dotted key " +
@@ -928,6 +930,10 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"['monitoring.collection.interval'] or ['xpack.monitoring'] to drop the whole subtree). Do NOT set a value, do NOT " +
 		"mention null -- the leaf (and any now-empty parent) is deleted; every sibling subtree (incl. xpack.security/OIDC) is " +
 		"preserved byte-for-byte. Use (a3) to remove a key, (a1) to add/change one. " +
+		"(a1), (a2), and (a3) are MUTUALLY EXCLUSIVE -- use EXACTLY ONE per request; never set the merge fields " +
+		"(userSettingsMergeKey/Value) together with userSettingsRemoveKeys or userSettingsYaml. For the target block in " +
+		"(a1) and (a3): a key under xpack.*/cluster.*/indices.*/search.* (an Elasticsearch setting) is 'elasticsearch_config'; " +
+		"a Kibana setting (xpack.fleet, server.*, Kibana feature) is 'kibana'; when unstated, default to 'elasticsearch_config'. " +
 		"And (b) component sizing -- to resize the integrations_server or kibana node, set " +
 		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. Set at " +
 		"least one topology field. NEVER propose deleting a deployment. " +
