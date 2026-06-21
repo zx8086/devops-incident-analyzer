@@ -69,6 +69,37 @@ describe("mergeClusterSettings (SIO-994)", () => {
 		expect(content).toContain('\n  "persistent"');
 	});
 
+	// SIO-996: explicit key removal (revert), distinct from set-to-null.
+	test("removes a persistent key entirely (not set to null)", () => {
+		const { content, previous, changed } = mergeClusterSettings(SETTINGS, {
+			removeKeysPersistent: ["search.max_buckets"],
+		});
+		expect(changed).toBe(true);
+		const obj = JSON.parse(content) as { persistent: Record<string, string> };
+		expect("search.max_buckets" in obj.persistent).toBe(false); // gone, not null
+		expect(obj.persistent["cluster.max_shards_per_node"]).toBe("1000"); // others survive
+		expect(previous.persistent["search.max_buckets"]).toBe("65536"); // pre-delete value captured
+	});
+
+	test("removing an absent key is a no-op (changed=false)", () => {
+		const { changed } = mergeClusterSettings(SETTINGS, {
+			removeKeysPersistent: ["xpack.monitoring.collection.interval"],
+		});
+		expect(changed).toBe(false);
+	});
+
+	test("set + remove in one merge: both reflected, others preserved", () => {
+		const { content, changed } = mergeClusterSettings(SETTINGS, {
+			persistentPatch: { "indices.breaker.request.limit": "40%" },
+			removeKeysPersistent: ["search.max_buckets"],
+		});
+		expect(changed).toBe(true);
+		const obj = JSON.parse(content) as { persistent: Record<string, string> };
+		expect(obj.persistent["indices.breaker.request.limit"]).toBe("40%");
+		expect("search.max_buckets" in obj.persistent).toBe(false);
+		expect(obj.persistent["cluster.max_shards_per_node"]).toBe("1000");
+	});
+
 	test("throws on a non-object JSON", () => {
 		expect(() => mergeClusterSettings("[]", { persistentPatch: { a: "b" } })).toThrow("not an object");
 	});
@@ -87,6 +118,21 @@ describe("parseIntentJson — cluster-settings-edit (SIO-994)", () => {
 		expect(req.workflow).toBe("cluster-settings-edit");
 		expect(req.cluster).toBe("eu-b2b");
 		expect(req.persistentPatch).toEqual({ "xpack.monitoring.collection.interval": "60s" });
+	});
+
+	// SIO-996: a removal request maps to removeKeysPersistent, not a null-valued patch.
+	test("maps a removeKeysPersistent request", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "cluster-settings-edit",
+				cluster: "eu-b2b",
+				removeKeysPersistent: ["xpack.monitoring.collection.interval"],
+				isProd: false,
+			}),
+		);
+		expect(req.workflow).toBe("cluster-settings-edit");
+		expect(req.removeKeysPersistent).toEqual(["xpack.monitoring.collection.interval"]);
+		expect(req.persistentPatch).toBeUndefined();
 	});
 });
 
@@ -151,6 +197,59 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 		expect(result.blockedReason).toContain("at least one persistent or transient setting");
 	});
 
+	// SIO-996: a remove-only request commits the file with the key gone.
+	test("happy path: removes the persistent key and commits the file without it", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				Object.assign(committed, args);
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-settings-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				removeKeysPersistent: ["search.max_buckets"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		const written = JSON.parse(String(committed.content)) as { persistent: Record<string, string> };
+		expect("search.max_buckets" in written.persistent).toBe(false);
+		expect(written.persistent["cluster.max_shards_per_node"]).toBe("1000");
+		// removed key shows in the commit message with a leading `-`
+		expect(String(committed.commit_message)).toContain("-search.max_buckets");
+	});
+
+	// SIO-996: removing an absent key is a no-op -- no MR, and (regression) no stray branch.
+	test("blocks a no-op remove (the key is already absent) without creating a branch", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let branchCreated = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => {
+				branchCreated = true;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-settings-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				removeKeysPersistent: ["xpack.monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("already match the request");
+		expect(branchCreated).toBe(false);
+	});
+
 	test("blocks (no create) on 404 — the settings file must already exist", async () => {
 		const { draftChange } = await import("./nodes.ts");
 		mockTools({ gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}' });
@@ -178,7 +277,7 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already have the requested values");
+		expect(result.blockedReason).toContain("already match the request");
 	});
 });
 
