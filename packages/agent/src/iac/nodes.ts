@@ -3833,6 +3833,10 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 	}
 
 	const keys = [...Object.keys(persistentPatch ?? {}), ...Object.keys(transientPatch ?? {})].join(", ");
+	// SIO-994 fix: create the branch BEFORE committing (gitlab_commit_file commits onto an existing
+	// branch; without this the commit 400s on a missing branch). Created here -- after the no-op/404
+	// guards -- so a no-op never leaves a stray branch. Idempotent (a re-run reuses the branch).
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
 	const commit = await callTool("gitlab_commit_file", {
 		branch,
 		file_path: filePath,

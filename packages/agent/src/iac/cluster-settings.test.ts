@@ -104,14 +104,18 @@ function mockTools(handlers: Record<string, (args: Record<string, unknown>) => s
 describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 	const fileResult = `[200] ${JSON.stringify({ content: Buffer.from(SETTINGS).toString("base64"), encoding: "base64" })}`;
 
-	test("happy path: merges the persistent setting, commits to cluster-settings/settings.json", async () => {
+	test("happy path: creates the branch, merges the persistent setting, commits to cluster-settings/settings.json", async () => {
 		const { draftChange } = await import("./nodes.ts");
-		let committed: Record<string, unknown> = {};
+		const committed: Record<string, unknown> = {};
+		const branchCreated: Record<string, unknown> = {};
 		mockTools({
 			gitlab_get_file_content: () => fileResult,
-			gitlab_create_branch: () => "[201] {}",
+			gitlab_create_branch: (args) => {
+				Object.assign(branchCreated, args);
+				return "[201] {}";
+			},
 			gitlab_commit_file: (args) => {
-				committed = args;
+				Object.assign(committed, args);
 				return "[201] {}";
 			},
 		});
@@ -126,6 +130,10 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 		const result = await draftChange(asIacState(state));
 		expect(result.precheckPassed).toBe(true);
 		expect(result.proposedFilePath).toBe("environments/eu-b2b/cluster-settings/settings.json");
+		// SIO-994 regression guard: the branch MUST be created before the commit (gitlab_commit_file
+		// commits onto an existing branch; without create_branch the commit 400s).
+		expect(branchCreated.branch).toBe(result.branch);
+		expect(committed.branch).toBe(result.branch);
 		expect(committed.file_path).toBe("environments/eu-b2b/cluster-settings/settings.json");
 		const written = JSON.parse(String(committed.content)) as { persistent: Record<string, string> };
 		expect(written.persistent["xpack.monitoring.collection.interval"]).toBe("60s");
