@@ -30,8 +30,8 @@ export function startIacReconcileCron(): void {
 	try {
 		const job = Bun.cron(schedule, async () => {
 			try {
-				const summary = await reconcileAll({ source: "cron" });
-				log.info(summary, "iac-reconcile cron sweep complete");
+				// reconcileAll logs its own "reconcile sweep complete" summary (tagged source:"cron").
+				await reconcileAll({ source: "cron" });
 			} catch (error) {
 				log.warn({ error: error instanceof Error ? error.message : String(error) }, "iac-reconcile cron sweep failed");
 			}
