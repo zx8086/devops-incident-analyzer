@@ -352,6 +352,26 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines/${pipelineId}`)),
 	);
 
+	// SIO-993: the post-merge terraform APPLY runs on the target branch (main), not as an MR pipeline,
+	// so gitlab_get_merge_request_pipelines never lists it. After an MR merges, GitLab's merge_commit_sha
+	// lands on main and a pipeline runs for it. List pipelines for that sha so a "check my MR" follow-up
+	// can read the apply pipeline's real status (running/success/failed) instead of telling the user to
+	// go look in GitLab. Newest first; [] when the apply pipeline has not started yet. Read-only.
+	server.tool(
+		"gitlab_list_pipelines_for_sha",
+		"List CI pipelines for a commit sha on a ref (default main). Used to find the post-merge terraform " +
+			"APPLY pipeline (which runs on main, not on the MR) via the MR's merge_commit_sha. Read-only; newest first.",
+		{
+			sha: z.string().describe("Commit sha (the MR's merge_commit_sha after merge)."),
+			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+		},
+		async ({ sha, ref }) => {
+			const branch = ref ?? "main";
+			const qs = `sha=${encodeURIComponent(sha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
+			return text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines?${qs}`));
+		},
+	);
+
 	server.tool(
 		"gitlab_get_pipeline_terraform_report",
 		"Get the actual Terraform plan (create/update/delete + changed resources) for an MR pipeline. " +

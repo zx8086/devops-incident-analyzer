@@ -5,6 +5,7 @@ import {
 	formatPlanSummary,
 	intentFromText,
 	isTerminalPipelineStatus,
+	parseApplyPipeline,
 	parseApprovalState,
 	parseMrState,
 	parseNewestPipeline,
@@ -79,12 +80,14 @@ describe("parseMrState (SIO-992)", () => {
 			detailedMergeStatus: "mergeable",
 		});
 	});
-	test("parses a merged MR with merged_at", () => {
-		const body = '[200] {"state":"merged","merged_at":"2026-06-20T22:30:00Z","detailed_merge_status":"merged"}';
+	test("parses a merged MR with merged_at + merge_commit_sha", () => {
+		const body =
+			'[200] {"state":"merged","merged_at":"2026-06-20T22:30:00Z","detailed_merge_status":"merged","merge_commit_sha":"abc123"}';
 		expect(parseMrState(body)).toEqual({
 			state: "merged",
 			mergedAt: "2026-06-20T22:30:00Z",
 			detailedMergeStatus: "merged",
+			mergeCommitSha: "abc123",
 		});
 	});
 	test("parses a closed MR", () => {
@@ -94,6 +97,28 @@ describe("parseMrState (SIO-992)", () => {
 		expect(parseMrState("[404] not found")).toBeNull();
 		expect(parseMrState("nope")).toBeNull();
 		expect(parseMrState('[200] {"no_state":true}')).toBeNull();
+	});
+});
+
+describe("parseApplyPipeline (SIO-993)", () => {
+	test("returns the newest pipeline (first, since order_by=id&sort=desc) with status + url", () => {
+		const body =
+			'[200] [{"id":99,"status":"running","web_url":"https://gitlab/p/99"},{"id":50,"status":"success","web_url":"https://gitlab/p/50"}]';
+		expect(parseApplyPipeline(body)).toEqual({
+			id: 99,
+			status: "running",
+			webUrl: "https://gitlab/p/99",
+		});
+	});
+	test("null on an empty list (apply not started yet)", () => {
+		expect(parseApplyPipeline("[200] []")).toBeNull();
+	});
+	test("null on a non-2xx / unparseable body", () => {
+		expect(parseApplyPipeline("[404] not found")).toBeNull();
+		expect(parseApplyPipeline("nope")).toBeNull();
+	});
+	test("tolerates a missing web_url", () => {
+		expect(parseApplyPipeline('[200] [{"id":7,"status":"success"}]')).toEqual({ id: 7, status: "success" });
 	});
 });
 

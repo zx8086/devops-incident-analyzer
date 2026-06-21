@@ -65,6 +65,8 @@ describe("watchPipeline post-MR step sequence (SIO-984)", () => {
 			gitlab_get_merge_request_pipelines: () => '[200] [{"id":999,"status":"success"}]',
 			gitlab_get_pipeline_terraform_report: () => "[no child pipeline yet]",
 			gitlab_get_merge_request_approvals: () => '[200] {"approved":false,"approved_by":[]}',
+			// SIO-992: watchPipeline now reads the MR state; an OPEN MR keeps the plan-only path.
+			gitlab_get_merge_request: () => '[200] {"state":"opened"}',
 		});
 		const { watchPipeline } = await import("./nodes.ts");
 		const state = { intent: "gitops", mrIid: 184, messages: [] } as unknown as IacStateType;
@@ -75,7 +77,9 @@ describe("watchPipeline post-MR step sequence (SIO-984)", () => {
 		// triggered (synthetic, pipelineId null) THEN the real status.
 		expect(statuses[0]).toBe("triggered");
 		expect(sink.steps[0]?.pipelineId).toBeNull();
-		expect(statuses).toContain("success");
+		// SIO-993: the live step for a terminal PLAN pipeline is qualified ("plan succeeded"), while the
+		// node's returned pipelineStatus stays the raw "success".
+		expect(statuses).toContain("plan succeeded");
 		expect(out.pipelineStatus).toBe("success");
 	});
 
@@ -85,6 +89,7 @@ describe("watchPipeline post-MR step sequence (SIO-984)", () => {
 			gitlab_get_merge_request_pipelines: () => '[200] [{"id":999,"status":"success"}]',
 			gitlab_get_pipeline_terraform_report: () => "[no child pipeline yet]",
 			gitlab_get_merge_request_approvals: () => '[200] {"approved":false,"approved_by":[]}',
+			gitlab_get_merge_request: () => '[200] {"state":"opened"}',
 		});
 		const { watchPipeline } = await import("./nodes.ts");
 		// A "check my MR" follow-up: intent pipeline-status, MR already on the thread.
@@ -98,7 +103,7 @@ describe("watchPipeline post-MR step sequence (SIO-984)", () => {
 
 		const statuses = sink.steps.map((s) => s.status);
 		expect(statuses).not.toContain("triggered"); // nothing was triggered this turn
-		expect(statuses).toContain("success");
+		expect(statuses).toContain("plan succeeded"); // SIO-993: qualified live step
 		expect(out.pipelineStatus).toBe("success");
 	});
 });

@@ -256,19 +256,57 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		expect(text).toContain("Merge in GitLab to trigger the apply");
 	});
 
-	// SIO-992: with the MR read as MERGED, the message must NOT say "ready to merge" and must NOT
-	// claim applied -- it says the apply runs on main and we can't confirm it's live.
-	test("success, MR MERGED: says merged, apply on main, cannot confirm applied", async () => {
+	// SIO-993: with the MR MERGED, the message reports the REAL apply-pipeline status read from main,
+	// not "go check GitLab". Four variants: applied / running / failed / not-started.
+	test("merged + apply SUCCEEDED: says applied, the change is LIVE", async () => {
+		const { text } = await render(
+			{
+				pipelineStatus: "success",
+				mrState: "merged",
+				applyPipelineStatus: "success",
+				applyPipelineId: 555,
+				applyPipelineUrl: "https://gitlab/p/555",
+				approvalState: { approved: true, required: 0 },
+			},
+			{ backend: "file" },
+		);
+		expect(text).toContain("MR: MERGED");
+		expect(text).toContain("Apply: #555 SUCCEEDED on main — the change is LIVE.");
+		expect(text).toContain("Merged and APPLIED");
+		expect(text).toContain("the change is now live");
+		expect(text).not.toContain("Check the apply pipeline on main in GitLab"); // the old cop-out is gone
+		expect(text).not.toContain("ready to merge");
+		expect(text).toContain("I never merge or apply.");
+	});
+
+	test("merged + apply RUNNING: says applying, not live yet", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", mrState: "merged", applyPipelineStatus: "running", applyPipelineId: 556 },
+			{ backend: "file" },
+		);
+		expect(text).toContain("Apply: #556 running on main — not live until it succeeds.");
+		expect(text).toContain("the terraform apply is now RUNNING on main");
+		expect(text).toContain('Ask "check my MR" again');
+	});
+
+	test("merged + apply FAILED: says NOT live", async () => {
+		const { text } = await render(
+			{ pipelineStatus: "success", mrState: "merged", applyPipelineStatus: "failed", applyPipelineId: 557 },
+			{ backend: "file" },
+		);
+		expect(text).toContain("Apply: #557 FAILED on main — the change is NOT live.");
+		expect(text).toContain("apply pipeline on main FAILED");
+	});
+
+	test("merged + apply not started (no status read): says pending, re-check shortly", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", mrState: "merged", approvalState: { approved: true, required: 0 } },
 			{ backend: "file" },
 		);
 		expect(text).toContain("MR: MERGED");
-		expect(text).toContain("apply runs on main");
-		expect(text).toContain("can't confirm the change is live");
+		expect(text).toContain("Apply: not started yet on main");
+		expect(text).toContain("hasn't started yet");
 		expect(text).not.toContain("ready to merge");
-		expect(text).toContain("MR since MERGED — apply runs on main, not this pipeline");
-		expect(text).toContain("I never merge or apply.");
 	});
 
 	test("success + not approved: footer flags missing approval", async () => {
