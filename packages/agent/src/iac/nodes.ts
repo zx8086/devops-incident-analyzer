@@ -61,6 +61,25 @@ function lastHumanText(state: IacStateType): string {
 	return "";
 }
 
+// SIO-1001: the deployment already established earlier in this session, in priority order. Lets a
+// terse gitops follow-up (a pasted policy JSON, "set it to 60d") inherit the cluster instead of the
+// parser re-asking "which deployment?" when the latest message names none. Mirrors the fallback
+// cascade already used by watchPipeline and the drift flow. Empty string on a fresh session, so a
+// genuinely first-turn no-cluster request still clarifies (no stale cluster leaks in).
+// (Exported for unit testing.)
+export function knownSessionDeployment(state: IacStateType): string {
+	return (
+		state.activeChange?.deployment?.trim() || state.targetDeployment?.trim() || state.iacRequest?.cluster?.trim() || ""
+	);
+}
+
+// SIO-1001: true when a clarification question is asking specifically for the deployment/cluster.
+// Only THAT clarification is suppressed when we can inherit the session deployment; clarifications
+// about other genuinely-missing fields (a version, a tier) still fire. (Pure; unit-tested.)
+export function isMissingClusterClarification(clarification: string): boolean {
+	return /\b(which|what)\b[\s\S]*\b(deployment|cluster)\b/i.test(clarification);
+}
+
 // SIO-981: a turn is a real follow-up when the agent has already answered at least once this
 // thread (a prior AIMessage exists). The classifier derives the converse gate from this rather than
 // trusting only the UI-supplied state.isFollowUp flag (which the client can omit on a reload).
@@ -136,6 +155,11 @@ const IntentSchema = z.object({
 			}),
 		)
 		.nullish(),
+	// SIO-1001: the AUTHORITATIVE complete policy body for a from-scratch onboard (the user pasted
+	// the whole `{ name, hot, delete }` and said "exactly these keys"). Used verbatim as the file
+	// instead of deep-merging a partial patch onto a sibling/canonical base, so absent phases stay
+	// absent. Distinct from phasesPatch (partial overlay) and sourcePolicy (copy a sibling).
+	ilmFullPolicy: z.record(z.string(), z.unknown()).nullish(),
 	version: z.string().nullish(),
 	integration: z.string().nullish(),
 	integrationVersion: z.string().nullish(),
@@ -286,6 +310,9 @@ export function parseIntentJson(raw: string): IacRequest {
 					sourcePolicy: soleIlm?.sourcePolicy ?? (isIlm ? stripJsonExt(nn(p.sourcePolicy)) : nn(p.sourcePolicy)),
 					phasesPatch: soleIlm?.phasesPatch ?? nn(p.phasesPatch),
 					ilmPolicies: multiIlm ? ilmEntries : undefined,
+					// SIO-1001: authoritative full-body onboard. A multi-policy (ilmPolicies[]) request never
+					// carries a single full body, so this only applies to the singular path.
+					ilmFullPolicy: multiIlm ? undefined : nn(p.ilmFullPolicy),
 					version: nn(p.version),
 					integration: nn(p.integration),
 					integrationVersion: nn(p.integrationVersion),
@@ -785,6 +812,14 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"'.alerts-ilm-policy'). If the user asks to COPY / clone / mirror / 'same as' / 'exact copy of' an existing " +
 		"policy, set sourcePolicy to that reference policy's filename VERBATIM and put ONLY the explicit overrides (if " +
 		"any) in phasesPatch. Otherwise set phasesPatch to the fields to change. " +
+		"AUTHORITATIVE WHOLE-FILE onboard: if the user pastes a COMPLETE policy body (a JSON object with `name` and one " +
+		"or more phase keys) AND wants exactly that shape -- tells used: 'onboard ... with ONLY these phases', 'exactly " +
+		"these keys', 'the file must contain exactly ...', 'do NOT add warm/cold/frozen', 'do not copy <policy>' -- set " +
+		"`ilmFullPolicy` to that object VERBATIM (the nested phase shape below) and leave phasesPatch AND sourcePolicy " +
+		"null. ilmFullPolicy means 'write exactly these phases, nothing else': any phase the user omitted is intentionally " +
+		"absent and MUST NOT be added. Use ilmFullPolicy ONLY for a from-scratch onboard where the user gave the full file; " +
+		"for an edit to fields of an existing policy use phasesPatch, and for a copy use sourcePolicy. ilmFullPolicy is a " +
+		"SINGLE-policy form -- never combine it with ilmPolicies. " +
 		"policyName is the policy file BASENAME WITHOUT the .json extension: 'metrics.json' -> policyName 'metrics', " +
 		"'30-days@lifecycle.json' -> '30-days@lifecycle'. Never include the .json suffix. " +
 		"If the user names MORE THAN ONE policy file in a single request (e.g. 'in metrics.json AND logs.json set warm " +
@@ -936,8 +971,30 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
 
-	const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(query)]);
+	// SIO-1001: when a deployment is already established this session, tell the planner so a terse
+	// follow-up (a pasted policy body, "set it to 60d") inherits the cluster instead of re-asking.
+	// Only added when known is non-empty, so a genuine first-turn no-cluster request still clarifies.
+	const known = knownSessionDeployment(state);
+	const sessionContext = known
+		? `\n\nSession context: a deployment is already established for this conversation: '${known}'. ` +
+			`If THIS message does not name a different cluster, set \`cluster\` to '${known}' and do NOT set a ` +
+			`clarification asking which deployment. Only use a different cluster if the user explicitly names one ` +
+			`in this message.`
+		: "";
+	const sysWithContext = `${sys}\n\n${instruction}${sessionContext}`;
+
+	const res = await llm.invoke([new SystemMessage(sysWithContext), new HumanMessage(query)]);
 	let request = parseIntentJson(String(res.content));
+
+	// SIO-1001: belt-and-braces -- if the planner still left the cluster empty but this session
+	// already targets a deployment, inherit it rather than interrupting to re-ask. Suppress ONLY a
+	// missing-cluster clarification; clarifications about other missing fields (version, tier) stand.
+	if (!request.cluster?.trim() && known) {
+		request.cluster = known;
+		if (request.clarification && isMissingClusterClarification(request.clarification)) {
+			request.clarification = undefined;
+		}
+	}
 
 	if (request.clarification) {
 		const answer = interrupt({
@@ -947,12 +1004,15 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		}) as { answer?: string };
 		const reply = answer?.answer ?? "";
 		const res2 = await llm.invoke([
-			new SystemMessage(`${sys}\n\n${instruction}`),
+			new SystemMessage(sysWithContext),
 			new HumanMessage(query),
 			new AIMessage(request.clarification),
 			new HumanMessage(reply),
 		]);
 		request = { ...parseIntentJson(String(res2.content)), clarification: undefined };
+		// SIO-1001: the user's clarification reply may itself omit the cluster ("yes, do it") -- keep
+		// inheriting the established deployment on the re-parse too.
+		if (!request.cluster?.trim() && known) request.cluster = known;
 		// SIO-912: a re-parse that still lands on "other" has no proposer -- surface capabilities.
 		if (request.workflow === "other") {
 			return {
@@ -2882,6 +2942,10 @@ async function commitOneIlmPolicy(
 	policy: string,
 	patch: Record<string, unknown> | undefined,
 	sourcePolicy: string | undefined,
+	// SIO-1001: when set, this is the AUTHORITATIVE complete policy body for a from-scratch (404)
+	// onboard -- used verbatim as the file instead of copying a sibling/canonical base, so absent
+	// phases stay absent. Ignored for the copy (sourcePolicy) and modify-existing paths.
+	fullPolicy?: Record<string, unknown>,
 ): Promise<IlmCommitResult> {
 	const filePath = deploymentJsonPath(ilmPolicyTemplate(), cluster, policy);
 
@@ -2941,38 +3005,53 @@ async function commitOneIlmPolicy(
 		policyCreated = !isGitlabSuccess(raw); // target is new if it 404s
 		updated = mergeIlmPhases(JSON.stringify(srcObj), patchObj);
 	} else if (raw.startsWith("[404")) {
-		// SIO-931 from-scratch: learn the shape from a sibling policy in this cluster's dir; fall
-		// back to the canonical skeleton when the cluster has no lifecycle-policies/ files yet.
 		policyCreated = true;
-		const dirPath = `environments/${cluster}/lifecycle-policies`;
-		const siblings = parseRepoTreeFiles(await callTool("gitlab_get_repository_tree", { path: dirPath })).filter(
-			(f) => f.endsWith(".json") && f !== `${policy}.json`,
-		);
-		const preferred = process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY
-			? `${process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY}.json`
-			: "basic-lifecycle-logs.json";
-		const templateFile = siblings.includes(preferred) ? preferred : siblings[0];
-		let base: Record<string, unknown> = { name: policy, ...structuredClone(CANONICAL_ILM_SHAPE) };
-		if (templateFile) {
-			const tplRaw = await callTool("gitlab_get_file_content", { filePath: `${dirPath}/${templateFile}` });
-			if (isGitlabSuccess(tplRaw)) {
-				try {
-					const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
-					tplObj.name = policy;
-					base = tplObj;
-				} catch {
-					log.warn({ cluster, templateFile }, "ilm template sibling is not valid JSON; using canonical shape");
+		// SIO-1001 authoritative full-body: the user supplied the COMPLETE file, so use it verbatim --
+		// the committed phase set is exactly what they gave, with NO sibling/canonical phases bleeding
+		// in. `name` is forced to the policy basename (the file's name must match its filename). We
+		// still run mergeIlmPhases (with patchObj, normally empty here) so `previous` is populated and
+		// the structural/retention gates below see a normal {content, previous} pair.
+		if (fullPolicy) {
+			const base: Record<string, unknown> = { ...fullPolicy, name: policy };
+			updated = mergeIlmPhases(JSON.stringify(base), patchObj);
+		} else {
+			// SIO-931 from-scratch: learn the shape from a sibling policy in this cluster's dir; fall
+			// back to the canonical skeleton when the cluster has no lifecycle-policies/ files yet.
+			const dirPath = `environments/${cluster}/lifecycle-policies`;
+			const siblings = parseRepoTreeFiles(await callTool("gitlab_get_repository_tree", { path: dirPath })).filter(
+				(f) => f.endsWith(".json") && f !== `${policy}.json`,
+			);
+			const preferred = process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY
+				? `${process.env.ELASTIC_IAC_ILM_TEMPLATE_POLICY}.json`
+				: "basic-lifecycle-logs.json";
+			const templateFile = siblings.includes(preferred) ? preferred : siblings[0];
+			let base: Record<string, unknown> = { name: policy, ...structuredClone(CANONICAL_ILM_SHAPE) };
+			if (templateFile) {
+				const tplRaw = await callTool("gitlab_get_file_content", { filePath: `${dirPath}/${templateFile}` });
+				if (isGitlabSuccess(tplRaw)) {
+					try {
+						const tplObj = JSON.parse(extractFileContent(tplRaw)) as Record<string, unknown>;
+						tplObj.name = policy;
+						base = tplObj;
+					} catch {
+						log.warn({ cluster, templateFile }, "ilm template sibling is not valid JSON; using canonical shape");
+					}
+				} else {
+					log.warn({ cluster, templateFile }, "ilm template sibling unreadable; using canonical shape");
 				}
 			} else {
-				log.warn({ cluster, templateFile }, "ilm template sibling unreadable; using canonical shape");
+				log.warn({ cluster }, "no sibling ILM policy to template from; using canonical shape");
 			}
-		} else {
-			log.warn({ cluster }, "no sibling ILM policy to template from; using canonical shape");
+			updated = mergeIlmPhases(JSON.stringify(base), patchObj);
 		}
-		updated = mergeIlmPhases(JSON.stringify(base), patchObj);
 	} else {
+		// SIO-1001: an authoritative full-body request that targets an ALREADY-TRACKED policy is
+		// treated as a patch of the named phases onto the existing file (additive merge). We do NOT
+		// destructively drop phases the body omits on a live policy -- the verbatim-replace path is
+		// the from-scratch (404) onboard above; on an existing policy this stays conservative.
+		const effectivePatch = fullPolicy ? { ...fullPolicy, name: policy } : patchObj;
 		try {
-			updated = mergeIlmPhases(extractFileContent(raw), patchObj);
+			updated = mergeIlmPhases(extractFileContent(raw), effectivePatch);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			return {
@@ -3222,7 +3301,9 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	}
 	// SIO-933: a bind-only request (point a template at an already-correct policy) carries no phase
 	// patch and no sourcePolicy, so the mandatory-phase guard must not fire when bindTemplate is set.
-	if (!req.sourcePolicy && !req.bindTemplate && (!patch || Object.keys(patch).length === 0)) {
+	// SIO-1001: an authoritative full-body onboard (ilmFullPolicy) also carries no phasesPatch; it is
+	// itself the change, so it must not trip this guard.
+	if (!req.sourcePolicy && !req.bindTemplate && !req.ilmFullPolicy && (!patch || Object.keys(patch).length === 0)) {
 		return {
 			blockedReason: "ILM change needs at least one phase field to change (or a sourcePolicy to copy).",
 			messages: [new AIMessage("Cannot propose the change: name a phase field to change, or a policy to copy from.")],
@@ -3245,8 +3326,8 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	let retentionChange: { from: string; to: string } | null = null;
 	let policyCreated = false;
 	let liveParity = ""; // SIO-983: draft-vs-live advisory from the single committed policy.
-	if (patch || req.sourcePolicy) {
-		const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy);
+	if (patch || req.sourcePolicy || req.ilmFullPolicy) {
+		const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy, req.ilmFullPolicy);
 		if (!result.ok && !(result.noop && req.bindTemplate)) {
 			return { blockedReason: result.blockedReason, messages: [new AIMessage(result.message)] };
 		}
