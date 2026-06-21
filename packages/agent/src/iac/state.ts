@@ -37,6 +37,13 @@ export interface IacRequest {
 	// opens ONE MR. A single-policy request leaves this undefined and uses the singular fields above
 	// (parseIntentJson folds a single-entry array back to the singular path for back-compat).
 	ilmPolicies?: Array<{ policyName: string; phasesPatch?: Record<string, unknown>; sourcePolicy?: string }>;
+	// SIO-1001: ilm-rollout onboarding an AUTHORITATIVE policy body -- the user supplied the COMPLETE
+	// file (e.g. pasted `{ name, hot, delete }` and said "exactly these keys / do not add warm/cold/
+	// frozen"). Distinct from phasesPatch (a partial overlay deep-merged onto a sibling/canonical base):
+	// for a from-scratch (404) policy this object is the file VERBATIM, so the committed phase set is
+	// exactly what the user gave with no sibling-derived phases bleeding in. Only the named phases are
+	// written; absent phases are absent. Ignored when phasesPatch/sourcePolicy is used instead.
+	ilmFullPolicy?: Record<string, unknown>;
 	// SIO-871: target Elasticsearch version for a version-upgrade workflow (e.g. "9.4.2").
 	version?: string;
 	// SIO-914: fleet-integration workflow -- the integration alias key in integrations.json
