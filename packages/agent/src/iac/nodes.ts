@@ -1184,7 +1184,11 @@ async function fetchLiveUserSettingsYaml(
 ): Promise<string | undefined> {
 	const id = await resolveDeploymentId(clusterName);
 	if (!id) return undefined;
-	const body = await callTool("elastic_cloud_get_deployment", { deployment_id: id, show_plans: true });
+	// The elastic-iac MCP tool takes `deploymentId` (camelCase) and does a plain GET
+	// /api/v1/deployments/{id} -- which already includes plan_info.current.plan.<kind>.user_settings_yaml
+	// (no show_plans flag exists on this tool). Passing snake_case / show_plans fails Zod validation and
+	// the live read silently degrades to repo-only, so the arg name must match the tool exactly.
+	const body = await callTool("elastic_cloud_get_deployment", { deploymentId: id });
 	return parseLiveUserSettingsYaml(body, target);
 }
 

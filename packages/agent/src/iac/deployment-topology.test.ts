@@ -1229,13 +1229,17 @@ describe("draftChange -> proposeTopologyChange live drift (SIO-1000)", () => {
 
 	test("repo has / live lacks: MR opens and the diff notes it aligns repo with live", async () => {
 		const { draftChange } = await import("./nodes.ts");
+		let getDeploymentArgs: Record<string, unknown> = {};
 		mockTools({
 			gitlab_get_file_content: () => repoFile,
 			gitlab_create_branch: () => "[201] {}",
 			gitlab_commit_file: () => "[201] {}",
 			elastic_cloud_list_deployments: () => ecList,
 			// live plan does NOT carry monitoring (EC dropped it)
-			elastic_cloud_get_deployment: () => liveBody("xpack:\n  security: {}\n"),
+			elastic_cloud_get_deployment: (args) => {
+				getDeploymentArgs = args;
+				return liveBody("xpack:\n  security: {}\n");
+			},
 		});
 		const state = {
 			iacRequest: {
@@ -1251,6 +1255,11 @@ describe("draftChange -> proposeTopologyChange live drift (SIO-1000)", () => {
 		expect(result.proposedDiff).toContain("xpack.monitoring.collection.interval");
 		expect(result.proposedDiff).toContain("Live cluster (drift)");
 		expect(result.proposedDiff).toContain("aligns the repo with the live cluster");
+		// the elastic-iac tool takes deploymentId (camelCase); a deployment_id/show_plans call would
+		// fail Zod validation and silently fall back to repo-only (the bug this guards against).
+		expect(getDeploymentArgs.deploymentId).toBe("dep-1");
+		expect(getDeploymentArgs.deployment_id).toBeUndefined();
+		expect(getDeploymentArgs.show_plans).toBeUndefined();
 	});
 
 	test("repo lacks / live has: no MR, message reports live drift + a re-apply is needed", async () => {
