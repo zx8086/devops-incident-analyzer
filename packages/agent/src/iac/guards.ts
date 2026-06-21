@@ -97,6 +97,32 @@ export function validateIlmPhaseOrdering(
 	return { ok: true };
 }
 
+// SIO-994: a SHORT danger denylist for the CLUSTER-level persistent/transient settings (flat dotted
+// keys, the PUT _cluster/settings surface). Mirrors dangerousSettingReason's philosophy -- validity
+// is CI's terraform plan; this only refuses valid-but-DANGEROUS keys a plan would happily accept that
+// can take the cluster read-only or halt allocation cluster-wide. Returns a reason or null. (Pure.)
+function dangerousClusterSettingReason(patch: Record<string, unknown>): string | null {
+	for (const [key, value] of Object.entries(patch)) {
+		const k = key.toLowerCase();
+		// Halting shard allocation cluster-wide takes the whole cluster offline for relocation.
+		if (k === "cluster.routing.allocation.enable" && String(value).toLowerCase() === "none") {
+			return `Refusing to set ${key} to 'none': that halts shard allocation cluster-wide. Make this change deliberately outside the agent.`;
+		}
+		// Cluster-wide read-only blocks (the classic "disk full" lockout) must be deliberate.
+		if (
+			(k === "cluster.blocks.read_only" || k === "cluster.blocks.read_only_allow_delete") &&
+			(value === true || String(value).toLowerCase() === "true")
+		) {
+			return `Refusing to set ${key} to true: that makes the whole cluster read-only. Make this change deliberately outside the agent.`;
+		}
+		// Flood-stage watermark controls the read-only-allow-delete lockout; changing it is risky.
+		if (k === "cluster.routing.allocation.disk.watermark.flood_stage") {
+			return `Refusing to change ${key} (the flood-stage disk watermark): it gates the cluster read-only lockout. Make this change deliberately outside the agent.`;
+		}
+	}
+	return null;
+}
+
 // Deterministic, safety-critical pre-draft guards from agents/elastic-iac/RULES.md.
 // LLM-judgment rules (e.g. "name the prod cluster explicitly") live in the prompt;
 // these are the mechanical constraints we never want to depend on the model for.
@@ -128,6 +154,13 @@ export function evaluateGuards(req: IacRequest, state: IacClusterState | null): 
 	for (const e of req.clusterDefaults ?? []) {
 		const reason = dangerousSettingReason(e.settingsPatch);
 		if (reason) return { blocked: true, reason: `Template '${e.templateName}': ${reason}` };
+	}
+
+	// SIO-994: danger denylist for cluster-level persistent/transient settings.
+	for (const patch of [req.persistentPatch, req.transientPatch]) {
+		if (!patch) continue;
+		const reason = dangerousClusterSettingReason(patch);
+		if (reason) return { blocked: true, reason };
 	}
 
 	return { blocked: false };

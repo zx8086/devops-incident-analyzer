@@ -106,6 +106,7 @@ const IntentSchema = z.object({
 			"alerting-edit",
 			"dataview-edit",
 			"cluster-default-edit",
+			"cluster-settings-edit",
 			"space-edit",
 			"security-edit",
 			"topology-edit",
@@ -169,6 +170,9 @@ const IntentSchema = z.object({
 			}),
 		)
 		.nullish(),
+	// SIO-994: cluster-settings-edit flat dotted-key patches for the persistent/transient blocks.
+	persistentPatch: z.record(z.string(), z.unknown()).nullish(),
+	transientPatch: z.record(z.string(), z.unknown()).nullish(),
 	// SIO-933: ilm-rollout optional component-template bind (cluster-defaults file basename, no .json).
 	bindTemplate: z.string().nullish(),
 	spaceName: z.string().nullish(),
@@ -297,6 +301,9 @@ export function parseIntentJson(raw: string): IacRequest {
 					// SIO-979: a single clusterDefaults entry folds its patch into the singular field.
 					settingsPatch: soleCd?.settingsPatch ?? nn(p.settingsPatch),
 					clusterDefaults: multiCd ? cdEntries : undefined,
+					// SIO-994: cluster-settings-edit persistent/transient patches.
+					persistentPatch: nn(p.persistentPatch),
+					transientPatch: nn(p.transientPatch),
 					// SIO-933: bindTemplate is a cluster-defaults file basename; users write it with .json
 					// ("bind logs-generic.otel.json"), so strip a trailing .json for ilm-rollout (mirrors
 					// policyName/sourcePolicy). The @custom suffix lives in the file's `name`, NOT the
@@ -368,6 +375,7 @@ export function capabilityMessage(): string {
 		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
 		'- **Cluster-defaults edits** -- edit the index settings on a template, e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld" or "bump refresh_interval to 30s on logs, metrics and traces-apm on eu-b2b" (any index setting; one MR can span several templates)\n' +
+		'- **Cluster-settings edits** -- edit the cluster-level persistent/transient settings (the PUT _cluster/settings surface), e.g. "set xpack.monitoring.collection.interval to 60s on eu-b2b" or "raise cluster.max_shards_per_node to 2000" (any cluster setting in environments/<dep>/cluster-settings/settings.json; distinct from per-template cluster-defaults)\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
@@ -826,6 +834,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"clusterDefaults to an array of { templateName, settingsPatch } -- one MR edits all of them. If the user instead " +
 		"wants to bind a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT " +
 		"cluster-default-edit. " +
+		"For a CLUSTER-SETTINGS change ('set xpack.monitoring.collection.interval to 60s on eu-b2b', 'raise " +
+		"cluster.max_shards_per_node to 2000', 'set the high disk watermark to 90% on ap-cld', 'add/change a setting in the " +
+		"persistent block of cluster-settings/settings.json') -- editing the CLUSTER-LEVEL persistent/transient settings (the " +
+		"PUT _cluster/settings surface: keys like xpack.*, cluster.*, indices.breaker.*, search.*, cluster.routing.allocation.* " +
+		"disk watermarks), which live in environments/<dep>/cluster-settings/settings.json -- set workflow to " +
+		"'cluster-settings-edit', cluster to the named deployment, and persistentPatch (and/or transientPatch) to a FLAT JSON " +
+		'object of dotted-key -> value (e.g. { "xpack.monitoring.collection.interval": "60s" }, { "cluster.max_shards_per_node": ' +
+		'"2000" }). The keys are FLAT dotted strings, NOT nested objects. This is DISTINCT from cluster-default-edit: ' +
+		"cluster-default-edit changes the index settings of ONE index TEMPLATE (settings.index on a cluster-defaults/<template>.json " +
+		"file); cluster-settings-edit changes the WHOLE CLUSTER's persistent/transient settings (one settings.json per deployment). " +
+		"If the user names a `persistent`/`transient` block or a cluster-level setting (xpack/cluster/indices.breaker/search/disk " +
+		"watermark), it is cluster-settings-edit, NOT cluster-default-edit. " +
 		"For a SPACE change ('rename the developer-experience space description on eu-cld', 'change the apps space color') " +
 		"-- editing an EXISTING space's display name/description/color, NOT creating one -- set workflow to 'space-edit', " +
 		"cluster to the named deployment, spaceName to the space file basename VERBATIM (e.g. 'developer-experience', " +
@@ -1598,6 +1618,7 @@ const WORKFLOW_STACK: Record<string, string> = {
 	"alerting-edit": "alerting",
 	"dataview-edit": "dataviews",
 	"cluster-default-edit": "cluster-defaults",
+	"cluster-settings-edit": "cluster-settings",
 	"space-edit": "spaces",
 	"security-edit": "security",
 	"dashboard-edit": "dashboards",
@@ -1846,6 +1867,15 @@ function clusterDefaultTemplate(): string {
 	);
 }
 
+// SIO-994: agent-side path for the per-deployment cluster-SETTINGS JSON (the cluster persistent/
+// transient settings, the PUT _cluster/settings surface). One fixed `settings.json` per deployment
+// under environments/<cluster>/cluster-settings/ -- distinct from cluster-defaults' per-template
+// files. ${cluster} is a literal placeholder. Lazy process.env read (no module-scope Bun.env).
+function clusterSettingsTemplate(): string {
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-954 - ${cluster} is a literal path placeholder substituted by deploymentJsonPath's .replace
+	return process.env.ELASTIC_IAC_CLUSTER_SETTINGS_TEMPLATE ?? "environments/${cluster}/cluster-settings/settings.json";
+}
+
 // SIO-917: read-modify-write a data-view JSON. Adds/replaces a runtime field in
 // runtime_field_map (in the repo's CONFIG form: a flat `script_source`, NOT the state form
 // `script: { source }` -- copying state-form is the §6 footgun), and/or sets title / name.
@@ -1966,6 +1996,50 @@ export function mergeClusterDefaultSettings(
 	merge(index, settingsPatch, previous);
 	settings.index = index;
 	obj.settings = settings;
+	const content = `${JSON.stringify(obj, null, 2)}\n`;
+	return { content, previous, changed: content !== original };
+}
+
+// SIO-994: read-modify-write the cluster-SETTINGS JSON (top-level `persistent`/`transient` blocks,
+// the PUT _cluster/settings surface). Unlike cluster-defaults, the keys are FLAT dotted strings at
+// the top of each block (e.g. "xpack.monitoring.collection.interval": "60s"), so this is a flat
+// key-set merge, not a deep nested merge. Sets each patch key on its block, capturing the previous
+// value (undefined if absent) for the diff; preserves every other key + 2-space indent + trailing
+// newline. `changed` is false on a no-op. Throws on bad JSON. (Pure; unit-tested.)
+export function mergeClusterSettings(
+	json: string,
+	patches: { persistentPatch?: Record<string, unknown>; transientPatch?: Record<string, unknown> },
+): {
+	content: string;
+	previous: { persistent: Record<string, unknown>; transient: Record<string, unknown> };
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("cluster-settings JSON is not an object");
+	}
+	const original = `${JSON.stringify(parsed, null, 2)}\n`;
+	const obj = parsed as Record<string, unknown>;
+	const persistent = (obj.persistent ?? {}) as Record<string, unknown>;
+	const transient = (obj.transient ?? {}) as Record<string, unknown>;
+
+	// Flat key-set: cluster settings are stored as dotted-key leaves, never nested objects.
+	const applyFlat = (
+		block: Record<string, unknown>,
+		patch: Record<string, unknown> | undefined,
+		prev: Record<string, unknown>,
+	): void => {
+		if (!patch) return;
+		for (const [key, value] of Object.entries(patch)) {
+			prev[key] = block[key]; // undefined when the block lacked this key (a pure add)
+			block[key] = value;
+		}
+	};
+	const previous = { persistent: {} as Record<string, unknown>, transient: {} as Record<string, unknown> };
+	applyFlat(persistent, patches.persistentPatch, previous.persistent);
+	applyFlat(transient, patches.transientPatch, previous.transient);
+	obj.persistent = persistent;
+	obj.transient = transient;
 	const content = `${JSON.stringify(obj, null, 2)}\n`;
 	return { content, previous, changed: content !== original };
 }
@@ -3689,6 +3763,101 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 	};
 }
 
+// SIO-994: propose a cluster-SETTINGS change -- flat-merge persistent/transient patches into the
+// EXISTING environments/<cluster>/cluster-settings/settings.json (the PUT _cluster/settings surface).
+// Single file, read-modify-write, edits only (404 blocks; creating the file is not supported). Mirrors
+// the single-file proposeClusterDefaultChange flow: read -> guard -> merge -> no-op -> full-file diff
+// -> single commit. Safety (a danger denylist for persistent keys) is enforced upstream in guardNode.
+async function proposeClusterSettingsChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const persistentPatch = req.persistentPatch;
+	const transientPatch = req.transientPatch;
+	const hasPatch = (p?: Record<string, unknown>) => !!p && Object.keys(p).length > 0;
+	if (!hasPatch(persistentPatch) && !hasPatch(transientPatch)) {
+		return {
+			blockedReason: "Cluster-settings change needs at least one persistent or transient setting to change.",
+			messages: [new AIMessage("Cannot propose the change: name a cluster persistent/transient setting to set.")],
+		};
+	}
+
+	const filePath = deploymentJsonPath(clusterSettingsTemplate(), cluster);
+	const branch = branchName(req);
+
+	const raw = await callTool("gitlab_get_file_content", { filePath });
+	if (raw.startsWith("[gitlab token not configured")) {
+		return {
+			blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+			messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+		};
+	}
+	if (!isGitlabSuccess(raw) && !isGitlabNotFound(raw)) {
+		return {
+			blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+		};
+	}
+	if (raw.startsWith("[404")) {
+		return {
+			blockedReason: `Cluster-settings file not found on '${cluster}' (${filePath}).`,
+			messages: [
+				new AIMessage(
+					`I couldn't find the cluster-settings file on '${cluster}' (${filePath}). Editing the cluster persistent/transient settings requires that file to already exist (creating it is not supported here).`,
+				),
+			],
+		};
+	}
+
+	let updated: ReturnType<typeof mergeClusterSettings>;
+	try {
+		updated = mergeClusterSettings(extractFileContent(raw), {
+			...(hasPatch(persistentPatch) && { persistentPatch }),
+			...(hasPatch(transientPatch) && { transientPatch }),
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return {
+			blockedReason: `Could not edit ${filePath}: ${reason}.`,
+			messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+		};
+	}
+
+	if (!updated.changed) {
+		return {
+			blockedReason: `Cluster settings on '${cluster}' already have the requested values; no change needed.`,
+			messages: [
+				new AIMessage(
+					`No change needed: the cluster settings on '${cluster}' already have the requested values. I did not open a merge request.`,
+				),
+			],
+		};
+	}
+
+	const keys = [...Object.keys(persistentPatch ?? {}), ...Object.keys(transientPatch ?? {})].join(", ");
+	const commit = await callTool("gitlab_commit_file", {
+		branch,
+		file_path: filePath,
+		content: updated.content,
+		commit_message: `${cluster}: cluster-settings (${keys})`,
+		action: "update",
+	});
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the change via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+
+	// Full-file diff so nothing (the other untouched persistent keys) is hidden at review.
+	const diffBlock = `${filePath} (cluster-settings)\n+ ${updated.content.replace(/\n/g, "\n+ ").trimEnd()}`;
+	return {
+		branch,
+		proposedFilePath: filePath,
+		proposedFiles: [filePath],
+		proposedDiff: diffBlock,
+		precheckPassed: true,
+	};
+}
+
 // SIO-918: propose a space change -- set name/description/color on an EXISTING per-space file.
 // Mirrors proposeSloChange: single file, read-modify-write, edits only (no space create; the
 // per-file-vs-aggregate split + disabled_features defaults make creation a separate problem).
@@ -4492,6 +4661,8 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 			? proposeClusterDefaultChanges(state, req)
 			: proposeClusterDefaultChange(state, req);
 	}
+	// SIO-994: cluster-level persistent/transient settings (distinct file from cluster-defaults).
+	if (req.workflow === "cluster-settings-edit") return proposeClusterSettingsChange(state, req);
 	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
 	if (req.workflow === "security-edit") return proposeSecurityRoleChange(state, req);
 	if (req.workflow === "topology-edit") return proposeTopologyChange(state, req);

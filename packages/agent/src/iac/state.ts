@@ -12,6 +12,7 @@ export interface IacRequest {
 		| "alerting-edit"
 		| "dataview-edit"
 		| "cluster-default-edit"
+		| "cluster-settings-edit"
 		| "space-edit"
 		| "security-edit"
 		| "topology-edit"
@@ -76,6 +77,13 @@ export interface IacRequest {
 	// array and the proposer commits all files in one atomic commit (mirrors ilmPolicies[]).
 	settingsPatch?: Record<string, unknown>;
 	clusterDefaults?: Array<{ templateName: string; settingsPatch: Record<string, unknown> }>;
+	// SIO-994: cluster-settings-edit -- the cluster-level persistent/transient settings file
+	// (environments/<dep>/cluster-settings/settings.json, the PUT _cluster/settings surface, distinct
+	// from cluster-defaults' per-index-template settings). Each patch is a FLAT dotted-key map merged
+	// into its top-level block (e.g. { "xpack.monitoring.collection.interval": "60s" }); validity is
+	// left to CI's terraform plan, safety to a short danger denylist in guards.ts.
+	persistentPatch?: Record<string, unknown>;
+	transientPatch?: Record<string, unknown>;
 	// SIO-933: ilm-rollout optional bind -- point a cluster-defaults component-template's
 	// settings.index.lifecycle.name at the created/edited policy, in the SAME MR. Basename, no .json.
 	bindTemplate?: string;
