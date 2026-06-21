@@ -154,9 +154,15 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 		stillOpen: 0,
 		errors: 0,
 	};
-	if (selectedBackend() !== "agent-memory") return summary;
+	// SIO-1005: a disabled backend is a legitimate no-op, but log it so a "why did nothing happen?"
+	// question has an answer in the logs instead of silence.
+	if (selectedBackend() !== "agent-memory") {
+		log.info({ source: opts.source }, "reconcile sweep skipped: agent-memory backend not selected");
+		return summary;
+	}
 
 	const targets = await enumerateUnreconciledChanges(opts.limit ?? 50);
+	log.info({ source: opts.source, targets: targets.length, limit: opts.limit ?? 50 }, "reconcile sweep start");
 	for (const target of targets) {
 		try {
 			const result = await reconcileOne(target);
@@ -174,6 +180,9 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 			);
 		}
 	}
+	// SIO-1005: one summary line per sweep, ALWAYS -- so cron, bootstrap, and a direct live-probe call
+	// all report their outcome (including checked:0) in one place, and the callers don't each repeat it.
+	log.info(summary, "reconcile sweep complete");
 	return summary;
 }
 
