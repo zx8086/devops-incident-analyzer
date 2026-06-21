@@ -3,9 +3,14 @@
 // real terminal state (applied / apply-failed / closed). In-process (not OS-level) is deliberate:
 // it shares the already-connected MCP bridge and the bound agent-memory client in THIS web process,
 // so reconcileAll's gitlab_* tool calls and durable-memory writes just work -- no separate daemon,
-// no re-connecting tools. Env-gated OFF by default. Bun.cron's no-overlap guarantee means a slow
-// sweep never stacks; unref() so it never blocks shutdown.
-import { reconcileAll } from "@devops-agent/agent";
+// no re-connecting tools. Bun.cron's no-overlap guarantee means a slow sweep never stacks; unref()
+// so it never blocks shutdown.
+//
+// Enabled implicitly by the agent-memory backend: reconcile has nothing to read or write on any
+// other backend (reconcileAll early-returns), so the cron is driven purely by
+// LIVE_MEMORY_BACKEND=agent-memory -- no separate on/off flag. Only the cadence is tunable
+// (IAC_RECONCILE_CRON_SCHEDULE).
+import { reconcileAll, selectedBackend } from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 
 const log = getLogger("agent:iac:reconcile-cron");
@@ -17,8 +22,12 @@ let started = false;
 
 export function startIacReconcileCron(): void {
 	if (started) return; // module load can run more than once under HMR; register the job once
-	const enabled = process.env.IAC_RECONCILE_CRON_ENABLED;
-	if (enabled !== "true" && enabled !== "1") return;
+	// Driven by the agent-memory backend: on any other backend reconcile is a no-op, so don't even
+	// register the timer. Set LIVE_MEMORY_BACKEND=agent-memory to enable.
+	if (selectedBackend() !== "agent-memory") {
+		log.info({ backend: selectedBackend() }, "iac-reconcile cron not started: agent-memory backend not selected");
+		return;
+	}
 	const schedule = process.env.IAC_RECONCILE_CRON_SCHEDULE || DEFAULT_SCHEDULE;
 
 	// A thrown sweep must not crash the web process. Bun.cron error semantics match setTimeout, so a

@@ -20,14 +20,14 @@ const AGENT = "elastic-iac";
 const DEFAULT_PROPOSAL_TTL_SECONDS = 7_776_000; // 90 days
 
 // SIO-1005: the TTL (seconds) the PROPOSAL iac-change fact should carry, or undefined for "durable,
-// no decay". Gated on the reconciliation cron being ENABLED: if the cron is off, nothing will ever
-// write the durable terminal fact, so we must NOT let the proposal expire (it would leave the MR
-// with no stored fact at all). When the cron is on, the proposal decays after the TTL because
-// reconciliation will have written the durable applied/failed/closed fact by then. Read defensively
-// (mirrors dailyLogTtlSeconds): an unset/invalid override falls back to the 90-day default.
+// no decay". Reconciliation is driven entirely by the agent-memory backend (no separate flag): when
+// it is active the reconciler runs (cron + bootstrap) and WILL write the durable applied/failed/
+// closed fact, so the proposal can safely decay after the TTL. On any other backend reconcile is a
+// no-op, so we must NOT let the proposal expire (it would leave the MR with no stored fact at all)
+// -> undefined. Read defensively (mirrors dailyLogTtlSeconds): an unset/invalid override falls back
+// to the 90-day default.
 export function iacProposalFactTtlSeconds(): number | undefined {
-	const cronOn = process.env.IAC_RECONCILE_CRON_ENABLED === "true" || process.env.IAC_RECONCILE_CRON_ENABLED === "1";
-	if (!cronOn) return undefined; // no reconciler -> keep proposals durable (today's behavior)
+	if (selectedBackend() !== "agent-memory") return undefined; // no reconciler -> keep proposals durable
 	const raw = process.env.IAC_PROPOSAL_FACT_TTL_SECONDS;
 	if (!raw) return DEFAULT_PROPOSAL_TTL_SECONDS;
 	const n = Number(raw);
