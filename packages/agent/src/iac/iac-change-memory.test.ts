@@ -256,16 +256,17 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		expect(text).toContain("Merge in GitLab to trigger the apply");
 	});
 
-	// SIO-993: with the MR MERGED, the message reports the REAL apply-pipeline status read from main,
-	// not "go check GitLab". Four variants: applied / running / failed / not-started.
-	test("merged + apply SUCCEEDED: says applied, the change is LIVE", async () => {
+	// SIO-993/SIO-995: with the MR MERGED, the message reports the REAL apply-JOB status (parent ->
+	// child -> apply:* job), not the parent pipeline's transient status. Only a confirmed apply-job
+	// SUCCESS reads as LIVE; running/failed/not-started must NEVER read as live.
+	test("merged + apply-job SUCCEEDED: says applied, the change is LIVE", async () => {
 		const { text } = await render(
 			{
 				pipelineStatus: "success",
 				mrState: "merged",
 				applyPipelineStatus: "success",
 				applyPipelineId: 555,
-				applyPipelineUrl: "https://gitlab/p/555",
+				applyPipelineUrl: "https://gitlab/jobs/555",
 				approvalState: { approved: true, required: 0 },
 			},
 			{ backend: "file" },
@@ -273,39 +274,51 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 		expect(text).toContain("MR: MERGED");
 		expect(text).toContain("Apply: #555 SUCCEEDED on main — the change is LIVE.");
 		expect(text).toContain("Merged and APPLIED");
+		expect(text).toContain("the apply job on main succeeded");
 		expect(text).toContain("the change is now live");
-		expect(text).not.toContain("Check the apply pipeline on main in GitLab"); // the old cop-out is gone
 		expect(text).not.toContain("ready to merge");
 		expect(text).toContain("I never merge or apply.");
 	});
 
-	test("merged + apply RUNNING: says applying, not live yet", async () => {
+	// SIO-995 REGRESSION GUARD (the MR 196 false-positive): the apply JOB was still RUNNING when
+	// checked (the parent pipeline reported success transiently). The message MUST say applying/NOT
+	// live -- never "APPLIED" or "LIVE".
+	test("merged + apply-job RUNNING: says applying, NOT live (never reports applied)", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", mrState: "merged", applyPipelineStatus: "running", applyPipelineId: 556 },
 			{ backend: "file" },
 		);
-		expect(text).toContain("Apply: #556 running on main — not live until it succeeds.");
-		expect(text).toContain("the terraform apply is now RUNNING on main");
+		expect(text).toContain("Apply: #556 running on main — NOT live until it succeeds.");
+		expect(text).toContain("the terraform apply is RUNNING on main");
+		expect(text).toContain("NOT live until the apply job succeeds");
 		expect(text).toContain('Ask "check my MR" again');
+		// the false-positive must be impossible
+		expect(text).not.toContain("the change is LIVE");
+		expect(text).not.toContain("Merged and APPLIED");
+		expect(text).not.toContain("change is now live");
 	});
 
-	test("merged + apply FAILED: says NOT live", async () => {
+	test("merged + apply-job FAILED: says NOT live", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", mrState: "merged", applyPipelineStatus: "failed", applyPipelineId: 557 },
 			{ backend: "file" },
 		);
 		expect(text).toContain("Apply: #557 FAILED on main — the change is NOT live.");
-		expect(text).toContain("apply pipeline on main FAILED");
+		expect(text).toContain("the apply on main FAILED");
+		expect(text).not.toContain("the change is LIVE");
+		expect(text).not.toContain("Merged and APPLIED");
 	});
 
-	test("merged + apply not started (no status read): says pending, re-check shortly", async () => {
+	test("merged + apply job not appeared yet (status ''): says NOT live, re-check (never applied)", async () => {
 		const { text } = await render(
 			{ pipelineStatus: "success", mrState: "merged", approvalState: { approved: true, required: 0 } },
 			{ backend: "file" },
 		);
 		expect(text).toContain("MR: MERGED");
 		expect(text).toContain("Apply: not started yet on main");
-		expect(text).toContain("hasn't started yet");
+		expect(text).toContain("NOT live until the apply job succeeds");
+		expect(text).not.toContain("the change is LIVE");
+		expect(text).not.toContain("Merged and APPLIED");
 		expect(text).not.toContain("ready to merge");
 	});
 

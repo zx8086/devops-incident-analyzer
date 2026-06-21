@@ -5,7 +5,7 @@ import {
 	formatPlanSummary,
 	intentFromText,
 	isTerminalPipelineStatus,
-	parseApplyPipeline,
+	parseApplyResult,
 	parseApprovalState,
 	parseMrState,
 	parseNewestPipeline,
@@ -100,25 +100,26 @@ describe("parseMrState (SIO-992)", () => {
 	});
 });
 
-describe("parseApplyPipeline (SIO-993)", () => {
-	test("returns the newest pipeline (first, since order_by=id&sort=desc) with status + url", () => {
+describe("parseApplyResult (SIO-995)", () => {
+	test("parses the apply JOB status + pipelineId + webUrl from the apply-result JSON", () => {
 		const body =
-			'[200] [{"id":99,"status":"running","web_url":"https://gitlab/p/99"},{"id":50,"status":"success","web_url":"https://gitlab/p/50"}]';
-		expect(parseApplyPipeline(body)).toEqual({
-			id: 99,
-			status: "running",
-			webUrl: "https://gitlab/p/99",
+			'[200] {"applyStatus":"failed","jobId":2,"pipelineId":50,"webUrl":"https://gitlab/jobs/2","parentStatus":"success"}';
+		expect(parseApplyResult(body)).toEqual({
+			applyStatus: "failed",
+			pipelineId: 50,
+			webUrl: "https://gitlab/jobs/2",
 		});
 	});
-	test("null on an empty list (apply not started yet)", () => {
-		expect(parseApplyPipeline("[200] []")).toBeNull();
+	test("applyStatus '' (apply job not started yet) is preserved -- caller must NOT treat as success", () => {
+		const r = parseApplyResult('[200] {"applyStatus":"","parentStatus":"success","reason":"apply pipeline starting"}');
+		expect(r?.applyStatus).toBe("");
+		expect(r?.reason).toBe("apply pipeline starting");
 	});
-	test("null on a non-2xx / unparseable body", () => {
-		expect(parseApplyPipeline("[404] not found")).toBeNull();
-		expect(parseApplyPipeline("nope")).toBeNull();
+	test("a running apply job stays 'running' (not collapsed to success)", () => {
+		expect(parseApplyResult('[200] {"applyStatus":"running","pipelineId":9}')?.applyStatus).toBe("running");
 	});
-	test("tolerates a missing web_url", () => {
-		expect(parseApplyPipeline('[200] [{"id":7,"status":"success"}]')).toEqual({ id: 7, status: "success" });
+	test("null on an unparseable body", () => {
+		expect(parseApplyResult("nope")).toBeNull();
 	});
 });
 

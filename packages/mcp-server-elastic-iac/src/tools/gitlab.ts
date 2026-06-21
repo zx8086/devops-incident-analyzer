@@ -109,6 +109,25 @@ export function findJobByName(jobsJson: unknown, name: string): number | null {
 	return null;
 }
 
+// SIO-995: the post-merge terraform APPLY job (name `apply:<deployment>:<stack>`) from a child
+// pipeline's GET /pipelines/:id/jobs, returning ITS status + web_url. The apply runs as the child of
+// the merge-commit pipeline (parent -> bridges -> child -> jobs), and the apply JOB's status -- NOT
+// the parent pipeline's status -- is the real "is the change live" signal: a parent reports success
+// transiently before the child apply job runs/fails. null when no apply job is present yet. (Pure.)
+export function applyJob(jobsJson: unknown): { id: number; status: string; webUrl?: string } | null {
+	if (!Array.isArray(jobsJson)) return null;
+	for (const j of jobsJson) {
+		const name = (j as { name?: unknown }).name;
+		const id = (j as { id?: unknown }).id;
+		const status = (j as { status?: unknown }).status;
+		const webUrl = (j as { web_url?: unknown }).web_url;
+		if (typeof name === "string" && name.startsWith("apply:") && typeof id === "number" && typeof status === "string") {
+			return { id, status, ...(typeof webUrl === "string" ? { webUrl } : {}) };
+		}
+	}
+	return null;
+}
+
 // SIO-904: detect a Terraform state-lock anywhere in the FULL job trace. Terraform prints the
 // lock-info block + retries after the error, so the signature can sit far from the trace tail --
 // grep the whole body here (not the returned tail) so the agent never misclassifies a recoverable
@@ -369,6 +388,84 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			const branch = ref ?? "main";
 			const qs = `sha=${encodeURIComponent(sha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
 			return text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines?${qs}`));
+		},
+	);
+
+	// SIO-995: the REAL post-merge apply outcome, walking the merge-commit's parent pipeline ->
+	// bridges -> child -> the `apply:<dep>:<stack>` JOB. The parent pipeline reports success
+	// transiently BEFORE the child apply job runs/fails, so reading the parent status (as the prior
+	// gitlab_list_pipelines_for_sha path did) gives FALSE "applied/live". The apply JOB's status is the
+	// truth: success = change live; running/pending = applying (not live); failed = NOT live. Returns a
+	// JSON {applyStatus, jobId?, pipelineId, webUrl?, parentStatus} so the agent never collapses a
+	// still-running or failed apply into "live". applyStatus is "" when the apply job hasn't appeared
+	// yet (parent only / no child) -- the caller must treat that as "starting", never success. Read-only.
+	server.tool(
+		"gitlab_get_merge_commit_apply_result",
+		"Resolve the REAL post-merge terraform APPLY outcome for a merge-commit sha: walk parent pipeline " +
+			"-> child -> the apply:* job and return that JOB's status (success=live, running=applying, failed=not " +
+			"live). Use the parent pipeline status here is NOT reliable. Read-only. Returns JSON.",
+		{
+			sha: z.string().describe("The MR's merge_commit_sha (after merge)."),
+			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+		},
+		async ({ sha, ref }) => {
+			const branch = ref ?? "main";
+			try {
+				const qs = `sha=${encodeURIComponent(sha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
+				const pipelines = (await glJson(`/projects/${project}/pipelines?${qs}`)) as Array<{
+					id?: unknown;
+					status?: unknown;
+					web_url?: unknown;
+				}>;
+				const parent = Array.isArray(pipelines) ? pipelines[0] : undefined;
+				if (!parent || typeof parent.id !== "number") {
+					return text(JSON.stringify({ applyStatus: "", reason: "no merge-commit pipeline yet" }));
+				}
+				const parentId = parent.id;
+				const parentStatus = typeof parent.status === "string" ? parent.status : "";
+				const parentUrl = typeof parent.web_url === "string" ? parent.web_url : undefined;
+				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${parentId}/bridges`));
+				if (childId === null) {
+					// Parent exists but no child yet -- the apply job hasn't been triggered. NOT success.
+					return text(
+						JSON.stringify({
+							applyStatus: "",
+							parentStatus,
+							pipelineId: parentId,
+							webUrl: parentUrl,
+							reason: "apply pipeline starting",
+						}),
+					);
+				}
+				const job = applyJob(await glJson(`/projects/${project}/pipelines/${childId}/jobs`));
+				if (!job) {
+					return text(
+						JSON.stringify({
+							applyStatus: "",
+							parentStatus,
+							pipelineId: childId,
+							webUrl: parentUrl,
+							reason: "apply job not started",
+						}),
+					);
+				}
+				return text(
+					JSON.stringify({
+						applyStatus: job.status,
+						jobId: job.id,
+						pipelineId: childId,
+						webUrl: job.webUrl ?? parentUrl,
+						parentStatus,
+					}),
+				);
+			} catch (err) {
+				return text(
+					JSON.stringify({
+						applyStatus: "",
+						reason: `apply result not available: ${err instanceof Error ? err.message : String(err)}`,
+					}),
+				);
+			}
 		},
 	);
 

@@ -5309,22 +5309,30 @@ export function parseMrState(
 	}
 }
 
-// SIO-993: the newest pipeline for a merge commit's sha, from gitlab_list_pipelines_for_sha's
-// "[<httpStatus>] [{id,status,web_url}...]" body. This is the post-merge terraform APPLY pipeline (it
-// runs on main, not on the MR). null when the body is empty/unparseable (apply not started yet).
-// (Pure.) Mirrors parseNewestPipeline's tag-skipping but on a sha-listing response.
-export function parseApplyPipeline(toolResult: string): { id: number; status: string; webUrl?: string } | null {
-	// Skip the "[<httpStatus>]" tag, then parse the JSON array that follows.
-	const tagEnd = toolResult.indexOf("]");
-	const arrStart = toolResult.indexOf("[", tagEnd + 1);
-	if (arrStart < 0) return null;
+// SIO-995: the REAL post-merge apply outcome, from gitlab_get_merge_commit_apply_result's JSON
+// {applyStatus, jobId?, pipelineId?, webUrl?, parentStatus?, reason?}. applyStatus is the APPLY JOB's
+// status (success=change live, running/pending=applying-not-live, failed=NOT live), NOT the parent
+// pipeline's (which reports success transiently before the child apply job runs/fails -- the SIO-993
+// false-positive). applyStatus is "" when the apply job hasn't appeared yet (treat as "starting",
+// never success). null on an unparseable body. (Pure.)
+export function parseApplyResult(
+	toolResult: string,
+): { applyStatus: string; pipelineId?: number; webUrl?: string; reason?: string } | null {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return null;
 	try {
-		const arr = JSON.parse(toolResult.slice(arrStart)) as Array<{ id?: unknown; status?: unknown; web_url?: unknown }>;
-		if (!Array.isArray(arr) || arr.length === 0) return null;
-		// The tool requests order_by=id&sort=desc, so the first entry is the newest pipeline.
-		const p = arr[0];
-		if (typeof p?.id !== "number" || typeof p?.status !== "string") return null;
-		return { id: p.id, status: p.status, ...(typeof p.web_url === "string" ? { webUrl: p.web_url } : {}) };
+		const r = JSON.parse(toolResult.slice(jsonStart)) as {
+			applyStatus?: unknown;
+			pipelineId?: unknown;
+			webUrl?: unknown;
+			reason?: unknown;
+		};
+		return {
+			applyStatus: typeof r.applyStatus === "string" ? r.applyStatus : "",
+			...(typeof r.pipelineId === "number" ? { pipelineId: r.pipelineId } : {}),
+			...(typeof r.webUrl === "string" ? { webUrl: r.webUrl } : {}),
+			...(typeof r.reason === "string" ? { reason: r.reason } : {}),
+		};
 	} catch {
 		return null;
 	}
@@ -5639,16 +5647,25 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// pipeline's real status (running/success/failed) so the message reports applied/applying/failed
 	// instead of telling the user to go check GitLab. Best-effort, single read (no in-turn poll-to-
 	// terminal): "" when not merged, no merge_commit_sha yet, or the apply pipeline hasn't started.
+	// SIO-995: read the APPLY JOB's status (parent -> child -> apply:* job), NOT the parent pipeline's
+	// status. The parent reports success transiently before the child apply job runs/fails, so reading
+	// it gave a FALSE "applied/live". applyPipelineStatus is "" when the apply job hasn't appeared yet
+	// (the caller treats "" as "starting", never success).
 	let applyPipelineStatus = "";
 	let applyPipelineId: number | null = null;
 	let applyPipelineUrl = "";
 	if (mrState === "merged" && mrInfo?.mergeCommitSha) {
-		const apply = parseApplyPipeline(await callTool("gitlab_list_pipelines_for_sha", { sha: mrInfo.mergeCommitSha }));
+		const apply = parseApplyResult(
+			await callTool("gitlab_get_merge_commit_apply_result", { sha: mrInfo.mergeCommitSha }),
+		);
 		if (apply) {
-			applyPipelineStatus = apply.status;
-			applyPipelineId = apply.id;
+			applyPipelineStatus = apply.applyStatus;
+			applyPipelineId = apply.pipelineId ?? null;
 			applyPipelineUrl = apply.webUrl ?? "";
-			log.info({ iid, applyPipelineId, applyPipelineStatus }, "iac apply pipeline status (post-merge)");
+			log.info(
+				{ iid, applyPipelineId, applyPipelineStatus, reason: apply.reason },
+				"iac apply job status (post-merge)",
+			);
 		}
 	}
 
@@ -7595,21 +7612,24 @@ export function iacClosingLine(state: IacStateType): string {
 		// "ready to merge", and we never claim the change is applied (the apply runs on main, which
 		// watchPipeline can't see). SIO-991: keep "staged, not applied" for the open case.
 		if (state.mrState === "merged") {
-			// SIO-993: merged -> the apply runs on main for the merge commit. We READ that pipeline, so
-			// report its real status instead of telling the user to go look. applyPipelineStatus is "" only
-			// when the apply hasn't started yet (or we couldn't read it).
+			// SIO-993/SIO-995: merged -> the terraform apply runs on main as the apply:* JOB (parent ->
+			// child -> job). We read that JOB's status (NOT the parent pipeline's, which reports success
+			// transiently before the apply job runs/fails -- the SIO-995 false-positive). Only a confirmed
+			// apply-job SUCCESS means the change is live; anything else (running / failed / not-started)
+			// must NOT read as live.
 			const applyLink = state.applyPipelineUrl ? ` (${state.applyPipelineUrl})` : "";
 			if (state.applyPipelineStatus === "success") {
-				return `Merged and APPLIED: the apply pipeline on main succeeded${applyLink}, so the change is now live. ${merge}`;
+				return `Merged and APPLIED: the apply job on main succeeded${applyLink}, so the change is now live. ${merge}`;
 			}
-			if (state.applyPipelineStatus === "failed") {
-				return `Merged, but the apply pipeline on main FAILED${applyLink} — the change is NOT live. Review the apply job log on main in GitLab. ${merge}`;
+			if (state.applyPipelineStatus === "failed" || state.applyPipelineStatus === "canceled") {
+				return `Merged, but the apply on main ${state.applyPipelineStatus.toUpperCase()}${applyLink} — the change is NOT live. Review the apply job log on main in GitLab. ${merge}`;
 			}
 			if (state.applyPipelineStatus && !isTerminalPipelineStatus(state.applyPipelineStatus)) {
-				return `Merged — the terraform apply is now RUNNING on main${applyLink} (status ${state.applyPipelineStatus}); the change isn't live until it succeeds. Ask "check my MR" again to see the apply finish. ${merge}`;
+				return `Merged — the terraform apply is RUNNING on main${applyLink} (status ${state.applyPipelineStatus}); the change is NOT live until the apply job succeeds. Ask "check my MR" again to see the apply finish. ${merge}`;
 			}
-			// Apply not started yet (or unreadable): merged, apply pending.
-			return `Merged — the terraform apply on main hasn't started yet (or I couldn't read it). The change isn't live until the apply pipeline succeeds. Ask "check my MR" again shortly. ${merge}`;
+			// applyPipelineStatus === "" -> the apply job hasn't appeared yet (apply pipeline starting,
+			// or it couldn't be resolved). NOT live, and never reported as success.
+			return `Merged — the terraform apply on main hasn't started yet (or I couldn't resolve it). The change is NOT live until the apply job succeeds. Ask "check my MR" again shortly. ${merge}`;
 		}
 		if (state.mrState === "closed") {
 			return `The plan CI succeeded but the MR was CLOSED without merging — nothing was applied. ${merge}`;
@@ -7774,19 +7794,19 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	}
 	// SIO-992: surface the MR lifecycle stage explicitly (open vs merged) when known, so the reader
 	// sees where in proposed -> merged -> applied the change actually is.
-	// SIO-993: when merged, add the REAL apply-pipeline status (read from main) so the reader sees
-	// applying/applied/failed, not "I can't see it".
+	// SIO-993/SIO-995: when merged, add the REAL apply-JOB status (parent -> child -> apply:* job),
+	// not the parent pipeline's transient status. Only a confirmed apply-job SUCCESS reads as LIVE.
 	if (state.mrState === "merged") {
 		lines.push("MR: MERGED (the terraform apply runs on main for the merge commit).");
 		const pid = state.applyPipelineId ? `#${state.applyPipelineId}` : "";
 		if (state.applyPipelineStatus === "success") {
 			lines.push(`Apply: ${pid} SUCCEEDED on main — the change is LIVE.`);
-		} else if (state.applyPipelineStatus === "failed") {
-			lines.push(`Apply: ${pid} FAILED on main — the change is NOT live.`);
+		} else if (state.applyPipelineStatus === "failed" || state.applyPipelineStatus === "canceled") {
+			lines.push(`Apply: ${pid} ${state.applyPipelineStatus.toUpperCase()} on main — the change is NOT live.`);
 		} else if (state.applyPipelineStatus) {
-			lines.push(`Apply: ${pid} ${state.applyPipelineStatus} on main — not live until it succeeds.`);
+			lines.push(`Apply: ${pid} ${state.applyPipelineStatus} on main — NOT live until it succeeds.`);
 		} else {
-			lines.push("Apply: not started yet on main (or unreadable) — re-check shortly.");
+			lines.push("Apply: not started yet on main (or unresolved) — re-check shortly. NOT live.");
 		}
 	} else if (state.mrState === "opened") {
 		lines.push("MR: OPEN (not merged; merging it in GitLab triggers the apply).");

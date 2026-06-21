@@ -1,6 +1,32 @@
 // src/tools/gitlab.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildCommitFileBody, buildCommitFilesBody, flipCommitAction } from "./gitlab.ts";
+import { applyJob, buildCommitFileBody, buildCommitFilesBody, flipCommitAction } from "./gitlab.ts";
+
+// SIO-995: the post-merge apply runs as a child pipeline's `apply:<dep>:<stack>` JOB; its status is
+// the real "is the change live" signal (the parent pipeline reports success transiently before the
+// apply job runs/fails). applyJob extracts that job from a child pipeline's jobs list.
+describe("applyJob (SIO-995)", () => {
+	test("finds the apply:<dep>:<stack> job and returns its status + web_url", () => {
+		const jobs = [
+			{ name: "verify:eu-b2b:cluster-settings", id: 1, status: "created" },
+			{ name: "apply:eu-b2b:cluster-settings", id: 2, status: "failed", web_url: "https://gitlab/jobs/2" },
+		];
+		expect(applyJob(jobs)).toEqual({ id: 2, status: "failed", webUrl: "https://gitlab/jobs/2" });
+	});
+
+	test("returns a running apply job's status (not collapsed to success)", () => {
+		expect(applyJob([{ name: "apply:eu-b2b:cluster-settings", id: 9, status: "running" }])).toEqual({
+			id: 9,
+			status: "running",
+		});
+	});
+
+	test("null when there is no apply job yet (only verify/plan present)", () => {
+		expect(applyJob([{ name: "plan:eu-b2b:cluster-settings", id: 1, status: "success" }])).toBeNull();
+		expect(applyJob([])).toBeNull();
+		expect(applyJob("nope")).toBeNull();
+	});
+});
 
 // SIO-873: the GitLab commits API needs a single action with the FULL new file content
 // (not a diff). This is what gitlab_commit_file POSTs.
