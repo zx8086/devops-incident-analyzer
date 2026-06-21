@@ -34,15 +34,40 @@ User (user_id)                  one per agent identity
 
 Blocks are written with `POST /users/{uid}/sessions/{sid}/memory` and a body of `{ messages?, facts?, annotations?, memory_block_ttl?, async_processing? }`.
 
-### Retrieval: semantic search, not keyword lookup
+### Retrieval: TWO modes — semantic ranking vs deterministic filter
 
-Recall is `POST /users/{uid}/sessions/{sid}/memory/search` with `{ query, filters: { session_ids?, relevant_k? } }`. The service:
+Recall is `POST /users/{uid}/sessions/{sid}/memory/search` with `{ query?, filters? }`. Per the
+service's own API reference: *"Provide a natural-language `query` to rank blocks by relevance, **or
+use `filters` alone for deterministic retrieval.**"* Those are two DIFFERENT code paths:
 
+**Semantic mode (`query` present).** The service:
 1. embeds the natural-language `query` with its configured embedding model,
 2. runs FTS-KNN (vector nearest-neighbour) over stored block embeddings,
-3. returns the top `relevant_k` blocks ranked by **`rel_score`** (the relevance score), `count`-bounded.
+3. takes the top `relevant_k` (default **10**) by **`rel_score`**, **then** applies the annotation
+   filter to that already-truncated window.
 
-There is no keyword/exact-match query mode in the subset we use — retrieval is semantic. The caller's only job is to write good text and issue a good natural-language query; the ranking is the service's.
+**Deterministic mode (no `query`, `filters` alone).** The annotation/time/block-id filters are the
+authoritative WHERE clause — no embedding, no `rel_score`, no top-k truncation. Every block matching
+the filter is returned (`count`-bounded only).
+
+> **GOTCHA (SIO-998).** In semantic mode the annotation filter runs AFTER the top-`relevant_k`
+> ranking, not before. The OpenAPI spec proves this by ASYMMETRY: `FilterOptions.start_time` /
+> `created_start_time` are documented as *"a pre-filter inside the FTS KNN index, so only blocks ...
+> enter the candidate pool"* — but `annotations` carries NO such note. Time bounds pre-filter; the
+> annotation map post-filters the already-truncated top-k. So an exact-key recall (`{ query: "iac
+> change", filters: { kind:"iac-change", mr_url:X }, relevant_k: 8 }`) can return **0** even when the
+> block exists — the target ranks outside the top-8 by semantic relevance to the query STRING and is
+> truncated before the `mr_url` filter is applied. Proven live: the same filter returned `0` at
+> `relevant_k:8`, `1` at `12`, `2` at `100`; with `query` DROPPED (deterministic mode) it returned all
+> `2` at the default k. **Rule: for an identifier-keyed recall (by mr_url / pipeline_id /
+> config_change_id), send `filters` alone and OMIT `query`. Reserve `query` for fuzzy "what did we do
+> like X" recall, never for "fetch THIS record".** Full spec vendored at
+> [`docs/reference/agent-memory-openapi.json`](../reference/agent-memory-openapi.json) +
+> [`agent-memory-api-reference.md`](../reference/agent-memory-api-reference.md).
+
+The bootstrap recaller (latest-user-message → ranked hits) is a legitimate semantic-mode use. The
+iac-change recalls (`recallIacChangeIntent`, `recallSessionProgress`, `recallLastIacChange`) are
+identifier-keyed and use deterministic mode.
 
 ### Server-side embeddings and async extraction
 

@@ -258,6 +258,41 @@ describe("createFetchAgentMemoryClient", () => {
 		restore();
 	});
 
+	// SIO-998: an empty query selects DETERMINISTIC mode -- the request body must OMIT `query` and
+	// `relevant_k` so the annotation filter is the authoritative WHERE clause (no top-k truncation).
+	test("searchMemory with an empty query omits query + relevant_k (deterministic mode)", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/elastic-iac/sessions/t-iac/memory/search": { status: 200, body: { count: 0, memory_blocks: [] } },
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.searchMemory({ userId: "elastic-iac", sessionId: "t-iac" }, "", {
+			allSessions: true,
+			relevantK: 8,
+			annotations: { kind: "iac-change", mr_url: "X" },
+		});
+		const body = calls[0]?.body as { query?: unknown; filters: { relevant_k?: unknown; annotations?: unknown } };
+		expect("query" in body).toBe(false); // no query key at all
+		expect("relevant_k" in body.filters).toBe(false); // no relevant_k -> no top-k truncation
+		expect(body.filters.annotations).toMatchObject({ kind: "iac-change", mr_url: "X" });
+		restore();
+	});
+
+	// SIO-998: a non-empty query stays in SEMANTIC mode -- query + relevant_k ARE sent.
+	test("searchMemory with a query keeps query + relevant_k (semantic mode)", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/elastic-iac/sessions/t-iac/memory/search": { status: 200, body: { count: 0, memory_blocks: [] } },
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.searchMemory({ userId: "elastic-iac", sessionId: "t-iac" }, "warm tier resize", {
+			allSessions: true,
+			relevantK: 5,
+		});
+		const body = calls[0]?.body as { query?: unknown; filters: { relevant_k?: unknown } };
+		expect(body.query).toBe("warm tier resize");
+		expect(body.filters.relevant_k).toBe(5);
+		restore();
+	});
+
 	test("sets Authorization header only when a bearer token is configured", async () => {
 		const original = globalThis.fetch;
 		const captured: { auth: string | null } = { auth: null };

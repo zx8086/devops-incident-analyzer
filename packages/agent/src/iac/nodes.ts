@@ -7696,7 +7696,11 @@ export function buildIacChangeRationale(state: IacStateType): string {
 export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 	if (!mrUrl || selectedBackend() !== "agent-memory") return "";
 	try {
-		const hits = await searchAgentMemory("elastic-iac", "iac change intent", { kind: "iac-change", mr_url: mrUrl });
+		// SIO-998: identifier-keyed (by mr_url) -> deterministic filter-only retrieval, NOT a ranked query
+		// (a query string can rank this MR's fact out of the top-k window before the mr_url filter applies).
+		const hits = await searchAgentMemory("elastic-iac", "", { kind: "iac-change", mr_url: mrUrl }, 8, {
+			deterministic: true,
+		});
 		// SIO-973: a re-recorded change returns as multiple hits; collapse to the first (highest-ranked).
 		const deduped = dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url);
 		// SIO-996: the same MR yields one fact per turn (config_change_id == per-turn requestId), and only
@@ -7753,13 +7757,11 @@ const PIPELINE_STATUS_RANK: Record<string, number> = {
 export async function recallSessionProgress(mrUrl: string): Promise<IacProgressStep[]> {
 	if (!mrUrl || selectedBackend() !== "agent-memory") return [];
 	try {
-		const hits = await searchAgentMemory(
-			"elastic-iac",
-			"iac change progress",
-			{ kind: "iac-change", mr_url: mrUrl },
-			8,
-			{ allSessions: false },
-		);
+		// SIO-998: identifier-keyed (by mr_url) -> deterministic filter-only retrieval (session-scoped).
+		const hits = await searchAgentMemory("elastic-iac", "", { kind: "iac-change", mr_url: mrUrl }, 8, {
+			allSessions: false,
+			deterministic: true,
+		});
 		// One step per distinct pipeline_status (the only annotation that advances as the pipeline
 		// runs). Hits with no pipeline_status fall back to config_change_id so a single proposal step
 		// is kept. Then order by lifecycle rank.
@@ -7799,9 +7801,10 @@ export interface RecalledIacChange {
 export async function recallLastIacChange(deployment?: string): Promise<RecalledIacChange | null> {
 	if (selectedBackend() !== "agent-memory") return null;
 	try {
+		// SIO-998: keyed by kind(+deployment) -> deterministic filter-only retrieval. "Most recent" is
+		// resolved by dedupe + the caller's ordering, not by semantic relevance to a query string.
 		const filter: AnnotationMap = { kind: "iac-change", ...(deployment ? { deployment } : {}) };
-		const query = deployment ? `iac change ${deployment}` : "iac change";
-		const hits = await searchAgentMemory("elastic-iac", query, filter);
+		const hits = await searchAgentMemory("elastic-iac", "", filter, 8, { deterministic: true });
 		const deduped = dedupeHitsBy(hits, (h) => h.annotations.mr_url ?? h.annotations.config_change_id);
 		const top = deduped[0];
 		if (!top) return null;
@@ -8738,12 +8741,15 @@ function renderFleetLearnings(hits: MemorySearchHit[]): string {
 // memory outage never blocks the preview. Distinct from recallInFlightFleetUpgrades, which reads
 // the DISPATCHED (in-flight) facts to resume a running pipeline.
 // SIO-971: exported for unit testing (the full detectFleetUpgrade needs gitlab preview mocks).
-export async function recallPriorFleetUpgrades(deployment: string, version: string): Promise<string> {
+// SIO-998: `version` is retained in the signature (callers pass the target version) but no longer
+// shapes the query -- this is a deterministic filter-only recall of ALL terminal fleet upgrades on the
+// deployment (renderFleetLearnings wants the full history, not version-ranked hits).
+export async function recallPriorFleetUpgrades(deployment: string, _version: string): Promise<string> {
 	if (selectedBackend() !== "agent-memory" || !deployment) return "";
 	try {
-		const hits = await searchAgentMemory("elastic-iac", `fleet upgrade ${deployment} ${version}`, {
-			deployment,
-			kind: "fleet-upgrade-terminal",
+		// SIO-998: keyed by deployment + kind -> deterministic filter-only retrieval.
+		const hits = await searchAgentMemory("elastic-iac", "", { deployment, kind: "fleet-upgrade-terminal" }, 8, {
+			deterministic: true,
 		});
 		return renderFleetLearnings(hits);
 	} catch (error) {

@@ -22,6 +22,7 @@ import {
 	pendingWriteCount,
 	recallAgentMemory,
 	resolveUserId,
+	searchAgentMemory,
 	selectedBackend,
 	setActiveMemorySession,
 	setSessionDatasources,
@@ -271,6 +272,27 @@ describe("recall + endSession", () => {
 		const { client } = makeFakeClient([]);
 		__setAgentMemoryClient(client);
 		expect(await recallAgentMemory("incident-analyzer", "t-1", "q")).toBeUndefined();
+	});
+
+	// SIO-998: deterministic:true passes an EMPTY query to the client (filter-only retrieval), so the
+	// annotation filter is authoritative and is never starved by the top-relevant_k semantic window.
+	test("searchAgentMemory(deterministic) sends an empty query to the client", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient(["a fact"]);
+		__setAgentMemoryClient(client);
+		await searchAgentMemory("elastic-iac", "ignored query", { kind: "iac-change", mr_url: "X" }, 8, {
+			deterministic: true,
+		});
+		expect(rec.searches).toContain(""); // the query the client saw was empty, not "ignored query"
+		expect(rec.searches).not.toContain("ignored query");
+	});
+
+	test("searchAgentMemory without deterministic forwards the query (semantic)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient(["a fact"]);
+		__setAgentMemoryClient(client);
+		await searchAgentMemory("elastic-iac", "warm tier resize", { deployment: "eu-b2b" });
+		expect(rec.searches).toContain("warm tier resize");
 	});
 
 	test("endAgentMemorySession flushes then ends the bound session", async () => {

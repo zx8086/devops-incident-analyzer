@@ -325,18 +325,25 @@ export async function searchAgentMemory(
 	// false to scope the search to the CURRENT session only (ref.sessionId == threadId) -- the
 	// service maps session_ids: undefined to the current session. Used by recallSessionProgress to
 	// retrieve only THIS conversation's breadcrumbs.
-	opts?: { allSessions?: boolean },
+	// SIO-998: deterministic=true selects FILTER-ONLY retrieval -- the annotation filter is the
+	// authoritative WHERE clause (no FTS-KNN ranking, no relevant_k top-k truncation). Use it for an
+	// IDENTIFIER-keyed recall (by mr_url/pipeline_id/config_change_id) where a query string would
+	// rank the target out of the top-k window before the filter applies. The passed `query` is
+	// ignored in this mode. See docs/architecture/agent-memory.md "Retrieval: TWO modes".
+	opts?: { allSessions?: boolean; deterministic?: boolean },
 ): Promise<MemorySearchHit[]> {
 	if (selectedBackend() !== "agent-memory") return [];
 	const userId = resolveUserId(agentName);
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	const deterministic = opts?.deterministic ?? false;
 	try {
 		const c = client();
 		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
 		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
-		const hits = await c.searchMemory(ref, query, {
+		const hits = await c.searchMemory(ref, deterministic ? "" : query, {
 			allSessions: opts?.allSessions ?? true,
-			relevantK: limit,
+			// In deterministic mode the client omits relevant_k; passing it here is harmless (ignored).
+			...(deterministic ? {} : { relevantK: limit }),
 			...(filter && Object.keys(filter).length > 0 ? { annotations: filter } : {}),
 		});
 		// SIO-991: a success log carrying the Couchbase coordinates (userId/sessionId/blockIds) so a
@@ -346,7 +353,9 @@ export async function searchAgentMemory(
 			{
 				userId,
 				sessionId: ref.sessionId,
-				query,
+				query: deterministic ? "" : query,
+				// SIO-998: which retrieval path ran -- "deterministic" (filter-only) vs "semantic" (ranked).
+				mode: deterministic ? "deterministic" : "semantic",
 				...(filter && Object.keys(filter).length > 0 && { filter }),
 				// SIO-992: scope is visible so a session-scoped progress recall is distinguishable from
 				// the default cross-session recall.
@@ -390,9 +399,10 @@ export async function recallInFlightFleetUpgrades(agentName: string): Promise<In
 		const c = client();
 		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
 		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
-		const hits = await c.searchMemory(ref, "in-flight fleet upgrades", {
+		// SIO-998: keyed by kind -> deterministic filter-only retrieval (empty query omits relevant_k so
+		// the annotation filter is authoritative, not a top-k window of a ranked "in-flight" query).
+		const hits = await c.searchMemory(ref, "", {
 			allSessions: true,
-			relevantK: 8,
 			annotations: { kind: "fleet-upgrade-dispatched" },
 		});
 		return hits.map((h) => {

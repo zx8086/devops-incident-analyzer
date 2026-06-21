@@ -32,7 +32,10 @@ export async function runMemorySearch(agentName: string, args: SearchMemoryArgs)
 	if (args.deployment) filter.deployment = args.deployment;
 	if (args.stack) filter.stack = args.stack;
 	if (args.kind) filter.kind = args.kind;
-	const hits = await searchAgentMemory(agentName, args.query, filter);
+	// SIO-998: this is a model-driven FUZZY recall, so keep the query (semantic ranking is the point).
+	// But the annotation filter post-filters the top-relevant_k, so a small k can drop filter-matching
+	// hits; use a wider window (25) so a deployment/stack/kind filter has a real candidate pool.
+	const hits = await searchAgentMemory(agentName, args.query, filter, 25);
 	if (hits.length === 0) return "No matching memory found (or durable memory is not enabled for this agent).";
 	const lines = hits.map((h) => {
 		const a = h.annotations;

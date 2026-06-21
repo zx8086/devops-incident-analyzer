@@ -183,8 +183,12 @@ export async function memoryEnrichIac(state: IacStateType): Promise<Partial<IacS
 	const siId = stackInstanceId(state);
 	if (!siId) return {};
 	try {
-		const query = state.iacRequest?.workflow ?? state.planReview?.title ?? siId;
-		const hits = await searchAgentMemory("elastic-iac", query, { stack_instance: siId, kind: "iac-change" });
+		// SIO-998: this is "all prior iac-changes on THIS stack_instance", an identifier-keyed recall --
+		// use deterministic filter-only retrieval so the stack_instance filter is authoritative, not a
+		// top-relevant_k window ranked by the workflow word (which can drop older changes on the stack).
+		const hits = await searchAgentMemory("elastic-iac", "", { stack_instance: siId, kind: "iac-change" }, 8, {
+			deterministic: true,
+		});
 		return { priorLearnings: renderLearnings(hits) };
 	} catch (error) {
 		logger.warn(
