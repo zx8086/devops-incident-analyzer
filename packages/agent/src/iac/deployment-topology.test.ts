@@ -6,6 +6,7 @@ import {
 	mergeDeploymentUserSettingsKey,
 	mergeUserSettingsKey,
 	parseIntentJson,
+	readDeploymentUserSettings,
 	removeDeploymentUserSettingsKeys,
 	removeUserSettingsKeys,
 	reviewPlan,
@@ -882,6 +883,97 @@ describe("reviewPlan — topology removal (SIO-999)", () => {
 		const result = await reviewPlan(asIacState(state));
 		expect(result.risks?.[0]).toContain("COULD LOCK OUT LOGIN");
 		expect(result.risks?.[0]).toContain("REMOVES a key INSIDE xpack.security");
+	});
+});
+
+// SIO-999: readDeploymentUserSettings + the idempotent no-op confirmation (show the current YAML when
+// a removal found nothing to remove, instead of a terse "no change").
+describe("readDeploymentUserSettings (SIO-999)", () => {
+	test("returns the target block's user_settings_yaml", () => {
+		expect(readDeploymentUserSettings(DEPLOYMENT, "elasticsearch_config")).toBe(ES_SSO);
+		expect(readDeploymentUserSettings(DEPLOYMENT, "kibana")).toBe(KB_SSO);
+	});
+
+	test("returns empty string when the block or field is absent", () => {
+		expect(readDeploymentUserSettings(JSON.stringify({ name: "x" }), "elasticsearch_config")).toBe("");
+		expect(readDeploymentUserSettings(JSON.stringify({ kibana: {} }), "kibana")).toBe("");
+	});
+
+	test("throws on non-object JSON", () => {
+		expect(() => readDeploymentUserSettings("[]", "kibana")).toThrow("not an object");
+	});
+});
+
+describe("draftChange -> proposeTopologyChange removal no-op (SIO-999)", () => {
+	// A deployment whose user_settings_yaml has the OIDC SSO realm but NO monitoring subtree -- removing
+	// monitoring is an idempotent no-op against the repo.
+	const DEPLOYMENT_NO_MON = JSON.stringify(
+		{
+			name: "eu-b2b",
+			elasticsearch: { autoscale: false, hot: { size: "4g", zone_count: 2 } },
+			elasticsearch_config: { plugins: [], user_settings_yaml: ES_SSO },
+			kibana: { size: "1g", user_settings_yaml: KB_SSO },
+		},
+		null,
+		2,
+	);
+	const fileResult = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT_NO_MON).toString("base64"), encoding: "base64" })}`;
+
+	test("absent key: no MR, but the message shows the current YAML + confirms it is already absent", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		// no commit was attempted (idempotent no-op)
+		expect(committed).toBe(false);
+		const text = String(result.messages?.[0]?.content ?? "");
+		expect(text).toContain("already absent");
+		expect(text).toContain("monitoring.collection.interval");
+		// the current YAML is shown so the user can confirm (the OIDC realm line)
+		expect(text).toContain("Current [elasticsearch_config].user_settings_yaml");
+		expect(text).toContain("xpack.security.authc.realms.saml.kibana-realm");
+		// honest about not checking live
+		expect(text).toContain("did not check the live cluster");
+	});
+
+	test("absent key under xpack.security: WITHHOLDS the current YAML body", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["xpack.security.authc.realms.oidc.ghost.order"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		const text = String(result.messages?.[0]?.content ?? "");
+		expect(text).toContain("already absent");
+		expect(text).toContain("withheld: the removal targeted xpack.security");
+		// the real SSO body is NOT echoed
+		expect(text).not.toContain("idp.metadata.path");
 	});
 });
 

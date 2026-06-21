@@ -1433,6 +1433,20 @@ export function removeDeploymentUserSettingsKeys(
 	};
 }
 
+// SIO-999: read the current user_settings_yaml of a _deployments JSON block (read-only; for the
+// idempotent no-op confirmation -- showing the user the live repo state when a removal found nothing
+// to remove). Returns "" when the block or field is absent; throws only on bad JSON.
+export function readDeploymentUserSettings(json: string, target: "elasticsearch_config" | "kibana"): string {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const block = (parsed as Record<string, unknown>)[target];
+	if (!block || typeof block !== "object") return "";
+	const yaml = (block as Record<string, unknown>).user_settings_yaml;
+	return typeof yaml === "string" ? yaml : "";
+}
+
 // SIO-919: set the size / zone_count of a non-data component (integrations_server or kibana) in the
 // _deployments JSON. Captures previous values, preserves other fields + trailing newline. Throws on
 // bad JSON or a missing component. (Pure; unit-tested.)
@@ -4591,6 +4605,40 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	}
 
 	if (!anyChange || isUnchangedConfig(content, extractFileContent(raw))) {
+		// SIO-999: a removal whose key(s) are ALREADY absent is an idempotent no-op -- but rather than a
+		// terse "no change", show the user the current user_settings_yaml so they can confirm the subtree
+		// is genuinely gone (the repo state, not a silent "nothing to see here"). Withhold the body when
+		// the removal targeted xpack.security (could carry secrets). NOTE: this confirms the REPO file
+		// only; it does not check the live cluster -- live drift is tracked separately.
+		if (
+			req.userSettingsMergeTarget !== undefined &&
+			req.userSettingsRemoveKeys !== undefined &&
+			req.userSettingsRemoveKeys.length > 0
+		) {
+			const keys = req.userSettingsRemoveKeys;
+			const touchesSecurity = keys.some((k) => k === "xpack.security" || k.startsWith("xpack.security."));
+			let currentYaml = "";
+			try {
+				currentYaml = readDeploymentUserSettings(content, req.userSettingsMergeTarget);
+			} catch {
+				currentYaml = "";
+			}
+			const yamlShown = touchesSecurity
+				? "(current user_settings_yaml withheld: the removal targeted xpack.security)"
+				: currentYaml.trim() === ""
+					? `[${req.userSettingsMergeTarget}].user_settings_yaml is empty / unset.`
+					: `Current [${req.userSettingsMergeTarget}].user_settings_yaml:\n\n${currentYaml.trimEnd()}`;
+			const keyList = keys.join(", ");
+			return {
+				blockedReason: `Deployment '${cluster}' user_settings_yaml already lacks ${keyList}; no change needed.`,
+				messages: [
+					new AIMessage(
+						`No change needed: ${keyList} ${keys.length > 1 ? "are" : "is"} already absent from '${cluster}' user_settings_yaml.\n\n` +
+							`${yamlShown}\n\nI did not open a merge request. (This reflects the repo file on main; I did not check the live cluster.)`,
+					),
+				],
+			};
+		}
 		return {
 			blockedReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
 			messages: [
