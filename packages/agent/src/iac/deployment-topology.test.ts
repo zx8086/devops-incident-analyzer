@@ -3,9 +3,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { parse } from "yaml";
 import {
 	branchSlug,
+	classifyUserSettingsDrift,
 	mergeDeploymentUserSettingsKey,
 	mergeUserSettingsKey,
 	parseIntentJson,
+	parseLiveUserSettingsYaml,
 	readDeploymentUserSettings,
 	removeDeploymentUserSettingsKeys,
 	removeUserSettingsKeys,
@@ -948,8 +950,8 @@ describe("draftChange -> proposeTopologyChange removal no-op (SIO-999)", () => {
 		// the current YAML is shown (as a fenced code block) so the user can confirm
 		expect(text).toContain("```yaml");
 		expect(text).toContain("xpack.security.authc.realms.saml.kibana-realm");
-		// honest about not checking live
-		expect(text).toContain("did NOT check the live cluster");
+		// live read unavailable in this test (cloud tools unmocked) -> graceful fallback wording
+		expect(text).toContain("could not read the live cluster");
 	});
 
 	test("absent key under xpack.security: WITHHOLDS the current YAML body", async () => {
@@ -1138,6 +1140,175 @@ describe("draftChange -> proposeTopologyChange suffix-match + ambiguity (SIO-999
 		expect(text).toContain("match more than one place");
 		expect(text).toContain("a.collection.interval");
 		expect(text).toContain("b.collection.interval");
+	});
+});
+
+// SIO-1000: live drift -- read the effective user_settings_yaml from the running cluster and compare
+// against the repo, so a removal can report which direction it reconciles. (Verified live: EC carries it
+// at resources.elasticsearch[0].info.plan_info.current.plan.elasticsearch.user_settings_yaml, and drops
+// non-allowlisted keys -- so a repo key can be absent live.)
+describe("parseLiveUserSettingsYaml (SIO-1000)", () => {
+	const liveBody = (usy: string) =>
+		`[200] ${JSON.stringify({
+			resources: {
+				elasticsearch: [{ info: { plan_info: { current: { plan: { elasticsearch: { user_settings_yaml: usy } } } } } }],
+			},
+		})}`;
+
+	test("extracts the elasticsearch_config user_settings_yaml from the EC plan envelope", () => {
+		const usy = "xpack:\n  security: {}\n";
+		expect(parseLiveUserSettingsYaml(liveBody(usy), "elasticsearch_config")).toBe(usy);
+	});
+
+	test("extracts the kibana user_settings_yaml", () => {
+		const body = `[200] ${JSON.stringify({
+			resources: {
+				kibana: [{ info: { plan_info: { current: { plan: { kibana: { user_settings_yaml: "a: b\n" } } } } } }],
+			},
+		})}`;
+		expect(parseLiveUserSettingsYaml(body, "kibana")).toBe("a: b\n");
+	});
+
+	test("returns undefined when the path is absent or the body is unparseable", () => {
+		expect(parseLiveUserSettingsYaml("[200] {}", "elasticsearch_config")).toBeUndefined();
+		expect(parseLiveUserSettingsYaml("not json", "elasticsearch_config")).toBeUndefined();
+		expect(
+			parseLiveUserSettingsYaml(
+				`[200] ${JSON.stringify({ resources: { elasticsearch: [] } })}`,
+				"elasticsearch_config",
+			),
+		).toBeUndefined();
+	});
+});
+
+describe("classifyUserSettingsDrift (SIO-1000)", () => {
+	const repoWithMon = 'xpack:\n  security: {}\n  monitoring:\n    collection:\n      interval: "60s"\n';
+	const liveNoMon = "xpack:\n  security: {}\n";
+
+	test("repo has, live lacks -> the eu-b2b case (repo edit reconciles)", () => {
+		const d = classifyUserSettingsDrift(repoWithMon, liveNoMon, "monitoring.collection.interval");
+		expect(d).toEqual({ inRepo: true, inLive: false, liveUnknown: false });
+	});
+
+	test("repo lacks, live has -> real live drift (needs re-apply)", () => {
+		const d = classifyUserSettingsDrift(liveNoMon, repoWithMon, "monitoring.collection.interval");
+		expect(d).toEqual({ inRepo: false, inLive: true, liveUnknown: false });
+	});
+
+	test("both lack -> genuine no-op", () => {
+		const d = classifyUserSettingsDrift(liveNoMon, liveNoMon, "monitoring.collection.interval");
+		expect(d).toEqual({ inRepo: false, inLive: false, liveUnknown: false });
+	});
+
+	test("live undefined -> liveUnknown (caller falls back to repo-only)", () => {
+		const d = classifyUserSettingsDrift(repoWithMon, undefined, "monitoring.collection.interval");
+		expect(d).toEqual({ inRepo: true, inLive: false, liveUnknown: true });
+	});
+});
+
+describe("draftChange -> proposeTopologyChange live drift (SIO-1000)", () => {
+	const ecList = `[200] ${JSON.stringify({ deployments: [{ id: "dep-1", name: "eu-b2b" }] })}`;
+	const liveBody = (usy: string) =>
+		`[200] ${JSON.stringify({
+			resources: {
+				elasticsearch: [{ info: { plan_info: { current: { plan: { elasticsearch: { user_settings_yaml: usy } } } } } }],
+			},
+		})}`;
+	// repo HAS the nested monitoring key; the OIDC realm too.
+	const ES_REPO = `xpack:\n  security:\n    authc:\n      realms:\n        oidc:\n          oidc-pvh-sso:\n            order: 2\n  monitoring:\n    collection:\n      interval: "60s"\n`;
+	const DEPLOYMENT_REPO = JSON.stringify(
+		{
+			name: "eu-b2b",
+			elasticsearch: { autoscale: false, hot: { size: "4g", zone_count: 2 } },
+			elasticsearch_config: { plugins: [], user_settings_yaml: ES_REPO },
+		},
+		null,
+		2,
+	);
+	const repoFile = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT_REPO).toString("base64"), encoding: "base64" })}`;
+
+	test("repo has / live lacks: MR opens and the diff notes it aligns repo with live", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => repoFile,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+			elastic_cloud_list_deployments: () => ecList,
+			// live plan does NOT carry monitoring (EC dropped it)
+			elastic_cloud_get_deployment: () => liveBody("xpack:\n  security: {}\n"),
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain("xpack.monitoring.collection.interval");
+		expect(result.proposedDiff).toContain("Live cluster (drift)");
+		expect(result.proposedDiff).toContain("aligns the repo with the live cluster");
+	});
+
+	test("repo lacks / live has: no MR, message reports live drift + a re-apply is needed", async () => {
+		// repo has NO monitoring; live still applies it.
+		const esNoMon = "xpack:\n  security:\n    authc: {}\n";
+		const depNoMon = JSON.stringify({ name: "eu-b2b", elasticsearch_config: { user_settings_yaml: esNoMon } }, null, 2);
+		const repoNoMon = `[200] ${JSON.stringify({ content: Buffer.from(depNoMon).toString("base64"), encoding: "base64" })}`;
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => repoNoMon,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => ecList,
+			elastic_cloud_get_deployment: () => liveBody('xpack:\n  monitoring:\n    collection:\n      interval: "60s"\n'),
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(false);
+		const text = String(result.messages?.[0]?.content ?? "");
+		expect(text).toContain("DRIFT");
+		expect(text).toContain("LIVE cluster still applies");
+		expect(text).toContain("plan re-apply");
+	});
+
+	test("repo lacks / live lacks: no MR, message says nothing to reconcile", async () => {
+		const esNoMon = "xpack:\n  security:\n    authc: {}\n";
+		const depNoMon = JSON.stringify({ name: "eu-b2b", elasticsearch_config: { user_settings_yaml: esNoMon } }, null, 2);
+		const repoNoMon = `[200] ${JSON.stringify({ content: Buffer.from(depNoMon).toString("base64"), encoding: "base64" })}`;
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => repoNoMon,
+			elastic_cloud_list_deployments: () => ecList,
+			elastic_cloud_get_deployment: () => liveBody("xpack:\n  security: {}\n"),
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		const text = String(result.messages?.[0]?.content ?? "");
+		expect(text).toContain("genuinely nothing to reconcile");
 	});
 });
 

@@ -1127,6 +1127,67 @@ async function resolveDeploymentId(clusterName: string): Promise<string> {
 	return parseDeploymentId(await callTool("elastic_cloud_list_deployments", {}), clusterName);
 }
 
+// SIO-1000: parse the live effective user_settings_yaml out of an elastic_cloud_get_deployment
+// "[status] {json}" body. EC carries it at
+// resources.<kind>[0].info.plan_info.current.plan.<kind>.user_settings_yaml, where <kind> is
+// "elasticsearch" for the elasticsearch_config target and "kibana" for the kibana target. Returns
+// the YAML string, or undefined if the body is unparseable / the path is absent (so the caller can
+// fall back to repo-only). EC applies user_settings operator-side and DROPS non-allowlisted keys, so
+// a key present in the repo can legitimately be absent here -- that is the drift signal. (Pure; unit-tested.)
+export function parseLiveUserSettingsYaml(
+	deploymentBody: string,
+	target: "elasticsearch_config" | "kibana",
+): string | undefined {
+	const jsonStart = deploymentBody.indexOf("{");
+	if (jsonStart < 0) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(deploymentBody.slice(jsonStart));
+	} catch {
+		return undefined;
+	}
+	const kind = target === "kibana" ? "kibana" : "elasticsearch";
+	// Walk the nested path defensively -- any missing hop means "no live value" (undefined), not a throw.
+	const resources = (parsed as { resources?: Record<string, unknown> }).resources;
+	const arr = resources?.[kind];
+	const first = Array.isArray(arr) ? arr[0] : undefined;
+	const yaml = (first as { info?: { plan_info?: { current?: { plan?: Record<string, unknown> } } } } | undefined)?.info
+		?.plan_info?.current?.plan?.[kind];
+	const usy = (yaml as { user_settings_yaml?: unknown } | undefined)?.user_settings_yaml;
+	return typeof usy === "string" ? usy : undefined;
+}
+
+// SIO-1000: classify repo-vs-live drift for ONE dotted key on a user_settings_yaml target. Resolves
+// the key (exact + suffix) independently against the repo YAML and the live YAML, so a shorthand like
+// "monitoring.collection.interval" is checked at its real nested path in both. liveUnknown=true when
+// the live read failed (caller falls back to repo-only + says so). (Pure; unit-tested.)
+export function classifyUserSettingsDrift(
+	repoYaml: string,
+	liveYaml: string | undefined,
+	dottedKey: string,
+): { inRepo: boolean; inLive: boolean; liveUnknown: boolean } {
+	const present = (yaml: string): boolean => {
+		const res = resolveUserSettingsKey(parseDocument(yaml || ""), dottedKey);
+		return res.kind === "exact" || res.kind === "suffix" || res.kind === "ambiguous";
+	};
+	const inRepo = present(repoYaml);
+	if (liveYaml === undefined) return { inRepo, inLive: false, liveUnknown: true };
+	return { inRepo, inLive: present(liveYaml), liveUnknown: false };
+}
+
+// SIO-1000: read the live effective user_settings_yaml for a deployment (best-effort). Resolves the
+// alias to an EC deployment id, fetches the plan, extracts the target block YAML. Returns undefined on
+// any failure so callers degrade to repo-only. (Async; thin wrapper, unit-tested via its pure parts.)
+async function fetchLiveUserSettingsYaml(
+	clusterName: string,
+	target: "elasticsearch_config" | "kibana",
+): Promise<string | undefined> {
+	const id = await resolveDeploymentId(clusterName);
+	if (!id) return undefined;
+	const body = await callTool("elastic_cloud_get_deployment", { deployment_id: id, show_plans: true });
+	return parseLiveUserSettingsYaml(body, target);
+}
+
 // Read live cluster state (topology, plan history, ILM, health) before drafting.
 export async function readClusterState(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
@@ -4504,6 +4565,12 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	let content = extractFileContent(raw);
 	let anyChange = false;
 	const diffLines: string[] = [`${filePath} (deployment topology ${cluster})`];
+	// SIO-1000: repo-vs-live drift annotations for a user_settings_yaml removal (best-effort live read).
+	// driftNotes feed the success message; liveRemovalYaml/Target are reused by the no-op branch so we
+	// read the live plan at most once.
+	const driftNotes: string[] = [];
+	let liveRemovalYaml: string | undefined;
+	let liveRemovalTarget: "elasticsearch_config" | "kibana" | undefined;
 
 	if (
 		req.autoscaleEnabled !== undefined ||
@@ -4638,6 +4705,19 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		}
 		content = removal.content;
 		anyChange = anyChange || removal.changed;
+		// SIO-1000: read the LIVE effective user_settings_yaml (best-effort) so we can annotate the MR
+		// with the drift direction. EC applies user_settings operator-side and drops non-allowlisted
+		// keys, so a key in the repo can be absent live. Captured here (repo `content` pre-removal) and
+		// reused by the no-op branch below. A failed read => liveYaml undefined => repo-only fallback.
+		const repoYamlBeforeRemoval = (() => {
+			try {
+				return readDeploymentUserSettings(extractFileContent(raw), req.userSettingsMergeTarget);
+			} catch {
+				return "";
+			}
+		})();
+		liveRemovalYaml = await fetchLiveUserSettingsYaml(cluster, req.userSettingsMergeTarget);
+		liveRemovalTarget = req.userSettingsMergeTarget;
 		// Removing a key under xpack.security can lock out login -- withhold the names; a non-security
 		// operational key (xpack.monitoring, ...) is safe to list. `removed` carries the FULL resolved
 		// paths (e.g. a "monitoring.collection.interval" request resolves to "xpack.monitoring...").
@@ -4647,6 +4727,19 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 				? `${removal.removed.length} key(s) (names withheld: xpack.security)`
 				: removal.removed.join(", ");
 			diffLines.push(`[${req.userSettingsMergeTarget}] user_settings_yaml removed ${removedShown}`);
+			// Annotate the drift direction per removed key (skip security keys to avoid echoing names).
+			if (!removal.touchesSecurity) {
+				for (const key of removal.removed) {
+					const drift = classifyUserSettingsDrift(repoYamlBeforeRemoval, liveRemovalYaml, key);
+					if (drift.liveUnknown) {
+						driftNotes.push(`${key}: could not read the live cluster -- this MR edits the repo only.`);
+					} else if (drift.inRepo && !drift.inLive) {
+						driftNotes.push(`${key}: aligns the repo with the live cluster (EC already dropped this key).`);
+					} else if (drift.inRepo && drift.inLive) {
+						driftNotes.push(`${key}: present in both repo and live; the apply will remove it from the cluster.`);
+					}
+				}
+			}
 		}
 	}
 
@@ -4715,12 +4808,28 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 					? `[${req.userSettingsMergeTarget}].user_settings_yaml is empty / unset.`
 					: `Current \`[${req.userSettingsMergeTarget}].user_settings_yaml\`:\n\n\`\`\`yaml\n${currentYaml.trimEnd()}\n\`\`\``;
 			const keyList = keys.join(", ");
+			// SIO-1000: the repo has no matching key. Check the LIVE cluster (read in the removal block above)
+			// to tell a genuine no-op from real drift. liveRemovalYaml is undefined if the live read failed.
+			const liveLine = ((): string => {
+				if (liveRemovalTarget === undefined) return "";
+				if (liveRemovalYaml === undefined) {
+					return "I could not read the live cluster, so I can only confirm the repo state. If the running cluster still applies this setting, tell me and I can investigate.";
+				}
+				// Drift only matters for non-security keys we can name; report any key still present live.
+				const stillLive = touchesSecurity
+					? []
+					: keys.filter((k) => classifyUserSettingsDrift(currentYaml, liveRemovalYaml, k).inLive);
+				if (stillLive.length > 0) {
+					return `DRIFT: the repo no longer has ${stillLive.join(", ")}, but the LIVE cluster still applies ${stillLive.length > 1 ? "them" : "it"}. A repo edit will not remove ${stillLive.length > 1 ? "them" : "it"} -- this needs a plan re-apply against the deployment. Tell me if you want me to dig into the live plan.`;
+				}
+				return "I also checked the live cluster: it does not apply this setting either, so there is genuinely nothing to reconcile.";
+			})();
 			return {
 				blockedReason: `Deployment '${cluster}' user_settings_yaml has no key matching ${keyList}; no change needed.`,
 				messages: [
 					new AIMessage(
 						`No change needed: I found no key matching ${keyList} in '${cluster}' user_settings_yaml (searched exact + suffix paths), so there was nothing to remove.\n\n` +
-							`${yamlBlock}\n\nI did not open a merge request. This reflects the repo file on main; I did NOT check the live cluster, so if the running cluster still has this setting applied (config drift), tell me and I can investigate.`,
+							`${yamlBlock}\n\nI did not open a merge request.${liveLine ? ` ${liveLine}` : ""}`,
 					),
 				],
 			};
@@ -4753,7 +4862,13 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	}
 	const committed = true;
 
-	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+	// SIO-1000: append the repo-vs-live drift notes (if any) under the diff so the reviewer sees which
+	// direction this removal reconciles.
+	const diffWithDrift =
+		driftNotes.length > 0
+			? `${diffLines.join("\n")}\n\nLive cluster (drift):\n${driftNotes.map((n) => `- ${n}`).join("\n")}`
+			: diffLines.join("\n");
+	return { branch, proposedFilePath: filePath, proposedDiff: diffWithDrift, precheckPassed: committed };
 }
 
 // SIO-920: validate a Kibana dashboard NDJSON payload WITHOUT parsing the whole file as one JSON
