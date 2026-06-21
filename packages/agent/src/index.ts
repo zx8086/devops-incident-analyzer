@@ -15,6 +15,7 @@ export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEnti
 export { buildIacGraph } from "./iac/graph.ts";
 export { evaluateGuards } from "./iac/guards.ts";
 export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";
+export { type ReconcileOptions, type ReconcileSummary, reconcileAll } from "./iac/reconcile.ts";
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {

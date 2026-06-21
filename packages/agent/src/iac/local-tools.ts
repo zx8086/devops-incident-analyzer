@@ -10,6 +10,7 @@
 import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import { searchAgentMemory } from "../memory-backend.ts";
+import { lifecycleTag } from "./lifecycle.ts";
 
 export const SEARCH_MEMORY_TOOL = "search_memory";
 
@@ -39,7 +40,10 @@ export async function runMemorySearch(agentName: string, args: SearchMemoryArgs)
 	if (hits.length === 0) return "No matching memory found (or durable memory is not enabled for this agent).";
 	const lines = hits.map((h) => {
 		const a = h.annotations;
-		const tags = [a.deployment, a.stack, a.version, a.outcome].filter(Boolean).join(" ");
+		// SIO-1005: lifecycleTag instead of the raw outcome -- a reconciled iac-change shows its
+		// lifecycle (applied/apply-failed), a still-proposed change reads "proposed" (not the misleading
+		// "completed"), and the distinct outcomes (rejected/blocked/...) pass through unchanged.
+		const tags = [a.deployment, a.stack, a.version, lifecycleTag(a)].filter(Boolean).join(" ");
 		return tags ? `- ${h.text} [${tags}]` : `- ${h.text}`;
 	});
 	return lines.join("\n");

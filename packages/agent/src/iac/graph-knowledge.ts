@@ -22,7 +22,8 @@ import {
 	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { dedupeHitsBy, type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
+import { dedupePreferring, type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
+import { lifecycleRank, lifecycleTag } from "./lifecycle.ts";
 import { iacTurnOutcome, stackForWorkflow, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -162,10 +163,18 @@ function renderLearnings(hits: MemorySearchHit[]): string {
 	if (hits.length === 0) return "";
 	// SIO-973: a re-recorded change (same config_change_id / mr_url) returns as multiple hits;
 	// collapse to one bullet per change so the plan-review card doesn't repeat the same learning.
-	return dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url)
+	// SIO-1005: prefer the reconciled (terminal) fact per MR via lifecycleRank, WITHOUT reordering the
+	// list -- each row keeps its slot (newest MR first) and only its winning hit is upgraded. The tag
+	// comes from lifecycleTag: a reconciled row reads [ilm-rollout applied]/[apply-failed]; a
+	// still-proposed row reads [ilm-rollout proposed] (not the misleading "completed").
+	return dedupePreferring(
+		hits,
+		(h) => h.annotations.config_change_id ?? h.annotations.mr_url,
+		(h) => lifecycleRank(h.annotations),
+	)
 		.map((h) => {
 			const a = h.annotations;
-			const tags = [a.workflow, a.version, a.outcome].filter(Boolean).join(" ");
+			const tags = [a.workflow, a.version, lifecycleTag(a)].filter(Boolean).join(" ");
 			return tags ? `- ${h.text} [${tags}]` : `- ${h.text}`;
 		})
 		.join("\n");

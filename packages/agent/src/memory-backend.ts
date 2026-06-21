@@ -105,7 +105,10 @@ export function setSessionOutcome(outcome: string | undefined): void {
 }
 
 type QueuedWrite =
-	| { kind: "fact"; text: string; createdAt: string; annotations?: AnnotationMap }
+	// SIO-1005: facts are durable by default (no ttlSeconds), but the proposal iac-change fact can
+	// carry a TTL so it auto-expires once the reconciliation pass has written the durable terminal
+	// fact -- keeping the append-only store at ~one fact per settled MR instead of two.
+	| { kind: "fact"; text: string; createdAt: string; annotations?: AnnotationMap; ttlSeconds?: number }
 	| { kind: "message"; message: ChatMessageBlock; ttlSeconds?: number; createdAt: string; annotations?: AnnotationMap };
 const queue: QueuedWrite[] = [];
 
@@ -122,8 +125,10 @@ function messageAnnotations(extra?: AnnotationMap): AnnotationMap {
 	return { kind: "daily-log", ...extra };
 }
 
-export function enqueueFact(text: string, createdAt: string, annotations?: AnnotationMap): void {
-	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations) });
+export function enqueueFact(text: string, createdAt: string, annotations?: AnnotationMap, ttlSeconds?: number): void {
+	// SIO-1005: ttlSeconds is optional and defaults to undefined -> a durable fact (no decay), so every
+	// existing caller is unchanged. Only the proposal iac-change fact passes a TTL.
+	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations), ttlSeconds });
 	maybeFlush();
 }
 
@@ -189,7 +194,13 @@ export async function flushAgentMemory(): Promise<void> {
 		for (const w of batch) {
 			const res =
 				w.kind === "fact"
-					? await c.addFacts(ref, [w.text], { createdAt: w.createdAt, annotations: w.annotations })
+					? await c.addFacts(ref, [w.text], {
+							// SIO-1005: ttlSeconds is undefined for ordinary durable facts (no decay); only the
+							// proposal iac-change fact sets it. addFacts forwards it as memory_block_ttl.
+							ttlSeconds: w.ttlSeconds,
+							createdAt: w.createdAt,
+							annotations: w.annotations,
+						})
 					: await c.addMessages(ref, [w.message], {
 							ttlSeconds: w.ttlSeconds,
 							createdAt: w.createdAt,
@@ -312,6 +323,35 @@ export function dedupeHitsBy(
 		if (seen.has(key)) continue;
 		seen.add(key);
 		out.push(hit);
+	}
+	return out;
+}
+
+// SIO-1005: like dedupeHitsBy, but when several hits share a key it keeps the one with the highest
+// rankFn instead of the first-seen one -- so a reconciled iac-change fact (lifecycle:applied) wins
+// over the original proposal fact (no lifecycle) for the same mr_url. Crucially still ORDER-
+// PRESERVING ACROSS keys: a group occupies the slot of its FIRST member, so the rendered list order
+// (e.g. the plan-review "Recent changes" panel, newest MR first) is unchanged -- only each row's
+// winning hit is upgraded. A global sort by rank would instead float every terminal change to the
+// top and sink a brand-new open proposal, which is visually worse. Higher rankFn wins; ties keep the
+// earlier hit. Keyless hits (keyFn -> undefined) are never collapsed together.
+export function dedupePreferring(
+	hits: MemorySearchHit[],
+	keyFn: (hit: MemorySearchHit) => string | undefined,
+	rankFn: (hit: MemorySearchHit) => number,
+): MemorySearchHit[] {
+	const slotByKey = new Map<string, number>();
+	const out: MemorySearchHit[] = [];
+	for (const [i, hit] of hits.entries()) {
+		const key = keyFn(hit) ?? `\0nokey:${i}`;
+		const slot = slotByKey.get(key);
+		if (slot === undefined) {
+			slotByKey.set(key, out.length);
+			out.push(hit);
+			continue;
+		}
+		const current = out[slot];
+		if (current && rankFn(hit) > rankFn(current)) out[slot] = hit;
 	}
 	return out;
 }
