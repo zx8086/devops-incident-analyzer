@@ -36,8 +36,8 @@ installGraphWarmer();
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
 // SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
-// real terminal state. Shares this process's MCP bridge + memory client. No-op unless
-// IAC_RECONCILE_CRON_ENABLED=true.
+// real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
+// agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
 startIacReconcileCron();
 
 // SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something

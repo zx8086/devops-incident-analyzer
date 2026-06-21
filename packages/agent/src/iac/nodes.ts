@@ -732,8 +732,8 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 		// (applied/failed) rather than the stale "proposed". Bounded + best-effort so session start
 		// stays fast; the Bun.cron sweep does the exhaustive pass. No-op unless agent-memory backend.
 		try {
-			const summary = await reconcileAll({ source: "bootstrap", limit: 8 });
-			if (summary.checked > 0) log.info(summary, "bootstrapIac: opportunistic reconcile sweep");
+			// reconcileAll logs its own "reconcile sweep complete" summary (tagged source:"bootstrap").
+			await reconcileAll({ source: "bootstrap", limit: 8 });
 		} catch (error) {
 			log.warn(
 				{ error: error instanceof Error ? error.message : String(error) },

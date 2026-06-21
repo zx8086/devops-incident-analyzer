@@ -225,36 +225,32 @@ describe("reconcileAll (SIO-1005)", () => {
 });
 
 describe("iacProposalFactTtlSeconds (SIO-1005)", () => {
-	const prevEnabled = process.env.IAC_RECONCILE_CRON_ENABLED;
+	// TTL is now driven by the agent-memory backend (the `backend` mock var), not a separate flag.
 	const prevTtl = process.env.IAC_PROPOSAL_FACT_TTL_SECONDS;
-	const restore = (key: string, prev: string | undefined) => {
-		if (prev === undefined) delete process.env[key];
-		else process.env[key] = prev;
-	};
 	afterEach(() => {
-		restore("IAC_RECONCILE_CRON_ENABLED", prevEnabled);
-		restore("IAC_PROPOSAL_FACT_TTL_SECONDS", prevTtl);
+		if (prevTtl === undefined) delete process.env.IAC_PROPOSAL_FACT_TTL_SECONDS;
+		else process.env.IAC_PROPOSAL_FACT_TTL_SECONDS = prevTtl;
 	});
 
-	test("cron OFF -> undefined (proposal stays durable; never expire without a reconciler)", () => {
-		delete process.env.IAC_RECONCILE_CRON_ENABLED;
+	test("backend NOT agent-memory -> undefined (proposal stays durable; never expire without a reconciler)", () => {
+		backend = "file";
 		expect(iacProposalFactTtlSeconds()).toBeUndefined();
 	});
 
-	test("cron ON, no override -> 90-day default", () => {
-		process.env.IAC_RECONCILE_CRON_ENABLED = "true";
+	test("agent-memory, no override -> 90-day default", () => {
+		backend = "agent-memory";
 		delete process.env.IAC_PROPOSAL_FACT_TTL_SECONDS;
 		expect(iacProposalFactTtlSeconds()).toBe(7_776_000);
 	});
 
-	test("cron ON, valid override -> that value", () => {
-		process.env.IAC_RECONCILE_CRON_ENABLED = "1";
+	test("agent-memory, valid override -> that value", () => {
+		backend = "agent-memory";
 		process.env.IAC_PROPOSAL_FACT_TTL_SECONDS = "2592000"; // 30d
 		expect(iacProposalFactTtlSeconds()).toBe(2_592_000);
 	});
 
-	test("cron ON, invalid override -> falls back to the default", () => {
-		process.env.IAC_RECONCILE_CRON_ENABLED = "true";
+	test("agent-memory, invalid override -> falls back to the default", () => {
+		backend = "agent-memory";
 		process.env.IAC_PROPOSAL_FACT_TTL_SECONDS = "not-a-number";
 		expect(iacProposalFactTtlSeconds()).toBe(7_776_000);
 	});

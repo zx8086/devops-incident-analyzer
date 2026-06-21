@@ -20,14 +20,14 @@ const AGENT = "elastic-iac";
 const DEFAULT_PROPOSAL_TTL_SECONDS = 7_776_000; // 90 days
 
 // SIO-1005: the TTL (seconds) the PROPOSAL iac-change fact should carry, or undefined for "durable,
-// no decay". Gated on the reconciliation cron being ENABLED: if the cron is off, nothing will ever
-// write the durable terminal fact, so we must NOT let the proposal expire (it would leave the MR
-// with no stored fact at all). When the cron is on, the proposal decays after the TTL because
-// reconciliation will have written the durable applied/failed/closed fact by then. Read defensively
-// (mirrors dailyLogTtlSeconds): an unset/invalid override falls back to the 90-day default.
+// no decay". Reconciliation is driven entirely by the agent-memory backend (no separate flag): when
+// it is active the reconciler runs (cron + bootstrap) and WILL write the durable applied/failed/
+// closed fact, so the proposal can safely decay after the TTL. On any other backend reconcile is a
+// no-op, so we must NOT let the proposal expire (it would leave the MR with no stored fact at all)
+// -> undefined. Read defensively (mirrors dailyLogTtlSeconds): an unset/invalid override falls back
+// to the 90-day default.
 export function iacProposalFactTtlSeconds(): number | undefined {
-	const cronOn = process.env.IAC_RECONCILE_CRON_ENABLED === "true" || process.env.IAC_RECONCILE_CRON_ENABLED === "1";
-	if (!cronOn) return undefined; // no reconciler -> keep proposals durable (today's behavior)
+	if (selectedBackend() !== "agent-memory") return undefined; // no reconciler -> keep proposals durable
 	const raw = process.env.IAC_PROPOSAL_FACT_TTL_SECONDS;
 	if (!raw) return DEFAULT_PROPOSAL_TTL_SECONDS;
 	const n = Number(raw);
@@ -154,9 +154,15 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 		stillOpen: 0,
 		errors: 0,
 	};
-	if (selectedBackend() !== "agent-memory") return summary;
+	// SIO-1005: a disabled backend is a legitimate no-op, but log it so a "why did nothing happen?"
+	// question has an answer in the logs instead of silence.
+	if (selectedBackend() !== "agent-memory") {
+		log.info({ source: opts.source }, "reconcile sweep skipped: agent-memory backend not selected");
+		return summary;
+	}
 
 	const targets = await enumerateUnreconciledChanges(opts.limit ?? 50);
+	log.info({ source: opts.source, targets: targets.length, limit: opts.limit ?? 50 }, "reconcile sweep start");
 	for (const target of targets) {
 		try {
 			const result = await reconcileOne(target);
@@ -174,6 +180,9 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 			);
 		}
 	}
+	// SIO-1005: one summary line per sweep, ALWAYS -- so cron, bootstrap, and a direct live-probe call
+	// all report their outcome (including checked:0) in one place, and the callers don't each repeat it.
+	log.info(summary, "reconcile sweep complete");
 	return summary;
 }
 
