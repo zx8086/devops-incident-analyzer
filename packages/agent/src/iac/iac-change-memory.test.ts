@@ -56,6 +56,18 @@ describe("buildIacChangeAnnotations (KG join keys)", () => {
 		});
 	});
 
+	// SIO-996: the rich change descriptor (plan-review title) is persisted VERBATIM as change_summary
+	// so a cross-thread recall reads the exact keys, not the service-paraphrased fact text.
+	test("carries change_summary from the plan-review title", () => {
+		const a = buildIacChangeAnnotations(gitopsState());
+		expect(a.change_summary).toBe("[eu-b2b] metrics: warm replicas 0");
+	});
+
+	test("omits change_summary when there is no plan-review title", () => {
+		const a = buildIacChangeAnnotations(gitopsState({ planReview: null }));
+		expect(a.change_summary).toBeUndefined();
+	});
+
 	test("includes version for a version-upgrade and stamps the failed outcome", () => {
 		const a = buildIacChangeAnnotations(
 			gitopsState({
@@ -361,6 +373,49 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 			kind: "iac-change",
 			mr_url: "https://gitlab.com/x/-/merge_requests/9",
 		});
+	});
+
+	// SIO-996: prefer the verbatim change_summary annotation over the paraphrased fact text.
+	test("enrichment fallback: prefers the change_summary annotation over the fact text", async () => {
+		const { text } = await render(
+			{ iacRequest: null, planReview: null, pipelineStatus: "success" },
+			{
+				backend: "agent-memory",
+				hits: [
+					{
+						text: "Elastic IaC change proposed on eu-b2b/cluster-settings: a reworded paraphrase.",
+						annotations: {
+							config_change_id: "c1",
+							change_summary: "[eu-b2b] removed xpack.monitoring.collection.interval: cluster-settings-edit",
+						},
+					},
+				],
+			},
+		);
+		expect(text).toContain("Change: [eu-b2b] removed xpack.monitoring.collection.interval: cluster-settings-edit");
+		expect(text).not.toContain("a reworded paraphrase");
+	});
+
+	// SIO-996: the proposal fact carries change_summary; a later re-check fact (different
+	// config_change_id, no planReview) does not. Recall must pick the one that has it, regardless of order.
+	test("enrichment fallback: picks the hit carrying change_summary even when it is not first", async () => {
+		const { text } = await render(
+			{ iacRequest: null, planReview: null, pipelineStatus: "success" },
+			{
+				backend: "agent-memory",
+				hits: [
+					{ text: "re-check fact, no descriptor", annotations: { config_change_id: "c2" } },
+					{
+						text: "proposal fact",
+						annotations: {
+							config_change_id: "c1",
+							change_summary: "[eu-b2b] removed search.max_buckets: cluster-settings-edit",
+						},
+					},
+				],
+			},
+		);
+		expect(text).toContain("Change: [eu-b2b] removed search.max_buckets: cluster-settings-edit");
 	});
 
 	test("enrichment fallback: dedups hits sharing a key into one Change line", async () => {
