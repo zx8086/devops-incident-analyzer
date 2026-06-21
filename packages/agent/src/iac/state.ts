@@ -84,6 +84,10 @@ export interface IacRequest {
 	// left to CI's terraform plan, safety to a short danger denylist in guards.ts.
 	persistentPatch?: Record<string, unknown>;
 	transientPatch?: Record<string, unknown>;
+	// SIO-996: cluster-settings-edit key REMOVAL (revert) -- dotted names to delete from each block.
+	// Distinct from a set-to-null patch (which writes a literal null); these drop the leaf entirely.
+	removeKeysPersistent?: string[];
+	removeKeysTransient?: string[];
 	// SIO-933: ilm-rollout optional bind -- point a cluster-defaults component-template's
 	// settings.index.lifecycle.name at the created/edited policy, in the SAME MR. Basename, no .json.
 	bindTemplate?: string;

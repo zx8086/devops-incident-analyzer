@@ -173,6 +173,9 @@ const IntentSchema = z.object({
 	// SIO-994: cluster-settings-edit flat dotted-key patches for the persistent/transient blocks.
 	persistentPatch: z.record(z.string(), z.unknown()).nullish(),
 	transientPatch: z.record(z.string(), z.unknown()).nullish(),
+	// SIO-996: cluster-settings-edit key REMOVAL -- dotted names to delete (revert), NOT set to null.
+	removeKeysPersistent: z.array(z.string()).nullish(),
+	removeKeysTransient: z.array(z.string()).nullish(),
 	// SIO-933: ilm-rollout optional component-template bind (cluster-defaults file basename, no .json).
 	bindTemplate: z.string().nullish(),
 	spaceName: z.string().nullish(),
@@ -304,6 +307,9 @@ export function parseIntentJson(raw: string): IacRequest {
 					// SIO-994: cluster-settings-edit persistent/transient patches.
 					persistentPatch: nn(p.persistentPatch),
 					transientPatch: nn(p.transientPatch),
+					// SIO-996: cluster-settings-edit key removals (revert), per block.
+					removeKeysPersistent: nn(p.removeKeysPersistent),
+					removeKeysTransient: nn(p.removeKeysTransient),
 					// SIO-933: bindTemplate is a cluster-defaults file basename; users write it with .json
 					// ("bind logs-generic.otel.json"), so strip a trailing .json for ilm-rollout (mirrors
 					// policyName/sourcePolicy). The @custom suffix lives in the file's `name`, NOT the
@@ -375,7 +381,7 @@ export function capabilityMessage(): string {
 		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
 		'- **Cluster-defaults edits** -- edit the index settings on a template, e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld" or "bump refresh_interval to 30s on logs, metrics and traces-apm on eu-b2b" (any index setting; one MR can span several templates)\n' +
-		'- **Cluster-settings edits** -- edit the cluster-level persistent/transient settings (the PUT _cluster/settings surface), e.g. "set xpack.monitoring.collection.interval to 60s on eu-b2b" or "raise cluster.max_shards_per_node to 2000" (any cluster setting in environments/<dep>/cluster-settings/settings.json; distinct from per-template cluster-defaults)\n' +
+		'- **Cluster-settings edits** -- set, change, or REMOVE the cluster-level persistent/transient settings (the PUT _cluster/settings surface), e.g. "set xpack.monitoring.collection.interval to 60s on eu-b2b", "raise cluster.max_shards_per_node to 2000", or "remove xpack.monitoring.collection.interval from the persistent block on eu-b2b" (any cluster setting in environments/<dep>/cluster-settings/settings.json; distinct from per-template cluster-defaults)\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
@@ -841,7 +847,11 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"disk watermarks), which live in environments/<dep>/cluster-settings/settings.json -- set workflow to " +
 		"'cluster-settings-edit', cluster to the named deployment, and persistentPatch (and/or transientPatch) to a FLAT JSON " +
 		'object of dotted-key -> value (e.g. { "xpack.monitoring.collection.interval": "60s" }, { "cluster.max_shards_per_node": ' +
-		'"2000" }). The keys are FLAT dotted strings, NOT nested objects. This is DISTINCT from cluster-default-edit: ' +
+		'"2000" }). The keys are FLAT dotted strings, NOT nested objects. To REMOVE/revert a setting (\'remove ' +
+		"xpack.monitoring.collection.interval from the persistent block', 'drop that setting', 'revert it') list the dotted key " +
+		"name(s) in removeKeysPersistent (and/or removeKeysTransient), e.g. removeKeysPersistent: " +
+		'["xpack.monitoring.collection.interval"]. NEVER express a removal by setting the key to null -- that writes a literal ' +
+		"null into the file; use the removeKeys arrays. You MAY combine sets and removes in one request. This is DISTINCT from cluster-default-edit: " +
 		"cluster-default-edit changes the index settings of ONE index TEMPLATE (settings.index on a cluster-defaults/<template>.json " +
 		"file); cluster-settings-edit changes the WHOLE CLUSTER's persistent/transient settings (one settings.json per deployment). " +
 		"If the user names a `persistent`/`transient` block or a cluster-level setting (xpack/cluster/indices.breaker/search/disk " +
@@ -2008,7 +2018,15 @@ export function mergeClusterDefaultSettings(
 // newline. `changed` is false on a no-op. Throws on bad JSON. (Pure; unit-tested.)
 export function mergeClusterSettings(
 	json: string,
-	patches: { persistentPatch?: Record<string, unknown>; transientPatch?: Record<string, unknown> },
+	patches: {
+		persistentPatch?: Record<string, unknown>;
+		transientPatch?: Record<string, unknown>;
+		// SIO-996: explicit key removal (revert), dotted names per block. Distinct from a set-to-null
+		// patch (a JSON null literal stays in the file); these DELETE the leaf. A remove of an absent
+		// key is a no-op, so a remove-only request that touches nothing reports changed=false.
+		removeKeysPersistent?: string[];
+		removeKeysTransient?: string[];
+	},
 ): {
 	content: string;
 	previous: { persistent: Record<string, unknown>; transient: Record<string, unknown> };
@@ -2035,9 +2053,25 @@ export function mergeClusterSettings(
 			block[key] = value;
 		}
 	};
+	// SIO-996: delete the named leaves. Records the pre-delete value into `prev`; deleting an absent
+	// key leaves both `block` and `prev[key]` untouched (a genuine no-op that does not flip `changed`).
+	const removeFlat = (
+		block: Record<string, unknown>,
+		keys: string[] | undefined,
+		prev: Record<string, unknown>,
+	): void => {
+		if (!keys) return;
+		for (const key of keys) {
+			if (!(key in block)) continue;
+			prev[key] = block[key];
+			delete block[key];
+		}
+	};
 	const previous = { persistent: {} as Record<string, unknown>, transient: {} as Record<string, unknown> };
 	applyFlat(persistent, patches.persistentPatch, previous.persistent);
 	applyFlat(transient, patches.transientPatch, previous.transient);
+	removeFlat(persistent, patches.removeKeysPersistent, previous.persistent);
+	removeFlat(transient, patches.removeKeysTransient, previous.transient);
 	obj.persistent = persistent;
 	obj.transient = transient;
 	const content = `${JSON.stringify(obj, null, 2)}\n`;
@@ -3772,11 +3806,22 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 	const cluster = req.cluster ?? "";
 	const persistentPatch = req.persistentPatch;
 	const transientPatch = req.transientPatch;
+	// SIO-996: a remove-only request carries no patch but must still be accepted.
+	const removeKeysPersistent = req.removeKeysPersistent;
+	const removeKeysTransient = req.removeKeysTransient;
 	const hasPatch = (p?: Record<string, unknown>) => !!p && Object.keys(p).length > 0;
-	if (!hasPatch(persistentPatch) && !hasPatch(transientPatch)) {
+	const hasKeys = (k?: string[]) => !!k && k.length > 0;
+	if (
+		!hasPatch(persistentPatch) &&
+		!hasPatch(transientPatch) &&
+		!hasKeys(removeKeysPersistent) &&
+		!hasKeys(removeKeysTransient)
+	) {
 		return {
-			blockedReason: "Cluster-settings change needs at least one persistent or transient setting to change.",
-			messages: [new AIMessage("Cannot propose the change: name a cluster persistent/transient setting to set.")],
+			blockedReason: "Cluster-settings change needs at least one persistent or transient setting to set or remove.",
+			messages: [
+				new AIMessage("Cannot propose the change: name a cluster persistent/transient setting to set or remove."),
+			],
 		};
 	}
 
@@ -3812,6 +3857,8 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 		updated = mergeClusterSettings(extractFileContent(raw), {
 			...(hasPatch(persistentPatch) && { persistentPatch }),
 			...(hasPatch(transientPatch) && { transientPatch }),
+			...(hasKeys(removeKeysPersistent) && { removeKeysPersistent }),
+			...(hasKeys(removeKeysTransient) && { removeKeysTransient }),
 		});
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
@@ -3822,17 +3869,24 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 	}
 
 	if (!updated.changed) {
+		// SIO-996: covers both "already at the requested value" and "asked to remove a key that's absent".
 		return {
-			blockedReason: `Cluster settings on '${cluster}' already have the requested values; no change needed.`,
+			blockedReason: `Cluster settings on '${cluster}' already match the request; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: the cluster settings on '${cluster}' already have the requested values. I did not open a merge request.`,
+					`No change needed: the cluster settings on '${cluster}' already match the request (the keys to set already have those values, and any keys to remove are already absent). I did not open a merge request.`,
 				),
 			],
 		};
 	}
 
-	const keys = [...Object.keys(persistentPatch ?? {}), ...Object.keys(transientPatch ?? {})].join(", ");
+	// SIO-996: removed keys appear in the commit message alongside the set keys (prefixed `-`).
+	const keys = [
+		...Object.keys(persistentPatch ?? {}),
+		...Object.keys(transientPatch ?? {}),
+		...(removeKeysPersistent ?? []).map((k) => `-${k}`),
+		...(removeKeysTransient ?? []).map((k) => `-${k}`),
+	].join(", ");
 	// SIO-994 fix: create the branch BEFORE committing (gitlab_commit_file commits onto an existing
 	// branch; without this the commit 400s on a missing branch). Created here -- after the no-op/404
 	// guards -- so a no-op never leaves a stray branch. Idempotent (a re-run reuses the branch).
