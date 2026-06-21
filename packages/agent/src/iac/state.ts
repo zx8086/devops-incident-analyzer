@@ -114,6 +114,13 @@ export interface IacRequest {
 	// lock out login) and the non-data component sizing (integrations_server / kibana).
 	userSettingsTarget?: "elasticsearch_config" | "kibana";
 	userSettingsYaml?: string;
+	// SIO-997: a SURGICAL single-key merge into the existing user_settings_yaml (e.g. set
+	// xpack.monitoring.collection.interval), distinct from userSettingsYaml's whole-block replace.
+	// The dotted key is set in place; every sibling subtree (incl. xpack.security/OIDC) is preserved
+	// byte-for-byte, so a non-SSO setting can be added without the planner reproducing the SSO block.
+	userSettingsMergeTarget?: "elasticsearch_config" | "kibana";
+	userSettingsMergeKey?: string;
+	userSettingsMergeValue?: string;
 	sizeComponent?: "integrations_server" | "kibana";
 	componentSize?: string;
 	componentZoneCount?: number;

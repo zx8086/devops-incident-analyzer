@@ -9,6 +9,7 @@ import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage }
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
+import { parseDocument } from "yaml";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
@@ -194,6 +195,10 @@ const IntentSchema = z.object({
 	tierAutoscale: z.boolean().nullish(),
 	userSettingsTarget: z.enum(["elasticsearch_config", "kibana"]).nullish(),
 	userSettingsYaml: z.string().nullish(),
+	// SIO-997: surgical single-key merge into the existing user_settings_yaml (non-SSO settings).
+	userSettingsMergeTarget: z.enum(["elasticsearch_config", "kibana"]).nullish(),
+	userSettingsMergeKey: z.string().nullish(),
+	userSettingsMergeValue: z.string().nullish(),
 	sizeComponent: z.enum(["integrations_server", "kibana"]).nullish(),
 	componentSize: z.string().nullish(),
 	componentZoneCount: z.number().nullish(),
@@ -331,6 +336,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					tierAutoscale: nn(p.tierAutoscale),
 					userSettingsTarget: nn(p.userSettingsTarget),
 					userSettingsYaml: nn(p.userSettingsYaml),
+					// SIO-997: surgical user_settings_yaml key merge (non-SSO).
+					userSettingsMergeTarget: nn(p.userSettingsMergeTarget),
+					userSettingsMergeKey: nn(p.userSettingsMergeKey),
+					userSettingsMergeValue: nn(p.userSettingsMergeValue),
 					sizeComponent: nn(p.sizeComponent),
 					componentSize: nn(p.componentSize),
 					componentZoneCount: nn(p.componentZoneCount),
@@ -754,7 +763,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"runtimeFieldName, runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, " +
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
 		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
-		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, sizeComponent, componentSize, " +
+		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, userSettingsMergeTarget, " +
+		"userSettingsMergeKey, userSettingsMergeValue, sizeComponent, componentSize, " +
 		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
@@ -874,10 +884,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"'topology-edit', cluster to the named deployment, autoscaleEnabled (true/false for the GLOBAL elasticsearch " +
 		"autoscale toggle), and/or topologyTier (hot|warm|cold|frozen|master|ml|coordinating) with tierZoneCount (integer " +
 		"1-3) and/or tierAutoscale (true/false for that tier). " +
-		"topology-edit ALSO covers two more surfaces of the same _deployments JSON: (a) the SSO/OIDC login config -- if the " +
-		"user gives a new user_settings_yaml block (SAML/OIDC realm or Kibana auth providers), set userSettingsTarget " +
-		"('elasticsearch_config' for the ES SAML realm, 'kibana' for the Kibana auth providers) and userSettingsYaml to the " +
-		"raw YAML string verbatim; and (b) component sizing -- to resize the integrations_server or kibana node, set " +
+		"topology-edit ALSO covers more surfaces of the same _deployments JSON. (a) user_settings_yaml -- the raw YAML the " +
+		"EC orchestrator applies with OPERATOR privileges (so it can set operator-only keys the cluster-settings stack 403s " +
+		"on, e.g. xpack.monitoring.collection.interval). There are TWO ways to edit it: " +
+		"(a1) a SINGLE-KEY merge (PREFERRED for an operational setting like 'set xpack.monitoring.collection.interval to 60s " +
+		"on eu-b2b via user_settings_yaml', 'add xpack.indices.recovery.max_bytes_per_sec ...') -- set userSettingsMergeTarget " +
+		"('elasticsearch_config' for ES settings, 'kibana' for Kibana settings), userSettingsMergeKey to the FLAT dotted key " +
+		"(e.g. 'xpack.monitoring.collection.interval'), and userSettingsMergeValue to the string value (e.g. '60s'). The agent " +
+		"merges just that key in place and preserves every other subtree (incl. the xpack.security/OIDC SSO realm) " +
+		"byte-for-byte -- you do NOT reproduce the existing YAML. (a2) a WHOLE-BLOCK replace -- ONLY when the user supplies a " +
+		"complete new SSO/OIDC realm or Kibana auth-providers block to swap in -- set userSettingsTarget + userSettingsYaml to " +
+		"the raw YAML string verbatim. Use (a1) for adding/changing one setting; use (a2) only to replace an entire SSO block. " +
+		"And (b) component sizing -- to resize the integrations_server or kibana node, set " +
 		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. Set at " +
 		"least one topology field. NEVER propose deleting a deployment. " +
 		"For a DASHBOARD change ('add this dashboard to the developer-experience space on eu-b2b', 'replace the kong " +
@@ -1253,6 +1271,65 @@ export function setDeploymentUserSettings(
 	const changed = previousYaml !== yaml;
 	blockObj.user_settings_yaml = yaml;
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousYaml, changed };
+}
+
+// SIO-997: a single dotted-key SET into an EXISTING user_settings_yaml block, distinct from
+// setDeploymentUserSettings' whole-block replace. The non-SSO common case ("set
+// xpack.monitoring.collection.interval to 60s") must add ONE leaf without the planner reproducing the
+// rest of the YAML -- a wrong reproduction of the xpack.security/OIDC subtree can lock out login. We
+// parse the existing string with `yaml`'s parseDocument (which preserves every untouched node's
+// formatting verbatim) and setIn the dotted path, creating only the missing intermediate maps. Every
+// sibling subtree -- crucially xpack.security -- is left byte-for-byte. (Pure; unit-tested.)
+export function mergeUserSettingsKey(
+	currentYaml: string,
+	dottedKey: string,
+	value: string,
+): { yaml: string; previousValue?: string; changed: boolean; touchesSecurity: boolean } {
+	const path = dottedKey.split(".");
+	const doc = parseDocument(currentYaml || "");
+	// getIn returns the existing scalar (its .value) or undefined; capture for the diff + no-op guard.
+	const prev = doc.getIn(path, true);
+	const previousValue =
+		prev && typeof prev === "object" && "value" in prev ? String((prev as { value: unknown }).value) : undefined;
+	doc.setIn(path, value);
+	const yaml = doc.toString();
+	return {
+		yaml,
+		previousValue,
+		changed: yaml !== currentYaml,
+		// xpack.security is the SSO/OIDC realm subtree; flag when the edit lands inside it so the risk
+		// message can warn about login lock-out only when it actually applies.
+		touchesSecurity: path[0] === "xpack" && path[1] === "security",
+	};
+}
+
+// SIO-997: read-modify-write a _deployments JSON: merge ONE dotted key into the target block's
+// user_settings_yaml (mergeUserSettingsKey), leaving every other subtree byte-for-byte. Mirrors
+// setDeploymentUserSettings' wrapper (preserves siblings + 2-space JSON indent + trailing newline);
+// throws on bad JSON or a missing target block. (Pure; unit-tested.)
+export function mergeDeploymentUserSettingsKey(
+	json: string,
+	target: "elasticsearch_config" | "kibana",
+	dottedKey: string,
+	value: string,
+): { content: string; previousValue?: string; changed: boolean; touchesSecurity: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const block = obj[target];
+	if (!block || typeof block !== "object") throw new Error(`deployment JSON has no ${target} block`);
+	const blockObj = block as Record<string, unknown>;
+	const currentYaml = typeof blockObj.user_settings_yaml === "string" ? blockObj.user_settings_yaml : "";
+	const merged = mergeUserSettingsKey(currentYaml, dottedKey, value);
+	blockObj.user_settings_yaml = merged.yaml;
+	return {
+		content: `${JSON.stringify(obj, null, 2)}\n`,
+		previousValue: merged.previousValue,
+		changed: merged.changed,
+		touchesSecurity: merged.touchesSecurity,
+	};
 }
 
 // SIO-919: set the size / zone_count of a non-data component (integrations_server or kibana) in the
@@ -4179,6 +4256,10 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		req.autoscaleEnabled !== undefined ||
 		(req.topologyTier !== undefined && (req.tierZoneCount !== undefined || req.tierAutoscale !== undefined)) ||
 		(req.userSettingsTarget !== undefined && req.userSettingsYaml !== undefined) ||
+		// SIO-997: the surgical user_settings_yaml key merge (non-SSO) is also a valid topology change.
+		(req.userSettingsMergeTarget !== undefined &&
+			req.userSettingsMergeKey !== undefined &&
+			req.userSettingsMergeValue !== undefined) ||
 		(req.sizeComponent !== undefined && (req.componentSize !== undefined || req.componentZoneCount !== undefined));
 	if (!cluster || !hasChange) {
 		return {
@@ -4297,6 +4378,41 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		// NEVER echo the YAML (SSO/OIDC can contain idp/sp identifiers); show only the target + size delta.
 		diffLines.push(
 			`[${req.userSettingsTarget}] user_settings_yaml updated (SSO/login config; ${sso.previousYaml?.length ?? 0} -> ${req.userSettingsYaml.length} chars; value withheld)`,
+		);
+	}
+
+	// SIO-997: surgical single-key merge into the existing user_settings_yaml (the non-SSO case). Adds
+	// ONLY the named dotted key; every sibling subtree (incl. xpack.security/OIDC) is preserved
+	// byte-for-byte by mergeUserSettingsKey. Unlike the whole-block replace above, the key + value ARE
+	// safe to echo (a non-SSO operational setting), UNLESS the edit lands inside xpack.security.
+	if (
+		req.userSettingsMergeTarget !== undefined &&
+		req.userSettingsMergeKey !== undefined &&
+		req.userSettingsMergeValue !== undefined
+	) {
+		let merge: ReturnType<typeof mergeDeploymentUserSettingsKey>;
+		try {
+			merge = mergeDeploymentUserSettingsKey(
+				content,
+				req.userSettingsMergeTarget,
+				req.userSettingsMergeKey,
+				req.userSettingsMergeValue,
+			);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
+		content = merge.content;
+		anyChange = anyChange || merge.changed;
+		// A security edit can contain secrets / lock out login -- withhold its value; a non-security
+		// operational key (xpack.monitoring, indices, ...) is safe to show in the diff.
+		const valueShown = merge.touchesSecurity ? "value withheld (xpack.security)" : `"${req.userSettingsMergeValue}"`;
+		const prevShown = merge.previousValue !== undefined ? ` (was "${merge.previousValue}")` : " (new key)";
+		diffLines.push(
+			`[${req.userSettingsMergeTarget}] user_settings_yaml ${req.userSettingsMergeKey} -> ${valueShown}${merge.touchesSecurity ? "" : prevShown}`,
 		);
 	}
 
@@ -4960,6 +5076,17 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 				"COULD LOCK OUT LOGIN: this edits the SSO/OIDC user_settings_yaml (SAML realm / Kibana auth providers). A malformed or wrong block can break authentication for ALL users. RECOMMEND HUMAN REVIEW of the YAML before merge; have a break-glass path ready.",
 			);
 		}
+		// SIO-997: the surgical merge preserves every sibling subtree byte-for-byte, so the lock-out
+		// risk applies ONLY when the dotted key itself lands inside xpack.security. A non-security key
+		// (xpack.monitoring, indices, slm, ...) is a benign operational edit on the shared state.
+		if (req?.userSettingsMergeKey !== undefined) {
+			const mergeTouchesSecurity = req.userSettingsMergeKey.startsWith("xpack.security.");
+			risks.unshift(
+				mergeTouchesSecurity
+					? "COULD LOCK OUT LOGIN: this merges a key INSIDE xpack.security (the SSO/OIDC realm). A wrong value can break authentication for ALL users. RECOMMEND HUMAN REVIEW; have a break-glass path ready."
+					: `This sets a single operational user_settings_yaml key (${req.userSettingsMergeKey}); the xpack.security/OIDC subtree is preserved byte-for-byte. Applies on the SHARED deployments state (rolling config change).`,
+			);
+		}
 		if (req?.autoscaleEnabled === true || req?.tierAutoscale === true) {
 			risks.push(
 				"Enabling autoscale lets the cluster grow toward its max_size ceiling automatically -- confirm the ceiling and the cost envelope.",
@@ -5036,7 +5163,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 											: req?.workflow === "security-edit"
 												? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
 												: req?.workflow === "topology-edit"
-													? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
+													? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.userSettingsMergeKey !== undefined ? `${req.userSettingsMergeKey}=${req.userSettingsMergeValue ?? "?"}` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
 													: req?.workflow === "dashboard-edit"
 														? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
 														: req?.workflow === "index-template-create"
@@ -5180,7 +5307,7 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Security role '${req?.roleName}' ADDITIVE privilege grant${state.privilegeEscalation ? " (PRIVILEGE ESCALATION -- recommend human security review)" : ""}. role_mappings + api_keys untouched.`
 				: "",
 			req?.workflow === "topology-edit"
-				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}.`
+				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.userSettingsMergeKey !== undefined ? ` ${req?.userSettingsMergeTarget ?? ""}.user_settings_yaml ${req.userSettingsMergeKey} -> ${req.userSettingsMergeKey.startsWith("xpack.security.") ? "value withheld (xpack.security)" : req.userSettingsMergeValue} (siblings byte-for-byte)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}.`
 				: "",
 			req?.workflow === "dashboard-edit"
 				? `Dashboard ${req?.dashboardAction ?? "?"} '${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}.ndjson' (whole-file Kibana NDJSON export; committed verbatim, no panel edits). ${review?.diff ?? ""}`

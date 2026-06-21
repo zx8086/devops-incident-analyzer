@@ -1,7 +1,10 @@
 // agent/src/iac/deployment-topology.test.ts
 import { describe, expect, mock, test } from "bun:test";
+import { parse } from "yaml";
 import {
 	branchSlug,
+	mergeDeploymentUserSettingsKey,
+	mergeUserSettingsKey,
 	parseIntentJson,
 	reviewPlan,
 	setComponentSize,
@@ -104,6 +107,25 @@ describe("parseIntentJson — topology-edit", () => {
 		expect(req?.topologyTier).toBe("hot");
 		expect(req?.tierZoneCount).toBe(3);
 		expect(req?.tierAutoscale).toBe(false);
+	});
+
+	// SIO-997: a non-SSO user_settings_yaml setting maps to the surgical merge fields, NOT "other".
+	test("maps the user_settings_yaml single-key merge fields", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "topology-edit",
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config",
+				userSettingsMergeKey: "xpack.monitoring.collection.interval",
+				userSettingsMergeValue: "60s",
+			}),
+		);
+		expect(req?.workflow).toBe("topology-edit");
+		expect(req?.userSettingsMergeTarget).toBe("elasticsearch_config");
+		expect(req?.userSettingsMergeKey).toBe("xpack.monitoring.collection.interval");
+		expect(req?.userSettingsMergeValue).toBe("60s");
+		// the whole-block replace fields stay empty (this is the merge path, not a swap)
+		expect(req?.userSettingsYaml).toBeUndefined();
 	});
 });
 
@@ -291,6 +313,101 @@ describe("setDeploymentUserSettings", () => {
 	});
 });
 
+// SIO-997: surgical dotted-key merge into an existing user_settings_yaml -- the non-SSO common case
+// (xpack.monitoring) must add ONE leaf and leave the xpack.security/OIDC subtree byte-for-byte.
+describe("mergeUserSettingsKey (SIO-997)", () => {
+	// The real eu-b2b nested-map OIDC block (abbreviated but structurally faithful to MR !199).
+	const OIDC = [
+		"xpack:",
+		"  security:",
+		"    authc:",
+		"      realms:",
+		"        oidc:",
+		"          oidc-pvh-sso:",
+		"            order: 2",
+		'            rp.client_id: "86997c24-1ea8-4e05-af01-603fb3fe85bb"',
+		"            claims.principal: email",
+		"",
+	].join("\n");
+
+	test("adds the monitoring subtree under the SAME xpack key, leaving security byte-for-byte", () => {
+		const { yaml, changed, touchesSecurity } = mergeUserSettingsKey(
+			OIDC,
+			"xpack.monitoring.collection.interval",
+			"60s",
+		);
+		expect(changed).toBe(true);
+		expect(touchesSecurity).toBe(false);
+		// the entire original security subtree survives verbatim, including indentation
+		expect(yaml).toContain("        oidc:\n          oidc-pvh-sso:\n            order: 2");
+		expect(yaml).toContain('            rp.client_id: "86997c24-1ea8-4e05-af01-603fb3fe85bb"');
+		// the new leaf is added under xpack, and re-parses to the right value
+		const reparsed = parse(yaml) as { xpack: { monitoring: { collection: { interval: string } } } };
+		expect(reparsed.xpack.monitoring.collection.interval).toBe("60s");
+		// and security is still present + unchanged after a round-trip
+		const sec = parse(yaml) as { xpack: { security: { authc: { realms: { oidc: Record<string, unknown> } } } } };
+		expect(sec.xpack.security.authc.realms.oidc).toBeDefined();
+	});
+
+	test("changed=false when the key already holds the requested value", () => {
+		const withKey = mergeUserSettingsKey(OIDC, "xpack.monitoring.collection.interval", "60s").yaml;
+		const again = mergeUserSettingsKey(withKey, "xpack.monitoring.collection.interval", "60s");
+		expect(again.changed).toBe(false);
+	});
+
+	test("captures the previous value when overwriting an existing key", () => {
+		const withKey = mergeUserSettingsKey(OIDC, "xpack.monitoring.collection.interval", "10s").yaml;
+		const over = mergeUserSettingsKey(withKey, "xpack.monitoring.collection.interval", "60s");
+		expect(over.previousValue).toBe("10s");
+		expect(over.changed).toBe(true);
+	});
+
+	test("flags touchesSecurity when the dotted key lands inside xpack.security", () => {
+		const res = mergeUserSettingsKey(OIDC, "xpack.security.authc.realms.oidc.oidc-pvh-sso.order", "5");
+		expect(res.touchesSecurity).toBe(true);
+	});
+
+	test("merges into an empty user_settings_yaml (no existing block)", () => {
+		const { yaml, changed } = mergeUserSettingsKey("", "xpack.monitoring.collection.interval", "60s");
+		expect(changed).toBe(true);
+		expect(
+			(parse(yaml) as { xpack: { monitoring: { collection: { interval: string } } } }).xpack.monitoring.collection
+				.interval,
+		).toBe("60s");
+	});
+});
+
+describe("mergeDeploymentUserSettingsKey (SIO-997)", () => {
+	test("merges the dotted key into elasticsearch_config, preserving every sibling + kibana SSO", () => {
+		const { content, changed, touchesSecurity } = mergeDeploymentUserSettingsKey(
+			DEPLOYMENT,
+			"elasticsearch_config",
+			"xpack.monitoring.collection.interval",
+			"60s",
+		);
+		expect(changed).toBe(true);
+		expect(touchesSecurity).toBe(false);
+		const parsed = JSON.parse(content) as {
+			elasticsearch_config: { user_settings_yaml: string; plugins: unknown[] };
+			kibana: { user_settings_yaml: string };
+		};
+		// the ES_SSO realm line survives inside the merged YAML; kibana block untouched
+		expect(parsed.elasticsearch_config.user_settings_yaml).toContain("xpack.security.authc.realms.saml.kibana-realm");
+		expect(parsed.elasticsearch_config.plugins).toEqual([]);
+		expect(parsed.kibana.user_settings_yaml).toBe(KB_SSO);
+		const merged = parse(parsed.elasticsearch_config.user_settings_yaml) as {
+			xpack: { monitoring: { collection: { interval: string } } };
+		};
+		expect(merged.xpack.monitoring.collection.interval).toBe("60s");
+	});
+
+	test("throws when the target block is missing", () => {
+		expect(() => mergeDeploymentUserSettingsKey(JSON.stringify({ name: "x" }), "kibana", "a.b", "c")).toThrow(
+			"no kibana block",
+		);
+	});
+});
+
 describe("setComponentSize", () => {
 	test("sets integrations_server size + zone_count, captures previous, leaves kibana alone", () => {
 		const { content, previousSize, previousZoneCount, changed } = setComponentSize(DEPLOYMENT, "integrations_server", {
@@ -353,6 +470,67 @@ describe("draftChange -> proposeTopologyChange (SSO + sizing)", () => {
 		// the committed file DID write the new YAML verbatim
 		const written = JSON.parse(String(committed.content)) as { elasticsearch_config: { user_settings_yaml: string } };
 		expect(written.elasticsearch_config.user_settings_yaml).toBe(newYaml);
+	});
+
+	// SIO-997: the surgical merge commits the file with ONLY the new key added; the existing SSO line
+	// survives byte-for-byte, and a non-security key is safe to show in the diff.
+	test("user_settings_yaml key merge commits; adds the key, preserves SSO, shows the value", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsMergeKey: "xpack.monitoring.collection.interval",
+				userSettingsMergeValue: "60s",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		// a non-security key IS shown in the diff (it is an operational setting, not a secret)
+		expect(result.proposedDiff).toContain("xpack.monitoring.collection.interval");
+		expect(result.proposedDiff).toContain("60s");
+		const written = JSON.parse(String(committed.content)) as { elasticsearch_config: { user_settings_yaml: string } };
+		const yaml = written.elasticsearch_config.user_settings_yaml;
+		// the existing ES SSO realm line is preserved byte-for-byte
+		expect(yaml).toContain("xpack.security.authc.realms.saml.kibana-realm");
+		// the new key re-parses to the right value
+		const reparsed = parse(yaml) as { xpack: { monitoring: { collection: { interval: string } } } };
+		expect(reparsed.xpack.monitoring.collection.interval).toBe("60s");
+	});
+
+	// SIO-997: a merge INSIDE xpack.security withholds the value (could be a secret / lock-out).
+	test("a merge into xpack.security withholds the value in the diff", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsMergeKey: "xpack.security.authc.realms.oidc.oidc1.rp.client_id",
+				userSettingsMergeValue: "super-secret-client-id",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain("value withheld (xpack.security)");
+		expect(result.proposedDiff).not.toContain("super-secret-client-id");
 	});
 
 	test("component sizing commits with a scalar diff", async () => {
