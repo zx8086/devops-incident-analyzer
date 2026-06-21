@@ -6,6 +6,8 @@ import {
 	mergeDeploymentUserSettingsKey,
 	mergeUserSettingsKey,
 	parseIntentJson,
+	removeDeploymentUserSettingsKeys,
+	removeUserSettingsKeys,
 	reviewPlan,
 	setComponentSize,
 	setDeploymentTopology,
@@ -611,6 +613,275 @@ describe("reviewPlan — topology SSO", () => {
 		expect(result.risks?.[0]).toContain("HUMAN REVIEW");
 		// the shared-state line is still present, just below the login warning
 		expect(result.risks?.some((r) => r.includes("SINGLE shared Terraform state"))).toBe(true);
+	});
+});
+
+// SIO-999: surgical key REMOVAL from user_settings_yaml -- mirrors the SIO-997 merge suite. Drops the
+// named dotted leaf (+ now-empty parents) while preserving every sibling subtree byte-for-byte.
+describe("removeUserSettingsKeys (SIO-999)", () => {
+	// The inert appended monitoring subtree alongside the real OIDC SSO realm (the eu-b2b repro).
+	const WITH_MONITORING = [
+		"xpack:",
+		"  security:",
+		"    authc:",
+		"      realms:",
+		"        oidc:",
+		"          oidc-pvh-sso:",
+		"            order: 2",
+		'            rp.client_id: "86997c24-1ea8-4e05-af01-603fb3fe85bb"',
+		"monitoring:",
+		"  collection:",
+		'    interval: "60s"',
+		"",
+	].join("\n");
+
+	test("removes the leaf AND prunes empty parents, leaving the OIDC realm byte-for-byte", () => {
+		const { yaml, removed, changed, touchesSecurity } = removeUserSettingsKeys(WITH_MONITORING, [
+			"monitoring.collection.interval",
+		]);
+		expect(changed).toBe(true);
+		expect(touchesSecurity).toBe(false);
+		expect(removed).toEqual(["monitoring.collection.interval"]);
+		// the whole inert monitoring subtree is gone (no `collection: {}` / `monitoring: {}` residue)
+		expect(yaml).not.toContain("monitoring");
+		// the OIDC security subtree survives verbatim, including indentation
+		expect(yaml).toContain("        oidc:\n          oidc-pvh-sso:\n            order: 2");
+		expect(yaml).toContain('            rp.client_id: "86997c24-1ea8-4e05-af01-603fb3fe85bb"');
+	});
+
+	test("removing the whole named subtree key drops it entirely", () => {
+		const { yaml, removed, changed } = removeUserSettingsKeys(WITH_MONITORING, ["monitoring"]);
+		expect(changed).toBe(true);
+		expect(removed).toEqual(["monitoring"]);
+		expect(yaml).not.toContain("monitoring");
+		expect(yaml).toContain("oidc-pvh-sso");
+	});
+
+	test("absent key is a no-op: changed=false, removed empty, yaml unchanged", () => {
+		const { yaml, removed, changed } = removeUserSettingsKeys(WITH_MONITORING, ["does.not.exist"]);
+		expect(changed).toBe(false);
+		expect(removed).toEqual([]);
+		expect(yaml).toBe(WITH_MONITORING);
+	});
+
+	test("stops pruning at an ancestor that still holds a sibling", () => {
+		const withSibling = ["monitoring:", "  collection:", '    interval: "60s"', "    enabled: true", ""].join("\n");
+		const { yaml } = removeUserSettingsKeys(withSibling, ["monitoring.collection.interval"]);
+		// collection survives (enabled remains); only interval is gone
+		expect(yaml).not.toContain("interval");
+		expect(yaml).toContain("enabled: true");
+		expect(yaml).toContain("collection:");
+	});
+
+	test("flags touchesSecurity when a removed key lands inside xpack.security", () => {
+		const res = removeUserSettingsKeys(WITH_MONITORING, ["xpack.security.authc.realms.oidc.oidc-pvh-sso.order"]);
+		expect(res.touchesSecurity).toBe(true);
+		expect(res.changed).toBe(true);
+	});
+
+	test("removes multiple keys in one pass", () => {
+		const res = removeUserSettingsKeys(WITH_MONITORING, [
+			"monitoring.collection.interval",
+			"xpack.security.authc.realms.oidc.oidc-pvh-sso.rp.client_id",
+		]);
+		expect(res.removed.length).toBe(2);
+		expect(res.touchesSecurity).toBe(true);
+		expect(res.yaml).not.toContain("monitoring");
+		expect(res.yaml).not.toContain("rp.client_id");
+		// the surviving realm scaffolding is still there
+		expect(res.yaml).toContain("oidc-pvh-sso");
+	});
+});
+
+describe("removeDeploymentUserSettingsKeys (SIO-999)", () => {
+	// A deployment whose elasticsearch_config user_settings_yaml carries SSO + the inert monitoring block.
+	const ES_WITH_MON = `${ES_SSO}monitoring:\n  collection:\n    interval: "60s"\n`;
+	const DEPLOYMENT_WITH_MON = JSON.stringify(
+		{
+			name: "eu-b2b",
+			elasticsearch: { autoscale: false, hot: { size: "4g", zone_count: 2 } },
+			elasticsearch_config: { plugins: [], user_settings_yaml: ES_WITH_MON },
+			kibana: { size: "1g", user_settings_yaml: KB_SSO },
+		},
+		null,
+		2,
+	);
+
+	test("removes the monitoring key from elasticsearch_config, preserving SSO + kibana block", () => {
+		const { content, removed, changed, touchesSecurity } = removeDeploymentUserSettingsKeys(
+			DEPLOYMENT_WITH_MON,
+			"elasticsearch_config",
+			["monitoring.collection.interval"],
+		);
+		expect(changed).toBe(true);
+		expect(touchesSecurity).toBe(false);
+		expect(removed).toEqual(["monitoring.collection.interval"]);
+		const parsed = JSON.parse(content) as {
+			elasticsearch_config: { user_settings_yaml: string; plugins: unknown[] };
+			kibana: { user_settings_yaml: string };
+		};
+		// SSO realm survives, monitoring gone, kibana untouched, plugins untouched
+		expect(parsed.elasticsearch_config.user_settings_yaml).toContain("xpack.security.authc.realms.saml.kibana-realm");
+		expect(parsed.elasticsearch_config.user_settings_yaml).not.toContain("monitoring");
+		expect(parsed.elasticsearch_config.plugins).toEqual([]);
+		expect(parsed.kibana.user_settings_yaml).toBe(KB_SSO);
+	});
+
+	test("absent key is a no-op (changed=false)", () => {
+		const { changed, removed } = removeDeploymentUserSettingsKeys(DEPLOYMENT_WITH_MON, "elasticsearch_config", [
+			"nope.not.here",
+		]);
+		expect(changed).toBe(false);
+		expect(removed).toEqual([]);
+	});
+
+	test("throws when the target block is missing", () => {
+		expect(() => removeDeploymentUserSettingsKeys(JSON.stringify({ name: "x" }), "kibana", ["a.b"])).toThrow(
+			"no kibana block",
+		);
+	});
+});
+
+describe("parseIntentJson — topology-edit removal (SIO-999)", () => {
+	test("maps the user_settings_yaml removal fields", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "topology-edit",
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config",
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			}),
+		);
+		expect(req?.workflow).toBe("topology-edit");
+		expect(req?.userSettingsMergeTarget).toBe("elasticsearch_config");
+		expect(req?.userSettingsRemoveKeys).toEqual(["monitoring.collection.interval"]);
+		// no value supplied -- this is the removal path, not a merge
+		expect(req?.userSettingsMergeValue).toBeUndefined();
+	});
+});
+
+describe("draftChange -> proposeTopologyChange removal (SIO-999)", () => {
+	const ES_WITH_MON = `${ES_SSO}monitoring:\n  collection:\n    interval: "60s"\n`;
+	const DEPLOYMENT_WITH_MON = JSON.stringify(
+		{
+			name: "eu-b2b",
+			region: "eu-central-1",
+			version: "8.15.0",
+			elasticsearch: { autoscale: false, hot: { size: "4g", max_size: "64g", zone_count: 2 } },
+			elasticsearch_config: { plugins: [], user_settings_yaml: ES_WITH_MON },
+			kibana: { size: "1g", zone_count: 1, user_settings_yaml: KB_SSO },
+		},
+		null,
+		2,
+	);
+	const fileResult = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT_WITH_MON).toString("base64"), encoding: "base64" })}`;
+
+	test("removal commits; drops the key, preserves SSO, lists the removed key in the diff", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		// the diff names the removed operational key
+		expect(result.proposedDiff).toContain("removed");
+		expect(result.proposedDiff).toContain("monitoring.collection.interval");
+		const written = JSON.parse(String(committed.content)) as { elasticsearch_config: { user_settings_yaml: string } };
+		const yaml = written.elasticsearch_config.user_settings_yaml;
+		expect(yaml).toContain("xpack.security.authc.realms.saml.kibana-realm");
+		expect(yaml).not.toContain("monitoring");
+	});
+
+	test("removal under xpack.security WITHHOLDS the key name in the diff", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["xpack.security.authc.realms.saml.kibana-realm.order"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain("names withheld: xpack.security");
+		expect(result.proposedDiff).not.toContain("kibana-realm.order");
+	});
+
+	test("removing an absent key is a no-op (no MR)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({ gitlab_get_file_content: () => fileResult });
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["nope.not.here"],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		// no change -> no branch/commit; the empty-diff guard blocks the MR
+		expect(result.branch).toBeUndefined();
+	});
+});
+
+describe("reviewPlan — topology removal (SIO-999)", () => {
+	test("operational removal: benign shared-state risk, names the removed key", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["monitoring.collection.interval"],
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.risks?.some((r) => r.includes("removes") && r.includes("monitoring.collection.interval"))).toBe(true);
+		expect(result.risks?.some((r) => r.includes("COULD LOCK OUT LOGIN"))).toBe(false);
+	});
+
+	test("security-key removal leads with COULD LOCK OUT LOGIN", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				userSettingsMergeTarget: "elasticsearch_config" as const,
+				userSettingsRemoveKeys: ["xpack.security.authc.realms.oidc.oidc1.order"],
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.risks?.[0]).toContain("COULD LOCK OUT LOGIN");
+		expect(result.risks?.[0]).toContain("REMOVES a key INSIDE xpack.security");
 	});
 });
 
