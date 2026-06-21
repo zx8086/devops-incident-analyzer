@@ -48,6 +48,7 @@ import type {
 	SyntheticsDriftReport,
 	SyntheticsPushResult,
 } from "./state.ts";
+import { WORKFLOW_VALUES } from "./state.ts";
 
 const log = getLogger("agent:iac");
 const AGENT = "elastic-iac";
@@ -112,29 +113,16 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 	}
 }
 
+// SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
+// "'tier-resize'|'ilm-rollout'|...", built from the same WORKFLOW_VALUES (imported from state.ts) that
+// the zod enum uses -- so the planner instruction can never drift from what the parser accepts.
+export const WORKFLOW_ENUM_PROSE = WORKFLOW_VALUES.map((w) => `'${w}'`).join("|");
+
 // The planner commonly emits explicit `null` for absent optional fields; z.optional()
 // rejects null and would silently fail the whole parse (-> the clarify fallback), so
 // every optional field is .nullish() and nulls are normalized to undefined below.
 const IntentSchema = z.object({
-	workflow: z
-		.enum([
-			"tier-resize",
-			"ilm-rollout",
-			"version-upgrade",
-			"fleet-integration",
-			"slo-edit",
-			"alerting-edit",
-			"dataview-edit",
-			"cluster-default-edit",
-			"cluster-settings-edit",
-			"space-edit",
-			"security-edit",
-			"topology-edit",
-			"dashboard-edit",
-			"index-template-create",
-			"other",
-		])
-		.default("other"),
+	workflow: z.enum(WORKFLOW_VALUES).default("other"),
 	cluster: z.string().nullish(),
 	tier: z.string().nullish(),
 	resource: z.string().nullish(),
@@ -785,8 +773,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sys = buildSystemPrompt(getAgentByName(AGENT));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
-		"workflow ('tier-resize'|'ilm-rollout'|'version-upgrade'|'fleet-integration'|'slo-edit'|'alerting-edit'|" +
-		"'dataview-edit'|'cluster-default-edit'|'space-edit'|'security-edit'|'topology-edit'|'dashboard-edit'|'index-template-create'|'other'), " +
+		// SIO-1003: built from WORKFLOW_VALUES so the instruction enum can never drift from the zod enum.
+		`workflow (${WORKFLOW_ENUM_PROSE}), ` +
 		"cluster, tier, " +
 		"resource, newSizeGb, " +
 		"newMaxGb, policyName, phasesPatch, ilmPolicies, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +

@@ -1,24 +1,34 @@
 // agent/src/iac/state.ts
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 
+// SIO-1003: the single source of truth for the IaC workflow enum. The IacRequest.workflow type, the
+// parseIntent zod schema, AND the parseIntent instruction's "workflow (...)" prose are all derived from
+// this in nodes.ts, so a new workflow added here is automatically offered to the planner and accepted by
+// the parser -- they can never drift (the SIO-1003 bug was cluster-settings-edit present in the schema
+// but missing from the instruction enum, so the LLM could not select it).
+export const WORKFLOW_VALUES = [
+	"tier-resize",
+	"ilm-rollout",
+	"version-upgrade",
+	"fleet-integration",
+	"slo-edit",
+	"alerting-edit",
+	"dataview-edit",
+	"cluster-default-edit",
+	"cluster-settings-edit",
+	"space-edit",
+	"security-edit",
+	"topology-edit",
+	"dashboard-edit",
+	"index-template-create",
+	"other",
+] as const;
+
+export type IacWorkflow = (typeof WORKFLOW_VALUES)[number];
+
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
-	workflow:
-		| "tier-resize"
-		| "ilm-rollout"
-		| "version-upgrade"
-		| "fleet-integration"
-		| "slo-edit"
-		| "alerting-edit"
-		| "dataview-edit"
-		| "cluster-default-edit"
-		| "cluster-settings-edit"
-		| "space-edit"
-		| "security-edit"
-		| "topology-edit"
-		| "dashboard-edit"
-		| "index-template-create"
-		| "other";
+	workflow: IacWorkflow;
 	cluster?: string;
 	tier?: string;
 	resource?: string;
