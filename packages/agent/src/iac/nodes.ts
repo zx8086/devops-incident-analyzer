@@ -4798,6 +4798,19 @@ export function summarizeNestedPatch(
 	return summary;
 }
 
+// SIO-996: a compact descriptor for a cluster-settings-edit change -- the actual keys being SET
+// (k=v tokens, both blocks) and REMOVED (k tokens). This is what makes the plan-review title (and so
+// the live "check my MR" card, the durable iac-change fact, and its later recall) say WHAT changed,
+// not just "cluster-settings-edit". Falls back to "change" when nothing is named. (Pure.)
+export function summarizeClusterSettings(req: IacRequest | undefined): string {
+	const setKeys = summarizeNestedPatch({ ...(req?.persistentPatch ?? {}), ...(req?.transientPatch ?? {}) });
+	const removed = [...(req?.removeKeysPersistent ?? []), ...(req?.removeKeysTransient ?? [])];
+	const parts: string[] = [];
+	if (setKeys) parts.push(`set ${setKeys}`);
+	if (removed.length > 0) parts.push(`removed ${removed.join(", ")}`);
+	return parts.join("; ") || "change";
+}
+
 // Assemble the review payload. Every workflow is a GitOps config edit: the change is
 // already committed to a branch via the GitLab API and CI computes the authoritative plan
 // on the MR (deck slide 18). SIO-912: the legacy local-terraform validate/plan branch is
@@ -5014,18 +5027,22 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 										: req?.settingsPatch
 											? `${req?.templateName ?? "?"}: ${summarizeNestedPatch(req.settingsPatch) || Object.keys(req.settingsPatch).join(", ")}`
 											: `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
-									: req?.workflow === "space-edit"
-										? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
-										: req?.workflow === "security-edit"
-											? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
-											: req?.workflow === "topology-edit"
-												? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
-												: req?.workflow === "dashboard-edit"
-													? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
-													: req?.workflow === "index-template-create"
-														? // SIO-978: "create N index templates: <first name>[, +K more]".
-															`create ${req?.indexTemplates?.length ?? 0} index template${(req?.indexTemplates?.length ?? 0) === 1 ? "" : "s"}: ${req?.indexTemplates?.[0]?.name ?? "?"}${(req?.indexTemplates?.length ?? 0) > 1 ? `, +${(req?.indexTemplates?.length ?? 0) - 1} more` : ""}`
-														: (req?.tier ?? req?.resource ?? "change");
+									: req?.workflow === "cluster-settings-edit"
+										? // SIO-996: name the set/removed cluster-level keys so the title (and the recalled
+											// iac-change fact) describe the change, not just the workflow.
+											summarizeClusterSettings(req)
+										: req?.workflow === "space-edit"
+											? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
+											: req?.workflow === "security-edit"
+												? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
+												: req?.workflow === "topology-edit"
+													? `${req?.cluster ?? "?"}: ${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
+													: req?.workflow === "dashboard-edit"
+														? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
+														: req?.workflow === "index-template-create"
+															? // SIO-978: "create N index templates: <first name>[, +K more]".
+																`create ${req?.indexTemplates?.length ?? 0} index template${(req?.indexTemplates?.length ?? 0) === 1 ? "" : "s"}: ${req?.indexTemplates?.[0]?.name ?? "?"}${(req?.indexTemplates?.length ?? 0) > 1 ? `, +${(req?.indexTemplates?.length ?? 0) - 1} more` : ""}`
+															: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -7506,6 +7523,12 @@ export function buildIacChangeAnnotations(state: IacStateType): AnnotationMap {
 	if (dep && stack) a.stack_instance = `${dep}/${stack}`;
 	if (state.iacRequest?.workflow) a.workflow = state.iacRequest.workflow;
 	if (state.iacRequest?.version) a.version = state.iacRequest.version;
+	// SIO-996: persist the rich change descriptor (the plan-review title -- "[eu-b2b] removed
+	// xpack.monitoring.collection.interval: cluster-settings-edit") as a VERBATIM annotation. The
+	// service paraphrases fact/summary text on ingest, but annotations survive unchanged, so a
+	// cross-thread "check my MR" recall reads the exact keys here instead of the reworded prose.
+	const changeSummary = state.planReview?.title;
+	if (changeSummary) a.change_summary = changeSummary;
 	if (state.mrUrl) a.mr_url = state.mrUrl;
 	// SIO-990: persist the MR iid too, so a fresh-thread "check my MR" can re-poll the exact MR via
 	// recall instead of guessing the "latest open agent MR" (which can be the wrong one).
@@ -7549,12 +7572,29 @@ export async function recallIacChangeIntent(mrUrl: string): Promise<string> {
 		const hits = await searchAgentMemory("elastic-iac", "iac change intent", { kind: "iac-change", mr_url: mrUrl });
 		// SIO-973: a re-recorded change returns as multiple hits; collapse to the first (highest-ranked).
 		const deduped = dedupeHitsBy(hits, (h) => h.annotations.config_change_id ?? h.annotations.mr_url);
-		const top = deduped[0];
+		// SIO-996: the same MR yields one fact per turn (config_change_id == per-turn requestId), and only
+		// the PROPOSAL turn's fact carries change_summary (a pipeline-status re-check has no planReview).
+		// Prefer the hit that actually has the verbatim descriptor over the highest-ranked one, which may
+		// be a re-check fact lacking it. Fall back to the top hit (then its text) for legacy facts.
+		const top = deduped.find((h) => h.annotations.change_summary) ?? deduped[0];
+		// SIO-996: prefer the verbatim change_summary annotation (the rich descriptor "[eu-b2b] removed
+		// <key>: cluster-settings-edit") over top.text -- the service LLM-paraphrases fact/summary on
+		// ingest, but annotations are stored unchanged, so the annotation is the lossless source of WHAT
+		// changed. Fall back to text for facts written before this field existed.
+		const intent = top?.annotations.change_summary || top?.text || "";
 		// SIO-991: make the recall path observable -- it only runs when the in-turn planReview/iacRequest
 		// is empty (a fresh-thread "check my MR"), and previously logged nothing on success. blockId ties
 		// the recalled fact to its Couchbase document. (searchAgentMemory also logs the raw search.)
-		log.info({ mrUrl, hit: Boolean(top), blockId: top?.blockId }, "recallIacChangeIntent");
-		return top?.text ?? "";
+		log.info(
+			{
+				mrUrl,
+				hit: Boolean(top),
+				blockId: top?.blockId,
+				source: top?.annotations.change_summary ? "annotation" : "text",
+			},
+			"recallIacChangeIntent",
+		);
+		return intent;
 	} catch {
 		return ""; // searchAgentMemory already logs
 	}

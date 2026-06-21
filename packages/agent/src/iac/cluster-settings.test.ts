@@ -5,7 +5,7 @@
 // parseIntent mapping, the proposer flow, the danger denylist, and the unmapped-request terminate.
 import { describe, expect, mock, test } from "bun:test";
 import { evaluateGuards } from "./guards.ts";
-import { mergeClusterSettings, parseIntentJson } from "./nodes.ts";
+import { mergeClusterSettings, parseIntentJson, summarizeClusterSettings } from "./nodes.ts";
 import type { IacRequest, IacStateType } from "./state.ts";
 
 const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
@@ -133,6 +133,57 @@ describe("parseIntentJson — cluster-settings-edit (SIO-994)", () => {
 		expect(req.workflow).toBe("cluster-settings-edit");
 		expect(req.removeKeysPersistent).toEqual(["xpack.monitoring.collection.interval"]);
 		expect(req.persistentPatch).toBeUndefined();
+	});
+});
+
+// SIO-996: the descriptor that makes the plan-review title (and so the live card, the durable
+// iac-change fact, and its recall) say WHAT changed instead of just "cluster-settings-edit".
+describe("summarizeClusterSettings (SIO-996)", () => {
+	const asReq = (partial: Partial<IacRequest>): IacRequest => partial as unknown as IacRequest;
+
+	test("names a removed persistent key", () => {
+		const req = asReq({ removeKeysPersistent: ["xpack.monitoring.collection.interval"] });
+		expect(summarizeClusterSettings(req)).toBe("removed xpack.monitoring.collection.interval");
+	});
+
+	test("names a set key as k=v", () => {
+		const req = asReq({ persistentPatch: { "cluster.max_shards_per_node": "2000" } });
+		expect(summarizeClusterSettings(req)).toBe("set cluster.max_shards_per_node=2000");
+	});
+
+	test("combines set + removed across both blocks", () => {
+		const req = asReq({
+			persistentPatch: { "cluster.max_shards_per_node": "2000" },
+			removeKeysTransient: ["search.max_buckets"],
+		});
+		expect(summarizeClusterSettings(req)).toBe("set cluster.max_shards_per_node=2000; removed search.max_buckets");
+	});
+
+	test("falls back to 'change' when nothing is named", () => {
+		expect(summarizeClusterSettings(asReq({}))).toBe("change");
+	});
+
+	// The descriptor must reach the plan-review title -- that single field feeds the live "check my MR"
+	// card, the durable iac-change fact (buildIacChangeDecision), and recallIacChangeIntent.
+	test("flows into planReview.title via reviewPlan", async () => {
+		const { reviewPlan } = await import("./nodes.ts");
+		mock.module("../mcp-bridge.ts", () => ({ getToolsForDataSource: () => [], getConnectedServers: () => [] }));
+		const state = {
+			iacRequest: {
+				workflow: "cluster-settings-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				removeKeysPersistent: ["xpack.monitoring.collection.interval"],
+			},
+			branch: "agent/eu-b2b-cluster-settings-edit-20260621",
+			proposedFiles: ["environments/eu-b2b/cluster-settings/settings.json"],
+			proposedDiff: "diff",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.planReview?.title).toBe(
+			"[eu-b2b] removed xpack.monitoring.collection.interval: cluster-settings-edit",
+		);
 	});
 });
 
