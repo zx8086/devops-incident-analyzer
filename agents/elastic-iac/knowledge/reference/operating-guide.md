@@ -148,7 +148,7 @@ Resize is the last lever, not the first.
 
 ## 7. Change-safety workflow
 
-1. **Plan in `gl-testing` first** — it is the mandatory IaC pre-check sandbox (kept alive ~$37/mo
+1. **Optionally plan in `gl-testing`** — it is an optional single-node IaC sandbox (kept alive ~$37/mo
    in lieu of decommission). It catches invalid template/ILM JSON. Caveat: it is single-node, so it
    does **not** validate HA, tiered allocation, replica, or CCS/CCR behaviour — only syntax/plan.
 2. **Apply off-peak.** Structural allocation changes cause an immediate shard-relocation wave.

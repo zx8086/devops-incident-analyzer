@@ -26,7 +26,6 @@ Validation policy: advisory — warn on empty fields, do not block submission
 
 ## Cluster(s) affected
 <!-- One or more. Use deployment names = the JSON filename under environments/_deployments/<name>.json. AI agent: emit a single resolved line "Cluster(s) affected: <name>" for the deployment you edited -- do NOT reproduce this checkbox menu or list clusters you didn't touch. -->
-- [ ] `gl-testing` (mandatory first non-eu-b2b target — IaC pre-check sandbox)
 - [ ] `eu-b2b`
 - [ ] `eu-cld`
 - [ ] `us-cld`
@@ -78,11 +77,6 @@ Validation policy: advisory — warn on empty fields, do not block submission
 Plan: 0 to add, 0 to change, 0 to destroy.
 ```
 
-**Tested in gl-testing first?**
-<!-- Required for tier-resize, ccs-ccr, ilm, integration, kibana-config. n/a for version-bump-only, refactor. -->
-- [ ] Yes — branch deployed to gl-testing, observed: 
-- [ ] No — reason: 
-
 **Observed cluster state after apply (if applied to non-prod)**
 - Cluster health: 
 - Relevant tier heap/disk %: 
@@ -107,7 +101,6 @@ AI agent validation checklist (advisory — WARN, don't BLOCK):
   ⚠ Risk not set
   ⚠ Files touched does not match git diff
   ⚠ HIGH risk without explicit rollback steps (>"revert the MR")
-  ⚠ HIGH risk without gl-testing validation evidence
   ⚠ ILM retention reduction without snapshot/archival reference
   ⚠ remote_cluster change without both-side connectivity check
   ⚠ Branch name does not match `feature/<snake_case>` (breaks bot title formatter)

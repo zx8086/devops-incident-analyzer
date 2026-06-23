@@ -1,6 +1,6 @@
 ---
 name: resize-tier
-description: Resize a hot/warm/cold/frozen/coord/ML tier in an Elastic Cloud deployment via Terraform diff. Handles autoscaling Current/Max ordering, warm-disk-full gate, ML shutdown workaround. Always pre-checks on gl-testing first.
+description: Resize a hot/warm/cold/frozen/coord/ML tier in an Elastic Cloud deployment via Terraform diff. Handles autoscaling Current/Max ordering, warm-disk-full gate, ML shutdown workaround.
 inputs:
   cluster: { type: string, required: true }       # e.g. "eu-b2b", "us-cld"
   tier: { type: string, required: true }          # hot|warm|cold|frozen|coord|ml
@@ -61,7 +61,6 @@ Use the `open-mr` skill. Title format from `knowledge/reference/mr-template.md`:
 - **Category**: `tier-resize`
 - **Risk**: MEDIUM by default; **HIGH** for hot-tier downsize, any prod cold tier change, or any change to coord on us-cld (cluster-shape-dependent — see IR-114).
 - **Pre-flight evidence**: paste the `validate-cluster-state` gate result (all 5 conditions).
-- **gl-testing**: required (the template enforces this for `tier-resize`).
 - **Rollback**: cite the previous plan_id from `elasticsearch_cloud_get_plan_history` so a human can reapply it.
 - **Risks**: warm-disk-watermark trajectory, ML job state, force-merge load, GC pressure, replica imbalance, plan reversals in last 14d.
 

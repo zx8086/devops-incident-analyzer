@@ -5848,7 +5848,8 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			"menus. Category, Cluster(s) affected, and Risk are one resolved line each (e.g. 'Category: tier-resize', " +
 			"'Cluster(s) affected: eu-b2b', 'Risk: MEDIUM') -- never list the unselected options or empty `- [ ]` boxes. " +
 			`This is a config edit committed via the GitLab API (no local terraform): use ${categoryRisk}, and mark the ` +
-			"gl-testing / Plan output sections 'n/a -- config edit; CI computes the plan on the MR'. Fill Summary, " +
+			"Plan output section 'n/a -- config edit; CI computes the plan on the MR'. Do NOT emit any gl-testing / " +
+			'"Tested in gl-testing first?" section; omit it entirely. Fill Summary, ' +
 			"Cluster(s) affected, What changed, Why, Files touched, Rollback plan, and Reviewer notes from the context. " +
 			"Append the open-mr skill footer. Output ONLY the final markdown.";
 		const llm = createLlm("iacDrafter", AGENT);

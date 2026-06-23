@@ -34,7 +34,6 @@ Call `gitlab_create_merge_request` with:
 ```
 ---
 Opened by pvh-elastic-iac-agent v<version>
-Pre-check: gl-testing pipeline #<id>
 Requires: 1 approval from CODEOWNERS for stacks/<cluster>/
 ```
 

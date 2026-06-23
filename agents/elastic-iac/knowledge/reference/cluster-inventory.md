@@ -4,7 +4,7 @@ Re-query Elastic Cloud on bootstrap; do not trust this file as ground truth. Use
 
 | Cluster | Purpose | Notes |
 |---|---|---|
-| `gl-testing` | IaC pre-check sandbox | Single-node. Mandatory first target. No HA / tier / replica / CCS validation. ~$37/mo. |
+| `gl-testing` | IaC sandbox | Single-node. Optional test target. No HA / tier / replica / CCS validation. ~$37/mo. |
 | `eu-b2b` | Primary EU B2B observability | Tiered hot/warm/cold/frozen. Active ILM optimisation in progress (Wave 2 merged, Wave 3 gated). |
 | `eu-b2b-dev` | eu-b2b development | |
 | `eu-b2b-stg` | eu-b2b staging | |

@@ -22,20 +22,12 @@ steps:
       phases: ${{ inputs.phases }}
       target_indices_pattern: ${{ inputs.target_indices_pattern }}
 
-  glt_precheck:
-    skill: pre-check-gl-testing
+  glt_mr:
+    skill: open-mr
     depends_on: [wave_glt]
     inputs:
       branch: ${{ steps.wave_glt.outputs.branch }}
-
-  glt_mr:
-    skill: open-mr
-    depends_on: [glt_precheck]
-    conditions:
-      - ${{ steps.glt_precheck.outputs.passed == true }}
-    inputs:
-      branch: ${{ steps.wave_glt.outputs.branch }}
-      title: "[gl-testing] ILM ${{ inputs.policy_name }} — pre-check"
+      title: "[gl-testing] ILM ${{ inputs.policy_name }} — wave 1"
       body: ${{ steps.wave_glt.outputs.body }}
 
   # Human merges glt_mr and applies. Then resumes the flow with `gitagent run --resume wave_dev`.

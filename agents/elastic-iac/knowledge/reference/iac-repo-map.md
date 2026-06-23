@@ -6,7 +6,7 @@
 - **Real path:** `gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac`
 - **GitLab project ID:** `82850717`
 - **Default branch:** `main`
-- **Pre-check sandbox:** `gl-testing` (mandatory first target, single-node, ~$37/mo)
+- **Sandbox:** `gl-testing` (optional single-node test cluster, ~$37/mo)
 
 ## Directory layout (verified live 2026-06-16)
 
@@ -26,7 +26,7 @@ current but the repo is ground truth. The repo has TWO trees that work together:
 ├── environments/
 │   ├── _deployments/                  # per-cluster deployment manifests (JSON)
 │   │   ├── eu-b2b.json                 #   .version, elasticsearch.<tier>.size/max_size
-│   │   ├── gl-testing.json            #   single-node pre-check sandbox manifest
+│   │   ├── gl-testing.json            #   single-node sandbox manifest
 │   │   ├── eu-cld.json   us-cld.json   ap-cld.json
 │   │   ├── eu-cld-monitor.json   us-cld-monitor.json   ap-cld-monitor.json
 │   │   ├── eu-onboarding.json   gl-cld-reporting.json
@@ -67,7 +67,7 @@ Live cluster set: `eu-b2b`, `eu-cld` (+`-monitor`), `ap-cld` (+`-monitor`),
 ## Pipeline conventions
 
 - **MR plan/apply:** an MR on an `agent/*` branch runs the per-family `plan:*` jobs;
-  apply is manual after merge. gl-testing is the mandatory first pre-check target.
+  apply is manual after merge. gl-testing is an optional single-node sandbox cluster.
 - **On-demand jobs the agent triggers** (via `gitlab_trigger_*` MCP tools; pipeline
   variables in parentheses) — all present in `.gitlab-ci.yml`:
   - `drift-check-on-demand` (`DRIFT_CHECK=true`, `STACK`, `DEPLOYMENT`)

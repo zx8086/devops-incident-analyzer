@@ -57,4 +57,4 @@ Re-measure actual usage at this point — do not estimate from baseline.
 Step 1: post MR URL, log in-flight entry with scheduled-downsize reminder.
 Step 2: post MR URL, mark the matching in-flight entry as scheduled-to-close.
 
-Both MRs go through `pre-check-gl-testing` before opening, per the standard `tier-resize` category rules.
+Both MRs follow the standard `tier-resize` category rules.

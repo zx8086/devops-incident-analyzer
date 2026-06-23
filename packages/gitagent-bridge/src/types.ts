@@ -106,7 +106,6 @@ export const AgentManifestSchema = z.object({
 			url: z.string(),
 			project_id: z.union([z.string(), z.number()]).optional(),
 			default_branch: z.string().optional(),
-			precheck_target: z.string().optional(),
 		})
 		.optional(),
 	knowledge: z.array(z.string()).optional(),
