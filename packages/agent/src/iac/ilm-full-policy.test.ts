@@ -144,3 +144,115 @@ describe("proposeIlmChange authoritative full-body (SIO-1001)", () => {
 		expect(validateIlmPolicy(FULL_BODY)).toEqual({ ok: true });
 	});
 });
+
+// SIO-1011: the per-entry analogue. A single prompt onboarding >=2 NEW policies with full bodies
+// (and "do not copy from live") must parse into ilmPolicies[] with each entry's ilmFullPolicy
+// preserved, and proposeIlmChanges must commit BOTH files verbatim onto ONE branch -- not block.
+const METRICBEAT_BODY = {
+	name: "metricbeat",
+	hot: { max_age: "1d", max_primary_shard_size: "2gb", priority: 100, rollover: true },
+	delete: { min_age: "3d", delete_searchable_snapshot: true },
+};
+const ELASTIC_CLOUD_LOGS_BODY = {
+	name: "elastic-cloud-logs",
+	hot: { max_age: "1d", max_primary_shard_size: "2gb", priority: 100, rollover: true },
+	delete: { min_age: "3d", delete_searchable_snapshot: true },
+};
+
+describe("parseIntentJson multi-file ilmFullPolicy (SIO-1011)", () => {
+	test("preserves per-entry ilmFullPolicy through the >=2 fold and nulls the singular full body", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "ilm-rollout",
+				cluster: "eu-cld-monitor",
+				ilmPolicies: [
+					{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY },
+					{ policyName: "elastic-cloud-logs", ilmFullPolicy: ELASTIC_CLOUD_LOGS_BODY },
+				],
+			}),
+		);
+		expect(req.ilmPolicies?.length).toBe(2);
+		expect(req.ilmPolicies?.[0]?.ilmFullPolicy).toEqual(METRICBEAT_BODY);
+		expect(req.ilmPolicies?.[1]?.ilmFullPolicy).toEqual(ELASTIC_CLOUD_LOGS_BODY);
+		// A multi-entry request never carries a singular full body.
+		expect(req.ilmFullPolicy).toBeUndefined();
+	});
+
+	test("a 1-entry array with ilmFullPolicy folds to the singular path (back-compat)", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "ilm-rollout",
+				cluster: "eu-cld-monitor",
+				ilmPolicies: [{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY }],
+			}),
+		);
+		expect(req.ilmPolicies).toBeUndefined();
+		expect(req.policyName).toBe("metricbeat");
+		expect(req.ilmFullPolicy).toEqual(METRICBEAT_BODY);
+	});
+});
+
+describe("proposeIlmChanges multi-file authoritative full-body (SIO-1011)", () => {
+	test("onboards TWO new full-body policies on one branch -- exact bodies, not blocked", async () => {
+		const committed: Record<string, string> = {};
+		mockBridge({
+			// Both target policies 404 (new files); a sibling exists but must NOT bleed in.
+			gitlab_get_file_content: (a) =>
+				String(a.filePath).includes("basic-lifecycle-logs") ? b64(SIBLING_JSON) : "[404] not found",
+			gitlab_get_repository_tree: () => SIBLING_TREE,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (a) => {
+				committed[String(a.file_path)] = String(a.content);
+				return "[201] {}";
+			},
+		});
+		const { proposeIlmChanges } = await import("./nodes.ts");
+		const out = await proposeIlmChanges(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-cld-monitor",
+			ilmPolicies: [
+				{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY },
+				{ policyName: "elastic-cloud-logs", ilmFullPolicy: ELASTIC_CLOUD_LOGS_BODY },
+			],
+		});
+		expect(out.blockedReason).toBeFalsy();
+		expect(out.proposedFiles?.length).toBe(2);
+		expect(out.policyCreated).toBe(true);
+
+		const paths = Object.keys(committed);
+		const metricbeatPath = paths.find((p) => p.endsWith("metricbeat.json"));
+		const logsPath = paths.find((p) => p.endsWith("elastic-cloud-logs.json"));
+		expect(metricbeatPath).toBeDefined();
+		expect(logsPath).toBeDefined();
+
+		const metricbeat = JSON.parse(committed[metricbeatPath ?? ""] ?? "{}");
+		// Exactly name + hot + delete -- no sibling warm/cold/frozen bled in.
+		expect(Object.keys(metricbeat).sort()).toEqual(["delete", "hot", "name"]);
+		expect(metricbeat.name).toBe("metricbeat");
+		expect(metricbeat.hot.max_age).toBe("1d");
+		expect(metricbeat.delete.min_age).toBe("3d");
+
+		const logs = JSON.parse(committed[logsPath ?? ""] ?? "{}");
+		expect(Object.keys(logs).sort()).toEqual(["delete", "hot", "name"]);
+		expect(logs.name).toBe("elastic-cloud-logs");
+	});
+
+	test("a multi-file entry with NO patch/copy/full-body still blocks (guard intact)", async () => {
+		mockBridge({
+			gitlab_get_file_content: () => "[404] not found",
+			gitlab_get_repository_tree: () => SIBLING_TREE,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const { proposeIlmChanges } = await import("./nodes.ts");
+		const out = await proposeIlmChanges(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-cld-monitor",
+			ilmPolicies: [{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY }, { policyName: "underspecified" }],
+		});
+		expect(out.blockedReason).toBeTruthy();
+		expect(out.proposedFiles).toBeUndefined();
+	});
+});

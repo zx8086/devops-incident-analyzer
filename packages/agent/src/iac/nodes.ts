@@ -143,6 +143,9 @@ const IntentSchema = z.object({
 				policyName: z.string(),
 				phasesPatch: z.record(z.string(), z.unknown()).nullish(),
 				sourcePolicy: z.string().nullish(),
+				// SIO-1011: per-entry authoritative full body, the multi-file analogue of the singular
+				// ilmFullPolicy -- lets a >=2 NEW-policy onboard (full bodies, "do not copy") parse.
+				ilmFullPolicy: z.record(z.string(), z.unknown()).nullish(),
 			}),
 		)
 		.nullish(),
@@ -271,6 +274,9 @@ export function parseIntentJson(raw: string): IacRequest {
 					policyName: stripJsonExt(e.policyName) ?? e.policyName,
 					phasesPatch: nn(e.phasesPatch),
 					sourcePolicy: stripJsonExt(nn(e.sourcePolicy)),
+					// SIO-1011: preserve the per-entry authoritative body through the fold so a multi-file
+					// from-scratch onboard reaches proposeIlmChanges with each full body intact.
+					ilmFullPolicy: nn(e.ilmFullPolicy),
 				}));
 				const multiIlm = ilmEntries.length >= 2;
 				const soleIlm = ilmEntries.length === 1 ? ilmEntries[0] : undefined;
@@ -301,9 +307,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					sourcePolicy: soleIlm?.sourcePolicy ?? (isIlm ? stripJsonExt(nn(p.sourcePolicy)) : nn(p.sourcePolicy)),
 					phasesPatch: soleIlm?.phasesPatch ?? nn(p.phasesPatch),
 					ilmPolicies: multiIlm ? ilmEntries : undefined,
-					// SIO-1001: authoritative full-body onboard. A multi-policy (ilmPolicies[]) request never
-					// carries a single full body, so this only applies to the singular path.
-					ilmFullPolicy: multiIlm ? undefined : nn(p.ilmFullPolicy),
+					// SIO-1001: authoritative full-body onboard for the singular path. SIO-1011: a 1-entry
+					// array folds to the singular path, so carry that sole entry's full body too (the multi-
+					// file path keeps its own per-entry ilmFullPolicy on ilmEntries when multiIlm).
+					ilmFullPolicy: multiIlm ? undefined : (soleIlm?.ilmFullPolicy ?? nn(p.ilmFullPolicy)),
 					version: nn(p.version),
 					integration: nn(p.integration),
 					integrationVersion: nn(p.integrationVersion),
@@ -822,16 +829,22 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"`ilmFullPolicy` to that object VERBATIM (the nested phase shape below) and leave phasesPatch AND sourcePolicy " +
 		"null. ilmFullPolicy means 'write exactly these phases, nothing else': any phase the user omitted is intentionally " +
 		"absent and MUST NOT be added. Use ilmFullPolicy ONLY for a from-scratch onboard where the user gave the full file; " +
-		"for an edit to fields of an existing policy use phasesPatch, and for a copy use sourcePolicy. ilmFullPolicy is a " +
-		"SINGLE-policy form -- never combine it with ilmPolicies. " +
+		"for an edit to fields of an existing policy use phasesPatch, and for a copy use sourcePolicy. The TOP-LEVEL " +
+		"ilmFullPolicy is a SINGLE-policy form -- do not set it AND a multi-entry ilmPolicies array. For onboarding " +
+		"MORE THAN ONE new policy in one request, do NOT use the top-level ilmFullPolicy; put a per-file ilmFullPolicy on " +
+		"each ilmPolicies entry instead (see below). " +
 		"policyName is the policy file BASENAME WITHOUT the .json extension: 'metrics.json' -> policyName 'metrics', " +
 		"'30-days@lifecycle.json' -> '30-days@lifecycle'. Never include the .json suffix. " +
 		"If the user names MORE THAN ONE policy file in a single request (e.g. 'in metrics.json AND logs.json set warm " +
-		"replicas to 0', 'on eu-b2b set X on policies A, B and C'), DO NOT pick one and drop the rest: set `ilmPolicies` " +
+		"replicas to 0', 'on eu-b2b set X on policies A, B and C', 'onboard metricbeat AND elastic-cloud-logs with these " +
+		"exact bodies'), DO NOT pick one and drop the rest: set `ilmPolicies` " +
 		"to an ARRAY with one object per file -- each { policyName: '<basename, no .json>', phasesPatch: { ... same nested " +
-		"shape ... } } (or sourcePolicy for a copy) -- applying the requested change to EACH named file, and leave the " +
-		"top-level policyName/phasesPatch/sourcePolicy null. All entries share the single top-level `cluster`. For a " +
-		"SINGLE policy use the top-level policyName/phasesPatch and omit ilmPolicies. " +
+		"shape ... } } (or sourcePolicy for a copy, or ilmFullPolicy for a from-scratch onboard) -- applying the requested " +
+		"change to EACH named file, and leave the top-level policyName/phasesPatch/sourcePolicy/ilmFullPolicy null. Each " +
+		"entry uses the SAME field rules as a single policy: ilmFullPolicy (the COMPLETE nested body VERBATIM) when the " +
+		"user pasted the whole file and said 'exactly these keys' / 'do not copy'; phasesPatch for an edit; sourcePolicy " +
+		"for a copy. All entries share the single top-level `cluster`. For a " +
+		"SINGLE policy use the top-level policyName/phasesPatch (or ilmFullPolicy) and omit ilmPolicies. " +
 		"phasesPatch uses the repo's NESTED phase shape (top-level keys hot|warm|cold|frozen|delete), matching the " +
 		"existing policy JSON files EXACTLY -- e.g. " +
 		'{ "hot": { "priority": 100, "max_age": "7d", "max_primary_shard_size": "10gb", "rollover": true }, ' +
@@ -3399,7 +3412,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 // (unreadable / invalid / no-op), fail the whole turn naming that file -- never open a partial MR
 // (the user said "change nothing else"). Aggregates the per-file diffs into one proposedDiff and
 // OR-reduces the risk flags (retentionChange/policyCreated) so the review card still surfaces them.
-async function proposeIlmChanges(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+export async function proposeIlmChanges(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const entries = req.ilmPolicies ?? [];
 
@@ -3412,12 +3425,14 @@ async function proposeIlmChanges(state: IacStateType, req: IacRequest): Promise<
 				messages: [new AIMessage("Cannot propose the change: every named policy needs a filename.")],
 			};
 		}
-		if (!e.sourcePolicy && (!e.phasesPatch || Object.keys(e.phasesPatch).length === 0)) {
+		// SIO-1011: a per-entry ilmFullPolicy IS the change (an authoritative from-scratch body), so it
+		// must not trip the mandatory-phase guard -- mirrors the singular guard at proposeIlmChange.
+		if (!e.sourcePolicy && !e.ilmFullPolicy && (!e.phasesPatch || Object.keys(e.phasesPatch).length === 0)) {
 			return {
-				blockedReason: `ILM change for '${e.policyName}' needs at least one phase field to change (or a sourcePolicy to copy).`,
+				blockedReason: `ILM change for '${e.policyName}' needs at least one phase field to change (or a sourcePolicy to copy, or a full policy body to onboard).`,
 				messages: [
 					new AIMessage(
-						`Cannot propose the change: policy '${e.policyName}' has no phase field to change and no policy to copy from.`,
+						`Cannot propose the change: policy '${e.policyName}' has no phase field to change, no policy to copy from, and no full body to onboard.`,
 					),
 				],
 			};
@@ -3435,7 +3450,16 @@ async function proposeIlmChanges(state: IacStateType, req: IacRequest): Promise<
 	let anyRetention: { from: string; to: string } | null = null;
 	let anyCreated = false;
 	for (const e of entries) {
-		const result = await commitOneIlmPolicy(cluster, branch, e.policyName, e.phasesPatch, e.sourcePolicy);
+		// SIO-1011: pass the per-entry full body through (6th arg) so a multi-file from-scratch onboard
+		// writes each authoritative body verbatim, exactly as the singular path does via req.ilmFullPolicy.
+		const result = await commitOneIlmPolicy(
+			cluster,
+			branch,
+			e.policyName,
+			e.phasesPatch,
+			e.sourcePolicy,
+			e.ilmFullPolicy,
+		);
 		if (!result.ok) {
 			// Atomic: one file's failure blocks the whole MR. Any files already committed to the
 			// branch are harmless -- no MR is opened, so the branch is never reviewed or merged.
