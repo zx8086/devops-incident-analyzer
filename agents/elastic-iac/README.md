@@ -10,9 +10,8 @@ Agent does:
 
 1. `validate-cluster-state` on eu-b2b (live API).
 2. `resize-tier` skill builds the Terraform diff with the correct Current-then-Max ordering.
-3. `pre-check-gl-testing` runs plan + apply against the single-node sandbox.
-4. `open-mr` creates the GitLab MR with risks, rollback, and pre-check evidence.
-5. Posts the MR URL. Stops. Human approves and triggers apply.
+3. `open-mr` creates the GitLab MR with risks and rollback; CI computes the plan on the MR.
+4. Posts the MR URL. Stops. Human approves and triggers apply.
 
 ## Layout
 
@@ -25,7 +24,6 @@ DUTIES.md                        # Permitted vs forbidden actions
 skills/
   resize-tier/SKILL.md
   add-ilm-policy/SKILL.md
-  pre-check-gl-testing/SKILL.md
   open-mr/SKILL.md
   validate-cluster-state/SKILL.md
 
@@ -90,7 +88,7 @@ For SOD compliance, run the agent under a service account that **does not have**
 Approach is grounded in:
 
 - **GAP spec** — agent.yaml + SOUL.md + RULES.md + DUTIES.md + skills/ + tools/ + knowledge/ + memory/ + workflows/ + hooks/ matches the open-gitagent reference layout.
-- **Your live constraints** (from memory) — gl-testing pre-check mandatory, autoscaling Current-before-Max, `.alerts` gate, frozen capacity caveat, retention-fleet template gotcha, validation scoping, no version-comparison content, plan_history > trackers.
+- **Your live constraints** (from memory) — autoscaling Current-before-Max, `.alerts` gate, frozen capacity caveat, retention-fleet template gotcha, validation scoping, no version-comparison content, plan_history > trackers.
 - **SOD** — explicit maker/checker conflict in `agent.yaml` + matching allow/deny lists in `tools/*.yaml` + permission-layer enforcement via GitLab role.
 
 ## Next steps
@@ -98,6 +96,6 @@ Approach is grounded in:
 1. Decide the runtime (Claude Code subagent vs CI service).
 2. Drop this directory into a new branch of the IaC repo (or a sibling repo).
 3. Add real Terraform paths to `knowledge/reference/stack-modules.md` after one `gitlab_get_repository_tree` pass.
-4. Run one dry workflow end-to-end against gl-testing only.
-5. After 2–3 successful gl-testing pre-checks, allow it on dev clusters.
+4. Run one dry workflow end-to-end against a non-prod cluster.
+5. After 2–3 successful non-prod MR cycles, allow it on the remaining dev clusters.
 6. Promote to staging/prod only after CODEOWNERS-approved MRs from the agent show clean diffs over a 2-week window.

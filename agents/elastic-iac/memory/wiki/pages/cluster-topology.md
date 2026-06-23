@@ -12,9 +12,8 @@ ground truth. Live in-flight state lives in `memory/runtime/context.md`.
 
 ## Live cluster set
 
-- `gl-testing` -- IaC pre-check sandbox. Single-node, ~$37/mo. The mandatory
-  first target for every change. Does NOT validate HA, tiering, replicas, or
-  CCS/CCR.
+- `gl-testing` -- IaC sandbox. Single-node, ~$37/mo. An optional test target.
+  Does NOT validate HA, tiering, replicas, or CCS/CCR.
 - `eu-b2b` (+ `eu-b2b-dev`, `eu-b2b-stg`) -- primary EU B2B observability.
   Tiered hot/warm/cold/frozen with active ILM optimisation in progress.
 - `eu-cld` (+ `eu-cld-monitor`) -- EU consumer/D2C.

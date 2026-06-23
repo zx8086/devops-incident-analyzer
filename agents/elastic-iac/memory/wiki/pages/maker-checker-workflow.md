@@ -13,9 +13,6 @@ opens MRs; a human approves, merges, and clicks apply.
 
 ## The standing rules (hard constraints)
 
-- **Pre-check on gl-testing first.** Every new stack-module change goes through
-  `gl-testing` before any other target. State in the MR that single-node only
-  validates module syntax + provider plan, not HA/tier/replica/CCS-CCR.
 - **Read live cluster state before writing the diff** (`..._get_deployment`,
   `..._get_plan_history`, `..._get_cluster_health`). Do not rely on trackers or
   memory snapshots alone.

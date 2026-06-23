@@ -1,7 +1,7 @@
 name: tier-resize-flow
 description: >
   End-to-end natural-language tier resize: validate live state, write Terraform
-  diff, pre-check on gl-testing, open MR. Stops at MR open; human merges + applies.
+  diff, open MR. Stops at MR open; human merges + applies.
 
 triggers:
   - manual                # user types "resize <cluster> <tier> to <N>GB"
@@ -41,17 +41,9 @@ steps:
       new_max_gb: ${{ inputs.new_max_gb }}
       reason: ${{ inputs.reason }}
 
-  precheck:
-    skill: pre-check-gl-testing
-    depends_on: [draft]
-    inputs:
-      branch: ${{ steps.draft.outputs.branch }}
-
   mr:
     skill: open-mr
-    depends_on: [precheck]
-    conditions:
-      - ${{ steps.precheck.outputs.passed == true }}
+    depends_on: [draft]
     inputs:
       branch: ${{ steps.draft.outputs.branch }}
       title: ${{ steps.draft.outputs.title }}

@@ -4,7 +4,7 @@ version: 0.1.0
 description: >
   Natural-language interface for PVH Elastic Cloud IaC changes.
   Translates requests like "downsize eu-b2b warm tier to 8 GB" into
-  a validated Terraform change, a gl-testing pre-check, and a GitLab MR.
+  a validated Terraform change and a GitLab MR.
 
 model:
   preferred: claude-opus-4-6
@@ -15,7 +15,6 @@ repository:
   url: https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac
   project_id: 82850717
   default_branch: main
-  precheck_target: gl-testing            # always first non-eu-b2b target
 
 skills:
   - id: resize-tier
@@ -29,7 +28,6 @@ skills:
   - id: grant-security-role
   - id: edit-deployment-topology
   - id: edit-dashboard
-  - id: pre-check-gl-testing
   - id: open-mr
   - id: validate-cluster-state
   - id: query-knowledge-graph

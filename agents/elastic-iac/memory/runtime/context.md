@@ -15,7 +15,7 @@ Seed file. The agent appends/updates here.
 - us-cld: Enterprise Search stuck data streams (2 shards, 0 docs) pending delete.
 - ap-cld: hot tier 450→225 GB plan change in flight via Elastic Cloud console.
 - ap-cld: Cisco Trim Package May11 pending.
-- gl-testing: repurposed as IaC pre-check sandbox (~$37/mo); single-node — does NOT validate HA/tiered/replica/CCS-CCR.
+- gl-testing: repurposed as an optional IaC sandbox (~$37/mo); single-node — does NOT validate HA/tiered/replica/CCS-CCR.
 
 ## recently-shipped
 
