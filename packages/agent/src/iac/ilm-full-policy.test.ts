@@ -4,7 +4,7 @@
 // from-scratch (404) policy commitOneIlmPolicy uses it VERBATIM instead of copying a sibling base,
 // so absent phases stay absent. Mirrors the mocking pattern in ilm-copy.test.ts.
 import { describe, expect, mock, test } from "bun:test";
-import { parseIntentJson } from "./nodes.ts";
+import { parseIntentJson, reviewPlan } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
@@ -254,5 +254,123 @@ describe("proposeIlmChanges multi-file authoritative full-body (SIO-1011)", () =
 		});
 		expect(out.blockedReason).toBeTruthy();
 		expect(out.proposedFiles).toBeUndefined();
+	});
+});
+
+// SIO-1012: the agent WARNS (never blocks, never writes tfvars) when the target (deployment, stack)
+// has no provisioned stack instance. CI discovers applyable combos via terraform.tfvars; without it
+// the merge applies as a no-op. The proposer sets stackInstanceMissing; reviewPlan surfaces a HIGH risk.
+const TFVARS = (cluster: string) =>
+	`[200] ${JSON.stringify({ content: Buffer.from(`deployment_name = "${cluster}"\n`).toString("base64"), encoding: "base64" })}`;
+
+describe("proposeIlmChanges stackInstanceMissing detection (SIO-1012)", () => {
+	test("sets stackInstanceMissing=true when the combo has no terraform.tfvars (404)", async () => {
+		mockBridge({
+			// Everything 404s EXCEPT the sibling -- crucially the tfvars path also 404s (unprovisioned).
+			gitlab_get_file_content: (a) =>
+				String(a.filePath).includes("basic-lifecycle-logs") ? b64(SIBLING_JSON) : "[404] not found",
+			gitlab_get_repository_tree: () => SIBLING_TREE,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const { proposeIlmChanges } = await import("./nodes.ts");
+		const out = await proposeIlmChanges(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-cld-monitor",
+			ilmPolicies: [
+				{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY },
+				{ policyName: "elastic-cloud-logs", ilmFullPolicy: ELASTIC_CLOUD_LOGS_BODY },
+			],
+		});
+		// Still opens (warn, not block) AND flags the missing instance.
+		expect(out.blockedReason).toBeFalsy();
+		expect(out.proposedFiles?.length).toBe(2);
+		expect(out.stackInstanceMissing).toBe(true);
+	});
+
+	test("sets stackInstanceMissing=false when terraform.tfvars exists (provisioned)", async () => {
+		mockBridge({
+			gitlab_get_file_content: (a) => {
+				const p = String(a.filePath);
+				if (p.endsWith("terraform.tfvars")) return TFVARS("eu-cld"); // provisioned
+				if (p.includes("basic-lifecycle-logs")) return b64(SIBLING_JSON);
+				return "[404] not found";
+			},
+			gitlab_get_repository_tree: () => SIBLING_TREE,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const { proposeIlmChanges } = await import("./nodes.ts");
+		const out = await proposeIlmChanges(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-cld",
+			ilmPolicies: [
+				{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY },
+				{ policyName: "elastic-cloud-logs", ilmFullPolicy: ELASTIC_CLOUD_LOGS_BODY },
+			],
+		});
+		expect(out.blockedReason).toBeFalsy();
+		expect(out.stackInstanceMissing).toBe(false);
+	});
+
+	test("the agent NEVER writes terraform.tfvars (no commit to a tfvars path)", async () => {
+		const committedPaths: string[] = [];
+		mockBridge({
+			gitlab_get_file_content: (a) =>
+				String(a.filePath).includes("basic-lifecycle-logs") ? b64(SIBLING_JSON) : "[404] not found",
+			gitlab_get_repository_tree: () => SIBLING_TREE,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (a) => {
+				committedPaths.push(String(a.file_path));
+				return "[201] {}";
+			},
+		});
+		const { proposeIlmChanges } = await import("./nodes.ts");
+		await proposeIlmChanges(asIacState({}), {
+			workflow: "ilm-rollout",
+			isProd: false,
+			cluster: "eu-cld-monitor",
+			ilmPolicies: [
+				{ policyName: "metricbeat", ilmFullPolicy: METRICBEAT_BODY },
+				{ policyName: "elastic-cloud-logs", ilmFullPolicy: ELASTIC_CLOUD_LOGS_BODY },
+			],
+		});
+		// Provisioning is repo/CI/human responsibility -- the agent commits ONLY policy JSON.
+		expect(committedPaths.every((p) => p.endsWith(".json"))).toBe(true);
+		expect(committedPaths.some((p) => p.endsWith("terraform.tfvars"))).toBe(false);
+	});
+});
+
+describe("reviewPlan stackInstanceMissing risk (SIO-1012)", () => {
+	test("pushes a leading HIGH no-op risk when the stack instance is missing", async () => {
+		const result = await reviewPlan(
+			asIacState({
+				iacRequest: { workflow: "ilm-rollout", isProd: false, cluster: "eu-cld-monitor", policyName: "metricbeat" },
+				branch: "b",
+				proposedDiff: "(diff)",
+				precheckPassed: true,
+				policyCreated: true,
+				stackInstanceMissing: true,
+			}),
+		);
+		// HIGH risks are unshifted to the front so a collapsed card still shows them.
+		expect(result.risks?.[0]).toContain("No provisioned stack instance");
+		expect(result.risks?.[0]).toContain("NO-OP");
+	});
+
+	test("no no-op risk when the stack instance is provisioned", async () => {
+		const result = await reviewPlan(
+			asIacState({
+				iacRequest: { workflow: "ilm-rollout", isProd: false, cluster: "eu-cld", policyName: "metricbeat" },
+				branch: "b",
+				proposedDiff: "(diff)",
+				precheckPassed: true,
+				policyCreated: true,
+				stackInstanceMissing: false,
+			}),
+		);
+		expect(result.risks?.some((r) => r.includes("No provisioned stack instance"))).toBe(false);
 	});
 });

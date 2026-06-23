@@ -2771,6 +2771,20 @@ export function isGitlabNotFound(result: string): boolean {
 	return result.startsWith("[404");
 }
 
+// SIO-1012: the repo's CI (scripts/ci-generate-pipeline.sh) discovers applyable combos by
+// `find environments/<dep>/<stack>/terraform.tfvars`. A (deployment, stack) with config JSON but
+// NO terraform.tfvars is NOT a provisioned stack instance: CI emits a no-op and the merge does not
+// apply. This checks for that tfvars so the proposer can flag it (warn-only -- the agent never
+// writes the tfvars; provisioning is a repo/CI/human responsibility). Returns true ONLY on a
+// definitive 404; a token/auth/other read error returns false (treated as "present/unknown") so a
+// GitLab fault never false-alarms as "unprovisioned". (Pure aside from the one read.)
+async function isStackInstanceMissing(cluster: string, stack: string): Promise<boolean> {
+	if (!cluster || !stack) return false;
+	const tfvarsPath = `environments/${cluster}/${stack}/terraform.tfvars`;
+	const raw = await callTool("gitlab_get_file_content", { filePath: tfvarsPath });
+	return isGitlabNotFound(raw);
+}
+
 // version-upgrade: propose the change as a GitLab config edit + branch + commit via
 // the API (no clone, no terraform, no local git). CI computes the plan on the MR.
 async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
@@ -3394,6 +3408,10 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		};
 	}
 
+	// SIO-1012: warn (not block) when the target combo has no provisioned stack instance, so the
+	// review card flags that CI will emit a no-op apply. lifecycle-policies is the ILM stack.
+	const stackInstanceMissing = await isStackInstanceMissing(cluster, stackForWorkflow("ilm-rollout"));
+
 	return {
 		branch,
 		proposedFilePath: files[0] ?? "",
@@ -3404,6 +3422,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 		policyCreated,
 		lifecycleRetargeted,
 		liveParity,
+		stackInstanceMissing,
 	};
 }
 
@@ -3475,6 +3494,10 @@ export async function proposeIlmChanges(state: IacStateType, req: IacRequest): P
 		if (result.liveParity) parityBlocks.push(`_${e.policyName}_\n\n${result.liveParity}`);
 	}
 
+	// SIO-1012: warn (not block) when the target combo has no provisioned stack instance -- one check
+	// for the whole batch (all entries share the one cluster + the lifecycle-policies stack).
+	const stackInstanceMissing = await isStackInstanceMissing(cluster, stackForWorkflow("ilm-rollout"));
+
 	return {
 		branch,
 		// proposedFilePath stays populated (first file) so any single-file consumer keeps working;
@@ -3486,6 +3509,7 @@ export async function proposeIlmChanges(state: IacStateType, req: IacRequest): P
 		retentionChange: anyRetention,
 		policyCreated: anyCreated,
 		liveParity: parityBlocks.join("\n\n"),
+		stackInstanceMissing,
 	};
 }
 
@@ -5465,6 +5489,19 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		if (state.policyCreated) {
 			risks.push(
 				"Creates a NEW managed ILM policy file not currently tracked in IaC; CI's plan will show a create. Verify all required phases (e.g. hot rollover + a delete/retention phase) are present, and that adopting the existing live policy will not need a Terraform import.",
+			);
+		}
+		// SIO-1012: the target (deployment, stack) has no provisioned stack instance (no
+		// environments/<dep>/<stack>/terraform.tfvars), which is how the repo's CI discovers applyable
+		// combos. Without it the merge produces a NO-OP apply -- the policy files land in git but never
+		// reach Elasticsearch. HIGH + first (unshift) so even a collapsed card flags it. The agent does
+		// NOT provision the stack (it writes config only); provisioning is a repo/CI/human step.
+		if (state.stackInstanceMissing) {
+			risks.unshift(
+				`No provisioned stack instance for ${req?.cluster ?? "this deployment"}/lifecycle-policies ` +
+					"(no terraform.tfvars). CI discovers applyable combos from that file, so this MR will merge but " +
+					"the apply will be a NO-OP -- the policies will NOT reach the cluster. Provision the stack instance " +
+					"on the repo side (terraform.tfvars + plan/apply wiring) before relying on this change taking effect.",
 			);
 		}
 		// SIO-933: re-pointing a component-template's lifecycle.name switches which ILM policy governs
