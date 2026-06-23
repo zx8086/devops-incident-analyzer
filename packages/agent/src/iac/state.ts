@@ -576,6 +576,12 @@ export const IacState = Annotation.Root({
 	// SIO-899: an ilm-rollout created a previously-untracked policy file (404 -> onboard);
 	// surfaced in the review card / MR body / final message so the human reviews a CREATE.
 	policyCreated: Annotation<boolean>({ reducer: last, default: () => false }),
+	// SIO-1012: the target (deployment, stack) has no provisioned stack instance -- i.e. no
+	// environments/<dep>/<stack>/terraform.tfvars, which is what the repo's CI uses to discover
+	// applyable combos (find ... -name terraform.tfvars). Without it CI emits a no-op and the merge
+	// will NOT apply. Surfaced as a HIGH risk on the review card so a no-op apply is not a silent
+	// surprise. The agent NEVER writes the tfvars -- provisioning is a repo/CI/human responsibility.
+	stackInstanceMissing: Annotation<boolean>({ reducer: last, default: () => false }),
 	// SIO-983: rendered live-parity advisory (the drafted change diffed against the LIVE cluster) --
 	// surfaced on the plan-review card. Empty when no live equivalent was read or the draft matches
 	// live. Set by the proposer (which holds both the live read and the drafted object).
