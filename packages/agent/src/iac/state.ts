@@ -43,10 +43,18 @@ export interface IacRequest {
 	sourcePolicy?: string;
 	// SIO-932: ilm-rollout naming MORE THAN ONE policy file in one request (e.g. "in metrics.json
 	// and logs.json set warm replicas to 0"). Each entry is an independent {policyName, phasesPatch?,
-	// sourcePolicy?} applied to the SAME cluster; draftChange commits them all to ONE branch and
-	// opens ONE MR. A single-policy request leaves this undefined and uses the singular fields above
-	// (parseIntentJson folds a single-entry array back to the singular path for back-compat).
-	ilmPolicies?: Array<{ policyName: string; phasesPatch?: Record<string, unknown>; sourcePolicy?: string }>;
+	// sourcePolicy?, ilmFullPolicy?} applied to the SAME cluster; draftChange commits them all to ONE
+	// branch and opens ONE MR. A single-policy request leaves this undefined and uses the singular
+	// fields above (parseIntentJson folds a single-entry array back to the singular path for back-compat).
+	// SIO-1011: ilmFullPolicy is the per-entry analogue of the singular ilmFullPolicy -- the authoritative
+	// complete body for a from-scratch onboard, so naming >=2 NEW policy files with full bodies (and "do
+	// not copy from live") is expressible in the multi-file path, not just the single-file one.
+	ilmPolicies?: Array<{
+		policyName: string;
+		phasesPatch?: Record<string, unknown>;
+		sourcePolicy?: string;
+		ilmFullPolicy?: Record<string, unknown>;
+	}>;
 	// SIO-1001: ilm-rollout onboarding an AUTHORITATIVE policy body -- the user supplied the COMPLETE
 	// file (e.g. pasted `{ name, hot, delete }` and said "exactly these keys / do not add warm/cold/
 	// frozen"). Distinct from phasesPatch (a partial overlay deep-merged onto a sibling/canonical base):
