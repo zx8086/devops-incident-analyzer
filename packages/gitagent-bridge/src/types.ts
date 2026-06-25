@@ -232,3 +232,33 @@ export const RunbookFrontmatterSchema = z
 	.strict();
 
 export type RunbookFrontmatter = z.infer<typeof RunbookFrontmatterSchema>;
+
+// SIO-1014: typed view of a SKILL.md frontmatter block. `name`/`description` are
+// the gitagent.sh authoring fields surfaced in the prompt's Skills catalog;
+// `inputs`/`outputs` are opaque contracts (narrowed at use sites). The learning
+// fields are optional so a SIO-1015 promoted/crystallized skill validates against
+// the same schema. `.passthrough()` (not `.strict()`) tolerates unknown keys —
+// many skills are markdown-only with no frontmatter at all.
+export const SkillFrontmatterSchema = z
+	.object({
+		name: z.string().optional(),
+		description: z.string().optional(),
+		inputs: z.record(z.string(), z.unknown()).optional(),
+		outputs: z.record(z.string(), z.unknown()).optional(),
+		// SIO-1015 skill-learning fields (absent on hand-authored skills). Constrained
+		// so invalid metadata (confidence out of [0,1], negative/fractional counts,
+		// non-ISO timestamps) is rejected at parse time rather than propagating.
+		confidence: z.number().min(0).max(1).optional(),
+		learned_from: z.string().optional(),
+		learned_at: z
+			.string()
+			.regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}/)
+			.optional(),
+		usage_count: z.number().int().nonnegative().optional(),
+		success_count: z.number().int().nonnegative().optional(),
+		failure_count: z.number().int().nonnegative().optional(),
+		negative_examples: z.array(z.string()).optional(),
+	})
+	.passthrough();
+
+export type SkillFrontmatter = z.infer<typeof SkillFrontmatterSchema>;

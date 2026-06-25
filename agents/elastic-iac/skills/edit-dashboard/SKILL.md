@@ -1,6 +1,6 @@
 ---
 name: edit-dashboard
-description: Add or replace a WHOLE Kibana dashboard NDJSON saved-object export in IaC -- commit a user-pasted/Kibana-exported NDJSON verbatim to environments/<deployment>/dashboards/<space>__<name>.ndjson + open an MR. MEDIUM risk -- dashboards are display-only; a malformed NDJSON fails CI's saved-objects import job, not production. WHOLE-FILE only: never edits panels/visualizations inside an existing saved object, never JSON.parses the file as one object (it is line-delimited). delete is not supported yet.
+description: "Add or replace a WHOLE Kibana dashboard NDJSON saved-object export in IaC -- commit a user-pasted/Kibana-exported NDJSON verbatim to environments/<deployment>/dashboards/<space>__<name>.ndjson + open an MR. MEDIUM risk -- dashboards are display-only; a malformed NDJSON fails CI's saved-objects import job, not production. WHOLE-FILE only: never edits panels/visualizations inside an existing saved object, never JSON.parses the file as one object (it is line-delimited). delete is not supported yet."
 inputs:
   cluster: { type: string, required: true }
   dashboard_space: { type: string, required: true }   # the Kibana space; becomes the <space>__ filename prefix; MUST be an existing space
