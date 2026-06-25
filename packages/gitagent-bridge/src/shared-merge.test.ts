@@ -15,10 +15,12 @@ function baseAgent(skills: Map<string, string>): LoadedAgent {
 		duties: "",
 		tools: [],
 		skills,
+		skillMeta: new Map(),
 		subAgents: new Map(),
 		knowledge: [],
 		workflows: new Map(),
 		sharedSkills: new Map(),
+		sharedSkillMeta: new Map(),
 	};
 }
 
@@ -61,8 +63,49 @@ describe("mergeShared", () => {
 	test("missing shared root yields empty merge", () => {
 		const result = mergeShared(join(tmpdir(), "does-not-exist-shared-xyz"), baseAgent(new Map()));
 		expect(result.sharedSkills.size).toBe(0);
+		expect(result.sharedSkillMeta.size).toBe(0);
 		expect(result.sharedContext).toBeUndefined();
 		expect(result.tools).toEqual([]);
+	});
+
+	// SIO-1014: shared-skill frontmatter is parsed into sharedSkillMeta.
+	test("shared-skill frontmatter is parsed into sharedSkillMeta", () => {
+		const root = makeSharedRoot({
+			"cite-sources": "---\nname: cite-sources\ndescription: Always cite tool outputs.\n---\n# Cite\nBody.",
+		});
+		try {
+			const result = mergeShared(root, baseAgent(new Map()));
+			expect(result.sharedSkillMeta.get("cite-sources")?.description).toBe("Always cite tool outputs.");
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	// SIO-1014: a markdown-only shared skill still gets a minimal meta record.
+	test("markdown-only shared skill gets a minimal meta record (name only)", () => {
+		const root = makeSharedRoot({ "cite-sources": "# Cite\nNo frontmatter." });
+		try {
+			const result = mergeShared(root, baseAgent(new Map()));
+			const meta = result.sharedSkillMeta.get("cite-sources");
+			expect(meta?.name).toBe("cite-sources");
+			expect(meta?.description).toBeUndefined();
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	// SIO-1014: shadowed shared meta is dropped exactly like the shadowed body.
+	test("local skill shadows shared meta too", () => {
+		const root = makeSharedRoot({
+			"cite-sources": "---\nname: cite-sources\ndescription: shared desc\n---\n# Shared",
+		});
+		try {
+			const local = new Map([["cite-sources", "# Local version"]]);
+			const result = mergeShared(root, baseAgent(local));
+			expect(result.sharedSkillMeta.has("cite-sources")).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true });
+		}
 	});
 });
 

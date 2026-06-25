@@ -12,6 +12,8 @@ import {
 	RunbookFrontmatterSchema,
 	type RunbookSelectionConfig,
 	type RunbookTriggers,
+	type SkillFrontmatter,
+	SkillFrontmatterSchema,
 	type ToolDefinition,
 	ToolDefinitionSchema,
 } from "./types.ts";
@@ -33,6 +35,10 @@ export interface LoadedAgent {
 	duties: string;
 	tools: ToolDefinition[];
 	skills: Map<string, string>;
+	// SIO-1014: typed SKILL.md frontmatter, keyed by skill name. Total over
+	// `skills` (every loaded skill has a record; markdown-only skills get a
+	// minimal { name } synthesized). Drives the prompt's Skills catalog.
+	skillMeta: Map<string, SkillFrontmatter>;
 	subAgents: Map<string, LoadedAgent>;
 	knowledge: KnowledgeEntry[];
 	// SIO-640: Optional runbook selection config from knowledge/index.yaml.
@@ -46,6 +52,8 @@ export interface LoadedAgent {
 	memory?: LoadedMemory;
 	workflows: Map<string, WorkflowDef>;
 	sharedSkills: Map<string, string>;
+	// SIO-1014: typed frontmatter for shared skills (same contract as skillMeta).
+	sharedSkillMeta: Map<string, SkillFrontmatter>;
 	sharedContext?: string;
 }
 
@@ -81,12 +89,15 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 	}
 
 	const skills = new Map<string, string>();
+	const skillMeta = new Map<string, SkillFrontmatter>();
 	const skillsDir = join(agentDir, "skills");
 	if (isDirectory(skillsDir)) {
 		for (const skillName of manifest.skills ?? []) {
 			const skillPath = join(skillsDir, skillName, "SKILL.md");
 			if (existsSync(skillPath)) {
-				skills.set(skillName, readFileSync(skillPath, "utf-8"));
+				const content = readFileSync(skillPath, "utf-8");
+				skills.set(skillName, content);
+				skillMeta.set(skillName, parseSkillFrontmatter(skillName, content));
 			}
 		}
 	}
@@ -116,6 +127,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		duties,
 		tools,
 		skills,
+		skillMeta,
 		subAgents,
 		knowledge,
 		runbookSelection,
@@ -123,6 +135,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		memory,
 		workflows,
 		sharedSkills: new Map(),
+		sharedSkillMeta: new Map(),
 	};
 
 	// SIO-843 / EPIC 5: merge shared skills + context for every agent. Shared
@@ -132,6 +145,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		...base,
 		tools: merged.tools,
 		sharedSkills: merged.sharedSkills,
+		sharedSkillMeta: merged.sharedSkillMeta,
 		sharedContext: merged.sharedContext,
 	};
 }
@@ -286,6 +300,39 @@ export function parseRunbookFrontmatter(content: string): {
 	const validated = RunbookFrontmatterSchema.parse(parsed);
 
 	return { triggers: validated.triggers, body };
+}
+
+// SIO-1014: parse a SKILL.md frontmatter block into typed metadata. Unlike
+// parseRunbookFrontmatter (which throws on malformed input), skill loading is
+// tolerant: most skills are markdown-only with no frontmatter, so absence and
+// malformation both fall back to a minimal { name } record. The record is always
+// total over the skill set so the prompt catalog can iterate without guards.
+export function parseSkillFrontmatter(skillName: string, content: string): SkillFrontmatter {
+	const minimal: SkillFrontmatter = { name: skillName };
+
+	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+		return minimal;
+	}
+
+	const afterOpening = content.indexOf("\n") + 1;
+	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	if (!closingMatch || closingMatch.index === undefined) {
+		// gitagent-bridge is intentionally dependency-light (no observability dep);
+		// console.warn matches the lib-free posture and is allowed by biome here.
+		console.warn(`skill frontmatter (${skillName}): missing closing --- delimiter; using minimal record`);
+		return minimal;
+	}
+
+	const frontmatterYaml = content.slice(afterOpening, afterOpening + closingMatch.index);
+	try {
+		const parsed = SkillFrontmatterSchema.parse(parse(frontmatterYaml) ?? {});
+		// Fall back to the skill directory name when the author omitted `name`.
+		return { ...parsed, name: parsed.name ?? skillName };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn(`skill frontmatter (${skillName}): parse failed (${message}); using minimal record`);
+		return minimal;
+	}
 }
 
 function loadOptionalFile(path: string): string {

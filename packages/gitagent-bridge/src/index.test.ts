@@ -21,9 +21,10 @@ import {
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
-import { parseRunbookFrontmatter } from "./manifest-loader.ts";
+import { parseRunbookFrontmatter, parseSkillFrontmatter } from "./manifest-loader.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+const ELASTIC_IAC_DIR = join(import.meta.dir, "../../../agents/elastic-iac");
 
 describe("manifest-loader", () => {
 	test("loads root agent with all fields", () => {
@@ -166,6 +167,116 @@ describe("skill-loader", () => {
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		const prompt = buildSystemPrompt(elastic);
 		expect(prompt).not.toContain("## Knowledge Base");
+	});
+});
+
+// SIO-1014: SKILL.md frontmatter -> typed skillMeta + a Skills catalog in the prompt.
+describe("skill frontmatter (SIO-1014)", () => {
+	test("skillMeta is total over skills (minimal record for markdown-only skills)", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		// incident-analyzer skills are markdown-only (no frontmatter) -> minimal { name }.
+		expect(agent.skillMeta.size).toBe(agent.skills.size);
+		for (const name of agent.skills.keys()) {
+			const meta = agent.skillMeta.get(name);
+			expect(meta).toBeDefined();
+			expect(meta?.name).toBe(name);
+			// no frontmatter -> no description
+			expect(meta?.description).toBeUndefined();
+		}
+	});
+
+	test("elastic-iac skills parse name + description from frontmatter", () => {
+		const agent = loadAgent(ELASTIC_IAC_DIR);
+		const resize = agent.skillMeta.get("resize-tier");
+		expect(resize).toBeDefined();
+		expect(resize?.name).toBe("resize-tier");
+		expect(resize?.description).toContain("Resize a hot/warm/cold");
+		// inputs/outputs are carried opaquely
+		expect(resize?.inputs).toBeDefined();
+		expect(resize?.outputs).toBeDefined();
+	});
+
+	test("buildSystemPrompt emits a Skills catalog for skills with descriptions", () => {
+		const agent = loadAgent(ELASTIC_IAC_DIR);
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Skills");
+		expect(prompt).toContain("**resize-tier**: Resize a hot/warm/cold");
+		// the full body still renders below the catalog
+		expect(prompt).toContain("Skill: resize-tier");
+	});
+
+	test("no Skills catalog when no active skill has a description (markdown-only)", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		// incident-analyzer locals are markdown-only AND the shared cite-sources skill
+		// is markdown-only too, so the catalog section is absent entirely.
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).not.toContain("## Skills\n");
+	});
+
+	test("catalog respects the activeSkills filter", () => {
+		const agent = loadAgent(ELASTIC_IAC_DIR);
+		const prompt = buildSystemPrompt(agent, ["resize-tier"]);
+		expect(prompt).toContain("**resize-tier**:");
+		expect(prompt).not.toContain("**add-ilm-policy**:");
+	});
+});
+
+describe("parseSkillFrontmatter (SIO-1014)", () => {
+	test("no frontmatter -> minimal record (name only)", () => {
+		const meta = parseSkillFrontmatter("my-skill", "# Skill: My Skill\n\nBody.");
+		expect(meta).toEqual({ name: "my-skill" });
+	});
+
+	test("parses name/description/inputs/outputs", () => {
+		const content = [
+			"---",
+			"name: resize-tier",
+			"description: Resize a tier.",
+			"inputs:",
+			"  cluster: { type: string, required: true }",
+			"outputs:",
+			"  mr_url: { type: string }",
+			"---",
+			"# Body",
+		].join("\n");
+		const meta = parseSkillFrontmatter("resize-tier", content);
+		expect(meta.name).toBe("resize-tier");
+		expect(meta.description).toBe("Resize a tier.");
+		expect(meta.inputs).toBeDefined();
+		expect(meta.outputs).toBeDefined();
+	});
+
+	test("falls back to the dir name when `name` is omitted", () => {
+		const meta = parseSkillFrontmatter("dir-name", "---\ndescription: d\n---\n# Body");
+		expect(meta.name).toBe("dir-name");
+		expect(meta.description).toBe("d");
+	});
+
+	test("missing closing delimiter -> minimal record (no throw)", () => {
+		const meta = parseSkillFrontmatter("broken", "---\nname: broken\n# Body with no close");
+		expect(meta).toEqual({ name: "broken" });
+	});
+
+	test("malformed YAML -> minimal record (no throw)", () => {
+		const meta = parseSkillFrontmatter("bad", "---\ninputs: { cluster: [unterminated\n---\n# Body");
+		expect(meta).toEqual({ name: "bad" });
+	});
+
+	test("optional learning fields validate when present", () => {
+		const content = [
+			"---",
+			"name: learned-skill",
+			"description: d",
+			"confidence: 0.5",
+			"usage_count: 0",
+			"learned_from: thread:abc",
+			"---",
+			"# Body",
+		].join("\n");
+		const meta = parseSkillFrontmatter("learned-skill", content);
+		expect(meta.confidence).toBe(0.5);
+		expect(meta.usage_count).toBe(0);
+		expect(meta.learned_from).toBe("thread:abc");
 	});
 });
 

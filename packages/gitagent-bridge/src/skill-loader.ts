@@ -31,6 +31,32 @@ function renderSkill(name: string, content: string | undefined): string | undefi
 	return `## Skill: ${name}\n\n${bodyOnly}`;
 }
 
+// SIO-1014: a compact "## Skills" index (name + one-line description) so the model
+// sees which skills exist at a glance, mirroring how tools expose action
+// descriptions. Skipped for skills with no description (markdown-only authoring).
+// Respects the same active/shadow rules as the body rendering below.
+function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string | undefined {
+	const lines: string[] = [];
+	const seen = new Set<string>();
+
+	const localNames = activeSkills ?? [...agent.skills.keys()];
+	for (const name of localNames) {
+		const description = agent.skillMeta.get(name)?.description?.trim();
+		if (description) lines.push(`- **${name}**: ${description}`);
+		seen.add(name);
+	}
+
+	const sharedNames = activeSkills ?? [...agent.sharedSkills.keys()];
+	for (const name of sharedNames) {
+		if (agent.skills.has(name) || seen.has(name)) continue;
+		const description = agent.sharedSkillMeta.get(name)?.description?.trim();
+		if (description) lines.push(`- **${name}**: ${description}`);
+	}
+
+	if (lines.length === 0) return undefined;
+	return `## Skills\n\n${lines.join("\n")}`;
+}
+
 export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): string {
 	const sections: string[] = [];
 
@@ -53,6 +79,11 @@ export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): 
 	if (agent.duties?.trim()) {
 		sections.push(agent.duties.trim());
 	}
+
+	// SIO-1014: the Skills catalog (name + description) frames the detailed skill
+	// bodies that follow. Absent when no active skill declares a description.
+	const catalog = buildSkillsCatalog(agent, activeSkills);
+	if (catalog) sections.push(catalog);
 
 	const skillsToLoad = activeSkills ?? [...agent.skills.keys()];
 	for (const skillName of skillsToLoad) {

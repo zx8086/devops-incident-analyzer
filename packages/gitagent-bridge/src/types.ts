@@ -232,3 +232,28 @@ export const RunbookFrontmatterSchema = z
 	.strict();
 
 export type RunbookFrontmatter = z.infer<typeof RunbookFrontmatterSchema>;
+
+// SIO-1014: typed view of a SKILL.md frontmatter block. `name`/`description` are
+// the gitagent.sh authoring fields surfaced in the prompt's Skills catalog;
+// `inputs`/`outputs` are opaque contracts (narrowed at use sites). The learning
+// fields are optional so a SIO-1015 promoted/crystallized skill validates against
+// the same schema. `.passthrough()` (not `.strict()`) tolerates unknown keys —
+// many skills are markdown-only with no frontmatter at all.
+export const SkillFrontmatterSchema = z
+	.object({
+		name: z.string().optional(),
+		description: z.string().optional(),
+		inputs: z.record(z.string(), z.unknown()).optional(),
+		outputs: z.record(z.string(), z.unknown()).optional(),
+		// SIO-1015 skill-learning fields (absent on hand-authored skills).
+		confidence: z.number().optional(),
+		learned_from: z.string().optional(),
+		learned_at: z.string().optional(),
+		usage_count: z.number().optional(),
+		success_count: z.number().optional(),
+		failure_count: z.number().optional(),
+		negative_examples: z.array(z.string()).optional(),
+	})
+	.passthrough();
+
+export type SkillFrontmatter = z.infer<typeof SkillFrontmatterSchema>;
