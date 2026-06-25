@@ -245,13 +245,18 @@ export const SkillFrontmatterSchema = z
 		description: z.string().optional(),
 		inputs: z.record(z.string(), z.unknown()).optional(),
 		outputs: z.record(z.string(), z.unknown()).optional(),
-		// SIO-1015 skill-learning fields (absent on hand-authored skills).
-		confidence: z.number().optional(),
+		// SIO-1015 skill-learning fields (absent on hand-authored skills). Constrained
+		// so invalid metadata (confidence out of [0,1], negative/fractional counts,
+		// non-ISO timestamps) is rejected at parse time rather than propagating.
+		confidence: z.number().min(0).max(1).optional(),
 		learned_from: z.string().optional(),
-		learned_at: z.string().optional(),
-		usage_count: z.number().optional(),
-		success_count: z.number().optional(),
-		failure_count: z.number().optional(),
+		learned_at: z
+			.string()
+			.regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}/)
+			.optional(),
+		usage_count: z.number().int().nonnegative().optional(),
+		success_count: z.number().int().nonnegative().optional(),
+		failure_count: z.number().int().nonnegative().optional(),
 		negative_examples: z.array(z.string()).optional(),
 	})
 	.passthrough();

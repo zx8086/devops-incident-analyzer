@@ -21,7 +21,7 @@ import {
 	validateToolSchemas,
 	withRelatedTools,
 } from "./index.ts";
-import { parseRunbookFrontmatter, parseSkillFrontmatter } from "./manifest-loader.ts";
+import { type LoadedAgent, parseRunbookFrontmatter, parseSkillFrontmatter } from "./manifest-loader.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 const ELASTIC_IAC_DIR = join(import.meta.dir, "../../../agents/elastic-iac");
@@ -218,6 +218,36 @@ describe("skill frontmatter (SIO-1014)", () => {
 		const prompt = buildSystemPrompt(agent, ["resize-tier"]);
 		expect(prompt).toContain("**resize-tier**:");
 		expect(prompt).not.toContain("**add-ilm-policy**:");
+	});
+
+	// SIO-1014 regression (CodeRabbit): a shared-only skill named in activeSkills
+	// must still be catalogued. The local pass must NOT pre-mark it as seen, or the
+	// shared pass drops its description while the body still renders below.
+	test("catalog includes a shared-only skill when it is the only active skill", () => {
+		const agent: LoadedAgent = {
+			manifest: { name: "t", version: "0.1.0", description: "t" },
+			soul: "",
+			rules: "",
+			duties: "",
+			tools: [],
+			skills: new Map([["local-skill", "---\nname: local-skill\ndescription: Local one.\n---\n# Local body"]]),
+			skillMeta: new Map([["local-skill", { name: "local-skill", description: "Local one." }]]),
+			subAgents: new Map(),
+			knowledge: [],
+			workflows: new Map(),
+			sharedSkills: new Map([
+				["shared-skill", "---\nname: shared-skill\ndescription: Shared one.\n---\n# Shared body"],
+			]),
+			sharedSkillMeta: new Map([["shared-skill", { name: "shared-skill", description: "Shared one." }]]),
+		};
+		const prompt = buildSystemPrompt(agent, ["shared-skill"]);
+		// catalogued
+		expect(prompt).toContain("**shared-skill**: Shared one.");
+		// body still renders
+		expect(prompt).toContain("Skill: shared-skill");
+		// inactive local skill is omitted from both catalog and bodies
+		expect(prompt).not.toContain("**local-skill**:");
+		expect(prompt).not.toContain("Skill: local-skill");
 	});
 });
 

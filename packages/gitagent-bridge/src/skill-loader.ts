@@ -41,6 +41,10 @@ function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string
 
 	const localNames = activeSkills ?? [...agent.skills.keys()];
 	for (const name of localNames) {
+		// SIO-1014: only mark REAL local skills as seen. A shared-only name passed
+		// via activeSkills must fall through to the shared pass below, not be
+		// pre-marked here (which would drop its catalog line while the body renders).
+		if (!agent.skills.has(name) || seen.has(name)) continue;
 		const description = agent.skillMeta.get(name)?.description?.trim();
 		if (description) lines.push(`- **${name}**: ${description}`);
 		seen.add(name);
@@ -48,9 +52,10 @@ function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string
 
 	const sharedNames = activeSkills ?? [...agent.sharedSkills.keys()];
 	for (const name of sharedNames) {
-		if (agent.skills.has(name) || seen.has(name)) continue;
+		if (!agent.sharedSkills.has(name) || agent.skills.has(name) || seen.has(name)) continue;
 		const description = agent.sharedSkillMeta.get(name)?.description?.trim();
 		if (description) lines.push(`- **${name}**: ${description}`);
+		seen.add(name);
 	}
 
 	if (lines.length === 0) return undefined;
