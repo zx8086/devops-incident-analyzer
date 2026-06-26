@@ -19,6 +19,7 @@
 - Tests colocated next to source (`foo.test.ts` beside `foo.ts`), not in `__tests__/`.
 - Run `bun run typecheck`, `bun run lint`, and the relevant `bun test` after every change.
 - WORKTREE GOTCHA: this branch runs in `.claude/worktrees/sharp-mccarthy-f7c622`. Use the worktree-relative paths below; do NOT write to the sibling main checkout at `/WebstormProjects/devops-incident-analyzer/...` or git will not see the file.
+- BRANCH SYNC (validated 2026-06-23): this branch is 5 commits behind `origin/main` (SIO-1014..SIO-1018, the skill-learning subsystem). Merge/rebase `origin/main` before starting. SIO-1018 added an orthogonal `skillsApplied` capture to `aggregate()` that shifts the cap-block line numbers by ~+11 but does NOT change any cap/gaps/confidence/IAM logic this plan depends on. All load-bearing symbols (`extractGapsBulletCount`, `GAPS_HEADING_RE`/`TOP_LEVEL_BULLET_RE`/`ANY_HEADING_RE`, `TOOL_ERROR_CONFIDENCE_CAP = 0.59`, `rewriteConfidenceInAnswer`, `anyCapTriggered`, `ToolError.category === "auth"`, `wrap.ts:82` advice, the single `LogsReadLimitedByName` policy statement, `POLICY_NAME` default `...Permissions`) are unchanged and re-verified. Anchor edits on the quoted text, not the line numbers.
 
 ---
 
@@ -37,7 +38,7 @@
 ## Task 1: `detectUngroundedBlockers` pure helper
 
 **Files:**
-- Modify: `packages/agent/src/aggregator.ts` (add helper + regex near the existing `extractGapsBulletCount`, ~line 246-269)
+- Modify: `packages/agent/src/aggregator.ts` (add helper + regex right after the existing `extractGapsBulletCount`, currently ending ~line 269 on origin/main; anchor on the function, not the number)
 - Test: `packages/agent/src/aggregator-grounding.test.ts` (create)
 
 **Interfaces:**
@@ -117,7 +118,7 @@ In `packages/agent/src/aggregator.ts`, add an import for the type at the top (th
 import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
 ```
 
-Then, immediately after `extractGapsBulletCount` (after line 269), add:
+Then, immediately after the `extractGapsBulletCount` function body, add:
 
 ```ts
 // SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
@@ -253,7 +254,7 @@ git commit -m "SIO-1013: rewrite ungrounded permission-blocker gaps to honest te
 ## Task 3: Wire grounding into the confidence cap inside `aggregate()`
 
 **Files:**
-- Modify: `packages/agent/src/aggregator.ts` (the cap block at lines 342-419)
+- Modify: `packages/agent/src/aggregator.ts` (the cap block, currently ~lines 384-419 on origin/main; SIO-1018 added an orthogonal `skillsApplied` capture above it but did not touch the cap/gaps/confidence logic — anchor on the symbol names below, not the numbers)
 - Test: `packages/agent/src/aggregator-grounding.test.ts` (extend with an `aggregate()`-level test using the existing LLM mock pattern)
 
 **Interfaces:**
@@ -314,7 +315,7 @@ Expected: FAIL — `confidenceScore` is `0.62` (uncapped) and `finalAnswer` stil
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `aggregate()` in `aggregator.ts`, locate the cap block (around lines 372-378):
+In `aggregate()` in `aggregator.ts`, locate the cap block (match this exact text — currently ~lines 384-389 on origin/main):
 
 ```ts
 	// SIO-709 AC #2: Gaps section with >= 2 bullets triggers the same 0.59 cap.
@@ -344,7 +345,7 @@ Replace it with:
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 ```
 
-Then add a warning log next to the two existing cap warnings (after the `gapsCapTriggered` block, ~line 404):
+Then add a warning log next to the two existing cap warnings (after the `if (gapsCapTriggered) { ... }` block, currently ~line 415 on origin/main):
 
 ```ts
 	if (ungroundedCapTriggered) {
@@ -355,7 +356,7 @@ Then add a warning log next to the two existing cap warnings (after the `gapsCap
 	}
 ```
 
-Finally, update the `finalAnswer` line (~line 408) so the ungrounded bullets are rewritten BEFORE the confidence line is synced:
+Finally, update the `const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(answer, cappedScore) : answer;` line (currently ~line 419 on origin/main) so the ungrounded bullets are rewritten BEFORE the confidence line is synced. NOTE (SIO-1018): the `aggregate()` return object now also carries `skillsApplied` on both the no-results early return and the normal return — leave that field untouched; your change only affects `finalAnswer`/`confidenceScore`/`confidenceCap`:
 
 ```ts
 	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
@@ -374,7 +375,7 @@ Expected: PASS (7 tests total).
 - [ ] **Step 5: Run the full aggregator suite to check no regression**
 
 Run: `bun test packages/agent/src/aggregator.test.ts`
-Expected: PASS (40 existing tests still green — the new cap only fires on permission-denial language with no auth error, which none of those fixtures contain). If any fail, inspect whether a fixture's Gaps prose accidentally matches `PERMISSION_DENIAL_RE`; if so, that fixture had an ungrounded claim and the test expectation should be updated, not the regex loosened.
+Expected: PASS (43 existing tests on origin/main still green — the new cap only fires on permission-denial language with no auth error, which none of those fixtures contain). If any fail, inspect whether a fixture's Gaps prose accidentally matches `PERMISSION_DENIAL_RE`; if so, that fixture had an ungrounded claim and the test expectation should be updated, not the regex loosened.
 
 - [ ] **Step 6: Typecheck + lint + commit**
 
