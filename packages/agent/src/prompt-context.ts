@@ -154,6 +154,18 @@ export function getRunbookFilenames(): string[] {
 	return agent.knowledge.filter((k) => k.category === "runbooks").map((k) => k.filename);
 }
 
+// SIO-1018: the local skill names active in the orchestrator prompt this turn --
+// the same set buildSystemPrompt iterates (agent.skills keys). Promoted learned
+// skills appear here once added to agent.yaml. Best-effort -> [] if the manifest
+// can't be read, so a trace failure never breaks the turn.
+export function getActiveSkillNames(): string[] {
+	try {
+		return [...getAgent().skills.keys()];
+	} catch {
+		return [];
+	}
+}
+
 // SIO-640: Runbook catalog projection for the lazy selector. Parses each
 // runbook's first H1 as title and first non-empty paragraph as summary.
 // SIO-643: Passes through optional frontmatter triggers so the deterministic

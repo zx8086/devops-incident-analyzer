@@ -68,7 +68,14 @@ export {
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
-export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
+export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
+export {
+	buildOrchestratorPrompt,
+	buildSubAgentPrompt,
+	getActiveSkillNames,
+	getAgent,
+	getAgentByName,
+} from "./prompt-context.ts";
 export { respond } from "./responder.ts";
 export {
 	buildSkillAnnotations,
@@ -90,6 +97,7 @@ export {
 } from "./skill-learner-install.ts";
 export {
 	type AppliedSkill,
+	appliedSkillsForNames,
 	computeConfidence,
 	isSkillOutcomeTrackingEnabled,
 	recordSkillOutcome,

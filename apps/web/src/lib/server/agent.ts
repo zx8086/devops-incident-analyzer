@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/agent.ts
 import { connect as netConnect } from "node:net";
 import {
+	appliedSkillsForNames,
 	buildGraph,
 	buildIacGraph,
 	createMcpClient,
@@ -508,14 +509,13 @@ async function readCompletedTurn(ctx: { agentName: string; threadId: string }): 
 	}
 }
 
-// SIO-1016: read the just-completed turn for the confidence feedback loop. Supplies
-// the coarse success signal (error state + confidence) AND the set of promoted skills
-// applied this turn. KNOWN LIMIT: there is no reliable per-turn "this catalog skill was
-// applied" trace in graph state today (promoted learned-skills are catalog entries the
-// model consults at will), so appliedSkills is [] -- a documented no-op. The mechanism
-// (recordSkillOutcome) is shipped + tested; a follow-up ticket adds the application
-// trace, after which this reader populates appliedSkills and the loop activates with no
-// further wiring. Scoped to incident-analyzer (matches readCompletedTurn).
+// SIO-1016 + SIO-1018: read the just-completed turn for the confidence feedback loop.
+// Supplies the coarse success signal (validationResult === "fail" -> hadError, plus
+// confidenceScore) AND the promoted skills active this turn. SIO-1018 closed the
+// attribution gap: the aggregate node records active skills onto state.skillsApplied,
+// which we map to SKILL.md paths here. Downstream recordSkillOutcome no-ops on any
+// body-only skill, so only learned-frontmatter skills are counted. Scoped to
+// incident-analyzer (matches readCompletedTurn).
 async function readCompletedTurnOutcome(ctx: { agentName: string; threadId: string }): Promise<OutcomeTurn | null> {
 	if (ctx.agentName !== "incident-analyzer") return null;
 	try {
@@ -525,11 +525,14 @@ async function readCompletedTurnOutcome(ctx: { agentName: string; threadId: stri
 		const confidenceScore = typeof values.confidenceScore === "number" ? values.confidenceScore : 0;
 		// validationResult "fail" is the turn-level error signal the validator sets.
 		const hadError = values.validationResult === "fail";
+		// SIO-1018: the aggregate node records the active skills onto skillsApplied;
+		// map them to SKILL.md paths. recordSkillOutcome self-filters body-only files,
+		// so the full active set is safe to pass.
+		const skillsApplied = Array.isArray(values.skillsApplied) ? (values.skillsApplied as string[]) : [];
 		return {
 			hadError,
 			confidenceScore,
-			// No per-turn skill-application signal yet -> deliberate no-op (see note above).
-			appliedSkills: [],
+			appliedSkills: appliedSkillsForNames(ctx.agentName, skillsApplied),
 		};
 	} catch (error) {
 		getLogger("web:skill-outcome").warn(

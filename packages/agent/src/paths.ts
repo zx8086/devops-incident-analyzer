@@ -54,3 +54,9 @@ export function getWorkspaceRoot(): string {
 export function getAgentsDir(name = "incident-analyzer"): string {
 	return join(getWorkspaceRoot(), "agents", name);
 }
+
+// SIO-1018: the on-disk SKILL.md layout, shared by the SIO-1017 promote CLI and the
+// SIO-1016 outcome reader so the path is defined exactly once.
+export function skillFilePath(workspaceRoot: string, agent: string, skill: string): string {
+	return join(workspaceRoot, "agents", agent, "skills", skill, "SKILL.md");
+}
