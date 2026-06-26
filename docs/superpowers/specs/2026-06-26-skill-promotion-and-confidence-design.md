@@ -173,6 +173,12 @@ The promoted `SKILL.md` frontmatter is already surfaced by the SIO-1014 loader i
 - Confidence uses Laplace smoothing: 0/0/0 → 0.5; recompute is exercised in a unit test.
 - `bun run typecheck && bun run lint && bun run test` pass.
 
+### As-built note — outcome attribution (the one open question)
+
+There is **no reliable per-turn "this catalog skill was applied" signal** in graph state today: promoted learned-skills are entries in the `## Skills` catalog that the model consults at its discretion, leaving no trace (unlike `selectedRunbooks`, which is recorded). Bumping every manifest skill every turn would make the counters noise, and a per-skill LLM judge is out of scope. So the shipped wiring is **deliberately gated to a no-op for catalog skills**: the production reader (`readCompletedTurnOutcome` in `apps/web/src/lib/server/agent.ts`) supplies the real success signal (`hadError` from `validationResult === "fail"`, plus `confidenceScore`) but returns `appliedSkills: []`. The full mechanism (`recordSkillOutcome`, `recordSkillOutcomesForTurn`, `outcomeForTurn`, Laplace `computeConfidence`, the per-path mutex) is shipped and unit-tested; the moment a follow-up ticket adds a per-turn skill-application trace, that reader populates `appliedSkills` and the loop activates with no further wiring. This keeps the propose-only posture honest: confidence only moves on real, attributable applications.
+
+A small follow-up ticket should add the application trace (e.g. a `skillsApplied` state channel populated when the model consults a catalog skill), at which point `appliedSkills` is non-empty and the loop runs end-to-end (verified composing manually: scaffold a draft → 2 success + 1 failure → `usage=3, success=2, failure=1, confidence=0.6`).
+
 ### Files
 
 | File | Change |

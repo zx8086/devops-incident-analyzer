@@ -81,7 +81,20 @@ export {
 	type SkillProposal,
 	SkillProposalSchema,
 } from "./skill-learner.ts";
-export { installSkillLearner, type TurnReader } from "./skill-learner-install.ts";
+export {
+	installSkillLearner,
+	type OutcomeTurn,
+	type OutcomeTurnReader,
+	runSkillOutcomeTracking,
+	type TurnReader,
+} from "./skill-learner-install.ts";
+export {
+	type AppliedSkill,
+	computeConfidence,
+	isSkillOutcomeTrackingEnabled,
+	recordSkillOutcome,
+	type SkillOutcome,
+} from "./skill-outcome.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
 export { DEFAULT_PRUNING_CONFIG, needsPruning, type PruningConfig, pruneState } from "./state-pruning.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";
