@@ -95,17 +95,23 @@ function parseProposal(raw: string): SkillProposal | null {
 	}
 }
 
+// The exact text handed to the LLM judge: the transcript, capped and PII-redacted.
+// The caller is not trusted to have redacted, and the judge input is just as
+// sensitive as the persisted body. Exported so the redaction guarantee is testable
+// without depending on the (process-global) LLM mock.
+const MAX_TRANSCRIPT_CHARS = 6000;
+export function redactForJudge(transcript: string): string {
+	return redactPiiContent(transcript.slice(0, MAX_TRANSCRIPT_CHARS));
+}
+
 // Asks the LLM judge whether this turn is worth crystallizing. Returns a worthy,
 // well-formed proposal or null. Best-effort: any error yields null.
 export async function judgeTurn(turn: SkillLearnerTurn): Promise<SkillProposal | null> {
 	try {
 		const llm = createLlm("skillLearner", LEARNER_AGENT);
-		// Redact before the transcript reaches the LLM: the caller is not trusted to
-		// have done it, and the judge input is just as sensitive as the persisted body.
-		const redactedTranscript = redactPiiContent(turn.transcript.slice(0, 6000));
 		const result = await invokeWithDeadline(llm as InvokableLlm, "skillLearner", [
 			new SystemMessage(JUDGE_PROMPT),
-			new HumanMessage(redactedTranscript),
+			new HumanMessage(redactForJudge(turn.transcript)),
 		]);
 		const content = typeof result.content === "string" ? result.content : "";
 		const proposal = parseProposal(content);
