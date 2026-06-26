@@ -299,6 +299,23 @@ export function detectUngroundedBlockers(answer: string, results: DataSourceResu
 	return { ungrounded };
 }
 
+// SIO-1013: replace each ungrounded permission-blocker bullet's fabricated cause with a
+// neutral truth. We do not know WHY the data is missing (the tool may simply never have
+// been called), so we assert only what is verifiable: the data was not retrieved and the
+// access state is unconfirmed. Only the flagged lines change; the rest of the report is
+// preserved verbatim.
+const UNGROUNDED_BLOCKER_REPLACEMENT =
+	"- Some data referenced above were not retrieved during this investigation. No permission error was observed, so the access state is unconfirmed; the relevant read tools may not have been invoked.";
+
+export function rewriteUngroundedBlockers(answer: string, ungrounded: string[]): string {
+	if (ungrounded.length === 0) return answer;
+	const flagged = new Set(ungrounded);
+	return answer
+		.split("\n")
+		.map((line) => (flagged.has(line) ? UNGROUNDED_BLOCKER_REPLACEMENT : line))
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 

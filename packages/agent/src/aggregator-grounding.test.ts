@@ -1,7 +1,7 @@
 // packages/agent/src/aggregator-grounding.test.ts
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
-import { detectUngroundedBlockers } from "./aggregator.ts";
+import { detectUngroundedBlockers, rewriteUngroundedBlockers } from "./aggregator.ts";
 
 const REPORT_TAIL = `## Gaps
 
@@ -54,5 +54,22 @@ describe("detectUngroundedBlockers", () => {
 			"## Gaps\n\n- logs:DescribeLogGroups was queried successfully and returned 12 groups.\n\nConfidence: 0.8";
 		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
 		expect(ungrounded).toHaveLength(0);
+	});
+});
+
+describe("rewriteUngroundedBlockers", () => {
+	test("replaces a flagged bullet with an honest 'not retrieved' statement", () => {
+		const flagged =
+			"- ECS collector application logs (`/ecs/fargate/open-telemetry-prd-log-group`) are inaccessible: `logs:DescribeLogGroups` and `logs:StartQuery` are not permitted for `DevOpsAgentReadOnly`.";
+		const answer = `## Gaps\n\n${flagged}\n\nConfidence: 0.62`;
+		const out = rewriteUngroundedBlockers(answer, [flagged]);
+		expect(out).not.toContain("not permitted for");
+		expect(out).toContain("were not retrieved during this investigation");
+		expect(out).toContain("Confidence: 0.62"); // other lines untouched
+	});
+
+	test("returns answer unchanged when nothing is flagged", () => {
+		const answer = "## Gaps\n\n- a real gap\n\nConfidence: 0.9";
+		expect(rewriteUngroundedBlockers(answer, [])).toBe(answer);
 	});
 });
