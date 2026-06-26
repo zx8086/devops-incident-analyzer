@@ -6,7 +6,9 @@ import { join } from "node:path";
 import type { SkillFrontmatter } from "@devops-agent/gitagent-bridge";
 import { SkillFrontmatterSchema } from "@devops-agent/gitagent-bridge";
 import { parse } from "yaml";
+import { getWorkspaceRoot } from "./paths.ts";
 import {
+	appliedSkillsForNames,
 	computeConfidence,
 	isSkillOutcomeTrackingEnabled,
 	nextFrontmatter,
@@ -246,6 +248,23 @@ describe("recordSkillOutcomesForTurn (SIO-1016)", () => {
 		// No throw, no files created.
 		await recordSkillOutcomesForTurn([], "success");
 		expect(true).toBe(true);
+	});
+});
+
+describe("appliedSkillsForNames (SIO-1018)", () => {
+	test("maps each name to its agents/<agent>/skills/<name>/SKILL.md path", () => {
+		const root = getWorkspaceRoot();
+		const result = appliedSkillsForNames("incident-analyzer", ["lag-correlation"]);
+		expect(result).toEqual([
+			{
+				name: "lag-correlation",
+				filePath: join(root, "agents", "incident-analyzer", "skills", "lag-correlation", "SKILL.md"),
+			},
+		]);
+	});
+
+	test("empty names -> empty list", () => {
+		expect(appliedSkillsForNames("incident-analyzer", [])).toEqual([]);
 	});
 });
 

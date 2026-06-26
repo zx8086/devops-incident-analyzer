@@ -97,6 +97,7 @@ export {
 } from "./skill-learner-install.ts";
 export {
 	type AppliedSkill,
+	appliedSkillsForNames,
 	computeConfidence,
 	isSkillOutcomeTrackingEnabled,
 	recordSkillOutcome,

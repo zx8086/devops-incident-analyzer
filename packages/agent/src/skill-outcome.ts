@@ -16,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { type SkillFrontmatter, SkillFrontmatterSchema } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { parse, stringify } from "yaml";
+import { getWorkspaceRoot, skillFilePath } from "./paths.ts";
 
 const logger = getLogger("agent:skill-outcome");
 
@@ -110,6 +111,15 @@ export function outcomeForTurn(turn: { hadError: boolean; confidenceScore: numbe
 export interface AppliedSkill {
 	name: string;
 	filePath: string;
+}
+
+// SIO-1018: resolve active skill names to AppliedSkill[] for recordSkillOutcomesForTurn.
+// Reuses the SIO-1017 skillFilePath layout. Resolves paths only -- existence and
+// frontmatter are checked downstream by recordSkillOutcome (no-op on a missing or
+// body-only file), so passing the full active set is safe.
+export function appliedSkillsForNames(agentName: string, names: string[]): AppliedSkill[] {
+	const root = getWorkspaceRoot();
+	return names.map((name) => ({ name, filePath: skillFilePath(root, agentName, name) }));
 }
 
 export async function recordSkillOutcomesForTurn(applied: AppliedSkill[], outcome: SkillOutcome): Promise<void> {
