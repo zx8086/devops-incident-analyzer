@@ -273,8 +273,11 @@ export function extractGapsBulletCount(answer: string): number {
 // MCP _error.kind=iam-permission-missing -> tool output text -> sub-agent.ts regex
 // (/access denied/i, /forbidden/i) -> toolErrors[{category:"auth"}]. If the gap claims a
 // denial but NO auth error exists in any sub-agent's results, the LLM fabricated it.
+// Note: the `logs:[a-z]+` arm was intentionally removed — an informational mention of a
+// logs: action (e.g. "logs:DescribeLogGroups returned 12 groups") must not count as a
+// denial. Only explicit denial phrases trigger the grounding check.
 const PERMISSION_DENIAL_RE =
-	/\b(not permitted|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission|logs:[a-z]+)\b/i;
+	/\b(not permitted|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission)\b/i;
 
 export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));

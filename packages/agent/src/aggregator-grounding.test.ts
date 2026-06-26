@@ -48,4 +48,11 @@ describe("detectUngroundedBlockers", () => {
 		]);
 		expect(ungrounded).toHaveLength(0);
 	});
+
+	test("does NOT flag an informational logs: mention with no denial phrase", () => {
+		const answer =
+			"## Gaps\n\n- logs:DescribeLogGroups was queried successfully and returned 12 groups.\n\nConfidence: 0.8";
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(0);
+	});
 });
