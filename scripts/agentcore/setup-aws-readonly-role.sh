@@ -21,7 +21,7 @@
 # Environment variables:
 #   AWS_REGION         - AWS region for the aws cli calls (default: eu-central-1)
 #   ROLE_NAME          - Role name (default: DevOpsAgentReadOnly)
-#   POLICY_NAME        - Managed policy name (default: DevOpsAgentReadOnlyPermissions,
+#   POLICY_NAME        - Managed policy name (default: DevOpsAgentReadOnlyPolicy,
 #                        the name the role actually has attached in every account)
 #   POLICY_FILE        - Path to the permissions policy document
 #                        (default: scripts/agentcore/policies/devops-agent-readonly-policy.json)
@@ -32,10 +32,12 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-eu-central-1}"
 ROLE_NAME="${ROLE_NAME:-DevOpsAgentReadOnly}"
-# SIO-858: the deployed managed policy is DevOpsAgentReadOnlyPermissions, NOT
-# DevOpsAgentReadOnlyPolicy. The old default created a stray second policy instead
-# of updating the real one in place. Override POLICY_NAME only if an account differs.
-POLICY_NAME="${POLICY_NAME:-DevOpsAgentReadOnlyPermissions}"
+# SIO-1013: the live attached managed policy is DevOpsAgentReadOnlyPolicy (verified via
+# aws iam list-policies --scope Local 2026-06-23: AttachmentCount 1, default v6). The
+# SIO-858 rename to DevOpsAgentReadOnlyPermissions was never deployed and no such policy
+# exists in the account, so the default is the real deployed name. Override only if an
+# account genuinely differs.
+POLICY_NAME="${POLICY_NAME:-DevOpsAgentReadOnlyPolicy}"
 POLICY_FILE="${POLICY_FILE:-scripts/agentcore/policies/devops-agent-readonly-policy.json}"
 TRUST_POLICY_FILE="${TRUST_POLICY_FILE:-scripts/agentcore/policies/devops-agent-readonly-trust-policy.json}"
 
