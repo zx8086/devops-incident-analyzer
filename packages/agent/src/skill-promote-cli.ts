@@ -16,10 +16,12 @@
 // is inert (the propose-only safety posture). The CLI prints the line to add by hand.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { getWorkspaceRoot } from "./paths.ts";
+import { getWorkspaceRoot, skillFilePath } from "./paths.ts";
 import { renderSkillMarkdown } from "./skill-promote.ts";
+
+export { skillFilePath };
 
 export interface PromoteArgs {
 	agent: string;
@@ -46,10 +48,6 @@ export function parsePromoteArgs(argv: string[]): PromoteArgs {
 		skill: values.skill,
 		force: values.force ?? false,
 	};
-}
-
-export function skillFilePath(workspaceRoot: string, agent: string, skill: string): string {
-	return join(workspaceRoot, "agents", agent, "skills", skill, "SKILL.md");
 }
 
 // The manifest hint a human pastes into agent.yaml when --add-to-manifest is NOT

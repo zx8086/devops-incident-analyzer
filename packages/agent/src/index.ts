@@ -70,6 +70,7 @@ export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigatio
 export { normalizeIncident } from "./normalizer.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
+export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
 export {
 	buildSkillAnnotations,
 	buildSkillFactText,
