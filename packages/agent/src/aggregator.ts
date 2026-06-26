@@ -277,7 +277,7 @@ export function extractGapsBulletCount(answer: string): number {
 // logs: action (e.g. "logs:DescribeLogGroups returned 12 groups") must not count as a
 // denial. Only explicit denial phrases trigger the grounding check.
 const PERMISSION_DENIAL_RE =
-	/\b(not permitted|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission)\b/i;
+	/\b(not permitted|not authorized|unauthorized|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission)\b/i;
 
 export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));

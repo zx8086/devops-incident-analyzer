@@ -55,6 +55,19 @@ describe("detectUngroundedBlockers", () => {
 		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
 		expect(ungrounded).toHaveLength(0);
 	});
+
+	test("flags a single ungrounded bullet using 'not authorized' phrasing", () => {
+		const answer =
+			"## Gaps\n\n- User is not authorized to perform: logs:StartQuery on the collector log group.\n\nConfidence: 0.7";
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(1);
+	});
+
+	test("flags an 'unauthorized' denial bullet when no auth error observed", () => {
+		const answer = "## Gaps\n\n- The request was unauthorized; metrics could not be read.\n\nConfidence: 0.7";
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(1);
+	});
 });
 
 describe("rewriteUngroundedBlockers", () => {
