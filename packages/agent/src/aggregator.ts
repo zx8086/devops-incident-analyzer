@@ -1,6 +1,6 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
-import { redactPiiContent } from "@devops-agent/shared";
+import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -266,6 +266,34 @@ export function extractGapsBulletCount(answer: string): number {
 		}
 	}
 	return count;
+}
+
+// SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
+// observed auth tool error. A real logs:DescribeLogGroups AccessDenied flows
+// MCP _error.kind=iam-permission-missing -> tool output text -> sub-agent.ts regex
+// (/access denied/i, /forbidden/i) -> toolErrors[{category:"auth"}]. If the gap claims a
+// denial but NO auth error exists in any sub-agent's results, the LLM fabricated it.
+const PERMISSION_DENIAL_RE =
+	/\b(not permitted|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission|logs:[a-z]+)\b/i;
+
+export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
+	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));
+	if (authErrorObserved) return { ungrounded: [] };
+
+	const lines = answer.split("\n");
+	let inGapsSection = false;
+	const ungrounded: string[] = [];
+	for (const line of lines) {
+		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
+		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
+			inGapsSection = true;
+			continue;
+		}
+		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line) && PERMISSION_DENIAL_RE.test(line)) {
+			ungrounded.push(line);
+		}
+	}
+	return { ungrounded };
 }
 
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
