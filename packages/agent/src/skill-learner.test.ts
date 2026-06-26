@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 // @langchain/aws; mocking it keeps createLlm("skillLearner") inert + observable.
 let llmContent = '{"worthy":false}';
 let invokeCalls = 0;
+// Capture the messages passed to the judge so a test can assert the transcript is
+// redacted before it reaches the LLM.
+let lastInvokeText = "";
 mock.module("@langchain/aws", () => ({
 	ChatBedrockConverse: class {
 		withFallbacks() {
@@ -13,8 +16,9 @@ mock.module("@langchain/aws", () => ({
 		bindTools() {
 			return this;
 		}
-		async invoke() {
+		async invoke(messages: Array<{ content: unknown }>) {
 			invokeCalls += 1;
+			lastInvokeText = messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
 			return { content: llmContent };
 		}
 	},
@@ -50,6 +54,7 @@ const prevFlag = process.env.SKILL_LEARNING_ENABLED;
 beforeEach(() => {
 	invokeCalls = 0;
 	llmContent = '{"worthy":false}';
+	lastInvokeText = "";
 });
 
 afterEach(async () => {
@@ -226,6 +231,22 @@ describe("learnFromTurn", () => {
 		await flushAgentMemory();
 
 		expect(added.length).toBe(0);
+	});
+
+	test("redacts the transcript before it reaches the judge", async () => {
+		process.env.SKILL_LEARNING_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = await import("./memory-backend.ts");
+		const { client } = memStub();
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1015 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(client as any);
+		llmContent = '{"worthy":false}';
+
+		await learnFromTurn(turn({ transcript: "User: my SSN is 123-45-6789 and lag spiked" }), NOW);
+
+		expect(invokeCalls).toBe(1);
+		expect(lastInvokeText).toContain("[SSN_REDACTED]");
+		expect(lastInvokeText).not.toContain("123-45-6789");
 	});
 
 	test("worthy:false does not write", async () => {

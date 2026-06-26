@@ -41,8 +41,10 @@ export interface SkillLearnerTurn {
 	confidenceScore: number;
 	// distinct dataSourceIds that actually produced tool output this turn
 	datasourcesUsed: string[];
-	// a compact transcript of the turn (user asks + assistant report), PII-redacted
-	// by the caller-agnostic redactor here before it ever reaches the judge.
+	// a compact transcript of the turn (user asks + assistant report). May contain
+	// PII as built by the caller; judgeTurn redacts it before it reaches the LLM and
+	// buildSkillFactText redacts before persistence, so the learner never trusts the
+	// caller to have redacted.
 	transcript: string;
 }
 
@@ -98,9 +100,12 @@ function parseProposal(raw: string): SkillProposal | null {
 export async function judgeTurn(turn: SkillLearnerTurn): Promise<SkillProposal | null> {
 	try {
 		const llm = createLlm("skillLearner", LEARNER_AGENT);
+		// Redact before the transcript reaches the LLM: the caller is not trusted to
+		// have done it, and the judge input is just as sensitive as the persisted body.
+		const redactedTranscript = redactPiiContent(turn.transcript.slice(0, 6000));
 		const result = await invokeWithDeadline(llm as InvokableLlm, "skillLearner", [
 			new SystemMessage(JUDGE_PROMPT),
-			new HumanMessage(turn.transcript.slice(0, 6000)),
+			new HumanMessage(redactedTranscript),
 		]);
 		const content = typeof result.content === "string" ? result.content : "";
 		const proposal = parseProposal(content);
