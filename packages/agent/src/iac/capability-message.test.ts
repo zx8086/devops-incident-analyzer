@@ -24,6 +24,10 @@ describe("capabilityMessage", () => {
 		expect(msg).toContain("Index templates");
 	});
 
+	test("advertises ingest-pipeline creation (SIO-1019)", () => {
+		expect(msg).toContain("Ingest pipelines");
+	});
+
 	test("advertises cluster-settings edits (SIO-994)", () => {
 		expect(msg).toContain("Cluster-settings edits");
 		expect(msg).toContain("persistent");

@@ -265,6 +265,7 @@ describe("stackForWorkflow (SIO-985)", () => {
 		expect(stackForWorkflow("security-edit")).toBe("security");
 		expect(stackForWorkflow("dashboard-edit")).toBe("dashboards");
 		expect(stackForWorkflow("index-template-create")).toBe("index-templates");
+		expect(stackForWorkflow("ingest-pipeline-create")).toBe("ingest-pipelines");
 		expect(stackForWorkflow("fleet-integration")).toBe("fleet-integrations");
 	});
 
