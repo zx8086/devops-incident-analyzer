@@ -385,7 +385,7 @@ Read-only access across the AWS services the MCP server exposes (**53 tools** as
 
 From a session authenticated **as the target account** (for the host self-loop, that's still `399987695868`):
 
-> **SIO-858: the permissions policy is a MANAGED policy named `DevOpsAgentReadOnlyPermissions`** (created with `create-policy` and attached with `attach-role-policy`), NOT an inline `put-role-policy` named `DevOpsAgentReadOnlyPolicy`. Use the managed path below so re-applies update the real policy in place (via `create-policy-version --set-as-default`) instead of creating a stray second policy.
+> **SIO-1013: the permissions policy is a MANAGED policy named `DevOpsAgentReadOnlyPolicy`** (created with `create-policy` and attached with `attach-role-policy`). This is the live deployed name, verified 2026-06-23 (`aws iam list-policies --scope Local`: AttachmentCount 1, default v6). The SIO-858 rename to `DevOpsAgentReadOnlyPolicy` was never deployed and no such policy exists in the account. Use the managed path below so re-applies update the real policy in place (via `create-policy-version --set-as-default`) instead of creating a stray second policy.
 
 ```bash
 # Create the role with the trust policy
@@ -396,17 +396,17 @@ aws iam create-role \
 
 # Create the managed permissions policy (first time)
 aws iam create-policy \
-  --policy-name DevOpsAgentReadOnlyPermissions \
+  --policy-name DevOpsAgentReadOnlyPolicy \
   --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json
 
 # Attach it to the role
 aws iam attach-role-policy \
   --role-name DevOpsAgentReadOnly \
-  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPermissions
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPolicy
 
 # On a later update (e.g. a new tool added an action), push a new default version instead:
 aws iam create-policy-version \
-  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPermissions \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyPolicy \
   --policy-document file://scripts/agentcore/policies/devops-agent-readonly-policy.json \
   --set-as-default
 ```

@@ -1,6 +1,6 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
-import { redactPiiContent } from "@devops-agent/shared";
+import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -268,6 +268,54 @@ export function extractGapsBulletCount(answer: string): number {
 	return count;
 }
 
+// SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
+// observed auth tool error. A real logs:DescribeLogGroups AccessDenied flows
+// MCP _error.kind=iam-permission-missing -> tool output text -> sub-agent.ts regex
+// (/access denied/i, /forbidden/i) -> toolErrors[{category:"auth"}]. If the gap claims a
+// denial but NO auth error exists in any sub-agent's results, the LLM fabricated it.
+// Note: the `logs:[a-z]+` arm was intentionally removed — an informational mention of a
+// logs: action (e.g. "logs:DescribeLogGroups returned 12 groups") must not count as a
+// denial. Only explicit denial phrases trigger the grounding check.
+const PERMISSION_DENIAL_RE =
+	/\b(not permitted|not authorized|unauthorized|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission)\b/i;
+
+export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
+	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));
+	if (authErrorObserved) return { ungrounded: [] };
+
+	const lines = answer.split("\n");
+	let inGapsSection = false;
+	const ungrounded: string[] = [];
+	for (const line of lines) {
+		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
+		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
+			inGapsSection = true;
+			continue;
+		}
+		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line) && PERMISSION_DENIAL_RE.test(line)) {
+			ungrounded.push(line);
+		}
+	}
+	return { ungrounded };
+}
+
+// SIO-1013: replace each ungrounded permission-blocker bullet's fabricated cause with a
+// neutral truth. We do not know WHY the data is missing (the tool may simply never have
+// been called), so we assert only what is verifiable: the data was not retrieved and the
+// access state is unconfirmed. Only the flagged lines change; the rest of the report is
+// preserved verbatim.
+const UNGROUNDED_BLOCKER_REPLACEMENT =
+	"- Some data referenced above were not retrieved during this investigation. No permission error was observed, so the access state is unconfirmed; the relevant read tools may not have been invoked.";
+
+export function rewriteUngroundedBlockers(answer: string, ungrounded: string[]): string {
+	if (ungrounded.length === 0) return answer;
+	const flagged = new Set(ungrounded);
+	return answer
+		.split("\n")
+		.map((line) => (flagged.has(line) ? UNGROUNDED_BLOCKER_REPLACEMENT : line))
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -385,7 +433,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const gapsBulletCount = extractGapsBulletCount(answer);
 	const gapsCapTriggered = gapsBulletCount >= GAPS_BULLET_THRESHOLD;
 
-	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered;
+	// SIO-1013: a Gaps bullet claiming a permission/IAM denial with NO observed auth tool
+	// error is fabricated. Cap confidence below the HITL gate so a hallucinated blocker
+	// can never print a passing score, and rewrite the bullet to honest "not retrieved" text.
+	const { ungrounded } = detectUngroundedBlockers(answer, results);
+	const ungroundedCapTriggered = ungrounded.length > 0;
+
+	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered || ungroundedCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -414,9 +468,19 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
-	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped
-	// value so the report prose and the HITL gate (which reads confidenceScore) agree.
-	const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(answer, cappedScore) : answer;
+	if (ungroundedCapTriggered) {
+		logger.warn(
+			{ ungrounded, cap: TOOL_ERROR_CONFIDENCE_CAP, originalScore: confidenceScore, cappedScore },
+			"Aggregator Gaps section claimed a permission blocker with no observed auth tool error; capping confidence",
+		);
+	}
+
+	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
+	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
+	const rewrittenForGrounding = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
+	const finalAnswer = anyCapTriggered
+		? rewriteConfidenceInAnswer(rewrittenForGrounding, cappedScore)
+		: rewrittenForGrounding;
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
