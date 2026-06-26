@@ -21,6 +21,7 @@ export const WORKFLOW_VALUES = [
 	"topology-edit",
 	"dashboard-edit",
 	"index-template-create",
+	"ingest-pipeline-create",
 	"other",
 ] as const;
 
@@ -180,6 +181,13 @@ export interface IacRequest {
 		dataStreamHidden?: boolean;
 		dataStreamAllowCustomRouting?: boolean;
 	}>;
+	// SIO-1019: ingest-pipeline-create -- add one or more NEW @custom ingest-pipeline JSON files under
+	// environments/<dep>/ingest-pipelines/ (the dedicated ingest-pipelines stack auto-discovers *.json
+	// in its config_path). Simpler than index-template-create: the user pastes the COMPLETE pipeline
+	// body and `body` is written VERBATIM (no buildXxxConfig shaping). N pipelines commit to ONE branch
+	// / ONE MR; an entry whose file already exists is skipped (additive create only -- edit is a
+	// separate, unsupported workflow). Always an array (no singular companion fields, like indexTemplates).
+	ingestPipelines?: Array<{ name: string; body: Record<string, unknown> }>;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;

@@ -32,7 +32,12 @@ describe("workflow enum sync (SIO-1003)", () => {
 		// Widen to string[] so the membership check accepts arbitrary string literals (toContain on the
 		// narrow readonly IacWorkflow[] would reject a plain string at compile time).
 		const values: readonly string[] = WORKFLOW_VALUES;
-		for (const w of ["cluster-settings-edit", "index-template-create", "cluster-default-edit"]) {
+		for (const w of [
+			"cluster-settings-edit",
+			"index-template-create",
+			"ingest-pipeline-create",
+			"cluster-default-edit",
+		]) {
 			expect(values).toContain(w);
 		}
 	});
