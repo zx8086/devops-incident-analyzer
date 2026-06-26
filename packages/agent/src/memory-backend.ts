@@ -283,8 +283,23 @@ export async function recallAgentMemory(
 			},
 			"agent-memory recall",
 		);
-		// hits are ranked by rel_score; keep the service order and join the text.
-		return hits.length > 0 ? hits.map((h) => h.text).join("\n") : undefined;
+		// hits are ranked by rel_score; keep the service order. SIO-1015: collapse
+		// duplicate skill proposals (durable facts double on re-record) by skill_name,
+		// and prefix kind:skill lines so they read as unpromoted proposals, not
+		// established facts. Non-skill hits pass through unchanged.
+		const seenSkills = new Set<string>();
+		const lines: string[] = [];
+		for (const h of hits) {
+			if (h.annotations?.kind === "skill") {
+				const name = h.annotations.skill_name ?? "";
+				if (name && seenSkills.has(name)) continue;
+				if (name) seenSkills.add(name);
+				lines.push(`[proposed-skill (unpromoted)] ${h.text}`);
+				continue;
+			}
+			lines.push(h.text);
+		}
+		return lines.length > 0 ? lines.join("\n") : undefined;
 	} catch (error) {
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory recall failed");
 		return undefined;

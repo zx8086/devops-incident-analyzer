@@ -283,6 +283,17 @@ export const AgentState = Annotation.Root({
 		default: () => null,
 	}),
 
+	// SIO-1018: per-turn trace of the local skills active in this turn's orchestrator
+	// prompt. Drives the SIO-1016 confidence feedback loop (mapped to SKILL.md paths
+	// in the post-turn reader). Mirrors selectedRunbooks' tri-state.
+	//   null    -> not captured (default; e.g. simple turns that skip aggregate)
+	//   []      -> captured, no active skills
+	//   [names] -> these skill names were active this turn
+	skillsApplied: Annotation<string[] | null>({
+		reducer: (_, next) => next,
+		default: () => null,
+	}),
+
 	// SIO-739: Append-only list of nodes that soft-failed (e.g. per-call LLM
 	// deadline exceeded). The SSE handler emits a partial_failure event for
 	// each new entry; the graph still reaches END so the validated answer

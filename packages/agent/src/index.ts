@@ -26,6 +26,7 @@ export {
 	registerMemoryPrOpener,
 	registerMemoryRecaller,
 	registerPostTurnFlusher,
+	registerPostTurnLearner,
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
@@ -67,8 +68,41 @@ export {
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
-export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
+export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
+export {
+	buildOrchestratorPrompt,
+	buildSubAgentPrompt,
+	getActiveSkillNames,
+	getAgent,
+	getAgentByName,
+} from "./prompt-context.ts";
 export { respond } from "./responder.ts";
+export {
+	buildSkillAnnotations,
+	buildSkillFactText,
+	isSkillLearningEnabled,
+	judgeTurn,
+	learnFromTurn,
+	preGateSkip,
+	type SkillLearnerTurn,
+	type SkillProposal,
+	SkillProposalSchema,
+} from "./skill-learner.ts";
+export {
+	installSkillLearner,
+	type OutcomeTurn,
+	type OutcomeTurnReader,
+	runSkillOutcomeTracking,
+	type TurnReader,
+} from "./skill-learner-install.ts";
+export {
+	type AppliedSkill,
+	appliedSkillsForNames,
+	computeConfidence,
+	isSkillOutcomeTrackingEnabled,
+	recordSkillOutcome,
+	type SkillOutcome,
+} from "./skill-outcome.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
 export { DEFAULT_PRUNING_CONFIG, needsPruning, type PruningConfig, pruneState } from "./state-pruning.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";

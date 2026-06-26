@@ -50,7 +50,9 @@ export type LlmRole =
 	| "iacReviewer"
 	// SIO-870: read-vs-write classification + read-only info answering for elastic-iac
 	| "iacClassifier"
-	| "iacReader";
+	| "iacReader"
+	// SIO-1015: post-turn worthiness judge for the skill-learning subsystem.
+	| "skillLearner";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -78,6 +80,8 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	iacReviewer: { temperature: 0, maxTokens: 4096 },
 	iacClassifier: { temperature: 0, maxTokens: 16 },
 	iacReader: { temperature: 0, maxTokens: 4096 },
+	// SIO-1015: deterministic worthiness judgment + a compact skill proposal as JSON.
+	skillLearner: { temperature: 0, maxTokens: 1024 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -106,6 +110,8 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	iacReviewer: 60_000,
 	iacClassifier: 30_000,
 	iacReader: 120_000,
+	// SIO-1015: post-turn, off the critical path; bound it so a slow judge never lingers.
+	skillLearner: 60_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.

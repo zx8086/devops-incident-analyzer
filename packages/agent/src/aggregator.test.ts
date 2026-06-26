@@ -37,6 +37,7 @@ mock.module("@devops-agent/shared", () => ({
 	DEFAULT_TOOL_RESULT_CAP_BYTES: 131_072,
 }));
 
+import { loadAgent } from "@devops-agent/gitagent-bridge";
 import {
 	_setAggregatorLoggerForTesting,
 	aggregate,
@@ -44,6 +45,7 @@ import {
 	extractGapsBulletCount,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
+import { getAgentsDir } from "./paths.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
 function getSystemPromptText(): string {
@@ -93,6 +95,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		pendingActions: [],
 		actionResults: [],
 		selectedRunbooks: null,
+		skillsApplied: null,
 		investigationFocus: undefined,
 		pendingTopicShiftPrompt: undefined,
 		...overrides,
@@ -673,6 +676,51 @@ describe.skipIf(!hasRunbooks)("aggregate per-result data cap (SIO-833)", () => {
 			}),
 		);
 		expect(getUserPromptText()).toContain("small result body");
+	});
+});
+
+// SIO-1018: load the real agent via gitagent-bridge (not mock.module-stubbable
+// prompt-context.ts) so sibling test files that stub getAgent() to return
+// { manifest: {} } cannot make this test return [].
+const realAgentForSkills = (() => {
+	try {
+		return loadAgent(getAgentsDir());
+	} catch {
+		return null;
+	}
+})();
+
+describe.skipIf(!realAgentForSkills)("getActiveSkillNames (SIO-1018)", () => {
+	test("returns the manifest's active local skill names", () => {
+		// Assert against realAgent.skills directly — pollution-proof because siblings
+		// mock ./prompt-context.ts, not @devops-agent/gitagent-bridge.
+		const realNames = [...(realAgentForSkills?.skills.keys() ?? [])];
+		// agents/incident-analyzer/agent.yaml lists these under skills:
+		expect(realNames).toContain("aggregate-findings");
+		expect(realNames).toContain("normalize-incident");
+		expect(realNames).toContain("propose-mitigation");
+	});
+});
+
+describe.skipIf(!hasRunbooks)("aggregate: skillsApplied trace (SIO-1018)", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("populates skillsApplied with the active skill names", async () => {
+		const result = await aggregate(makeState({}));
+		expect(result.skillsApplied).toContain("aggregate-findings");
+	});
+
+	test("populates skillsApplied even on the no-datasource-results path", async () => {
+		const result = await aggregate(makeState({ dataSourceResults: [] }));
+		expect(result.skillsApplied).toContain("aggregate-findings");
 	});
 });
 

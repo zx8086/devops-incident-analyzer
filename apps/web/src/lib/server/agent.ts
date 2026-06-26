@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/agent.ts
 import { connect as netConnect } from "node:net";
 import {
+	appliedSkillsForNames,
 	buildGraph,
 	buildIacGraph,
 	createMcpClient,
@@ -12,11 +13,14 @@ import {
 	installAgentMemory,
 	installGraphWarmer,
 	installMemoryPromotion,
+	installSkillLearner,
 	needsPruning,
+	type OutcomeTurn,
 	pruneState,
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
+	type SkillLearnerTurn,
 	setSessionOutcome,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
@@ -35,6 +39,12 @@ installGraphWarmer();
 // SIO-938: wire the agent-memory recall/flush seams. No-op unless
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
+// SIO-1015: wire the skill-learning post-turn seam. The learner core lives in
+// @devops-agent/agent but state reads (getGraph/getState) live here, so we inject
+// a reader. No-op unless SKILL_LEARNING_ENABLED + agent-memory backend.
+// SIO-1016: also inject the confidence-feedback reader (runs in the same post-turn
+// slot, independently gated by SKILL_OUTCOME_TRACKING_ENABLED).
+installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
 // SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
 // real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
 // agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
@@ -449,6 +459,87 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 			{ error: error instanceof Error ? error.message : String(error) },
 			"state pruning failed; continuing",
 		);
+	}
+}
+
+// SIO-1015: read the just-completed orchestrator turn into the skill-learner's
+// input. Scoped to incident-analyzer (elastic-iac has no confidence/datasource
+// signal) -> returns null for any other agent. Best-effort: null on any failure.
+// Builds a compact transcript (latest user ask + assistant report) for the judge;
+// the learner core PII-redacts before any write.
+async function readCompletedTurn(ctx: { agentName: string; threadId: string }): Promise<SkillLearnerTurn | null> {
+	if (ctx.agentName !== "incident-analyzer") return null;
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
+		const values = snapshot.values ?? {};
+		const messages = (values.messages ?? []) as BaseMessage[];
+		const dataSourceResults = (values.dataSourceResults ?? []) as Array<{
+			dataSourceId?: string;
+			toolOutputs?: unknown[];
+		}>;
+		const datasourcesUsed = dataSourceResults
+			.filter((r) => (r.toolOutputs?.length ?? 0) > 0)
+			.map((r) => r.dataSourceId)
+			.filter((id): id is string => Boolean(id));
+
+		// Compact transcript: the last human turn + the last assistant report. Each
+		// message's content can be a string or content-block array; coerce to text.
+		const text = (m: BaseMessage): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+		const lastHuman = [...messages].reverse().find((m) => m.getType() === "human");
+		const lastAi = [...messages].reverse().find((m) => m.getType() === "ai");
+		const transcript = [lastHuman && `User: ${text(lastHuman)}`, lastAi && `Assistant: ${text(lastAi)}`]
+			.filter(Boolean)
+			.join("\n\n");
+
+		return {
+			agentName: ctx.agentName,
+			threadId: ctx.threadId,
+			queryComplexity: (values.queryComplexity ?? "complex") as "simple" | "complex",
+			confidenceScore: typeof values.confidenceScore === "number" ? values.confidenceScore : 0,
+			datasourcesUsed,
+			transcript,
+		};
+	} catch (error) {
+		getLogger("web:skill-learner").warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"readCompletedTurn failed; skipping skill learning for this turn",
+		);
+		return null;
+	}
+}
+
+// SIO-1016 + SIO-1018: read the just-completed turn for the confidence feedback loop.
+// Supplies the coarse success signal (validationResult === "fail" -> hadError, plus
+// confidenceScore) AND the promoted skills active this turn. SIO-1018 closed the
+// attribution gap: the aggregate node records active skills onto state.skillsApplied,
+// which we map to SKILL.md paths here. Downstream recordSkillOutcome no-ops on any
+// body-only skill, so only learned-frontmatter skills are counted. Scoped to
+// incident-analyzer (matches readCompletedTurn).
+async function readCompletedTurnOutcome(ctx: { agentName: string; threadId: string }): Promise<OutcomeTurn | null> {
+	if (ctx.agentName !== "incident-analyzer") return null;
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
+		const values = snapshot.values ?? {};
+		const confidenceScore = typeof values.confidenceScore === "number" ? values.confidenceScore : 0;
+		// validationResult "fail" is the turn-level error signal the validator sets.
+		const hadError = values.validationResult === "fail";
+		// SIO-1018: the aggregate node records the active skills onto skillsApplied;
+		// map them to SKILL.md paths. recordSkillOutcome self-filters body-only files,
+		// so the full active set is safe to pass.
+		const skillsApplied = Array.isArray(values.skillsApplied) ? (values.skillsApplied as string[]) : [];
+		return {
+			hadError,
+			confidenceScore,
+			appliedSkills: appliedSkillsForNames(ctx.agentName, skillsApplied),
+		};
+	} catch (error) {
+		getLogger("web:skill-outcome").warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"readCompletedTurnOutcome failed; skipping outcome tracking for this turn",
+		);
+		return null;
 	}
 }
 

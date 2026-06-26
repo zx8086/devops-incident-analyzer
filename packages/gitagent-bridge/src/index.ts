@@ -50,6 +50,8 @@ export {
 	RunbookSelectionConfigSchema,
 	type RunbookTriggers,
 	RunbookTriggersSchema,
+	type SkillFrontmatter,
+	SkillFrontmatterSchema,
 	type ToolDefinition,
 	ToolDefinitionSchema,
 	type ToolMapping,

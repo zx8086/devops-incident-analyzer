@@ -6,7 +6,7 @@ inputs:
   dataview_name: { type: string, required: true }        # data-view file basename, e.g. "logs"
   runtime_field_name: { type: string, required: false }  # add/replace this runtime field
   runtime_field_type: { type: string, required: false }  # default "keyword"
-  runtime_field_script: { type: string, required: false }# painless source (ONLY if scripted)
+  runtime_field_script: { type: string, required: false } # painless source (ONLY if scripted)
   dataview_title: { type: string, required: false }      # index pattern, e.g. "logs-*"
   dataview_display_name: { type: string, required: false }
 ---
