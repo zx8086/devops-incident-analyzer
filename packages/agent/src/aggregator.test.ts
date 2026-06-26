@@ -715,7 +715,6 @@ describe.skipIf(!hasRunbooks)("aggregate: skillsApplied trace (SIO-1018)", () =>
 
 	test("populates skillsApplied with the active skill names", async () => {
 		const result = await aggregate(makeState({}));
-		expect(result.skillsApplied).toBeDefined();
 		expect(result.skillsApplied).toContain("aggregate-findings");
 	});
 
