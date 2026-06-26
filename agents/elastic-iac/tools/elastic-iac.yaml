@@ -68,6 +68,7 @@ tool_mapping:
       - elastic_get_cluster_health
       - elastic_get_index_template
       - elastic_ilm_get_lifecycle
+      - elastic_simulate_ingest_pipeline
     read_repo:
       - gitlab_get_repository_tree
       - gitlab_get_file_content
@@ -101,7 +102,11 @@ tool_mapping:
       - kg_stack_instance_history
       - kg_deployment_history
   action_descriptions:
-    read_state: when reading live Elastic Cloud topology, versions (one or all deployments), plan history, health, templates, or ILM -- to answer an info question or ground a change before proposing
+    read_state: >-
+      when reading live Elastic Cloud topology, versions (one or all deployments), plan history,
+      health, templates, or ILM -- to answer an info question or ground a change before proposing;
+      also when simulating an inline ingest-pipeline body against a deployment to validate it
+      compiles before proposing
     read_repo: when reading the IaC repository tree or config-file blobs (environments/<cluster>/**) to locate the file to edit
     propose: when proposing a config change via the GitLab API -- read the config JSON, edit the field, branch and commit server-side (no clone/terraform/local git); CI plans on the MR
     open_mr: when the proposed config edit is committed to the branch and the merge request is opened for human review

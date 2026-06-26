@@ -198,6 +198,41 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 		async ({ policy, deployment }) =>
 			text(await clusterFetch(config.clusterDeployments, deployment, `/_ilm/policy/${encodeURIComponent(policy)}`)),
 	);
+
+	// SIO-1020: simulate an INLINE ingest-pipeline body against a configured deployment's data-plane
+	// _ingest/pipeline/_simulate API, so the elastic-iac agent can validate a pasted @custom pipeline
+	// (processor compilation, grok-pattern compile, script compile) BEFORE opening the MR. Takes the
+	// deployment NAME only (never a model-supplied URL -- same SSRF-safe contract as the read tools);
+	// _simulate is read-only and never mutates the cluster. Default docs to a single empty document so
+	// a pure structural simulate works without the caller providing sample data.
+	server.tool(
+		"elastic_simulate_ingest_pipeline",
+		"Simulate an inline ingest-pipeline definition against a configured deployment's cluster API " +
+			"(_ingest/pipeline/_simulate). Validates that the pipeline and its processors compile before it is " +
+			"committed. Pass `pipeline` (the inline {processors:[...]} body), `deployment` (cluster name), and " +
+			"optionally `docs` (sample documents; defaults to one empty doc) and `verbose`. Read-only.",
+		{
+			pipeline: z
+				.record(z.string(), z.unknown())
+				.describe('Inline pipeline definition, e.g. { processors: [ { drop: { if: "..." } } ] }.'),
+			deployment: z.string().optional().describe("Configured deployment (cluster) name; resolves the URL + auth."),
+			docs: z
+				.array(z.record(z.string(), z.unknown()))
+				.optional()
+				.describe("Sample documents (each {_source:{...}} or bare fields). Defaults to a single empty document."),
+			verbose: z.boolean().optional().describe("Show the result after each processor step, not just the final output."),
+		},
+		async ({ pipeline, deployment, docs, verbose }) => {
+			const sampleDocs = (docs && docs.length > 0 ? docs : [{ _source: {} }]).map((doc) => ({
+				_index: (doc._index as string | undefined) ?? "_simulate",
+				_id: (doc._id as string | undefined) ?? "_id",
+				_source: (doc._source ?? doc) as Record<string, unknown>,
+			}));
+			const body = JSON.stringify({ pipeline, docs: sampleDocs });
+			const path = `/_ingest/pipeline/_simulate${verbose ? "?verbose=true" : ""}`;
+			return text(await clusterPost(config.clusterDeployments, deployment, path, body));
+		},
+	);
 }
 
 // Resolve a configured cluster (by name) to its base URL + Authorization header. "" url => the
@@ -233,6 +268,32 @@ async function clusterFetch(
 async function clusterFetchRaw(baseUrl: string, apiPath: string, authHeader?: string): Promise<string> {
 	try {
 		const res = await fetch(`${baseUrl}${apiPath}`, authHeader ? { headers: { Authorization: authHeader } } : {});
+		return `[${res.status}] ${await res.text()}`;
+	} catch (err) {
+		return `[cluster request failed: ${err instanceof Error ? err.message : String(err)}]`;
+	}
+}
+
+// SIO-1020: POST sibling of clusterFetch for the data-plane _simulate endpoint. Resolves the same
+// per-deployment URL + auth (deployment NAME only -- never a model-supplied base URL), sends a JSON
+// body, and returns the same `[<status>] <body>` convention. Used only for read-only simulate calls;
+// the toolset never POSTs a mutation.
+async function clusterPost(
+	deployments: ClusterDeployment[],
+	deployment: string | undefined,
+	apiPath: string,
+	body: string,
+): Promise<string> {
+	const { url, authHeader } = resolveCluster(deployments, deployment);
+	if (!url) {
+		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]`;
+	}
+	try {
+		const res = await fetch(`${url}${apiPath}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", ...(authHeader ? { Authorization: authHeader } : {}) },
+			body,
+		});
 		return `[${res.status}] ${await res.text()}`;
 	} catch (err) {
 		return `[cluster request failed: ${err instanceof Error ? err.message : String(err)}]`;

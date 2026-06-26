@@ -5362,11 +5362,35 @@ async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest)
 	};
 }
 
+// SIO-1020: interpret an elastic_simulate_ingest_pipeline result string (the `[<status>] <body>`
+// convention the elastic-iac cluster tools return). A 2xx means the pipeline + every processor
+// COMPILED (the propose-time signal we want); a 4xx/5xx is a real ES rejection -> block. Anything
+// else (deployment not configured, request failed, tool unavailable) is unavailability, NOT a
+// validation failure -> skip (warn-and-proceed): simulate is a best-effort guard and a working
+// feature must not hard-depend on optional cluster connectivity. (Pure; unit-tested.)
+export function interpretSimulateResult(
+	raw: string,
+): { ok: true } | { ok: false; reason: string } | { skipped: true; note: string } {
+	const status = raw.match(/^\[(\d{3})\]/);
+	if (status) {
+		const code = Number(status[1]);
+		if (code >= 200 && code < 300) return { ok: true };
+		// A 4xx/5xx from ES is a genuine compile/parse rejection of the pipeline body.
+		return { ok: false, reason: raw.slice(0, 300) };
+	}
+	// Non-status placeholders: "[cluster '...' not configured...]", "[cluster request failed...]",
+	// "[<tool> unavailable - elastic-iac server not connected]".
+	return { skipped: true, note: raw.slice(0, 200) };
+}
+
 // SIO-1019: ingest-pipeline-create -- write one or more NEW @custom ingest-pipeline JSON files VERBATIM
 // to environments/<cluster>/ingest-pipelines/, on ONE branch / ONE MR. Mirrors proposeIndexTemplateCreate
 // but with no config-shaping step: `body` is the document the user pasted, serialized as-is. Additive
 // create only -- a file that already exists is skipped (edit is a separate, unsupported workflow); if
 // every requested file already exists there is nothing to do and no MR is opened.
+// SIO-1020: each body is SIMULATED against the deployment's _ingest/pipeline/_simulate before any
+// commit -- a real ES rejection blocks (no MR); an unreachable/unconfigured cluster is a best-effort
+// skip (the change still proceeds).
 async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const entries = req.ingestPipelines ?? [];
@@ -5389,6 +5413,39 @@ async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest
 					new AIMessage("Cannot propose the change: every ingest pipeline needs a name and a JSON-object body."),
 				],
 			};
+		}
+	}
+
+	// SIO-1020: simulate each body against the deployment BEFORE creating the branch, so an invalid
+	// pipeline is rejected with the real ES error at propose-time instead of at CI apply-time. The body
+	// is the COMPLETE pipeline doc, but _simulate wants only the runnable shape (processors/on_failure),
+	// so the top-level `name` (an IaC-file field, not a _simulate field) is dropped from the simulated
+	// pipeline. A 4xx/5xx ES rejection blocks; an unreachable/unconfigured cluster is a best-effort skip.
+	for (const e of entries) {
+		const { name: _pipelineName, ...pipelineForSim } = e.body as Record<string, unknown>;
+		const raw = await callTool("elastic_simulate_ingest_pipeline", {
+			pipeline: pipelineForSim,
+			deployment: cluster,
+		});
+		const verdict = interpretSimulateResult(raw);
+		if ("ok" in verdict && verdict.ok === false) {
+			log.warn({ cluster, pipeline: e.name, error: verdict.reason }, "ingest-pipeline simulate rejected the body");
+			return {
+				blockedReason: `Ingest pipeline '${e.name}' failed simulation on '${cluster}': ${verdict.reason}`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: ingest pipeline '${e.name}' did not pass simulation against ${cluster}. Elasticsearch rejected it:\n\n${verdict.reason}\n\nFix the pipeline body and try again.`,
+					),
+				],
+			};
+		}
+		if ("skipped" in verdict) {
+			// Best-effort: the cluster is not reachable/configured for simulate. Proceed with the change
+			// (CI's plan/apply remains the backstop) but record why the guard did not run.
+			log.warn(
+				{ cluster, pipeline: e.name, note: verdict.note },
+				"ingest-pipeline simulate skipped (cluster unavailable); proceeding",
+			);
 		}
 	}
 
@@ -5811,7 +5868,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		// @custom hook), so it is additive and low-risk; the body is committed verbatim, so a malformed
 		// processor would surface in CI's plan/apply, not silently change behavior in production.
 		risks.push(
-			"Creates NEW @custom ingest pipeline(s); CI's plan will show a create. The body is committed verbatim -- confirm the processors are correct (a malformed pipeline fails CI's apply, not production). An @custom pipeline only runs where its managed default pipeline references it.",
+			"Creates NEW @custom ingest pipeline(s); CI's plan will show a create. The body is committed verbatim and was SIMULATED against the deployment (processors compile) before this MR -- but confirm the processors do the intended thing on real data (simulate runs against a synthetic empty document, and is skipped when the cluster is unreachable). An @custom pipeline only runs where its managed default pipeline references it.",
 		);
 	}
 

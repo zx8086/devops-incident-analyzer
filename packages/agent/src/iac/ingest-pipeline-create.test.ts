@@ -1,6 +1,6 @@
 // agent/src/iac/ingest-pipeline-create.test.ts
 import { describe, expect, mock, test } from "bun:test";
-import { branchSlug, parseIntentJson } from "./nodes.ts";
+import { branchSlug, interpretSimulateResult, parseIntentJson } from "./nodes.ts";
 import type { IacRequest, IacStateType } from "./state.ts";
 
 const asIacState = (partial: Partial<IacStateType>): IacStateType => partial as unknown as IacStateType;
@@ -96,8 +96,14 @@ describe("draftChange -> proposeIngestPipelineCreate", () => {
 	test("happy path: creates two files on ONE branch with VERBATIM bodies, sets diff + proposedFiles", async () => {
 		const { draftChange } = await import("./nodes.ts");
 		const committed: Array<Record<string, unknown>> = [];
+		const simulated: Array<Record<string, unknown>> = [];
 		let branchCreates = 0;
 		mockTools({
+			// SIO-1020: simulate runs first and must pass (2xx) before any commit.
+			elastic_simulate_ingest_pipeline: (args) => {
+				simulated.push(args);
+				return '[200] {"docs":[{"doc":{"_source":{}}}]}';
+			},
 			// both files are new -> 404 means "go ahead and create".
 			gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}',
 			gitlab_create_branch: () => {
@@ -122,6 +128,12 @@ describe("draftChange -> proposeIngestPipelineCreate", () => {
 		expect(branchCreates).toBe(1); // ONE shared branch
 		expect(committed).toHaveLength(2);
 		expect(committed.every((c) => c.action === "create")).toBe(true);
+		// SIO-1020: both bodies were simulated against the deployment, and the top-level `name`
+		// (an IaC-file field, not a _simulate field) is dropped from the simulated pipeline.
+		expect(simulated).toHaveLength(2);
+		expect((simulated[0]?.pipeline as Record<string, unknown>)?.name).toBeUndefined();
+		expect((simulated[0]?.pipeline as Record<string, unknown>)?.processors).toBeDefined();
+		expect(simulated[0]?.deployment).toBe("us-cld");
 		expect(result.proposedFiles).toEqual([
 			"environments/us-cld/ingest-pipelines/logs-cisco_ftd.log@custom.json",
 			"environments/us-cld/ingest-pipelines/logs-cisco_meraki.log@custom.json",
@@ -213,5 +225,90 @@ describe("draftChange -> proposeIngestPipelineCreate", () => {
 		};
 		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toContain("already exist");
+	});
+
+	// SIO-1020: simulate gates the commit.
+	test("blocks (no branch, no commit) when simulate rejects the body", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let branchCreates = 0;
+		let commits = 0;
+		mockTools({
+			elastic_simulate_ingest_pipeline: () =>
+				'[400] {"error":{"type":"parse_exception","reason":"[patterns] Invalid regex pattern"}}',
+			gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}',
+			gitlab_create_branch: () => {
+				branchCreates += 1;
+				return "[201] {}";
+			},
+			gitlab_commit_file: () => {
+				commits += 1;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ingest-pipeline-create" as const,
+				isProd: false,
+				cluster: "us-cld",
+				ingestPipelines: [FTD_ENTRY],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("failed simulation");
+		expect(result.blockedReason).toContain("parse_exception");
+		// The body never reached the repo -- no branch, no commit.
+		expect(branchCreates).toBe(0);
+		expect(commits).toBe(0);
+		expect(result.precheckPassed).toBeUndefined();
+	});
+
+	test("proceeds (best-effort) when simulate is unavailable: cluster not configured", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const committed: Array<Record<string, unknown>> = [];
+		mockTools({
+			// The deployment has no configured cluster connection for simulate.
+			elastic_simulate_ingest_pipeline: () =>
+				"[cluster 'us-cld' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]",
+			gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}',
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed.push(args);
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "ingest-pipeline-create" as const,
+				isProd: false,
+				cluster: "us-cld",
+				ingestPipelines: [FTD_ENTRY],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		// Simulate could not run, but the change still proceeds (CI is the backstop).
+		expect(result.precheckPassed).toBe(true);
+		expect(committed).toHaveLength(1);
+	});
+});
+
+describe("interpretSimulateResult (SIO-1020)", () => {
+	test("2xx -> ok (pipeline compiled)", () => {
+		expect(interpretSimulateResult('[200] {"docs":[]}')).toEqual({ ok: true });
+		expect(interpretSimulateResult("[201] {}")).toEqual({ ok: true });
+	});
+
+	test("4xx/5xx -> not ok with the ES error as the reason", () => {
+		const v = interpretSimulateResult('[400] {"error":{"type":"parse_exception"}}');
+		expect(v).toMatchObject({ ok: false });
+		if ("ok" in v && v.ok === false) expect(v.reason).toContain("parse_exception");
+		expect(interpretSimulateResult("[500] boom")).toMatchObject({ ok: false });
+	});
+
+	test("non-status placeholders -> skipped (warn-and-proceed)", () => {
+		expect(interpretSimulateResult("[cluster 'us-cld' not configured: ...]")).toMatchObject({ skipped: true });
+		expect(interpretSimulateResult("[cluster request failed: timeout]")).toMatchObject({ skipped: true });
+		expect(
+			interpretSimulateResult("[elastic_simulate_ingest_pipeline unavailable - elastic-iac server not connected]"),
+		).toMatchObject({ skipped: true });
 	});
 });
