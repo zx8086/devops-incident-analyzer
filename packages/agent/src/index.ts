@@ -26,6 +26,7 @@ export {
 	registerMemoryPrOpener,
 	registerMemoryRecaller,
 	registerPostTurnFlusher,
+	registerPostTurnLearner,
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
@@ -69,6 +70,18 @@ export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigatio
 export { normalizeIncident } from "./normalizer.ts";
 export { buildOrchestratorPrompt, buildSubAgentPrompt, getAgent, getAgentByName } from "./prompt-context.ts";
 export { respond } from "./responder.ts";
+export {
+	buildSkillAnnotations,
+	buildSkillFactText,
+	isSkillLearningEnabled,
+	judgeTurn,
+	learnFromTurn,
+	preGateSkip,
+	type SkillLearnerTurn,
+	type SkillProposal,
+	SkillProposalSchema,
+} from "./skill-learner.ts";
+export { installSkillLearner, type TurnReader } from "./skill-learner-install.ts";
 export { AgentState, type AgentStateType } from "./state.ts";
 export { DEFAULT_PRUNING_CONFIG, needsPruning, type PruningConfig, pruneState } from "./state-pruning.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";
