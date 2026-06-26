@@ -60,6 +60,14 @@ export function registerPostTurnFlusher(fn: (ctx: { agentName: string; threadId:
 	postTurnFlusher = fn;
 }
 
+// SIO-1015: post-turn LEARNER seam, independent of the flusher (mirrors the
+// recaller/flusher separation). Evaluates the completed turn and may crystallize
+// a skill proposal. Kept separate so learning and memory-flush fail independently.
+let postTurnLearner: ((ctx: { agentName: string; threadId: string }) => Promise<void>) | null = null;
+export function registerPostTurnLearner(fn: (ctx: { agentName: string; threadId: string }) => Promise<void>): void {
+	postTurnLearner = fn;
+}
+
 // Per-session context threaded through bootstrap/teardown. agentName -> Agent
 // Memory user; threadId -> session; firstUserQuery seeds semantic recall.
 export interface BootstrapContext {
@@ -221,15 +229,29 @@ export async function runTeardown(ctx: TeardownContext = {}): Promise<TeardownSt
 // SIO-942: drains live-memory writes after a completed turn without ending the
 // session. Called from each turn-completion point (mirrors pruneThreadState).
 // No-op when no post-turn flusher is registered (e.g. file backend). Best-effort:
-// failures are logged, never surfaced to the turn.
+// failures are logged, never surfaced to the turn. SIO-1015: also runs the
+// post-turn learner (independent seam) so a learning failure never affects the
+// flush, and vice versa. The flusher runs first so this turn's blocks are
+// persisted before the learner reads back state.
 export async function runPostTurn(ctx: { agentName: string; threadId: string }): Promise<void> {
-	if (!postTurnFlusher) return;
-	try {
-		await postTurnFlusher(ctx);
-	} catch (error) {
-		logger.warn(
-			{ error: error instanceof Error ? error.message : String(error) },
-			"post-turn memory flush failed; turn completion continues",
-		);
+	if (postTurnFlusher) {
+		try {
+			await postTurnFlusher(ctx);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"post-turn memory flush failed; turn completion continues",
+			);
+		}
+	}
+	if (postTurnLearner) {
+		try {
+			await postTurnLearner(ctx);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"post-turn skill learning failed; turn completion continues",
+			);
+		}
 	}
 }

@@ -12,11 +12,13 @@ import {
 	installAgentMemory,
 	installGraphWarmer,
 	installMemoryPromotion,
+	installSkillLearner,
 	needsPruning,
 	pruneState,
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
+	type SkillLearnerTurn,
 	setSessionOutcome,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
@@ -35,6 +37,10 @@ installGraphWarmer();
 // SIO-938: wire the agent-memory recall/flush seams. No-op unless
 // LIVE_MEMORY_BACKEND=agent-memory.
 installAgentMemory();
+// SIO-1015: wire the skill-learning post-turn seam. The learner core lives in
+// @devops-agent/agent but state reads (getGraph/getState) live here, so we inject
+// a reader. No-op unless SKILL_LEARNING_ENABLED + agent-memory backend.
+installSkillLearner(readCompletedTurn);
 // SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
 // real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
 // agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
@@ -449,6 +455,53 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 			{ error: error instanceof Error ? error.message : String(error) },
 			"state pruning failed; continuing",
 		);
+	}
+}
+
+// SIO-1015: read the just-completed orchestrator turn into the skill-learner's
+// input. Scoped to incident-analyzer (elastic-iac has no confidence/datasource
+// signal) -> returns null for any other agent. Best-effort: null on any failure.
+// Builds a compact transcript (latest user ask + assistant report) for the judge;
+// the learner core PII-redacts before any write.
+async function readCompletedTurn(ctx: { agentName: string; threadId: string }): Promise<SkillLearnerTurn | null> {
+	if (ctx.agentName !== "incident-analyzer") return null;
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
+		const values = snapshot.values ?? {};
+		const messages = (values.messages ?? []) as BaseMessage[];
+		const dataSourceResults = (values.dataSourceResults ?? []) as Array<{
+			dataSourceId?: string;
+			toolOutputs?: unknown[];
+		}>;
+		const datasourcesUsed = dataSourceResults
+			.filter((r) => (r.toolOutputs?.length ?? 0) > 0)
+			.map((r) => r.dataSourceId)
+			.filter((id): id is string => Boolean(id));
+
+		// Compact transcript: the last human turn + the last assistant report. Each
+		// message's content can be a string or content-block array; coerce to text.
+		const text = (m: BaseMessage): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+		const lastHuman = [...messages].reverse().find((m) => m.getType() === "human");
+		const lastAi = [...messages].reverse().find((m) => m.getType() === "ai");
+		const transcript = [lastHuman && `User: ${text(lastHuman)}`, lastAi && `Assistant: ${text(lastAi)}`]
+			.filter(Boolean)
+			.join("\n\n");
+
+		return {
+			agentName: ctx.agentName,
+			threadId: ctx.threadId,
+			queryComplexity: (values.queryComplexity ?? "complex") as "simple" | "complex",
+			confidenceScore: typeof values.confidenceScore === "number" ? values.confidenceScore : 0,
+			datasourcesUsed,
+			transcript,
+		};
+	} catch (error) {
+		getLogger("web:skill-learner").warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"readCompletedTurn failed; skipping skill learning for this turn",
+		);
+		return null;
 	}
 }
 
