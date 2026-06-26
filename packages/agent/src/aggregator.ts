@@ -433,7 +433,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const gapsBulletCount = extractGapsBulletCount(answer);
 	const gapsCapTriggered = gapsBulletCount >= GAPS_BULLET_THRESHOLD;
 
-	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered;
+	// SIO-1013: a Gaps bullet claiming a permission/IAM denial with NO observed auth tool
+	// error is fabricated. Cap confidence below the HITL gate so a hallucinated blocker
+	// can never print a passing score, and rewrite the bullet to honest "not retrieved" text.
+	const { ungrounded } = detectUngroundedBlockers(answer, results);
+	const ungroundedCapTriggered = ungrounded.length > 0;
+
+	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered || ungroundedCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -462,9 +468,19 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
-	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped
-	// value so the report prose and the HITL gate (which reads confidenceScore) agree.
-	const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(answer, cappedScore) : answer;
+	if (ungroundedCapTriggered) {
+		logger.warn(
+			{ ungrounded, cap: TOOL_ERROR_CONFIDENCE_CAP, originalScore: confidenceScore, cappedScore },
+			"Aggregator Gaps section claimed a permission blocker with no observed auth tool error; capping confidence",
+		);
+	}
+
+	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
+	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
+	const rewrittenForGrounding = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
+	const finalAnswer = anyCapTriggered
+		? rewriteConfidenceInAnswer(rewrittenForGrounding, cappedScore)
+		: rewrittenForGrounding;
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
