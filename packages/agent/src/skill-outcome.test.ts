@@ -249,6 +249,38 @@ describe("recordSkillOutcomesForTurn (SIO-1016)", () => {
 		await recordSkillOutcomesForTurn([], "success");
 		expect(true).toBe(true);
 	});
+
+	// SIO-1018 e2e: prove the attribution flow end-to-end (names -> AppliedSkill[] -> file bump)
+	test("SIO-1018 e2e: a turn outcome fanned across AppliedSkill[] bumps the skill file with Laplace confidence", async () => {
+		// temp SKILL.md with learning frontmatter (0/0/0 seed)
+		const file = join(dir, "SKILL.md");
+		writeFileSync(
+			file,
+			[
+				"---",
+				"name: e2e-probe",
+				"description: e2e probe",
+				"confidence: 0.5",
+				"usage_count: 0",
+				"success_count: 0",
+				"failure_count: 0",
+				"---",
+				"",
+				"# probe",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		const applied = [{ name: "e2e-probe", filePath: file }];
+		await recordSkillOutcomesForTurn(applied, "success");
+		await recordSkillOutcomesForTurn(applied, "success");
+		await recordSkillOutcomesForTurn(applied, "failure");
+		const fm = parse(splitFm(readFileSync(file, "utf8"))) as Record<string, unknown>;
+		expect(fm.usage_count).toBe(3);
+		expect(fm.success_count).toBe(2);
+		expect(fm.failure_count).toBe(1);
+		expect(fm.confidence).toBeCloseTo(0.6, 5); // (2+1)/(3+2)
+	});
 });
 
 describe("appliedSkillsForNames (SIO-1018)", () => {
