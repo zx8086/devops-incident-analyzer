@@ -44,7 +44,7 @@ import {
 	extractGapsBulletCount,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
-import { getRunbookFilenames } from "./prompt-context.ts";
+import { getActiveSkillNames, getRunbookFilenames } from "./prompt-context.ts";
 
 function getSystemPromptText(): string {
 	if (!lastInvokeMessages || lastInvokeMessages.length === 0) return "";
@@ -93,6 +93,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		pendingActions: [],
 		actionResults: [],
 		selectedRunbooks: null,
+		skillsApplied: null,
 		investigationFocus: undefined,
 		pendingTopicShiftPrompt: undefined,
 		...overrides,
@@ -673,6 +674,39 @@ describe.skipIf(!hasRunbooks)("aggregate per-result data cap (SIO-833)", () => {
 			}),
 		);
 		expect(getUserPromptText()).toContain("small result body");
+	});
+});
+
+describe("getActiveSkillNames (SIO-1018)", () => {
+	test("returns the manifest's active local skill names", () => {
+		const names = getActiveSkillNames();
+		// agents/incident-analyzer/agent.yaml lists these under skills:
+		expect(names).toContain("aggregate-findings");
+		expect(names).toContain("normalize-incident");
+		expect(names).toContain("propose-mitigation");
+	});
+});
+
+describe.skipIf(!hasRunbooks)("aggregate: skillsApplied trace (SIO-1018)", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("populates skillsApplied with the active skill names", async () => {
+		const result = await aggregate(makeState({}));
+		expect(result.skillsApplied).toBeDefined();
+		expect(result.skillsApplied).toContain("aggregate-findings");
+	});
+
+	test("populates skillsApplied even on the no-datasource-results path", async () => {
+		const result = await aggregate(makeState({ dataSourceResults: [] }));
+		expect(result.skillsApplied).toContain("aggregate-findings");
 	});
 });
 

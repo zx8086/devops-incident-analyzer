@@ -7,7 +7,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
-import { buildOrchestratorPrompt } from "./prompt-context.ts";
+import { buildOrchestratorPrompt, getActiveSkillNames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
@@ -270,11 +270,22 @@ export function extractGapsBulletCount(answer: string): number {
 
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
+
+	// SIO-1018: capture the active skills for the confidence feedback loop. Best-effort:
+	// a failure leaves it null (== "not captured"), never blocking the report.
+	let skillsApplied: string[] | null = null;
+	try {
+		skillsApplied = getActiveSkillNames();
+	} catch {
+		skillsApplied = null;
+	}
+
 	if (results.length === 0) {
 		logger.warn("No datasource results to aggregate");
 		return {
 			messages: [new AIMessage({ content: "No datasource results to aggregate." })],
 			finalAnswer: "No datasource results to aggregate.",
+			skillsApplied,
 		};
 	}
 
@@ -415,6 +426,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		messages: [new AIMessage({ content: finalAnswer })],
 		finalAnswer,
 		confidenceScore: cappedScore,
+		skillsApplied,
 		...(anyCapTriggered && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
 	};
 }
