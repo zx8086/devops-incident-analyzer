@@ -9,7 +9,8 @@
 		"typecheck": "bunx tsc --noEmit",
 		"eval:precheck": "bun run src/eval/precheck.ts",
 		"eval:upload-dataset": "bun run src/eval/build-dataset.ts",
-		"eval:run": "bun run src/eval/run-eval.ts"
+		"eval:run": "bun run src/eval/run-eval.ts",
+		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",

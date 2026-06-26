@@ -14,6 +14,7 @@ import {
 	installMemoryPromotion,
 	installSkillLearner,
 	needsPruning,
+	type OutcomeTurn,
 	pruneState,
 	runBootstrap,
 	runPostTurn,
@@ -40,7 +41,9 @@ installAgentMemory();
 // SIO-1015: wire the skill-learning post-turn seam. The learner core lives in
 // @devops-agent/agent but state reads (getGraph/getState) live here, so we inject
 // a reader. No-op unless SKILL_LEARNING_ENABLED + agent-memory backend.
-installSkillLearner(readCompletedTurn);
+// SIO-1016: also inject the confidence-feedback reader (runs in the same post-turn
+// slot, independently gated by SKILL_OUTCOME_TRACKING_ENABLED).
+installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
 // SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
 // real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
 // agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
@@ -500,6 +503,38 @@ async function readCompletedTurn(ctx: { agentName: string; threadId: string }): 
 		getLogger("web:skill-learner").warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"readCompletedTurn failed; skipping skill learning for this turn",
+		);
+		return null;
+	}
+}
+
+// SIO-1016: read the just-completed turn for the confidence feedback loop. Supplies
+// the coarse success signal (error state + confidence) AND the set of promoted skills
+// applied this turn. KNOWN LIMIT: there is no reliable per-turn "this catalog skill was
+// applied" trace in graph state today (promoted learned-skills are catalog entries the
+// model consults at will), so appliedSkills is [] -- a documented no-op. The mechanism
+// (recordSkillOutcome) is shipped + tested; a follow-up ticket adds the application
+// trace, after which this reader populates appliedSkills and the loop activates with no
+// further wiring. Scoped to incident-analyzer (matches readCompletedTurn).
+async function readCompletedTurnOutcome(ctx: { agentName: string; threadId: string }): Promise<OutcomeTurn | null> {
+	if (ctx.agentName !== "incident-analyzer") return null;
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
+		const values = snapshot.values ?? {};
+		const confidenceScore = typeof values.confidenceScore === "number" ? values.confidenceScore : 0;
+		// validationResult "fail" is the turn-level error signal the validator sets.
+		const hadError = values.validationResult === "fail";
+		return {
+			hadError,
+			confidenceScore,
+			// No per-turn skill-application signal yet -> deliberate no-op (see note above).
+			appliedSkills: [],
+		};
+	} catch (error) {
+		getLogger("web:skill-outcome").warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"readCompletedTurnOutcome failed; skipping outcome tracking for this turn",
 		);
 		return null;
 	}
