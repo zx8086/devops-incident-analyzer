@@ -231,7 +231,9 @@ describe("draftChange -> proposeFleetIntegration", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already at 6.14.2");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already at 6.14.2");
+		expect(result.blockedReason).toBeFalsy();
 	});
 
 	test("blocks when the integrations file 404s (deployment has no Fleet integrations)", async () => {

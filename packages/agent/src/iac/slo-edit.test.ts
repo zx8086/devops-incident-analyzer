@@ -241,7 +241,9 @@ describe("draftChange -> proposeSloChange", () => {
 			iacRequest: { workflow: "slo-edit" as const, isProd: false, cluster: "eu-b2b", sloName: "x", sloTarget: 0.99 },
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already has the requested values");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already has the requested values");
+		expect(result.blockedReason).toBeFalsy();
 	});
 });
 

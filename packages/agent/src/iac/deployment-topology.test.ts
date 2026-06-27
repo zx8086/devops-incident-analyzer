@@ -253,7 +253,10 @@ describe("draftChange -> proposeTopologyChange", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already has the requested topology values");
+		// SIO-1020: a no-op surfaces as noopReason (-> neutral "No change needed"), NOT blockedReason
+		// (-> amber "Blocked"). It still opens no MR.
+		expect(result.noopReason).toContain("already has the requested topology values");
+		expect(result.blockedReason).toBeFalsy();
 	});
 });
 

@@ -297,7 +297,9 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already match the request");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already match the request");
+		expect(result.blockedReason).toBeFalsy();
 		expect(branchCreated).toBe(false);
 	});
 
@@ -316,7 +318,7 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 		expect(result.blockedReason).toContain("not found");
 	});
 
-	test("blocks a no-op (the setting already has the requested value)", async () => {
+	test("no-op (the setting already has the requested value) -> neutral, no MR", async () => {
 		const { draftChange } = await import("./nodes.ts");
 		mockTools({ gitlab_get_file_content: () => fileResult, gitlab_create_branch: () => "[201] {}" });
 		const state = {
@@ -328,7 +330,9 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already match the request");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already match the request");
+		expect(result.blockedReason).toBeFalsy();
 	});
 });
 

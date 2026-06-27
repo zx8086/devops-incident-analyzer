@@ -454,7 +454,9 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already has total_shards_per_node");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already has total_shards_per_node");
+		expect(result.blockedReason).toBeFalsy();
 	});
 
 	// SIO-979: a freeform single-template settingsPatch routes to the new proposer and commits

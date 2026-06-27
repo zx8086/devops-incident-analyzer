@@ -2858,10 +2858,10 @@ async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Pro
 	// Surface immediate feedback and open nothing (no branch, no commit, no review gate).
 	if (updated.previous === version) {
 		return {
-			blockedReason: `${cluster} is already on ${version}; no change needed.`,
+			noopReason: `${cluster} is already on ${version}; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: ${cluster} is already on Elasticsearch ${version}. I did not open a merge request.`,
+					`No change needed: ${cluster} is already on Elasticsearch ${version}, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -2938,10 +2938,10 @@ async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise
 	// No-op guard: requested sizing already matches the deployment JSON (empty diff).
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `${tier} tier already has the requested sizing; no change needed.`,
+			noopReason: `${tier} tier already has the requested sizing; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: the ${tier} tier already has the requested sizing. I did not open a merge request.`,
+					`No change needed: the ${tier} tier already has the requested sizing, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -3141,7 +3141,7 @@ async function commitOneIlmPolicy(
 				ok: false,
 				noop: true, // SIO-933: distinguishes "nothing to change" from a real failure (bind-only path).
 				blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
-				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values. I did not open a merge request.`,
+				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values, so there is nothing to merge.`,
 			};
 		}
 	}
@@ -3402,7 +3402,10 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	if (patch || req.sourcePolicy || req.ilmFullPolicy) {
 		const result = await commitOneIlmPolicy(cluster, branch, policy, patch, req.sourcePolicy, req.ilmFullPolicy);
 		if (!result.ok && !(result.noop && req.bindTemplate)) {
-			return { blockedReason: result.blockedReason, messages: [new AIMessage(result.message)] };
+			// SIO-1020: a no-op policy (already has the requested values) with no pending bind is a
+			// neutral "no change needed", not a real block (read/parse/commit error).
+			const key = result.noop ? "noopReason" : "blockedReason";
+			return { [key]: result.blockedReason, messages: [new AIMessage(result.message)] };
 		}
 		if (result.ok) {
 			policyFiles.push(result.filePath);
@@ -3435,10 +3438,10 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 	// standard "no change needed" block rather than opening an empty MR.
 	if (files.length === 0) {
 		return {
-			blockedReason: `Policy '${policy}' on '${cluster}' already has the requested values; no change needed.`,
+			noopReason: `Policy '${policy}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: '${policy}' on '${cluster}' is already as requested. I did not open a merge request.`,
+					`No change needed: '${policy}' on '${cluster}' is already as requested, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -3620,10 +3623,10 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 	// No-op guard: the requested version already matches (empty diff).
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `Integration '${alias}' on '${cluster}' is already at ${version}; no change needed.`,
+			noopReason: `Integration '${alias}' on '${cluster}' is already at ${version}; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: integration '${alias}' on '${cluster}' is already pinned to ${version}. I did not open a merge request.`,
+					`No change needed: integration '${alias}' on '${cluster}' is already pinned to ${version}, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -3736,10 +3739,10 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `SLO '${slo}' on '${cluster}' already has the requested values; no change needed.`,
+			noopReason: `SLO '${slo}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: SLO '${slo}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+					`No change needed: SLO '${slo}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -3860,10 +3863,10 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `Alert rule '${rule}' on '${cluster}' already has the requested values; no change needed.`,
+			noopReason: `Alert rule '${rule}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: alert rule '${rule}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+					`No change needed: alert rule '${rule}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -3996,10 +3999,10 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `Data view '${dataview}' on '${cluster}' already has the requested values; no change needed.`,
+			noopReason: `Data view '${dataview}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: data view '${dataview}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+					`No change needed: data view '${dataview}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -4102,7 +4105,7 @@ async function prepareOneClusterDefaultFile(
 			ok: false,
 			noop: true,
 			blockedReason: `Template '${template}' on '${cluster}' already has the requested settings; no change needed.`,
-			message: `No change needed: template '${template}' on '${cluster}' already has the requested settings. I did not open a merge request.`,
+			message: `No change needed: template '${template}' on '${cluster}' already has the requested settings, so there is nothing to merge.`,
 		};
 	}
 
@@ -4159,7 +4162,14 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 		const result = await prepareOneClusterDefaultFile(cluster, e.templateName, e.settingsPatch);
 		if (!result.ok) {
 			// Atomic: one file's failure blocks the whole MR. The branch was created but no commit
-			// landed and no MR is opened, so it is never reviewed or merged.
+			// landed and no MR is opened, so it is never reviewed or merged. SIO-1020: a no-op file
+			// (already has the requested settings) is a neutral "no change needed", not a real block.
+			if (result.noop) {
+				return {
+					noopReason: `Template '${e.templateName}' on '${cluster}' already has the requested settings; no change needed.`,
+					messages: [new AIMessage(result.message)],
+				};
+			}
 			return {
 				blockedReason: `Multi-file cluster-defaults change blocked on '${e.templateName}': ${result.blockedReason}`,
 				messages: [new AIMessage(`${result.message} No merge request was opened (the batch is all-or-nothing).`)],
@@ -4255,10 +4265,10 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 
 	if (!updated.changed || isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `Template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}; no change needed.`,
+			noopReason: `Template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}. I did not open a merge request.`,
+					`No change needed: template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -4372,10 +4382,10 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 	if (!updated.changed) {
 		// SIO-996: covers both "already at the requested value" and "asked to remove a key that's absent".
 		return {
-			blockedReason: `Cluster settings on '${cluster}' already match the request; no change needed.`,
+			noopReason: `Cluster settings on '${cluster}' already match the request; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: the cluster settings on '${cluster}' already match the request (the keys to set already have those values, and any keys to remove are already absent). I did not open a merge request.`,
+					`No change needed: the cluster settings on '${cluster}' already match the request (the keys to set already have those values, and any keys to remove are already absent), so there is nothing to merge.`,
 				),
 			],
 		};
@@ -4483,10 +4493,10 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 
 	if (isUnchangedConfig(updated.content, extractFileContent(raw))) {
 		return {
-			blockedReason: `Space '${space}' on '${cluster}' already has the requested values; no change needed.`,
+			noopReason: `Space '${space}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: space '${space}' on '${cluster}' already has the requested values. I did not open a merge request.`,
+					`No change needed: space '${space}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -4611,10 +4621,10 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 
 	if (!updated.changed) {
 		return {
-			blockedReason: `Role '${roleName}' on '${cluster}' already has the requested privileges; no change needed.`,
+			noopReason: `Role '${roleName}' on '${cluster}' already has the requested privileges; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: role '${roleName}' on '${cluster}' already has the requested privileges. I did not open a merge request.`,
+					`No change needed: role '${roleName}' on '${cluster}' already has the requested privileges, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -5004,20 +5014,20 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 				return "I also checked the live cluster: it does not apply this setting either, so there is genuinely nothing to reconcile.";
 			})();
 			return {
-				blockedReason: `Deployment '${cluster}' user_settings_yaml has no key matching ${keyList}; no change needed.`,
+				noopReason: `Deployment '${cluster}' user_settings_yaml has no key matching ${keyList}; no change needed.`,
 				messages: [
 					new AIMessage(
 						`No change needed: I found no key matching ${keyList} in '${cluster}' user_settings_yaml (searched exact + suffix paths), so there was nothing to remove.\n\n` +
-							`${yamlBlock}\n\nI did not open a merge request.${liveLine ? ` ${liveLine}` : ""}`,
+							`${yamlBlock}\n\nThere is nothing to merge.${liveLine ? ` ${liveLine}` : ""}`,
 					),
 				],
 			};
 		}
 		return {
-			blockedReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
+			noopReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: deployment '${cluster}' already has the requested topology values. I did not open a merge request.`,
+					`No change needed: deployment '${cluster}' already has the requested topology values, so there is nothing to merge.`,
 				),
 			],
 		};
@@ -5344,10 +5354,10 @@ async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest)
 	if (files.length === 0) {
 		// Everything requested already exists -- nothing to create, so no MR.
 		return {
-			blockedReason: `Index template(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
+			noopReason: `Index template(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested index template file(s) already exist on '${cluster}'. I did not open a merge request.`,
+					`No change needed: the requested index template file(s) already exist on '${cluster}', so there is nothing to merge.`,
 				),
 			],
 		};
@@ -5506,10 +5516,10 @@ async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest
 	if (files.length === 0) {
 		// Everything requested already exists -- nothing to create, so no MR.
 		return {
-			blockedReason: `Ingest pipeline(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
+			noopReason: `Ingest pipeline(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested ingest-pipeline file(s) already exist on '${cluster}'. I did not open a merge request.`,
+					`No change needed: the requested ingest-pipeline file(s) already exist on '${cluster}', so there is nothing to merge.`,
 				),
 			],
 		};
@@ -6357,14 +6367,25 @@ export function isTerminalPipelineStatus(status: string): boolean {
 
 // SIO-930: the user-facing outcome of one IaC turn, derived from terminal state, so the UI chip
 // reflects what actually happened instead of an unconditional "Completed". Precedence: explicit human
-// decisions (reject/decline) > a request we have no proposer for (unsupported) > a mechanical guard
-// block > a failed CI pipeline > completed. (Pure; unit-tested.)
-export type IacTurnOutcome = "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+// decisions (reject/decline) > a no-op (requested config already matches current state) > a request we
+// have no proposer for (unsupported) > a mechanical guard block > a failed CI pipeline > completed.
+// (Pure; unit-tested.)
+export type IacTurnOutcome =
+	| "completed"
+	| "rejected"
+	| "declined"
+	| "no-op"
+	| "blocked"
+	| "unsupported"
+	| "pipeline-failed";
 
 export function iacTurnOutcome(state: IacStateType): IacTurnOutcome {
 	if (state.reviewDecision === "rejected") return "rejected";
 	if (state.syntheticsPushApproved === false && state.syntheticsDriftReport) return "declined";
 	if (state.fleetUpgradeApproved === false && state.fleetUpgradeReport) return "declined";
+	// SIO-1020: a no-op is not a failure -- the requested config already matches current state. It
+	// renders as a neutral "No change needed", distinct from an amber "Blocked" guard rejection.
+	if (state.noopReason) return "no-op";
 	if (state.blockedReason) {
 		return state.iacRequest?.workflow === "other" ? "unsupported" : "blocked";
 	}

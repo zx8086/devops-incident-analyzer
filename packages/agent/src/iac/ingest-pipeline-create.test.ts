@@ -224,7 +224,9 @@ describe("draftChange -> proposeIngestPipelineCreate", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already exist");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already exist");
+		expect(result.blockedReason).toBeFalsy();
 	});
 
 	// SIO-1020: simulate gates the commit.

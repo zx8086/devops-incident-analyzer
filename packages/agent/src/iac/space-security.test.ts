@@ -344,7 +344,9 @@ describe("draftChange -> proposeSecurityRoleChange", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already has the requested privileges");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already has the requested privileges");
+		expect(result.blockedReason).toBeFalsy();
 	});
 });
 

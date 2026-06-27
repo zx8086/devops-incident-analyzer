@@ -309,7 +309,7 @@ export interface ReducerState {
 	lastConfidence: number | undefined;
 	// SIO-930: per-turn outcome from the IaC done event ("rejected"/"declined"/etc.); drives the
 	// completion chip color/label. "completed" for the incident agent (which omits the field).
-	lastOutcome: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+	lastOutcome: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
 	lastDataSourceContext: DataSourceContext | undefined;
 	pendingActions: PendingAction[];
 	actionResults: ActionResult[];

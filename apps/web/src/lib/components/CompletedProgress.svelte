@@ -59,7 +59,7 @@ let {
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, DataSourceStatus>;
 	dataSourceFindings?: Map<string, DataSourceFindings>;
-	outcome?: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
 } = $props();
 
 let expanded = $state(false);
@@ -128,6 +128,17 @@ const outcomeView = $derived.by(() => {
 				bgFrom: "#fffbeb",
 				bgTo: "#fef3c7",
 				border: "#fde68a",
+			};
+		case "no-op":
+			// SIO-1020: a no-op (requested config already matches current state) is informational, not
+			// a failure. Neutral styling distinct from amber "Blocked"; no MR was opened.
+			return {
+				label: "No change needed",
+				icon: "message-square" as const,
+				text: "text-gray-600",
+				bgFrom: "#f9fafb",
+				bgTo: "#f3f4f6",
+				border: "#e5e7eb",
 			};
 		case "unsupported":
 			return {
