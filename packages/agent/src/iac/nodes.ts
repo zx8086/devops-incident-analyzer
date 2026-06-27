@@ -723,6 +723,13 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 // SIO-960: on a FRESH session's first turn, proactively surface in-flight work (a dispatched
 // fleet upgrade recovered from durable memory) so the user doesn't have to ask "how's it going?".
 // Implements the hooks/bootstrap.md "Open in-flight items" startup line. Injects a SystemMessage
+// SIO-1020: terminal short-circuit fields are checkpointed per-thread, but parseIntent/amendChange/
+// draftChange route to END the moment either is truthy -- and those edges run BEFORE guardNode (which
+// is the only node that clears blockedReason). So a prior turn's blockedReason/noopReason would
+// short-circuit the next unrelated follow-up. Reset both at turn start (bootstrap runs first on every
+// turn) so each turn re-derives its own terminal state. (guardNode still clears blockedReason mid-lane.)
+const TURN_START_RESET = { blockedReason: "", noopReason: "" } as const;
+
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
 export async function bootstrapIac(state: IacStateType, config?: RunnableConfig): Promise<Partial<IacStateType>> {
 	// SIO-965: capture the checkpointer thread id for the knowledge-graph Session
@@ -763,10 +770,15 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 		const note = await buildInFlightSessionNote();
 		if (note) {
 			log.info({ note }, "bootstrapIac: surfacing in-flight work at session start");
-			return { connected: true, ...(threadId && { threadId }), messages: [new SystemMessage(note)] };
+			return {
+				connected: true,
+				...TURN_START_RESET,
+				...(threadId && { threadId }),
+				messages: [new SystemMessage(note)],
+			};
 		}
 	}
-	return { connected: true, ...(threadId && { threadId }) };
+	return { connected: true, ...TURN_START_RESET, ...(threadId && { threadId }) };
 }
 
 // SIO-960: a one-line "you have work in flight" note from durable memory, or "" when
@@ -4158,17 +4170,17 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 	const prepared: Array<{ filePath: string; content: string }> = [];
 	const diffBlocks: string[] = [];
 	const settingKeys = new Set<string>();
+	const skippedNoops: string[] = [];
 	for (const e of entries) {
 		const result = await prepareOneClusterDefaultFile(cluster, e.templateName, e.settingsPatch);
 		if (!result.ok) {
-			// Atomic: one file's failure blocks the whole MR. The branch was created but no commit
-			// landed and no MR is opened, so it is never reviewed or merged. SIO-1020: a no-op file
-			// (already has the requested settings) is a neutral "no change needed", not a real block.
+			// SIO-1020: a no-op file (already has the requested settings) is skipped, NOT a block --
+			// in a mixed batch the OTHER (real-change) files must still proceed. A batch-level noop is
+			// emitted below only if EVERY file was a no-op (nothing prepared). A real failure
+			// (read/parse) still blocks the whole MR atomically (the branch has no commit, no MR opens).
 			if (result.noop) {
-				return {
-					noopReason: `Template '${e.templateName}' on '${cluster}' already has the requested settings; no change needed.`,
-					messages: [new AIMessage(result.message)],
-				};
+				skippedNoops.push(e.templateName);
+				continue;
 			}
 			return {
 				blockedReason: `Multi-file cluster-defaults change blocked on '${e.templateName}': ${result.blockedReason}`,
@@ -4178,6 +4190,18 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 		prepared.push({ filePath: result.filePath, content: result.content });
 		diffBlocks.push(result.diffBlock);
 		for (const k of Object.keys(e.settingsPatch)) settingKeys.add(k);
+	}
+
+	// Every requested template already had the requested settings -> neutral no-op, no MR.
+	if (prepared.length === 0) {
+		return {
+			noopReason: `Cluster-defaults templates on '${cluster}' already have the requested settings; no change needed (${skippedNoops.join(", ")}).`,
+			messages: [
+				new AIMessage(
+					`No change needed: the requested cluster-defaults templates on '${cluster}' already have the requested settings, so there is nothing to merge.`,
+				),
+			],
+		};
 	}
 
 	const fields = [...settingKeys].join(", ");

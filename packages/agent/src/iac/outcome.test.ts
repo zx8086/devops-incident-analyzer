@@ -64,6 +64,19 @@ describe("iacTurnOutcome (SIO-930)", () => {
 		expect(iacTurnOutcome(s({ noopReason: "already as requested", blockedReason: "ignored" }))).toBe("no-op");
 	});
 
+	// A blockedReason on a workflow:"other" maps to "unsupported"; a no-op must still outrank that branch.
+	test("a no-op outranks the unsupported (workflow:other) branch", () => {
+		expect(
+			iacTurnOutcome(
+				s({
+					noopReason: "already as requested",
+					blockedReason: "No proposer for this request (workflow 'other').",
+					iacRequest: { workflow: "other", isProd: false },
+				}),
+			),
+		).toBe("no-op");
+	});
+
 	test("a human rejection still outranks a no-op", () => {
 		expect(iacTurnOutcome(s({ reviewDecision: "rejected", noopReason: "already as requested" }))).toBe("rejected");
 	});
