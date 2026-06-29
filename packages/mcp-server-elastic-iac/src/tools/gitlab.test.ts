@@ -72,6 +72,19 @@ describe("buildCommitFileBody", () => {
 		expect(body.actions[0]?.action).toBe("delete");
 		expect(body.actions[0]).not.toHaveProperty("content");
 	});
+
+	// SIO-1022: a create/update without content is a caller bug -- throw rather than commit an
+	// empty file. (delete is the only action allowed to omit content.)
+	test("throws when a create/update action has no content", () => {
+		expect(() =>
+			buildCommitFileBody({
+				branch: "agent/x",
+				commitMessage: "m",
+				filePath: "environments/eu-b2b/cluster-defaults/logs.json",
+				action: "update",
+			}),
+		).toThrow(/requires content/);
+	});
 });
 
 // SIO-979: an ATOMIC multi-file commit -- one POST /repository/commits with several actions,

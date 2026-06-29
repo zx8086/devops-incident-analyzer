@@ -4284,10 +4284,6 @@ async function proposeClusterDefaultDelete(_state: IacStateType, req: IacRequest
 		}
 	}
 
-	const branch = branchName(req);
-	// Create the shared branch ONCE; all deletes land in a single atomic commit.
-	await callTool("gitlab_create_branch", { branch, ref: "main" });
-
 	const toDelete: string[] = [];
 	const diffBlocks: string[] = [];
 	const skippedAbsent: string[] = [];
@@ -4328,6 +4324,11 @@ async function proposeClusterDefaultDelete(_state: IacStateType, req: IacRequest
 			],
 		};
 	}
+
+	// SIO-1022: create the shared branch only after the probe confirms a real deletion, so a no-op
+	// or read/token error leaves no orphan branch behind (which would also make a re-run collide).
+	const branch = branchName(req);
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
 
 	const commit = await callTool("gitlab_commit_files", {
 		branch,

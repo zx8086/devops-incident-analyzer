@@ -12,10 +12,16 @@ const log = createContextLogger("gitlab");
 // "delete" carries NO content (GitLab rejects a delete action with a content field).
 type CommitAction = { action: string; file_path: string; content?: string };
 
-// Build one commit action: a "delete" omits content, every other action carries it.
-// SIO-1022: delete removes the file (its for_each key) -- the override-revert path.
-function commitAction(action: "create" | "update" | "delete", filePath: string, content: string): CommitAction {
-	return action === "delete" ? { action, file_path: filePath } : { action, file_path: filePath, content };
+// Build one commit action: a "delete" omits content, a "create"/"update" REQUIRES it.
+// SIO-1022: delete removes the file (its for_each key) -- the override-revert path. A
+// create/update without content is a caller bug; throw rather than silently commit an empty
+// file (GitLab would accept "" as a valid zero-byte body, clobbering the file).
+function commitAction(action: "create" | "update" | "delete", filePath: string, content?: string): CommitAction {
+	if (action === "delete") return { action, file_path: filePath };
+	if (content === undefined) {
+		throw new Error(`commitAction: "${action}" on ${filePath} requires content (refusing to commit an empty file).`);
+	}
+	return { action, file_path: filePath, content };
 }
 
 // Build the POST /repository/commits body for a single-file content change. GitLab's
@@ -34,7 +40,7 @@ export function buildCommitFileBody(input: {
 	return {
 		branch: input.branch,
 		commit_message: input.commitMessage,
-		actions: [commitAction(input.action ?? "update", input.filePath, input.content ?? "")],
+		actions: [commitAction(input.action ?? "update", input.filePath, input.content)],
 	};
 }
 
@@ -52,7 +58,7 @@ export function buildCommitFilesBody(input: {
 	return {
 		branch: input.branch,
 		commit_message: input.commitMessage,
-		actions: input.files.map((f) => commitAction(f.action ?? "update", f.file_path, f.content ?? "")),
+		actions: input.files.map((f) => commitAction(f.action ?? "update", f.file_path, f.content)),
 	};
 }
 
