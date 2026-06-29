@@ -248,6 +248,10 @@ const IntentSchema = z.object({
 	// MR. body is the COMPLETE pipeline document (name + processors) written VERBATIM, so it is an opaque
 	// object (two-arg z.record, matching phasesPatch/settingsPatch). Always an array (no singular form).
 	ingestPipelines: z.array(z.object({ name: z.string(), body: z.record(z.string(), z.unknown()) })).nullish(),
+	// SIO-1024: ingest-pipeline-edit -- one or more EXISTING @custom ingest-pipeline files whose body is
+	// REPLACED in ONE MR. Same shape as ingestPipelines, but `name` is the FILE BASENAME from the path the
+	// user names (not the body's name field). body is the COMPLETE replacement document, written VERBATIM.
+	ingestPipelineEdits: z.array(z.object({ name: z.string(), body: z.record(z.string(), z.unknown()) })).nullish(),
 	reason: z.string().nullish(),
 	isProd: z.boolean().default(false),
 	clarification: z.string().nullish(),
@@ -410,6 +414,13 @@ export function parseIntentJson(raw: string): IacRequest {
 						name: stripJsonExt(e.name) ?? e.name,
 						body: e.body,
 					})),
+					// SIO-1024: ingest-pipeline-edit -- same .json strip as the create fold. `name` is the file
+					// basename from the path the user named (the planner is told to use the path basename, not
+					// the body's name field), so the edit proposer reads the EXISTING file at that exact path.
+					ingestPipelineEdits: nn(p.ingestPipelineEdits)?.map((e) => ({
+						name: stripJsonExt(e.name) ?? e.name,
+						body: e.body,
+					})),
 					reason: nn(p.reason),
 					clarification: nn(p.clarification),
 				};
@@ -449,7 +460,7 @@ export function capabilityMessage(): string {
 		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
 		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n' +
 		'- **Index templates** -- add a high-priority index template so an index pattern lands on a short-retention ILM policy; e.g. "route dev/staging metrics and traces to their short-retention policies on eu-b2b" (new-file create; composes component templates + binds the ILM policy via the template settings)\n' +
-		'- **Ingest pipelines** -- add a new @custom ingest pipeline; e.g. "create an ingest pipeline logs-cisco_ftd.log@custom that drops flow-expiration events on us-cld" (paste the complete pipeline JSON; new-file create, committed verbatim)\n\n' +
+		'- **Ingest pipelines** -- add a NEW @custom ingest pipeline, e.g. "create an ingest pipeline logs-cisco_ftd.log@custom that drops flow-expiration events on us-cld", or REPLACE the body of an EXISTING one, e.g. "replace the entire contents of environments/ap-cld/ingest-pipelines/drop-cisco-meraki-ip-session.json with exactly {...}" (paste the complete pipeline JSON; committed verbatim, one MR; the file must already exist for an edit)\n\n' +
 		'A Fleet **agent binary** upgrade ("upgrade the agents to 9.4.2") is an imperative Fleet API ' +
 		"action, not a Terraform config change, so it goes through a different path that isn't wired up " +
 		"yet. The Fleet upgrade trigger is on the roadmap."
@@ -844,7 +855,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
 		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, userSettingsMergeTarget, " +
 		"userSettingsMergeKey, userSettingsMergeValue, userSettingsRemoveKeys, sizeComponent, componentSize, " +
-		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, ingestPipelines, reason, isProd (true only if " +
+		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, ingestPipelines, ingestPipelineEdits, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"Extract `cluster` ONLY from the deployment the user names in this request; NEVER default to a cluster that " +
@@ -1043,6 +1054,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"name) and body (the COMPLETE pipeline document the user pasted, VERBATIM -- a JSON object with `name` and " +
 		"`processors`). Pass body exactly as given: do NOT reshape, add, or drop processors, and do NOT invent a body the " +
 		"user did not provide. " +
+		"For an INGEST-PIPELINE EDIT ('replace the entire contents of environments/ap-cld/ingest-pipelines/" +
+		"drop-cisco-meraki-ip-session.json with exactly {...}', 'update the existing ingest pipeline ... change the drop " +
+		"processor's if', 'edit the @custom ingest pipeline on us-cld') -- REPLACING the body of one or more EXISTING " +
+		"@custom ingest-pipeline files (the user names a file that already exists, or says replace/update/edit) -- set " +
+		"workflow to 'ingest-pipeline-edit', cluster to the named deployment, and ingestPipelineEdits to an ARRAY with one " +
+		"object per file (multiple files commit to ONE merge request). Each entry: name (the FILE BASENAME the user names " +
+		"in the path -- e.g. for environments/ap-cld/ingest-pipelines/drop-cisco-meraki-ip-session.json the name is " +
+		"'drop-cisco-meraki-ip-session', the part before .json; this is the FILENAME, which can DIFFER from the body's " +
+		"`name` field, so use the path, NOT the body) and body (the COMPLETE replacement document the user pasted, " +
+		"VERBATIM -- a JSON object). Pass body exactly as given: do NOT reshape, add, or drop processors. Choose " +
+		"'ingest-pipeline-create' ONLY for a NEW file and 'ingest-pipeline-edit' when the file already exists or the user " +
+		"says replace/update/edit. " +
 		"Set clarification (a single direct question) ONLY when a required field is genuinely missing -- e.g. no " +
 		"cluster named, an upgrade with no concrete target version ('upgrade to latest'), or a resize with no tier or " +
 		"no size/max. Do NOT ask for information the user already provided. Respond with ONLY the JSON object.";
@@ -2029,7 +2052,10 @@ export function branchSlug(req: IacRequest): string {
 															: req.workflow === "ingest-pipeline-create"
 																? // SIO-1019: a multi-pipeline create joins pipeline names; the 40-char cap truncates a long list.
 																	(req.ingestPipelines ?? []).map((e) => e.name).join("-")
-																: (req.tier ?? req.resource);
+																: req.workflow === "ingest-pipeline-edit"
+																	? // SIO-1024: a multi-pipeline edit joins file basenames; the 40-char cap truncates a long list.
+																		(req.ingestPipelineEdits ?? []).map((e) => e.name).join("-")
+																	: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -2102,6 +2128,7 @@ const WORKFLOW_STACK: Record<string, string> = {
 	"dashboard-edit": "dashboards",
 	"index-template-create": "index-templates",
 	"ingest-pipeline-create": "ingest-pipelines",
+	"ingest-pipeline-edit": "ingest-pipelines",
 };
 
 export function stackForWorkflow(workflow: string | undefined): string {
@@ -5683,6 +5710,128 @@ async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest
 	};
 }
 
+// SIO-1024: ingest-pipeline-edit -- REPLACE the full body of one or more EXISTING @custom ingest-pipeline
+// JSON files VERBATIM, on ONE branch / ONE MR. The sibling of proposeIngestPipelineCreate with the
+// file-existence rule INVERTED: the target file MUST already exist (a 404 BLOCKS -- it never creates) and
+// the commit uses action "update". `name` is the FILE BASENAME the user named in the path (not the body's
+// `name` field), so the path is resolved exactly like create but read with the expectation of a 2xx.
+// SIO-1020 simulate guard kept verbatim. The diff is a before/after against the existing file content.
+async function proposeIngestPipelineEdit(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const entries = req.ingestPipelineEdits ?? [];
+
+	if (entries.length === 0) {
+		return {
+			blockedReason: "Ingest-pipeline edit needs at least one pipeline file to replace.",
+			messages: [new AIMessage("Cannot propose the change: name at least one existing ingest pipeline to edit.")],
+		};
+	}
+	for (const e of entries) {
+		const validBody = typeof e.body === "object" && e.body !== null && !Array.isArray(e.body);
+		if (!e.name || !validBody) {
+			return {
+				blockedReason: "Each ingest pipeline needs a name and a JSON-object body.",
+				messages: [
+					new AIMessage("Cannot propose the change: every ingest pipeline needs a name and a JSON-object body."),
+				],
+			};
+		}
+	}
+
+	// SIO-1020: simulate each replacement body BEFORE creating the branch (same guard as create).
+	for (const e of entries) {
+		const { name: _pipelineName, ...pipelineForSim } = e.body as Record<string, unknown>;
+		const raw = await callTool("elastic_simulate_ingest_pipeline", {
+			pipeline: pipelineForSim,
+			deployment: cluster,
+		});
+		const verdict = interpretSimulateResult(raw);
+		if ("ok" in verdict && verdict.ok === false) {
+			log.warn({ cluster, pipeline: e.name, error: verdict.reason }, "ingest-pipeline simulate rejected the body");
+			return {
+				blockedReason: `Ingest pipeline '${e.name}' failed simulation on '${cluster}': ${verdict.reason}`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: ingest pipeline '${e.name}' did not pass simulation against ${cluster}. Elasticsearch rejected it:\n\n${verdict.reason}\n\nFix the pipeline body and try again.`,
+					),
+				],
+			};
+		}
+		if ("skipped" in verdict) {
+			log.warn(
+				{ cluster, pipeline: e.name, note: verdict.note },
+				"ingest-pipeline simulate skipped (cluster unavailable); proceeding",
+			);
+		}
+	}
+
+	const branch = branchName(req);
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+
+	const files: string[] = [];
+	const diffBlocks: string[] = [];
+	for (const e of entries) {
+		const filePath = deploymentJsonPath(ingestPipelineTemplate(), cluster).replace(/\$\{name\}/g, e.name);
+
+		// Probe: an edit REQUIRES the file to exist. A 404 BLOCKS (this is not the create path -- never
+		// silently create on edit). Any other non-2xx read (token/timeout/5xx) blocks the batch.
+		const raw = await callTool("gitlab_get_file_content", { filePath });
+		if (raw.startsWith("[gitlab token not configured")) {
+			return {
+				blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+				messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+			};
+		}
+		if (isGitlabNotFound(raw)) {
+			return {
+				blockedReason: `No ingest-pipeline file '${filePath}' on '${cluster}' to edit.`,
+				messages: [
+					new AIMessage(
+						`Cannot propose the change: there is no ingest-pipeline file '${filePath}' on '${cluster}' to edit. To add a new pipeline, ask me to *create* it instead.`,
+					),
+				],
+			};
+		}
+		if (!isGitlabSuccess(raw)) {
+			return {
+				blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+				messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+			};
+		}
+
+		// Verbatim replacement body; same serialization as create.
+		const content = `${JSON.stringify(e.body, null, 2)}\n`;
+		const commit = await callTool("gitlab_commit_file", {
+			branch,
+			file_path: filePath,
+			content,
+			commit_message: `${cluster}: edit ingest pipeline ${e.name}`,
+			action: "update",
+		});
+		if (!isGitlabSuccess(commit)) {
+			return {
+				blockedReason: `Could not commit ${filePath} via the GitLab API: ${commit.slice(0, 120)}.`,
+				messages: [new AIMessage(`Cannot propose the change: the GitLab commit for '${e.name}' failed.`)],
+			};
+		}
+		files.push(filePath);
+		// Before/after diff: the existing content (from the probe read) vs the replacement body, so the
+		// review card shows exactly what changes rather than re-printing the whole new file.
+		const before = `${extractFileContent(raw).trimEnd()}\n`;
+		diffBlocks.push(
+			`${filePath} (replace ingest pipeline ${e.name})\n- ${before.replace(/\n/g, "\n- ").trimEnd()}\n+ ${content.replace(/\n/g, "\n+ ").trimEnd()}`,
+		);
+	}
+
+	return {
+		branch,
+		proposedFilePath: files[0] ?? "",
+		proposedFiles: files,
+		proposedDiff: diffBlocks.join("\n\n"),
+		precheckPassed: files.length > 0,
+	};
+}
+
 // SIO-990: amend lane entry. A correction to the change just proposed this session (intent
 // "gitops-amend", set by classifyIacIntent's correction guard) re-parses the corrected request from
 // the latest message and routes it through the SAME proposer chain (readClusterState -> guard ->
@@ -5731,6 +5880,7 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 	if (req.workflow === "dashboard-edit") return proposeDashboardChange(state, req);
 	if (req.workflow === "index-template-create") return proposeIndexTemplateCreate(state, req);
 	if (req.workflow === "ingest-pipeline-create") return proposeIngestPipelineCreate(state, req);
+	if (req.workflow === "ingest-pipeline-edit") return proposeIngestPipelineEdit(state, req);
 
 	// Defensive: a workflow value with no proposer must stop before the review gate rather
 	// than open an empty MR. parseIntent should already have blocked "other" upstream.
@@ -6039,6 +6189,14 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			"Creates NEW @custom ingest pipeline(s); CI's plan will show a create. The body is committed verbatim and was SIMULATED against the deployment (processors compile) before this MR -- but confirm the processors do the intended thing on real data (simulate runs against a synthetic empty document, and is skipped when the cluster is unreachable). An @custom pipeline only runs where its managed default pipeline references it.",
 		);
 	}
+	if (req?.workflow === "ingest-pipeline-edit") {
+		// SIO-1024: replacing an existing @custom pipeline body is an UPDATE in CI's plan. The whole body is
+		// swapped (no partial patch), so the risk is a behavior change on live ingest -- the new body was
+		// simulated before this MR, but confirm the change against real data.
+		risks.push(
+			"REPLACES the body of EXISTING @custom ingest pipeline(s); CI's plan will show an update-in-place. The whole pipeline body is swapped (verbatim, no partial patch) and was SIMULATED against the deployment before this MR -- but this changes live ingest behavior where the managed default pipeline references the @custom hook, so confirm the new processors do the intended thing on real data (simulate runs against a synthetic empty document, and is skipped when the cluster is unreachable).",
+		);
+	}
 
 	// Descriptor: upgrade shows the version transition; tier-resize the tier + new sizing.
 	const tierTarget = [
@@ -6106,7 +6264,10 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 																: req?.workflow === "ingest-pipeline-create"
 																	? // SIO-1019: "create N ingest pipelines: <first name>[, +K more]".
 																		`create ${req?.ingestPipelines?.length ?? 0} ingest pipeline${(req?.ingestPipelines?.length ?? 0) === 1 ? "" : "s"}: ${req?.ingestPipelines?.[0]?.name ?? "?"}${(req?.ingestPipelines?.length ?? 0) > 1 ? `, +${(req?.ingestPipelines?.length ?? 0) - 1} more` : ""}`
-																	: (req?.tier ?? req?.resource ?? "change");
+																	: req?.workflow === "ingest-pipeline-edit"
+																		? // SIO-1024: "edit N ingest pipelines: <first name>[, +K more]".
+																			`edit ${req?.ingestPipelineEdits?.length ?? 0} ingest pipeline${(req?.ingestPipelineEdits?.length ?? 0) === 1 ? "" : "s"}: ${req?.ingestPipelineEdits?.[0]?.name ?? "?"}${(req?.ingestPipelineEdits?.length ?? 0) > 1 ? `, +${(req?.ingestPipelineEdits?.length ?? 0) - 1} more` : ""}`
+																		: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -6252,6 +6413,9 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 			req?.workflow === "ingest-pipeline-create"
 				? `Creates ${req?.ingestPipelines?.length ?? 0} NEW @custom ingest pipeline file(s) on '${req?.cluster}': ${(req?.ingestPipelines ?? []).map((e) => e.name).join(", ")}. Bodies committed VERBATIM; new files only (existing pipelines are untouched).`
 				: "",
+			req?.workflow === "ingest-pipeline-edit"
+				? `Replaces ${req?.ingestPipelineEdits?.length ?? 0} EXISTING @custom ingest pipeline file(s) on '${req?.cluster}': ${(req?.ingestPipelineEdits ?? []).map((e) => e.name).join(", ")}. Bodies committed VERBATIM (whole-body replace; the file must already exist).`
+				: "",
 			req?.reason ? `Reason given: ${req.reason}.` : "",
 			`Branch: ${state.branch}. Target: main.`,
 			// SIO-932: list every committed file so the MR's "Files touched" section is complete for a
@@ -6290,9 +6454,11 @@ export async function buildMrDescription(state: IacStateType): Promise<string> {
 														: // SIO-1019: a new @custom ingest pipeline is an additive new-file create (mr-template.md
 															// MEDIUM "ingest-pipeline (additive)"); LOW because it only runs where its managed default
 															// pipeline references it and existing data is untouched.
-															req?.workflow === "ingest-pipeline-create"
-															? "Category ingest-pipelines, Risk LOW"
-															: "Category version-bump, Risk LOW";
+															req?.workflow === "ingest-pipeline-edit"
+															? "Category ingest-pipelines, Risk MEDIUM"
+															: req?.workflow === "ingest-pipeline-create"
+																? "Category ingest-pipelines, Risk LOW"
+																: "Category version-bump, Risk LOW";
 		const instruction =
 			"Write the GitLab merge request description using knowledge/reference/mr-template.md's SECTION HEADINGS, but as an " +
 			"agent-authored MR: state the single RESOLVED value per section -- do NOT reproduce the human checkbox " +
