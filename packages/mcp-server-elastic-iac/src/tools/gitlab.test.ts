@@ -59,6 +59,19 @@ describe("buildCommitFileBody", () => {
 		});
 		expect(body.actions[0]?.action).toBe("create");
 	});
+
+	// SIO-1022: a delete action removes the file and carries NO content key (GitLab rejects a
+	// delete action with content). It is emitted even when no content is passed.
+	test("emits a delete action with no content key", () => {
+		const body = buildCommitFileBody({
+			branch: "agent/revert-eu-b2b-querylog-settings-20260629",
+			commitMessage: "eu-b2b: remove ineffective querylog@settings override",
+			filePath: "environments/eu-b2b/cluster-defaults/logs-elasticsearch.querylog@settings.json",
+			action: "delete",
+		});
+		expect(body.actions[0]?.action).toBe("delete");
+		expect(body.actions[0]).not.toHaveProperty("content");
+	});
 });
 
 // SIO-979: an ATOMIC multi-file commit -- one POST /repository/commits with several actions,
@@ -86,6 +99,29 @@ describe("buildCommitFilesBody", () => {
 		// defaults to "update" when a file omits its action (matches buildCommitFileBody)
 		expect(body.actions[2]?.action).toBe("update");
 		expect(body.actions[2]?.file_path).toBe("environments/eu-b2b/cluster-defaults/traces-apm.json");
+	});
+
+	// SIO-1022: a mixed batch may carry delete actions; each delete omits its content key.
+	test("emits delete actions with no content key in a mixed batch", () => {
+		const body = buildCommitFilesBody({
+			branch: "agent/revert-eu-b2b-querylog-settings-20260629",
+			commitMessage: "eu-b2b: remove ineffective querylog@settings override",
+			files: [
+				{
+					file_path: "environments/eu-b2b/cluster-defaults/logs-elasticsearch.querylog@settings.json",
+					action: "delete",
+				},
+				{ file_path: "environments/eu-b2b/cluster-defaults/logs.json", content: '{"a":1}\n', action: "update" },
+			],
+		});
+		expect(body.actions).toHaveLength(2);
+		expect(body.actions[0]?.action).toBe("delete");
+		expect(body.actions[0]).not.toHaveProperty("content");
+		expect(body.actions[1]).toEqual({
+			action: "update",
+			file_path: "environments/eu-b2b/cluster-defaults/logs.json",
+			content: '{"a":1}\n',
+		});
 	});
 });
 

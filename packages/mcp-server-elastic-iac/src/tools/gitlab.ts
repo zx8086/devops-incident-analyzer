@@ -8,22 +8,33 @@ import { gitlabFetch, text } from "./shared.ts";
 
 const log = createContextLogger("gitlab");
 
+// A single GitLab commit action. "create"/"update" carry the FULL new file content; a
+// "delete" carries NO content (GitLab rejects a delete action with a content field).
+type CommitAction = { action: string; file_path: string; content?: string };
+
+// Build one commit action: a "delete" omits content, every other action carries it.
+// SIO-1022: delete removes the file (its for_each key) -- the override-revert path.
+function commitAction(action: "create" | "update" | "delete", filePath: string, content: string): CommitAction {
+	return action === "delete" ? { action, file_path: filePath } : { action, file_path: filePath, content };
+}
+
 // Build the POST /repository/commits body for a single-file content change. GitLab's
 // commit actions take the FULL new file content, not a diff: "update" requires the file
 // to already exist, "create" requires it to be absent. Defaults to "update" (the
 // read-modify-write proposer path edits existing config); a new file (e.g. the reconcile
-// marker) passes "create". (Pure; unit-tested.)
+// marker) passes "create". SIO-1022: "delete" removes the file (content is ignored/omitted).
+// (Pure; unit-tested.)
 export function buildCommitFileBody(input: {
 	branch: string;
 	commitMessage: string;
 	filePath: string;
-	content: string;
-	action?: "create" | "update";
-}): { branch: string; commit_message: string; actions: Array<{ action: string; file_path: string; content: string }> } {
+	content?: string;
+	action?: "create" | "update" | "delete";
+}): { branch: string; commit_message: string; actions: CommitAction[] } {
 	return {
 		branch: input.branch,
 		commit_message: input.commitMessage,
-		actions: [{ action: input.action ?? "update", file_path: input.filePath, content: input.content }],
+		actions: [commitAction(input.action ?? "update", input.filePath, input.content ?? "")],
 	};
 }
 
@@ -31,16 +42,17 @@ export function buildCommitFileBody(input: {
 // actions in ONE commit, so N files land together (the proven MR !182 shape: one commit, three
 // files). Each file carries its own action (a read-modify-write edit is "update"; a brand-new
 // file is "create"); a file may omit it and defaults to "update", mirroring buildCommitFileBody.
+// SIO-1022: a "delete" action removes the file and emits NO content key.
 // (Pure; unit-tested.)
 export function buildCommitFilesBody(input: {
 	branch: string;
 	commitMessage: string;
-	files: Array<{ file_path: string; content: string; action?: "create" | "update" }>;
-}): { branch: string; commit_message: string; actions: Array<{ action: string; file_path: string; content: string }> } {
+	files: Array<{ file_path: string; content?: string; action?: "create" | "update" | "delete" }>;
+}): { branch: string; commit_message: string; actions: CommitAction[] } {
 	return {
 		branch: input.branch,
 		commit_message: input.commitMessage,
-		actions: input.files.map((f) => ({ action: f.action ?? "update", file_path: f.file_path, content: f.content })),
+		actions: input.files.map((f) => commitAction(f.action ?? "update", f.file_path, f.content ?? "")),
 	};
 }
 
@@ -226,23 +238,27 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	server.tool(
 		"gitlab_commit_file",
-		"Commit a single-file content change to a branch via the GitLab API (server-side; no local git). " +
-			"Upsert: updates the file when it exists, creates it when it does not. The content is the FULL new file body, not a diff.",
+		"Commit a single-file change to a branch via the GitLab API (server-side; no local git). " +
+			"Upsert: updates the file when it exists, creates it when it does not. The content is the FULL new file body, not a diff. " +
+			"SIO-1022: action 'delete' removes the file (no content needed) -- used to revert a config override.",
 		{
 			branch: z.string(),
 			file_path: z.string(),
-			content: z.string().describe("Full new file content (read-modify-write; not a diff)."),
+			content: z
+				.string()
+				.optional()
+				.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
 			commit_message: z.string(),
 			action: z
-				.enum(["create", "update"])
+				.enum(["create", "update", "delete"])
 				.optional()
 				.describe(
-					"Initial commit action; defaults to 'update'. Auto-falls back to the other on a file-exists mismatch.",
+					"Initial commit action; defaults to 'update'. 'create'/'update' auto-flip on a file-exists mismatch; 'delete' removes the file.",
 				),
 		},
 		async ({ branch, file_path, content, commit_message, action }) => {
 			const initial = action ?? "update";
-			const commitWith = (act: "create" | "update") =>
+			const commitWith = (act: "create" | "update" | "delete") =>
 				gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/repository/commits`, {
 					method: "POST",
 					body: JSON.stringify(
@@ -250,11 +266,12 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					),
 				});
 			log.info(
-				{ branch, filePath: file_path, action: initial, bytes: content.length },
+				{ branch, filePath: file_path, action: initial, bytes: content?.length ?? 0 },
 				"gitlab_commit_file: committing",
 			);
 			let res = await commitWith(initial);
-			const flipped = res.startsWith("[4") ? flipCommitAction(initial, res) : null;
+			// SIO-885 auto-flip only applies to the create/update upsert; a delete on a missing file is a real error.
+			const flipped = initial !== "delete" && res.startsWith("[4") ? flipCommitAction(initial, res) : null;
 			if (flipped) {
 				log.warn(
 					{ branch, filePath: file_path, from: initial, to: flipped, response: res.slice(0, 200) },
@@ -278,16 +295,20 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		"gitlab_commit_files",
 		"Commit MULTIPLE files atomically in ONE commit on a branch via the GitLab API (server-side; no " +
 			"local git). All files land in a single commit. Each file's content is the FULL new body, not a diff. " +
-			"Each file carries its own action ('update' for an existing file, 'create' for a new one); pass the " +
-			"correct action up front -- unlike gitlab_commit_file, a multi-action commit cannot auto-flip per file.",
+			"Each file carries its own action ('update' for an existing file, 'create' for a new one, 'delete' to " +
+			"remove it -- SIO-1022); pass the correct action up front -- unlike gitlab_commit_file, a multi-action " +
+			"commit cannot auto-flip per file.",
 		{
 			branch: z.string(),
 			files: z
 				.array(
 					z.object({
 						file_path: z.string(),
-						content: z.string().describe("Full new file content (read-modify-write; not a diff)."),
-						action: z.enum(["create", "update"]).optional().describe("Defaults to 'update'."),
+						content: z
+							.string()
+							.optional()
+							.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
+						action: z.enum(["create", "update", "delete"]).optional().describe("Defaults to 'update'."),
 					}),
 				)
 				.min(1)

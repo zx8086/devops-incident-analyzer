@@ -189,6 +189,9 @@ const IntentSchema = z.object({
 			}),
 		)
 		.nullish(),
+	// SIO-1022: cluster-default-delete -- one or more cluster-defaults override files to REMOVE
+	// (delete the whole file, not edit its settings). templateName is the file basename VERBATIM.
+	clusterDefaultDeletes: z.array(z.object({ templateName: z.string() })).nullish(),
 	// SIO-994: cluster-settings-edit flat dotted-key patches for the persistent/transient blocks.
 	persistentPatch: z.record(z.string(), z.unknown()).nullish(),
 	transientPatch: z.record(z.string(), z.unknown()).nullish(),
@@ -295,6 +298,12 @@ export function parseIntentJson(raw: string): IacRequest {
 				}));
 				const multiCd = cdEntries.length >= 2;
 				const soleCd = cdEntries.length === 1 ? cdEntries[0] : undefined;
+				// SIO-1022: cluster-default-delete entries -- strip a trailing .json from each basename
+				// (the planner may echo "logs-elasticsearch.querylog@settings.json"); the @custom-style
+				// suffix is part of the basename and is preserved. Always an array (no singular fold).
+				const cdDeletes = (nn(p.clusterDefaultDeletes) ?? []).map((e) => ({
+					templateName: stripJsonExt(e.templateName) ?? e.templateName,
+				}));
 				// SIO-932: only strip .json for the ilm-rollout workflow; other workflows' name fields
 				// (sloName, ruleName, dataviewName, ...) are basenames the planner already gives bare,
 				// and a couple legitimately could carry other meanings.
@@ -340,6 +349,8 @@ export function parseIntentJson(raw: string): IacRequest {
 					// SIO-979: a single clusterDefaults entry folds its patch into the singular field.
 					settingsPatch: soleCd?.settingsPatch ?? nn(p.settingsPatch),
 					clusterDefaults: multiCd ? cdEntries : undefined,
+					// SIO-1022: cluster-default-delete -- the files to remove (always an array).
+					clusterDefaultDeletes: cdDeletes.length > 0 ? cdDeletes : undefined,
 					// SIO-994: cluster-settings-edit persistent/transient patches.
 					persistentPatch: nn(p.persistentPatch),
 					transientPatch: nn(p.transientPatch),
@@ -431,6 +442,7 @@ export function capabilityMessage(): string {
 		'- **Alert rule edits** -- e.g. "raise the MarTech cart-failed alert threshold to 5 on eu-cld"\n' +
 		'- **Data view edits** -- e.g. "add a service runtime field to the logs data view on us-cld"\n' +
 		'- **Cluster-defaults edits** -- edit the index settings on a template, e.g. "set total_shards_per_node to 3 on the logs@custom template on ap-cld" or "bump refresh_interval to 30s on logs, metrics and traces-apm on eu-b2b" (any index setting; one MR can span several templates)\n' +
+		'- **Cluster-defaults override removal** -- delete a whole cluster-defaults override FILE, e.g. "remove the logs-elasticsearch.querylog@settings override on eu-b2b" (opens a delete MR; I report whether the plan is a no-op cleanup or a destroy you must sign off before merge)\n' +
 		'- **Cluster-settings edits** -- set, change, or REMOVE the cluster-level persistent/transient settings (the PUT _cluster/settings surface), e.g. "set xpack.monitoring.collection.interval to 60s on eu-b2b", "raise cluster.max_shards_per_node to 2000", or "remove xpack.monitoring.collection.interval from the persistent block on eu-b2b" (any cluster setting in environments/<dep>/cluster-settings/settings.json; distinct from per-template cluster-defaults)\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
@@ -933,6 +945,13 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"(mirrors ilmPolicies for ILM). If the user instead " +
 		"wants to bind a template's ILM lifecycle to a policy, that is 'ilm-rollout' with bindTemplate, NOT " +
 		"cluster-default-edit. " +
+		"To REMOVE/DELETE a cluster-defaults override FILE entirely ('remove the logs-elasticsearch.querylog@settings " +
+		"override on eu-b2b', 'delete the cluster-defaults override file for X', 'revert/drop the X@settings override') -- " +
+		"removing the whole file, NOT editing its settings -- set workflow to 'cluster-default-delete', cluster to the named " +
+		"deployment, and clusterDefaultDeletes to an array of { templateName } where templateName is the override file " +
+		"basename VERBATIM (e.g. 'logs-elasticsearch.querylog@settings'; the part before .json, INCLUDING any @settings/@custom " +
+		"suffix that is part of the filename). One MR removes all listed files. This is DISTINCT from cluster-default-edit " +
+		"(which edits settings.index in a file that stays): deletion drops the whole override file (its Terraform for_each key). " +
 		"For a CLUSTER-SETTINGS change ('set xpack.monitoring.collection.interval to 60s on eu-b2b', 'raise " +
 		"cluster.max_shards_per_node to 2000', 'set the high disk watermark to 90% on ap-cld', 'add/change a setting in the " +
 		"persistent block of cluster-settings/settings.json') -- editing the CLUSTER-LEVEL persistent/transient settings (the " +
@@ -1991,23 +2010,26 @@ export function branchSlug(req: IacRequest): string {
 										req.clusterDefaults && req.clusterDefaults.length >= 2
 										? req.clusterDefaults.map((e) => e.templateName).join("-")
 										: req.templateName
-									: req.workflow === "space-edit"
-										? req.spaceName
-										: req.workflow === "security-edit"
-											? req.roleName
-											: req.workflow === "topology-edit"
-												? req.topologyTier
-												: req.workflow === "dashboard-edit"
-													? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
-														// include space + action so same-day edits don't collide on one branch.
-														[req.dashboardSpace, req.dashboardName, req.dashboardAction].filter(Boolean).join("-")
-													: req.workflow === "index-template-create"
-														? // SIO-978: a multi-template create joins template names; the 40-char cap truncates a long list.
-															(req.indexTemplates ?? []).map((e) => e.name).join("-")
-														: req.workflow === "ingest-pipeline-create"
-															? // SIO-1019: a multi-pipeline create joins pipeline names; the 40-char cap truncates a long list.
-																(req.ingestPipelines ?? []).map((e) => e.name).join("-")
-															: (req.tier ?? req.resource);
+									: req.workflow === "cluster-default-delete"
+										? // SIO-1022: revert/remove the named override file(s) (40-char cap truncates a long list).
+											`revert-${(req.clusterDefaultDeletes ?? []).map((e) => e.templateName).join("-")}`
+										: req.workflow === "space-edit"
+											? req.spaceName
+											: req.workflow === "security-edit"
+												? req.roleName
+												: req.workflow === "topology-edit"
+													? req.topologyTier
+													: req.workflow === "dashboard-edit"
+														? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
+															// include space + action so same-day edits don't collide on one branch.
+															[req.dashboardSpace, req.dashboardName, req.dashboardAction].filter(Boolean).join("-")
+														: req.workflow === "index-template-create"
+															? // SIO-978: a multi-template create joins template names; the 40-char cap truncates a long list.
+																(req.indexTemplates ?? []).map((e) => e.name).join("-")
+															: req.workflow === "ingest-pipeline-create"
+																? // SIO-1019: a multi-pipeline create joins pipeline names; the 40-char cap truncates a long list.
+																	(req.ingestPipelines ?? []).map((e) => e.name).join("-")
+																: (req.tier ?? req.resource);
 	return [req.cluster, descriptor, req.workflow]
 		.filter(Boolean)
 		.join("-")
@@ -4226,6 +4248,108 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 	};
 }
 
+// SIO-1022: propose a cluster-defaults override DELETE -- remove one or more whole
+// environments/<dep>/cluster-defaults/<template>.json files in ONE MR. AGENTS.md s3 treats deleting
+// such a file as an ordinary config change (the filename minus .json is the Terraform for_each key,
+// so removing the file drops exactly that one resource). Mirrors proposeClusterDefaultChanges:
+// probe each file, commit the deletes atomically. A file already absent is a per-file no-op; if
+// EVERY target is absent the whole turn is a neutral no-op (no MR). The destroy-vs-no-op verdict
+// comes from the CI plan, surfaced post-MR (AGENTS.md s7).
+async function proposeClusterDefaultDelete(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+	const cluster = req.cluster ?? "";
+	const entries = req.clusterDefaultDeletes ?? [];
+
+	if (!cluster) {
+		return {
+			blockedReason: "Cluster-defaults delete needs a deployment.",
+			messages: [
+				new AIMessage("Cannot propose the change: name the deployment whose override file should be removed."),
+			],
+		};
+	}
+	if (entries.length === 0) {
+		return {
+			blockedReason: "Cluster-defaults delete needs at least one override file to remove.",
+			messages: [
+				new AIMessage("Cannot propose the change: name at least one cluster-defaults override file to remove."),
+			],
+		};
+	}
+	for (const e of entries) {
+		if (!e.templateName) {
+			return {
+				blockedReason: "Cluster-defaults delete needs a template basename for every file.",
+				messages: [new AIMessage("Cannot propose the change: every override to remove needs its file basename.")],
+			};
+		}
+	}
+
+	const branch = branchName(req);
+	// Create the shared branch ONCE; all deletes land in a single atomic commit.
+	await callTool("gitlab_create_branch", { branch, ref: "main" });
+
+	const toDelete: string[] = [];
+	const diffBlocks: string[] = [];
+	const skippedAbsent: string[] = [];
+	for (const e of entries) {
+		const filePath = deploymentJsonPath(clusterDefaultTemplate(), cluster).replace(/\$\{template\}/g, e.templateName);
+		const raw = await callTool("gitlab_get_file_content", { filePath });
+		if (raw.startsWith("[gitlab token not configured")) {
+			return {
+				blockedReason: "ELASTIC_IAC_GITLAB_TOKEN not configured; cannot read the GitOps repo.",
+				messages: [new AIMessage("Cannot propose the change: set ELASTIC_IAC_GITLAB_TOKEN for the GitOps repo.")],
+			};
+		}
+		if (isGitlabNotFound(raw)) {
+			// Already absent -> per-file no-op; nothing to delete for this entry.
+			skippedAbsent.push(filePath);
+			continue;
+		}
+		if (!isGitlabSuccess(raw)) {
+			return {
+				blockedReason: `Could not read the GitOps repo via the GitLab API: ${raw.slice(0, 120)}.`,
+				messages: [new AIMessage("Cannot propose the change: I could not read the target file from the GitOps repo.")],
+			};
+		}
+		toDelete.push(filePath);
+		// Show the full current body as a removal block so the review card states what is being removed.
+		const body = extractFileContent(raw).trimEnd();
+		diffBlocks.push(`${filePath} (remove override file)\n- ${body.replace(/\n/g, "\n- ")}`);
+	}
+
+	// Every target was already absent -> neutral no-op, no MR.
+	if (toDelete.length === 0) {
+		return {
+			noopReason: `Cluster-defaults override file(s) on '${cluster}' are already absent; nothing to delete (${skippedAbsent.join(", ")}).`,
+			messages: [
+				new AIMessage(
+					`No change needed: the requested cluster-defaults override file(s) on '${cluster}' are already absent, so there is nothing to merge.`,
+				),
+			],
+		};
+	}
+
+	const commit = await callTool("gitlab_commit_files", {
+		branch,
+		files: toDelete.map((file_path) => ({ file_path, action: "delete" })),
+		commit_message: `${cluster}: remove cluster-defaults override ${entries.map((e) => e.templateName).join("/")}`,
+	});
+	if (!isGitlabSuccess(commit)) {
+		return {
+			blockedReason: `Could not commit the deletion via the GitLab API: ${commit.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot propose the change: the GitLab commit failed.")],
+		};
+	}
+
+	return {
+		branch,
+		proposedFilePath: toDelete[0] ?? "",
+		proposedFiles: toDelete,
+		proposedDiff: diffBlocks.join("\n\n"),
+		precheckPassed: toDelete.length > 0,
+	};
+}
+
 // SIO-917: propose a cluster-defaults change -- set total_shards_per_node on an EXISTING
 // index-template file. Mirrors proposeSloChange: single file, read-modify-write, edits only.
 async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
@@ -5596,6 +5720,8 @@ export async function draftChange(state: IacStateType): Promise<Partial<IacState
 			? proposeClusterDefaultChanges(state, req)
 			: proposeClusterDefaultChange(state, req);
 	}
+	// SIO-1022: remove a whole cluster-defaults override file (delete the for_each key).
+	if (req.workflow === "cluster-default-delete") return proposeClusterDefaultDelete(state, req);
 	// SIO-994: cluster-level persistent/transient settings (distinct file from cluster-defaults).
 	if (req.workflow === "cluster-settings-edit") return proposeClusterSettingsChange(state, req);
 	if (req.workflow === "space-edit") return proposeSpaceChange(state, req);
@@ -5820,6 +5946,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 			);
 		}
 	}
+	// SIO-1022: deleting an override file is in-remit (AGENTS.md s3), but the destroy-vs-no-op verdict
+	// comes from the CI plan. Lead with the s7 contract so the reviewer reads the plan before merge.
+	if (req?.workflow === "cluster-default-delete") {
+		risks.unshift(
+			"This MR DELETES a cluster-defaults override file. CI computes the plan: 0 add / 0 change / 0 destroy means a safe no-op cleanup (the override never converged); ANY destroy means the resource is live and merging removes it -- do NOT merge an unintended destroy without data-owner sign-off.",
+		);
+	}
 	if (req?.workflow === "space-edit") {
 		risks.push(
 			"Space metadata change (name/description/color); it does not touch data, dashboards, or feature access. The space's disabled_features and solution are untouched.",
@@ -5949,27 +6082,30 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 										: req?.settingsPatch
 											? `${req?.templateName ?? "?"}: ${summarizeNestedPatch(req.settingsPatch) || Object.keys(req.settingsPatch).join(", ")}`
 											: `${req?.templateName ?? "?"}: total_shards_per_node ${req?.totalShardsPerNode ?? "?"}`
-									: req?.workflow === "cluster-settings-edit"
-										? // SIO-996: name the set/removed cluster-level keys so the title (and the recalled
-											// iac-change fact) describe the change, not just the workflow.
-											summarizeClusterSettings(req)
-										: req?.workflow === "space-edit"
-											? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
-											: req?.workflow === "security-edit"
-												? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
-												: req?.workflow === "topology-edit"
-													? // SIO-997: no leading cluster -- the title wrapper already prefixes "[<cluster>]" (other
-														// descriptors lead with their own id; only topology doubled the cluster).
-														`${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.userSettingsMergeKey !== undefined ? `${req.userSettingsMergeKey}=${req.userSettingsMergeValue ?? "?"}` : "", req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? `-${req.userSettingsRemoveKeys.length} key(s)` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
-													: req?.workflow === "dashboard-edit"
-														? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
-														: req?.workflow === "index-template-create"
-															? // SIO-978: "create N index templates: <first name>[, +K more]".
-																`create ${req?.indexTemplates?.length ?? 0} index template${(req?.indexTemplates?.length ?? 0) === 1 ? "" : "s"}: ${req?.indexTemplates?.[0]?.name ?? "?"}${(req?.indexTemplates?.length ?? 0) > 1 ? `, +${(req?.indexTemplates?.length ?? 0) - 1} more` : ""}`
-															: req?.workflow === "ingest-pipeline-create"
-																? // SIO-1019: "create N ingest pipelines: <first name>[, +K more]".
-																	`create ${req?.ingestPipelines?.length ?? 0} ingest pipeline${(req?.ingestPipelines?.length ?? 0) === 1 ? "" : "s"}: ${req?.ingestPipelines?.[0]?.name ?? "?"}${(req?.ingestPipelines?.length ?? 0) > 1 ? `, +${(req?.ingestPipelines?.length ?? 0) - 1} more` : ""}`
-																: (req?.tier ?? req?.resource ?? "change");
+									: req?.workflow === "cluster-default-delete"
+										? // SIO-1022: title by the removed override file basename(s).
+											`remove ${(req?.clusterDefaultDeletes ?? []).map((e) => e.templateName).join(", ") || "override"}`
+										: req?.workflow === "cluster-settings-edit"
+											? // SIO-996: name the set/removed cluster-level keys so the title (and the recalled
+												// iac-change fact) describe the change, not just the workflow.
+												summarizeClusterSettings(req)
+											: req?.workflow === "space-edit"
+												? `${req?.spaceName ?? "?"}: ${[req?.spaceDisplayName ? "name" : "", req?.spaceDescription ? "description" : "", req?.spaceColor ? "color" : ""].filter(Boolean).join(", ") || "change"}`
+												: req?.workflow === "security-edit"
+													? `${req?.roleName ?? "?"}: grant ${[req?.grantCluster?.length ? "cluster" : "", req?.grantIndexNames?.length ? "index" : "", req?.grantKibanaApplication ? "kibana" : ""].filter(Boolean).join(", ") || "privileges"}`
+													: req?.workflow === "topology-edit"
+														? // SIO-997: no leading cluster -- the title wrapper already prefixes "[<cluster>]" (other
+															// descriptors lead with their own id; only topology doubled the cluster).
+															`${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.userSettingsMergeKey !== undefined ? `${req.userSettingsMergeKey}=${req.userSettingsMergeValue ?? "?"}` : "", req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? `-${req.userSettingsRemoveKeys.length} key(s)` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
+														: req?.workflow === "dashboard-edit"
+															? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
+															: req?.workflow === "index-template-create"
+																? // SIO-978: "create N index templates: <first name>[, +K more]".
+																	`create ${req?.indexTemplates?.length ?? 0} index template${(req?.indexTemplates?.length ?? 0) === 1 ? "" : "s"}: ${req?.indexTemplates?.[0]?.name ?? "?"}${(req?.indexTemplates?.length ?? 0) > 1 ? `, +${(req?.indexTemplates?.length ?? 0) - 1} more` : ""}`
+																: req?.workflow === "ingest-pipeline-create"
+																	? // SIO-1019: "create N ingest pipelines: <first name>[, +K more]".
+																		`create ${req?.ingestPipelines?.length ?? 0} ingest pipeline${(req?.ingestPipelines?.length ?? 0) === 1 ? "" : "s"}: ${req?.ingestPipelines?.[0]?.name ?? "?"}${(req?.ingestPipelines?.length ?? 0) > 1 ? `, +${(req?.ingestPipelines?.length ?? 0) - 1} more` : ""}`
+																	: (req?.tier ?? req?.resource ?? "change");
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -8919,6 +9055,22 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		for (const r of state.planReport.resources.slice(0, 10)) {
 			lines.push(`  ${r.actions.join("+")} ${r.address}`);
 		}
+		// SIO-1022: for an override DELETE, state the AGENTS.md s7 verdict from the plan counts.
+		if (state.iacRequest?.workflow === "cluster-default-delete") {
+			const { create, update, delete: destroy } = state.planReport;
+			lines.push(
+				destroy === 0 && create === 0 && update === 0
+					? "Verdict: NO-OP CLEANUP -- 0 destroy. The override never converged in state; safe to merge, no apply runs."
+					: destroy > 0
+						? `Verdict: DESTRUCTIVE -- ${destroy} resource(s) to destroy. Merging removes them live; needs data-owner sign-off, do NOT merge if unintended.`
+						: "Verdict: unexpected plan for a file delete (no destroy but adds/changes). Review the plan before merging.",
+			);
+		}
+	} else if (state.iacRequest?.workflow === "cluster-default-delete" && state.mrState !== "merged") {
+		// SIO-1022: a delete with no plan yet -> do NOT claim a verdict; tell the user to verify.
+		lines.push(
+			"Verdict: the CI plan has not reported yet -- verify it shows 0 destroy (no-op cleanup) before merging.",
+		);
 	} else if (isTerminalPipelineStatus(state.pipelineStatus)) {
 		lines.push("Plan: not available from the pipeline report.");
 		// SIO-878: when the pipeline failed, explain the likely cause.
