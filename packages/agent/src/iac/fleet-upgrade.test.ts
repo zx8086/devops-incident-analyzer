@@ -462,19 +462,64 @@ describe("formatFleetUpgradeSummary", () => {
 			pipelineStatus: "running",
 			note: "Upgrade started and running; not finished within the status window.",
 		};
+		// SIO-1023: report.rolloutSeconds is the stale preview value (3600 -> "~60 min"); the prose ETA
+		// must instead be the agent-count-scaled value applyFleetUpgrade actually sent to CI. With 8
+		// upgradeable agents -> dynamicRolloutSeconds(8) = 600s -> "~10 min".
 		const s = stateWith({
-			fleetUpgradeReport: report({ deployment: "ap-cld", rolloutSeconds: 3600 }),
+			fleetUpgradeReport: report({
+				deployment: "ap-cld",
+				rolloutSeconds: 3600,
+				crosstab: { upgradeable: 8, notUpgradeable: 0, byReason: [] },
+			}),
 			fleetUpgradeResult: result,
 		});
 		const msg = formatFleetUpgradeSummary(s);
 		expect(msg).toContain("started");
 		expect(msg).not.toContain("failed");
-		// expected duration surfaced from rolloutSeconds (3600s -> ~60 min)
-		expect(msg).toContain("60 min");
+		// SIO-1023: ETA derives from the agent count (8 -> 600s -> "~10 min"), NOT the stale 3600s preview value.
+		expect(msg).toContain("10 min");
+		expect(msg).not.toContain("60 min");
 		// the resumable follow-up affordance
 		expect(msg.toLowerCase()).toContain("check");
 		// pipeline link preserved for tracking
 		expect(msg).toContain("2605468937");
+	});
+
+	// SIO-1023: the dispatched prose ETA must equal the agent-count-scaled apply window
+	// (formatRolloutDuration(dynamicRolloutSeconds(willUpgrade))), the same value the
+	// "expected ~N min" pipeline-log step shows -- so the two never disagree. willUpgrade
+	// prefers versionCrosstab.upgradeableOutdated when present, else crosstab.upgradeable.
+	test("dispatched -> ETA matches the agent-count-scaled apply window for varying counts", () => {
+		const result: FleetUpgradeResult = { status: "dispatched", pipelineId: 1, pipelineStatus: "running" };
+		for (const willUpgrade of [8, 24, 19, 200]) {
+			// 24 -> 720s -> "~12 min"; 200 -> 3600s ceil -> "~60 min".
+			const expected = formatRolloutDuration(dynamicRolloutSeconds(willUpgrade));
+			const s = stateWith({
+				fleetUpgradeReport: report({
+					rolloutSeconds: 3600, // stale preview value -- must be ignored
+					crosstab: { upgradeable: willUpgrade, notUpgradeable: 0, byReason: [] },
+				}),
+				fleetUpgradeResult: result,
+			});
+			expect(formatFleetUpgradeSummary(s)).toContain(`over ${expected}.`);
+		}
+	});
+
+	// SIO-1023: willUpgrade prefers the version partition's upgradeableOutdated when present.
+	test("dispatched -> ETA uses versionCrosstab.upgradeableOutdated when present", () => {
+		const result: FleetUpgradeResult = { status: "dispatched", pipelineId: 1, pipelineStatus: "running" };
+		const s = stateWith({
+			fleetUpgradeReport: report({
+				rolloutSeconds: 3600,
+				crosstab: { upgradeable: 200, notUpgradeable: 0, byReason: [] }, // would scale to the 3600s ceil
+				// but the version partition narrows the real upgrade set to 24 -> 720s -> "~12 min".
+				versionCrosstab: { alreadyOnTarget: 176, outdated: 24, versionUnknown: 0, upgradeableOutdated: 24 },
+			}),
+			fleetUpgradeResult: result,
+		});
+		const expected = formatRolloutDuration(dynamicRolloutSeconds(24));
+		expect(formatFleetUpgradeSummary(s)).toContain(`over ${expected}.`);
+		expect(formatFleetUpgradeSummary(s)).toContain("12 min");
 	});
 
 	// SIO-961: a deadline/env-failure apply is "partial", NOT "failed". The summary must lead with

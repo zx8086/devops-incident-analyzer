@@ -10069,7 +10069,9 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	} else {
 		// Running past the status window: the bulk_upgrade is in flight (a long rollout we chose not
 		// to block on). Report it as dispatched with the expected duration + the pipeline to track.
-		const eta = report.rolloutSeconds ? ` Expected ${formatRolloutDuration(report.rolloutSeconds)}.` : "";
+		// SIO-1023: use the agent-count-scaled rollout we actually sent to CI (same as the up-front
+		// "expected ~N min" step), not the preview artifact's fixed report.rolloutSeconds.
+		const eta = rollout > 0 ? ` Expected ${formatRolloutDuration(rollout)}.` : "";
 		result = {
 			status: "dispatched",
 			...common,
@@ -10190,9 +10192,14 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 				? ` Pipeline [#${result.pipelineId}](${result.pipelineUrl}) is running.`
 				: ` Pipeline #${result.pipelineId} is running.`
 			: "";
+		// SIO-1023: derive the ETA from the SAME agent-count-scaled formula applyFleetUpgrade sent to
+		// CI (and showed in the "expected ~N min" pipeline-log step), not the preview artifact's
+		// report.rolloutSeconds (a fixed ~3600s -> a stale "~60 min" that always overstated the rollout).
+		const willUpgrade = report.versionCrosstab?.upgradeableOutdated ?? report.crosstab.upgradeable;
+		const effectiveRollout = dynamicRolloutSeconds(willUpgrade);
 		return (
 			`Fleet upgrade started for ${dep} -- ${report.crosstab.upgradeable} agent(s) upgrading to ` +
-			`${report.targetVersion} over ${formatRolloutDuration(report.rolloutSeconds)}.${dPid}${skipNote} ` +
+			`${report.targetVersion} over ${formatRolloutDuration(effectiveRollout)}.${dPid}${skipNote} ` +
 			"I won't block on the full rollout; ask me to check on it or watch the pipeline."
 		);
 	}
