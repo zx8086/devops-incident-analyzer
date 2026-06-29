@@ -150,10 +150,17 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow
 		// "other") with a capability message + blockedReason -> stop before reading cluster
 		// state or drafting. Otherwise proceed to the maker pipeline.
-		.addConditionalEdges("parseIntent", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
+		.addConditionalEdges("parseIntent", (s) => (s.blockedReason || s.noopReason ? END : "readClusterState"), [
+			"readClusterState",
+			END,
+		])
 		// SIO-990: amendChange re-parses (via parseIntent); same blockedReason short-circuit, then the
 		// shared maker chain (readClusterState -> guard -> draftChange -> reviewPlan -> reviewGate).
-		.addConditionalEdges("amendChange", (s) => (s.blockedReason ? END : "readClusterState"), ["readClusterState", END])
+		// SIO-1020: a no-op (noopReason) is terminal too -- it ends the turn without opening an MR.
+		.addConditionalEdges("amendChange", (s) => (s.blockedReason || s.noopReason ? END : "readClusterState"), [
+			"readClusterState",
+			END,
+		])
 		// SIO-954/SIO-970: readClusterState -> guard, with graphEnrichIac (KG) and memoryEnrichIac
 		// (agent-memory recall) spliced in before guard when their respective backends are enabled.
 		// Each enrich routes onward via memoryTarget so the two compose independently.
@@ -163,8 +170,13 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// Blocked by a mechanical safety guard -> stop before any write.
 		.addConditionalEdges("guard", (s) => (s.blockedReason ? END : "draftChange"), ["draftChange", END])
 		// SIO-873: the GitOps proposer (draftChange) can block too (e.g. missing token,
-		// unparseable JSON) -> stop before the review gate.
-		.addConditionalEdges("draftChange", (s) => (s.blockedReason ? END : "reviewPlan"), ["reviewPlan", END])
+		// unparseable JSON) -> stop before the review gate. SIO-1020: a no-op (noopReason -- the
+		// requested config already matches current state) is also terminal here; the turn ends with a
+		// neutral "No change needed" outcome instead of opening an empty-diff MR.
+		.addConditionalEdges("draftChange", (s) => (s.blockedReason || s.noopReason ? END : "reviewPlan"), [
+			"reviewPlan",
+			END,
+		])
 		.addEdge("reviewPlan", "reviewGate")
 		// Human decision from the planReview interrupt routes to MR-open or stop.
 		// SIO-990: on an APPROVED amend that already has an open MR, the corrected commit landed on the

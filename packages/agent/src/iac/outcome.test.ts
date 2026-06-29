@@ -47,6 +47,40 @@ describe("iacTurnOutcome (SIO-930)", () => {
 		).toBe("blocked");
 	});
 
+	// SIO-1020: a no-op (requested config already matches current state) is a neutral "No change
+	// needed", NOT an amber "Blocked".
+	test("no-op when a proposer set a noopReason", () => {
+		expect(
+			iacTurnOutcome(
+				s({
+					noopReason: "cold tier already has the requested sizing; no change needed.",
+					iacRequest: { workflow: "tier-resize", isProd: false },
+				}),
+			),
+		).toBe("no-op");
+	});
+
+	test("a no-op outranks a (defensive) co-set blockedReason", () => {
+		expect(iacTurnOutcome(s({ noopReason: "already as requested", blockedReason: "ignored" }))).toBe("no-op");
+	});
+
+	// A blockedReason on a workflow:"other" maps to "unsupported"; a no-op must still outrank that branch.
+	test("a no-op outranks the unsupported (workflow:other) branch", () => {
+		expect(
+			iacTurnOutcome(
+				s({
+					noopReason: "already as requested",
+					blockedReason: "No proposer for this request (workflow 'other').",
+					iacRequest: { workflow: "other", isProd: false },
+				}),
+			),
+		).toBe("no-op");
+	});
+
+	test("a human rejection still outranks a no-op", () => {
+		expect(iacTurnOutcome(s({ reviewDecision: "rejected", noopReason: "already as requested" }))).toBe("rejected");
+	});
+
 	test("pipeline-failed on a terminal failed pipeline with no block/decision", () => {
 		expect(iacTurnOutcome(s({ pipelineStatus: "failed" }))).toBe("pipeline-failed");
 	});

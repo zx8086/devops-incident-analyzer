@@ -618,6 +618,10 @@ export const IacState = Annotation.Root({
 	connected: Annotation<boolean>({ reducer: last, default: () => true }),
 	// terminal blocked reason from the guard (e.g. prod not named, .alerts unmanaged).
 	blockedReason: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-1020: a no-op "change" -- the requested config already matches current state. Distinct
+	// from blockedReason (a real guard rejection) so the turn renders as a neutral "No change
+	// needed" instead of an amber "Blocked". Set by every GitOps proposer's no-op guard.
+	noopReason: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-882: drift reconcile sub-flow. targetDeployment scopes the audit to one
 	// deployment; driftReport holds the per-stack plan; driftIndex walks the drifted
 	// stacks sequentially; currentDirection is the gate's chosen direction for the

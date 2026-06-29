@@ -454,7 +454,9 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 			},
 		};
 		const result = await draftChange(asIacState(state));
-		expect(result.blockedReason).toContain("already has total_shards_per_node");
+		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
+		expect(result.noopReason).toContain("already has total_shards_per_node");
+		expect(result.blockedReason).toBeFalsy();
 	});
 
 	// SIO-979: a freeform single-template settingsPatch routes to the new proposer and commits
@@ -559,6 +561,70 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 		const result = await draftChange(asIacState(state));
 		expect(result.blockedReason).toBeDefined();
 		expect(result.precheckPassed).toBeUndefined();
+	});
+
+	// SIO-1020: a no-op file in a MIXED batch is skipped (not a block); the real-change file(s) still
+	// proceed to one MR. Only when EVERY file is a no-op does the whole batch read "No change needed".
+	test("multi-file: a no-op file is skipped; the real change still commits", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult, // settings.index.routing.allocation.total_shards_per_node=2
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_files: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				clusterDefaults: [
+					// no-op: the file already has total_shards_per_node=2
+					{ templateName: "logs", settingsPatch: { routing: { allocation: { total_shards_per_node: 2 } } } },
+					// real change: refresh_interval is absent
+					{ templateName: "metrics", settingsPatch: { refresh_interval: "30s" } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.noopReason).toBeFalsy();
+		const files = committed.files as Array<{ file_path: string }>;
+		expect(files).toHaveLength(1); // only the metrics change
+		expect(result.proposedFiles).toEqual(["environments/eu-b2b/cluster-defaults/metrics.json"]);
+	});
+
+	// SIO-1020: when EVERY file in the batch is a no-op, the turn reads neutral "No change needed".
+	test("multi-file: all files no-op -> noopReason, no MR", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_files: () => {
+				committed = true;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "cluster-default-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				clusterDefaults: [
+					{ templateName: "logs", settingsPatch: { routing: { allocation: { total_shards_per_node: 2 } } } },
+					{ templateName: "metrics", settingsPatch: { routing: { allocation: { total_shards_per_node: 2 } } } },
+				],
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.noopReason).toContain("already have the requested settings");
+		expect(result.blockedReason).toBeFalsy();
+		expect(result.precheckPassed).toBeUndefined();
+		expect(committed).toBe(false);
 	});
 });
 

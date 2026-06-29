@@ -38,7 +38,7 @@ export interface ChatMessage {
 	runId?: string;
 	confidence?: number;
 	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
-	outcome?: "completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed";
+	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
 	// SIO-991: the GitOps MR pipeline-log snapshot for THIS turn (the "Pipeline log (N steps)"
 	// panel). Captured per-message like completedNodes so it survives subsequent turns -- the
 	// global iacPipelineLog is cleared on the next sendMessage, which used to wipe the panel.
@@ -81,9 +81,9 @@ function createAgentStore() {
 	let lastToolsUsed = $state<string[]>([]);
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
-	let lastOutcome = $state<"completed" | "rejected" | "declined" | "blocked" | "unsupported" | "pipeline-failed">(
-		"completed",
-	);
+	let lastOutcome = $state<
+		"completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed"
+	>("completed");
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let pendingAttachments = $state<AttachmentBlock[]>([]);
 	let pendingActions = $state<PendingAction[]>([]);

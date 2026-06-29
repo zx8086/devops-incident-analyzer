@@ -368,7 +368,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		dataSourceContext: DataSourceContextSchema.optional(),
 		// SIO-930: the elastic-iac per-turn outcome, used to label the completion chip. Absent for
 		// the incident agent (treated as "completed" by the reducer).
-		outcome: z.enum(["completed", "rejected", "declined", "blocked", "unsupported", "pipeline-failed"]).optional(),
+		outcome: z
+			.enum(["completed", "rejected", "declined", "no-op", "blocked", "unsupported", "pipeline-failed"])
+			.optional(),
 	}),
 	z.object({ type: z.literal("low_confidence"), message: z.string() }),
 	z.object({
