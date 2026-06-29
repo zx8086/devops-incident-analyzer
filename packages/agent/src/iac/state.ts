@@ -23,6 +23,7 @@ export const WORKFLOW_VALUES = [
 	"dashboard-edit",
 	"index-template-create",
 	"ingest-pipeline-create",
+	"ingest-pipeline-edit",
 	"other",
 ] as const;
 
@@ -195,6 +196,15 @@ export interface IacRequest {
 	// / ONE MR; an entry whose file already exists is skipped (additive create only -- edit is a
 	// separate, unsupported workflow). Always an array (no singular companion fields, like indexTemplates).
 	ingestPipelines?: Array<{ name: string; body: Record<string, unknown> }>;
+	// SIO-1024: ingest-pipeline-edit -- REPLACE the full body of one or more EXISTING @custom
+	// ingest-pipeline files under environments/<dep>/ingest-pipelines/. Sibling to ingest-pipeline-create
+	// with the file-existence rule inverted: the target file MUST already exist (a 404 blocks, never
+	// creates) and the commit uses action "update". `name` is the FILE BASENAME the user names in the path
+	// (e.g. 'drop-cisco-meraki-ip-session'), NOT the body's `name` field -- the two can differ (a file
+	// named drop-cisco-meraki-ip-session.json can hold a pipeline named logs-cisco_meraki.log@custom), and
+	// the create path's name->filename derivation would 404 on that mismatch. `body` is written VERBATIM.
+	// N files commit to ONE branch / ONE MR. Always an array (no singular companion fields).
+	ingestPipelineEdits?: Array<{ name: string; body: Record<string, unknown> }>;
 	reason?: string;
 	// Prod requires the user to name the prod cluster explicitly (RULES.md).
 	isProd: boolean;
