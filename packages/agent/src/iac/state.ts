@@ -15,6 +15,7 @@ export const WORKFLOW_VALUES = [
 	"alerting-edit",
 	"dataview-edit",
 	"cluster-default-edit",
+	"cluster-default-delete",
 	"cluster-settings-edit",
 	"space-edit",
 	"security-edit",
@@ -103,6 +104,12 @@ export interface IacRequest {
 	// array and the proposer commits all files in one atomic commit (mirrors ilmPolicies[]).
 	settingsPatch?: Record<string, unknown>;
 	clusterDefaults?: Array<{ templateName: string; settingsPatch: Record<string, unknown> }>;
+	// SIO-1022: cluster-default-delete -- REMOVE one or more cluster-defaults override files
+	// (environments/<dep>/cluster-defaults/<templateName>.json). The filename (minus .json) is the
+	// Terraform for_each key, so deleting the file drops exactly that one resource (AGENTS.md s3).
+	// templateName is the file basename VERBATIM (e.g. `logs-elasticsearch.querylog@settings`). Always
+	// an array (one MR per batch); each entry whose file is already absent is a per-file no-op.
+	clusterDefaultDeletes?: Array<{ templateName: string }>;
 	// SIO-994: cluster-settings-edit -- the cluster-level persistent/transient settings file
 	// (environments/<dep>/cluster-settings/settings.json, the PUT _cluster/settings surface, distinct
 	// from cluster-defaults' per-index-template settings). Each patch is a FLAT dotted-key map merged
