@@ -117,7 +117,8 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 20-node LangGraph StateGraph: classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, fan-out (queryDataSource), align, aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift |
+| Agent Orchestrator | `packages/agent` | 20-node LangGraph StateGraph (22 with the knowledge graph enabled): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, fan-out (queryDataSource), align, aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated `recordEntities` / `graphEnrich` |
+| Knowledge Graph MCP Server | `packages/mcp-server-knowledge-graph` | In-process MCP server (:9087, SIO-967) over the embedded lbug graph: curated `kg_*` tools + read-only Cypher; gated on `KNOWLEDGE_GRAPH_ENABLED`. See [knowledge-graph.md](knowledge-graph.md) |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
@@ -290,7 +291,7 @@ elastic kafka capella konnect gitlab atlassian aws
 17. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
 18. **detectTopicShift** -- On follow-up turns, detects whether the new question is a topic shift (warranting a fresh classify) or a continuation (carrying forward prior findings).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 20 — counting `proposeInvestigate`, `proposeMonitor`, `proposeEscalate` separately gives the 20 distinct registered nodes (18 numbered groups above, with item 15 spanning three).
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **22** — 20 base nodes (counting `proposeInvestigate`, `proposeMonitor`, `proposeEscalate` separately; 18 numbered groups above, with item 15 spanning three) plus the 2 always-registered knowledge-graph nodes (`recordEntities`, `graphEnrich`), which are edged only when `KNOWLEDGE_GRAPH_ENABLED` is set. See [knowledge-graph.md](knowledge-graph.md).
 
 ---
 
@@ -324,6 +325,7 @@ Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 20 — coun
 | GitLab MCP Server | 9084 | Streamable HTTP (MCP) |
 | Atlassian MCP Server | 9085 | Streamable HTTP (MCP) |
 | Elastic IaC MCP Server | 9086 | Streamable HTTP (MCP) |
+| Knowledge Graph MCP Server | 9087 | Streamable HTTP (MCP), in-process in the web app (SIO-967) |
 | Atlassian OAuth Callback | 9185 | HTTP (OAuth 2.0 redirect) |
 | AWS MCP (SigV4 proxy) | 3001 | HTTP (SigV4-signed proxy to AgentCore runtime) |
 
@@ -357,3 +359,4 @@ The system enforces several security boundaries:
 | 2026-05-28 | added AWS as 7th datasource/MCP server (multi-estate via cross-account AssumeRole, AgentCore SigV4 proxy on port 3001, `awsEstateRouter` pre-fan-out node); updated pipeline from 13 to 20 nodes (extractFindings, mitigation split into investigate/monitor/escalate + aggregateMitigation, detectTopicShift); refreshed Elastic tool count from ~84 to ~93 after the cloud/billing additions |
 | 2026-06-02 | Added the Elastic IaC MCP server (port 9086) to Port Assignments; it backs the peer Elastic IaC maker agent. Full design: `docs/superpowers/specs/2026-06-02-elastic-iac-agent-design.md`. |
 | 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |
+| 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |

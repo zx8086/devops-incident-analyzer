@@ -121,6 +121,56 @@ Written once per completed investigation. Maps to Agent Memory **Conversational 
 
 The compiled wiki (`memory/wiki/`) maps conceptually to durable facts too, but is not yet pushed to Agent Memory by this change (see Out of scope).
 
+## Scenario catalog
+
+Beyond the two block types above, the agents read and write memory in a number of specific scenarios. The `agent-memory` backend (not the file default) is what makes the identifier-keyed recalls and direct durable facts below possible — on the file backend the durable-fact paths are PR-gated or no-ops. The single writer (`memory-writer.ts`) feeds a write-behind queue (`memory-backend.ts`) that drains to the REST client (`agent-memory.ts`); recall reads go straight through `searchAgentMemory` / `recallAgentMemory`.
+
+### Writes
+
+| # | Scenario | Where | Trigger | What is written |
+|---|----------|-------|---------|-----------------|
+| W1 | Incident daily-log | `follow-up-generator.ts` `recordDailyLog` | terminal `followUp` (incident-analyzer) | conversational **message** (short TTL): requestId, services, severity, confidence, datasources |
+| W2 | IaC daily-log | `iac/nodes.ts` `teardownIac` | `teardown` (elastic-iac) | conversational **message**: requestId, cluster, intent + MR url/rejected + pipeline status |
+| W3 | IaC change proposal fact | `iac/nodes.ts` `buildIacChangeDecision` -> `recordKeyDecision` | after `openMr` on the gitops path | durable **fact**, TTL'd (`IAC_PROPOSAL_FACT_TTL_SECONDS`, default 90d) so it auto-expires once reconciliation writes the terminal fact; annotations `kind:iac-change`, `config_change_id`, `mr_url`, `mr_iid`, `deployment`, `stack`, `stack_instance`, `workflow`, `version`, `pipeline_id`, `change_summary`, `outcome` |
+| W4 | Fleet-upgrade dispatched + terminal facts | `iac/nodes.ts` `recordKeyDecision` | fleet-upgrade dispatch, then terminal pipeline | durable **fact(s)**: `kind:fleet-upgrade-dispatched` (for cross-session re-poll), then a terminal fact on completion (SIO-943/957/958/959) |
+| W5 | Reconciliation terminal fact | `iac/reconcile.ts` (`reconcileOne`/`buildReconciledIacAnnotations`) | the reconcile sweep finds an MR reached a terminal live state | durable **fact** with `lifecycle` = `applied` / `apply-failed` / `closed` + `apply_pipeline_id`; append-only (SIO-1005) |
+| W6 | Skill-learning proposal fact | `skill-learner.ts` `buildSkillFactText`/`buildSkillAnnotations` | post-turn learner seam, incident-analyzer only | durable **fact** `kind:skill` with `skill_name`, `task_category`, seeded `confidence="0.5"`, `learned_from`, usage/success/failure counters (SIO-1015) |
+| W7 | Session annotations | `memory-backend.ts` `setSessionDatasources` / `setSessionOutcome` (SIO-952) | session create / teardown | session-level annotations: `datasources` span at first write, `outcome` at end |
+
+### Reads (recall)
+
+| # | Scenario | Where | Trigger | Mode |
+|---|----------|-------|---------|------|
+| R1 | Bootstrap semantic recall | `memory-backend.ts` `recallAgentMemory` | `load_live_memory` bootstrap (both agents) | **semantic** — `searchMemory(latest user message, allSessions, relevant_k=8)` ranked by `rel_score` |
+| R2 | IaC change intent recall | `iac/nodes.ts` `recallIacChangeIntent` -> `searchAgentMemory` | "check my MR" / plan-review enrichment | **deterministic** — filter `{kind:iac-change, mr_url}` alone (SIO-998) |
+| R3 | Last IaC change recall (cross-thread) | `iac/nodes.ts` `recallLastIacChange` | a cleared thread mints a new threadId | **deterministic** — `mr_iid`/deployment filter, `allSessions` (SIO-990) |
+| R4 | Plan-review memory enrich | `iac/graph-knowledge.ts` `memoryEnrichIac` | pre-draft, after `graphEnrichIac` (SIO-970) | **deterministic** — filter `{stack_instance, kind:iac-change}` -> `priorLearnings` |
+| R5 | In-flight fleet-upgrade recall | `memory-backend.ts` `recallInFlightFleetUpgrades` | session bootstrap (proactive, SIO-960) + "how's the upgrade going?" | **deterministic** — filter `{kind:fleet-upgrade-dispatched}` |
+| R6 | Skill dedup check | `skill-learner.ts` `proposalExists` -> `searchAgentMemory` | before writing a new `kind:skill` fact | **deterministic** — filter `{kind:skill, skill_name}` |
+
+The semantic-vs-deterministic distinction (and *why* identifier-keyed recalls MUST omit `query`) is the SIO-998 gotcha documented in [Retrieval: TWO modes](#retrieval-two-modes--semantic-ranking-vs-deterministic-filter) above.
+
+### Dedup (SIO-973 / SIO-1005)
+
+Agent Memory facts are durable and undeletable (no client delete API, no TTL on facts), so re-recording the same change permanently doubles it, and an `allSessions` recall returns both copies. `memory-backend.ts` exposes two order-preserving dedupers, both keyed on **annotations** (not the text — the service paraphrases facts on ingest):
+
+- `dedupeHitsBy(hits, keyFn)` — first hit per key wins (SIO-973).
+- `dedupePreferring(hits, keyFn, rankFn)` — highest-ranked hit per key wins, list order preserved (SIO-1005; used by `renderLearnings` to upgrade a `(deployment, stack)` row to its reconciled fact via `lifecycleRank` without reordering).
+
+Keys are `pipeline_id` for fleet learnings and `config_change_id ?? mr_url` for gitops learnings.
+
+### Lifecycle reconciliation (SIO-1005 / SIO-1021)
+
+An IaC change proposal fact (W3) is written `proposed` and TTL-decays. A background sweep (`iac/reconcile.ts` `reconcileAll`, driven by `Bun.cron` with a `setInterval` fallback under Node, SIO-1021, plus a bounded refresh in `bootstrapIac`) enumerates unreconciled `kind:iac-change` facts, re-checks each MR's live state, and **appends** an authoritative terminal fact (`lifecycle: applied | apply-failed | closed`) when the MR reaches a terminal outcome. The append-only model + `dedupePreferring` means the panel shows one row per change at its latest lifecycle. The `outcome:"completed"` annotation means "proposal turn done", NOT applied; `lifecycleTag()` maps it to `proposed` so the UI never mislabels a still-open change as live.
+
+### Skill-learning loop (SIO-1015 / 1016 / 1017 / 1018)
+
+Incident-analyzer only. After a turn, the post-turn learner seam (`skill-learner.ts`) pre-gates on agent identity, `complex` query, `confidence >= 0.6`, and >= 2 datasources; an LLM judge over a PII-redacted transcript proposes a reusable skill, which is written as a `kind:skill` **proposal fact** (deduped by `skill_name`, R6) — never auto-loaded. Humans promote a proposal into a real `SKILL.md` (`skill:promote`, SIO-1017); thereafter the skill's confidence evolves from per-turn outcomes via Laplace smoothing on its frontmatter (SIO-1016), traced by the per-turn skill-application signal (SIO-1018). Requires the agent-memory backend (the file backend has no fact storage for proposals).
+
+### Block-ID logging (SIO-991)
+
+`addFacts`/`addMessages` return `AddMemoryResult { blockIds }`, and `searchMemory` surfaces each hit's `blockId`. The writer logs the `user_id` + `session_id` + `block_id` of every flushed write and recall (log markers `flushed agent-memory writes`, `agent-memory search|recall`, `recallIacChangeIntent`) so a write/recall can be cross-referenced to its Couchbase block during diagnosis.
+
 ## Lifecycle: when reads and writes happen
 
 Driven by each agent's `hooks/hooks.yaml` lifecycle steps, run per session (keyed by `threadId`) from `apps/web/src/lib/server/agent.ts`. Both agents have a `hooks.yaml`: incident-analyzer declares the full set (`load_live_memory`, `load_wiki_index`, `warm_knowledge_graph`, `emit_session_start` / `flush_daily_log`, `checkpoint_key_decisions`, `open_memory_pr`); elastic-iac declares the memory subset (`load_live_memory`, `emit_session_start` / `flush_daily_log`) — it has no wiki, knowledge-graph, or memory-pr trees. The lifecycle runner resolves hooks for the **invoked** agent via `getAgentByName(ctx.agentName)`, so each agent runs its own steps under its own Agent Memory user.
@@ -160,6 +210,8 @@ AGENT_MEMORY_ENABLED=true
 AGENT_MEMORY_BEARER_TOKEN=          # required only if the service runs with OIDC_AUTH_ENABLED (RS256 JWT)
 AGENT_MEMORY_DAILYLOG_TTL_SECONDS=  # short TTL for breadcrumbs; omit for no decay (facts never decay)
 AGENT_MEMORY_SYNC_WRITES=false      # true => async_processing=false: blocks are searchable on write
+IAC_PROPOSAL_FACT_TTL_SECONDS=      # TTL on the iac-change proposal fact (W3); default 90d, expires once reconciliation writes the terminal fact
+SKILL_LEARNING_ENABLED=false        # incident-analyzer post-turn skill-proposal learner (W6); agent-memory backend only
 ```
 
 Requires a running Agent Memory Docker container connected to your Capella cluster, with an embedding model + LLM available for vector embeddings and summaries. With async writes (default), semantic search returns a block only once it reaches `status: "ready"`; with `AGENT_MEMORY_SYNC_WRITES=true` a block is `ready` by the time the write returns.

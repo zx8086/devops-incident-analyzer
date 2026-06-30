@@ -2,7 +2,7 @@
 
 > **Audience:** engineers working in this repo. **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 
-This is the concept map for the agent architecture. It defines the seven ideas the agents are built from, says where each one lives in code, and links to the authoritative deep-dive doc where one exists. Four of the seven are explained in full here (they have no standalone doc); three point to their dedicated doc.
+This is the concept map for the agent architecture. It defines the seven core ideas the agents are built from, says where each one lives in code, and links to the authoritative deep-dive doc where one exists. Four of the seven are explained in full here (they have no standalone doc); three point to their dedicated doc. A related, optional capability — the **Knowledge Graph** — is wired in through the lifecycle's `warm_knowledge_graph` step (§6) and has its own deep-dive ([knowledge-graph.md](knowledge-graph.md)); it is listed in the table below for discoverability.
 
 The repo implements the **gitagent.sh (Open GAP) memory + agent standard**: agents are declarative definitions (`agents/`) compiled by the bridge (`packages/gitagent-bridge/`) into a LangGraph runtime (`packages/agent/`). The concepts below are the layers of that standard.
 
@@ -15,6 +15,7 @@ The repo implements the **gitagent.sh (Open GAP) memory + agent standard**: agen
 | **Live Agent Memory** | Durable cross-session memory (recall at start, append at boundaries) | `memory-writer.ts`, `memory-backend.ts` | [agent-memory.md](agent-memory.md) |
 | **SkillsFlow** | Declarative DAG workflows chaining skills/agents/tools deterministically | `packages/skillflow/`, `gitagent-bridge/src/workflow.ts` | this doc (§ below) |
 | **Knowledge Tree** | Disk-based, always-on reference knowledge indexed by `knowledge/index.yaml` | `agents/<agent>/knowledge/` | this doc (§ below) |
+| **Knowledge Graph** | Optional embedded entity+correlation graph (lbug); record/enrich nodes + an in-process MCP server (:9087) | `packages/knowledge-graph/`, `packages/mcp-server-knowledge-graph/` | [knowledge-graph.md](knowledge-graph.md) |
 | **Agent Lifecycle / Hooks** | Per-session bootstrap + teardown steps (recall, warm, flush) | `packages/agent/src/lifecycle.ts`, `hooks/hooks.yaml` | this doc (§ below) |
 | **Segregation of Duties (SOD)** | Maker/checker boundary: the agent proposes, CI + humans dispose | `agents/elastic-iac/DUTIES.md`, compliance layer | [DUTIES.md](../../agents/elastic-iac/DUTIES.md) + [gitagent-bridge.md](gitagent-bridge.md) |
 | **Shared Context & Skills** | Monorepo root context/skills/tools merged into every agent | `agents/shared/`, `gitagent-bridge/src/shared-merge.ts` | this doc (§ below) |
@@ -161,7 +162,7 @@ They are installed once at module load in `apps/web/src/lib/server/agent.ts` (`i
 3. List the step in the agent's `hooks/hooks.yaml`.
 4. If it needs external wiring, add a `register…` seam and `install…` it in `apps/web/src/lib/server/agent.ts`.
 
-This lifecycle is the spine that ties Live Memory, the Wiki, and the Knowledge Graph together — see [agent-memory.md](agent-memory.md) for the memory steps in detail.
+This lifecycle is the spine that ties Live Memory, the Wiki, and the Knowledge Graph together — see [agent-memory.md](agent-memory.md) for the memory steps and [knowledge-graph.md](knowledge-graph.md) for what `warm_knowledge_graph` opens.
 
 ---
 

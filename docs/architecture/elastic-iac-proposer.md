@@ -8,7 +8,7 @@ The `elastic-iac` agent is a peer to the incident-analyzer (selected by the UI a
 
 The governing principle (deck "Elastic Cloud Observability · IaC Monorepo", p.18): **agent proposes, GitOps disposes.** The agent never merges, approves, or applies — that is the human/CI side of a maker/checker separation of duties.
 
-## Graph (24 nodes)
+## Graph (29 nodes)
 
 ```text
 START -> bootstrap -> {connected? classifyIacIntent : END}
@@ -54,6 +54,9 @@ START -> bootstrap -> {connected? classifyIacIntent : END}
 | `detectDrift` / `explainDrift` / `reconcileGate` / `reconcileStack` / `advanceDrift` | Drift sub-flow: detect config drift per stack, explain it, gate human approval, then trigger the reconcile CI pipeline and advance to the next stack. |
 | `detectSyntheticsDrift` / `syntheticsPushGate` / `pushSynthetics` | Synthetics drift sub-flow (SIO-902): audit one deployment's monitors (source YAML vs live Kibana), gate approval, push via a single remote `SYNTH_PUSH` CI job (no repo write). |
 | `detectFleetUpgrade` / `fleetUpgradeGate` / `applyFleetUpgrade` | Fleet binary upgrade sub-flow (SIO-913). See [Fleet upgrade](#fleet-upgrade) below. |
+| `amendChange` | (SIO-990) In-place edit of an active proposal: a correction follow-up resolves to the existing branch/MR (`resolveBranch`) and updates it in place rather than opening a second MR, so `reviewGate` skips the duplicate `openMr`. |
+| `graphEnrichIac` / `recordIacEntities` / `recordIacOutcome` | (SIO-954/965/969) Knowledge-graph nodes, gated on `KNOWLEDGE_GRAPH_ENABLED`. `graphEnrichIac` (pre-draft) reads the deployment's change history + per-cell history + blast radius -> `iacGraphContext` and `lastStackInstanceOutcome` (a prior `failed` change on the same cell raises a HIGH risk on the plan-review card). `recordIacEntities` (after `openMr`) writes the `ConfigChange`; `recordIacOutcome` (after `watchPipeline`) writes the `Pipeline` + promotes the change outcome. See [knowledge-graph.md](knowledge-graph.md). |
+| `memoryEnrichIac` | (SIO-970) Agent-memory node, gated on the `agent-memory` backend (independent of the graph). Deterministic recall of prior `iac-change` facts for the targeted `stack_instance` -> `priorLearnings` on the plan-review card. See [agent-memory.md](agent-memory.md). |
 
 ## Workflows
 
@@ -68,7 +71,12 @@ A change is a JSON config edit (config-edit `kind`) committed via the API; CI co
 | **slo-edit** (SIO-915) | SLO objective target, time-window duration, tags | slo / LOW |
 | **alerting-edit** (SIO-916) | threshold, `windowSize`, `windowUnit`, `enabled`, `interval` | alerting / LOW |
 | **dataview-edit** (SIO-917) | runtime fields, title/displayName | dataview / LOW |
-| **cluster-default-edit** (SIO-917) | `total_shards_per_node` | cluster-default / LOW |
+| **cluster-default-edit** (SIO-917/979/980/981) | freeform `settingsPatch` (any `index.*` key) on a component/index-template's `settings.index`; multi-file via `clusterDefaults[]` | cluster-default / LOW (short danger denylist in `guards.ts`) |
+| **cluster-default-delete** (SIO-1022) | deletes an override file under `environments/<cluster>/cluster-defaults/` | cluster-default / LOW |
+| **cluster-settings-edit** (SIO-994/996) | whole-cluster persistent/transient settings (`PUT _cluster/settings`) in `environments/<cluster>/cluster-settings/settings.json`; can set OR remove flat dotted keys | cluster-settings / MEDIUM |
+| **index-template-create** (SIO-978) | creates an index template (settings emitted at top level for the module) | index-template / LOW |
+| **ingest-pipeline-create** (SIO-1019) | writes a verbatim `@custom` ingest-pipeline JSON to `environments/<cluster>/ingest-pipelines/` | ingest-pipeline / LOW |
+| **ingest-pipeline-edit** (SIO-1024) | edits an existing ingest-pipeline JSON | ingest-pipeline / LOW |
 | **space-edit** (SIO-918) | space displayName, description, color (roles/disabled_features untouched) | space / LOW |
 | **security-edit** (SIO-918) | **additive** privilege grants (cluster/index/kibana; no removal, secrets untouched) | security / MEDIUM (privilege escalation surfaced) |
 | **fleet-integration** (SIO-914) | integration package version pins (major-version bump flagged) | fleet-integration / LOW-MEDIUM |
@@ -123,7 +131,7 @@ The GitOps target is resolved by the MCP server; the JSON paths are agent-side t
 
 - **Never merges, approves, or triggers apply** — human/CI only (DUTIES).
 - **`watchPipeline` reports the MR _plan_ pipeline, not the post-merge apply.** After merge, the apply runs in a child `deploy` pipeline on `main` (job `apply:<cluster>:deployments`) that the agent does not track. A `pipeline-status` follow-up after merge still reports the plan. Closing this gap is tracked in [SIO-881](https://linear.app/siobytes/issue/SIO-881).
-- **ILM/version/tier are modify-only** — creating new policies, adding/removing whole phases, and multi-wave choreography are out of scope.
+- **From-scratch creation is now supported for some resources** — ILM onboard honoring the user's exact phase set (SIO-1001/1011), `index-template-create` (SIO-978), and `ingest-pipeline-create` (SIO-1019). Multi-wave choreography and arbitrary new-resource types remain out of scope; an unhandled request (`workflow === "other"`) returns a capability-aware message.
 
 ## Operational notes
 

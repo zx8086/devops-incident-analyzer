@@ -32,7 +32,7 @@ User Query
 Incident Report
 ```
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 20-node StateGraph (22 with the knowledge graph enabled) including retry loops, conditional edges, the SIO-828 AWS estate router, and the SIO-681 cross-agent correlation enforcement detour. The separate 24-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 20-node StateGraph (22 with the knowledge graph enabled) including retry loops, conditional edges, the SIO-828 AWS estate router, and the SIO-681 cross-agent correlation enforcement detour. The separate 29-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
 ## Quick Start
 
@@ -67,11 +67,11 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 20-node pipeline (+2 gated knowledge-graph nodes) plus a separate 24-node elastic-iac proposer graph
+  agent/                         LangGraph 20-node pipeline (+2 gated knowledge-graph nodes) plus a separate 29-node elastic-iac proposer graph
   shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
   checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
-  knowledge-graph/               Optional entity + correlation graph (SIO-850, off by default)
+  knowledge-graph/               Embedded entity + correlation graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED)
   memory-pr/                     PR-based human-in-the-loop for durable agent learnings (SIO-849)
   skillflow/                     Declarative workflow (DAG) loader + executor (SIO-848)
   mcp-server-elastic/            Elasticsearch MCP (multi-deployment)
@@ -82,6 +82,7 @@ packages/
   mcp-server-atlassian/          Atlassian MCP (Jira/Confluence proxy)
   mcp-server-aws/                AWS MCP (multi-estate via cross-account AssumeRole)
   mcp-server-elastic-iac/        Elastic IaC MCP (GitOps proposer tools, port 9086)
+  mcp-server-knowledge-graph/    In-process Knowledge Graph MCP (curated kg_* + read-only Cypher, port 9087)
 
 apps/
   web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming)
@@ -99,6 +100,7 @@ apps/
 | Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_READ_ONLY` |
 | AWS | 3001 (SigV4 proxy) | multi-estate read-only (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray) | `AWS_MCP_URL`, `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` |
 | Elastic IaC | 9086 | GitOps proposer tools (terraform/git/gitlab/elastic-cloud) | `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` |
+| Knowledge Graph | 9087 (in-process) | curated `kg_*` graph readers + read-only Cypher (lbug); off unless enabled | `KNOWLEDGE_GRAPH_ENABLED`, `KG_MCP_ALLOW_CYPHER` |
 
 ## Agent Memory (live-memory backend)
 
@@ -110,6 +112,12 @@ The storage behind that writer is swappable via `LIVE_MEMORY_BACKEND` (SIO-938):
 - **`agent-memory`** -- the [Couchbase Agent Memory](https://docs.couchbase.com/) REST service. Adds semantic recall and TTL decay. Mapping: `context` + `key-decisions` + wiki pages -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL); on bootstrap the agent semantic-searches its past sessions for relevant context. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`); each chat thread is a session.
 
 The backend is a direct REST client in `packages/shared` (no MCP server, no LLM tool surface) wired through the lifecycle bootstrap/teardown seams. Writes are queued behind the synchronous writer and drained at session teardown, so the default file path is unchanged when `LIVE_MEMORY_BACKEND` is unset. See [the design spec](docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md).
+
+Beyond the bootstrap recall + dailylog breadcrumb, the agents use memory in several specific scenarios — IaC-change proposal facts + "check my MR" recall, in-flight fleet-upgrade recovery across sessions, post-turn skill-learning proposals (`kind:skill`), lifecycle reconciliation of proposed -> applied/failed changes, and annotation-keyed dedup. The full read/write catalog is in [docs/architecture/agent-memory.md](docs/architecture/agent-memory.md#scenario-catalog).
+
+## Knowledge Graph (lbug)
+
+An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Five pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`; `graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
 
 ## Commands
 

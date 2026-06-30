@@ -57,6 +57,11 @@ Long-term memory that spans **multiple sessions**. It stores facts and preferenc
 - **Lifecycle:** durable, no TTL
 - **Written:** promoted (human-in-the-loop) or appended, always PII-redacted
 - **Runtime fact (SIO-943):** a *terminal* operational outcome can also write a durable fact directly, without the PR gate, when `LIVE_MEMORY_BACKEND=agent-memory`. The first such path: a completed fleet upgrade (`status` `applied` or `failed`) records `Fleet agents on <deployment> upgraded to <version>` so a future session recalls it (`recordKeyDecision` in `iac/nodes.ts`, agent-memory-only). On the file backend this path is a no-op — `key-decisions.md` stays PR-gated.
+- **More runtime facts (agent-memory backend only):** the same direct-write path now carries several more durable facts, all annotated for identifier-keyed deterministic recall (see the [agent-memory scenario catalog](agent-memory.md#scenario-catalog)):
+  - **IaC change proposal** (`kind:iac-change`, `iac/nodes.ts` `buildIacChangeDecision`) — TTL'd (`IAC_PROPOSAL_FACT_TTL_SECONDS`), annotated with `config_change_id` / `mr_url` / `stack_instance` so "check my MR" and `memoryEnrichIac` can recall it.
+  - **Reconciliation terminal fact** (`iac/reconcile.ts`) — appended (append-only) when the MR reaches a terminal live state, carrying the `lifecycle` annotation (`applied` / `apply-failed` / `closed`); `dedupePreferring` collapses the proposal + terminal pair to one panel row (SIO-1005).
+  - **Skill-learning proposal** (`kind:skill`, `skill-learner.ts`) — incident-analyzer post-turn proposals with seeded confidence; humans promote them into real `SKILL.md` files (SIO-1015..1018).
+  On the file backend all three are no-ops — `key-decisions.md` stays PR-gated.
 
 ### Semantic memory
 
