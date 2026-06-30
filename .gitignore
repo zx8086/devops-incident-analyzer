@@ -10,6 +10,9 @@ dist
 coverage
 *.lcov
 
+# knowledge-graph runtime store (lbug/LadybugDB; KNOWLEDGE_GRAPH_PATH default)
+.data/
+
 # logs
 logs
 # Exception: CloudWatch Logs MCP tool family lives in a directory named logs

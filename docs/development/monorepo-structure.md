@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-06-17
 
-Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 16 workspace packages (5 core, 8 MCP servers, and 3 supporting packages: knowledge-graph, memory-pr, skillflow), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
+Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 17 workspace packages (5 core, 9 MCP servers — including the in-process `mcp-server-knowledge-graph` — and 3 supporting packages: knowledge-graph, memory-pr, skillflow), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
 
 ---
 
@@ -46,8 +46,9 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 20-node pipeline (correlation enforcement, typed findings, AWS estate router, mitigation branch split) plus a separate 24-node elastic-iac proposer graph
-    knowledge-graph/             Optional entity + correlation knowledge graph (SIO-850, embedded LadybugDB, off by default)
+    agent/                       LangGraph supervisor and 20-node pipeline (22 with the knowledge graph enabled: correlation enforcement, typed findings, AWS estate router, mitigation branch split, gated KG nodes) plus a separate 29-node elastic-iac proposer graph
+    knowledge-graph/             Embedded entity + correlation knowledge graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED). See architecture/knowledge-graph.md
+    mcp-server-knowledge-graph/  In-process Knowledge Graph MCP server (:9087, SIO-967): curated kg_* tools + read-only Cypher over the embedded graph
     memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
     skillflow/                   Declarative workflow (DAG) loader + executor (SIO-848)
     mcp-server-elastic/          Elasticsearch MCP server (~93 tools: 77 cluster + 16 conditional cloud/billing on EC_API_KEY)

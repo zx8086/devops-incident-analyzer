@@ -430,6 +430,38 @@ The `memory` checkpointer stores state in-process (lost on restart). The `sqlite
 
 ---
 
+## Live Memory, Knowledge Graph & Skill Learning
+
+Optional cross-session subsystems. All are off / file-backed by default; the deep-dives are [Agent Memory](../architecture/agent-memory.md) and [Knowledge Graph](../architecture/knowledge-graph.md).
+
+### Live memory (Couchbase Agent Memory backend)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LIVE_MEMORY_ENABLED` | No | off | Master gate for the live-memory tier (recall at bootstrap, append at boundaries); writer no-ops when unset |
+| `LIVE_MEMORY_BACKEND` | No | `file` | `file` (git-tracked markdown) or `agent-memory` (Couchbase Agent Memory REST) |
+| `AGENT_MEMORY_BASE_URL` | When backend=agent-memory | *(none)* | Agent Memory service URL (no default) |
+| `AGENT_MEMORY_ENABLED` | No | off | Enables the Agent Memory client (used only when backend=agent-memory) |
+| `AGENT_MEMORY_BEARER_TOKEN` | No | *(none)* | OIDC bearer token, only if the service runs with `OIDC_AUTH_ENABLED` |
+| `AGENT_MEMORY_DAILYLOG_TTL_SECONDS` | No | *(none)* | Short TTL for dailylog breadcrumbs; omit for no decay (facts never decay) |
+| `AGENT_MEMORY_SYNC_WRITES` | No | `false` | `true` -> `async_processing=false`: a written block is searchable immediately |
+| `IAC_PROPOSAL_FACT_TTL_SECONDS` | No | 90d | TTL on the elastic-iac change proposal fact; it expires once reconciliation writes the terminal fact (SIO-1005) |
+| `SKILL_LEARNING_ENABLED` | No | off | incident-analyzer post-turn skill-proposal learner (writes `kind:skill` facts; agent-memory backend only, SIO-1015) |
+
+### Knowledge graph (lbug / in-process MCP server)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `KNOWLEDGE_GRAPH_ENABLED` | No | off | Master gate (`true`/`1`); every graph node + `kg_*` tool no-ops when unset. SIO-954 "default on" is set via deployment config, not the code default |
+| `KNOWLEDGE_GRAPH_PATH` | No | `.data/knowledge-graph` | Embedded lbug data directory (the file-locked path) |
+| `KNOWLEDGE_GRAPH_MCP_HOST` | No | `127.0.0.1` | In-process KG MCP server bind host |
+| `KNOWLEDGE_GRAPH_MCP_PORT` | No | `9087` | In-process KG MCP server port |
+| `KNOWLEDGE_GRAPH_MCP_PATH` | No | `/mcp` | KG MCP endpoint path |
+| `KG_MCP_ALLOW_CYPHER` | No | on | Register the read-only-guarded `kg_run_cypher` tool; set `false` to disable |
+| `EMBEDDINGS_MODEL` | No | `amazon.titan-embed-text-v2:0` | Bedrock embedder for `Incident` similarity in `graphEnrich` |
+
+---
+
 ## MCP Server URLs
 
 URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. These must match the actual running addresses of your MCP servers.
