@@ -5,6 +5,8 @@ import {
 	extractToolErrors,
 	getSubAgentRecursionLimit,
 	getSubAgentTimeoutMs,
+	invokeSubAgentWithSalvage,
+	isRecursionLimitError,
 	normalizeToolContent,
 } from "./sub-agent.ts";
 
@@ -292,5 +294,105 @@ describe("normalizeToolContent SIO-786", () => {
 	test("handles null/undefined gracefully", () => {
 		expect(normalizeToolContent(null)).toBe("null");
 		expect(normalizeToolContent(undefined)).toBe("undefined");
+	});
+});
+
+// SIO-1029: a recursion-limit blow-up should salvage partial findings instead of
+// blanking the datasource.
+describe("SIO-1029: isRecursionLimitError", () => {
+	test("recognizes GraphRecursionError by name", () => {
+		const err = new Error("boom");
+		err.name = "GraphRecursionError";
+		expect(isRecursionLimitError(err)).toBe(true);
+	});
+
+	test("recognizes the recursion-limit message", () => {
+		const err = new Error(
+			"Recursion limit of 40 reached without hitting a stop condition.\n\nTroubleshooting URL: https://docs.langchain.com/oss/javascript/langgraph/GRAPH_RECURSION_LIMIT/\n",
+		);
+		expect(isRecursionLimitError(err)).toBe(true);
+	});
+
+	test("returns false for unrelated errors and non-errors", () => {
+		expect(isRecursionLimitError(new Error("fetch failed"))).toBe(false);
+		expect(isRecursionLimitError("Recursion limit of 40 reached")).toBe(false); // not an Error instance
+		expect(isRecursionLimitError(null)).toBe(false);
+	});
+});
+
+describe("SIO-1029: invokeSubAgentWithSalvage", () => {
+	function graphRecursionError(): Error {
+		const err = new Error("Recursion limit of 40 reached without hitting a stop condition.");
+		err.name = "GraphRecursionError";
+		return err;
+	}
+
+	test("returns the final snapshot with truncated=false on normal completion", async () => {
+		async function* stream() {
+			yield { messages: [{ content: "a", _getType: () => "ai" }] };
+			yield {
+				messages: [
+					{ content: "a", _getType: () => "ai" },
+					{ content: "final", _getType: () => "ai" },
+				],
+			};
+		}
+		const result = await invokeSubAgentWithSalvage(() => stream(), {});
+		expect(result.truncated).toBe(false);
+		expect(result.messages).toHaveLength(2);
+		expect(result.messages.at(-1)?.content).toBe("final");
+	});
+
+	test("salvages the last snapshot with truncated=true on a recursion-limit error", async () => {
+		async function* stream() {
+			yield { messages: [{ content: "partial-1", _getType: () => "ai" }] };
+			yield {
+				messages: [
+					{ content: "partial-1", _getType: () => "ai" },
+					{ content: "partial-2", _getType: () => "tool", name: "elasticsearch_search" },
+				],
+			};
+			throw graphRecursionError();
+		}
+		const result = await invokeSubAgentWithSalvage(() => stream(), {});
+		expect(result.truncated).toBe(true);
+		expect(result.messages).toHaveLength(2);
+		expect(result.messages.at(-1)?.content).toBe("partial-2");
+	});
+
+	test("re-throws non-recursion errors (hard-error path preserved)", async () => {
+		async function* stream() {
+			yield { messages: [{ content: "x", _getType: () => "ai" }] };
+			throw new Error("fetch failed");
+		}
+		await expect(invokeSubAgentWithSalvage(() => stream(), {})).rejects.toThrow("fetch failed");
+	});
+
+	test("re-throws a recursion error when no partial messages were captured", async () => {
+		// biome-ignore lint/correctness/useYield: SIO-1029 test needs an empty async generator that throws before yielding
+		async function* stream() {
+			throw graphRecursionError();
+		}
+		await expect(invokeSubAgentWithSalvage(() => stream(), {})).rejects.toThrow("Recursion limit");
+	});
+
+	test("awaits a promise-of-iterable (agent.stream returns a promise)", async () => {
+		async function* gen() {
+			yield { messages: [{ content: "ok", _getType: () => "ai" }] };
+		}
+		const result = await invokeSubAgentWithSalvage(() => Promise.resolve(gen()), {});
+		expect(result.truncated).toBe(false);
+		expect(result.messages.at(-1)?.content).toBe("ok");
+	});
+
+	test("passes streamMode: values through to the stream fn", async () => {
+		let seenOpts: Record<string, unknown> = {};
+		async function* stream(opts: Record<string, unknown>) {
+			seenOpts = opts;
+			yield { messages: [] };
+		}
+		await invokeSubAgentWithSalvage((opts) => stream(opts), { recursionLimit: 40 });
+		expect(seenOpts.streamMode).toBe("values");
+		expect(seenOpts.recursionLimit).toBe(40);
 	});
 });

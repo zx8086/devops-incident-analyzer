@@ -225,3 +225,86 @@ describe("instrumentTools", () => {
 		expect(observed.map((e) => e.iteration)).toEqual([1, 2, 3]);
 	});
 });
+
+// SIO-1029: the loop guard short-circuits repeated/unproductive elasticsearch_search
+// calls so the elastic sub-agent stops looping on empty results before it blows the
+// recursion limit.
+describe("SIO-1029: elasticsearch_search loop guard", () => {
+	const EMPTY_SEARCH = "Total results: 0, showing 0 from position 0";
+
+	function buildCountingSearchTool(payload: string) {
+		let calls = 0;
+		const t = tool(
+			async () => {
+				calls += 1;
+				return payload;
+			},
+			{
+				name: "elasticsearch_search",
+				description: "Test fixture that counts underlying invocations.",
+				schema: z.object({ index: z.string(), q: z.string() }),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	test("short-circuits the third empty search without calling the underlying tool", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingSearchTool(EMPTY_SEARCH);
+		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({
+			id: "c1",
+			name: "elasticsearch_search",
+			args: { index: "logs-*", q: "a" },
+			type: "tool_call",
+		});
+		await wrapped.invoke({
+			id: "c2",
+			name: "elasticsearch_search",
+			args: { index: "traces-*", q: "b" },
+			type: "tool_call",
+		});
+		const third = await wrapped.invoke({
+			id: "c3",
+			name: "elasticsearch_search",
+			args: { index: "metrics-*", q: "c" },
+			type: "tool_call",
+		});
+
+		// Underlying tool ran only twice; the third was short-circuited by the guard.
+		expect(getCalls()).toBe(2);
+		const stopText = third instanceof ToolMessage ? String(third.content) : String(third);
+		expect(stopText).toContain("Stop searching");
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
+	});
+
+	test("does not short-circuit when searches return real results", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingSearchTool('[{"_source":{"message":"boom"}}]');
+		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({
+			id: "c1",
+			name: "elasticsearch_search",
+			args: { index: "logs-*", q: "a" },
+			type: "tool_call",
+		});
+		await wrapped.invoke({
+			id: "c2",
+			name: "elasticsearch_search",
+			args: { index: "traces-*", q: "b" },
+			type: "tool_call",
+		});
+		await wrapped.invoke({
+			id: "c3",
+			name: "elasticsearch_search",
+			args: { index: "metrics-*", q: "c" },
+			type: "tool_call",
+		});
+
+		expect(getCalls()).toBe(3);
+	});
+});
