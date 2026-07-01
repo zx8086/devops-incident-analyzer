@@ -32,6 +32,10 @@ const COMPLEX_PATTERNS = [
 	/\b(latency|throughput|error.?rate|p99|p95|cpu|memory|disk)\b/i,
 	/\b(check|monitor|inspect|diagnose|investigate|analyze|analyse)\b/i,
 	/\b(how.+doing|what.+happening|what.+wrong|is.+ok|are.+ok)\b/i,
+	// SIO-1028: history / recall phrasing routes complex even without an infra keyword,
+	// so "have we seen this before?" / "anything recurring lately?" reach the knowledge
+	// graph enrichment path instead of falling to the responder (which gets no graphContext).
+	/\b(before|previously|prior|history|historical|recur|recurring|past|last (week|month|time)|have we (seen|had|dealt|hit))\b/i,
 ];
 
 // SIO-749: follow-up detection moved to the UI. apps/web/src/routes/+page.svelte
@@ -199,3 +203,7 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 		return { ...turnReset, queryComplexity: "complex" };
 	}
 }
+
+// SIO-1028: expose the pure regex classifier for unit tests (mirrors topic-shift.ts).
+// patternClassify is the LLM-free fast path; recall phrasings must hit it directly.
+export const _testOnly = { patternClassify };
