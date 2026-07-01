@@ -13,6 +13,7 @@ import {
 	type GraphStore,
 	getGraphStore,
 	priorChangesForDeployment,
+	priorRootCauses,
 	stacksUsingModule,
 } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -123,6 +124,29 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 				return `- ${wf}${c.summary}${mr}`;
 			});
 			return text(`Recent changes to ${deployment}:\n${lines.join("\n")}`);
+		},
+	);
+
+	// SIO-1026: "have we seen this root cause before, and what resolved it".
+	server.tool(
+		"kg_prior_root_causes",
+		"Prior incidents that shared a root-cause class (e.g. a correlation rule name), with any runbook that resolved them. Read-only; no Cypher.",
+		{
+			causeClass: z.string().min(1).describe("Root-cause class, e.g. the correlation rule name kafka-significant-lag"),
+		},
+		async ({ causeClass }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await priorRootCauses(store, causeClass);
+			if (rows.length === 0)
+				return text(
+					`Graph queried: no prior incident recorded the ${causeClass} root cause. Report this; do not invent a history from specs.`,
+				);
+			const lines = rows.map((r) => {
+				const rb = r.runbooks.length > 0 ? ` resolved by ${r.runbooks.join(", ")}` : "";
+				return `- [${r.severity}] ${r.summary} (incident ${r.incidentId})${rb}`;
+			});
+			return text(`Prior incidents with the ${causeClass} root cause:\n${lines.join("\n")}`);
 		},
 	);
 }

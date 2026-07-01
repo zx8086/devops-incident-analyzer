@@ -37,12 +37,13 @@ afterEach(() => {
 });
 
 describe("curated kg_* tools", () => {
-	test("register the four read-only tools", async () => {
+	test("register the read-only tools", async () => {
 		const client = await connectedClient();
 		const names = (await client.listTools()).tools.map((t) => t.name).sort();
 		expect(names).toEqual([
 			"kg_deployment_history",
 			"kg_deployments_running_stack",
+			"kg_prior_root_causes",
 			"kg_stack_instance_history",
 			"kg_stacks_using_module",
 		]);
@@ -108,5 +109,30 @@ describe("curated kg_* tools", () => {
 		});
 		expect(out).toContain("Recent changes to eu-cld/slos");
 		expect(out).toContain("[applied] slo-edit: tighten (u9)");
+	});
+
+	// SIO-1026: prior root causes.
+	test("kg_prior_root_causes renders prior incidents + resolving runbooks", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("RootCause {class:", [
+			{
+				incidentId: "inc1",
+				summary: "kafka outage",
+				severity: "high",
+				description: "lag",
+				runbook: "a.md",
+				createdAt: "2026-06-30",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_prior_root_causes", { causeClass: "kafka-significant-lag" });
+		expect(out).toContain("Prior incidents with the kafka-significant-lag root cause");
+		expect(out).toContain("[high] kafka outage (incident inc1) resolved by a.md");
+	});
+
+	test("kg_prior_root_causes empty result is an authoritative graph result", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_prior_root_causes", { causeClass: "nope" });
+		expect(out).toContain("no prior incident recorded the nope root cause");
 	});
 });

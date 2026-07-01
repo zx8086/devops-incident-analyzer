@@ -35,12 +35,12 @@ GraphStore (interface)        init() | run<T>(cypher, params) | close()
 
 **Node labels** (`NODE_LABELS`) span two domains:
 
-- **Incident-side (SIO-850):** `Service`, `Deployment`, `KafkaTopic`, `ConsumerGroup`, `ApiRoute`, `Bucket`, `AwsAccount`, `AwsResource`, `Incident` (carries a 1024-dim Bedrock Titan embedding for similarity search), `Finding`, `Runbook`, `WikiPage`.
+- **Incident-side (SIO-850):** `Service`, `Deployment`, `KafkaTopic`, `ConsumerGroup`, `ApiRoute`, `Bucket`, `AwsAccount`, `AwsResource`, `Incident` (carries a 1024-dim Bedrock Titan embedding for similarity search), `Finding`, `Runbook`, `WikiPage`, `RootCause` (SIO-1026: a derived cause keyed by a stable class hash, linked from an `Incident` via `HAS_ROOT_CAUSE`).
 - **IaC-side (SIO-954/965):** `ElasticDeployment` (a cluster, distinct from a microservice `Service`), `ConfigChange` (one maker turn's proposed edit), `MergeRequest`, plus the three-layer repo model `Module` -> `Stack` -> `StackInstance` (the sparse `(deployment, stack)` state cell a change targets), `Workflow`, `Session`, `Pipeline`.
 
-**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`; IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`.
+**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`.
 
-`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
+`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
 
 ## The in-process MCP server (port 9087, SIO-967)
 
@@ -69,14 +69,15 @@ A fifth tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_C
 
 Both pipelines register their graph nodes **always** but edge them only when the flag is set (the SIO-640 edge-gate idiom), so the node functions are type-safe and unit-testable while remaining unreachable when disabled. Every node **soft-fails** — a cold or absent graph degrades to empty context and never throws.
 
-### incident-analyzer — 2 nodes (`packages/agent/src/graph-knowledge.ts`)
+### incident-analyzer — 3 nodes (`packages/agent/src/graph-knowledge.ts`)
 
 | Node | Trigger | Reads / Writes |
 |------|---------|----------------|
 | `recordEntities` (`recordGraphEntities`) | after `entityExtractor` | **WRITE**: `upsertEntities` (affected `Service`s) + `recordIncident` (the turn's `Incident` with severity + summary, linked `AFFECTED_BY`). |
-| `graphEnrich` | after `recordEntities` | **READ**: `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (Bedrock Titan embedding of the user query -> vector-nearest prior incidents). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
+| `graphEnrich` | after `recordEntities` | **READ**: `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (Bedrock Titan embedding of the user query -> vector-nearest prior incidents), each annotated with its recorded `rootCauseForIncident` (SIO-1026: "we've seen this before -- prior root cause X"). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
+| `recordRootCause` (`recordRootCauseData`, SIO-1026) | after `aggregateMitigation` (LATE, so the final `confidenceScore` is known) | **WRITE**: re-runs the correlation engine (a pure function of state) and, when a rule FIRED and was covered (`reason: "already covered by prior agent findings"`), `recordRootCause` — the turn's `RootCause` (class = satisfied rule name, PK = stable hash so recurrences MERGE) linked `HAS_ROOT_CAUSE` from the `Incident`. Records nothing when no cross-domain correlation held (never fabricates a cause). |
 
-Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`.
+Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> followUp`.
 
 ### elastic-iac — 3 graph nodes + 1 memory-enrich node (`packages/agent/src/iac/graph-knowledge.ts`)
 
@@ -93,19 +94,19 @@ Edge sequence when enabled: `readClusterState -> graphEnrichIac -> memoryEnrichI
 
 The graph nodes are why the registered node counts exceed the base graphs:
 
-- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **22** — 20 base nodes + the 2 gated KG nodes (`recordEntities`, `graphEnrich`).
+- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **23** — 20 base nodes + the 3 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`).
 - **elastic-iac:** `grep -c addNode packages/agent/src/iac/graph.ts` = **29** — base proposer/sub-flow nodes + `graphEnrichIac`, `recordIacEntities`, `recordIacOutcome` (KG) + `memoryEnrichIac` (Agent Memory) + `amendChange`.
 
 ## Agent asymmetry
 
 | Aspect | incident-analyzer | elastic-iac |
 |--------|-------------------|-------------|
-| Write nodes | `recordEntities` (services + incidents) | `recordIacEntities` + `recordIacOutcome` (changes + pipelines) |
-| Read/enrich node | `graphEnrich` (deps + vector-similar incidents) | `graphEnrichIac` (change history + blast radius) |
+| Write nodes | `recordEntities` (services + incidents) + `recordRootCause` (SIO-1026) | `recordIacEntities` + `recordIacOutcome` (changes + pipelines) |
+| Read/enrich node | `graphEnrich` (deps + vector-similar incidents + their prior root causes) | `graphEnrichIac` (change history + blast radius) |
 | LLM-callable `kg_*` tools | none (graph used only via internal nodes) | yes — curated `kg_*` + `kg_run_cypher` via the in-process MCP server |
 | `warm_knowledge_graph` hook | yes (bootstrap opens + `init`s the store) | no |
 
-Extending the `kg_*` MCP tool surface to incident-analyzer's incident-side graph is explicit future scope (SIO-967).
+incident-analyzer consumes the graph purely through internal enrich nodes -- it has no LLM-callable `kg_*` tools by design (its graph use is enrichment, not a ReAct tool loop; the entity extractor only routes the seven user datasources, so a graph sub-agent would never be dispatched). SIO-1026 brought prior-root-cause recall into that enrichment path. The shared `kg_prior_root_causes` MCP tool (SIO-1027) is available to elastic-iac's `kg_run_cypher`/curated surface and to any future ad-hoc caller.
 
 ## Lifecycle
 

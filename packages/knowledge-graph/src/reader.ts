@@ -56,6 +56,83 @@ export async function similarIncidents(store: GraphStore, embedding: number[], l
 	}
 }
 
+// SIO-1026: the root cause linked to one incident (0 or 1 via HAS_ROOT_CAUSE).
+export interface RootCause {
+	id: string;
+	class: string;
+	description: string;
+	confidence: number;
+	ruleName: string;
+}
+
+export async function rootCauseForIncident(store: GraphStore, incidentId: string): Promise<RootCause | null> {
+	if (!incidentId) return null;
+	const rows = await store.run<{
+		id: string;
+		class: string;
+		description: string;
+		confidence: number;
+		ruleName: string | null;
+	}>(
+		"MATCH (i:Incident {id: $id})-[r:HAS_ROOT_CAUSE]->(rc:RootCause) RETURN rc.id AS id, rc.class AS class, rc.description AS description, rc.confidence AS confidence, r.ruleName AS ruleName LIMIT 1",
+		{ id: incidentId },
+	);
+	const row = rows[0];
+	if (!row) return null;
+	return {
+		id: String(row.id),
+		class: String(row.class ?? ""),
+		description: String(row.description ?? ""),
+		confidence: Number(row.confidence ?? 0),
+		ruleName: row.ruleName ? String(row.ruleName) : "",
+	};
+}
+
+// SIO-1026: prior incidents that shared a root-cause class -- "have we seen this
+// before, and what resolved it". Joins RootCause back to its incidents and any
+// runbook that resolved them (RESOLVED_BY), most-recent incident first.
+export interface PriorRootCause {
+	incidentId: string;
+	summary: string;
+	severity: string;
+	description: string;
+	runbooks: string[];
+}
+
+export async function priorRootCauses(store: GraphStore, causeClass: string, limit = 5): Promise<PriorRootCause[]> {
+	if (!causeClass) return [];
+	const rows = await store.run<{
+		incidentId: string;
+		summary: string | null;
+		severity: string | null;
+		description: string | null;
+		runbook: string | null;
+		createdAt: string | null;
+	}>(
+		"MATCH (i:Incident)-[:HAS_ROOT_CAUSE]->(rc:RootCause {class: $class}) OPTIONAL MATCH (i)-[:RESOLVED_BY]->(rb:Runbook) RETURN i.id AS incidentId, i.summary AS summary, i.severity AS severity, rc.description AS description, rb.filename AS runbook, i.createdAt AS createdAt ORDER BY i.createdAt DESC LIMIT $limit",
+		{ class: causeClass, limit },
+	);
+	// Collapse the OPTIONAL-MATCH fan-out (one row per runbook) into one entry per
+	// incident, preserving order and deduping runbooks.
+	const byIncident = new Map<string, PriorRootCause>();
+	for (const row of rows) {
+		const id = String(row.incidentId);
+		const existing = byIncident.get(id);
+		if (existing) {
+			if (row.runbook && !existing.runbooks.includes(String(row.runbook))) existing.runbooks.push(String(row.runbook));
+			continue;
+		}
+		byIncident.set(id, {
+			incidentId: id,
+			summary: String(row.summary ?? ""),
+			severity: String(row.severity ?? ""),
+			description: String(row.description ?? ""),
+			runbooks: row.runbook ? [String(row.runbook)] : [],
+		});
+	}
+	return [...byIncident.values()];
+}
+
 // SIO-954: recent IaC change history for one deployment, most-recent first.
 // createdAt is an ISO string so a lexicographic ORDER BY DESC is chronological.
 export interface IacChange {
@@ -162,10 +239,17 @@ export async function topology(store: GraphStore): Promise<TopologyEdge[]> {
 	return rows.map((r) => ({ from: String(r.from), to: String(r.to) }));
 }
 
+// SIO-1026: a similar prior incident with its recorded root cause (if any),
+// rendered inline in the graph context so the aggregator can reuse prior analysis.
+export interface SimilarIncidentWithCause extends SimilarIncident {
+	rootCause?: { class: string; description: string } | null;
+}
+
 // Renders a compact prompt section from the read results. Empty string when
 // there is nothing relevant, so the happy path is unchanged when the graph is
-// empty or disabled.
-export function buildGraphContext(deps: ServiceDependency[], similar: SimilarIncident[]): string {
+// empty or disabled. similar accepts the SIO-1026 cause-annotated shape; a plain
+// SimilarIncident (no rootCause) renders exactly as before.
+export function buildGraphContext(deps: ServiceDependency[], similar: SimilarIncidentWithCause[]): string {
 	if (deps.length === 0 && similar.length === 0) return "";
 	const lines: string[] = ["\n\n---\n\n## Knowledge Graph"];
 	if (deps.length > 0) {
@@ -174,7 +258,10 @@ export function buildGraphContext(deps: ServiceDependency[], similar: SimilarInc
 	}
 	if (similar.length > 0) {
 		lines.push("### Similar prior incidents");
-		for (const s of similar) lines.push(`- [${s.severity}] ${s.summary} (id ${s.id})`);
+		for (const s of similar) {
+			const cause = s.rootCause ? ` -- prior root cause: ${s.rootCause.description || s.rootCause.class}` : "";
+			lines.push(`- [${s.severity}] ${s.summary} (id ${s.id})${cause}`);
+		}
 	}
 	return lines.join("\n");
 }

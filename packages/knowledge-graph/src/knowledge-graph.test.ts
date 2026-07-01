@@ -15,9 +15,12 @@ import {
 	MIGRATIONS,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
+	priorRootCauses,
 	recordIacChange,
 	recordIncident,
 	recordPipeline,
+	recordRootCause,
+	rootCauseForIncident,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
@@ -47,6 +50,12 @@ describe("schema", () => {
 		for (const rel of ["USES_MODULE", "OF_STACK", "ON_DEPLOYMENT", "TARGETS", "VIA_WORKFLOW", "IN_SESSION", "RAN"]) {
 			expect(MIGRATIONS.some((m) => m.includes(`REL TABLE IF NOT EXISTS ${rel}(`))).toBe(true);
 		}
+	});
+
+	// SIO-1026: RootCause node + HAS_ROOT_CAUSE rel.
+	test("MIGRATIONS include the SIO-1026 RootCause node + HAS_ROOT_CAUSE rel", () => {
+		expect(MIGRATIONS.some((m) => m.includes("NODE TABLE IF NOT EXISTS RootCause("))).toBe(true);
+		expect(MIGRATIONS.some((m) => m.includes("REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE("))).toBe(true);
 	});
 
 	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
@@ -127,6 +136,36 @@ describe("writer (parameterized, injection-safe)", () => {
 		await recordIncident(store, { id: "inc2" });
 		const merge = store.calls.find((c) => c.cypher.includes("MERGE (i:Incident"));
 		expect(merge?.cypher).not.toContain("embedding");
+	});
+
+	// SIO-1026: RootCause writer.
+	test("recordRootCause merges the node and the HAS_ROOT_CAUSE edge with bound params", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, {
+			id: "rc-hash",
+			incidentId: "inc1",
+			class: "kafka-significant-lag",
+			description: "consumer lag > 10K",
+			confidence: 0.72,
+			ruleName: "kafka-significant-lag",
+		});
+		const node = store.calls.find((c) => c.cypher.includes("MERGE (rc:RootCause"));
+		expect(node?.params).toEqual({
+			id: "rc-hash",
+			class: "kafka-significant-lag",
+			description: "consumer lag > 10K",
+			confidence: 0.72,
+			createdAt: expect.any(String),
+		});
+		const edge = store.calls.find((c) => c.cypher.includes("HAS_ROOT_CAUSE"));
+		expect(edge?.params).toEqual({ incidentId: "inc1", id: "rc-hash", ruleName: "kafka-significant-lag" });
+	});
+
+	test("recordRootCause is a no-op without an id or incidentId", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, { id: "", incidentId: "inc1" });
+		await recordRootCause(store, { id: "rc", incidentId: "" });
+		expect(store.calls).toEqual([]);
 	});
 
 	test("linkResolution links incident to runbooks", async () => {
@@ -279,6 +318,24 @@ describe("reader", () => {
 		expect(ctx).toContain("kafka lag outage");
 	});
 
+	// SIO-1026: a similar incident annotated with its prior root cause.
+	test("buildGraphContext appends the prior root cause when present", () => {
+		const ctx = buildGraphContext(
+			[],
+			[
+				{
+					id: "inc1",
+					summary: "kafka lag outage",
+					severity: "high",
+					distance: 0.1,
+					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
+				},
+			],
+		);
+		expect(ctx).toContain("kafka lag outage");
+		expect(ctx).toContain("prior root cause: consumer lag > 10K");
+	});
+
 	// SIO-954: IaC change-history reader.
 	test("priorChangesForDeployment maps rows, [] for an empty deployment", async () => {
 		const store = new InMemoryGraphStore();
@@ -344,6 +401,67 @@ describe("reader", () => {
 		store2.stub("OF_STACK", [{ deployment: "eu-cld" }, { deployment: "us-cld" }]);
 		expect(await deploymentsRunningStack(store2, "slos")).toEqual(["eu-cld", "us-cld"]);
 		expect(await deploymentsRunningStack(store2, "")).toEqual([]);
+	});
+
+	// SIO-1026: RootCause readers.
+	test("rootCauseForIncident maps the linked cause, null when none / empty id", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("[r:HAS_ROOT_CAUSE]", [
+			{
+				id: "rc1",
+				class: "kafka-significant-lag",
+				description: "lag>10K",
+				confidence: 0.7,
+				ruleName: "kafka-significant-lag",
+			},
+		]);
+		expect(await rootCauseForIncident(store, "inc1")).toEqual({
+			id: "rc1",
+			class: "kafka-significant-lag",
+			description: "lag>10K",
+			confidence: 0.7,
+			ruleName: "kafka-significant-lag",
+		});
+		expect(await rootCauseForIncident(store, "")).toBeNull();
+		const empty = new InMemoryGraphStore();
+		expect(await rootCauseForIncident(empty, "inc-none")).toBeNull();
+	});
+
+	test("priorRootCauses collapses runbook fan-out per incident, [] for empty class", async () => {
+		const store = new InMemoryGraphStore();
+		// two rows for the same incident (one per runbook) + a second incident
+		store.stub("RootCause {class:", [
+			{
+				incidentId: "inc1",
+				summary: "kafka outage",
+				severity: "high",
+				description: "lag",
+				runbook: "a.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "kafka outage",
+				severity: "high",
+				description: "lag",
+				runbook: "b.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc2",
+				summary: "older lag",
+				severity: "medium",
+				description: "lag",
+				runbook: null,
+				createdAt: "2026-06-01",
+			},
+		]);
+		const prior = await priorRootCauses(store, "kafka-significant-lag");
+		expect(prior).toEqual([
+			{ incidentId: "inc1", summary: "kafka outage", severity: "high", description: "lag", runbooks: ["a.md", "b.md"] },
+			{ incidentId: "inc2", summary: "older lag", severity: "medium", description: "lag", runbooks: [] },
+		]);
+		expect(await priorRootCauses(store, "")).toEqual([]);
 	});
 });
 
