@@ -6,16 +6,22 @@
 // KNOWLEDGE_GRAPH_ENABLED and soft-fail (never throw) so a cold/absent embedded
 // graph degrades to empty context, mirroring the mitigation deadline soft-fail.
 
+import { createHash } from "node:crypto";
 import {
 	buildGraphContext,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	priorRelationshipsForServices,
 	recordIncident,
+	recordRootCause,
+	rootCauseForIncident,
+	type SimilarIncidentWithCause,
 	similarIncidents,
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import { evaluate } from "./correlation/engine.ts";
+import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
@@ -96,12 +102,20 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 		const services = affectedServiceNames(state);
 		const deps = await priorRelationshipsForServices(store, services);
 
-		let similar: Awaited<ReturnType<typeof similarIncidents>> = [];
+		let similar: SimilarIncidentWithCause[] = [];
 		const query = lastUserQuery(state);
 		if (query) {
 			try {
 				const embedding = await getEmbedder()(query);
-				similar = await similarIncidents(store, embedding);
+				const nearest = await similarIncidents(store, embedding);
+				// SIO-1026: annotate each similar incident with its recorded root cause
+				// so the aggregator can reuse prior analysis ("we've seen this before").
+				similar = await Promise.all(
+					nearest.map(async (inc) => {
+						const rc = await rootCauseForIncident(store, inc.id);
+						return { ...inc, rootCause: rc ? { class: rc.class, description: rc.description } : null };
+					}),
+				);
 			} catch (error) {
 				// Embedding/vector failure is non-fatal: keep the dependency context.
 				logger.warn(
@@ -118,6 +132,57 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			"graphEnrich failed; continuing without graph context",
 		);
 		return {};
+	}
+}
+
+// SIO-1026: derive the turn's root cause from the strongest satisfied correlation.
+// The engine (a pure function of state) is re-run here; the cause is the rule that
+// FIRED (trigger present) AND was covered by cross-domain findings -- reason
+// "already covered by prior agent findings". Trivially-satisfied rules (trigger
+// absent, fail-open, or degraded) are NOT a cause: we never fabricate one when no
+// cross-domain correlation held (mirrors the SIO-1013 grounded-gaps discipline).
+// When several covered rules hold on one incident we pick a DETERMINISTIC winner
+// (lowest rule name) rather than whichever happens to sit first in the
+// correlationRules array, so the persisted HAS_ROOT_CAUSE edge is reproducible
+// across re-analyses of the same state.
+function topSatisfiedCorrelation(state: AgentStateType): { ruleName: string; description: string } | null {
+	const decisions = evaluate(state, correlationRules);
+	const covered = decisions
+		.filter(
+			(d) => d.status === "satisfied" && d.match !== null && d.reason === "already covered by prior agent findings",
+		)
+		.sort((a, b) => a.rule.name.localeCompare(b.rule.name));
+	const winner = covered[0];
+	if (!winner) return null;
+	return { ruleName: winner.rule.name, description: winner.rule.description };
+}
+
+// recordRootCause node: persist a RootCause for the turn's Incident when a
+// cross-domain correlation held. Runs LATE (after mitigation) so it can see the
+// final confidenceScore. Soft-fails like the other graph nodes.
+export async function recordRootCauseData(state: AgentStateType): Promise<Partial<AgentStateType>> {
+	if (!isKnowledgeGraphEnabled()) return {};
+	const cause = topSatisfiedCorrelation(state);
+	if (!cause) return {};
+	try {
+		const store = await getGraphStore();
+		// PK is a stable hash of the normalized class so recurrences MERGE to one node.
+		const id = createHash("sha256").update(cause.ruleName).digest("hex").slice(0, 16);
+		await recordRootCause(store, {
+			id,
+			incidentId: state.requestId,
+			class: cause.ruleName,
+			description: cause.description,
+			confidence: state.confidenceScore,
+			ruleName: cause.ruleName,
+		});
+		return {};
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"recordRootCause graph write failed; continuing",
+		);
+		return { partialFailures: [{ node: "recordRootCause", reason: "graph-write-failed" }] };
 	}
 }
 

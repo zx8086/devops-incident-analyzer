@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { HumanMessage } from "@langchain/core/messages";
-import { _setEmbedderForTesting, graphEnrich, recordGraphEntities } from "./graph-knowledge.ts";
+import { _setEmbedderForTesting, graphEnrich, recordGraphEntities, recordRootCauseData } from "./graph-knowledge.ts";
 import type { AgentStateType } from "./state.ts";
 
 const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
@@ -13,6 +13,27 @@ function stateWith(services: string[], query: string): AgentStateType {
 		requestId: "req-1",
 		normalizedIncident: { severity: "high", affectedServices: services.map((name) => ({ name })) },
 		extractedEntities: { dataSources: [] },
+	} as unknown as AgentStateType;
+}
+
+// SIO-1026: a state where the kafka-significant-lag rule fires AND is already
+// covered by elastic findings referencing the same group id -> a satisfied,
+// covered correlation the root-cause node persists.
+function stateWithCoveredCorrelation(): AgentStateType {
+	return {
+		messages: [new HumanMessage("kafka lag outage")],
+		requestId: "req-1",
+		confidenceScore: 0.72,
+		normalizedIncident: { severity: "high", affectedServices: [{ name: "orders" }] },
+		dataSourceResults: [
+			{
+				dataSourceId: "kafka",
+				status: "success",
+				kafkaFindings: { consumerGroups: [{ id: "grp-1", state: "STABLE", totalLag: 20_000 }] },
+			},
+			// elastic findings referencing grp-1 make the rule "already covered".
+			{ dataSourceId: "elastic", status: "success", data: { services: [{ name: "grp-1" }] } },
+		],
 	} as unknown as AgentStateType;
 }
 
@@ -55,11 +76,21 @@ describe("graphEnrich", () => {
 		expect(result).toEqual({});
 	});
 
-	test("produces graphContext from dependencies + similar incidents when enabled", async () => {
+	test("produces graphContext from dependencies + similar incidents (with prior root cause) when enabled", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
 		store.stub("-[:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
 		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
+		// SIO-1026: the similar incident has a recorded root cause.
+		store.stub("[r:HAS_ROOT_CAUSE]", [
+			{
+				id: "rc1",
+				class: "kafka-significant-lag",
+				description: "consumer lag > 10K",
+				confidence: 0.7,
+				ruleName: "kafka-significant-lag",
+			},
+		]);
 		_setGraphStoreForTesting(store);
 		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
 
@@ -67,6 +98,7 @@ describe("graphEnrich", () => {
 		expect(result.graphContext).toContain("## Knowledge Graph");
 		expect(result.graphContext).toContain("svc-a -> svc-b");
 		expect(result.graphContext).toContain("prior kafka outage");
+		expect(result.graphContext).toContain("prior root cause: consumer lag > 10K");
 	});
 
 	test("soft-fails to dependencies-only when the embedder throws", async () => {
@@ -82,5 +114,42 @@ describe("graphEnrich", () => {
 		expect(result.graphContext).toContain("svc-a -> svc-b");
 		// no similar-incidents section because the embedding failed
 		expect(result.graphContext).not.toContain("Similar prior incidents");
+	});
+});
+
+describe("recordRootCauseData", () => {
+	test("is a no-op when the graph is disabled", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const result = await recordRootCauseData(stateWithCoveredCorrelation());
+		expect(result).toEqual({});
+		expect(store.calls).toEqual([]);
+	});
+
+	test("records nothing when no correlation fired (honest null, not fabricated)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		// stateWith has no dataSourceResults -> every rule is trivially satisfied
+		// (trigger absent), never "already covered".
+		const state = { ...stateWith(["svc-a"], "hello"), dataSourceResults: [] } as unknown as AgentStateType;
+		const result = await recordRootCauseData(state);
+		expect(result).toEqual({});
+		expect(store.calls).toEqual([]);
+	});
+
+	test("writes a RootCause + HAS_ROOT_CAUSE when a covered correlation held", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await recordRootCauseData(stateWithCoveredCorrelation());
+		const node = store.calls.find((c) => c.cypher.includes("MERGE (rc:RootCause"));
+		expect(node?.params?.class).toBe("kafka-significant-lag");
+		// confidence is per-incident -> lives on the edge, not the shared node.
+		const edge = store.calls.find((c) => c.cypher.includes("MERGE (i)-[r:HAS_ROOT_CAUSE]"));
+		expect(edge?.params?.incidentId).toBe("req-1");
+		expect(edge?.params?.ruleName).toBe("kafka-significant-lag");
+		expect(edge?.params?.confidence).toBe(0.72);
 	});
 });

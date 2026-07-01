@@ -24,6 +24,10 @@ export const NODE_LABELS = [
 	"Finding",
 	"Runbook",
 	"WikiPage",
+	// SIO-1026: a recurring incident root cause. Keyed by a stable hash of its
+	// normalized class so repeat occurrences MERGE to one node; populated from the
+	// pipeline's top satisfied correlation rule (never fabricated when none fired).
+	"RootCause",
 	// SIO-954: IaC (elastic-iac) concepts. An ElasticDeployment is a cluster
 	// (distinct from a microservice Service); a ConfigChange is one maker turn's
 	// proposed edit; a MergeRequest is the GitLab MR that carries it.
@@ -55,6 +59,8 @@ export const REL_TYPES = [
 	"RESOLVED_BY",
 	"DOCUMENTED_IN",
 	"DEPLOYED_AS",
+	// SIO-1026: an Incident's derived root cause (from the top satisfied correlation).
+	"HAS_ROOT_CAUSE",
 	// SIO-954: IaC change history. CHANGED_BY links a deployment to a config
 	// change; PROPOSED_IN links a config change to the MR that carries it.
 	"CHANGED_BY",
@@ -87,6 +93,18 @@ export const IncidentNodeSchema = z
 export const FindingNodeSchema = z
 	.object({ id: z.string().min(1), kind: z.string(), summary: z.string().optional() })
 	.strict();
+// SIO-1026: the writer boundary shape for a RootCause node. The node is SHARED
+// across incidents (PK = hash of the normalized class), so it carries only cause
+// IDENTITY (id, class, description). Per-incident metadata (confidence, createdAt,
+// ruleName) lives on the HAS_ROOT_CAUSE edge instead, so a later incident with the
+// same cause class cannot overwrite an earlier incident's values.
+export const RootCauseNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		class: z.string().optional(),
+		description: z.string().optional(),
+	})
+	.strict();
 // SIO-954: IaC writer boundary shapes.
 export const DeploymentNodeSchema = z.object({ name: z.string().min(1) }).strict();
 export const ConfigChangeNodeSchema = z
@@ -114,6 +132,7 @@ export const PipelineNodeSchema = z
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
+export type RootCauseNode = z.infer<typeof RootCauseNodeSchema>;
 export type DeploymentNode = z.infer<typeof DeploymentNodeSchema>;
 export type ConfigChangeNode = z.infer<typeof ConfigChangeNodeSchema>;
 export type ModuleNode = z.infer<typeof ModuleNodeSchema>;
@@ -138,6 +157,10 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS Finding(id STRING, kind STRING, summary STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Runbook(filename STRING, PRIMARY KEY(filename))",
 	"CREATE NODE TABLE IF NOT EXISTS WikiPage(slug STRING, PRIMARY KEY(slug))",
+	// SIO-1026: RootCause (deterministic, no embedding). The node is shared across
+	// incidents (PK = class hash) so it holds only cause identity; per-incident
+	// confidence/createdAt live on the HAS_ROOT_CAUSE edge below.
+	"CREATE NODE TABLE IF NOT EXISTS RootCause(id STRING, class STRING, description STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service)",
 	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic)",
 	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic)",
@@ -147,6 +170,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
 	"CREATE REL TABLE IF NOT EXISTS DOCUMENTED_IN(FROM Service TO WikiPage)",
 	"CREATE REL TABLE IF NOT EXISTS DEPLOYED_AS(FROM Service TO Deployment)",
+	"CREATE REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE(FROM Incident TO RootCause, ruleName STRING, confidence DOUBLE, createdAt STRING)",
 	// SIO-954/SIO-965: IaC change-history tables. ElasticDeployment/ConfigChange
 	// carry the richer SIO-965 columns (ecId/region, outcome) for FRESH graphs;
 	// EXISTING graphs gain those columns via the tolerant ALTER_MIGRATIONS below

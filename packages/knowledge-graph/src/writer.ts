@@ -100,6 +100,48 @@ export async function recordIncident(store: GraphStore, incident: IncidentRecord
 	}
 }
 
+// SIO-1026: a derived root cause linked to one incident. id is a stable hash of
+// the normalized class (the caller owns hashing) so recurrences MERGE to one node
+// and the HAS_ROOT_CAUSE edge accumulates across incidents that share a cause.
+export interface RootCauseRecord {
+	id: string;
+	incidentId: string;
+	class?: string;
+	description?: string;
+	confidence?: number;
+	createdAt?: string;
+	// The satisfied correlation rule that produced this cause; stored on the edge.
+	ruleName?: string;
+}
+
+export async function recordRootCause(store: GraphStore, rootCause: RootCauseRecord): Promise<void> {
+	if (!rootCause.id || !rootCause.incidentId) return;
+	// The node is shared across incidents (PK = class hash): only set identity.
+	await store.run("MERGE (rc:RootCause {id: $id}) SET rc.class = $class, rc.description = $description", {
+		id: rootCause.id,
+		class: rootCause.class ?? "",
+		description: rootCause.description ?? "",
+	});
+	// An incident has at most one root cause. A re-analysis may pick a different
+	// rule, so drop any prior HAS_ROOT_CAUSE edge for this incident before linking
+	// the new one -- otherwise edges accumulate and rootCauseForIncident (LIMIT 1)
+	// would return an arbitrary one.
+	await store.run("MATCH (i:Incident {id: $incidentId})-[r:HAS_ROOT_CAUSE]->(:RootCause) DELETE r", {
+		incidentId: rootCause.incidentId,
+	});
+	// Per-incident metadata lives on the edge, not the shared node.
+	await store.run(
+		"MATCH (i:Incident {id: $incidentId}), (rc:RootCause {id: $id}) MERGE (i)-[r:HAS_ROOT_CAUSE]->(rc) SET r.ruleName = $ruleName, r.confidence = $confidence, r.createdAt = $createdAt",
+		{
+			incidentId: rootCause.incidentId,
+			id: rootCause.id,
+			ruleName: rootCause.ruleName ?? "",
+			confidence: rootCause.confidence ?? 0,
+			createdAt: rootCause.createdAt ?? new Date().toISOString(),
+		},
+	);
+}
+
 // SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the
 // recordIacOutcome node later promotes it to applied/rejected/failed.
 export type ChangeOutcome = "proposed" | "applied" | "rejected" | "failed";

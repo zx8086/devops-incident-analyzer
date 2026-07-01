@@ -15,9 +15,12 @@ import {
 	MIGRATIONS,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
+	priorRootCauses,
 	recordIacChange,
 	recordIncident,
 	recordPipeline,
+	recordRootCause,
+	rootCauseForIncident,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
@@ -47,6 +50,22 @@ describe("schema", () => {
 		for (const rel of ["USES_MODULE", "OF_STACK", "ON_DEPLOYMENT", "TARGETS", "VIA_WORKFLOW", "IN_SESSION", "RAN"]) {
 			expect(MIGRATIONS.some((m) => m.includes(`REL TABLE IF NOT EXISTS ${rel}(`))).toBe(true);
 		}
+	});
+
+	// SIO-1026: RootCause node + HAS_ROOT_CAUSE rel. Per-incident metadata
+	// (confidence, createdAt) lives on the EDGE, not the shared node, so a repeat
+	// cause class cannot overwrite an earlier incident's values.
+	test("MIGRATIONS include the SIO-1026 RootCause node + HAS_ROOT_CAUSE rel", () => {
+		const node = MIGRATIONS.find((m) => m.includes("NODE TABLE IF NOT EXISTS RootCause("));
+		const rel = MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE("));
+		expect(node).toBeDefined();
+		expect(rel).toBeDefined();
+		// shared node = identity only.
+		expect(node).not.toContain("confidence");
+		expect(node).not.toContain("createdAt");
+		// per-incident metadata on the edge.
+		expect(rel).toContain("confidence");
+		expect(rel).toContain("createdAt");
 	});
 
 	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
@@ -127,6 +146,49 @@ describe("writer (parameterized, injection-safe)", () => {
 		await recordIncident(store, { id: "inc2" });
 		const merge = store.calls.find((c) => c.cypher.includes("MERGE (i:Incident"));
 		expect(merge?.cypher).not.toContain("embedding");
+	});
+
+	// SIO-1026: RootCause writer. The shared node holds only identity; per-incident
+	// confidence/createdAt/ruleName live on the HAS_ROOT_CAUSE edge.
+	test("recordRootCause sets identity on the node and per-incident metadata on the edge", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, {
+			id: "rc-hash",
+			incidentId: "inc1",
+			class: "kafka-significant-lag",
+			description: "consumer lag > 10K",
+			confidence: 0.72,
+			ruleName: "kafka-significant-lag",
+		});
+		// node carries identity only -- no confidence/createdAt.
+		const node = store.calls.find((c) => c.cypher.includes("MERGE (rc:RootCause"));
+		expect(node?.params).toEqual({ id: "rc-hash", class: "kafka-significant-lag", description: "consumer lag > 10K" });
+		expect(node?.cypher).not.toContain("confidence");
+		// edge carries the per-incident metadata.
+		const edge = store.calls.find((c) => c.cypher.includes("MERGE (i)-[r:HAS_ROOT_CAUSE]"));
+		expect(edge?.cypher).toContain("r.confidence = $confidence");
+		expect(edge?.params).toEqual({
+			incidentId: "inc1",
+			id: "rc-hash",
+			ruleName: "kafka-significant-lag",
+			confidence: 0.72,
+			createdAt: expect.any(String),
+		});
+	});
+
+	test("recordRootCause drops any prior HAS_ROOT_CAUSE edge for the incident (single-valued)", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, { id: "rc-hash", incidentId: "inc1", ruleName: "r" });
+		const del = store.calls.find((c) => c.cypher.includes("DELETE r"));
+		expect(del?.cypher).toContain("MATCH (i:Incident {id: $incidentId})-[r:HAS_ROOT_CAUSE]->");
+		expect(del?.params).toEqual({ incidentId: "inc1" });
+	});
+
+	test("recordRootCause is a no-op without an id or incidentId", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, { id: "", incidentId: "inc1" });
+		await recordRootCause(store, { id: "rc", incidentId: "" });
+		expect(store.calls).toEqual([]);
 	});
 
 	test("linkResolution links incident to runbooks", async () => {
@@ -279,6 +341,24 @@ describe("reader", () => {
 		expect(ctx).toContain("kafka lag outage");
 	});
 
+	// SIO-1026: a similar incident annotated with its prior root cause.
+	test("buildGraphContext appends the prior root cause when present", () => {
+		const ctx = buildGraphContext(
+			[],
+			[
+				{
+					id: "inc1",
+					summary: "kafka lag outage",
+					severity: "high",
+					distance: 0.1,
+					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
+				},
+			],
+		);
+		expect(ctx).toContain("kafka lag outage");
+		expect(ctx).toContain("prior root cause: consumer lag > 10K");
+	});
+
 	// SIO-954: IaC change-history reader.
 	test("priorChangesForDeployment maps rows, [] for an empty deployment", async () => {
 		const store = new InMemoryGraphStore();
@@ -344,6 +424,118 @@ describe("reader", () => {
 		store2.stub("OF_STACK", [{ deployment: "eu-cld" }, { deployment: "us-cld" }]);
 		expect(await deploymentsRunningStack(store2, "slos")).toEqual(["eu-cld", "us-cld"]);
 		expect(await deploymentsRunningStack(store2, "")).toEqual([]);
+	});
+
+	// SIO-1026: RootCause readers.
+	test("rootCauseForIncident maps the linked cause, null when none / empty id", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("[r:HAS_ROOT_CAUSE]", [
+			{
+				id: "rc1",
+				class: "kafka-significant-lag",
+				description: "lag>10K",
+				confidence: 0.7,
+				ruleName: "kafka-significant-lag",
+			},
+		]);
+		expect(await rootCauseForIncident(store, "inc1")).toEqual({
+			id: "rc1",
+			class: "kafka-significant-lag",
+			description: "lag>10K",
+			confidence: 0.7,
+			ruleName: "kafka-significant-lag",
+		});
+		expect(await rootCauseForIncident(store, "")).toBeNull();
+		const empty = new InMemoryGraphStore();
+		expect(await rootCauseForIncident(empty, "inc-none")).toBeNull();
+	});
+
+	test("priorRootCauses collapses runbook fan-out per incident, [] for empty class", async () => {
+		const store = new InMemoryGraphStore();
+		// two rows for the same incident (one per runbook) + a second incident
+		store.stub("RootCause {class:", [
+			{
+				incidentId: "inc1",
+				summary: "kafka outage",
+				severity: "high",
+				description: "lag",
+				runbook: "a.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "kafka outage",
+				severity: "high",
+				description: "lag",
+				runbook: "b.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc2",
+				summary: "older lag",
+				severity: "medium",
+				description: "lag",
+				runbook: null,
+				createdAt: "2026-06-01",
+			},
+		]);
+		const prior = await priorRootCauses(store, "kafka-significant-lag");
+		expect(prior).toEqual([
+			{ incidentId: "inc1", summary: "kafka outage", severity: "high", description: "lag", runbooks: ["a.md", "b.md"] },
+			{ incidentId: "inc2", summary: "older lag", severity: "medium", description: "lag", runbooks: [] },
+		]);
+		expect(await priorRootCauses(store, "")).toEqual([]);
+	});
+
+	// SIO-1026 (CodeRabbit): the limit bounds DISTINCT INCIDENTS, not joined rows --
+	// a single incident with many runbooks must not crowd out newer incidents.
+	test("priorRootCauses limits distinct incidents, not the runbook fan-out", async () => {
+		const store = new InMemoryGraphStore();
+		// inc1 has 3 runbook rows; inc2 has 1. With limit=1 we must get inc1 with all
+		// 3 runbooks -- not 1 row of inc1 truncated, and inc2 correctly excluded.
+		store.stub("RootCause {class:", [
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "a.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "b.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "c.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc2",
+				summary: "b",
+				severity: "low",
+				description: "lag",
+				runbook: "d.md",
+				createdAt: "2026-06-01",
+			},
+		]);
+		const prior = await priorRootCauses(store, "kafka-significant-lag", 1);
+		expect(prior).toHaveLength(1);
+		expect(prior[0]).toEqual({
+			incidentId: "inc1",
+			summary: "a",
+			severity: "high",
+			description: "lag",
+			runbooks: ["a.md", "b.md", "c.md"],
+		});
 	});
 });
 

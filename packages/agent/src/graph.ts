@@ -18,7 +18,7 @@ import {
 import { extractEntities } from "./entity-extractor.ts";
 import { extractFindings } from "./extract-findings.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
-import { graphEnrich, recordGraphEntities } from "./graph-knowledge.ts";
+import { graphEnrich, recordGraphEntities, recordRootCauseData } from "./graph-knowledge.ts";
 import { initializeLangSmith } from "./langsmith.ts";
 import { aggregateMitigation } from "./mitigation.ts";
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
@@ -120,6 +120,8 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// SIO-850: knowledge-graph nodes (opt-in; unreachable when disabled).
 		.addNode("recordEntities", traceNode("recordEntities", recordGraphEntities))
 		.addNode("graphEnrich", traceNode("graphEnrich", graphEnrich))
+		// SIO-1026: late root-cause write; registered always, edged only when enabled.
+		.addNode("recordRootCause", traceNode("recordRootCause", recordRootCauseData))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -184,7 +186,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("proposeInvestigate", "aggregateMitigation")
 		.addEdge("proposeMonitor", "aggregateMitigation")
 		.addEdge("proposeEscalate", "aggregateMitigation")
-		.addEdge("aggregateMitigation", "followUp");
+		// SIO-1026: when the knowledge graph is enabled, aggregateMitigation ->
+		// recordRootCause -> followUp; otherwise the direct edge to followUp is kept.
+		.addEdge("aggregateMitigation", knowledgeGraphEnabled ? "recordRootCause" : "followUp")
+		.addEdge("recordRootCause", "followUp");
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
 	return graph.compile({ checkpointer });
