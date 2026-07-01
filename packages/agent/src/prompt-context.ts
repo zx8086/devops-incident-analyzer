@@ -7,6 +7,7 @@ import {
 	requiresApproval,
 	type ToolDefinition,
 } from "@devops-agent/gitagent-bridge";
+import { buildGraphSection } from "./graph-section.ts";
 import { readLiveMemory } from "./memory-writer.ts";
 import { getAgentsDir } from "./paths.ts";
 import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
@@ -105,7 +106,10 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 	const agent = getAgent();
 	const filter = options.runbookFilter;
 
-	const graphSection = options.graphContext?.trim() ? options.graphContext : "";
+	// SIO-1028: prepend a usage instruction to the raw graph block so recall questions
+	// answer from prior-incident entries instead of relying on LLM inference. Pure builder
+	// lives in graph-section.ts so its unit test dodges the prompt-context.ts module mock.
+	const graphSection = buildGraphSection(options.graphContext);
 
 	if (filter === undefined) {
 		return (
