@@ -18,6 +18,61 @@ import { getSubAgentToolCapBytes } from "./sub-agent-truncate-tool-output.ts";
 
 const logger = getLogger("agent:sub-agent");
 
+// SIO-1029: the LangGraph recursion-limit error. When createReactAgent exhausts
+// its recursionLimit it throws GraphRecursionError (name === "GraphRecursionError",
+// lc_error_code === "GRAPH_RECURSION_LIMIT", message contains "Recursion limit of
+// N reached"). The error carries no partial state, so we salvage the accumulated
+// messages by streaming (streamMode: "values" -> full state after each step) and
+// keeping the last snapshot. Detected by name/marker to avoid importing the class
+// (keeps this testable with a plain fake error).
+export function isRecursionLimitError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	if (error.name === "GraphRecursionError") return true;
+	return /GRAPH_RECURSION_LIMIT|Recursion limit of \d+ reached/i.test(error.message);
+}
+
+interface SubAgentInvokeResult {
+	messages: Array<{ content: unknown; name?: string; _getType(): string }>;
+	truncated: boolean;
+}
+
+// SIO-1029: run the ReAct sub-agent while capturing the latest full-state
+// snapshot, so a recursion-limit blow-up still yields the messages gathered so
+// far instead of returning null. On normal completion this behaves exactly like
+// agent.invoke (returns the final { messages }). On GraphRecursionError it
+// returns the last snapshot with truncated=true. Any other error re-throws to
+// the existing hard-error catch. `stream` is injected for testing; it may
+// return the async iterable directly or a promise of it (agent.stream does the
+// latter).
+export type SalvageStreamFn = (
+	opts: Record<string, unknown>,
+) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+
+export async function invokeSubAgentWithSalvage(
+	stream: SalvageStreamFn,
+	opts: Record<string, unknown>,
+): Promise<SubAgentInvokeResult> {
+	let last: { messages?: unknown[] } | undefined;
+	try {
+		const iterable = await stream({ ...opts, streamMode: "values" });
+		for await (const chunk of iterable) {
+			last = chunk as { messages?: unknown[] };
+		}
+		return {
+			messages: (last?.messages ?? []) as SubAgentInvokeResult["messages"],
+			truncated: false,
+		};
+	} catch (error) {
+		if (isRecursionLimitError(error) && last?.messages && last.messages.length > 0) {
+			return {
+				messages: last.messages as SubAgentInvokeResult["messages"],
+				truncated: true,
+			};
+		}
+		throw error;
+	}
+}
+
 // SIO-626: Prevent hung MCP servers from stalling the pipeline indefinitely.
 // SIO-697: Default lifted to 6 min (was 5) so deep elastic fan-outs can finish
 // within the graph budget without forcing alignment retries to start with no
@@ -223,6 +278,39 @@ const MAX_TOOLS_PER_AGENT = 25;
 // typed findings -> empty KafkaFindingsCard DLQ section.
 const MIN_FILTERED_TOOLS = 1;
 
+// SIO-1029: project-resolution tools that MUST be present regardless of which
+// action group the filter selects. The gitlab sub-agent's code_analysis /
+// merge_requests / pipelines actions are all project-scoped, but gitlab_search
+// -- the only way to resolve a service name to a GitLab project id -- lives in
+// the separate `search` action group and was being filtered out. Without it the
+// LLM guessed a bare service name as project_id and every /api/v4/projects/{id}
+// call 404'd. Union these in before the MAX_TOOLS_PER_AGENT slice so the agent
+// can always search-first. Keep the count small (gitlab code_analysis=5 + this=1
+// is well under 25).
+const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
+	gitlab: ["gitlab_search"],
+};
+
+// SIO-1029: union the datasource's always-include resolution tools into a
+// filtered selection (looked up from allTools by name), deduping, before the
+// caller slices to MAX_TOOLS_PER_AGENT. No-op for datasources without a
+// resolution set or when the tools are already present.
+function withResolutionTools(
+	selected: StructuredToolInterface[],
+	allTools: StructuredToolInterface[],
+	dataSourceId: string,
+): StructuredToolInterface[] {
+	const required = RESOLUTION_TOOLS_BY_DATASOURCE[dataSourceId];
+	if (!required || required.length === 0) return selected;
+	const present = new Set(selected.map((t) => t.name));
+	const missing = required.filter((name) => !present.has(name));
+	if (missing.length === 0) return selected;
+	const missingSet = new Set(missing);
+	const extras = allTools.filter((t) => missingSet.has(t.name));
+	if (extras.length === 0) return selected;
+	return [...extras, ...selected];
+}
+
 // SIO-738: Shared merge step so the augmentation test exercises the same
 // dedup logic the production runSubAgent path uses. Returns baseActions
 // reference unchanged when keywordActions is empty (no extra allocation).
@@ -306,7 +394,8 @@ export function selectToolsByAction(
 			const nameSet = new Set(toolNames);
 			const selected = allTools.filter((t) => nameSet.has(t.name));
 			if (selected.length >= MIN_FILTERED_TOOLS) {
-				return { tools: selected.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+				const withResolution = withResolutionTools(selected, allTools, dataSourceId);
+				return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 			}
 		}
 	}
@@ -316,7 +405,8 @@ export function selectToolsByAction(
 		const nameSet = new Set(allActionNames);
 		const selected = allTools.filter((t) => nameSet.has(t.name));
 		if (selected.length >= MIN_FILTERED_TOOLS) {
-			return { tools: selected.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+			const withResolution = withResolutionTools(selected, allTools, dataSourceId);
+			return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 		}
 	}
 
@@ -443,37 +533,39 @@ async function runSubAgent(
 
 		const recursionLimit = getSubAgentRecursionLimit(dataSourceId);
 		log.info({ deploymentId, recursionLimit }, "Invoking sub-agent");
-		const response = await agent.invoke(
-			{ messages },
-			{
-				...config,
-				signal: AbortSignal.timeout(getSubAgentTimeoutMs()),
-				runName: deploymentId ? `${agentName}[${deploymentId}]` : agentName,
-				metadata: {
-					...config?.metadata,
-					data_source_id: dataSourceId,
-					request_id: state.requestId,
-					...(deploymentId && { deployment_id: deploymentId }),
-				},
-				tags: [
-					...(config?.tags ?? []),
-					"sub-agent",
-					`datasource:${dataSourceId}`,
-					...(deploymentId ? [`deployment:${deploymentId}`] : []),
-				],
-				...(recursionLimit !== undefined && { recursionLimit }),
+		// SIO-1029: stream so a recursion-limit blow-up salvages partial findings
+		// (see invokeSubAgentWithSalvage) instead of returning a hard error with
+		// no data. Behaviour on normal completion is unchanged (final { messages }).
+		const response = await invokeSubAgentWithSalvage((opts) => agent.stream({ messages }, opts), {
+			...config,
+			signal: AbortSignal.timeout(getSubAgentTimeoutMs()),
+			runName: deploymentId ? `${agentName}[${deploymentId}]` : agentName,
+			metadata: {
+				...config?.metadata,
+				data_source_id: dataSourceId,
+				request_id: state.requestId,
+				...(deploymentId && { deployment_id: deploymentId }),
 			},
-		);
+			tags: [
+				...(config?.tags ?? []),
+				"sub-agent",
+				`datasource:${dataSourceId}`,
+				...(deploymentId ? [`deployment:${deploymentId}`] : []),
+			],
+			...(recursionLimit !== undefined && { recursionLimit }),
+		});
 		const lastResponse = response.messages.at(-1);
 		const duration = Date.now() - startTime;
 
 		const toolErrors = extractToolErrors(response.messages);
 		const toolMessages = response.messages.filter((m: { _getType(): string }) => m._getType() === "tool");
 		const allToolsFailed = toolMessages.length > 0 && toolErrors.length === toolMessages.length;
+		const truncated = response.truncated;
 
 		// SIO-707: emit per-failure visibility ({toolName, category, message}) alongside the count.
 		// toolErrorCount is preserved for backward compatibility with existing log parsers.
 		// Messages are already PII-redacted in extractToolErrors above.
+		// SIO-1029: `truncated` flags a recursion-limit salvage -- partial results, not a hard error.
 		log.info(
 			{
 				duration,
@@ -482,6 +574,7 @@ async function runSubAgent(
 				responseLength: String(lastResponse?.content ?? "").length,
 				toolErrorCount: toolErrors.length,
 				allToolsFailed,
+				...(truncated && { truncated: true }),
 				...(toolErrors.length > 0 && {
 					toolErrors: toolErrors.map((e) => ({
 						toolName: e.toolName,
@@ -490,7 +583,7 @@ async function runSubAgent(
 					})),
 				}),
 			},
-			"Sub-agent completed",
+			truncated ? "Sub-agent completed (truncated at recursion limit; partial results)" : "Sub-agent completed",
 		);
 
 		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => ({
@@ -498,9 +591,18 @@ async function runSubAgent(
 			rawJson: tryParseJson(normalizeToolContent(m.content)),
 		}));
 
+		// SIO-1029: a truncated run that still gathered tool data is partial-success,
+		// not error -- salvage what elastic observed rather than blanking the datasource.
+		// The last message on a truncated run is an AIMessage/ToolMessage mid-loop, not a
+		// synthesized answer, so append an explicit note when there is no clean final text.
+		const salvageNote =
+			"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
+		const baseData = lastResponse ? String(lastResponse.content) : "No response from sub-agent";
+		const data = truncated ? `${baseData}${salvageNote}` : baseData;
+
 		return {
 			dataSourceId,
-			data: lastResponse ? String(lastResponse.content) : "No response from sub-agent",
+			data,
 			status: allToolsFailed ? "error" : "success",
 			duration,
 			toolOutputs,

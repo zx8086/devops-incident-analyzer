@@ -2,6 +2,15 @@
 
 import { ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import {
+	createLoopGuardState,
+	isGuardedTool,
+	LOOP_GUARD_STOP_MESSAGE,
+	type LoopGuardState,
+	recordResult,
+	shouldShortCircuit,
+	toolCallSignature,
+} from "./sub-agent-loop-guard.ts";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
@@ -56,25 +65,57 @@ export interface InstrumentContext {
 // the original references via Proxy passthrough so LangChain's tool-binding sees
 // an unchanged surface.
 export function instrumentTools(tools: StructuredToolInterface[], ctx: InstrumentContext): StructuredToolInterface[] {
-	const counter = { iteration: 0 };
-	return tools.map((tool) => instrumentTool(tool, ctx, counter));
+	// SIO-1029: per-run state shared across every tool in this sub-agent invocation.
+	// The loop guard tracks consecutive-empty / duplicate elasticsearch_search calls.
+	const runState = { iteration: 0, loopGuard: createLoopGuardState() };
+	return tools.map((tool) => instrumentTool(tool, ctx, runState));
+}
+
+interface RunState {
+	iteration: number;
+	loopGuard: LoopGuardState;
 }
 
 function instrumentTool(
 	tool: StructuredToolInterface,
 	ctx: InstrumentContext,
-	counter: { iteration: number },
+	runState: RunState,
 ): StructuredToolInterface {
 	const handler: ProxyHandler<StructuredToolInterface> = {
 		get(target, prop, receiver) {
 			if (prop === "invoke") {
 				return async (arg: unknown, configArg?: unknown) => {
-					counter.iteration += 1;
-					const iteration = counter.iteration;
+					runState.iteration += 1;
+					const iteration = runState.iteration;
+
+					// SIO-1029: short-circuit a repeated/unproductive guarded call
+					// (elasticsearch_search) before it re-hits MCP, so the LLM gets
+					// an explicit terminal signal instead of another silent empty.
+					const guarded = isGuardedTool(tool.name);
+					const signature = guarded ? toolCallSignature(tool.name, arg) : "";
+					if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature)) {
+						ctx.log.info(
+							{
+								event: "subagent.loop_guard_stop",
+								dataSourceId: ctx.dataSourceId,
+								deploymentId: ctx.deploymentId,
+								toolName: tool.name,
+								iteration,
+								consecutiveEmpty: runState.loopGuard.consecutiveEmpty,
+							},
+							"Loop guard short-circuited repeated/unproductive tool call",
+						);
+						return buildStopResult(arg);
+					}
+
 					const result = await target.invoke(
 						arg as Parameters<StructuredToolInterface["invoke"]>[0],
 						configArg as Parameters<StructuredToolInterface["invoke"]>[1],
 					);
+
+					if (guarded) {
+						recordResult(runState.loopGuard, tool.name, signature, extractContent(result));
+					}
 					return processResult(result, tool.name, iteration, ctx);
 				};
 			}
@@ -83,6 +124,18 @@ function instrumentTool(
 		},
 	};
 	return new Proxy(tool, handler);
+}
+
+// SIO-1029: return the guard's stop message as a ToolMessage shaped like a real
+// tool result. When createReactAgent's ToolNode invokes a tool it passes the
+// full tool-call object ({ name, args, id }); we reuse that id so the message
+// pairs with its AIMessage tool_call (Bedrock requires the pairing).
+function buildStopResult(arg: unknown): ToolMessage {
+	const toolCallId =
+		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
+			? (arg as { id: string }).id
+			: "loop-guard-stop";
+	return new ToolMessage({ content: LOOP_GUARD_STOP_MESSAGE, tool_call_id: toolCallId });
 }
 
 function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {

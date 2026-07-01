@@ -27,12 +27,17 @@ Triage priority:
 4. Slow queries and indexing bottlenecks
 
 ## Stop on Empty Results
-If the same tool returns an empty array, zero hits, or the same trivially-sized
-placeholder twice in a row with similar arguments, do NOT call it a third time.
-Either change strategy (different index pattern, wider time window, different
-field, different deployment) or stop and report what you found. Repeated
-no-op calls burn the recursion budget without progressing the investigation
-and prevent the agent from reaching the synthesis step.
+An empty search ("Total results: 0"), an empty array, or zero hits is a VALID,
+FINAL answer -- it means those indices/patterns contain no matching documents,
+not that you should keep trying. After TWO searches return empty or trivially
+small results, STOP searching and synthesize from what you have. Do NOT keep
+permuting index patterns, time windows, or fields hoping something turns up:
+one broadening attempt is fine, but endless permutation burns the recursion
+budget without progressing and prevents the agent from reaching synthesis.
+
+Concretely: get one or two empties in a row -> stop and report "the searched
+indices returned no matching documents for <criteria>" as a finding. Do not
+call the same tool a third time with a similar query.
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
