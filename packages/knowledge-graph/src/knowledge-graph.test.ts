@@ -52,10 +52,20 @@ describe("schema", () => {
 		}
 	});
 
-	// SIO-1026: RootCause node + HAS_ROOT_CAUSE rel.
+	// SIO-1026: RootCause node + HAS_ROOT_CAUSE rel. Per-incident metadata
+	// (confidence, createdAt) lives on the EDGE, not the shared node, so a repeat
+	// cause class cannot overwrite an earlier incident's values.
 	test("MIGRATIONS include the SIO-1026 RootCause node + HAS_ROOT_CAUSE rel", () => {
-		expect(MIGRATIONS.some((m) => m.includes("NODE TABLE IF NOT EXISTS RootCause("))).toBe(true);
-		expect(MIGRATIONS.some((m) => m.includes("REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE("))).toBe(true);
+		const node = MIGRATIONS.find((m) => m.includes("NODE TABLE IF NOT EXISTS RootCause("));
+		const rel = MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE("));
+		expect(node).toBeDefined();
+		expect(rel).toBeDefined();
+		// shared node = identity only.
+		expect(node).not.toContain("confidence");
+		expect(node).not.toContain("createdAt");
+		// per-incident metadata on the edge.
+		expect(rel).toContain("confidence");
+		expect(rel).toContain("createdAt");
 	});
 
 	test("ALTER_MIGRATIONS add the outcome + EC columns for pre-existing graphs", () => {
@@ -138,8 +148,9 @@ describe("writer (parameterized, injection-safe)", () => {
 		expect(merge?.cypher).not.toContain("embedding");
 	});
 
-	// SIO-1026: RootCause writer.
-	test("recordRootCause merges the node and the HAS_ROOT_CAUSE edge with bound params", async () => {
+	// SIO-1026: RootCause writer. The shared node holds only identity; per-incident
+	// confidence/createdAt/ruleName live on the HAS_ROOT_CAUSE edge.
+	test("recordRootCause sets identity on the node and per-incident metadata on the edge", async () => {
 		const store = new InMemoryGraphStore();
 		await recordRootCause(store, {
 			id: "rc-hash",
@@ -149,16 +160,28 @@ describe("writer (parameterized, injection-safe)", () => {
 			confidence: 0.72,
 			ruleName: "kafka-significant-lag",
 		});
+		// node carries identity only -- no confidence/createdAt.
 		const node = store.calls.find((c) => c.cypher.includes("MERGE (rc:RootCause"));
-		expect(node?.params).toEqual({
+		expect(node?.params).toEqual({ id: "rc-hash", class: "kafka-significant-lag", description: "consumer lag > 10K" });
+		expect(node?.cypher).not.toContain("confidence");
+		// edge carries the per-incident metadata.
+		const edge = store.calls.find((c) => c.cypher.includes("MERGE (i)-[r:HAS_ROOT_CAUSE]"));
+		expect(edge?.cypher).toContain("r.confidence = $confidence");
+		expect(edge?.params).toEqual({
+			incidentId: "inc1",
 			id: "rc-hash",
-			class: "kafka-significant-lag",
-			description: "consumer lag > 10K",
+			ruleName: "kafka-significant-lag",
 			confidence: 0.72,
 			createdAt: expect.any(String),
 		});
-		const edge = store.calls.find((c) => c.cypher.includes("HAS_ROOT_CAUSE"));
-		expect(edge?.params).toEqual({ incidentId: "inc1", id: "rc-hash", ruleName: "kafka-significant-lag" });
+	});
+
+	test("recordRootCause drops any prior HAS_ROOT_CAUSE edge for the incident (single-valued)", async () => {
+		const store = new InMemoryGraphStore();
+		await recordRootCause(store, { id: "rc-hash", incidentId: "inc1", ruleName: "r" });
+		const del = store.calls.find((c) => c.cypher.includes("DELETE r"));
+		expect(del?.cypher).toContain("MATCH (i:Incident {id: $incidentId})-[r:HAS_ROOT_CAUSE]->");
+		expect(del?.params).toEqual({ incidentId: "inc1" });
 	});
 
 	test("recordRootCause is a no-op without an id or incidentId", async () => {
@@ -462,6 +485,57 @@ describe("reader", () => {
 			{ incidentId: "inc2", summary: "older lag", severity: "medium", description: "lag", runbooks: [] },
 		]);
 		expect(await priorRootCauses(store, "")).toEqual([]);
+	});
+
+	// SIO-1026 (CodeRabbit): the limit bounds DISTINCT INCIDENTS, not joined rows --
+	// a single incident with many runbooks must not crowd out newer incidents.
+	test("priorRootCauses limits distinct incidents, not the runbook fan-out", async () => {
+		const store = new InMemoryGraphStore();
+		// inc1 has 3 runbook rows; inc2 has 1. With limit=1 we must get inc1 with all
+		// 3 runbooks -- not 1 row of inc1 truncated, and inc2 correctly excluded.
+		store.stub("RootCause {class:", [
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "a.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "b.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc1",
+				summary: "a",
+				severity: "high",
+				description: "lag",
+				runbook: "c.md",
+				createdAt: "2026-06-30",
+			},
+			{
+				incidentId: "inc2",
+				summary: "b",
+				severity: "low",
+				description: "lag",
+				runbook: "d.md",
+				createdAt: "2026-06-01",
+			},
+		]);
+		const prior = await priorRootCauses(store, "kafka-significant-lag", 1);
+		expect(prior).toHaveLength(1);
+		expect(prior[0]).toEqual({
+			incidentId: "inc1",
+			summary: "a",
+			severity: "high",
+			description: "lag",
+			runbooks: ["a.md", "b.md", "c.md"],
+		});
 	});
 });
 

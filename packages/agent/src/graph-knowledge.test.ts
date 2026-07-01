@@ -146,9 +146,10 @@ describe("recordRootCauseData", () => {
 		await recordRootCauseData(stateWithCoveredCorrelation());
 		const node = store.calls.find((c) => c.cypher.includes("MERGE (rc:RootCause"));
 		expect(node?.params?.class).toBe("kafka-significant-lag");
-		expect(node?.params?.confidence).toBe(0.72);
-		const edge = store.calls.find((c) => c.cypher.includes("HAS_ROOT_CAUSE"));
+		// confidence is per-incident -> lives on the edge, not the shared node.
+		const edge = store.calls.find((c) => c.cypher.includes("MERGE (i)-[r:HAS_ROOT_CAUSE]"));
 		expect(edge?.params?.incidentId).toBe("req-1");
 		expect(edge?.params?.ruleName).toBe("kafka-significant-lag");
+		expect(edge?.params?.confidence).toBe(0.72);
 	});
 });

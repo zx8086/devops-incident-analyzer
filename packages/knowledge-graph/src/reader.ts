@@ -67,6 +67,8 @@ export interface RootCause {
 
 export async function rootCauseForIncident(store: GraphStore, incidentId: string): Promise<RootCause | null> {
 	if (!incidentId) return null;
+	// confidence + ruleName are per-incident and live on the HAS_ROOT_CAUSE edge (r),
+	// not the shared RootCause node (rc) -- see writer.ts / schema.ts (SIO-1026).
 	const rows = await store.run<{
 		id: string;
 		class: string;
@@ -74,7 +76,7 @@ export async function rootCauseForIncident(store: GraphStore, incidentId: string
 		confidence: number;
 		ruleName: string | null;
 	}>(
-		"MATCH (i:Incident {id: $id})-[r:HAS_ROOT_CAUSE]->(rc:RootCause) RETURN rc.id AS id, rc.class AS class, rc.description AS description, rc.confidence AS confidence, r.ruleName AS ruleName LIMIT 1",
+		"MATCH (i:Incident {id: $id})-[r:HAS_ROOT_CAUSE]->(rc:RootCause) RETURN rc.id AS id, rc.class AS class, rc.description AS description, r.confidence AS confidence, r.ruleName AS ruleName LIMIT 1",
 		{ id: incidentId },
 	);
 	const row = rows[0];
@@ -101,6 +103,12 @@ export interface PriorRootCause {
 
 export async function priorRootCauses(store: GraphStore, causeClass: string, limit = 5): Promise<PriorRootCause[]> {
 	if (!causeClass) return [];
+	// The OPTIONAL MATCH to Runbook fans out to one row per runbook, so a query-level
+	// LIMIT would bound JOINED ROWS, not incidents -- a single incident with many
+	// runbooks could crowd out newer incidents. lbug's binder is fragile with
+	// multi-clause WITH...LIMIT restructures (vars don't cross clauses cleanly), so
+	// instead we fetch all matching rows ordered newest-first and apply the incident
+	// limit AFTER collapsing the fan-out, which is deterministic and lbug-safe.
 	const rows = await store.run<{
 		incidentId: string;
 		summary: string | null;
@@ -109,11 +117,11 @@ export async function priorRootCauses(store: GraphStore, causeClass: string, lim
 		runbook: string | null;
 		createdAt: string | null;
 	}>(
-		"MATCH (i:Incident)-[:HAS_ROOT_CAUSE]->(rc:RootCause {class: $class}) OPTIONAL MATCH (i)-[:RESOLVED_BY]->(rb:Runbook) RETURN i.id AS incidentId, i.summary AS summary, i.severity AS severity, rc.description AS description, rb.filename AS runbook, i.createdAt AS createdAt ORDER BY i.createdAt DESC LIMIT $limit",
-		{ class: causeClass, limit },
+		"MATCH (i:Incident)-[:HAS_ROOT_CAUSE]->(rc:RootCause {class: $class}) OPTIONAL MATCH (i)-[:RESOLVED_BY]->(rb:Runbook) RETURN i.id AS incidentId, i.summary AS summary, i.severity AS severity, rc.description AS description, rb.filename AS runbook, i.createdAt AS createdAt ORDER BY i.createdAt DESC",
+		{ class: causeClass },
 	);
 	// Collapse the OPTIONAL-MATCH fan-out (one row per runbook) into one entry per
-	// incident, preserving order and deduping runbooks.
+	// incident, preserving newest-first order and deduping runbooks.
 	const byIncident = new Map<string, PriorRootCause>();
 	for (const row of rows) {
 		const id = String(row.incidentId);
@@ -130,7 +138,8 @@ export async function priorRootCauses(store: GraphStore, causeClass: string, lim
 			runbooks: row.runbook ? [String(row.runbook)] : [],
 		});
 	}
-	return [...byIncident.values()];
+	// Bound the DISTINCT-incident set (not the joined rows) to `limit`.
+	return [...byIncident.values()].slice(0, limit);
 }
 
 // SIO-954: recent IaC change history for one deployment, most-recent first.

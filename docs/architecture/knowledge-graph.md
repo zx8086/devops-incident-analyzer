@@ -106,7 +106,7 @@ The graph nodes are why the registered node counts exceed the base graphs:
 | LLM-callable `kg_*` tools | none (graph used only via internal nodes) | yes — curated `kg_*` + `kg_run_cypher` via the in-process MCP server |
 | `warm_knowledge_graph` hook | yes (bootstrap opens + `init`s the store) | no |
 
-incident-analyzer consumes the graph purely through internal enrich nodes -- it has no LLM-callable `kg_*` tools by design (its graph use is enrichment, not a ReAct tool loop; the entity extractor only routes the seven user datasources, so a graph sub-agent would never be dispatched). SIO-1026 brought prior-root-cause recall into that enrichment path. The shared `kg_prior_root_causes` MCP tool (SIO-1027) is available to elastic-iac's `kg_run_cypher`/curated surface and to any future ad-hoc caller.
+incident-analyzer consumes the graph purely through internal enrich nodes -- it has no LLM-callable `kg_*` tools by design (its graph use is enrichment, not a ReAct tool loop; the entity extractor only routes the seven user datasources, so a graph sub-agent would never be dispatched). SIO-1026 brought prior-root-cause recall into that enrichment path and added the shared `kg_prior_root_causes` MCP tool, which is available to elastic-iac's `kg_run_cypher`/curated surface and to any future ad-hoc caller.
 
 ## Lifecycle
 

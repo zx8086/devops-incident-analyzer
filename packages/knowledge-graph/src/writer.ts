@@ -116,19 +116,29 @@ export interface RootCauseRecord {
 
 export async function recordRootCause(store: GraphStore, rootCause: RootCauseRecord): Promise<void> {
 	if (!rootCause.id || !rootCause.incidentId) return;
+	// The node is shared across incidents (PK = class hash): only set identity.
+	await store.run("MERGE (rc:RootCause {id: $id}) SET rc.class = $class, rc.description = $description", {
+		id: rootCause.id,
+		class: rootCause.class ?? "",
+		description: rootCause.description ?? "",
+	});
+	// An incident has at most one root cause. A re-analysis may pick a different
+	// rule, so drop any prior HAS_ROOT_CAUSE edge for this incident before linking
+	// the new one -- otherwise edges accumulate and rootCauseForIncident (LIMIT 1)
+	// would return an arbitrary one.
+	await store.run("MATCH (i:Incident {id: $incidentId})-[r:HAS_ROOT_CAUSE]->(:RootCause) DELETE r", {
+		incidentId: rootCause.incidentId,
+	});
+	// Per-incident metadata lives on the edge, not the shared node.
 	await store.run(
-		"MERGE (rc:RootCause {id: $id}) SET rc.class = $class, rc.description = $description, rc.confidence = $confidence, rc.createdAt = $createdAt",
+		"MATCH (i:Incident {id: $incidentId}), (rc:RootCause {id: $id}) MERGE (i)-[r:HAS_ROOT_CAUSE]->(rc) SET r.ruleName = $ruleName, r.confidence = $confidence, r.createdAt = $createdAt",
 		{
+			incidentId: rootCause.incidentId,
 			id: rootCause.id,
-			class: rootCause.class ?? "",
-			description: rootCause.description ?? "",
+			ruleName: rootCause.ruleName ?? "",
 			confidence: rootCause.confidence ?? 0,
 			createdAt: rootCause.createdAt ?? new Date().toISOString(),
 		},
-	);
-	await store.run(
-		"MATCH (i:Incident {id: $incidentId}), (rc:RootCause {id: $id}) MERGE (i)-[r:HAS_ROOT_CAUSE]->(rc) SET r.ruleName = $ruleName",
-		{ incidentId: rootCause.incidentId, id: rootCause.id, ruleName: rootCause.ruleName ?? "" },
 	);
 }
 

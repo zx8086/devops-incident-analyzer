@@ -144,7 +144,12 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 				);
 			const lines = rows.map((r) => {
 				const rb = r.runbooks.length > 0 ? ` resolved by ${r.runbooks.join(", ")}` : "";
-				return `- [${r.severity}] ${r.summary} (incident ${r.incidentId})${rb}`;
+				// reader.ts coalesces missing severity/summary to "" -- omit an empty
+				// severity prefix and fall back for an empty summary so the bullet is
+				// never rendered as "- []  (incident ...)".
+				const severity = r.severity ? `[${r.severity}] ` : "";
+				const summary = r.summary || "(summary unavailable)";
+				return `- ${severity}${summary} (incident ${r.incidentId})${rb}`;
 			});
 			return text(`Prior incidents with the ${causeClass} root cause:\n${lines.join("\n")}`);
 		},

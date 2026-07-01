@@ -141,13 +141,20 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 // "already covered by prior agent findings". Trivially-satisfied rules (trigger
 // absent, fail-open, or degraded) are NOT a cause: we never fabricate one when no
 // cross-domain correlation held (mirrors the SIO-1013 grounded-gaps discipline).
+// When several covered rules hold on one incident we pick a DETERMINISTIC winner
+// (lowest rule name) rather than whichever happens to sit first in the
+// correlationRules array, so the persisted HAS_ROOT_CAUSE edge is reproducible
+// across re-analyses of the same state.
 function topSatisfiedCorrelation(state: AgentStateType): { ruleName: string; description: string } | null {
 	const decisions = evaluate(state, correlationRules);
-	const covered = decisions.find(
-		(d) => d.status === "satisfied" && d.match !== null && d.reason === "already covered by prior agent findings",
-	);
-	if (!covered) return null;
-	return { ruleName: covered.rule.name, description: covered.rule.description };
+	const covered = decisions
+		.filter(
+			(d) => d.status === "satisfied" && d.match !== null && d.reason === "already covered by prior agent findings",
+		)
+		.sort((a, b) => a.rule.name.localeCompare(b.rule.name));
+	const winner = covered[0];
+	if (!winner) return null;
+	return { ruleName: winner.rule.name, description: winner.rule.description };
 }
 
 // recordRootCause node: persist a RootCause for the turn's Incident when a

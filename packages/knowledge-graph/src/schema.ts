@@ -93,16 +93,16 @@ export const IncidentNodeSchema = z
 export const FindingNodeSchema = z
 	.object({ id: z.string().min(1), kind: z.string(), summary: z.string().optional() })
 	.strict();
-// SIO-1026: the writer boundary shape for a RootCause node. class is the normalized
-// cause category (e.g. the satisfied correlation rule name); confidence carries the
-// turn's confidenceScore so recall can rank prior causes.
+// SIO-1026: the writer boundary shape for a RootCause node. The node is SHARED
+// across incidents (PK = hash of the normalized class), so it carries only cause
+// IDENTITY (id, class, description). Per-incident metadata (confidence, createdAt,
+// ruleName) lives on the HAS_ROOT_CAUSE edge instead, so a later incident with the
+// same cause class cannot overwrite an earlier incident's values.
 export const RootCauseNodeSchema = z
 	.object({
 		id: z.string().min(1),
 		class: z.string().optional(),
 		description: z.string().optional(),
-		confidence: z.number().optional(),
-		createdAt: z.string().optional(),
 	})
 	.strict();
 // SIO-954: IaC writer boundary shapes.
@@ -157,8 +157,10 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS Finding(id STRING, kind STRING, summary STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Runbook(filename STRING, PRIMARY KEY(filename))",
 	"CREATE NODE TABLE IF NOT EXISTS WikiPage(slug STRING, PRIMARY KEY(slug))",
-	// SIO-1026: RootCause (deterministic, no embedding) + its Incident link.
-	"CREATE NODE TABLE IF NOT EXISTS RootCause(id STRING, class STRING, description STRING, confidence DOUBLE, createdAt STRING, PRIMARY KEY(id))",
+	// SIO-1026: RootCause (deterministic, no embedding). The node is shared across
+	// incidents (PK = class hash) so it holds only cause identity; per-incident
+	// confidence/createdAt live on the HAS_ROOT_CAUSE edge below.
+	"CREATE NODE TABLE IF NOT EXISTS RootCause(id STRING, class STRING, description STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service)",
 	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic)",
 	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic)",
@@ -168,7 +170,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
 	"CREATE REL TABLE IF NOT EXISTS DOCUMENTED_IN(FROM Service TO WikiPage)",
 	"CREATE REL TABLE IF NOT EXISTS DEPLOYED_AS(FROM Service TO Deployment)",
-	"CREATE REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE(FROM Incident TO RootCause, ruleName STRING)",
+	"CREATE REL TABLE IF NOT EXISTS HAS_ROOT_CAUSE(FROM Incident TO RootCause, ruleName STRING, confidence DOUBLE, createdAt STRING)",
 	// SIO-954/SIO-965: IaC change-history tables. ElasticDeployment/ConfigChange
 	// carry the richer SIO-965 columns (ecId/region, outcome) for FRESH graphs;
 	// EXISTING graphs gain those columns via the tolerant ALTER_MIGRATIONS below
