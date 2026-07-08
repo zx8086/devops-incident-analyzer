@@ -4,6 +4,7 @@ import {
 	buildFleetFactDecision,
 	buildFleetFactRationale,
 	buildFleetGateMessage,
+	buildFleetHostSelector,
 	buildFleetMemorySummary,
 	classifyFleetApplyResult,
 	dynamicRolloutSeconds,
@@ -11,7 +12,10 @@ import {
 	formatRolloutDuration,
 	hasApplicableFleetUpgrade,
 	intentFromText,
+	parseExpectedAgentCount,
 	parseFleetApplyOutcome,
+	parseFleetHostList,
+	parseFleetRawSelector,
 	parseFleetUpgradeReport,
 	parseSinglePipeline,
 	parseTargetVersion,
@@ -1204,5 +1208,271 @@ describe("recallPriorFleetUpgrades (SIO-971)", () => {
 		withTerminalFacts([]);
 		expect(await recallPriorFleetUpgrades("us-cld", "9.4.2")).toBe("");
 		reset();
+	});
+});
+
+// SIO-1032: host-scoped fleet upgrade + expected-count guard. The repo already honors a SELECTOR
+// (task fleet:bulk-upgrade-preview SELECTOR=...); these cover the AGENT side that was throwing the
+// user's host list away and never enforcing "must resolve to exactly N".
+describe("buildFleetHostSelector (SIO-1032)", () => {
+	test("builds the upgradeable:true-scoped KQL from a host list, one quoted clause per host", () => {
+		expect(buildFleetHostSelector(["eu1w2022amp40", "hwv00061", "amsctx514"])).toBe(
+			'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("eu1w2022amp40" or "hwv00061" or "amsctx514")',
+		);
+	});
+	test("preserves host-name case verbatim (Fleet hostnames are case-sensitive)", () => {
+		expect(buildFleetHostSelector(["Hwv00153", "IT-A440TILL101"])).toBe(
+			'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("Hwv00153" or "IT-A440TILL101")',
+		);
+	});
+	test("trims whitespace and drops empty/blank entries", () => {
+		expect(buildFleetHostSelector([" hostA ", "", "   ", "hostB"])).toBe(
+			'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("hostA" or "hostB")',
+		);
+	});
+	test("an empty list, an all-blank list, or undefined yields undefined (unscoped -> all agents)", () => {
+		expect(buildFleetHostSelector([])).toBeUndefined();
+		expect(buildFleetHostSelector(["", "  "])).toBeUndefined();
+		expect(buildFleetHostSelector(undefined)).toBeUndefined();
+	});
+});
+
+describe("fleet-upgrade raw-text scoping parsers (SIO-1032)", () => {
+	// The reported prompt shape: a colon introduces a comma-run of host tokens, and the target
+	// version 9.4.2 sits just before the colon -- it must NOT be captured as a host.
+	const prompt =
+		"In the eu-cld deployment, upgrade these Fleet agents to 9.4.2: " +
+		"eu1w2022amp40, hwv00061, IT-A440TILL101, AMSDB063-CLONE, EU2DB01D. " +
+		"Scope the selector to exactly these hosts and to upgradeable:true. " +
+		"Preview first: it must resolve to 25 agents.";
+
+	test("parseFleetHostList pulls the named hosts, excludes the version, preserves case", () => {
+		const hosts = parseFleetHostList(prompt);
+		expect(hosts).toEqual(["eu1w2022amp40", "hwv00061", "IT-A440TILL101", "AMSDB063-CLONE", "EU2DB01D"]);
+		expect(hosts).not.toContain("9.4.2");
+	});
+	test("parseFleetHostList honors an explicit 'hosts:' / 'agents:' label", () => {
+		expect(parseFleetHostList("upgrade agents: hostA, hostB, hostC to 9.4.2")).toEqual(["hostA", "hostB", "hostC"]);
+	});
+	test("parseFleetHostList de-dupes case-insensitively, keeping first-seen casing", () => {
+		expect(parseFleetHostList("hosts: HostA, hosta, HOSTB")).toEqual(["HostA", "HOSTB"]);
+	});
+	test("parseFleetHostList returns [] for a plain upgrade with no host list", () => {
+		expect(parseFleetHostList("upgrade all the fleet agents on eu-cld to 9.4.2")).toEqual([]);
+	});
+
+	test("parseExpectedAgentCount reads 'it must resolve to 25 agents'", () => {
+		expect(parseExpectedAgentCount(prompt)).toBe(25);
+	});
+	test("parseExpectedAgentCount reads 'exactly 12 agents' and 'resolve to 7'", () => {
+		expect(parseExpectedAgentCount("stop unless exactly 12 agents match")).toBe(12);
+		expect(parseExpectedAgentCount("the selector should resolve to 7")).toBe(7);
+	});
+	test("parseExpectedAgentCount is undefined when the user states no count", () => {
+		expect(parseExpectedAgentCount("upgrade the agents on eu-cld to 9.4.2")).toBeUndefined();
+	});
+
+	test("parseFleetRawSelector captures an inline local_metadata KQL clause", () => {
+		const kql = 'local_metadata.host.hostname:("a" or "b")';
+		expect(parseFleetRawSelector(`use this: ${kql} please`)).toBe(kql);
+	});
+	test("parseFleetRawSelector reads a 'SELECTOR=' prefix form", () => {
+		const kql = 'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("x")';
+		expect(parseFleetRawSelector(`SELECTOR=${kql}`)).toBe(kql);
+	});
+	test("parseFleetRawSelector is undefined when no KQL is present", () => {
+		expect(parseFleetRawSelector("upgrade these hosts: a, b, c")).toBeUndefined();
+	});
+});
+
+describe("buildFleetGateMessage count-mismatch warning (SIO-1032)", () => {
+	test("warns when the resolved count differs from the user's expected count", () => {
+		const { message } = buildFleetGateMessage(
+			report({
+				deployment: "eu-cld",
+				resolvedCount: 1595,
+				expectedAgentCount: 25,
+				crosstab: { upgradeable: 40, notUpgradeable: 0, byReason: [] },
+				versionCrosstab: { alreadyOnTarget: 1555, outdated: 40, versionUnknown: 0, upgradeableOutdated: 40 },
+			}),
+		);
+		expect(message).toContain("WARNING");
+		expect(message).toContain("you asked for exactly 25");
+		expect(message).toContain("resolved to 1595");
+		// the warning still says the approve upgrades only the scoped, upgradeable set
+		expect(message).toContain("40 scoped");
+	});
+	test("no warning when the resolved count matches the expected count", () => {
+		const { message } = buildFleetGateMessage(
+			report({
+				resolvedCount: 25,
+				expectedAgentCount: 25,
+				crosstab: { upgradeable: 25, notUpgradeable: 0, byReason: [] },
+			}),
+		);
+		expect(message).not.toContain("WARNING");
+		expect(message).not.toContain("you asked for exactly");
+	});
+	test("no warning when the user set no expected count (guard is opt-in)", () => {
+		const { message } = buildFleetGateMessage(report({ resolvedCount: 1595 }));
+		expect(message).not.toContain("WARNING");
+	});
+});
+
+describe("fleet-upgrade selector threading (SIO-1032)", () => {
+	test("detectFleetUpgrade builds the KQL from a host list parsed from the message text", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const previewArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				previewArgs.push(args);
+				return '[423] {"status":"locked","note":"a fleet pipeline is already running"}';
+			},
+		});
+		// The fleet-upgrade intent skips parseIntent, so the host list comes from the raw text; only
+		// cluster/version are pre-parsed onto iacRequest (as the live classifier path provides them).
+		const state = {
+			messages: [{ getType: () => "human", content: "upgrade only these fleet agents to 9.4.2: hostA, hostB" }],
+			iacRequest: { workflow: "other", isProd: false, cluster: "eu-cld", version: "9.4.2" },
+		} as unknown as IacStateType;
+
+		await detectFleetUpgrade(state);
+
+		expect(previewArgs).toHaveLength(1);
+		expect(previewArgs[0]?.deployment).toBe("eu-cld");
+		expect(previewArgs[0]?.selector).toBe(
+			'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("hostA" or "hostB")',
+		);
+	});
+
+	test("a raw KQL selector pasted in the message wins and is sent verbatim", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const previewArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				previewArgs.push(args);
+				return '[423] {"status":"locked"}';
+			},
+		});
+		const rawKql = 'local_metadata.host.hostname:("only-this-one")';
+		const state = {
+			messages: [
+				// a raw KQL clause AND a stray host token -- the raw selector must win.
+				{ getType: () => "human", content: `upgrade eu-cld agents to 9.4.2 using ${rawKql} not: otherhost` },
+			],
+			iacRequest: { workflow: "other", isProd: false, cluster: "eu-cld", version: "9.4.2" },
+		} as unknown as IacStateType;
+
+		await detectFleetUpgrade(state);
+
+		expect(previewArgs[0]?.selector).toBe(rawKql);
+	});
+
+	test("a plain upgrade (no scoping) sends NO selector -- CI resolves all outdated agents (back-compat)", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const previewArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				previewArgs.push(args);
+				return '[423] {"status":"locked"}';
+			},
+		});
+		const state = {
+			messages: [{ getType: () => "human", content: "upgrade all the fleet agents in eu-cld to 9.4.2" }],
+			iacRequest: { workflow: "fleet-upgrade", isProd: false, cluster: "eu-cld", version: "9.4.2" },
+		} as unknown as IacStateType;
+
+		await detectFleetUpgrade(state);
+
+		expect(previewArgs[0]).not.toHaveProperty("selector");
+	});
+
+	test("applyFleetUpgrade resends report.requestedSelector so an approval stays scoped", async () => {
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		const applyArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: (args) => {
+				applyArgs.push(args);
+				return '[201] {"deployment":"eu-cld","version":"9.4.2","pipelineId":2606400810,"status":"created"}';
+			},
+			gitlab_get_pipeline: () => '[200] {"id":2606400810,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({
+					pipelineId: 2606400810,
+					status: "success",
+					report: JSON.stringify({
+						mode: "apply",
+						action_id: "act-1",
+						apply: { poll_status: "COMPLETE", acked: 2, created: 2, failed_silent: 0 },
+					}),
+				})}`,
+		});
+		const scoped =
+			'local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:("hostA" or "hostB")';
+		const state = stateWith({
+			fleetUpgradeReport: report({
+				deployment: "eu-cld",
+				resolvedCount: 2,
+				requestedSelector: scoped,
+				crosstab: { upgradeable: 2, notUpgradeable: 0, byReason: [] },
+			}),
+		});
+
+		await applyFleetUpgrade(state);
+
+		expect(applyArgs).toHaveLength(1);
+		expect(applyArgs[0]?.selector).toBe(scoped);
+	});
+
+	test("applyFleetUpgrade sends NO selector when the upgrade was unscoped (back-compat)", async () => {
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		const applyArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: (args) => {
+				applyArgs.push(args);
+				return '[201] {"pipelineId":2606400811,"status":"created"}';
+			},
+			gitlab_get_pipeline: () => '[200] {"id":2606400811,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({
+					pipelineId: 2606400811,
+					status: "success",
+					report: JSON.stringify({
+						mode: "apply",
+						action_id: "act-2",
+						apply: { poll_status: "COMPLETE", acked: 8, created: 8, failed_silent: 0 },
+					}),
+				})}`,
+		});
+		const state = stateWith({
+			fleetUpgradeReport: report({
+				deployment: "eu-cld",
+				crosstab: { upgradeable: 8, notUpgradeable: 0, byReason: [] },
+			}),
+		});
+
+		await applyFleetUpgrade(state);
+
+		expect(applyArgs[0]).not.toHaveProperty("selector");
+	});
+});
+
+// SIO-1032: the 40-vs-1595 bug -- the gate card headlined willUpgrade (40) but the dispatched
+// summary reported crosstab.upgradeable (1595). Both must now report the same willUpgrade count.
+describe("formatFleetUpgradeSummary count agrees with the gate card (SIO-1032)", () => {
+	test("dispatched summary reports willUpgrade (upgradeableOutdated), not the full upgradeable count", () => {
+		const result: FleetUpgradeResult = { status: "dispatched", pipelineId: 2662207800, pipelineStatus: "running" };
+		const rep = report({
+			deployment: "eu-cld",
+			resolvedCount: 1807,
+			crosstab: { upgradeable: 1595, notUpgradeable: 212, byReason: [{ reason: "wolfi_container", count: 3 }] },
+			versionCrosstab: { alreadyOnTarget: 1555, outdated: 40, versionUnknown: 0, upgradeableOutdated: 40 },
+		});
+		const msg = formatFleetUpgradeSummary(stateWith({ fleetUpgradeReport: rep, fleetUpgradeResult: result }));
+		// the gate card headline for the same report:
+		expect(buildFleetGateMessage(rep).willUpgrade).toBe(40);
+		// the summary agrees -- 40 agent(s), never the 1595 total
+		expect(msg).toContain("40 agent(s) upgrading");
+		expect(msg).not.toContain("1595 agent(s) upgrading");
 	});
 });

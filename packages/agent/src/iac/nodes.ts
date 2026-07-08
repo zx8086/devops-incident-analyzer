@@ -158,6 +158,12 @@ const IntentSchema = z.object({
 	integration: z.string().nullish(),
 	integrationVersion: z.string().nullish(),
 	force: z.boolean().nullish(),
+	// SIO-1032: fleet-upgrade host scoping. selectedHostnames = the plain host list the user named
+	// (the agent builds the KQL); fleetSelector = a raw KQL selector the user wrote (passthrough,
+	// wins over the host list); expectedAgentCount = "must resolve to exactly N" gate-warning guard.
+	selectedHostnames: z.array(z.string()).nullish(),
+	fleetSelector: z.string().nullish(),
+	expectedAgentCount: z.number().nullish(),
 	sloName: z.string().nullish(),
 	sloTarget: z.number().nullish(),
 	sloWindow: z.string().nullish(),
@@ -332,6 +338,10 @@ export function parseIntentJson(raw: string): IacRequest {
 					integration: nn(p.integration),
 					integrationVersion: nn(p.integrationVersion),
 					force: nn(p.force),
+					// SIO-1032: fleet-upgrade host scoping + count guard (all optional; absent = unscoped).
+					selectedHostnames: nn(p.selectedHostnames),
+					fleetSelector: nn(p.fleetSelector),
+					expectedAgentCount: nn(p.expectedAgentCount),
 					sloName: nn(p.sloName),
 					sloTarget: nn(p.sloTarget),
 					sloWindow: nn(p.sloWindow),
@@ -848,7 +858,8 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		`workflow (${WORKFLOW_ENUM_PROSE}), ` +
 		"cluster, tier, " +
 		"resource, newSizeGb, " +
-		"newMaxGb, policyName, phasesPatch, ilmPolicies, version, integration, integrationVersion, force, sloName, sloTarget, sloWindow, " +
+		"newMaxGb, policyName, phasesPatch, ilmPolicies, version, integration, integrationVersion, force, " +
+		"selectedHostnames, fleetSelector, expectedAgentCount, sloName, sloTarget, sloWindow, " +
 		"sloTags, ruleName, alertThreshold, alertWindowSize, alertWindowUnit, alertEnabled, alertInterval, dataviewName, " +
 		"runtimeFieldName, runtimeFieldType, runtimeFieldScript, dataviewTitle, dataviewDisplayName, templateName, " +
 		"totalShardsPerNode, spaceName, spaceDisplayName, spaceDescription, spaceColor, roleName, grantCluster, " +
@@ -921,6 +932,17 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"to the named deployment, integration to the integration alias key VERBATIM (e.g. 'aws', 'kafka', 'system', 'apm', " +
 		"'elastic-defend'), integrationVersion to the explicit target package version string, and force to true ONLY if the " +
 		"user explicitly asks to force/reinstall it. " +
+		"For a Fleet AGENT BINARY upgrade ('upgrade the Fleet agents on eu-cld to 9.4.2', 'bulk-upgrade the agents on X') -- " +
+		"upgrading the elastic-agent binaries enrolled on hosts, NOT an integration package and NOT a cluster version -- " +
+		"set workflow to 'fleet-upgrade', cluster to the named deployment, and version to the target agent version string. " +
+		"OPTIONAL host scoping (all three fields are optional; when the user names no hosts and no count, leave them null and " +
+		"the upgrade covers all outdated agents): if the user NAMES specific hosts/agents and scopes to them ('upgrade ONLY " +
+		"these agents: hostA, hostB, ...', 'scope to exactly these hosts', 'just hostA and hostB'), set selectedHostnames to " +
+		"the array of host names VERBATIM (one string per host, preserving case). If the user instead pastes a RAW Fleet KQL " +
+		"selector ('SELECTOR = local_metadata.host.hostname:(\"a\" or \"b\")', 'use this kuery: ...'), set fleetSelector to that " +
+		"query string VERBATIM (do NOT also fill selectedHostnames). If the user states an EXPECTED COUNT the preview must " +
+		"resolve to ('it must resolve to 25 agents', 'expect exactly 25', 'stop if it resolves to any other count'), set " +
+		"expectedAgentCount to that integer. These scope ONLY the fleet-upgrade workflow; ignore them for every other workflow. " +
 		"For an SLO change ('set the DS API Health SLO target to 99.5% on ap-cld', 'change the ap-cld ds-authentication SLO " +
 		"window to 60 days') -- editing an EXISTING SLO's target/time-window/tags, NOT creating one -- set workflow to " +
 		"'slo-edit', cluster to the named deployment, sloName to the SLO file basename VERBATIM (e.g. 'ds-authentication', " +
@@ -9960,6 +9982,81 @@ export async function recallPriorFleetUpgrades(deployment: string, _version: str
 	}
 }
 
+// SIO-1032: raw-text scoping parsers for the fleet-upgrade flow. The fleet-upgrade INTENT routes
+// straight to detectFleetUpgrade and never runs parseIntent, so deployment/version (and now the host
+// scope) are parsed from the message text here, deterministically -- same idiom as parseTargetVersion.
+
+// A pasted Fleet KQL selector wins over a host list. Recognizes an explicit `SELECTOR=<kql>` /
+// `selector: <kql>` / `kuery: <kql>` prefix, else a bare `local_metadata...:(...)` clause. Returns the
+// trimmed query (quotes preserved) or undefined. Pure.
+export function parseFleetRawSelector(text: string): string | undefined {
+	const prefixed = text.match(/\b(?:selector|kuery|kql)\s*[:=]\s*(.+)$/im);
+	if (prefixed?.[1]) {
+		const q = prefixed[1]
+			.trim()
+			.replace(/^["'`]|["'`]$/g, "")
+			.trim();
+		if (/local_metadata|host\.hostname|agent\.id/i.test(q)) return q;
+	}
+	// A bare KQL clause the user pasted inline (up to the matching close paren).
+	const bare = text.match(/local_metadata[^\n]*?:\s*\([^)]*\)/i);
+	return bare ? bare[0].trim() : undefined;
+}
+
+// The user's "must resolve to exactly N agents" guard. Matches "resolve to (exactly) N", "exactly N
+// agents", "must be N hosts/agents". Returns the integer or undefined. Pure.
+export function parseExpectedAgentCount(text: string): number | undefined {
+	const m =
+		text.match(/\bresolve[sd]?\s+to\s+(?:exactly\s+|precisely\s+)?(\d+)\b/i) ||
+		text.match(/\b(?:exactly|precisely)\s+(\d+)\s+(?:agent|host)s?\b/i) ||
+		text.match(/\bmust\s+(?:be|resolve\s+to)\s+(\d+)\s+(?:agent|host)s?\b/i);
+	if (!m?.[1]) return undefined;
+	const n = Number.parseInt(m[1], 10);
+	return Number.isFinite(n) ? n : undefined;
+}
+
+// A named host list the user scoped the upgrade to. Recognizes an explicit "(only/scope to/these)
+// hosts/agents: h1, h2, ..." label, else a bare colon-introduced comma-run (the reported prompt form:
+// "...to 9.4.2: eu1w2022amp40, hwv00061, ..."). The list is comma-separated; each element's LEADING
+// token is the host, and collection STOPS at the first element whose leading token is not host-shaped
+// (that is where the sentence resumes -- e.g. "...EU2DB01D. Scope the selector..."). A host token has
+// >=2 chars, starts with a letter, is letters/digits/dot/underscore/hyphen, and is NOT a bare version.
+// De-dupes case-insensitively (first-seen casing wins), preserves order. Pure.
+export function parseFleetHostList(text: string): string[] {
+	// The captured segment starts after a "hosts:/agents:" label or a bare colon and runs to the end of
+	// the line (the list may wrap, but the reported form is single-line). Prefer the labelled form.
+	const labelled = text.match(/\b(?:hosts?|agents?)\s*:\s*([^\n]+)/i);
+	const colonRun = text.match(/:\s*([A-Za-z][\w.-]*\s*,\s*[^\n]+)/);
+	const segment = (labelled?.[1] ?? colonRun?.[1] ?? "").trim();
+	if (!segment) return [];
+	const isVersion = (t: string) => /^\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?$/.test(t);
+	const isHost = (t: string) => t.length >= 2 && /^[A-Za-z][\w.-]*$/.test(t) && !isVersion(t);
+	const seen = new Set<string>();
+	const hosts: string[] = [];
+	for (const element of segment.split(",")) {
+		// take the element's leading whitespace-delimited token, trimming trailing punctuation.
+		const tok = (element.trim().split(/\s+/)[0] ?? "").replace(/[.,;:]+$/, "");
+		// A non-host leading token means the comma-list ended and prose resumed -> stop.
+		if (!isHost(tok)) break;
+		const key = tok.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		hosts.push(tok);
+	}
+	return hosts;
+}
+
+// SIO-1032: build the Fleet KQL from a named host list, ANDed with upgradeable:true so a scoped
+// upgrade never picks up a non-upgradeable (Wolfi/container) agent. Mirrors the repo
+// `task fleet:bulk-upgrade-preview SELECTOR=...` form. Quotes each hostname; empty/whitespace-only
+// entries are dropped, and an empty list yields undefined (unscoped -> all outdated agents). Pure.
+export function buildFleetHostSelector(hostnames?: string[]): string | undefined {
+	const hosts = (hostnames ?? []).map((h) => h.trim()).filter(Boolean);
+	if (hosts.length === 0) return undefined;
+	const clause = hosts.map((h) => `"${h}"`).join(" or ");
+	return `local_metadata.elastic.agent.upgradeable:true and local_metadata.host.hostname:(${clause})`;
+}
+
 export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<IacStateType>> {
 	// SIO-923: prefer the deployment the planner already parsed (state.iacRequest.cluster) over
 	// re-deriving it from the raw text. resolveDriftDeployment matches the WHOLE user message against
@@ -9987,8 +10084,29 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 		};
 	}
 
-	log.info({ deployment, version }, "iac fleet upgrade: triggering preview");
-	const trig = parseTriggerResult(await callTool("gitlab_trigger_fleet_upgrade_preview", { deployment, version }));
+	// SIO-1032: scope the preview to the user's host set, parsed from the message text (fleet-upgrade
+	// skips parseIntent, so we parse here like deployment/version). A raw KQL selector wins over a named
+	// host list; state.iacRequest is a fallback for any future path that DOES run parseIntent. Absent
+	// both -> undefined (CI resolves all outdated agents, the prior behavior).
+	const fleetText = lastHumanText(state);
+	const rawSelector = state.iacRequest?.fleetSelector?.trim() || parseFleetRawSelector(fleetText);
+	const hostList =
+		state.iacRequest?.selectedHostnames && state.iacRequest.selectedHostnames.length > 0
+			? state.iacRequest.selectedHostnames
+			: parseFleetHostList(fleetText);
+	const requestedSelector = rawSelector || buildFleetHostSelector(hostList);
+	const expectedAgentCount = state.iacRequest?.expectedAgentCount ?? parseExpectedAgentCount(fleetText);
+	log.info(
+		{ deployment, version, hasSelector: Boolean(requestedSelector), expectedAgentCount },
+		"iac fleet upgrade: triggering preview",
+	);
+	const trig = parseTriggerResult(
+		await callTool("gitlab_trigger_fleet_upgrade_preview", {
+			deployment,
+			version,
+			...(requestedSelector && { selector: requestedSelector }),
+		}),
+	);
 	if (trig.pipelineId === null) {
 		const reason =
 			trig.status === "locked"
@@ -10038,6 +10156,10 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 	const report: FleetUpgradeReport = {
 		...parsed,
 		generatedAt: parsed.generatedAt || new Date().toISOString(),
+		// SIO-1032: keep the agent-sent selector + expected-count guard on the report so the gate can
+		// warn on a count mismatch and applyFleetUpgrade can resend the SAME selector (stay scoped).
+		...(requestedSelector && { requestedSelector }),
+		...(expectedAgentCount != null && { expectedAgentCount }),
 		...(priorUpgrades && { priorUpgrades }),
 	};
 	log.info(
@@ -10083,7 +10205,17 @@ export function buildFleetGateMessage(report: FleetUpgradeReport): {
 	// SIO-936: stagger window scales with the agents this flow actually moves (not the script's
 	// fixed 3600s default), so the card no longer reads "4 agents over 3600s".
 	const rollout = dynamicRolloutSeconds(willUpgrade);
+	// SIO-1032: if the user stated an expected count ('must resolve to exactly N') and the selector
+	// resolved to a different number, lead the card with a WARNING. The operator may still approve --
+	// the apply stays scoped to the requested selector, so approving upgrades only the matched set.
+	const countWarning =
+		report.expectedAgentCount != null && report.expectedAgentCount !== report.resolvedCount
+			? `WARNING: you asked for exactly ${report.expectedAgentCount} agent(s) but the selector resolved to ` +
+				`${report.resolvedCount}. Review the host list before approving -- approving upgrades only the ` +
+				`${willUpgrade} scoped, upgradeable agent(s) your selector matched. `
+			: "";
 	const message =
+		countWarning +
 		`${report.deployment}: ${willUpgrade} Fleet agent(s) will be upgraded to ${report.targetVersion} ` +
 		`over ${rollout}s. ${alreadyNote}${skipNote}` +
 		"This is an imperative bulk_upgrade (not Terraform). Approve to run it via CI, or decline.";
@@ -10136,6 +10268,9 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 		await callTool("gitlab_trigger_fleet_upgrade_apply", {
 			deployment,
 			version: targetVersion,
+			// SIO-1032: resend the SAME selector the preview used, so an operator who approves past a
+			// count-mismatch warning still upgrades ONLY the scoped set -- never a silent fleet-wide apply.
+			...(report.requestedSelector && { selector: report.requestedSelector }),
 			maxAgents: report.resolvedCount,
 			rolloutSeconds: rollout,
 		}),
@@ -10159,7 +10294,7 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	await dispatchCustomEvent("iac_pipeline_progress", {
 		pipelineId: trig.pipelineId,
 		status:
-			`fleet apply: started -- ${report.crosstab.upgradeable} agent(s) -> ${targetVersion}, ` +
+			`fleet apply: started -- ${willUpgrade} agent(s) -> ${targetVersion}, ` +
 			`expected ${formatRolloutDuration(rollout)}`,
 	});
 
@@ -10364,7 +10499,7 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 		const willUpgrade = report.versionCrosstab?.upgradeableOutdated ?? report.crosstab.upgradeable;
 		const effectiveRollout = dynamicRolloutSeconds(willUpgrade);
 		return (
-			`Fleet upgrade started for ${dep} -- ${report.crosstab.upgradeable} agent(s) upgrading to ` +
+			`Fleet upgrade started for ${dep} -- ${willUpgrade} agent(s) upgrading to ` +
 			`${report.targetVersion} over ${formatRolloutDuration(effectiveRollout)}.${dPid}${skipNote} ` +
 			"I won't block on the full rollout; ask me to check on it or watch the pipeline."
 		);
