@@ -19,7 +19,13 @@ export function normalize(s: string): string {
 		result = result.replace(SUFFIX_PATTERN, "");
 	}
 	// Singular form: drop trailing `s` (handles notifications-service vs notification-service).
-	return result.replace(/s$/, "");
+	result = result.replace(/s$/, "");
+	// SIO-1030: a name that is entirely suffix tokens (e.g. "prod-service", "svc-service",
+	// or bare "service") strips to "". An empty normalized form breaks matchesFocus two ways:
+	// a focus service that empties is silently skipped (false negative), and an empty haystack
+	// makes `sNorm.includes("")` true for every focus (false positive). Fall back to the
+	// lowercased original so such names still compare literally instead of vanishing.
+	return result.length > 0 ? result : s.toLowerCase();
 }
 
 export function tokenize(s: string): Set<string> {
