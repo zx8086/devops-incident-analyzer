@@ -68,6 +68,31 @@ describe("detectUngroundedBlockers", () => {
 		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
 		expect(ungrounded).toHaveLength(1);
 	});
+
+	// SIO-1031: the LLM writes "IAM gap persists" — not "iam permission" / "permission gap" — so the
+	// SIO-1013 regex missed it and a fabricated DescribeLogGroups blocker printed uncapped.
+	test("flags an 'IAM gap persists' bullet when no auth error observed", () => {
+		const answer =
+			"## Gaps\n\n- `logs:DescribeLogGroups` IAM gap persists in both estates; log group names were obtained from task definitions.\n\nConfidence: 0.71";
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(1);
+		expect(ungrounded[0]).toContain("IAM gap persists");
+	});
+
+	test("does NOT flag an 'IAM gap persists' bullet when a real auth toolError exists", () => {
+		const answer =
+			"## Gaps\n\n- `logs:DescribeLogGroups` IAM gap persists in both estates; log group names were obtained from task definitions.\n\nConfidence: 0.71";
+		const results = [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [
+					{ toolName: "aws_logs_describe_log_groups", category: "auth", message: "AccessDenied", retryable: false },
+				],
+			}),
+		];
+		const { ungrounded } = detectUngroundedBlockers(answer, results);
+		expect(ungrounded).toHaveLength(0);
+	});
 });
 
 describe("rewriteUngroundedBlockers", () => {
