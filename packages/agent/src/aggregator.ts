@@ -169,6 +169,11 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// output rather than silently missing bold/compound headings.
 	const defensiveProseRule = `\n\nDEFENSIVE PROSE FORBIDDEN: Do not editorialise about whether your output is fabricated, hallucinated, or trustworthy. Phrases like "not fabricated", "I am not hallucinating", "this is reliable", or "based on real data" are banned. If a value or finding is uncertain, do one of: (a) emit a "[partial: <field-name>]" marker inline where the value would go, (b) list the missing data in the Gaps section, or (c) lower your confidence score. Never reassure the reader in prose -- structured markers and the Gaps section are the only acceptable channels for uncertainty. When listing gaps, use exactly the heading "## Gaps" (no bold, no extra words, no colon) so downstream tooling can parse the section reliably.`;
 
+	// SIO-1031: the LLM fabricated a "logs:DescribeLogGroups IAM gap persists" blocker with no tool
+	// having returned AccessDenied. A permission/IAM claim MUST be grounded in an observed auth tool
+	// error, never inferred from missing data. Aligns the model with detectUngroundedBlockers.
+	const groundedBlockerRule = `\n\nGROUNDED BLOCKERS ONLY: Only describe a datasource as permission-blocked or write "IAM gap" / "not permitted" / a named IAM action as a cause if a tool call in THIS investigation returned an authorization error. If data is simply absent with no observed auth error, state that the data was not retrieved and the access state is unconfirmed -- do NOT name an IAM action or assert a permission gap you did not observe.`;
+
 	// SIO-742: when a *_health_check tool returned status:"up" for a Confluent
 	// component (REST Proxy, ksqlDB, Kafka Connect, Schema Registry), do NOT list
 	// that component as a gap. Gaps is for missing data; a confirmed-up health
@@ -191,7 +196,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${healthCheckGapRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -276,8 +281,11 @@ export function extractGapsBulletCount(answer: string): number {
 // Note: the `logs:[a-z]+` arm was intentionally removed — an informational mention of a
 // logs: action (e.g. "logs:DescribeLogGroups returned 12 groups") must not count as a
 // denial. Only explicit denial phrases trigger the grounding check.
+// SIO-1031: the LLM writes "IAM gap persists" / "IAM access" for fabricated blockers, which the
+// original `iam permission` arm missed. `iam (?:permission|gap|access)` catches that denial
+// phrasing while staying narrow — it never fires on a bare action name.
 const PERMISSION_DENIAL_RE =
-	/\b(not permitted|not authorized|unauthorized|access denied|accessdenied|forbidden|iam permission|permission (?:gap|denied|missing)|lacks? permission)\b/i;
+	/\b(not permitted|not authorized|unauthorized|access denied|accessdenied|forbidden|iam (?:permission|gap|access)|permission (?:gap|denied|missing)|lacks? permission)\b/i;
 
 export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));
