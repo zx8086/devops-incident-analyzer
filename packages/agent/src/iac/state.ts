@@ -73,6 +73,14 @@ export interface IacRequest {
 	integration?: string;
 	integrationVersion?: string;
 	force?: boolean;
+	// SIO-1032: fleet-upgrade host scoping + count guard. selectedHostnames is the plain host list
+	// the user named ("upgrade agents A, B, C only") -> the agent builds the Fleet KQL from it.
+	// fleetSelector is a raw KQL selector the user wrote verbatim (passthrough; wins over the host
+	// list). expectedAgentCount is "must resolve to exactly N / stop if any other count" -- a gate
+	// WARNING, not a hard block; the apply stays selector-scoped regardless.
+	selectedHostnames?: string[];
+	fleetSelector?: string;
+	expectedAgentCount?: number;
 	// SIO-915: slo-edit workflow -- the SLO file basename and the override fields. sloTarget is
 	// a percent (99.5) or fraction (0.995); sloWindow is a duration string ("60d"); sloTags
 	// replace the file-level tags.
@@ -435,6 +443,14 @@ export interface FleetUpgradeReport {
 	targetVersion: string;
 	rolloutSeconds: number;
 	selector: string;
+	// SIO-1032: the selector the AGENT sent to CI (built from a host list or the user's raw KQL),
+	// kept distinct from `selector` (which the CI report echoes back). applyFleetUpgrade resends
+	// this exact string so an approved apply stays scoped to the named set. Undefined = unscoped
+	// (all outdated agents, the pre-SIO-1032 behavior).
+	requestedSelector?: string;
+	// SIO-1032: the "must resolve to exactly N agents" guard the user stated. When set and it does
+	// not equal resolvedCount, the gate card carries a WARNING (operator may still override).
+	expectedAgentCount?: number;
 	resolvedCount: number; // agents matched by the selector
 	versionAvailable: boolean; // target present in /api/fleet/agents/available_versions
 	maxAgents: number;
