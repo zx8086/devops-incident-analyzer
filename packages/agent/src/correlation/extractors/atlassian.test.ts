@@ -99,3 +99,36 @@ describe("extractAtlassianFindings", () => {
 		expect(extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: null }])).toEqual({});
 	});
 });
+
+describe("extractAtlassianFindings focus scoping (SIO-1030)", () => {
+	const issues = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "findLinkedIncidents",
+		rawJson: { issues: rows },
+	});
+
+	test("empty focus keeps every issue (show-all, back-compat)", () => {
+		const out = extractAtlassianFindings(
+			[
+				issues([
+					{ key: "A-1", summary: "prices outage", status: "Open" },
+					{ key: "B-1", summary: "kong blip", status: "Open" },
+				]),
+			],
+			[],
+		);
+		expect(out.linkedIssues).toHaveLength(2);
+	});
+
+	test("keeps issues whose summary references the focus, drops unrelated", () => {
+		const out = extractAtlassianFindings(
+			[
+				issues([
+					{ key: "INC-1", summary: "prices-api-v2-service returning 500s", status: "Resolved" },
+					{ key: "INC-2", summary: "authentication-service latency", status: "Resolved" },
+				]),
+			],
+			["prices-api-v2-service"],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+});

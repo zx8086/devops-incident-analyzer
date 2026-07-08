@@ -105,3 +105,53 @@ describe("extractAwsFindings", () => {
 		expect(findings.alarms?.map((a) => a.name)).toEqual(["shown-1", "dropped-2", "dropped-3"]);
 	});
 });
+
+describe("extractAwsFindings focus scoping (SIO-1030)", () => {
+	const alarms = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "aws_cloudwatch_describe_alarms",
+		rawJson: { MetricAlarms: rows },
+	});
+	const FOCUS = ["prices-api-v2-service"];
+
+	test("empty focus keeps every alarm (show-all, back-compat)", () => {
+		const out = extractAwsFindings(
+			[
+				alarms([
+					{ AlarmName: "prices-api-v2-service-CPU", StateValue: "ALARM" },
+					{ AlarmName: "bitly-service-Memory", StateValue: "OK" },
+				]),
+			],
+			[],
+		);
+		expect(out.alarms).toHaveLength(2);
+	});
+
+	test("drops off-focus alarms, keeps focus-named (matched on name)", () => {
+		const out = extractAwsFindings(
+			[
+				alarms([
+					{ AlarmName: "prices-api-v2-service-CPU-Utilization-High", StateValue: "ALARM" },
+					{ AlarmName: "authentication-service-CPU-Utilization", StateValue: "ALARM" },
+					{ AlarmName: "bitly-service-Memory-Utilization", StateValue: "ALARM" },
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.alarms?.map((a) => a.name)).toEqual(["prices-api-v2-service-CPU-Utilization-High"]);
+	});
+
+	test("NO high-signal pass-through: an off-focus ALARM-state alarm is still dropped", () => {
+		// Product decision is strict drop, no exceptions — assert we did NOT copy
+		// kafka's degraded pass-through into the AWS card.
+		const out = extractAwsFindings([alarms([{ AlarmName: "storytelling-service-CPU", StateValue: "ALARM" }])], FOCUS);
+		expect(out.alarms ?? []).toHaveLength(0);
+	});
+
+	test("matches on namespace, not only alarm name", () => {
+		const out = extractAwsFindings(
+			[alarms([{ AlarmName: "generic-alarm", StateValue: "ALARM", Namespace: "prices-api-v2-service" }])],
+			FOCUS,
+		);
+		expect(out.alarms).toHaveLength(1);
+	});
+});
