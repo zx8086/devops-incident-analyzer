@@ -48,3 +48,36 @@ describe("extractGitLabFindings", () => {
 		expect(extractGitLabFindings(outputs)).toEqual({});
 	});
 });
+
+describe("extractGitLabFindings focus scoping (SIO-1030)", () => {
+	const mrs = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "gitlab_list_merge_requests",
+		rawJson: rows,
+	});
+
+	test("empty focus keeps every MR (show-all, back-compat)", () => {
+		const out = extractGitLabFindings(
+			[
+				mrs([
+					{ id: 1, title: "prices thing" },
+					{ id: 2, title: "articles thing" },
+				]),
+			],
+			[],
+		);
+		expect(out.mergedRequests).toHaveLength(2);
+	});
+
+	test("keeps MRs referencing the focus in title/description, drops unrelated", () => {
+		const out = extractGitLabFindings(
+			[
+				mrs([
+					{ id: 10, title: "Fix OFFSET regression", description: "affects prices-api-v2-service paging" },
+					{ id: 11, title: "Bump kong-proxy timeout", description: "unrelated infra tweak" },
+				]),
+			],
+			["prices-api-v2-service"],
+		);
+		expect(out.mergedRequests?.map((m) => m.id)).toEqual([10]);
+	});
+});

@@ -8,12 +8,16 @@
 import type { AtlassianFindings, AtlassianLinkedIssue, ToolOutput } from "@devops-agent/shared";
 import { AtlassianLinkedIssueSchema } from "@devops-agent/shared";
 import { z } from "zod";
+import { matchesFocus } from "../focus-match.ts";
 
 const EnvelopeSchema = z.object({
 	issues: z.array(z.unknown()).optional(),
 });
 
-export function extractAtlassianFindings(outputs: ToolOutput[]): AtlassianFindings {
+// SIO-1030: focusServices scopes linked incidents to the incident under
+// investigation. Strict drop — an issue is kept only when its summary references
+// a focus service (matchesFocus short-circuits show-all on empty focus).
+export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: string[] = []): AtlassianFindings {
 	const linkedIssues: AtlassianLinkedIssue[] = [];
 	for (const o of outputs) {
 		if (o.toolName !== "findLinkedIncidents") continue;
@@ -21,7 +25,9 @@ export function extractAtlassianFindings(outputs: ToolOutput[]): AtlassianFindin
 		if (!env.success) continue;
 		for (const raw of env.data.issues ?? []) {
 			const parsed = AtlassianLinkedIssueSchema.safeParse(raw);
-			if (parsed.success) linkedIssues.push(parsed.data);
+			if (!parsed.success) continue;
+			if (!matchesFocus(parsed.data.summary, focusServices)) continue;
+			linkedIssues.push(parsed.data);
 		}
 	}
 	return linkedIssues.length > 0 ? { linkedIssues } : {};

@@ -57,3 +57,42 @@ describe("extractCouchbaseFindings", () => {
 		expect(extractCouchbaseFindings(outputs)).toEqual({});
 	});
 });
+
+describe("extractCouchbaseFindings focus scoping (SIO-1030)", () => {
+	const queries = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "capella_get_longest_running_queries",
+		rawJson: rows,
+	});
+
+	test("empty focus keeps every slow query (show-all, back-compat)", () => {
+		const out = extractCouchbaseFindings(
+			[queries([{ statement: "SELECT * FROM prices_v2 b" }, { statement: "SELECT * FROM articles a" }])],
+			[],
+		);
+		expect(out.slowQueries).toHaveLength(2);
+	});
+
+	test("keeps queries whose statement names the focus, drops unrelated", () => {
+		const out = extractCouchbaseFindings(
+			[
+				queries([
+					{ statement: "SELECT mainSize FROM `prices-api-v2-service` WHERE k = $1" },
+					{ statement: "SELECT salesStatus FROM articles WHERE x = 1" },
+				]),
+			],
+			["prices-api-v2-service"],
+		);
+		expect(out.slowQueries).toHaveLength(1);
+		expect(out.slowQueries?.[0]?.statement).toContain("prices-api-v2-service");
+	});
+
+	test("legitimately empties the card when no statement names the focus (strict, documented)", () => {
+		// A slow query often names a bucket/collection, not the focus service. Under
+		// the strict "no exceptions" policy this drops all rows — the honest result.
+		const out = extractCouchbaseFindings(
+			[queries([{ statement: "SELECT * FROM `product_catalog` WHERE k = $1" }])],
+			["prices-api-v2-service"],
+		);
+		expect(out.slowQueries ?? []).toHaveLength(0);
+	});
+});

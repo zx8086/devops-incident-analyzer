@@ -17,6 +17,7 @@ import type {
 	ToolOutput,
 } from "@devops-agent/shared";
 import { z } from "zod";
+import { matchesFocus } from "../focus-match.ts";
 import { distinctiveTokens } from "../rules.ts";
 
 // Elasticsearch hit envelope.
@@ -386,7 +387,12 @@ interface LogClusterAccumulator {
 	lastSeen?: string;
 }
 
-function extractLogClustersFromHits(hits: unknown[]): ElasticLogCluster[] {
+// SIO-1030: focusServices scopes clusters to the incident BEFORE the inner
+// slice(0,10) below, so the per-ToolOutput cap operates on the focus-scoped set
+// (otherwise an off-focus cluster could evict the single relevant one). A hit is
+// kept when its service (falling back to the message text) references the focus;
+// matchesFocus short-circuits show-all on empty focus.
+function extractLogClustersFromHits(hits: unknown[], focusServices: string[] = []): ElasticLogCluster[] {
 	const bySignature = new Map<string, LogClusterAccumulator>();
 	let totalErrorLevel = 0;
 
@@ -395,13 +401,14 @@ function extractLogClustersFromHits(hits: unknown[]): ElasticLogCluster[] {
 		const source = (hit as { _source?: unknown })._source;
 		const parsed = LogsHitSourceSchema.safeParse(source);
 		if (!parsed.success) continue;
+		const serviceName = extractServiceName(parsed.data.service);
+		if (!matchesFocus(serviceName ?? parsed.data.message, focusServices)) continue;
 		const tokens = distinctiveTokens(parsed.data.message);
 		if (tokens.size === 0) continue;
 		const sig = signatureFromTokens(tokens);
 		const level = parsed.data.level ?? "";
 		if (level.toLowerCase() === "error") totalErrorLevel++;
 		const ts = parsed.data["@timestamp"];
-		const serviceName = extractServiceName(parsed.data.service);
 
 		let acc = bySignature.get(sig);
 		if (!acc) {
@@ -555,7 +562,12 @@ function parseLogsHitsFromText(content: string): unknown[] {
 	}
 }
 
-export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
+// SIO-1030: focusServices scopes the elastic card to the incident. Strict drop —
+// APM services match on service.name, log clusters on service ?? sampleMessage,
+// synthetic monitors on monitor.name (matchesFocus short-circuits show-all on empty
+// focus). The log filter runs BEFORE the existing top-10 slice so the cap operates
+// on the scoped set. No high-signal pass-through per the product decision.
+export function extractElasticFindings(outputs: ToolOutput[], focusServices: string[] = []): ElasticFindings {
 	const monitorsByName = new Map<string, ElasticSyntheticMonitor>();
 	const apmByName = new Map<string, ElasticApmService>();
 	// SIO-788: dedupe log clusters across multiple ToolOutput entries by signature.
@@ -605,7 +617,7 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 				const blockHits = parseLogClustersFromBlockText(o.rawJson);
 				const jsonHits = blockHits.length > 0 ? [] : parseLogsHitsFromText(o.rawJson);
 				const hits = blockHits.length > 0 ? blockHits : jsonHits;
-				for (const cluster of extractLogClustersFromHits(hits)) {
+				for (const cluster of extractLogClustersFromHits(hits, focusServices)) {
 					if (clustersBySignature.has(cluster.signature)) continue;
 					clustersBySignature.set(cluster.signature, cluster);
 				}
@@ -632,7 +644,7 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 		// when the index clearly points elsewhere.
 		const wantLogs = !nonLogsIndex && (logsByIndex || (!looksLikeSyntheticIndex(o) && logsHitsErrorMajority(hits)));
 		if (wantLogs) {
-			for (const cluster of extractLogClustersFromHits(hits)) {
+			for (const cluster of extractLogClustersFromHits(hits, focusServices)) {
 				if (clustersBySignature.has(cluster.signature)) continue;
 				clustersBySignature.set(cluster.signature, cluster);
 			}
@@ -662,11 +674,18 @@ export function extractElasticFindings(outputs: ToolOutput[]): ElasticFindings {
 	}
 
 	const findings: ElasticFindings = {};
-	if (monitorsByName.size > 0) findings.syntheticMonitors = Array.from(monitorsByName.values());
-	if (apmByName.size > 0) findings.apmServices = Array.from(apmByName.values());
+	// SIO-1030: strict focus filter for the apm + synthetic branches at assembly
+	// (their maps are populated without inline scoping). matchesFocus returns true
+	// for every row when focusServices is empty, so unfocused investigations keep
+	// everything. Log clusters are already scoped inside extractLogClustersFromHits
+	// (BEFORE its inner top-10 cap), so no second filter here.
+	const monitors = Array.from(monitorsByName.values()).filter((m) => matchesFocus(m.name, focusServices));
+	if (monitors.length > 0) findings.syntheticMonitors = monitors;
+	const apm = Array.from(apmByName.values()).filter((s) => matchesFocus(s.serviceName, focusServices));
+	if (apm.length > 0) findings.apmServices = apm;
 	if (clustersBySignature.size > 0) {
-		// SIO-788: outer top-10 cap. Each ToolOutput contributes up to 10 clusters;
-		// when multiple outputs feed in, sort the merged set and cap at 10.
+		// SIO-788: outer top-10 cap over the (already focus-scoped) merged set. Each
+		// ToolOutput contributes up to 10 clusters; sort and cap the merge at 10.
 		const all = Array.from(clustersBySignature.values()).sort((a, b) => b.count - a.count);
 		findings.logClusters = all.slice(0, 10);
 	}

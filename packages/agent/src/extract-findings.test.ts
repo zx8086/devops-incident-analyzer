@@ -162,3 +162,86 @@ describe("extractFindings node", () => {
 		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
 	});
 });
+
+// SIO-1030: focusServices now reaches every extractor (not just kafka). One
+// representative focus/off-focus pair per datasource proves the wiring in
+// extract-findings.ts, and an unfocused variant proves the show-all guardrail.
+describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
+	function stateFor(
+		dataSourceId: string,
+		toolOutputs: DataSourceResult["toolOutputs"],
+		focus?: string[],
+	): AgentStateType {
+		return {
+			...baseState(),
+			...(focus ? { investigationFocus: { services: focus, datasources: [], summary: "", establishedAtTurn: 1 } } : {}),
+			dataSourceResults: [{ dataSourceId, data: "prose", status: "success", duration: 10, toolOutputs }],
+		} as unknown as AgentStateType;
+	}
+
+	test("aws: focus reaches extractAwsFindings (off-focus alarm dropped)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "aws_cloudwatch_describe_alarms",
+				rawJson: {
+					MetricAlarms: [
+						{ AlarmName: "prices-api-v2-service-CPU", StateValue: "ALARM" },
+						{ AlarmName: "bitly-service-Memory", StateValue: "ALARM" },
+					],
+				},
+			},
+		];
+		const scoped = await extractFindings(stateFor("aws", outputs, ["prices-api-v2-service"]));
+		expect(scoped.dataSourceResults?.[0]?.awsFindings?.alarms?.map((a) => a.name)).toEqual([
+			"prices-api-v2-service-CPU",
+		]);
+		const showAll = await extractFindings(stateFor("aws", outputs));
+		expect(showAll.dataSourceResults?.[0]?.awsFindings?.alarms).toHaveLength(2);
+	});
+
+	test("couchbase: focus reaches extractCouchbaseFindings (off-focus query dropped)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "capella_get_longest_running_queries",
+				rawJson: [
+					{ statement: "SELECT * FROM `prices-api-v2-service` b" },
+					{ statement: "SELECT * FROM `product_catalog` c" },
+				],
+			},
+		];
+		const scoped = await extractFindings(stateFor("couchbase", outputs, ["prices-api-v2-service"]));
+		expect(scoped.dataSourceResults?.[0]?.couchbaseFindings?.slowQueries).toHaveLength(1);
+		const showAll = await extractFindings(stateFor("couchbase", outputs));
+		expect(showAll.dataSourceResults?.[0]?.couchbaseFindings?.slowQueries).toHaveLength(2);
+	});
+
+	test("gitlab: focus reaches extractGitLabFindings (off-focus MR dropped)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "gitlab_list_merge_requests",
+				rawJson: [
+					{ id: 1, title: "prices-api-v2-service paging fix" },
+					{ id: 2, title: "kong-proxy timeout bump" },
+				],
+			},
+		];
+		const scoped = await extractFindings(stateFor("gitlab", outputs, ["prices-api-v2-service"]));
+		expect(scoped.dataSourceResults?.[0]?.gitlabFindings?.mergedRequests?.map((m) => m.id)).toEqual([1]);
+	});
+
+	test("atlassian: focus reaches extractAtlassianFindings (off-focus issue dropped)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					issues: [
+						{ key: "INC-1", summary: "prices-api-v2-service 500s", status: "Open" },
+						{ key: "INC-2", summary: "authentication-service latency", status: "Open" },
+					],
+				},
+			},
+		];
+		const scoped = await extractFindings(stateFor("atlassian", outputs, ["prices-api-v2-service"]));
+		expect(scoped.dataSourceResults?.[0]?.atlassianFindings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+});

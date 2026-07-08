@@ -1,6 +1,10 @@
 // packages/agent/src/correlation/extractors/kafka.ts
 import type { KafkaFindings, ToolOutput } from "@devops-agent/shared";
 import { z } from "zod";
+// SIO-1030: normalize/tokenize/matchesFocus moved to the shared focus-match module
+// so every extractor + correlation/rules.ts use one matcher. Kafka's degraded
+// pass-through (below) is unchanged; only the name-match loop is now shared.
+import { matchesFocus } from "../focus-match.ts";
 
 // SIO-771/772: file-private schemas describe the **tool output** shape (what
 // the kafka MCP returns), not the **finding** shape (which lives in
@@ -85,40 +89,12 @@ const ListKsqlQueriesWrappedSchema = z.object({
 	queries: z.array(z.unknown()),
 });
 
-// SIO-785: tokens used as suffixes/qualifiers on kafka consumer-group ids that
-// should be stripped before fuzzy-matching against APM service names. Kafka groups
-// often look like `<service>-prod-consumer`, `<service>-sink`, `<service>-eventing`.
-const SUFFIX_PATTERN = /-?(consumer|sink|eventing|prod|stg|dev|svc|service)$/g;
-const MIN_TOKEN_LENGTH = 4;
-
-function normalize(s: string): string {
-	let result = s.toLowerCase();
-	// Strip suffix tokens iteratively (a group can be e.g. `notifications-service-consumer`).
-	let prev = "";
-	while (prev !== result) {
-		prev = result;
-		result = result.replace(SUFFIX_PATTERN, "");
-	}
-	// Singular form: drop trailing `s` (handles notifications-service vs notification-service).
-	return result.replace(/s$/, "");
-}
-
-function tokenize(s: string): Set<string> {
-	// SIO-785: depluralise per token so `articles` matches `article`. The whole-string
-	// normalize only strips a single trailing `s`, but kafka group ids embed plural
-	// nouns mid-string (e.g. `pim-sink-articles`).
-	return new Set(
-		normalize(s)
-			.split(/[-_.]/)
-			.filter((t) => t.length >= MIN_TOKEN_LENGTH)
-			.map((t) => t.replace(/s$/, "")),
-	);
-}
-
-// SIO-785: "related to" matching between a finding name and the investigation
-// focus services. Pass-through any finding that is degraded (non-Stable state,
-// non-zero lag, or DLQ with growth) regardless of name match — those are
-// operational signals the user should see even if they didn't ask by name.
+// SIO-785 / SIO-1030: "related to" matching between a finding name and the
+// investigation focus services. Pass-through any finding that is degraded
+// (non-Stable state, non-zero lag, or DLQ with growth) regardless of name match —
+// those are operational signals the user should see even if they didn't ask by
+// name. The name-match itself is delegated to the shared matchesFocus (which
+// short-circuits show-all on empty focus).
 function isRelevantById(
 	id: string | undefined,
 	state: string | undefined,
@@ -129,33 +105,12 @@ function isRelevantById(
 	if ((totalLag ?? 0) > 0) return true;
 	if (focusServices.length === 0) return true;
 	if (!id) return false;
-	const idNorm = normalize(id);
-	const idTokens = tokenize(id);
-	for (const svc of focusServices) {
-		const sNorm = normalize(svc);
-		if (sNorm.length > 0 && (idNorm.includes(sNorm) || sNorm.includes(idNorm))) return true;
-		const sTokens = tokenize(svc);
-		for (const t of sTokens) {
-			if (idTokens.has(t)) return true;
-		}
-	}
-	return false;
+	return matchesFocus(id, focusServices);
 }
 
 function isRelevantDlq(name: string, recentDelta: number | null, focusServices: string[]): boolean {
 	if (recentDelta !== null && recentDelta > 0) return true;
-	if (focusServices.length === 0) return true;
-	const nameNorm = normalize(name);
-	const nameTokens = tokenize(name);
-	for (const svc of focusServices) {
-		const sNorm = normalize(svc);
-		if (sNorm.length > 0 && (nameNorm.includes(sNorm) || sNorm.includes(nameNorm))) return true;
-		const sTokens = tokenize(svc);
-		for (const t of sTokens) {
-			if (nameTokens.has(t)) return true;
-		}
-	}
-	return false;
+	return matchesFocus(name, focusServices);
 }
 
 // SIO-785: focusServices is an optional list of service names from the

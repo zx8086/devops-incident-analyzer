@@ -5,6 +5,7 @@
 // CompositeAlarms are intentionally out of scope for v1 (rarely triage signal).
 import type { AwsCloudWatchAlarm, AwsFindings, ToolOutput } from "@devops-agent/shared";
 import { z } from "zod";
+import { matchesFocus } from "../focus-match.ts";
 
 const MetricAlarmSchema = z.object({
 	AlarmName: z.string(),
@@ -22,7 +23,14 @@ const DescribeAlarmsResponseSchema = z.object({
 	_summary: z.array(z.unknown()).optional(),
 });
 
-export function extractAwsFindings(outputs: ToolOutput[]): AwsFindings {
+// SIO-1030: focusServices scopes the alarm list to the incident. Strict drop —
+// an alarm is kept only when its name/metric/namespace references a focus service
+// (matchesFocus short-circuits show-all on empty focus). No high-signal
+// pass-through: an off-focus ALARM-state alarm is still dropped per the product
+// decision. The correlation engine reads the same alarms via getAwsFindings and
+// scopes with the same matcher (rules.ts alarmReferencesFocus), so card and rule
+// agree.
+export function extractAwsFindings(outputs: ToolOutput[], focusServices: string[] = []): AwsFindings {
 	const alarms: AwsCloudWatchAlarm[] = [];
 	for (const o of outputs) {
 		if (o.toolName !== "aws_cloudwatch_describe_alarms") continue;
@@ -32,6 +40,8 @@ export function extractAwsFindings(outputs: ToolOutput[]): AwsFindings {
 		for (const raw of source) {
 			const parsed = MetricAlarmSchema.safeParse(raw);
 			if (!parsed.success) continue;
+			const haystack = `${parsed.data.AlarmName} ${parsed.data.MetricName ?? ""} ${parsed.data.Namespace ?? ""}`;
+			if (!matchesFocus(haystack, focusServices)) continue;
 			alarms.push({
 				name: parsed.data.AlarmName,
 				state: parsed.data.StateValue,

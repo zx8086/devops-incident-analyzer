@@ -684,3 +684,80 @@ describe("extractElasticFindings — log clusters (SIO-788)", () => {
 		expect(clusters.some((c) => typeof c.service === "string" && c.service.length > 0)).toBe(true);
 	});
 });
+
+describe("extractElasticFindings focus scoping (SIO-1030)", () => {
+	const FOCUS = ["prices-api-v2-service"];
+
+	function syntheticHits(...monitors: Array<{ name: string; status: string }>): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "synthetics-*" },
+			rawJson: { hits: { hits: monitors.map((monitor) => ({ _source: { monitor } })) } },
+		} as unknown as ToolOutput;
+	}
+	function apmAgg(...keys: string[]): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "traces-apm-*" },
+			rawJson: {
+				by_service: { buckets: keys.map((key) => ({ key, doc_count: 1000, errors: { doc_count: 5 } })) },
+			},
+		} as unknown as ToolOutput;
+	}
+	function logsHits(...rows: Array<{ message: string; service?: string }>): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "logs-app-*" },
+			rawJson: {
+				hits: {
+					hits: rows.map((r) => ({
+						_source: { message: r.message, level: "error", ...(r.service ? { service: r.service } : {}) },
+					})),
+				},
+			},
+		} as unknown as ToolOutput;
+	}
+
+	test("empty focus keeps everything (show-all, back-compat)", () => {
+		const out = extractElasticFindings(
+			[syntheticHits({ name: "prices-hc", status: "up" }, { name: "kong-hc", status: "up" })],
+			[],
+		);
+		expect(out.syntheticMonitors).toHaveLength(2);
+	});
+
+	test("synthetic monitors: drops off-focus, keeps focus-named", () => {
+		const out = extractElasticFindings(
+			[
+				syntheticHits(
+					{ name: "prices-api-v2-service-healthcheck", status: "down" },
+					{ name: "authentication-service-healthcheck", status: "down" },
+				),
+			],
+			FOCUS,
+		);
+		expect(out.syntheticMonitors?.map((m) => m.name)).toEqual(["prices-api-v2-service-healthcheck"]);
+	});
+
+	test("apm services: drops off-focus serviceName, keeps focus-named", () => {
+		const out = extractElasticFindings([apmAgg("prices-api-v2-service", "kong-proxy", "bitly-service")], FOCUS);
+		expect(out.apmServices?.map((s) => s.serviceName)).toEqual(["prices-api-v2-service"]);
+	});
+
+	test("log clusters: scope is applied BEFORE the top-10 cap", () => {
+		// 12 distinct off-focus error clusters + 1 focus-named. Without pre-cap
+		// scoping the top-10 slice could evict the single relevant cluster; with
+		// scoping first, only the focus cluster survives.
+		const offFocus = Array.from({ length: 12 }, (_, i) => ({
+			message: `kong upstream error variant ${i} distinct token alpha${i} beta${i} gamma${i}`,
+			service: "kong-proxy",
+		}));
+		const onFocus = {
+			message: "prices-api-v2-service database connection timeout distinct one two three",
+			service: "prices-api-v2-service",
+		};
+		const out = extractElasticFindings([logsHits(...offFocus, onFocus)], FOCUS);
+		expect(out.logClusters?.every((c) => c.service === "prices-api-v2-service")).toBe(true);
+		expect(out.logClusters).toHaveLength(1);
+	});
+});

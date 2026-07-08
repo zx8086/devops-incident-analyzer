@@ -106,6 +106,35 @@ describe("aws-cloudwatch-anomaly-needs-kafka-lag", () => {
 		const state = makeStateWithAwsProse("Alarm 'MSK-ConsumerLag-High' StateValue: ALARM. Threshold: 10000 messages.");
 		expect(rule.trigger(state)).toBeNull();
 	});
+
+	// SIO-1030: alarmReferencesFocus now delegates to the shared matchesFocus, so the
+	// focus can be referenced by any of name / metricName / namespace (not just name).
+	// These pin those paths so the alarm-scoping match can't silently drift.
+	test("fires when the focus is named only by the alarm metricName (not the name)", () => {
+		const state = makeStateWithAwsAlarms(
+			[{ name: "MSK-ConsumerLag-High", metricName: "payments-service-lag", state: "ALARM", namespace: "AWS/Kafka" }],
+			["payments-service"],
+		);
+		expect(rule.trigger(state)).not.toBeNull();
+	});
+
+	test("fires when the focus is named only by the alarm namespace (not the name)", () => {
+		const state = makeStateWithAwsAlarms(
+			[{ name: "Kafka-ConsumerLag-High", state: "ALARM", namespace: "Custom/payments-service/Kafka" }],
+			["payments-service"],
+		);
+		expect(rule.trigger(state)).not.toBeNull();
+	});
+
+	test("fires on a normalized (plural/suffix) name match between focus and alarm", () => {
+		// alarm names the plural `notifications-service`; focus is singular
+		// `notification-service`. matchesFocus normalizes both to `notification`.
+		const state = makeStateWithAwsAlarms(
+			[{ name: "MSK-ConsumerLag-High-notifications-service", state: "ALARM", namespace: "AWS/Kafka" }],
+			["notification-service"],
+		);
+		expect(rule.trigger(state)).not.toBeNull();
+	});
 });
 
 describe("kafka-broker-timeout-needs-aws-metrics", () => {

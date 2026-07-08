@@ -11,9 +11,40 @@ import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:extract-findings");
 
-// SIO-785: union of service names from the investigation context. Used by the
-// kafka extractor to filter consumer groups + DLQ topics to those related to
-// what the user is investigating. Other extractors may adopt this in follow-ups.
+// SIO-1030: emit a per-domain diagnostic mirroring the KafkaFindingsCard block so
+// the live scoping behaviour is visible in dev-server logs (grep the `tag`, or
+// filter by `agent:extract-findings`). `droppedAll` is the tell that focusServices
+// (unnormalized user/LLM strings) matched nothing and the card was over-scoped —
+// warn on it so an accidentally-empty card is not silently shipped.
+function logCard(
+	tag: string,
+	focusServices: string[],
+	rawCount: number,
+	filteredCount: number,
+	extra: Record<string, unknown> = {},
+): void {
+	const filterMode = focusServices.length === 0 ? "show-all" : "scoped";
+	const droppedAll = filterMode === "scoped" && rawCount > 0 && filteredCount === 0;
+	const payload = {
+		tag,
+		focusServices,
+		focusServicesCount: focusServices.length,
+		rawCount,
+		filteredCount,
+		filterMode,
+		droppedAll,
+		...extra,
+	};
+	if (droppedAll) {
+		logger.warn(payload, "findings card scoped to empty");
+	} else {
+		logger.info(payload, "findings extracted");
+	}
+}
+
+// SIO-785: union of service names from the investigation context. Used by every
+// extractor (SIO-1030) to filter findings to those related to what the user is
+// investigating. Empty union = show-all (first-turn / unfocused investigations).
 function collectFocusServices(state: AgentStateType): string[] {
 	const set = new Set<string>();
 	for (const s of state.investigationFocus?.services ?? []) {
@@ -60,35 +91,71 @@ function countRawConsumerGroups(toolOutputs: DataSourceResult["toolOutputs"]): {
 
 export async function extractFindings(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	const focusServices = collectFocusServices(state);
+	// SIO-1030: every extractor now takes focusServices and strict-drops off-focus
+	// rows. rawCount is measured by re-running the (pure, cheap) extractor with empty
+	// focus (show-all) so the diagnostic reports true before/after without reaching
+	// into extractor internals.
 	const extractors: Record<string, (r: DataSourceResult) => Partial<DataSourceResult>> = {
 		kafka: (r) => {
-			const kafkaFindings = extractKafkaFindings(r.toolOutputs ?? [], focusServices);
+			const outs = r.toolOutputs ?? [];
+			const kafkaFindings = extractKafkaFindings(outs, focusServices);
 			// SIO-785 diagnostic: report focus + before/after counts so the live filter
 			// behaviour is visible in dev-server logs without DevTools spelunking.
 			// Grep: `KafkaFindingsCard` in pino output, or filter by `agent:extract-findings`.
 			const raw = countRawConsumerGroups(r.toolOutputs);
-			logger.info(
-				{
-					tag: "KafkaFindingsCard",
-					focusServices,
-					focusServicesCount: focusServices.length,
-					rawConsumerGroups: raw.count,
-					filteredConsumerGroups: kafkaFindings.consumerGroups?.length ?? 0,
-					dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
-					sampleRawIds: raw.sampleIds,
-					filterMode: focusServices.length === 0 ? "show-all" : "scoped",
-				},
-				"kafka findings extracted",
-			);
+			logCard("KafkaFindingsCard", focusServices, raw.count, kafkaFindings.consumerGroups?.length ?? 0, {
+				dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
+				sampleRawIds: raw.sampleIds,
+			});
 			return { kafkaFindings };
 		},
-		gitlab: (r) => ({ gitlabFindings: extractGitLabFindings(r.toolOutputs ?? []) }),
-		couchbase: (r) => ({ couchbaseFindings: extractCouchbaseFindings(r.toolOutputs ?? []) }),
-		elastic: (r) => ({ elasticFindings: extractElasticFindings(r.toolOutputs ?? []) }),
+		gitlab: (r) => {
+			const outs = r.toolOutputs ?? [];
+			const gitlabFindings = extractGitLabFindings(outs, focusServices);
+			const rawCount = extractGitLabFindings(outs).mergedRequests?.length ?? 0;
+			logCard("GitLabFindingsCard", focusServices, rawCount, gitlabFindings.mergedRequests?.length ?? 0);
+			return { gitlabFindings };
+		},
+		couchbase: (r) => {
+			const outs = r.toolOutputs ?? [];
+			const couchbaseFindings = extractCouchbaseFindings(outs, focusServices);
+			const rawCount = extractCouchbaseFindings(outs).slowQueries?.length ?? 0;
+			logCard("CouchbaseFindingsCard", focusServices, rawCount, couchbaseFindings.slowQueries?.length ?? 0);
+			return { couchbaseFindings };
+		},
+		elastic: (r) => {
+			const outs = r.toolOutputs ?? [];
+			const elasticFindings = extractElasticFindings(outs, focusServices);
+			const raw = extractElasticFindings(outs);
+			const rawCount =
+				(raw.apmServices?.length ?? 0) + (raw.logClusters?.length ?? 0) + (raw.syntheticMonitors?.length ?? 0);
+			const filteredCount =
+				(elasticFindings.apmServices?.length ?? 0) +
+				(elasticFindings.logClusters?.length ?? 0) +
+				(elasticFindings.syntheticMonitors?.length ?? 0);
+			logCard("ElasticFindingsCard", focusServices, rawCount, filteredCount, {
+				apmServices: elasticFindings.apmServices?.length ?? 0,
+				logClusters: elasticFindings.logClusters?.length ?? 0,
+				syntheticMonitors: elasticFindings.syntheticMonitors?.length ?? 0,
+			});
+			return { elasticFindings };
+		},
 		// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch alarms.
-		aws: (r) => ({ awsFindings: extractAwsFindings(r.toolOutputs ?? []) }),
+		aws: (r) => {
+			const outs = r.toolOutputs ?? [];
+			const awsFindings = extractAwsFindings(outs, focusServices);
+			const rawCount = extractAwsFindings(outs).alarms?.length ?? 0;
+			logCard("AWSFindingsCard", focusServices, rawCount, awsFindings.alarms?.length ?? 0);
+			return { awsFindings };
+		},
 		// SIO-785 Phase 2 (2026-05-18): Atlassian linked incidents.
-		atlassian: (r) => ({ atlassianFindings: extractAtlassianFindings(r.toolOutputs ?? []) }),
+		atlassian: (r) => {
+			const outs = r.toolOutputs ?? [];
+			const atlassianFindings = extractAtlassianFindings(outs, focusServices);
+			const rawCount = extractAtlassianFindings(outs).linkedIssues?.length ?? 0;
+			logCard("AtlassianFindingsCard", focusServices, rawCount, atlassianFindings.linkedIssues?.length ?? 0);
+			return { atlassianFindings };
+		},
 	};
 	const dataSourceResults = state.dataSourceResults.map((r) => {
 		const extractor = extractors[r.dataSourceId];

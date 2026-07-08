@@ -7,6 +7,7 @@ import type {
 	ToolError,
 } from "@devops-agent/shared";
 import type { AgentName, AgentStateType } from "../state";
+import { matchesFocus } from "./focus-match.ts";
 
 export interface CorrelationRule {
 	name: string;
@@ -53,14 +54,13 @@ function isKafkaAlarm(a: AwsCloudWatchAlarm): boolean {
 	return /\b(MSK|Kafka)\b/i.test(`${a.name} ${a.metricName ?? ""} ${a.namespace ?? ""}`);
 }
 
-// SIO-842: an alarm is in-scope for the incident if any established focus service is
-// referenced by its name/metric/namespace. With no established focus we fall back to
-// "all" (matching collectFocusServices' show-all semantics in extract-findings.ts), so
-// recall is preserved on first-turn / unfocused investigations.
+// SIO-842 / SIO-1030: an alarm is in-scope for the incident if any established focus
+// service is referenced by its name/metric/namespace. Delegates to the shared
+// matchesFocus so the correlation rule and the AWS finding card (aws.ts extractor)
+// scope with one matcher — no drift where the card hides an alarm the rule still
+// treats as in-scope. Empty focus => "all" (show-all semantics preserved).
 function alarmReferencesFocus(a: AwsCloudWatchAlarm, focusServices: string[]): boolean {
-	if (focusServices.length === 0) return true;
-	const haystack = `${a.name} ${a.metricName ?? ""} ${a.namespace ?? ""}`.toLowerCase();
-	return focusServices.some((svc) => svc.length > 0 && haystack.includes(svc.toLowerCase()));
+	return matchesFocus(`${a.name} ${a.metricName ?? ""} ${a.namespace ?? ""}`, focusServices);
 }
 
 // SIO-717: read the result-level toolErrors (populated by sub-agent.ts) and
