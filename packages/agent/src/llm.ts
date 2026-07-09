@@ -157,15 +157,45 @@ function buildChatModel(
 // (iacReader binds tools via createLlmWithTools, which handles the fallback itself.)
 const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 
+// SIO-1040: model tiering. A role in DEFAULT_LIGHTWEIGHT_ROLES runs on the light
+// model (the borrowed elastic-agent manifest -> haiku) unless an env override says
+// otherwise. Rollout ships classifier-only (status quo); the others are eligible to
+// be flipped to light per-role via AGENT_LLM_TIER_<ROLE>=light after a LangSmith
+// replay eval, without a code change. Every tierable role is invoke-only (not in
+// TOOL_BINDING_ROLES), so withFallbacks is unchanged and a light-model failure falls
+// UP to the standard manifest model.
+const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier"]);
+const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
+	"classifier",
+	"entityExtractor",
+	"normalizer",
+	"awsEstateRouter",
+	"runbookSelector",
+	"followUp",
+	"actionProposal",
+]);
+
+export function isLightweightRole(role: LlmRole, env: NodeJS.ProcessEnv = process.env): boolean {
+	if (!TIERABLE_ROLES.has(role)) return false;
+	const raw = env[`AGENT_LLM_TIER_${roleToEnvSegment(role)}`]?.toLowerCase();
+	if (raw === "light") return true;
+	if (raw === "standard") return false;
+	return DEFAULT_LIGHTWEIGHT_ROLES.has(role);
+}
+
 export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatBedrockConverse {
 	const agent = getAgentForLlm(agentName);
-	const isLightweight = role === "classifier";
+	const isLightweight = isLightweightRole(role);
 
+	// KNOWN FRAGILITY: the light tier borrows the elastic-agent sub-agent manifest's
+	// model (haiku). There is no dedicated light-model config; if the elastic-agent
+	// manifest changes model, every light-tier role follows it.
 	const modelConfig = isLightweight ? agent.subAgents.get("elastic-agent")?.manifest.model : agent.manifest.model;
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
 	const primary = buildChatModel(bedrockConfig, overrides);
+	logger.debug({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM tier resolved");
 
 	// SIO-621: Wrap with fallback model from gitagent manifest if available.
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires

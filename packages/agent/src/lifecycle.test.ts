@@ -21,6 +21,9 @@ function installPromptContextMock(): void {
 	mock.module("./prompt-context.ts", () => ({
 		getAgent: () => stub,
 		getAgentByName: () => stub,
+		// SIO-1040: aggregate() reads buildOrchestratorPromptParts; stub it so a
+		// full-suite run never builds a real prompt against this thin stub.
+		buildOrchestratorPromptParts: () => ({ stable: "", volatile: "" }),
 	}));
 }
 installPromptContextMock();

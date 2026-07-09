@@ -20,7 +20,7 @@ export {
 } from "./model-factory.ts";
 export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
-export { buildSystemPrompt } from "./skill-loader.ts";
+export { buildSystemPrompt, buildSystemPromptParts, type SystemPromptParts } from "./skill-loader.ts";
 export {
 	buildFacadeMap,
 	type FacadeMap,

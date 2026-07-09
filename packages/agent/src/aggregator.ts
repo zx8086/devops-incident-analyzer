@@ -2,12 +2,13 @@
 import { getLogger } from "@devops-agent/observability";
 import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
-import { buildOrchestratorPrompt, getActiveSkillNames } from "./prompt-context.ts";
+import { buildCachedSystemMessage } from "./prompt-cache.ts";
+import { buildOrchestratorPromptParts, getActiveSkillNames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
@@ -81,7 +82,10 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 		services: state.investigationFocus?.services ?? state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [],
 		datasources: state.investigationFocus?.datasources ?? state.targetDataSources,
 	};
-	const systemPrompt = buildOrchestratorPrompt({ runbookFilter, wikiFocus, graphContext: state.graphContext });
+	// SIO-1040: split the orchestrator prompt so the stable core (soul + rules +
+	// skills) is a Bedrock cache prefix and the volatile suffix (filtered
+	// knowledge + memory + wiki + graph) stays uncached.
+	const promptParts = buildOrchestratorPromptParts({ runbookFilter, wikiFocus, graphContext: state.graphContext });
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 	const userQuery = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";
@@ -139,7 +143,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 			? `\n\nAWS ESTATE SCOPE: This investigation assessed ONLY the following AWS estate(s): ${assessedEstates.join(", ")}. Every AWS finding below is from ${assessedEstates.length === 1 ? "this estate" : "these estates"} alone. Do NOT claim health, coverage, or status for any other AWS account or estate. If aws_list_estates output appears in the data, it lists the runtime's CONFIGURED estates for routing -- it is NOT a statement that those estates were assessed; never write "all N accounts are healthy" based on it. In the report header and executive summary, state the assessed estate(s) explicitly and scope all conclusions to ${assessedEstates.length === 1 ? "it" : "them"}.`
 			: "";
 
-	const messages: BaseMessage[] = [new SystemMessage(systemPrompt)];
+	const messages: BaseMessage[] = [buildCachedSystemMessage(promptParts.stable, promptParts.volatile)];
 
 	// On follow-ups with a prior answer, provide it as condensed context instead of
 	// replaying the full conversation history (which can exceed token limits)

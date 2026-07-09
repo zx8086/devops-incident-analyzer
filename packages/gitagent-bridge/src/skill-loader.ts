@@ -62,7 +62,17 @@ function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string
 	return `## Skills\n\n${lines.join("\n")}`;
 }
 
-export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): string {
+// SIO-1040: stable/volatile split for Bedrock prompt caching. `core` is the
+// identity+rules+skills prefix (stable across turns -> cacheable); `knowledge`
+// is the knowledge-base section prefixed with the section separator, or "" when
+// the agent has no knowledge. buildSystemPrompt = core + knowledge is
+// BYTE-IDENTICAL to the pre-split output (invariant test in index.test.ts).
+export interface SystemPromptParts {
+	core: string;
+	knowledge: string;
+}
+
+export function buildSystemPromptParts(agent: LoadedAgent, activeSkills?: string[]): SystemPromptParts {
 	const sections: string[] = [];
 
 	if (agent.soul) {
@@ -106,9 +116,16 @@ export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): 
 		if (rendered) sections.push(rendered);
 	}
 
-	if (agent.knowledge.length > 0) {
-		sections.push(buildKnowledgeSection(agent.knowledge));
-	}
+	const core = sections.join("\n\n---\n\n");
 
-	return sections.join("\n\n---\n\n");
+	// Knowledge carries the leading separator so core + knowledge reproduces the
+	// original single join exactly. Empty (no separator) when there is no knowledge.
+	const knowledge = agent.knowledge.length > 0 ? `\n\n---\n\n${buildKnowledgeSection(agent.knowledge)}` : "";
+
+	return { core, knowledge };
+}
+
+export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): string {
+	const { core, knowledge } = buildSystemPromptParts(agent, activeSkills);
+	return core + knowledge;
 }

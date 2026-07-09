@@ -6,6 +6,7 @@ import {
 	buildFacadeMap,
 	buildRelatedToolsMap,
 	buildSystemPrompt,
+	buildSystemPromptParts,
 	buildToolPrompt,
 	complianceToMetadata,
 	getRecursionLimit,
@@ -167,6 +168,35 @@ describe("skill-loader", () => {
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		const prompt = buildSystemPrompt(elastic);
 		expect(prompt).not.toContain("## Knowledge Base");
+	});
+
+	// SIO-1040: the stable/volatile split must reproduce buildSystemPrompt byte-for-byte.
+	describe("buildSystemPromptParts byte-identity (SIO-1040)", () => {
+		test("root agent: core + knowledge === buildSystemPrompt (with knowledge)", () => {
+			const agent = loadAgent(AGENTS_DIR);
+			const parts = buildSystemPromptParts(agent);
+			expect(parts.core + parts.knowledge).toBe(buildSystemPrompt(agent));
+			// knowledge is the ONLY part carrying the knowledge base; core must not.
+			expect(parts.knowledge).toContain("## Knowledge Base");
+			expect(parts.core).not.toContain("## Knowledge Base");
+			// knowledge carries the leading separator so concatenation is lossless.
+			expect(parts.knowledge.startsWith("\n\n---\n\n")).toBe(true);
+		});
+
+		test("sub-agent with no knowledge: knowledge === '' and core === full prompt", () => {
+			const agent = loadAgent(AGENTS_DIR);
+			const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
+			const parts = buildSystemPromptParts(elastic);
+			expect(parts.knowledge).toBe("");
+			expect(parts.core).toBe(buildSystemPrompt(elastic));
+			expect(parts.core + parts.knowledge).toBe(buildSystemPrompt(elastic));
+		});
+
+		test("filtered activeSkills: byte-identity preserved", () => {
+			const agent = loadAgent(AGENTS_DIR);
+			const parts = buildSystemPromptParts(agent, ["normalize-incident"]);
+			expect(parts.core + parts.knowledge).toBe(buildSystemPrompt(agent, ["normalize-incident"]));
+		});
 	});
 });
 
