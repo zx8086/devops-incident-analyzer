@@ -9,6 +9,7 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 export const WORKFLOW_VALUES = [
 	"tier-resize",
 	"ilm-rollout",
+	"ilm-delete",
 	"version-upgrade",
 	"fleet-integration",
 	"slo-edit",
@@ -119,6 +120,12 @@ export interface IacRequest {
 	// templateName is the file basename VERBATIM (e.g. `logs-elasticsearch.querylog@settings`). Always
 	// an array (one MR per batch); each entry whose file is already absent is a per-file no-op.
 	clusterDefaultDeletes?: Array<{ templateName: string }>;
+	// SIO-1037: ilm-delete -- REMOVE one or more whole ILM policy files
+	// (environments/<dep>/lifecycle-policies/<policyName>.json). Mirrors clusterDefaultDeletes: the
+	// filename (minus .json) is the Terraform for_each key, so deleting the file drops exactly that one
+	// policy resource. policyName is the file basename VERBATIM, INCLUDING any leading dot (e.g.
+	// `.alerts-ilm-policy`). Always an array (one MR per batch); a file already absent is a per-file no-op.
+	ilmDeletes?: Array<{ policyName: string }>;
 	// SIO-994: cluster-settings-edit -- the cluster-level persistent/transient settings file
 	// (environments/<dep>/cluster-settings/settings.json, the PUT _cluster/settings surface, distinct
 	// from cluster-defaults' per-index-template settings). Each patch is a FLAT dotted-key map merged
