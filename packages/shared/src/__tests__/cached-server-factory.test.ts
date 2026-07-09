@@ -140,4 +140,114 @@ describe("createCachedServerFactory", () => {
 		expect(prompts.map((p) => p.name)).toContain("greet");
 		expect(resources.map((r) => r.name)).toContain("cfg");
 	});
+
+	// SIO-1044/SIO-1050: legacy sugar methods (tool/resource/prompt) independently call the private
+	// _createRegistered* methods in SDK 1.29.0 -- they do NOT delegate to register*. A recorder that
+	// only patches registerTool/registerResource/registerPrompt silently drops any legacy-API
+	// registration, so it exists only on the discarded boot template and is missing on every replay.
+	test("legacy server.tool(...) registration is present and callable on replayed servers", async () => {
+		const factory = createCachedServerFactory({
+			createBareServer: bareServer,
+			registerAll: (server) => {
+				server.tool("legacy-echo", "legacy echo", { msg: z.string() }, async (args: { msg: string }) => ({
+					content: [{ type: "text", text: `legacy:${args.msg}` }],
+				}));
+			},
+		});
+
+		const namesA = await toolNames(factory());
+		expect(namesA).toContain("legacy-echo");
+
+		const client = await connectedClient(factory());
+		const result = (await client.callTool({ name: "legacy-echo", arguments: { msg: "hi" } })) as {
+			content: Array<{ type: string; text: string }>;
+		};
+		await client.close();
+		expect(result.content[0]?.text).toBe("legacy:hi");
+	});
+
+	test("legacy server.resource(...) and server.prompt(...) are recorded/replayed", async () => {
+		const factory = createCachedServerFactory({
+			createBareServer: bareServer,
+			registerAll: (server) => {
+				server.resource("legacy-cfg", "cfg://legacy", async () => ({
+					contents: [{ uri: "cfg://legacy", text: "legacy-value" }],
+				}));
+				server.prompt("legacy-greet", "legacy greet", () => ({
+					messages: [{ role: "user", content: { type: "text", text: "legacy hello" } }],
+				}));
+			},
+		});
+		const client = await connectedClient(factory());
+		const { prompts } = await client.listPrompts();
+		const { resources } = await client.listResources();
+		await client.close();
+		expect(prompts.map((p) => p.name)).toContain("legacy-greet");
+		expect(resources.map((r) => r.name)).toContain("legacy-cfg");
+	});
+
+	test("interleaved tool()/registerTool() calls replay in original registration order", async () => {
+		const factory = createCachedServerFactory({
+			createBareServer: bareServer,
+			registerAll: (server) => {
+				server.tool("z-legacy", async () => ({ content: [{ type: "text", text: "z" }] }));
+				server.registerTool("y-modern", { description: "y", inputSchema: z.object({}).shape }, async () => ({
+					content: [{ type: "text", text: "y" }],
+				}));
+				server.tool("x-legacy", async () => ({ content: [{ type: "text", text: "x" }] }));
+			},
+		});
+
+		// Control server: same registrations run directly, without going through the factory.
+		const control = bareServer();
+		control.tool("z-legacy", async () => ({ content: [{ type: "text", text: "z" }] }));
+		control.registerTool("y-modern", { description: "y", inputSchema: z.object({}).shape }, async () => ({
+			content: [{ type: "text", text: "y" }],
+		}));
+		control.tool("x-legacy", async () => ({ content: [{ type: "text", text: "x" }] }));
+
+		async function unsortedToolNames(server: McpServer): Promise<string[]> {
+			const client = await connectedClient(server);
+			const { tools } = await client.listTools();
+			await client.close();
+			return tools.map((t) => t.name);
+		}
+
+		const replayedOrder = await unsortedToolNames(factory());
+		const controlOrder = await unsortedToolNames(control);
+		expect(replayedOrder).toEqual(controlOrder);
+		expect(replayedOrder).toEqual(["z-legacy", "y-modern", "x-legacy"]);
+	});
+
+	// Mirrors the couchbase toolRegistry.ts pattern: a consumer wraps server.tool with its own
+	// handler-tracing wrapper AFTER the recorder has already captured server.tool verbatim.
+	test("consumer wrapper patched on server.tool after the recorder is captured verbatim", async () => {
+		const marker: string[] = [];
+		const factory = createCachedServerFactory({
+			createBareServer: bareServer,
+			registerAll: (server) => {
+				type Registrar = (...args: unknown[]) => unknown;
+				const original = (server.tool as Registrar).bind(server);
+				(server as unknown as { tool: Registrar }).tool = (...args: unknown[]) => {
+					const [name, ...rest] = args as [string, ...unknown[]];
+					const handler = rest[rest.length - 1] as (a: unknown, e: unknown) => Promise<unknown>;
+					const wrapped = async (a: unknown, e: unknown) => {
+						marker.push(`wrapped:${name}`);
+						return handler(a, e);
+					};
+					return original(name, ...rest.slice(0, -1), wrapped);
+				};
+
+				server.tool("wrapped-legacy-tool", async () => ({ content: [{ type: "text", text: "ran" }] }));
+			},
+		});
+
+		const client1 = await connectedClient(factory());
+		await client1.callTool({ name: "wrapped-legacy-tool", arguments: {} });
+		await client1.close();
+		const client2 = await connectedClient(factory());
+		await client2.callTool({ name: "wrapped-legacy-tool", arguments: {} });
+		await client2.close();
+		expect(marker).toEqual(["wrapped:wrapped-legacy-tool", "wrapped:wrapped-legacy-tool"]);
+	});
 });
