@@ -2,6 +2,7 @@
 
 // src/server.ts
 import { readFileSync } from "node:fs";
+import { createCachedServerFactory } from "@devops-agent/shared";
 import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -280,13 +281,9 @@ function registerCloudAndBillingTools(server: McpServer, cloudClient: CloudClien
 	logger.info("Registered 16 Elastic Cloud Deployment + Billing tools");
 }
 
-// Sync -- called per-request by factory. Creates McpServer and registers tools.
-export function createMcpServerInstance(
-	config: Config,
-	esClient: Client,
-	cloudClient: CloudClient | null = null,
-): McpServer {
-	const server = new McpServer(
+// Sync -- allocates a bare McpServer with capabilities/instructions but NO tools.
+function createBareServer(config: Config): McpServer {
+	return new McpServer(
 		{
 			name: config.server.name,
 			version: config.server.version,
@@ -304,6 +301,45 @@ export function createMcpServerInstance(
 			instructions: `Elasticsearch MCP Server (${config.server.version}) - Comprehensive Elasticsearch operations with ${config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS"} mode`,
 		},
 	);
+}
+
+// SIO-1041: record-once / replay-many factory. registerAll (~93 wrapped Zod schemas + closures,
+// plus elastic's own tools/index.ts monkey-patch that binds the recorder as its delegate) runs
+// ONCE at boot; each request replays the recorded tool triples onto a fresh bare server. The boot
+// info lines that previously fired per request now fire once, during recording.
+export function createMcpServerFactory(
+	config: Config,
+	esClient: Client,
+	cloudClient: CloudClient | null = null,
+): () => McpServer {
+	return createCachedServerFactory({
+		createBareServer: () => createBareServer(config),
+		registerAll: (server) => {
+			const registeredTools = registerAllTools(server, esClient);
+
+			if (cloudClient) {
+				registerCloudAndBillingTools(server, cloudClient);
+			}
+
+			logger.info(
+				{
+					toolCount: registeredTools.length,
+					cloudToolsEnabled: !!cloudClient,
+				},
+				"All tools registered successfully",
+			);
+		},
+	});
+}
+
+// Sync -- creates a fresh McpServer and registers all tools on it. Kept for back-compat
+// (createElasticsearchMcpServer + any callers that want a one-off instance without the factory).
+export function createMcpServerInstance(
+	config: Config,
+	esClient: Client,
+	cloudClient: CloudClient | null = null,
+): McpServer {
+	const server = createBareServer(config);
 
 	const registeredTools = registerAllTools(server, esClient);
 
