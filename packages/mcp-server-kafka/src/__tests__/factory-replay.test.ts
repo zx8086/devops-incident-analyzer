@@ -177,13 +177,15 @@ describe("SIO-1044: kafka-mcp-server cached factory replay", () => {
 	});
 
 	test("registerAll runs exactly once across two factory() calls", () => {
-		// registerAllTools has no observable counter of its own; instead we assert the
-		// documented boot-time contract directly -- createCachedServerFactory calls
-		// opts.registerAll synchronously during factory construction (once), and the
-		// returned closure never calls it again. Wrapping registerAllTools in a spy here
-		// would only prove our own spy works, not the factory's behavior, so we assert
-		// against the shared factory's call count instead: registerAll is invoked once
-		// per createCachedServerFactory() invocation, not once per factory() call.
+		// registerAllTools has no observable counter of its own, so we build a parallel factory
+		// here with a counting closure around the SAME package-composition registerAll
+		// (registerAllTools with this suite's kafkaService/gatesEnabledConfig/
+		// gatesEnabledToolOptions) createMcpServerFactory uses in production. This proves the
+		// shared cached factory invokes registerAll exactly once at createCachedServerFactory()
+		// construction time and never again across repeated factory() replays. The production
+		// export's own equivalence to this composition is covered by the preceding tests
+		// (replay-vs-replay and replay-vs-control-server tool list equality), so re-deriving it
+		// here would be redundant.
 		let registerAllCalls = 0;
 		const factory = createCachedServerFactory({
 			createBareServer: () => new McpServer({ name: "@devops-agent/mcp-server-kafka", version: "0.0.0" }),

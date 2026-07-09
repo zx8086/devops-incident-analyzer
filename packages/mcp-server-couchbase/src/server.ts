@@ -67,6 +67,25 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 			// biome-ignore lint/suspicious/noExplicitAny: accessing internal MCP SDK resource registry
 			const serverInternal = server as Record<string, any>;
 			serverInternal.readResourceByUri = async (resourceUri: string) => {
+				// SIO-1044 final review: restore the playbook:// fast path that used to live at the
+				// end of the old resources/playbookResource.ts (deleted by this branch; see
+				// `git show 0f8f098:packages/mcp-server-couchbase/src/resources/playbookResource.ts`).
+				// The generic registry walk below uses `.uri`/`.handler` field names that do not exist
+				// on SDK 1.29's `_registeredResources` (keyed BY uri, values carry `readCallback`), so
+				// it never finds a match for playbook:// URIs -- this fast path serves them directly
+				// off the boot-time playbook registry, matching the old implementation's exact URI
+				// parsing and return shape. The generic walk remains the fallback for other protocols
+				// (docs:// stays broken pre-existing -- fixing the registry-walk field names is an
+				// out-of-scope follow-up).
+				const protocol = resourceUri.split("://")[0];
+				const rest = resourceUri.split("://")[1] || "";
+				if (protocol === "playbook" && ds.playbooks) {
+					if (rest === "") {
+						return ds.playbooks.handler.listPlaybooks();
+					}
+					return ds.playbooks.handler.getPlaybook(rest);
+				}
+
 				// Some SDK versions store resources as a Map (iterable), others as a plain object (not iterable).
 				const resourceMap =
 					serverInternal._resources || serverInternal.resources || serverInternal._registeredResources;

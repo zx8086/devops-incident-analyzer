@@ -4,9 +4,11 @@
 // old async registerAllResources, so it has been hoisted out to loadPlaybooks (called once, in
 // initDatasource) -- registerAll here stays fully synchronous. The old code also raced two
 // independent readResourceByUri assignments (playbookResource.ts and server.ts); the
-// playbookResource.ts one has been deleted, so server.ts's generic implementation is now the sole
-// canonical assignment, applied once to the boot template and resolved lazily by tool handlers
-// that close over that template server.
+// playbookResource.ts one has been deleted, and server.ts's single assignment now serves
+// playbook:// URIs via a restored fast path (matching the old implementation's semantics) with
+// the generic registry walk kept only as a fallback for other protocols. The assignment is
+// applied once to the boot template and resolved lazily by tool handlers that close over that
+// template server.
 
 import { describe, expect, test } from "bun:test";
 import { createCachedServerFactory } from "@devops-agent/shared";
@@ -126,7 +128,7 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		expect(replayedPrompts).toEqual(controlPrompts);
 	});
 
-	test("Finding-C regression: readResourceByUri property resolves on a replayed server (no crash on missing property)", async () => {
+	test("Finding-C regression: capella_list_playbooks resolves real playbook content on a replayed server", async () => {
 		const factory = createMcpServerFactory(makeDatasource());
 		const replayed = factory();
 
@@ -137,16 +139,22 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		// The tool handler resolves readResourceByUri lazily off its closure-captured server (the
 		// boot template, which stays alive in the factory closure) -- not off the replayed instance
 		// itself. Under the OLD dual-assignment race (playbookResource.ts vs server.ts), or if the
-		// property were missing on the replayed instance entirely, this call would throw a
-		// TypeError -- "server.readResourceByUri is not a function" / "Cannot read properties of
-		// undefined" -- which the SDK surfaces as a generic tool-execution error whose text contains
-		// "is not a function". The property DOES resolve here (proving the lazy-template-resolution
-		// fix): the call instead reaches the (pre-existing, out-of-scope) internal resource-registry
-		// lookup and returns its own structured "No resource handler found for URI" error -- a
-		// deliberate business-logic error, not a missing-property crash.
+		// property were missing on the replayed instance entirely, this call would throw and the SDK
+		// would surface a generic tool-execution error. That failure mode is ruled out here, but the
+		// regression this test guards against is narrower and easy to miss with a pure
+		// absence-of-error assertion: server.ts's generic registry walk uses `.uri`/`.handler` field
+		// names that do not exist on SDK 1.29's `_registeredResources` (keyed BY uri, values carry
+		// `readCallback`), so it silently fails to find ANY match for playbook:// -- without the
+		// playbook:// fast path restored in server.ts, this call returns a structured
+		// "No resource handler found for URI" error instead of throwing, which a substring-absence
+		// assertion would not catch. Assert positively instead: the stub playbook registry
+		// (makePlaybooks, resourceId "test1") must actually resolve through to real listing content.
+		expect(result.isError).not.toBe(true);
 		const text = JSON.stringify(result);
+		expect(text).not.toContain("No resource handler found");
 		expect(text).not.toContain("is not a function");
 		expect(text).not.toContain("Cannot read properties of undefined");
+		expect(text).toContain("test1");
 	});
 
 	test("registerAll (including playbook resource registration) runs exactly once across replays", async () => {
