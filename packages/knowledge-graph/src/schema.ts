@@ -46,6 +46,10 @@ export const NODE_LABELS = [
 	"Workflow",
 	"Session",
 	"Pipeline",
+	// SIO-1038: one elastic-iac turn's VERBATIM user prompt. Keyed by requestId
+	// (== the turn's ConfigChange id when it opens an MR, so a prompt links to its
+	// change for free). RAW text, no truncation, no redaction.
+	"Prompt",
 ] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
@@ -77,6 +81,8 @@ export const REL_TYPES = [
 	"VIA_WORKFLOW",
 	"IN_SESSION",
 	"RAN",
+	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
+	"PROMPTED_IN",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
 
@@ -129,6 +135,15 @@ export const SessionNodeSchema = z.object({ threadId: z.string().min(1) }).stric
 export const PipelineNodeSchema = z
 	.object({ id: z.string().min(1), status: z.string().optional(), url: z.string().optional() })
 	.strict();
+// SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
+export const PromptNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		text: z.string().optional(),
+		agent: z.string().optional(),
+		createdAt: z.string().optional(),
+	})
+	.strict();
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
@@ -141,6 +156,7 @@ export type StackInstanceNode = z.infer<typeof StackInstanceNodeSchema>;
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 export type SessionNode = z.infer<typeof SessionNodeSchema>;
 export type PipelineNode = z.infer<typeof PipelineNodeSchema>;
+export type PromptNode = z.infer<typeof PromptNodeSchema>;
 
 // Schema DDL. Kuzu/Ladybug node & rel tables, idempotent (IF NOT EXISTS). The
 // embedding column on Incident backs the native vector index (see VECTOR_INDEX).
@@ -187,6 +203,8 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS Workflow(name STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS Session(threadId STRING, PRIMARY KEY(threadId))",
 	"CREATE NODE TABLE IF NOT EXISTS Pipeline(id STRING, status STRING, url STRING, PRIMARY KEY(id))",
+	// SIO-1038: verbatim per-turn user prompt. text holds the RAW, untruncated prompt.
+	"CREATE NODE TABLE IF NOT EXISTS Prompt(id STRING, text STRING, agent STRING, createdAt STRING, PRIMARY KEY(id))",
 	"CREATE REL TABLE IF NOT EXISTS USES_MODULE(FROM Stack TO Module)",
 	"CREATE REL TABLE IF NOT EXISTS OF_STACK(FROM StackInstance TO Stack)",
 	"CREATE REL TABLE IF NOT EXISTS ON_DEPLOYMENT(FROM StackInstance TO ElasticDeployment)",
@@ -194,6 +212,8 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS VIA_WORKFLOW(FROM ConfigChange TO Workflow)",
 	"CREATE REL TABLE IF NOT EXISTS IN_SESSION(FROM ConfigChange TO Session)",
 	"CREATE REL TABLE IF NOT EXISTS RAN(FROM MergeRequest TO Pipeline)",
+	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
+	"CREATE REL TABLE IF NOT EXISTS PROMPTED_IN(FROM Prompt TO Session)",
 ];
 
 // SIO-965: best-effort additive column migrations for graphs created before the

@@ -18,13 +18,15 @@ import {
 	isKnowledgeGraphEnabled,
 	priorChangesForDeployment,
 	recordIacChange,
+	recordIacPrompt,
 	recordPipeline,
 	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { dedupePreferring, type MemorySearchHit, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
+import { recordRawUserPrompt } from "../memory-writer.ts";
 import { lifecycleRank, lifecycleTag } from "./lifecycle.ts";
-import { iacTurnOutcome, stackForWorkflow, stackFromPaths } from "./nodes.ts";
+import { iacTurnOutcome, lastHumanText, stackForWorkflow, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const logger = getLogger("agent:iac:graph-knowledge");
@@ -93,6 +95,49 @@ export async function recordIacEntities(state: IacStateType): Promise<Partial<Ia
 		);
 		return {};
 	}
+}
+
+// SIO-1038: recordIacPrompt node. Runs BEFORE classifyIacIntent so it captures the
+// VERBATIM user prompt for EVERY intent branch (info/converse/drift/fleet/gitops/
+// blocked/no-op) -- not just the MR turns recordIacEntities covers. Two independent
+// sinks, each self-gated and isolated so one failing never blocks the other:
+//   1. Knowledge graph -- a Prompt node (gated on KNOWLEDGE_GRAPH_ENABLED).
+//   2. Agent memory -- a RAW (unredacted) fact (self-gated on backend + the
+//      LIVE_MEMORY_RAW_PROMPTS_ENABLED opt-in inside recordRawUserPrompt).
+// RAW + FULL (no truncation), matching Incident.summary's raw behaviour but without
+// the .slice cap. Soft-fails to {} like the other IaC KG nodes.
+export async function recordIacPromptNode(state: IacStateType): Promise<Partial<IacStateType>> {
+	if (!state.requestId) return {};
+	const text = lastHumanText(state);
+	if (!text) return {};
+	// Sink 1: knowledge graph.
+	if (isKnowledgeGraphEnabled()) {
+		try {
+			const store = await getGraphStore();
+			await recordIacPrompt(store, {
+				id: state.requestId,
+				text,
+				agent: "elastic-iac",
+				threadId: state.threadId || undefined,
+			});
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"recordIacPrompt graph write failed; continuing",
+			);
+		}
+	}
+	// Sink 2: agent-memory RAW fact (self-gates on backend + raw-prompts flag).
+	try {
+		const deployment = targetDeploymentName(state);
+		recordRawUserPrompt(text, state.requestId, deployment ? { deployment } : undefined);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"recordRawUserPrompt failed; continuing",
+		);
+	}
+	return {};
 }
 
 // SIO-965: recordIacOutcome node: after watchPipeline, record the MR's CI pipeline

@@ -57,7 +57,9 @@ const log = getLogger("agent:iac");
 const AGENT = "elastic-iac";
 const IAC_SERVER = "elastic-iac-mcp";
 
-function lastHumanText(state: IacStateType): string {
+// SIO-1038: exported so graph-knowledge.ts reuses the exact same verbatim, no-truncation
+// extraction for the prompt-capture node instead of duplicating it.
+export function lastHumanText(state: IacStateType): string {
 	for (let i = state.messages.length - 1; i >= 0; i--) {
 		const m = state.messages[i];
 		if (m?.getType() === "human") return typeof m.content === "string" ? m.content : JSON.stringify(m.content);

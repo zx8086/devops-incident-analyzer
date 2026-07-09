@@ -4,7 +4,13 @@ import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
 import { selectedBackend } from "../memory-backend.ts";
-import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
+import {
+	graphEnrichIac,
+	memoryEnrichIac,
+	recordIacEntities,
+	recordIacOutcome,
+	recordIacPromptNode,
+} from "./graph-knowledge.ts";
 import {
 	advanceDrift,
 	amendChange,
@@ -58,6 +64,11 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 	const enrichTarget = () => (knowledgeGraphEnabled ? "graphEnrichIac" : memoryTarget());
 	const memoryTarget = () => (memoryEnrichEnabled ? "memoryEnrichIac" : "guard");
 	const recordTarget = () => (knowledgeGraphEnabled ? "recordIacEntities" : "watchPipeline");
+	// SIO-1038: prompt-capture runs before the intent fan-out so EVERY turn is covered.
+	// Selected when EITHER sink is enabled (KG flag OR agent-memory backend); each sink
+	// re-checks its own gate inside the node. Same edge-gate idiom -- the node is always
+	// registered and always named in the `ends` list.
+	const promptTarget = () => (knowledgeGraphEnabled || memoryEnrichEnabled ? "recordIacPrompt" : "classifyIacIntent");
 	// SIO-965: recordIacOutcome (Pipeline + terminal ConfigChange.outcome) runs after
 	// watchPipeline when the KG is enabled, for both the gitops MR flow and the
 	// pipeline-status re-check. Same edge-gate idiom as the SIO-954 nodes above.
@@ -106,14 +117,24 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-970: agent-memory recall node (registered always; reached only when the
 		// agent-memory backend is selected, independent of the KG flag).
 		.addNode("memoryEnrichIac", memoryEnrichIac)
+		// SIO-1038: prompt-capture node (registered always; reached only when the KG or the
+		// agent-memory backend is enabled). Writes the verbatim prompt to both sinks.
+		.addNode("recordIacPrompt", recordIacPromptNode)
 		.addNode("recordIacEntities", recordIacEntities)
 		// SIO-965: KG outcome node (Pipeline + terminal outcome), registered always.
 		.addNode("recordIacOutcome", recordIacOutcome)
 		.addNode("teardown", teardownIac)
 
 		.addEdge(START, "bootstrap")
-		// Not connected -> surface the message and stop.
-		.addConditionalEdges("bootstrap", (s) => (s.connected ? "classifyIacIntent" : END), ["classifyIacIntent", END])
+		// Not connected -> surface the message and stop. SIO-1038: when connected, detour
+		// through recordIacPrompt first (if a sink is enabled) so every turn's prompt is
+		// captured before the intent fan-out; the node then advances to classifyIacIntent.
+		.addConditionalEdges("bootstrap", (s) => (s.connected ? promptTarget() : END), [
+			"recordIacPrompt",
+			"classifyIacIntent",
+			END,
+		])
+		.addEdge("recordIacPrompt", "classifyIacIntent")
 		// SIO-870 info -> answerInfo; gitops -> maker pipeline. SIO-875 pipeline-status ->
 		// re-check the thread's MR via watchPipeline. SIO-882 drift -> detectDrift.
 		.addConditionalEdges(

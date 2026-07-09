@@ -253,6 +253,36 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1038: persist one elastic-iac turn's VERBATIM user prompt. id is the turn's
+// requestId (== its ConfigChange id when it opens an MR). text is RAW and NOT
+// truncated -- unlike Incident.summary's .slice(0, 280) cap. When threadId is
+// present, link the prompt to its Session. Values are bound (never interpolated),
+// so raw prompt text with Cypher metacharacters is safe.
+export interface IacPromptRecord {
+	id: string;
+	text?: string;
+	agent?: string;
+	threadId?: string;
+	createdAt?: string;
+}
+
+export async function recordIacPrompt(store: GraphStore, prompt: IacPromptRecord): Promise<void> {
+	if (!prompt.id) return;
+	await store.run("MERGE (p:Prompt {id: $id}) SET p.text = $text, p.agent = $agent, p.createdAt = $createdAt", {
+		id: prompt.id,
+		text: prompt.text ?? "",
+		agent: prompt.agent ?? "",
+		createdAt: prompt.createdAt ?? new Date().toISOString(),
+	});
+	if (prompt.threadId) {
+		await store.run("MERGE (s:Session {threadId: $tid})", { tid: prompt.threadId });
+		await store.run("MATCH (p:Prompt {id: $id}), (s:Session {threadId: $tid}) MERGE (p)-[:PROMPTED_IN]->(s)", {
+			id: prompt.id,
+			tid: prompt.threadId,
+		});
+	}
+}
+
 // --- SIO-965 repo-structure seeders -----------------------------------------
 //
 // Pure, network-free, idempotent (all MERGE). The seed-iac CLI owns all GitLab

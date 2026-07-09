@@ -1,12 +1,22 @@
 // agent/src/iac/graph-knowledge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
-import { __setAgentMemoryClient } from "../memory-backend.ts";
-import { graphEnrichIac, memoryEnrichIac, recordIacEntities, recordIacOutcome } from "./graph-knowledge.ts";
+import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
+import { HumanMessage } from "@langchain/core/messages";
+import { __resetMemoryQueue, __setAgentMemoryClient, clearActiveMemorySession } from "../memory-backend.ts";
+import {
+	graphEnrichIac,
+	memoryEnrichIac,
+	recordIacEntities,
+	recordIacOutcome,
+	recordIacPromptNode,
+} from "./graph-knowledge.ts";
 import { stackForWorkflow, stackFromPaths } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
 const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
+const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+const prevEnabled = process.env.LIVE_MEMORY_ENABLED;
+const prevRawPrompts = process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
 
 function iacState(over: Partial<IacStateType> = {}): IacStateType {
 	return {
@@ -28,7 +38,16 @@ beforeEach(() => {
 afterEach(() => {
 	if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
 	else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
+	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	if (prevEnabled === undefined) delete process.env.LIVE_MEMORY_ENABLED;
+	else process.env.LIVE_MEMORY_ENABLED = prevEnabled;
+	if (prevRawPrompts === undefined) delete process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
+	else process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = prevRawPrompts;
 	_setGraphStoreForTesting(null);
+	__setAgentMemoryClient(null);
+	__resetMemoryQueue();
+	clearActiveMemorySession();
 });
 
 describe("recordIacEntities", () => {
@@ -80,6 +99,100 @@ describe("recordIacEntities", () => {
 		const result = await recordIacEntities(iacState({ targetDeployment: "", iacRequest: null }));
 		expect(result).toEqual({});
 		expect(store.calls).toEqual([]);
+	});
+});
+
+describe("recordIacPromptNode (SIO-1038)", () => {
+	// A throwing store proves sink 1 soft-fails without breaking the turn.
+	class ThrowingGraphStore extends InMemoryGraphStore {
+		override async run<T extends GraphRow = GraphRow>(): Promise<T[]> {
+			throw new Error("boom");
+		}
+	}
+
+	const promptState = (over: Partial<IacStateType> = {}) =>
+		iacState({ messages: [new HumanMessage("Delete the ILM file on eu-b2b")], threadId: "thread-abc", ...over });
+
+	test("is a no-op when requestId is empty", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const result = await recordIacPromptNode(promptState({ requestId: "" }));
+		expect(result).toEqual({});
+		expect(store.calls).toEqual([]);
+	});
+
+	test("is a no-op when there is no human message", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const result = await recordIacPromptNode(iacState({ messages: [] }));
+		expect(result).toEqual({});
+		expect(store.calls).toEqual([]);
+	});
+
+	test("writes the Prompt node + PROMPTED_IN with FULL untruncated text when the KG is enabled", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		// >280 chars proves there is NO .slice(0, 280) cap (unlike Incident.summary).
+		const longPrompt = `upgrade fleet agents: ${"host-".repeat(80)}`;
+		await recordIacPromptNode(promptState({ messages: [new HumanMessage(longPrompt)] }));
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (p:Prompt"));
+		expect(merge?.params?.id).toBe("req-1");
+		expect(merge?.params?.text).toBe(longPrompt);
+		expect((merge?.params?.text as string).length).toBeGreaterThan(280);
+		expect(merge?.params?.agent).toBe("elastic-iac");
+		expect(store.calls.some((c) => c.cypher.includes("PROMPTED_IN") && c.params?.tid === "thread-abc")).toBe(true);
+	});
+
+	test("does not write to the graph when the KG is disabled", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const result = await recordIacPromptNode(promptState());
+		expect(result).toEqual({});
+		expect(store.calls).toEqual([]);
+	});
+
+	test("still records the raw agent-memory fact when the KG is off but the backend + raw flag are on", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		process.env.LIVE_MEMORY_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = "true";
+		const { setActiveMemorySession, flushAgentMemory } = await import("../memory-backend.ts");
+		const facts: string[] = [];
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts(_ref, f) {
+				facts.push(...f);
+				return { blockIds: [], acceptedCount: f.length, rejectedCount: 0 };
+			},
+			async addMessages(_ref, m) {
+				return { blockIds: [], acceptedCount: m.length, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true, status: "ok" };
+			},
+		});
+		setActiveMemorySession("elastic-iac", "thread-abc");
+
+		await recordIacPromptNode(promptState({ messages: [new HumanMessage("just a converse question")] }));
+		await flushAgentMemory();
+		expect(facts).toContain("just a converse question");
+	});
+
+	test("soft-fails to {} when the graph store throws (sink 1) and does not break the turn", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		_setGraphStoreForTesting(new ThrowingGraphStore());
+		const result = await recordIacPromptNode(promptState());
+		expect(result).toEqual({});
 	});
 });
 
