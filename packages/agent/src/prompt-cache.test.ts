@@ -32,7 +32,7 @@ describe("buildCachedSystemMessage (SIO-1040)", () => {
 	});
 
 	test("enabled with empty volatile: cache point is still the last block (no empty text block)", () => {
-		// The 1.3.x converter rejects empty text blocks -> a "" volatile must be dropped.
+		// Bedrock rejects empty text content blocks at request time -> a "" volatile must be dropped.
 		const msg = buildCachedSystemMessage("STABLE", "", { AGENT_PROMPT_CACHE_ENABLED: "true" });
 		expect(msg.content as unknown[]).toEqual([{ type: "text", text: "STABLE" }, CACHE_POINT]);
 	});

@@ -30,7 +30,7 @@ export function buildCachedSystemMessage(
 	if (!isPromptCacheEnabled(env)) return new SystemMessage(stable + volatile);
 
 	const content: SystemContentBlock[] = [{ type: "text", text: stable }, CACHE_POINT];
-	// The 1.3.x converter rejects empty text blocks; a blank volatile must be dropped.
+	// Bedrock rejects empty text content blocks at request time; a blank volatile must be dropped.
 	if (volatile.trim() !== "") content.push({ type: "text", text: volatile });
 
 	// SDK lags runtime: core's ContentBlock union omits the provider cache-point
