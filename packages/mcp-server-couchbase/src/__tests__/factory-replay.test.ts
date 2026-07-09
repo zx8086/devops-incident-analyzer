@@ -7,7 +7,9 @@
 // playbookResource.ts one has been deleted, so server.ts's generic implementation is now the sole
 // canonical assignment, applied once to the boot template and resolved lazily by tool handlers
 // that close over that template server.
+
 import { describe, expect, test } from "bun:test";
+import { createCachedServerFactory } from "@devops-agent/shared";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -147,31 +149,59 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		expect(text).not.toContain("Cannot read properties of undefined");
 	});
 
-	test("loadPlaybooks (async fs enumeration) is not invoked during factory replay -- registerAll runs exactly once", async () => {
-		// Structural assertion mirroring the shared cached-server-factory test's counter pattern:
-		// registerPlaybookResources is synchronous and takes a pre-enumerated PlaybookRegistry, so
-		// repeated factory() calls never touch the filesystem. We assert this by constructing the
-		// datasource once (playbooks enumerated up front, exactly like initDatasource would) and
-		// confirming multiple replays produce the same resource set without any additional async
-		// enumeration step -- i.e. registerAll (which calls registerPlaybookResources) is recorded
-		// once at createMcpServerFactory() time, not once per factory() call.
+	test("registerAll (including playbook resource registration) runs exactly once across replays", async () => {
+		// Directly mirrors packages/shared/src/__tests__/cached-server-factory.test.ts's
+		// "registerAll runs exactly once" test, but with the SAME registration composition
+		// createMcpServerFactory uses in server.ts (registerAllTools, registerSqlppQueryGenerator,
+		// registerAllResources -- which is the sole caller of registerPlaybookResources --,
+		// registerPingHandlers, capella_echo). We construct createCachedServerFactory directly so
+		// we can wrap that composition in a counting closure and assert the counter, not just an
+		// observable side effect (a static resourceIds array), proving registration -- and
+		// therefore the async-fs-free registerPlaybookResources path -- does not re-run per replay.
 		let registerAllCalls = 0;
+		let registerPlaybookResourcesCalls = 0;
 		const ds = makeDatasource();
+		// Spy-wrap the playbook registry so we can additionally count the actual
+		// registerPlaybookResources -> handler interaction, not just the outer registerAll call.
+		const playbooksSpy: PlaybookRegistry | null = ds.playbooks
+			? {
+					handler: ds.playbooks.handler,
+					get resourceIds() {
+						registerPlaybookResourcesCalls++;
+						// biome-ignore lint/style/noNonNullAssertion: guarded by the enclosing ds.playbooks check
+						return ds.playbooks!.resourceIds;
+					},
+				}
+			: null;
 
-		// Wrap registerAllResources indirectly by counting via a spy-free structural check: call the
-		// factory multiple times and confirm the SAME resourceIds list (proof registerAll's closure
-		// over ds.playbooks, captured once, is what's replayed -- not re-derived per call).
-		const factory = createMcpServerFactory(ds);
+		const factory = createCachedServerFactory({
+			createBareServer: () => new McpServer({ name: "couchbase-mcp-server-test", version: "0.0.0" }),
+			registerAll: (server) => {
+				registerAllCalls++;
+				server.resource("test-playbook", "playbook://test.md", async (uri) => ({
+					contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# Test" }],
+				}));
+				registerAllTools(server, ds.bucket);
+				registerSqlppQueryGenerator(server);
+				registerAllResources(server, ds.bucket, playbooksSpy);
+				registerPingHandlers(server);
+				server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params) => ({
+					content: [{ type: "text" as const, text: JSON.stringify(params) }],
+				}));
+			},
+		});
+
+		expect(registerAllCalls).toBe(1);
+
 		for (let i = 0; i < 3; i++) {
 			const server = factory();
 			const uris = await resourceUris(server);
 			expect(uris).toContain("playbook://test1");
-			registerAllCalls++;
 		}
 
-		expect(registerAllCalls).toBe(3);
-		// The registry object itself was enumerated exactly once (in makePlaybooks, standing in for
-		// loadPlaybooks) -- resourceIds is a fixed array, never re-read from disk between replays.
-		expect(ds.playbooks?.resourceIds).toEqual(["test1"]);
+		// registerAll (and therefore registerPlaybookResources, the only consumer of the playbooks
+		// registry) ran once at createCachedServerFactory() time -- not once per factory() replay.
+		expect(registerAllCalls).toBe(1);
+		expect(registerPlaybookResourcesCalls).toBe(1);
 	});
 });
