@@ -177,6 +177,7 @@ describe("draftChange -> proposeIngestPipelineEdit", () => {
 		expect(result.blockedReason).toContain("drop-cisco-meraki-ip-session");
 		// A 404 is reached only after the branch is created (the read is per-file in the commit loop),
 		// but no COMMIT happens.
+		expect(branchCreates).toBe(1);
 		expect(commits).toBe(0);
 		expect(result.precheckPassed).toBeUndefined();
 	});

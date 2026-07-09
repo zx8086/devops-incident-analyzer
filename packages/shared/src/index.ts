@@ -223,6 +223,7 @@ export {
 export { installToolCallLogging, type ToolCallLogger } from "./tool-call-logging.ts";
 export {
 	type ConnectionContext,
+	createServerTracing,
 	createSessionContext,
 	detectClient,
 	generateSessionId,
@@ -236,6 +237,8 @@ export {
 	isTracingActive,
 	resetTracing,
 	runWithSession,
+	type ServerTracing,
+	type ServerTracingConfig,
 	type SessionContext,
 	type ToolTraceOptions,
 	type TracingOptions,

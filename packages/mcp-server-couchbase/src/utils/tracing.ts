@@ -1,42 +1,12 @@
 // src/utils/tracing.ts
-// Re-exports from shared tracing module with couchbase-specific defaults
-import {
-	isTracingActive,
-	initializeTracing as sharedInitializeTracing,
-	traceToolCall as sharedTraceToolCall,
-	type TracingOptions,
-} from "@devops-agent/shared";
+import { createServerTracing, isTracingActive } from "@devops-agent/shared";
 import { createContextLogger } from "../utils/logger";
-
-const log = createContextLogger("tool");
 
 export { isTracingActive };
 
-export function initializeTracing(options?: TracingOptions): void {
-	const project = process.env.COUCHBASE_LANGSMITH_PROJECT || process.env.LANGSMITH_PROJECT || "couchbase-mcp-server";
-	sharedInitializeTracing({ project, ...options });
-}
-
-export async function traceToolCall<T>(toolName: string, handler: () => Promise<T>): Promise<T> {
-	const startTime = Date.now();
-	log.info({ tool: toolName, dataSource: "couchbase" }, `Tool call started: ${toolName}`);
-
-	try {
-		const result = await sharedTraceToolCall(toolName, handler, { dataSourceId: "couchbase" });
-		const duration = Date.now() - startTime;
-		log.info({ tool: toolName, dataSource: "couchbase", duration }, `Tool call completed: ${toolName}`);
-		return result;
-	} catch (error) {
-		const duration = Date.now() - startTime;
-		log.error(
-			{
-				tool: toolName,
-				dataSource: "couchbase",
-				duration,
-				error: error instanceof Error ? error.message : String(error),
-			},
-			`Tool call failed: ${toolName}`,
-		);
-		throw error;
-	}
-}
+export const { initializeTracing, traceToolCall } = createServerTracing({
+	dataSourceId: "couchbase",
+	projectEnvVar: "COUCHBASE_LANGSMITH_PROJECT",
+	defaultProject: "couchbase-mcp-server",
+	log: createContextLogger("tool"),
+});

@@ -1,7 +1,16 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
 	"files": {
-		"includes": ["**", "!**/.svelte-kit", "!migrate", "!.worktrees", "!current", "!.claude/worktrees"]
+		"includes": [
+			"**",
+			"!**/.svelte-kit",
+			"!migrate",
+			"!.worktrees",
+			"!current",
+			"!.claude/worktrees",
+			"!guides",
+			"!docs/reference/agent-memory-openapi.json"
+		]
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"linter": {
