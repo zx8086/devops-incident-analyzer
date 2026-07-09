@@ -4,6 +4,7 @@ import {
 	buildTelemetryConfig,
 	canonicalizeUpstream,
 	createBootstrapAdapter,
+	createCachedServerFactory,
 	createMcpApplication,
 	createReadinessProbe,
 } from "@devops-agent/shared";
@@ -169,11 +170,13 @@ if (import.meta.main) {
 				return { kafkaService, clientManager, toolOptions };
 			},
 
-			createServerFactory: (ds) => () => {
-				const server = new McpServer({ name: pkg.name, version: pkg.version });
-				registerAllTools(server, ds.kafkaService, config, ds.toolOptions);
-				return server;
-			},
+			// SIO-1044: record-once/replay-many -- registerAllTools' schema/closure construction
+			// runs once at boot instead of once per stateless request.
+			createServerFactory: (ds) =>
+				createCachedServerFactory({
+					createBareServer: () => new McpServer({ name: pkg.name, version: pkg.version }),
+					registerAll: (server) => registerAllTools(server, ds.kafkaService, config, ds.toolOptions),
+				}),
 
 			// SIO-726: build the /ready probe from the same services tools were
 			// registered with, then thread it into the HTTP transport. Stdio and
