@@ -8,6 +8,9 @@ let { content }: { content: string } = $props();
 // SIO-1042: $derived can't be throttled, so this is $state seeded with a leading-edge parse
 // (correct first paint for static consumers -- a cheap "" parse at SSR) plus a trailing-edge
 // throttle for streaming updates. Caps re-parses at ~8/s during token-by-token SSE streaming.
+// The initial-value-only capture the compiler warns about is intentional: the $effect below
+// owns every subsequent update.
+// svelte-ignore state_referenced_locally
 let html = $state(renderMarkdown(content));
 const THROTTLE_MS = 120;
 let lastRun = 0;
