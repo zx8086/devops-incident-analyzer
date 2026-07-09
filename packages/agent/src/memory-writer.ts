@@ -66,6 +66,15 @@ function isEnabled(): boolean {
 	return v === "true" || v === "1";
 }
 
+// SIO-1038: opt-in gate for storing the VERBATIM user prompt as a RAW (unredacted)
+// agent-memory fact. Off by default -- this deliberately bypasses redactPiiContent()
+// (otherwise unconditional on every write path here), landing raw prompts in the
+// durable, append-only store, which overrides the manifest's pii_handling: redact.
+function rawPromptsEnabled(): boolean {
+	const v = process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
+	return v === "true" || v === "1";
+}
+
 // SIO-845: when LIVE_MEMORY_IMMUTABLE is set, dailylog appends are wrapped in the
 // shared hash-chain so the audit log is tamper-evident (recordkeeping.immutable).
 function immutableEnabled(): boolean {
@@ -192,4 +201,23 @@ export function recordKeyDecision(decision: KeyDecision, baseDir?: string): void
 	if (decision.rationale) lines.push("", `Rationale: ${redactPiiContent(decision.rationale)}`);
 	appendFileSync(path, `\n${lines.join("\n")}\n`);
 	logger.info({ requestId: decision.requestId }, "Recorded key decision");
+}
+
+// SIO-1038: persist the VERBATIM user prompt as a RAW (UNREDACTED) durable fact.
+// Triple-gated: LIVE_MEMORY_ENABLED, the LIVE_MEMORY_RAW_PROMPTS_ENABLED opt-in, and
+// the agent-memory backend. Deliberately does NOT call redactPiiContent() -- the only
+// write path here that stores raw text -- so the annotation kind is "user-prompt-raw"
+// to keep it distinct from redacted key-decision facts. File backend is a no-op: raw
+// prompt archival is an agent-memory-only concern.
+export function recordRawUserPrompt(text: string, requestId: string, annotations?: AnnotationMap): void {
+	if (!isEnabled() || !rawPromptsEnabled()) return;
+	if (selectedBackend() !== "agent-memory") return;
+	if (!text) return;
+	// No redaction: the prompt is stored exactly as the user typed it.
+	enqueueFact(text, new Date().toISOString(), { kind: "user-prompt-raw", ...annotations });
+	const ref = getActiveMemoryRef();
+	logger.info(
+		{ requestId, backend: "agent-memory", kind: "user-prompt-raw", userId: ref?.userId, sessionId: ref?.sessionId },
+		"Recorded raw user prompt",
+	);
 }

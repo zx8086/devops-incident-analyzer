@@ -82,4 +82,11 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("recordIacEntities");
 		expect(nodeNames).toContain("recordIacOutcome");
 	});
+
+	// SIO-1038: the pre-fan-out prompt-capture node (registered always; edge-gated).
+	test("graph contains the recordIacPrompt node", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("recordIacPrompt");
+	});
 });

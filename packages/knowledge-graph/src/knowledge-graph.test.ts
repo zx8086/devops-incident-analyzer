@@ -17,6 +17,7 @@ import {
 	priorRelationshipsForServices,
 	priorRootCauses,
 	recordIacChange,
+	recordIacPrompt,
 	recordIncident,
 	recordPipeline,
 	recordRootCause,
@@ -50,6 +51,15 @@ describe("schema", () => {
 		for (const rel of ["USES_MODULE", "OF_STACK", "ON_DEPLOYMENT", "TARGETS", "VIA_WORKFLOW", "IN_SESSION", "RAN"]) {
 			expect(MIGRATIONS.some((m) => m.includes(`REL TABLE IF NOT EXISTS ${rel}(`))).toBe(true);
 		}
+	});
+
+	// SIO-1038: the verbatim-prompt Prompt node + PROMPTED_IN rel.
+	test("MIGRATIONS include the SIO-1038 Prompt node + PROMPTED_IN rel", () => {
+		const node = MIGRATIONS.find((m) => m.includes("NODE TABLE IF NOT EXISTS Prompt("));
+		const rel = MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS PROMPTED_IN("));
+		expect(node).toBeDefined();
+		expect(node).toContain("text STRING");
+		expect(rel).toContain("FROM Prompt TO Session");
 	});
 
 	// SIO-1026: RootCause node + HAS_ROOT_CAUSE rel. Per-incident metadata
@@ -243,6 +253,41 @@ describe("writer (parameterized, injection-safe)", () => {
 		await recordIacChange(store, { id: "", deployment: "eu-b2b" });
 		await recordIacChange(store, { id: "req-3", deployment: "" });
 		expect(store.calls).toEqual([]);
+	});
+
+	// SIO-1038: verbatim prompt writer.
+	test("recordIacPrompt merges the Prompt node with the RAW text bound as a param", async () => {
+		const store = new InMemoryGraphStore();
+		const prompt = "Delete environments/eu-b2b/lifecycle-policies/.alerts-ilm-policy.json -- contact a@b.com";
+		await recordIacPrompt(store, { id: "req-1", text: prompt, agent: "elastic-iac", threadId: "thread-abc" });
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (p:Prompt"));
+		expect(merge?.params?.id).toBe("req-1");
+		// RAW + FULL: bound verbatim, not interpolated, not redacted.
+		expect(merge?.params?.text).toBe(prompt);
+		expect(merge?.params?.agent).toBe("elastic-iac");
+		expect(store.calls.some((c) => c.cypher.includes("PROMPTED_IN") && c.params?.tid === "thread-abc")).toBe(true);
+	});
+
+	test("recordIacPrompt skips the Session link when threadId is absent", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacPrompt(store, { id: "req-2", text: "no thread" });
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (p:Prompt"))).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("PROMPTED_IN"))).toBe(false);
+	});
+
+	test("recordIacPrompt is a no-op without an id", async () => {
+		const store = new InMemoryGraphStore();
+		await recordIacPrompt(store, { id: "", text: "x" });
+		expect(store.calls).toEqual([]);
+	});
+
+	test("recordIacPrompt binds Cypher metacharacters instead of interpolating them", async () => {
+		const store = new InMemoryGraphStore();
+		const nasty = "') DELETE (n) //";
+		await recordIacPrompt(store, { id: "req-3", text: nasty });
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (p:Prompt"));
+		expect(merge?.params?.text).toBe(nasty);
+		expect(merge?.cypher.includes(nasty)).toBe(false);
 	});
 
 	// SIO-965: three-layer attachments + outcome on recordIacChange.

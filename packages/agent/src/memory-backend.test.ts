@@ -29,7 +29,7 @@ import {
 	setSessionDatasources,
 	setSessionOutcome,
 } from "./memory-backend.ts";
-import { appendDailyLog, recordKeyDecision } from "./memory-writer.ts";
+import { appendDailyLog, recordKeyDecision, recordRawUserPrompt } from "./memory-writer.ts";
 
 // SIO-938: aggregator.test.ts mocks @devops-agent/shared with a passthrough
 // redactPiiContent, and Bun's mock.module leaks across the run (last-wins,
@@ -107,6 +107,7 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
 const prevEnabled = process.env.LIVE_MEMORY_ENABLED;
+const prevRawPrompts = process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
 
 beforeEach(() => {
 	process.env.LIVE_MEMORY_ENABLED = "true";
@@ -120,6 +121,8 @@ afterEach(() => {
 	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
 	if (prevEnabled === undefined) delete process.env.LIVE_MEMORY_ENABLED;
 	else process.env.LIVE_MEMORY_ENABLED = prevEnabled;
+	if (prevRawPrompts === undefined) delete process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
+	else process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = prevRawPrompts;
 	__setAgentMemoryClient(null);
 });
 
@@ -190,6 +193,53 @@ describe("writer -> agent-memory backend", () => {
 		enqueueMessage({ user_content: "x", assistant_content: "y" }, "2026-06-17T00:00:00Z");
 		await flushAgentMemory();
 		expect(rec.messages).toHaveLength(0); // dropped, no throw
+	});
+
+	// SIO-1038: recordRawUserPrompt stores the prompt VERBATIM (unredacted) as a
+	// durable fact, distinct from the redacted key-decision path.
+	test("recordRawUserPrompt enqueues the VERBATIM prompt (no redaction) when the raw flag is on", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = "true";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-raw");
+
+		const prompt = "Delete the ILM file for eu-b2b; ping alice@external.com if it fails";
+		recordRawUserPrompt(prompt, "r-raw", { deployment: "eu-b2b" });
+		await flushAgentMemory();
+
+		expect(rec.facts).toHaveLength(1);
+		// The whole point: raw, unredacted, verbatim -- even PII survives.
+		expect(rec.facts[0]).toBe(prompt);
+		if (REDACTION_ACTIVE) expect(rec.facts[0]).toContain("alice@external.com");
+		expect(rec.factAnnotations[0]?.kind).toBe("user-prompt-raw");
+		expect(rec.factAnnotations[0]?.deployment).toBe("eu-b2b");
+		// Durable (no TTL) so the prompt persists.
+		expect(rec.factTtls[0]).toBeUndefined();
+	});
+
+	test("recordRawUserPrompt is a no-op when the raw-prompts flag is off", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		delete process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-off");
+
+		recordRawUserPrompt("some prompt", "r-off");
+		await flushAgentMemory();
+		expect(rec.facts).toHaveLength(0);
+	});
+
+	test("recordRawUserPrompt is a no-op on the file backend even with the flag on", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND; // file backend
+		process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = "true";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-file");
+
+		recordRawUserPrompt("some prompt", "r-file");
+		await flushAgentMemory();
+		expect(rec.facts).toHaveLength(0);
 	});
 });
 
