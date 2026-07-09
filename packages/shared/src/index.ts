@@ -116,6 +116,7 @@ export {
 	type McpApplicationOptions,
 	type TransportListenInfo,
 } from "./bootstrap.ts";
+export { type CachedServerFactoryOptions, createCachedServerFactory } from "./cached-server-factory.ts";
 export {
 	type AgentConfig,
 	AgentConfigSchema,
@@ -146,6 +147,7 @@ export {
 	buildEcsOptions,
 	createFormattedDestination,
 	createMcpLogger,
+	createProdDestination,
 	type EcsLoggerConfig,
 	formatLogLine,
 	getChildLogger,

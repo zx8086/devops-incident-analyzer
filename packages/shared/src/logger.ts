@@ -203,6 +203,53 @@ export interface McpLoggerOptions {
 	retentionPeriod?: string;
 }
 
+// SIO-1041: minimum SonicBoom coalescing buffer before a flush syscall in prod/staging. Bounds
+// write() syscalls under bursty load; the exit hook + 5s timer bound worst-case latency.
+const PROD_LOG_MIN_LENGTH = 4096;
+const PROD_LOG_FLUSH_INTERVAL_MS = 5_000;
+
+interface SonicBoomLike {
+	flush(): void;
+	flushSync(): void;
+}
+
+// Registry-guard the process-level exit hook so multiple createMcpLogger calls in ONE process
+// (the knowledge-graph server is mounted in-process in the web app) register a SINGLE exit
+// handler that flushes ALL registered SonicBoom destinations, instead of N stacked handlers.
+const prodDestinations = new Set<SonicBoomLike>();
+let exitHookInstalled = false;
+
+function registerProdDestination(sonic: SonicBoomLike): void {
+	prodDestinations.add(sonic);
+	if (!exitHookInstalled) {
+		exitHookInstalled = true;
+		// 'exit' fires synchronously even on process.exit() from bootstrap fatal paths, so this is
+		// the real flush guarantee (bootstrap's logger.flush?.() is async and can race the exit).
+		process.on("exit", () => {
+			for (const dest of prodDestinations) {
+				try {
+					dest.flushSync();
+				} catch {
+					// A destination already closed/errored must not block the others from flushing.
+				}
+			}
+		});
+	}
+}
+
+// SIO-1041: async (sync:false) prod/staging destination on fd 2 with bounded worst-case latency.
+// Returns the raw SonicBoom so the exit hook + interval flush target it directly -- NOT any
+// immutableChain wrapper, which only wraps write() and writes through to this SonicBoom.
+export function createProdDestination(fd: 1 | 2): SonicBoomLike {
+	const sonic = pino.destination({ dest: fd, sync: false, minLength: PROD_LOG_MIN_LENGTH }) as unknown as SonicBoomLike;
+	registerProdDestination(sonic);
+	// Bound latency on quiet servers where minLength is never reached. unref'd so the timer never
+	// keeps the process alive on its own.
+	const flushTimer = setInterval(() => sonic.flush(), PROD_LOG_FLUSH_INTERVAL_MS);
+	flushTimer.unref();
+	return sonic;
+}
+
 export function createMcpLogger(serviceName: string, options?: McpLoggerOptions): pino.Logger {
 	const level = getLogLevel();
 	const ecsConfig: EcsLoggerConfig & { retentionPeriod?: string } = { serviceName };
@@ -218,9 +265,15 @@ export function createMcpLogger(serviceName: string, options?: McpLoggerOptions)
 		return pino({ level, ...ecsOpts }, dest).child({ service: serviceName });
 	}
 
-	let dest: { write(data: string): void } = pino.destination({ dest: 2, sync: true });
+	// SIO-1041: async destination (was sync:true, a blocking write() syscall per log line in the
+	// server hot path). dest stays fd 2 for stdio-protocol safety. The exit hook + 5s interval
+	// flush installed by createProdDestination bound worst-case latency.
+	const sonic = createProdDestination(2);
+	let dest: { write(data: string): void } = sonic as unknown as { write(data: string): void };
 	if (options?.immutableChain) {
 		const { createHashChainDestination } = require("./immutable-log.ts");
+		// The hash-chain wraps write() only and writes THROUGH to sonic; flushSync/flush still
+		// target the SonicBoom directly (registered above), never this wrapper.
 		dest = createHashChainDestination(dest);
 	}
 	return pino({ level, ...ecsOpts }, dest).child({ service: serviceName });
