@@ -1,10 +1,18 @@
 # Elastic-iac user prompts (from LangSmith)
 
-Source: LangSmith project `devops-incident-analyzer`, 30 most-recent traces (window Jul 1-9, 2026).
-Filtered to elastic-iac via `compliance_hitl: "always"` metadata (incident-analyzer = `"conditional"`).
-Total elastic-iac turns: 19  |  Distinct requests: 8
+Source: LangSmith project `devops-incident-analyzer`. Swept the full window reachable by
+`langsmith-fetch` (newest 100 traces, spanning 2026-06-29 -> 2026-07-09). The CLI caps a
+query at 100 traces and has no before/offset cursor, so it cannot page older than the newest
+100 -- Jun 29 is the practical floor for this tool.
 
-> Note: this is a WINDOW export (recent traces only). Older elastic-iac prompts exist in LangSmith but were not fetched.
+Filtered to elastic-iac via the `compliance_hitl: "always"` metadata fingerprint
+(incident-analyzer = `"conditional"`). The one self-test probe turn is excluded.
+
+**All elastic-iac activity falls within Jul 8-9, 2026** -- no elastic-iac turns exist earlier
+in the reachable window (Jun 29 - Jul 8 is incident-analyzer + other traffic), so this is the
+complete elastic-iac prompt history the CLI can retrieve.
+
+Total elastic-iac turns: 19  |  Distinct requests: 8
 
 ---
 
