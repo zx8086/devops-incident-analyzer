@@ -32,7 +32,7 @@ User Query
 Incident Report
 ```
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 20-node StateGraph (22 with the knowledge graph enabled) including retry loops, conditional edges, the SIO-828 AWS estate router, and the SIO-681 cross-agent correlation enforcement detour. The separate 29-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 20-node StateGraph (23 with the knowledge graph enabled) including retry loops, conditional edges, the SIO-828 AWS estate router, and the SIO-681 cross-agent correlation enforcement detour. The separate 30-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
 ## Quick Start
 
@@ -67,7 +67,7 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 20-node pipeline (+2 gated knowledge-graph nodes) plus a separate 29-node elastic-iac proposer graph
+  agent/                         LangGraph 20-node pipeline (+3 gated knowledge-graph nodes) plus a separate 30-node elastic-iac proposer graph
   shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
   checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
@@ -117,7 +117,7 @@ Beyond the bootstrap recall + dailylog breadcrumb, the agents use memory in seve
 
 ## Knowledge Graph (lbug)
 
-An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Five pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`; `graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
+An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Seven pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`/`recordRootCause`; `recordIacPrompt`/`graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
 
 ## Commands
 
