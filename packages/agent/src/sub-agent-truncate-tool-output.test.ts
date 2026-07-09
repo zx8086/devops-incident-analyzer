@@ -1,7 +1,11 @@
 // packages/agent/src/sub-agent-truncate-tool-output.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { getSubAgentToolCapBytes, truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
+import {
+	getSubAgentStateOutputCapBytes,
+	getSubAgentToolCapBytes,
+	truncateToolOutput,
+} from "./sub-agent-truncate-tool-output.ts";
 
 const CAP = 65_536;
 
@@ -58,6 +62,39 @@ describe("getSubAgentToolCapBytes", () => {
 	test("returns floored integer for valid positive override", () => {
 		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "32768" })).toBe(32_768);
 		expect(getSubAgentToolCapBytes({ SUBAGENT_TOOL_RESULT_CAP_BYTES: "65536.9" })).toBe(65_536);
+	});
+});
+
+describe("getSubAgentStateOutputCapBytes", () => {
+	test("returns default 65536 when env var is missing", () => {
+		expect(getSubAgentStateOutputCapBytes({})).toBe(65_536);
+	});
+
+	test("returns default 65536 when env var is empty string", () => {
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "" })).toBe(65_536);
+	});
+
+	test("returns default 65536 when env var is non-numeric", () => {
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "abc" })).toBe(65_536);
+	});
+
+	test("returns null when env var is explicitly 0 (disabled)", () => {
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "0" })).toBeNull();
+	});
+
+	test("returns default when env var is negative", () => {
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "-100" })).toBe(65_536);
+	});
+
+	test("returns floored integer for valid positive override", () => {
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "32768" })).toBe(32_768);
+		expect(getSubAgentStateOutputCapBytes({ SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES: "10000.9" })).toBe(10_000);
+	});
+
+	test("is independent from SUBAGENT_TOOL_RESULT_CAP_BYTES", () => {
+		const env = { SUBAGENT_TOOL_RESULT_CAP_BYTES: "4096" };
+		expect(getSubAgentToolCapBytes(env)).toBe(4_096);
+		expect(getSubAgentStateOutputCapBytes(env)).toBe(65_536); // unaffected by the other var
 	});
 });
 
@@ -317,5 +354,44 @@ describe("truncateToolOutput", () => {
 		const marker = parsed.at(-1) as Record<string, unknown>;
 		expect(marker._truncated).toBe(true);
 		expect(marker._totalCount).toBe(21);
+	});
+
+	// SIO-1043: the elastic sub-agent state cap must not silently drop `aggregations` --
+	// extractFindings and downstream cards read aggregation buckets, not raw hits, for
+	// many elastic queries. Verifies the json-hits reducer spreads the top-level object
+	// (preserving sibling fields like aggregations) rather than replacing it.
+	test("json-hits reduction preserves sibling aggregations envelope", () => {
+		const hits = Array.from({ length: 200 }, (_, i) => ({
+			_index: "logs-prod",
+			_id: `doc-${i}`,
+			_source: { message: "x".repeat(1024), trace_id: `t-${i}`, level: "error" },
+		}));
+		const content = JSON.stringify({
+			took: 12,
+			timed_out: false,
+			hits: { total: { value: 200, relation: "eq" }, hits },
+			aggregations: {
+				error_rate_over_time: {
+					buckets: Array.from({ length: 24 }, (_, i) => ({
+						key_as_string: `2026-07-09T${String(i).padStart(2, "0")}:00:00Z`,
+						doc_count: 10 + i,
+					})),
+				},
+			},
+		});
+		const result = truncateToolOutput(content, CAP);
+
+		expect(result.strategy).toBe("json-hits");
+		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
+
+		const parsed = JSON.parse(result.content) as {
+			hits: { hits: unknown[]; _truncated: boolean; _totalHits: number };
+			aggregations: { error_rate_over_time: { buckets: Array<{ doc_count: number }> } };
+		};
+		expect(parsed.hits.hits.length).toBe(3); // hits reduced
+		expect(parsed.hits._truncated).toBe(true);
+		// aggregations survive fully intact -- not trimmed by the hits reducer.
+		expect(parsed.aggregations.error_rate_over_time.buckets.length).toBe(24);
+		expect(parsed.aggregations.error_rate_over_time.buckets[0]?.doc_count).toBe(10);
 	});
 });

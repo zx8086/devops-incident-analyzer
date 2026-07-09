@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { extractFindings } from "./extract-findings.ts";
 import type { AgentStateType } from "./state.ts";
+import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 function baseState(): AgentStateType {
 	return { dataSourceResults: [] } as unknown as AgentStateType;
@@ -160,6 +161,68 @@ describe("extractFindings node", () => {
 		const out = await extractFindings(state);
 		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
 		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
+	});
+});
+
+// SIO-1043: the persisted-state cap (sub-agent.ts) runs truncateToolOutput on the
+// rawJson STRING form before extractFindings ever sees it. Proves the two stages
+// compose: a 200-consumer-group payload gets capped at creation, and lag findings
+// still extract from what survives (fewer items, but safeParse-clean per row).
+describe("extractFindings survives the SIO-1043 persisted-state cap", () => {
+	const STATE_CAP = 65_536;
+
+	test("kafka_list_consumer_groups: capped 200-group payload still yields consumerGroups", async () => {
+		// Real kafka_list_consumer_groups rows carry more than {id, state} (members,
+		// partition assignments, etc.); the extractor's zod schema strips unknown keys,
+		// so padding with an oversized field forces the payload past STATE_CAP without
+		// affecting what the extractor actually reads.
+		const groups = Array.from({ length: 200 }, (_, i) => ({
+			id: `consumer-group-${i}`,
+			state: i % 7 === 0 ? "EMPTY" : "STABLE",
+			members: Array.from({ length: 8 }, (_, m) => ({ memberId: `member-${i}-${m}`, host: "10.0.0.1" })),
+		}));
+		const rawText = JSON.stringify(groups);
+		const originalBytes = Buffer.byteLength(rawText, "utf8");
+		expect(originalBytes).toBeGreaterThan(STATE_CAP); // sanity: payload must overflow the cap
+
+		// Mirrors the sub-agent.ts SIO-1043 cap-at-creation step: cap the string, re-parse.
+		const capped = truncateToolOutput(rawText, STATE_CAP);
+		expect(capped.strategy).not.toBe("none");
+		expect(capped.finalBytes).toBeLessThanOrEqual(STATE_CAP);
+		const rawJson = JSON.parse(capped.content) as unknown;
+
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [kafkaResult([{ toolName: "kafka_list_consumer_groups", rawJson }])],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+
+		// Fewer than 200 (some dropped by the cap), but well-formed rows still parse
+		// -- the trailing {_truncated, ...} marker fails safeParse and is silently skipped.
+		expect(kafka?.kafkaFindings?.consumerGroups?.length).toBeGreaterThan(0);
+		expect(kafka?.kafkaFindings?.consumerGroups?.length).toBeLessThan(200);
+		expect(kafka?.kafkaFindings?.consumerGroups?.[0]?.id).toBe("consumer-group-0");
+	});
+
+	test("kafka_get_consumer_group_lag: single large payload survives the cap unchanged", async () => {
+		// A single tool output well under the cap is left untouched (strategy "none"),
+		// confirming the cap only engages on oversized payloads.
+		const rawText = JSON.stringify({ groupId: "notification-service", totalLag: "4821" });
+		const capped = truncateToolOutput(rawText, STATE_CAP);
+		expect(capped.strategy).toBe("none");
+		const rawJson = JSON.parse(capped.content) as unknown;
+
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [kafkaResult([{ toolName: "kafka_get_consumer_group_lag", rawJson }])],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.[0]).toMatchObject({
+			id: "notification-service",
+			totalLag: 4821,
+		});
 	});
 });
 

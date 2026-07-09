@@ -13,6 +13,9 @@ const ARRAY_INLINE_SAMPLE = 5;
 const MARKER_BYTE_RESERVE = 256;
 // SIO-833: sourced from @devops-agent/shared so the agent and AWS MCP caps move in lockstep.
 const DEFAULT_CAP_BYTES = DEFAULT_TOOL_RESULT_CAP_BYTES;
+// SIO-1043: default for the persisted-state cap (toolOutputs[].rawJson), independent
+// of the LLM-facing SUBAGENT_TOOL_RESULT_CAP_BYTES cap above.
+const DEFAULT_STATE_CAP_BYTES = 65_536;
 
 export type TruncationStrategy =
 	| "json-hits"
@@ -39,6 +42,19 @@ export function getSubAgentToolCapBytes(env: NodeJS.ProcessEnv = process.env): n
 	if (!Number.isFinite(parsed)) return DEFAULT_CAP_BYTES;
 	if (parsed === 0) return null;
 	if (parsed < 0) return DEFAULT_CAP_BYTES;
+	return Math.floor(parsed);
+}
+
+// SIO-1043: mirrors getSubAgentToolCapBytes' contract exactly (default/invalid/negative ->
+// DEFAULT_STATE_CAP_BYTES, "0" disables). Caps the persisted toolOutputs[].rawJson at
+// creation time, separate from the LLM-facing SUBAGENT_TOOL_RESULT_CAP_BYTES cap.
+export function getSubAgentStateOutputCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
+	const raw = env.SUBAGENT_STATE_TOOL_OUTPUT_CAP_BYTES;
+	if (raw == null || raw === "") return DEFAULT_STATE_CAP_BYTES;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed)) return DEFAULT_STATE_CAP_BYTES;
+	if (parsed === 0) return null;
+	if (parsed < 0) return DEFAULT_STATE_CAP_BYTES;
 	return Math.floor(parsed);
 }
 

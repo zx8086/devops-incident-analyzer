@@ -14,7 +14,11 @@ import { extractTextFromContent } from "./message-utils.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { instrumentTools } from "./sub-agent-instrumentation.ts";
-import { getSubAgentToolCapBytes } from "./sub-agent-truncate-tool-output.ts";
+import {
+	getSubAgentStateOutputCapBytes,
+	getSubAgentToolCapBytes,
+	truncateToolOutput,
+} from "./sub-agent-truncate-tool-output.ts";
 
 const logger = getLogger("agent:sub-agent");
 
@@ -586,10 +590,34 @@ async function runSubAgent(
 			truncated ? "Sub-agent completed (truncated at recursion limit; partial results)" : "Sub-agent completed",
 		);
 
-		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => ({
-			toolName: m.name ?? "unknown",
-			rawJson: tryParseJson(normalizeToolContent(m.content)),
-		}));
+		// SIO-1043: cap toolOutputs[].rawJson at creation so the persisted checkpoint state
+		// doesn't grow unboundedly. Capped on the STRING form then re-parsed -- safe because
+		// truncateToolOutput's strategies are JSON-structure-preserving (extractors' safeParse
+		// still succeeds, just fewer items), and the extractFindings node runs on these same
+		// objects afterwards anyway.
+		const stateCapBytes = getSubAgentStateOutputCapBytes();
+		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => {
+			const toolName = m.name ?? "unknown";
+			const text = normalizeToolContent(m.content);
+			if (stateCapBytes == null) {
+				return { toolName, rawJson: tryParseJson(text) };
+			}
+			const capped = truncateToolOutput(text, stateCapBytes);
+			if (capped.strategy !== "none") {
+				log.info(
+					{
+						event: "subagent.state_output_truncated",
+						deploymentId,
+						toolName,
+						originalBytes: capped.originalBytes,
+						finalBytes: capped.finalBytes,
+						strategy: capped.strategy,
+					},
+					"Persisted tool output truncated",
+				);
+			}
+			return { toolName, rawJson: tryParseJson(capped.content) };
+		});
 
 		// SIO-1029: a truncated run that still gathered tool data is partial-success,
 		// not error -- salvage what elastic observed rather than blanking the datasource.
