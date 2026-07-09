@@ -25,6 +25,9 @@ import { parseSseChunks } from "./sse-buffer.ts";
 export type AgentId = "incident-analyzer" | "elastic-iac";
 
 export interface ChatMessage {
+	// SIO-1042: stable identity for {#each} keying (was index-based, causing DOM node reuse
+	// glitches across message list mutations). Assigned once at creation, never regenerated.
+	id: string;
 	role: "user" | "assistant";
 	content: string;
 	suggestions?: string[];
@@ -119,6 +122,7 @@ function createAgentStore() {
 	// outcome/toolsUsed, so resumed turns failed the trace gate and always showed "Completed").
 	function buildAssistantMessage(content: string): ChatMessage {
 		return {
+			id: crypto.randomUUID(),
 			role: "assistant",
 			content,
 			suggestions: [...lastSuggestions],
@@ -159,7 +163,7 @@ function createAgentStore() {
 		const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
 		pendingAttachments = [];
 
-		messages = [...messages, { role: "user", content }];
+		messages = [...messages, { id: crypto.randomUUID(), role: "user", content }];
 		isStreaming = true;
 		currentContent = "";
 		dataSourceProgress = new Map();

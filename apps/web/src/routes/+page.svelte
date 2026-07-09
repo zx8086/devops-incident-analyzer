@@ -220,7 +220,7 @@ function handleSuggestionClick(suggestion: string) {
         </div>
       {/if}
 
-      {#each agentStore.messages as msg, i}
+      {#each agentStore.messages as msg, i (msg.id)}
         <!-- SIO-901: skip the trailing drift summary here; it is re-rendered below the drift card. -->
         {#if i !== driftSummaryIndex}
           <!-- SIO-941: render the collapsed pipeline log ABOVE the fleet-upgrade result message so
@@ -264,7 +264,7 @@ function handleSuggestionClick(suggestion: string) {
 
         {#if agentStore.currentContent}
           <ChatMessage
-            message={{ role: "assistant", content: agentStore.currentContent }}
+            message={{ id: "streaming", role: "assistant", content: agentStore.currentContent }}
             index={agentStore.messages.length}
             isLast={true}
             isStreaming={true}
