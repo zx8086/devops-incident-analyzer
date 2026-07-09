@@ -36,9 +36,9 @@ GraphStore (interface)        init() | run<T>(cypher, params) | close()
 **Node labels** (`NODE_LABELS`) span two domains:
 
 - **Incident-side (SIO-850):** `Service`, `Deployment`, `KafkaTopic`, `ConsumerGroup`, `ApiRoute`, `Bucket`, `AwsAccount`, `AwsResource`, `Incident` (carries a 1024-dim Bedrock Titan embedding for similarity search), `Finding`, `Runbook`, `WikiPage`, `RootCause` (SIO-1026: a derived cause keyed by a stable class hash, linked from an `Incident` via `HAS_ROOT_CAUSE`).
-- **IaC-side (SIO-954/965):** `ElasticDeployment` (a cluster, distinct from a microservice `Service`), `ConfigChange` (one maker turn's proposed edit), `MergeRequest`, plus the three-layer repo model `Module` -> `Stack` -> `StackInstance` (the sparse `(deployment, stack)` state cell a change targets), `Workflow`, `Session`, `Pipeline`.
+- **IaC-side (SIO-954/965):** `ElasticDeployment` (a cluster, distinct from a microservice `Service`), `ConfigChange` (one maker turn's proposed edit), `MergeRequest`, plus the three-layer repo model `Module` -> `Stack` -> `StackInstance` (the sparse `(deployment, stack)` state cell a change targets), `Workflow`, `Session`, `Pipeline`, `Prompt` (SIO-1038: a turn's verbatim user prompt, stored RAW/untruncated; PK = `requestId`, so it links to that turn's `ConfigChange` for free).
 
-**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`.
+**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`, `PROMPTED_IN` (SIO-1038: `Prompt` -> `Session`).
 
 `reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
 
@@ -79,23 +79,24 @@ Both pipelines register their graph nodes **always** but edge them only when the
 
 Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> followUp`.
 
-### elastic-iac — 3 graph nodes + 1 memory-enrich node (`packages/agent/src/iac/graph-knowledge.ts`)
+### elastic-iac — 4 graph nodes + 1 memory-enrich node (`packages/agent/src/iac/graph-knowledge.ts`)
 
 | Node | Trigger | Reads / Writes |
 |------|---------|----------------|
+| `recordIacPrompt` (SIO-1038) | between `bootstrap` and `classifyIacIntent` (pre-fan-out, the only chokepoint on every intent branch) | **WRITE** (two independently-gated, soft-failing sinks): a `Prompt` node + `PROMPTED_IN` edge to the turn's `Session` (KG; PK = `requestId`, so it links to the `ConfigChange` for free; gated on `KNOWLEDGE_GRAPH_ENABLED`), and a raw `user-prompt-raw` fact to agent-memory via `recordRawUserPrompt` (gated on `LIVE_MEMORY_ENABLED` + `LIVE_MEMORY_RAW_PROMPTS_ENABLED` + the `agent-memory` backend). Stores the prompt RAW/untruncated and **bypasses PII redaction** on both sinks. Not part of the enrich chain — it runs before intent classification. |
 | `graphEnrichIac` | after `readClusterState` (pre-draft) | **READ**: `priorChangesForDeployment` + per-cell `changeHistoryForStackInstance` + `deploymentsRunningStack` (blast radius). Produces `state.iacGraphContext` and `lastStackInstanceOutcome`; when the last change to this exact `(deployment, stack)` cell was `failed`, `reviewPlan` raises a HIGH risk on the plan-review card (SIO-969). Stack key falls back to the workflow's stack pre-draft (`stackForWorkflow`, the verified inverse of `stackFromPaths`). |
 | `recordIacEntities` | after `openMr` | **WRITE**: `recordIacChange` — the `ElasticDeployment` + `ConfigChange` (workflow, file paths, summary, MR url, optional `StackInstance`/`Session`), outcome seeded `proposed`. |
 | `recordIacOutcome` | after `watchPipeline` | **WRITE**: `recordPipeline` (the MR's CI `Pipeline`) + `setChangeOutcome` promoting the change to its terminal value (`applied` on pipeline success, `failed`, or `rejected`). |
 | `memoryEnrichIac` (SIO-970) | after `graphEnrichIac` (pre-draft) | **READ Agent Memory, not the graph** — gated independently on the `agent-memory` backend (works even with the graph off). Deterministic recall of prior `iac-change` facts for the same `stack_instance` -> `state.priorLearnings` on the plan-review card. Listed here because it shares the enrich chain; see [agent-memory.md](agent-memory.md). |
 
-Edge sequence when enabled: `readClusterState -> graphEnrichIac -> memoryEnrichIac -> guard`, and `openMr -> recordIacEntities -> watchPipeline -> recordIacOutcome -> teardown`.
+Edge sequence when enabled: `readClusterState -> graphEnrichIac -> memoryEnrichIac -> guard`, and `openMr -> recordIacEntities -> watchPipeline -> recordIacOutcome -> teardown`. Unlike the enrich nodes, `recordIacPrompt` is **edged unconditionally** (`bootstrap -> recordIacPrompt -> classifyIacIntent`) — only its two writes are gated internally — so it is always registered *and* always reached.
 
 ## Node counts (verified)
 
 The graph nodes are why the registered node counts exceed the base graphs:
 
 - **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **23** — 20 base nodes + the 3 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`).
-- **elastic-iac:** `grep -c addNode packages/agent/src/iac/graph.ts` = **29** — base proposer/sub-flow nodes + `graphEnrichIac`, `recordIacEntities`, `recordIacOutcome` (KG) + `memoryEnrichIac` (Agent Memory) + `amendChange`.
+- **elastic-iac:** `grep -c addNode packages/agent/src/iac/graph.ts` = **30** — base proposer/sub-flow nodes + `recordIacPrompt` (SIO-1038, always-edged pre-fan-out capture) + `graphEnrichIac`, `recordIacEntities`, `recordIacOutcome` (KG) + `memoryEnrichIac` (Agent Memory) + `amendChange`.
 
 ## Agent asymmetry
 

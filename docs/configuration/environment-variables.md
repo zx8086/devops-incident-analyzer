@@ -440,6 +440,7 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 |----------|----------|---------|-------------|
 | `LIVE_MEMORY_ENABLED` | No | off | Master gate for the live-memory tier (recall at bootstrap, append at boundaries); writer no-ops when unset |
 | `LIVE_MEMORY_BACKEND` | No | `file` | `file` (git-tracked markdown) or `agent-memory` (Couchbase Agent Memory REST) |
+| `LIVE_MEMORY_RAW_PROMPTS_ENABLED` | No | off | (SIO-1038) Store each elastic-iac turn's **verbatim** user prompt as a RAW, **unredacted** durable fact (`kind: user-prompt-raw`). WARNING: bypasses PII redaction — an explicit override of the elastic-iac manifest's `pii_handling: redact`. Only effective with `LIVE_MEMORY_ENABLED=true` **and** `LIVE_MEMORY_BACKEND=agent-memory` |
 | `AGENT_MEMORY_BASE_URL` | When backend=agent-memory | *(none)* | Agent Memory service URL (no default) |
 | `AGENT_MEMORY_ENABLED` | No | off | Enables the Agent Memory client (used only when backend=agent-memory) |
 | `AGENT_MEMORY_BEARER_TOKEN` | No | *(none)* | OIDC bearer token, only if the service runs with `OIDC_AUTH_ENABLED` |

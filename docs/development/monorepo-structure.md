@@ -46,7 +46,7 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 20-node pipeline (22 with the knowledge graph enabled: correlation enforcement, typed findings, AWS estate router, mitigation branch split, gated KG nodes) plus a separate 29-node elastic-iac proposer graph
+    agent/                       LangGraph supervisor and 20-node pipeline (23 with the knowledge graph enabled: correlation enforcement, typed findings, AWS estate router, mitigation branch split, gated KG nodes) plus a separate 30-node elastic-iac proposer graph
     knowledge-graph/             Embedded entity + correlation knowledge graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED). See architecture/knowledge-graph.md
     mcp-server-knowledge-graph/  In-process Knowledge Graph MCP server (:9087, SIO-967): curated kg_* tools + read-only Cypher over the embedded graph
     memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
