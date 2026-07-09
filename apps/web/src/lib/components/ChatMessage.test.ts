@@ -9,6 +9,7 @@ import type { ChatMessage as ChatMessageType } from "$lib/stores/agent.svelte";
 import ChatMessage from "./ChatMessage.svelte";
 
 const baseAssistant: ChatMessageType = {
+	id: "test-base",
 	role: "assistant",
 	content: "## Incident Report\n\nDetails follow.",
 	responseTime: 12345,
@@ -202,6 +203,7 @@ describe("ChatMessage placement", () => {
 describe("CompletedProgress trace gate (SIO-934)", () => {
 	test("renders the trace chip for a completedNodes-only message (no responseTime/tools/findings)", () => {
 		const message: ChatMessageType = {
+			id: "test-1",
 			role: "assistant",
 			content: "MR opened: https://gitlab.example/mr/1",
 			completedNodes: new Map([
@@ -216,6 +218,7 @@ describe("CompletedProgress trace gate (SIO-934)", () => {
 
 	test("renders the amber 'Blocked' chip for a blocked outcome with nodes", () => {
 		const message: ChatMessageType = {
+			id: "test-2",
 			role: "assistant",
 			content: "No change needed.",
 			completedNodes: new Map([["draftChange", { duration: 1224 }]]),
@@ -230,6 +233,7 @@ describe("CompletedProgress trace gate (SIO-934)", () => {
 	test("renders the 'Plan rejected' chip for a rejected resume turn", () => {
 		// Mirrors a resumeIac turn after the user rejects the plan-review gate.
 		const message: ChatMessageType = {
+			id: "test-3",
 			role: "assistant",
 			content: "Plan rejected. No merge request opened.",
 			completedNodes: new Map([
@@ -245,7 +249,7 @@ describe("CompletedProgress trace gate (SIO-934)", () => {
 
 	test("renders NO trace chip for an empty assistant message (no nodes/time/tools/findings)", () => {
 		// Guards against over-loosening the gate: a bare message must not sprout a chip.
-		const message: ChatMessageType = { role: "assistant", content: "Just a sentence." };
+		const message: ChatMessageType = { id: "test-4", role: "assistant", content: "Just a sentence." };
 		const { body } = render(ChatMessage, { props: { message, index: 0 } });
 		expect(body).not.toContain("Completed");
 		expect(body).not.toContain("Blocked");
@@ -253,6 +257,7 @@ describe("CompletedProgress trace gate (SIO-934)", () => {
 
 	test("renders no trace chip while streaming even when nodes exist", () => {
 		const message: ChatMessageType = {
+			id: "test-5",
 			role: "assistant",
 			content: "streaming...",
 			completedNodes: new Map([["parseIntent", { duration: 900 }]]),
