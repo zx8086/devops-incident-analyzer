@@ -49,6 +49,9 @@ mock.module("@langchain/aws", () => ({
 mock.module("./prompt-context.ts", () => ({
 	getRunbookFilenames: () => [] as string[],
 	getAgent: () => ({ manifest: {} }),
+	// SIO-1040: aggregate() now reads buildOrchestratorPromptParts; stub it so the
+	// process-global mock never lets a real prompt build run against this thin getAgent.
+	buildOrchestratorPromptParts: () => ({ stable: "", volatile: "" }),
 }));
 
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";

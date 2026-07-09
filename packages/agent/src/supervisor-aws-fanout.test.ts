@@ -29,6 +29,8 @@ mock.module("./prompt-context.ts", () => ({
 		subAgents: new Map(),
 	}),
 	buildOrchestratorPrompt: () => "",
+	// SIO-1040: aggregate() reads the split builder; keep it stubbed in lock-step.
+	buildOrchestratorPromptParts: () => ({ stable: "", volatile: "" }),
 	buildSubAgentPrompt: () => "",
 	getToolDefinitionForDataSource: () => undefined,
 }));
