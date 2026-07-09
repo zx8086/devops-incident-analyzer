@@ -2,13 +2,17 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createServer } from "../src/server";
+import { createMcpServerFactory } from "../src/server";
 import toolRegistry from "../src/tools";
 import { logger } from "../src/utils/logger";
 import { mockConnection, mockServer } from "./test.utils";
 
 describe("Integration Tests", () => {
-	let server: Awaited<ReturnType<typeof createServer>>;
+	// SIO-1044: createServer was replaced by createMcpServerFactory (record-once/replay-many).
+	// server here is a factory-produced McpServer, exercised only for its definedness below --
+	// this suite drives tool handlers directly through mockServer.registeredTools, not through
+	// `server` itself.
+	let server: McpServer;
 	const TEST_DOC_ID = "integration_test_doc";
 
 	beforeAll(async () => {
@@ -16,7 +20,8 @@ describe("Integration Tests", () => {
 		Object.values(toolRegistry).forEach((registerTool) => {
 			registerTool(mockServer as unknown as McpServer, mockConnection.defaultBucket);
 		});
-		server = await createServer(mockConnection);
+		const factory = createMcpServerFactory({ bucket: mockConnection.defaultBucket, playbooks: null });
+		server = factory();
 	});
 
 	afterAll(async () => {

@@ -9,7 +9,7 @@ import { logger } from "../utils/logger";
 /**
  * Playbook handler class that manages access to playbook content
  */
-class PlaybookHandler {
+export class PlaybookHandler {
 	baseDirectory: string;
 	fileExtension: string;
 	playbookFiles: string[] = [];
@@ -141,14 +141,23 @@ class PlaybookHandler {
 	}
 }
 
+// SIO-1044: pre-enumerated playbook state, produced once by loadPlaybooks (async, fs-bound) in
+// initDatasource and consumed synchronously by registerPlaybookResources on every factory replay.
+export interface PlaybookRegistry {
+	handler: PlaybookHandler;
+	resourceIds: string[];
+}
+
 /**
- * Register playbook resources from the playbook directory
- * Makes playbooks available via resources/list and resources/read endpoints
+ * Async directory probing + handler initialization for the playbook feature. Runs ONCE, in
+ * initDatasource -- never inside registerAll (which must stay synchronous for the cached server
+ * factory). Returns null when playbooks are disabled in config or no directory with markdown
+ * files could be found.
  */
-export async function registerPlaybookResources(server: McpServer): Promise<void> {
+export async function loadPlaybooks(): Promise<PlaybookRegistry | null> {
 	if (!config.playbooks?.enabled) {
 		logger.info("Playbook resources are disabled in config");
-		return;
+		return null;
 	}
 
 	try {
@@ -185,138 +194,73 @@ export async function registerPlaybookResources(server: McpServer): Promise<void
 
 		if (!playbookDir) {
 			logger.error("No playbook directory found with markdown files");
-			return;
+			return null;
 		}
 
 		// Initialize the playbook handler
 		const handler = new PlaybookHandler(playbookDir, config.playbooks.fileExtension);
 		await handler.initialize();
 
-		// Register resources - both for resources/list and resources/read
-		// First register with the original method that works with resources/read
-		server.resource(
-			"playbook-directory", // Resource ID
-			"playbook://", // URI
-			async (uri) => {
-				logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
-				return handler.listPlaybooks();
-			},
-		);
-
-		// Also register specific handlers for individual playbooks
 		const playbooks = await fs.readdir(playbookDir);
 		const playbookFiles = playbooks.filter((file) => file.endsWith(config.playbooks.fileExtension || ".md"));
-
-		for (const file of playbookFiles) {
-			const resourceId = file.replace(new RegExp(`\\${config.playbooks.fileExtension || ".md"}$`), "");
-			const resourceUri = `playbook://${resourceId}`;
-
-			// Register each playbook as a separate resource
-			server.resource(
-				`playbook-${resourceId}`, // Resource ID
-				resourceUri, // URI
-				async (uri) => {
-					logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
-					return handler.getPlaybook(resourceId);
-				},
-			);
-		}
-
-		// Expose a method for tools to easily access resources by URI
-		(server as unknown as Record<string, unknown>).readResourceByUri = (async (resourceUri: string) => {
-			try {
-				logger.info(`Handling readResourceByUri for: ${resourceUri}`);
-				// Simple URL parsing without using URL constructor (for compatibility)
-				const protocol = resourceUri.split("://")[0];
-				const path = resourceUri.split("://")[1] || "";
-
-				if (protocol === "playbook") {
-					if (path === "") {
-						return handler.listPlaybooks();
-					} else {
-						return handler.getPlaybook(path);
-					}
-				}
-
-				// Look through server resources for a matching URI
-				const serverInternal = server as unknown as Record<string, unknown>;
-				interface ResourceEntry {
-					uri?: string;
-					handler: (href: { href: string }, params: Record<string, unknown>) => Promise<unknown>;
-				}
-				const resourceMap = serverInternal._resources || serverInternal.resources || new Map();
-				if (resourceMap instanceof Map) {
-					for (const [id, resource] of resourceMap.entries() as IterableIterator<[string, ResourceEntry]>) {
-						if (resource.uri === resourceUri) {
-							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
-							return resource.handler({ href: resourceUri }, {});
-						}
-					}
-				} else if (typeof resourceMap === "object" && resourceMap !== null) {
-					for (const id in resourceMap as Record<string, ResourceEntry>) {
-						const resource = (resourceMap as Record<string, ResourceEntry>)[id];
-						if (resource?.uri === resourceUri) {
-							logger.info(`Found matching resource for ${resourceUri}: ${id}`);
-							return resource.handler({ href: resourceUri }, {});
-						}
-					}
-				}
-
-				throw new Error(`No resource handler found for URI: ${resourceUri}`);
-			} catch (error) {
-				logger.error(
-					{
-						error: error instanceof Error ? error.message : String(error),
-					},
-					`Error reading resource URI: ${resourceUri}`,
-				);
-				throw error;
-			}
-		}).bind(server);
-
-		// Work around the template issue by adding a custom handler for templates listing
-		type RequestHandler = (schema: { method: string }, handler: () => Promise<unknown>) => void;
-		const serverExt = server as unknown as Record<string, RequestHandler | undefined>;
-		const setHandler: RequestHandler = serverExt.setRequestHandler ?? (() => {});
-		serverExt.setRequestHandler = setHandler;
-		setHandler(
-			{
-				method: "resources/templates/list",
-			},
-			async () => {
-				logger.info("Custom handler for resources/templates/list called");
-				// Return an empty but properly structured templates array
-				return { templates: [] };
-			},
+		const resourceIds = playbookFiles.map((file) =>
+			file.replace(new RegExp(`\\${config.playbooks.fileExtension || ".md"}$`), ""),
 		);
 
-		// Also handle resources/list to include our resources
-		setHandler(
-			{
-				method: "resources/list",
-			},
-			async () => {
-				logger.info("Custom handler for resources/list called");
-				return {
-					resources: [
-						{
-							id: "playbook-directory",
-							uri: "playbook://",
-							name: "Playbook Directory",
-							description: "Directory of available playbooks",
-						},
-					],
-				};
-			},
-		);
-
-		logger.info("Playbook resources registered successfully");
+		return { handler, resourceIds };
 	} catch (err) {
 		logger.error(
 			{
 				error: err instanceof Error ? err.message : String(err),
 			},
-			"Error registering playbook resources",
+			"Error loading playbook resources",
+		);
+		return null;
+	}
+}
+
+/**
+ * Register playbook resources from a pre-enumerated PlaybookRegistry.
+ * Makes playbooks available via resources/list and resources/read endpoints.
+ * Sync -- safe to call from registerAll under the cached server factory. No-op when playbooks
+ * is null (disabled / no directory found).
+ *
+ * SIO-1044: the generic readResourceByUri assignment previously lived here (racing against an
+ * equivalent assignment in server.ts, decided nondeterministically by microtask ordering under
+ * the old floating-promise registerAllResources call). It has been removed -- server.ts's
+ * assignment is now the sole, canonical implementation.
+ */
+export function registerPlaybookResources(server: McpServer, playbooks: PlaybookRegistry | null): void {
+	if (!playbooks) {
+		return;
+	}
+	const { handler, resourceIds } = playbooks;
+
+	// Register resources - both for resources/list and resources/read
+	// First register with the original method that works with resources/read
+	server.resource(
+		"playbook-directory", // Resource ID
+		"playbook://", // URI
+		async (uri) => {
+			logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
+			return handler.listPlaybooks();
+		},
+	);
+
+	// Also register specific handlers for individual playbooks
+	for (const resourceId of resourceIds) {
+		const resourceUri = `playbook://${resourceId}`;
+
+		// Register each playbook as a separate resource
+		server.resource(
+			`playbook-${resourceId}`, // Resource ID
+			resourceUri, // URI
+			async (uri) => {
+				logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
+				return handler.getPlaybook(resourceId);
+			},
 		);
 	}
+
+	logger.info("Playbook resources registered successfully");
 }
