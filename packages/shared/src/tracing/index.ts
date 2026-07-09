@@ -14,6 +14,7 @@ export {
 } from "./langsmith.ts";
 
 export { withNestedTrace } from "./nested-trace.ts";
+export { createServerTracing, type ServerTracing, type ServerTracingConfig } from "./server-tracing-factory.ts";
 export {
 	createSessionContext,
 	getCurrentClientInfo,
