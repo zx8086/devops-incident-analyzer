@@ -13,7 +13,7 @@ import { initializeCloudClient } from "./clients/cloudClient.js";
 import { runWithDeployment } from "./clients/context.js";
 import { listRegisteredDeploymentIds } from "./clients/registry.js";
 import { clearConfigWarnings, config, getConfigWarnings } from "./config/index.js";
-import { createMcpServerInstance, initializeElasticsearchClient } from "./server.js";
+import { createMcpServerFactory, initializeElasticsearchClient } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { logger } from "./utils/logger.js";
 import { getReadOnlyManager } from "./utils/readOnlyMode.js";
@@ -64,11 +64,13 @@ if (import.meta.main) {
 		},
 
 		// SIO-674: Build the Elastic Cloud client once per server (lazy auth -- no probe).
-		// initializeCloudClient returns null when EC_API_KEY is unset; createMcpServerInstance
-		// then registers cluster tools only and the cloud + billing tools never appear.
+		// initializeCloudClient returns null when EC_API_KEY is unset; the factory then records
+		// cluster tools only and the cloud + billing tools never appear.
+		// SIO-1041: createMcpServerFactory records the ~93 wrapped tool registrations ONCE at boot
+		// and replays them per request, instead of re-running registerAllTools on every request.
 		createServerFactory: (esClient) => {
 			const cloudClient = initializeCloudClient(config);
-			return () => createMcpServerInstance(config, esClient, cloudClient);
+			return createMcpServerFactory(config, esClient, cloudClient);
 		},
 
 		// SIO-671: hoisted from per-tool withReadOnlyCheck wrappers. The shared
