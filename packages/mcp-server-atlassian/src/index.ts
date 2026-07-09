@@ -10,7 +10,7 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { AtlassianMcpProxy } from "./atlassian-client/index.js";
 import { loadConfiguration } from "./config/index.js";
-import { type AtlassianDatasource, createAtlassianServer, discoverRemoteTools } from "./server.js";
+import { type AtlassianDatasource, createMcpServerFactory, discoverRemoteTools } from "./server.js";
 import { createTransport } from "./transport/index.js";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
@@ -68,7 +68,9 @@ if (import.meta.main) {
 			return { proxy, config, discoveredTools, siteUrl };
 		},
 
-		createServerFactory: (ds) => () => createAtlassianServer(ds),
+		// SIO-1044: record-once / replay-many factory (createMcpServerFactory already returns
+		// the sync () => McpServer required by createServerFactory).
+		createServerFactory: (ds) => createMcpServerFactory(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		createTransport: (serverFactory, ds, identityCard) => {

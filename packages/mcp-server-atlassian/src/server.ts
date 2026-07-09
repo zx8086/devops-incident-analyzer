@@ -1,4 +1,5 @@
 // src/server.ts
+import { createCachedServerFactory } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AtlassianMcpProxy, ProxyToolInfo } from "./atlassian-client/index.js";
 import type { Config } from "./config/index.js";
@@ -7,13 +8,6 @@ import { registerProxyTools } from "./tools/proxy/index.js";
 import { createContextLogger } from "./utils/logger.js";
 
 const log = createContextLogger("server");
-
-// SIO-703: in HTTP stateless mode, createServerFactory fires per request, so the
-// "MCP server created" log fired N times per tool call and polluted the trace
-// timeline. The factory's output is identical across requests (discoveredTools
-// is captured once at startup), so logging once on the first invocation gives
-// operators the same visibility without the per-request noise.
-let serverCreatedLogged = false;
 
 export interface AtlassianDatasource {
 	proxy: AtlassianMcpProxy;
@@ -36,13 +30,18 @@ export async function discoverRemoteTools(proxy: AtlassianMcpProxy): Promise<Pro
 	}
 }
 
-export function createAtlassianServer(ds: AtlassianDatasource): McpServer {
-	const { config, proxy, discoveredTools, siteUrl } = ds;
-	const server = new McpServer({
+// Sync -- allocates a bare McpServer with capabilities/instructions but NO tools.
+function createBareServer(config: Config): McpServer {
+	return new McpServer({
 		name: config.application.name,
 		version: config.application.version,
 	});
+}
 
+// discoveredTools is a boot-time snapshot (initDatasource discovers it once via
+// discoverRemoteTools), so iterating the frozen array here is sound under the SIO-1044 factory.
+function registerAll(server: McpServer, ds: AtlassianDatasource): void {
+	const { config, proxy, discoveredTools, siteUrl } = ds;
 	const { registered, filtered } = registerProxyTools(server, proxy, discoveredTools, {
 		readOnly: config.atlassian.readOnly,
 	});
@@ -51,23 +50,19 @@ export function createAtlassianServer(ds: AtlassianDatasource): McpServer {
 		siteUrl,
 	});
 
-	if (!serverCreatedLogged) {
-		log.info(
-			{ proxyRegistered: registered, proxyFiltered: filtered, customCount, total: registered + customCount },
-			"Atlassian MCP server created",
-		);
-		serverCreatedLogged = true;
-	}
-	return server;
+	log.info(
+		{ proxyRegistered: registered, proxyFiltered: filtered, customCount, total: registered + customCount },
+		"Atlassian MCP server created",
+	);
 }
 
-// SIO-703: test seam. Tests can reset the once-flag between cases without
-// reaching for module-cache invalidation, and inspect the flag state to
-// confirm logging suppression occurred.
-export function _resetServerCreatedLoggedForTest(): void {
-	serverCreatedLogged = false;
-}
-
-export function _isServerCreatedLoggedForTest(): boolean {
-	return serverCreatedLogged;
+// SIO-1044: record-once / replay-many factory. registerAll runs ONCE at boot (against the
+// datasource's frozen discoveredTools snapshot); each request replays the recorded tool tuples
+// onto a fresh bare server. The "Atlassian MCP server created" log now fires once, at boot,
+// making the SIO-703 once-flag redundant.
+export function createMcpServerFactory(ds: AtlassianDatasource): () => McpServer {
+	return createCachedServerFactory({
+		createBareServer: () => createBareServer(ds.config),
+		registerAll: (server) => registerAll(server, ds),
+	});
 }
