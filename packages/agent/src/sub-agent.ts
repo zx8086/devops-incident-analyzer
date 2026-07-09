@@ -11,6 +11,7 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { instrumentTools } from "./sub-agent-instrumentation.ts";
@@ -451,7 +452,10 @@ async function runSubAgent(
 		const focusBlock = focus
 			? `\n\n---\n\nINVESTIGATION FOCUS (continuing across turns):\n- Summary: ${focus.summary}\n- Anchored services: ${focus.services.join(", ") || "(none)"}\n- Anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none)"}\n\nAll tool calls must stay scoped to this investigation. Do not pivot to unrelated clusters, services, or time ranges. If the user's current message references "kafka" or "the broker" or similar pronouns, resolve them against the anchored services list, not the broadest possible interpretation.`
 			: "";
-		const systemPrompt = `${baseSystemPrompt}${focusBlock}`;
+		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
+		// iterations and per-deployment fan-out share the Bedrock cache prefix within
+		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).
+		const systemPrompt = buildCachedSystemMessage(baseSystemPrompt, focusBlock);
 		const llm = createLlm("subAgent");
 
 		if (allTools.length === 0) {

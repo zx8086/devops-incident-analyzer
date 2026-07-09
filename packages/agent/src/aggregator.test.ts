@@ -45,6 +45,7 @@ import {
 	extractGapsBulletCount,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import { getAgentsDir } from "./paths.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 
@@ -52,7 +53,10 @@ function getSystemPromptText(): string {
 	if (!lastInvokeMessages || lastInvokeMessages.length === 0) return "";
 	const systemMsg = lastInvokeMessages.find((m) => m._getType() === "system");
 	if (!systemMsg) return "";
-	return String(systemMsg.content);
+	// SIO-1040: the system message is now a Bedrock cache-point block array
+	// ([text, cachePoint, text]) when caching is enabled, not a plain string.
+	// extractTextFromContent flattens the text blocks (dropping the cache point).
+	return extractTextFromContent(systemMsg.content);
 }
 
 function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {

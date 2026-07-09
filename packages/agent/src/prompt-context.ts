@@ -8,6 +8,14 @@ import {
 	type ToolDefinition,
 } from "@devops-agent/gitagent-bridge";
 import { buildGraphSection } from "./graph-section.ts";
+import {
+	assembleOrchestratorPromptParts,
+	filterAgentRunbooks,
+	type OrchestratorPromptParts,
+} from "./orchestrator-prompt-assembly.ts";
+
+export type { OrchestratorPromptParts } from "./orchestrator-prompt-assembly.ts";
+
 import { readLiveMemory } from "./memory-writer.ts";
 import { getAgentsDir } from "./paths.ts";
 import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
@@ -102,43 +110,25 @@ function wikiSectionFor(options: OrchestratorPromptOptions): string {
 	return buildWikiSection(focus, getAgent());
 }
 
-export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {}): string {
-	const agent = getAgent();
-	const filter = options.runbookFilter;
-
-	// SIO-1028: prepend a usage instruction to the raw graph block so recall questions
-	// answer from prior-incident entries instead of relying on LLM inference. Pure builder
-	// lives in graph-section.ts so its unit test dodges the prompt-context.ts module mock.
-	const graphSection = buildGraphSection(options.graphContext);
-
-	if (filter === undefined) {
-		return (
-			buildSystemPrompt(agent) +
-			buildComplianceBoundary() +
-			buildLiveMemorySection() +
-			wikiSectionFor(options) +
-			graphSection
-		);
-	}
-
-	// Filter the knowledge array to remove non-selected runbooks. Other
-	// categories (systems-map, slo-policies) pass through unchanged. Shallow
-	// copy preserves referential equality for everything else so downstream
-	// consumers see the same identities as the cached agent.
-	const filterSet = new Set(filter);
-	const filteredKnowledge = agent.knowledge.filter((entry) => {
-		if (entry.category !== "runbooks") return true;
-		return filterSet.has(entry.filename);
+// SIO-1040: stable/volatile split for Bedrock prompt caching. The pure assembly
+// (knowledge filter + section ordering) lives in orchestrator-prompt-assembly.ts
+// so its byte-identity unit test dodges the process-global prompt-context.ts mock.
+// This wrapper only gathers the turn-varying sections (which need getAgent + IO).
+export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions = {}): OrchestratorPromptParts {
+	const agent = filterAgentRunbooks(getAgent(), options.runbookFilter);
+	return assembleOrchestratorPromptParts(agent, {
+		compliance: buildComplianceBoundary(),
+		liveMemory: buildLiveMemorySection(),
+		wiki: wikiSectionFor(options),
+		// SIO-1028: prepend a usage instruction to the raw graph block so recall
+		// questions answer from prior-incident entries instead of LLM inference.
+		graph: buildGraphSection(options.graphContext),
 	});
+}
 
-	const filteredAgent = { ...agent, knowledge: filteredKnowledge };
-	return (
-		buildSystemPrompt(filteredAgent) +
-		buildComplianceBoundary() +
-		buildLiveMemorySection() +
-		wikiSectionFor(options) +
-		graphSection
-	);
+export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {}): string {
+	const { stable, volatile } = buildOrchestratorPromptParts(options);
+	return stable + volatile;
 }
 
 export function buildSubAgentPrompt(agentName: string): string {
