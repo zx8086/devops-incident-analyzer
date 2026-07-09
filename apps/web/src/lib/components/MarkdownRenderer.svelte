@@ -1,72 +1,38 @@
 <script lang="ts">
 // apps/web/src/lib/components/MarkdownRenderer.svelte
 
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import yaml from "highlight.js/lib/languages/yaml";
-import { Marked, Renderer } from "marked";
-
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("yaml", yaml);
+import { renderMarkdown } from "$lib/markdown.ts";
 
 let { content }: { content: string } = $props();
 
-const renderer = new Renderer();
+// SIO-1042: $derived can't be throttled, so this is $state seeded with a leading-edge parse
+// (correct first paint for static consumers -- a cheap "" parse at SSR) plus a trailing-edge
+// throttle for streaming updates. Caps re-parses at ~8/s during token-by-token SSE streaming.
+let html = $state(renderMarkdown(content));
+const THROTTLE_MS = 120;
+let lastRun = 0;
+let timer: ReturnType<typeof setTimeout> | null = null;
 
-renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
-	let highlighted: string;
-	if (lang) {
-		try {
-			highlighted = hljs.highlight(text, { language: lang }).value;
-		} catch {
-			highlighted = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-		}
-	} else {
-		highlighted = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+$effect(() => {
+	void content; // dependency registration
+	const elapsed = performance.now() - lastRun;
+	if (elapsed >= THROTTLE_MS) {
+		html = renderMarkdown(content);
+		lastRun = performance.now();
+	} else if (timer === null) {
+		// Trailing-edge: reads the latest `content` at fire time so the final streamed token is
+		// never dropped even if several updates land inside one throttle window.
+		timer = setTimeout(() => {
+			timer = null;
+			html = renderMarkdown(content);
+			lastRun = performance.now();
+		}, THROTTLE_MS - elapsed);
 	}
-	return `<pre class="hljs"><code class="language-${lang ?? ""}">${highlighted}</code></pre>`;
-};
+});
 
-renderer.codespan = ({ text }: { text: string }) => {
-	return `<code class="inline-code">${text}</code>`;
-};
-
-renderer.link = ({ href, title, text }: { href: string; title?: string | null; text: string }) => {
-	const titleAttr = title ? ` title="${title}"` : "";
-	return `<a href="${href}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text}</a>`;
-};
-
-renderer.table = ({
-	header,
-	rows,
-}: {
-	header: { text: string; align: string | null }[];
-	rows: { text: string; align: string | null }[][];
-}) => {
-	const alignStyle = (align: string | null) => (align ? ` style="text-align:${align}"` : "");
-	let out = '<div class="table-container"><table class="markdown-table"><thead><tr>';
-	for (const cell of header) {
-		out += `<th${alignStyle(cell.align)}>${cell.text}</th>`;
-	}
-	out += "</tr></thead><tbody>";
-	for (const row of rows) {
-		out += "<tr>";
-		for (const cell of row) {
-			out += `<td${alignStyle(cell.align)}>${cell.text}</td>`;
-		}
-		out += "</tr>";
-	}
-	out += "</tbody></table></div>";
-	return out;
-};
-
-const marked = new Marked({ renderer, breaks: true });
-
-const html = $derived(marked.parse(content) as string);
+$effect(() => () => {
+	if (timer !== null) clearTimeout(timer);
+});
 
 function handleClick(e: MouseEvent) {
 	const target = e.target as HTMLElement;
