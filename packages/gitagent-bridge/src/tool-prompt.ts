@@ -61,17 +61,3 @@ export function buildContextFromAgent(agent: LoadedAgent): ToolPromptContext {
 		agentRole: agent.manifest.delegation?.mode ?? "auto",
 	};
 }
-
-export function buildAllToolPrompts(
-	agent: LoadedAgent,
-	contextOverrides: Partial<ToolPromptContext> = {},
-): Map<string, string> {
-	const context = { ...buildContextFromAgent(agent), ...contextOverrides };
-	const prompts = new Map<string, string>();
-
-	for (const tool of agent.tools) {
-		prompts.set(tool.name, buildToolPrompt(tool, context));
-	}
-
-	return prompts;
-}

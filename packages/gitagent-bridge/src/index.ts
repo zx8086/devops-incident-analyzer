@@ -18,7 +18,7 @@ export {
 	resolveBedrockConfig,
 	resolveFallbackConfig,
 } from "./model-factory.ts";
-export { buildRelatedToolsMap, getRelatedTools, withRelatedTools } from "./related-tools.ts";
+export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export { buildSystemPrompt, buildSystemPromptParts, type SystemPromptParts } from "./skill-loader.ts";
 export {
@@ -29,12 +29,11 @@ export {
 	getAvailableActions,
 	getUncoveredTools,
 	matchActionsByKeywords,
-	matchesPattern,
 	type ResolvedMapping,
 	resolveActionTools,
 	resolveMapping,
 } from "./tool-mapping.ts";
-export { buildAllToolPrompts, buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";
+export { buildContextFromAgent, buildToolPrompt, type ToolPromptContext } from "./tool-prompt.ts";
 export { type ToolValidationResult, validateToolSchemas } from "./tool-schema.ts";
 export {
 	type AgentManifest,

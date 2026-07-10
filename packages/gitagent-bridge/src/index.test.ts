@@ -2,9 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
-	buildAllToolPrompts,
 	buildFacadeMap,
-	buildRelatedToolsMap,
 	buildSystemPrompt,
 	buildSystemPromptParts,
 	buildToolPrompt,
@@ -12,7 +10,6 @@ import {
 	getRecursionLimit,
 	getUncoveredTools,
 	loadAgent,
-	matchesPattern,
 	RunbookFrontmatterSchema,
 	RunbookTriggersSchema,
 	requiresApproval,
@@ -23,6 +20,9 @@ import {
 	withRelatedTools,
 } from "./index.ts";
 import { type LoadedAgent, parseRunbookFrontmatter, parseSkillFrontmatter } from "./manifest-loader.ts";
+// SIO-1046: matchesPattern is no longer part of the package's public surface (kept module-level for
+// its internal caller in tool-mapping.ts); its behavior tests import the module directly.
+import { matchesPattern } from "./tool-mapping.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 const ELASTIC_IAC_DIR = join(import.meta.dir, "../../../agents/elastic-iac");
@@ -364,27 +364,9 @@ describe("tool-prompt", () => {
 		const result = buildToolPrompt({ name: "test", description: "static desc" } as ToolDefinition, {});
 		expect(result).toBe("static desc");
 	});
-
-	test("buildAllToolPrompts returns map for all tools", () => {
-		const agent = loadAgent(AGENTS_DIR);
-		const prompts = buildAllToolPrompts(agent);
-		expect(prompts.size).toBe(9); // SIO-863: + aws-introspect
-		expect(prompts.has("elastic-search-logs")).toBe(true);
-		expect(prompts.has("gitlab-api")).toBe(true);
-		expect(prompts.has("aws-introspect")).toBe(true);
-	});
 });
 
 describe("related-tools", () => {
-	test("builds related tools map from agent", () => {
-		const agent = loadAgent(AGENTS_DIR);
-		const map = buildRelatedToolsMap(agent);
-		expect(map.size).toBeGreaterThan(0);
-		const elasticRelated = map.get("elastic-search-logs");
-		expect(elasticRelated).toBeDefined();
-		expect(elasticRelated?.length).toBeGreaterThan(0);
-	});
-
 	test("withRelatedTools appends hints to response", () => {
 		const map = new Map([["tool1", ["hint1", "hint2"]]]);
 		const response = { data: "test" };
