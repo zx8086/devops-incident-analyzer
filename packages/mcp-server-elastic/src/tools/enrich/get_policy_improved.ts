@@ -1,5 +1,6 @@
 /* src/tools/enrich/get_policy_improved.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
+/* SIO-1047: getPolicyHandler split into module-private helpers (parse/fetch/shape/response) to cut cognitive complexity */
 
 import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -55,6 +56,181 @@ interface PolicySummary {
 // not yet reflected in the SDK type. Augment locally for the read sites.
 type EnrichSummaryWithCreated = estypes.EnrichSummary & { created?: string };
 
+// Resolves the type-specific config block (match/geo_match/range) for a raw enrich policy entry.
+function resolvePolicyConfig(config: EnrichSummaryWithCreated["config"]): {
+	type: string;
+	policyConfig: Partial<estypes.EnrichPolicy> & { name?: string };
+} {
+	if (config.match) {
+		return { type: "match", policyConfig: config.match };
+	}
+	if (config.geo_match) {
+		return { type: "geo_match", policyConfig: config.geo_match };
+	}
+	if (config.range) {
+		return { type: "range", policyConfig: config.range };
+	}
+	return { type: "unknown", policyConfig: {} };
+}
+
+// Transforms raw ES enrich policy entries into the flattened summary shape used throughout the response.
+function transformPolicySummaries(policies: EnrichSummaryWithCreated[]): PolicySummary[] {
+	return policies.map((policy) => {
+		const { type, policyConfig } = resolvePolicyConfig(policy.config);
+
+		const rawIndices = policyConfig.indices;
+		const sourceIndices: string[] = Array.isArray(rawIndices)
+			? rawIndices.filter((s): s is string => typeof s === "string")
+			: typeof rawIndices === "string"
+				? [rawIndices]
+				: [];
+		const enrichFieldsRaw = policyConfig.enrich_fields;
+		const enrichFields: string[] = Array.isArray(enrichFieldsRaw)
+			? enrichFieldsRaw.filter((f): f is string => typeof f === "string")
+			: typeof enrichFieldsRaw === "string"
+				? [enrichFieldsRaw]
+				: [];
+		return {
+			name: policyConfig.name || "unnamed",
+			type: type,
+			source_indices: sourceIndices,
+			match_field: typeof policyConfig.match_field === "string" ? policyConfig.match_field : "",
+			enrich_fields: enrichFields,
+			query: !!policyConfig.query,
+			created: policy.created || undefined,
+		};
+	});
+}
+
+// Finds the raw ES policy entry whose type-specific config name matches the given policy name.
+function findRawPolicyByName(
+	policies: EnrichSummaryWithCreated[],
+	name: string | undefined,
+): EnrichSummaryWithCreated | undefined {
+	return policies.find((p) => {
+		const cfg = p.config.match || p.config.geo_match || p.config.range;
+		return cfg?.name === name;
+	});
+}
+
+// Sort comparator for the sortBy param: name (default), type, or indices_count.
+function comparePolicySummaries(a: PolicySummary, b: PolicySummary, sortBy: GetPolicyParams["sortBy"]): number {
+	switch (sortBy) {
+		case "type":
+			return a.type.localeCompare(b.type);
+		case "indices_count":
+			return b.source_indices.length - a.source_indices.length;
+		default:
+			return a.name.localeCompare(b.name);
+	}
+}
+
+// Summary-mode body for a single policy: type, match field, indices/fields (capped preview), query flag, created date.
+function renderPolicySummaryEntry(policy: PolicySummary): string[] {
+	const lines: string[] = [];
+	lines.push(`### ${policy.name}`);
+	lines.push(`- **Type**: ${policy.type}`);
+	lines.push(`- **Match Field**: ${policy.match_field}`);
+
+	lines.push(`- **Source Indices**: ${policy.source_indices.length}`);
+	if (policy.source_indices.length <= 3) {
+		for (const idx of policy.source_indices) {
+			lines.push(`  - ${idx}`);
+		}
+	} else {
+		for (const idx of policy.source_indices.slice(0, 2)) {
+			lines.push(`  - ${idx}`);
+		}
+		lines.push(`  - ... and ${policy.source_indices.length - 2} more`);
+	}
+
+	lines.push(`- **Enrich Fields**: ${policy.enrich_fields.length}`);
+	if (policy.enrich_fields.length <= 5) {
+		for (const field of policy.enrich_fields) {
+			lines.push(`  - ${field}`);
+		}
+	} else {
+		for (const field of policy.enrich_fields.slice(0, 3)) {
+			lines.push(`  - ${field}`);
+		}
+		lines.push(`  - ... and ${policy.enrich_fields.length - 3} more`);
+	}
+
+	if (policy.query) {
+		lines.push("- **Has Query Filter**: Yes");
+	}
+
+	if (policy.created) {
+		lines.push(`- **Created**: ${new Date(policy.created).toISOString().split("T")[0]}`);
+	}
+
+	lines.push("");
+	return lines;
+}
+
+// Aggregate stats block (type distribution, average enrich fields, query-filter count) shown when total > 5.
+function renderPolicyStatistics(policySummaries: PolicySummary[], total: number): string[] {
+	const lines: string[] = [];
+	lines.push("\n## Policy Statistics");
+
+	const typeCount = policySummaries.reduce(
+		(acc, p) => {
+			acc[p.type] = (acc[p.type] || 0) + 1;
+			return acc;
+		},
+		{} as Record<string, number>,
+	);
+
+	lines.push(`- **Total Policies**: ${total}`);
+	lines.push("- **Policy Types**:");
+	for (const [type, count] of Object.entries(typeCount).sort(([, a], [, b]) => b - a)) {
+		lines.push(`  - ${type}: ${count}`);
+	}
+
+	const avgFields = (
+		policySummaries.reduce((sum, p) => sum + p.enrich_fields.length, 0) / policySummaries.length
+	).toFixed(1);
+	lines.push(`- **Average Enrich Fields**: ${avgFields}`);
+
+	const withQuery = policySummaries.filter((p) => p.query).length;
+	if (withQuery > 0) {
+		lines.push(`- **Policies with Query Filter**: ${withQuery}`);
+	}
+
+	return lines;
+}
+
+// Full summary-mode response body: per-policy entries plus the aggregate statistics block when total > 5.
+function buildSummaryModeContent(
+	paginatedPolicies: PolicySummary[],
+	policySummaries: PolicySummary[],
+	total: number,
+): string[] {
+	const lines: string[] = [];
+	for (const policy of paginatedPolicies) {
+		lines.push(...renderPolicySummaryEntry(policy));
+	}
+
+	if (total > 5) {
+		lines.push(...renderPolicyStatistics(policySummaries, total));
+	}
+
+	return lines;
+}
+
+// Detailed-mode response body: full raw JSON for each paginated policy.
+function buildDetailedModeContent(paginatedPolicies: PolicySummary[], policies: EnrichSummaryWithCreated[]): string[] {
+	const lines: string[] = [];
+	lines.push("## Policy Details\n");
+	lines.push("```json");
+
+	const detailedResults = paginatedPolicies.map((policySummary) => findRawPolicyByName(policies, policySummary.name));
+
+	lines.push(JSON.stringify(detailedResults, null, 2));
+	lines.push("```");
+	return lines;
+}
+
 // MCP error handling
 function createGetPolicyMcpError(
 	error: Error | string,
@@ -101,56 +277,14 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			const policies: EnrichSummaryWithCreated[] = (result.policies || []) as EnrichSummaryWithCreated[];
 
 			// Transform policies into summary format
-			const policySummaries: PolicySummary[] = policies.map((policy) => {
-				const config = policy.config;
-
-				// Determine policy type and extract config
-				let type = "unknown";
-				let policyConfig: Partial<estypes.EnrichPolicy> & { name?: string } = {};
-
-				if (config.match) {
-					type = "match";
-					policyConfig = config.match;
-				} else if (config.geo_match) {
-					type = "geo_match";
-					policyConfig = config.geo_match;
-				} else if (config.range) {
-					type = "range";
-					policyConfig = config.range;
-				}
-
-				const rawIndices = policyConfig.indices;
-				const sourceIndices: string[] = Array.isArray(rawIndices)
-					? rawIndices.filter((s): s is string => typeof s === "string")
-					: typeof rawIndices === "string"
-						? [rawIndices]
-						: [];
-				const enrichFieldsRaw = policyConfig.enrich_fields;
-				const enrichFields: string[] = Array.isArray(enrichFieldsRaw)
-					? enrichFieldsRaw.filter((f): f is string => typeof f === "string")
-					: typeof enrichFieldsRaw === "string"
-						? [enrichFieldsRaw]
-						: [];
-				return {
-					name: policyConfig.name || "unnamed",
-					type: type,
-					source_indices: sourceIndices,
-					match_field: typeof policyConfig.match_field === "string" ? policyConfig.match_field : "",
-					enrich_fields: enrichFields,
-					query: !!policyConfig.query,
-					created: policy.created || undefined,
-				};
-			});
+			const policySummaries: PolicySummary[] = transformPolicySummaries(policies);
 
 			// If a specific policy was requested, filter results
 			if (name && !Array.isArray(name)) {
 				const filtered = policySummaries.filter((p) => p.name === name);
 				if (filtered.length === 1) {
 					// Return just the specific policy requested
-					const policy = policies.find((p) => {
-						const cfg = p.config.match || p.config.geo_match || p.config.range;
-						return cfg?.name === name;
-					});
+					const policy = findRawPolicyByName(policies, name);
 					return {
 						content: [
 							{
@@ -163,16 +297,7 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 			}
 
 			// Sort policies
-			policySummaries.sort((a, b) => {
-				switch (sortBy) {
-					case "type":
-						return a.type.localeCompare(b.type);
-					case "indices_count":
-						return b.source_indices.length - a.source_indices.length;
-					default:
-						return a.name.localeCompare(b.name);
-				}
-			});
+			policySummaries.sort((a, b) => comparePolicySummaries(a, b, sortBy));
 
 			// Apply pagination
 			const { results: paginatedPolicies, metadata } = paginateResults(policySummaries, {
@@ -191,88 +316,10 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 				responseContent.push("No enrich policies found.");
 			} else if (summary) {
 				// Summary mode - compact view
-				for (const policy of paginatedPolicies) {
-					responseContent.push(`### ${policy.name}`);
-					responseContent.push(`- **Type**: ${policy.type}`);
-					responseContent.push(`- **Match Field**: ${policy.match_field}`);
-
-					responseContent.push(`- **Source Indices**: ${policy.source_indices.length}`);
-					if (policy.source_indices.length <= 3) {
-						for (const idx of policy.source_indices) {
-							responseContent.push(`  - ${idx}`);
-						}
-					} else {
-						for (const idx of policy.source_indices.slice(0, 2)) {
-							responseContent.push(`  - ${idx}`);
-						}
-						responseContent.push(`  - ... and ${policy.source_indices.length - 2} more`);
-					}
-
-					responseContent.push(`- **Enrich Fields**: ${policy.enrich_fields.length}`);
-					if (policy.enrich_fields.length <= 5) {
-						for (const field of policy.enrich_fields) {
-							responseContent.push(`  - ${field}`);
-						}
-					} else {
-						for (const field of policy.enrich_fields.slice(0, 3)) {
-							responseContent.push(`  - ${field}`);
-						}
-						responseContent.push(`  - ... and ${policy.enrich_fields.length - 3} more`);
-					}
-
-					if (policy.query) {
-						responseContent.push("- **Has Query Filter**: Yes");
-					}
-
-					if (policy.created) {
-						responseContent.push(`- **Created**: ${new Date(policy.created).toISOString().split("T")[0]}`);
-					}
-
-					responseContent.push("");
-				}
-
-				// Add type distribution if there are multiple policies
-				if (metadata.total > 5) {
-					responseContent.push("\n## Policy Statistics");
-
-					const typeCount = policySummaries.reduce(
-						(acc, p) => {
-							acc[p.type] = (acc[p.type] || 0) + 1;
-							return acc;
-						},
-						{} as Record<string, number>,
-					);
-
-					responseContent.push(`- **Total Policies**: ${metadata.total}`);
-					responseContent.push("- **Policy Types**:");
-					for (const [type, count] of Object.entries(typeCount).sort(([, a], [, b]) => b - a)) {
-						responseContent.push(`  - ${type}: ${count}`);
-					}
-
-					const avgFields = (
-						policySummaries.reduce((sum, p) => sum + p.enrich_fields.length, 0) / policySummaries.length
-					).toFixed(1);
-					responseContent.push(`- **Average Enrich Fields**: ${avgFields}`);
-
-					const withQuery = policySummaries.filter((p) => p.query).length;
-					if (withQuery > 0) {
-						responseContent.push(`- **Policies with Query Filter**: ${withQuery}`);
-					}
-				}
+				responseContent.push(...buildSummaryModeContent(paginatedPolicies, policySummaries, metadata.total));
 			} else {
 				// Detailed mode - full policy information
-				responseContent.push("## Policy Details\n");
-				responseContent.push("```json");
-
-				const detailedResults = paginatedPolicies.map((policySummary) => {
-					return policies.find((p) => {
-						const cfg = p.config.match || p.config.geo_match || p.config.range;
-						return cfg?.name === policySummary.name;
-					});
-				});
-
-				responseContent.push(JSON.stringify(detailedResults, null, 2));
-				responseContent.push("```");
+				responseContent.push(...buildDetailedModeContent(paginatedPolicies, policies));
 			}
 
 			// Truncate response if needed

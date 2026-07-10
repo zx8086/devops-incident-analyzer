@@ -1,12 +1,13 @@
 /* src/tools/enrich/execute_policy.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
+/* SIO-1047: executePolicyHandler split into module-private helpers (notify/execute/shape-response) to cut cognitive complexity */
 
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
-import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
+import { createProgressTracker, notificationManager, type ProgressTracker } from "../../utils/notifications.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -22,6 +23,80 @@ const executePolicyValidator = z.object({
 });
 
 type ExecutePolicyParams = z.infer<typeof executePolicyValidator>;
+
+type ExecutePolicyResult = Awaited<ReturnType<Client["enrich"]["executePolicy"]>>;
+
+// Initial-info + (optional) synchronous-mode-warning notifications sent before the ES call.
+async function sendExecuteStartNotifications(params: ExecutePolicyParams): Promise<void> {
+	const { name, masterTimeout, waitForCompletion } = params;
+
+	await notificationManager.sendInfo(`Starting enrich policy execution: ${name}`, {
+		operation_type: "enrich_execute_policy",
+		policy_name: name,
+		wait_for_completion: waitForCompletion,
+		master_timeout: masterTimeout,
+		execution_mode: waitForCompletion ? "synchronous" : "asynchronous",
+	});
+
+	if (waitForCompletion) {
+		await notificationManager.sendWarning(`Policy execution in synchronous mode - this may take several minutes`, {
+			operation_type: "enrich_execute_policy",
+			policy_name: name,
+			warning: "Synchronous execution blocks until the enrich index is fully built",
+			recommendation: "Consider using asynchronous mode for large datasets",
+		});
+	}
+}
+
+// Asynchronous-mode completion path: tracker completes with the task id, followed by an info notification.
+async function handleAsyncPolicyResult(name: string, taskId: string, tracker: ProgressTracker): Promise<void> {
+	await tracker.complete({ task: taskId }, `Enrich policy execution task created: ${taskId}`);
+
+	await notificationManager.sendInfo(`Enrich policy execution started asynchronously: ${taskId}`, {
+		operation_type: "enrich_execute_policy",
+		policy_name: name,
+		mode: "asynchronous",
+		task_id: taskId,
+		note: "Use task management API to monitor execution progress",
+		monitor_command: `elasticsearch_tasks_get_task with taskId: "${taskId}"`,
+	});
+}
+
+// Synchronous-mode (or completed) path: progress + duration logging, tracker completion, and a
+// duration-scaled notification (warning above 60s, info otherwise).
+async function handleSyncPolicyResult(name: string, duration: number, tracker: ProgressTracker): Promise<void> {
+	await tracker.updateProgress(75, "Processing policy execution results");
+
+	if (duration > 30000) {
+		// Execute operations can take longer
+		logger.warn({ duration }, "Slow execute enrich policy operation");
+	}
+
+	const executionSummary = {
+		policy_name: name,
+		duration_ms: duration,
+		execution_time_seconds: Math.round(duration / 1000),
+		mode: "synchronous",
+		status: "completed",
+	};
+
+	await tracker.complete(executionSummary, `Enrich policy execution completed: ${name} in ${Math.round(duration)}ms`);
+
+	if (duration > 60000) {
+		await notificationManager.sendWarning(`Long execution time: ${Math.round(duration / 1000)}s for policy ${name}`, {
+			operation_type: "enrich_execute_policy",
+			...executionSummary,
+			performance_warning: true,
+			recommendation: "Consider optimizing source data size or using asynchronous execution",
+		});
+	} else {
+		await notificationManager.sendInfo(`Enrich policy execution completed successfully: ${name}`, {
+			operation_type: "enrich_execute_policy",
+			...executionSummary,
+			performance_note: duration > 10000 ? "Standard execution time" : "Fast execution",
+		});
+	}
+}
 
 function createExecutePolicyMcpError(
 	error: Error | string,
@@ -63,29 +138,12 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 			logger.debug({ name, masterTimeout, waitForCompletion }, "Executing enrich policy");
 
 			// Send initial notification with policy execution details
-			await notificationManager.sendInfo(`Starting enrich policy execution: ${name}`, {
-				operation_type: "enrich_execute_policy",
-				policy_name: name,
-				wait_for_completion: waitForCompletion,
-				master_timeout: masterTimeout,
-				execution_mode: waitForCompletion ? "synchronous" : "asynchronous",
-			});
+			await sendExecuteStartNotifications(params);
 
 			await tracker.updateProgress(10, "Initiating enrich policy execution");
-
-			// Warn about potentially long-running operation
-			if (waitForCompletion) {
-				await notificationManager.sendWarning(`Policy execution in synchronous mode - this may take several minutes`, {
-					operation_type: "enrich_execute_policy",
-					policy_name: name,
-					warning: "Synchronous execution blocks until the enrich index is fully built",
-					recommendation: "Consider using asynchronous mode for large datasets",
-				});
-			}
-
 			await tracker.updateProgress(25, "Submitting policy execution request");
 
-			const result = await esClient.enrich.executePolicy({
+			const result: ExecutePolicyResult = await esClient.enrich.executePolicy({
 				name,
 				master_timeout: masterTimeout,
 				wait_for_completion: waitForCompletion,
@@ -96,55 +154,10 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 			// Handle different response types based on wait_for_completion
 			if (waitForCompletion === false && result.task) {
 				// Asynchronous mode - return task ID
-				await tracker.complete({ task: result.task }, `Enrich policy execution task created: ${result.task}`);
-
-				await notificationManager.sendInfo(`Enrich policy execution started asynchronously: ${result.task}`, {
-					operation_type: "enrich_execute_policy",
-					policy_name: name,
-					mode: "asynchronous",
-					task_id: result.task,
-					note: "Use task management API to monitor execution progress",
-					monitor_command: `elasticsearch_tasks_get_task with taskId: "${result.task}"`,
-				});
+				await handleAsyncPolicyResult(name, result.task, tracker);
 			} else {
 				// Synchronous mode or completion
-				await tracker.updateProgress(75, "Processing policy execution results");
-
-				if (duration > 30000) {
-					// Execute operations can take longer
-					logger.warn({ duration }, "Slow execute enrich policy operation");
-				}
-
-				const executionSummary = {
-					policy_name: name,
-					duration_ms: duration,
-					execution_time_seconds: Math.round(duration / 1000),
-					mode: "synchronous",
-					status: "completed",
-				};
-
-				await tracker.complete(
-					executionSummary,
-					`Enrich policy execution completed: ${name} in ${Math.round(duration)}ms`,
-				);
-
-				if (duration > 60000) {
-					await notificationManager.sendWarning(
-						`Long execution time: ${Math.round(duration / 1000)}s for policy ${name}`,
-						{
-							operation_type: "enrich_execute_policy",
-							...executionSummary,
-							performance_warning: true,
-							recommendation: "Consider optimizing source data size or using asynchronous execution",
-						},
-					);
-				} else {
-					await notificationManager.sendInfo(`Enrich policy execution completed successfully: ${name}`, {
-						operation_type: "enrich_execute_policy",
-						...executionSummary,
-						performance_note: duration > 10000 ? "Standard execution time" : "Fast execution",
-					});
-				}
+				await handleSyncPolicyResult(name, duration, tracker);
 			}
 
 			return {
