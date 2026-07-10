@@ -49,10 +49,13 @@ is also frequently NOT the Elasticsearch `service.name` (e.g. `styles-v3` is
 anchor on either form. So a zero-hit query against ONE index family filtered on the
 literal short name is EXPECTED and does NOT prove the service is absent. Before you
 report a NAMED service as having "zero documents," you MUST run exactly ONE discovery
-aggregation: a `service.name` terms aggregation (size 0) over BOTH families
-(`logs-*,logs-apm.*`), then match the anchor against the returned real `service.name`s
-under BOTH forms -- the bare short-name (`styles-v3`) and the prefixed form
+aggregation: a `service.name` terms aggregation (search-body `size: 0` to suppress hits;
+the terms agg itself needs a non-zero `size`, e.g. 20+, to return buckets) over BOTH
+families (`logs-*,logs-apm.*`), then match the anchor against the returned real
+`service.name`s under BOTH forms -- the bare short-name (`styles-v3`) and the prefixed form
 (`pvh-services-styles-v3`), in either direction -- and search wherever it resolves.
+(On these OTel/APM streams aggregate on `service.name` directly -- it is keyword-typed and
+has NO `.keyword` sub-field; a `service.name.keyword` terms agg returns zero buckets here.)
 This single, bounded step is not "permutation" -- it is name resolution, and it takes
 precedence over the two-empties stop rule for that service. After it, the stop rule
 resumes normally.

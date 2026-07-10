@@ -202,9 +202,12 @@ tool_mapping:
       sanitizes it to `.ds-logs-apm.app.pvh_services_styles_v3-default-*`), and other datasources
       may anchor on either form. Do NOT conclude a service is absent from a single index-pattern +
       literal-`service.name` query. When a named service returns zero, FIRST run one discovery
-      aggregation -- a `service.name` terms agg (size 0) over BOTH families (`logs-*,logs-apm.*`)
-      -- and match the anchor against the returned names under BOTH forms (bare `styles-v3` and
-      prefixed `pvh-services-styles-v3`, in either direction), then search wherever it resolved.
+      aggregation -- a `service.name` terms agg (search-body `size: 0` to suppress hits; the terms
+      agg needs a non-zero `size`, e.g. 20+, to return buckets) over BOTH families
+      (`logs-*,logs-apm.*`) -- and match the anchor against the returned names under BOTH forms
+      (bare `styles-v3` and prefixed `pvh-services-styles-v3`, in either direction), then search
+      wherever it resolved. On these OTel/APM streams aggregate on `service.name` directly -- it is
+      keyword-typed with NO `.keyword` sub-field, so `service.name.keyword` returns zero buckets.
       Distinguish "service not present" from "service present but the cited error string is not
       observed" -- and before claiming an error is unobserved, check the APM ERROR stream
       (`logs-apm.error-*`): SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection
