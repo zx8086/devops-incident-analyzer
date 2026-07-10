@@ -19,6 +19,14 @@ interface BranchSpec {
 	rules: string[];
 }
 
+// SIO-1059: the Couchbase PrivateLink report's top escalate step was "enable the SDK circuit
+// breaker to cut EndpointConnectionFailedEvent log volume." A circuit breaker gates OPERATION
+// dispatch and opens only after failed operations accumulate; the report itself showed zero
+// failing operations (p99 104ms, queries succeeding), so it cannot reduce a background reconnect
+// loop's WARN volume. A proposed remedy must act on the actual observed failure mode.
+const MECHANISM_MATCH_RULE =
+	"Each step's mechanism must plausibly act on the OBSERVED failure mode in the report. Do not propose a remedy that targets a different failure class than what was observed -- e.g. do not recommend a circuit breaker / backoff to reduce log noise or a reconnect loop when the report shows no failing operations (a circuit breaker gates operation dispatch, not background reconnects). If a step is defensible hygiene but will not resolve the observed symptom, say so explicitly rather than presenting it as the fix.";
+
 const SPECS: Record<BranchKind, BranchSpec> = {
 	investigate: {
 		kind: "investigate",
@@ -28,6 +36,7 @@ const SPECS: Record<BranchKind, BranchSpec> = {
 			"All suggestions must be read-only and safe to automate.",
 			"Never suggest destructive operations (restart, delete, drop, reset, truncate).",
 			"If the report confidence is low, lead with broader diagnostic steps.",
+			MECHANISM_MATCH_RULE,
 		],
 	},
 	monitor: {
@@ -43,6 +52,7 @@ const SPECS: Record<BranchKind, BranchSpec> = {
 		rules: [
 			"All suggestions must explicitly state they require human approval.",
 			"Never suggest destructive operations directly; describe them as escalations.",
+			MECHANISM_MATCH_RULE,
 		],
 	},
 };

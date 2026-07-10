@@ -16,7 +16,9 @@ import { listDiscoveredResourcesSchema } from "../tools/config/list-discovered-r
 import { describeTableSchema } from "../tools/dynamodb/describe-table.ts";
 import { listTablesSchema } from "../tools/dynamodb/list-tables.ts";
 import { describeInstancesSchema } from "../tools/ec2/describe-instances.ts";
+import { describeNetworkInterfacesSchema } from "../tools/ec2/describe-network-interfaces.ts";
 import { describeSecurityGroupsSchema } from "../tools/ec2/describe-security-groups.ts";
+import { describeVpcEndpointsSchema } from "../tools/ec2/describe-vpc-endpoints.ts";
 import { describeVpcsSchema } from "../tools/ec2/describe-vpcs.ts";
 import { describeServicesSchema } from "../tools/ecs/describe-services.ts";
 import { describeTaskDefinitionSchema } from "../tools/ecs/describe-task-definition.ts";
@@ -94,6 +96,28 @@ describe("ec2 tool param schemas", () => {
 	});
 	test("describeVpcs rejects non-array vpcIds", () => {
 		expect(describeVpcsSchema.safeParse({ vpcIds: "vpc-1" }).success).toBe(false);
+	});
+	// SIO-1057
+	test("describeVpcEndpoints accepts endpoint ids and vpc-id filter", () => {
+		expect(
+			describeVpcEndpointsSchema.safeParse({
+				vpcEndpointIds: ["vpce-045853bfc0d45e1e0"],
+				filters: [{ Name: "vpc-id", Values: ["vpc-1"] }],
+			}).success,
+		).toBe(true);
+	});
+	test("describeVpcEndpoints rejects non-array vpcEndpointIds", () => {
+		expect(describeVpcEndpointsSchema.safeParse({ vpcEndpointIds: "vpce-1" }).success).toBe(false);
+	});
+	test("describeNetworkInterfaces accepts a private-ip-address filter", () => {
+		expect(
+			describeNetworkInterfacesSchema.safeParse({
+				filters: [{ Name: "private-ip-address", Values: ["10.34.50.147"] }],
+			}).success,
+		).toBe(true);
+	});
+	test("describeNetworkInterfaces rejects a malformed filter (missing Values)", () => {
+		expect(describeNetworkInterfacesSchema.safeParse({ filters: [{ Name: "vpc-id" }] }).success).toBe(false);
 	});
 	test("describeInstances accepts valid input", () => {
 		expect(describeInstancesSchema.safeParse({ instanceIds: ["i-abc"] }).success).toBe(true);

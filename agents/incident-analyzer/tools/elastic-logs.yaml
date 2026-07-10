@@ -192,7 +192,17 @@ tool_mapping:
   action_descriptions:
     search: >-
       when querying logs by service, time window, and search terms (the primary log-search
-      path; covers structured queries, aggregations, and free-text). For billion-doc indices
+      path; covers structured queries, aggregations, and free-text). IMPORTANT -- application
+      logs are OpenTelemetry APM logs in the `logs-apm.app.*` data streams, NOT in `logs-*`.
+      An incident's short service name is often NOT the Elasticsearch `service.name`: the APM
+      `service.name` may carry a prefix/suffix (e.g. the incident name `styles-v3` is
+      `pvh-services-styles-v3` in APM), and the backing index sanitizes it (dots/dashes ->
+      underscores, e.g. `.ds-logs-apm.app.pvh_services_styles_v3-default-*`). Do NOT conclude a
+      service is absent from a single `logs-*` + literal-`service.name` query. When a named
+      service returns zero, FIRST run one discovery aggregation -- a `service.name` terms agg
+      over `logs-apm.app.*` (size 0) -- to resolve the real `service.name`, then search that.
+      Distinguish "service not present" from "service present but the cited error string is not
+      observed at the expected level" (report the latter explicitly). For billion-doc indices
       (traces-apm*, logs-apm*), narrow the index pattern (date suffix or specific index name
       beats `traces-apm*`), use the shortest viable time window (prefer `now-24h` over
       `now-7d`), project only needed fields via `_source` or `fields`, and avoid fanning out

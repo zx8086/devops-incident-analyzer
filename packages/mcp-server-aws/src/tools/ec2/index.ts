@@ -5,10 +5,20 @@ import { withEstate } from "../estate-schema.ts";
 import { toMcp } from "../wrap.ts";
 import { type DescribeInstancesParams, describeInstances, describeInstancesSchema } from "./describe-instances.ts";
 import {
+	type DescribeNetworkInterfacesParams,
+	describeNetworkInterfaces,
+	describeNetworkInterfacesSchema,
+} from "./describe-network-interfaces.ts";
+import {
 	type DescribeSecurityGroupsParams,
 	describeSecurityGroups,
 	describeSecurityGroupsSchema,
 } from "./describe-security-groups.ts";
+import {
+	type DescribeVpcEndpointsParams,
+	describeVpcEndpoints,
+	describeVpcEndpointsSchema,
+} from "./describe-vpc-endpoints.ts";
 import { type DescribeVpcsParams, describeVpcs, describeVpcsSchema } from "./describe-vpcs.ts";
 
 export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
@@ -34,5 +44,25 @@ export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 		"List or describe EC2 security groups with ingress/egress rules.",
 		withEstate(config, describeSecurityGroupsSchema.shape),
 		async (params) => toMcp(await secGroups(params as DescribeSecurityGroupsParams)),
+	);
+
+	// SIO-1057: resolve a VPC endpoint (vpce-...) to its backing ENI IDs, to confirm whether a
+	// stale PrivateLink target IP is still a registered endpoint interface.
+	const vpcEndpoints = describeVpcEndpoints(config);
+	server.tool(
+		"aws_ec2_describe_vpc_endpoints",
+		"List or describe VPC endpoints. Returns VpcEndpoints[] with ServiceName, State, and NetworkInterfaceIds (the backing ENIs). Filter by vpcEndpointIds or filters (e.g. vpc-id).",
+		withEstate(config, describeVpcEndpointsSchema.shape),
+		async (params) => toMcp(await vpcEndpoints(params as DescribeVpcEndpointsParams)),
+	);
+
+	// SIO-1057: resolve an ENI (eni-...) to its PrivateIpAddress(es), or find an ENI by private IP
+	// via filters: [{ Name: "private-ip-address", Values: ["10.34.50.147"] }].
+	const networkInterfaces = describeNetworkInterfaces(config);
+	server.tool(
+		"aws_ec2_describe_network_interfaces",
+		"List or describe elastic network interfaces (ENIs). Returns NetworkInterfaces[] with PrivateIpAddress, PrivateIpAddresses[], Status, and Attachment. Filter by networkInterfaceIds or filters (e.g. private-ip-address, vpc-id).",
+		withEstate(config, describeNetworkInterfacesSchema.shape),
+		async (params) => toMcp(await networkInterfaces(params as DescribeNetworkInterfacesParams)),
 	);
 }
