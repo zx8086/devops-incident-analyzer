@@ -14,6 +14,7 @@ import {
 	responsePresets,
 	truncateResponse,
 } from "../../utils/responseHandling.js";
+import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -349,10 +350,7 @@ export const registerEnrichGetPolicyTool: ToolRegistrationFunction = (server: Mc
 		} catch (error) {
 			// Error handling
 			if (error instanceof z.ZodError) {
-				throw createGetPolicyMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-					type: "validation",
-					details: { validationErrors: error.issues, providedArgs: args },
-				});
+				throwZodValidationMcpError(error, args, createGetPolicyMcpError);
 			}
 
 			if (error instanceof Error) {

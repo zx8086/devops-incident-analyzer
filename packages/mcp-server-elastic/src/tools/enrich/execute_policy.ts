@@ -8,6 +8,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, type ProgressTracker } from "../../utils/notifications.js";
+import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
 import { booleanField } from "../../utils/zodHelpers.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
@@ -180,10 +181,7 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 
 			// Error handling
 			if (error instanceof z.ZodError) {
-				throw createExecutePolicyMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-					type: "validation",
-					details: { validationErrors: error.issues, providedArgs: args },
-				});
+				throwZodValidationMcpError(error, args, createExecutePolicyMcpError);
 			}
 
 			if (error instanceof Error) {

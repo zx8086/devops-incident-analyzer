@@ -7,6 +7,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
+import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -67,10 +68,7 @@ export const registerEnrichStatsTool: ToolRegistrationFunction = (server: McpSer
 		} catch (error) {
 			// Error handling
 			if (error instanceof z.ZodError) {
-				throw createStatsMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-					type: "validation",
-					details: { validationErrors: error.issues, providedArgs: args },
-				});
+				throwZodValidationMcpError(error, args, createStatsMcpError);
 			}
 
 			if (error instanceof Error) {
