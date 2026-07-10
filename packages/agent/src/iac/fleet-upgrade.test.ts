@@ -1,5 +1,23 @@
 // agent/src/iac/fleet-upgrade.test.ts
-import { describe, expect, mock, test } from "bun:test";
+//
+// SIO-1045: this file OWNS a mock.module("../memory-backend.ts", ...) registered at file scope,
+// BEFORE the static `import "./nodes.ts"` below (nodes.ts statically imports ../memory-backend.ts).
+// bun's mock.module is process-global and last-registration-wins, so a sibling test file
+// (iac-change-memory.test.ts / reconcile.test.ts) that mocks the same module path leaks into this
+// file's tests unless THIS file re-claims the module at its own load time -- relying on the
+// polluter's own afterEach/afterAll restore is insufficient (proven on Linux CI: bun schedules test
+// files in a different order there than a local macOS run, so the polluter can register its stub
+// AFTER this file has already loaded, or its restore can run before this file's tests execute in a
+// way that still leaves the stub active for the intervening period). The factory below re-exports the
+// REAL module's implementation for everything, so detectFleetUpgrade/bootstrapIac/watchPipeline/
+// applyFleetUpgrade/recallPriorFleetUpgrades exercise the real searchAgentMemory/selectedBackend/
+// dedupeHitsBy/dedupePreferring/recallInFlightFleetUpgrades logic; per-test control is layered on
+// top via the real __setAgentMemoryClient injection seam (unchanged from before this fix).
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackend from "../memory-backend.ts";
+
+mock.module("../memory-backend.ts", () => realMemoryBackend);
+
 import {
 	buildFleetFactDecision,
 	buildFleetFactRationale,
@@ -22,6 +40,15 @@ import {
 	recallPriorFleetUpgrades,
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
+
+// SIO-1045: re-claim ownership after every test in this file. mockTools() (below) mocks a DIFFERENT
+// module (../mcp-bridge.ts) via mock.restore()-surviving registration, and several tests in this file
+// dynamically `await import("../memory-backend.ts")` mid-test to call __setAgentMemoryClient -- none
+// of that re-registers this module's mock.module entry, but re-asserting here is a cheap, explicit
+// guarantee that this file's own tests never depend on load-order relative to any other file.
+afterEach(() => {
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+});
 
 // SIO-913: a camelCase preview-report stub (post-parse shape).
 function report(over: Partial<FleetUpgradeReport>): FleetUpgradeReport {

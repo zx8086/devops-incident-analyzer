@@ -3,7 +3,22 @@
 // SIO-966 / SIO-967: the LOCAL durable-memory query tool. The knowledge-graph query
 // tool moved to the MCP surface in SIO-967; its handler is now tested in
 // packages/mcp-server-knowledge-graph/src/tools/curated.test.ts.
-import { afterEach, describe, expect, test } from "bun:test";
+//
+// SIO-1045: this file OWNS a mock.module("../memory-backend.ts", ...) registered at file scope,
+// BEFORE the static `import "./local-tools.ts"` below (which itself statically imports
+// ../memory-backend.ts). bun's mock.module is process-global and last-registration-wins; a sibling
+// test file (iac-change-memory.test.ts / reconcile.test.ts) that mocks the same module and restores
+// it in its own afterEach/afterAll is NOT sufficient -- the polluter-side restore was proven
+// insufficient on Linux CI (bun schedules test files in a different order there than locally), so
+// every VICTIM must re-claim its own dependency deterministically at its own file scope instead of
+// trusting another file's cleanup. The factory below re-exports the REAL module's implementation for
+// everything (so runMemorySearch's real logic + the real searchAgentMemory/selectedBackend behavior
+// is exercised), with per-test control only where a test needs to observe/stub the network boundary.
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackend from "../memory-backend.ts";
+
+mock.module("../memory-backend.ts", () => realMemoryBackend);
+
 import { createSearchMemoryTool, runMemorySearch } from "./local-tools.ts";
 
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
@@ -11,6 +26,10 @@ const prevBackend = process.env.LIVE_MEMORY_BACKEND;
 afterEach(() => {
 	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
 	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	// SIO-1045: re-claim ownership after every test in this file, in case a test body's own dynamic
+	// `await import("../memory-backend.ts")` call raced a mock registered by a test running
+	// concurrently in another worker, or a nested import re-registered the mock differently.
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
 });
 
 describe("runMemorySearch", () => {
