@@ -32,6 +32,11 @@ import {
 	renderLiveParity,
 } from "./live-parity.ts";
 import { createSearchMemoryTool } from "./local-tools.ts";
+// SIO-1047: parseMrState/parseApplyResult moved to mr-live-state.ts (kept it a dependency-free leaf,
+// breaking the nodes.ts <-> reconcile.ts import cycle). watchPipeline below still calls both; they
+// are also re-exported near the bottom of this file for pipeline-status.test.ts, which imports both
+// from "./nodes.ts".
+import { parseApplyResult, parseMrState } from "./mr-live-state.ts";
 import { iacProposalFactTtlSeconds, reconcileAll } from "./reconcile.ts";
 import type {
 	DriftReport,
@@ -6749,103 +6754,6 @@ export function parseApprovalState(toolResult: string): IacApprovalState | null 
 	}
 }
 
-// SIO-992: parse the MR lifecycle state from gitlab_get_merge_request's "[status] {json}" body.
-// GitLab's GET /merge_requests/:iid returns state ("opened"|"merged"|"closed") + merged_at +
-// detailed_merge_status. We only need state (+ mergedAt for context) to distinguish "MR open, plan
-// ready" from "MR merged, apply runs on main". null on a non-2xx/unparseable body. (Pure.)
-// SIO-993: also capture merge_commit_sha so a merged MR can find its apply pipeline on main.
-export function parseMrState(
-	toolResult: string,
-): { state: string; mergedAt?: string; detailedMergeStatus?: string; mergeCommitSha?: string } | null {
-	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return null;
-	try {
-		const m = JSON.parse(toolResult.slice(jsonStart)) as {
-			state?: unknown;
-			merged_at?: unknown;
-			detailed_merge_status?: unknown;
-			merge_commit_sha?: unknown;
-		};
-		if (typeof m.state !== "string") return null;
-		return {
-			state: m.state,
-			...(typeof m.merged_at === "string" && m.merged_at ? { mergedAt: m.merged_at } : {}),
-			...(typeof m.detailed_merge_status === "string" ? { detailedMergeStatus: m.detailed_merge_status } : {}),
-			...(typeof m.merge_commit_sha === "string" && m.merge_commit_sha ? { mergeCommitSha: m.merge_commit_sha } : {}),
-		};
-	} catch {
-		return null;
-	}
-}
-
-// SIO-995: the REAL post-merge apply outcome, from gitlab_get_merge_commit_apply_result's JSON
-// {applyStatus, jobId?, pipelineId?, webUrl?, parentStatus?, reason?}. applyStatus is the APPLY JOB's
-// status (success=change live, running/pending=applying-not-live, failed=NOT live), NOT the parent
-// pipeline's (which reports success transiently before the child apply job runs/fails -- the SIO-993
-// false-positive). applyStatus is "" when the apply job hasn't appeared yet (treat as "starting",
-// never success). null on an unparseable body. (Pure.)
-export function parseApplyResult(
-	toolResult: string,
-): { applyStatus: string; pipelineId?: number; webUrl?: string; reason?: string } | null {
-	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return null;
-	try {
-		const r = JSON.parse(toolResult.slice(jsonStart)) as {
-			applyStatus?: unknown;
-			pipelineId?: unknown;
-			webUrl?: unknown;
-			reason?: unknown;
-		};
-		return {
-			applyStatus: typeof r.applyStatus === "string" ? r.applyStatus : "",
-			...(typeof r.pipelineId === "number" ? { pipelineId: r.pipelineId } : {}),
-			...(typeof r.webUrl === "string" ? { webUrl: r.webUrl } : {}),
-			...(typeof r.reason === "string" ? { reason: r.reason } : {}),
-		};
-	} catch {
-		return null;
-	}
-}
-
-export interface MrLiveState {
-	mrState: string; // "opened" | "merged" | "closed" | "" (unread)
-	mergeCommitSha?: string;
-	applyStatus: string; // apply-JOB status; "" when not merged or the apply job hasn't appeared
-	applyPipelineId: number | null;
-	applyPipelineUrl: string;
-}
-
-// SIO-1005: the live MR -> apply-job lookup, extracted from watchPipeline (the SIO-992/SIO-995
-// sequence) so the reconciliation pass (reconcile.ts) re-checks a proposed MR's true state with the
-// EXACT same reads -- read the MR's lifecycle state, and once merged read the apply JOB's status
-// (parent -> child -> apply:* job), never the parent pipeline's. Reuses this module's private
-// callTool so the reconcile module needs no MCP wiring of its own. Best-effort: every field falls
-// back to its empty value when a tool is unavailable or a body is unparseable.
-export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
-	const mrInfo = parseMrState(await callTool("gitlab_get_merge_request", { iid }));
-	const mrState = mrInfo?.state ?? "";
-	let applyStatus = "";
-	let applyPipelineId: number | null = null;
-	let applyPipelineUrl = "";
-	if (mrState === "merged" && mrInfo?.mergeCommitSha) {
-		const apply = parseApplyResult(
-			await callTool("gitlab_get_merge_commit_apply_result", { sha: mrInfo.mergeCommitSha }),
-		);
-		if (apply) {
-			applyStatus = apply.applyStatus;
-			applyPipelineId = apply.pipelineId ?? null;
-			applyPipelineUrl = apply.webUrl ?? "";
-		}
-	}
-	return {
-		mrState,
-		...(mrInfo?.mergeCommitSha ? { mergeCommitSha: mrInfo.mergeCommitSha } : {}),
-		applyStatus,
-		applyPipelineId,
-		applyPipelineUrl,
-	};
-}
-
 // A pipeline status is terminal when CI has stopped running.
 export function isTerminalPipelineStatus(status: string): boolean {
 	return ["success", "failed", "canceled", "skipped"].includes(status);
@@ -10658,3 +10566,7 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 	// blocked | failed
 	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${bfPid}${skipNote}`;
 }
+
+// SIO-1047: re-export -- parseMrState/parseApplyResult now live in mr-live-state.ts (see the import
+// above), but pipeline-status.test.ts still imports both from "./nodes.ts".
+export { parseApplyResult, parseMrState } from "./mr-live-state.ts";

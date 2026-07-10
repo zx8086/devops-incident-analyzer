@@ -12,7 +12,7 @@ import type { AnnotationMap } from "@devops-agent/shared";
 import { dedupeHitsBy, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { classifyLiveState, type IacLifecycle, isTerminalLifecycle } from "./lifecycle.ts";
-import { fetchMrLiveState } from "./nodes.ts";
+import { fetchMrLiveState } from "./mr-live-state.ts";
 
 const log = getLogger("agent:iac:reconcile");
 const AGENT = "elastic-iac";
