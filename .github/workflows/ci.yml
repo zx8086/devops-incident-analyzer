@@ -53,11 +53,11 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    # v1: main ships pre-existing failures (SIO-861-era agent PII redaction tests,
-    # SIO-865 live-API suites needing real credentials). continue-on-error until a
-    # v2 follow-up gates live-API tests on env and fixes the agent failures, then
-    # flips this to blocking behind a per-package allowlist.
-    continue-on-error: true
+    # v2 (SIO-1045): blocking. All packages are green offline -- live-API suites
+    # (elastic/couchbase/konnect, SIO-865) skip on missing credentials, and the
+    # apps/web mock.module isolation failures were fixed in this ticket. No
+    # per-package allowlist needed; if a package regresses, fix or gate it rather
+    # than reintroducing continue-on-error (it renders as a red X even on pass).
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
