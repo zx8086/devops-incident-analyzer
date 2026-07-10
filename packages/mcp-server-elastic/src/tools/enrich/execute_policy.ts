@@ -27,8 +27,10 @@ type ExecutePolicyParams = z.infer<typeof executePolicyValidator>;
 
 type ExecutePolicyResult = Awaited<ReturnType<Client["enrich"]["executePolicy"]>>;
 
-// Initial-info + (optional) synchronous-mode-warning notifications sent before the ES call.
-async function sendExecuteStartNotifications(params: ExecutePolicyParams): Promise<void> {
+// Initial-info notification sent before the ES call. Kept separate from the sync-mode warning so
+// the handler preserves the original notification/progress interleave (info -> progress 10 ->
+// warning -> progress 25).
+async function sendExecuteStartInfo(params: ExecutePolicyParams): Promise<void> {
 	const { name, masterTimeout, waitForCompletion } = params;
 
 	await notificationManager.sendInfo(`Starting enrich policy execution: ${name}`, {
@@ -38,6 +40,11 @@ async function sendExecuteStartNotifications(params: ExecutePolicyParams): Promi
 		master_timeout: masterTimeout,
 		execution_mode: waitForCompletion ? "synchronous" : "asynchronous",
 	});
+}
+
+// Synchronous-mode warning, emitted between the 10 and 25 progress updates as in the original handler.
+async function sendSyncModeWarning(params: ExecutePolicyParams): Promise<void> {
+	const { name, waitForCompletion } = params;
 
 	if (waitForCompletion) {
 		await notificationManager.sendWarning(`Policy execution in synchronous mode - this may take several minutes`, {
@@ -139,9 +146,10 @@ export const registerEnrichExecutePolicyTool: ToolRegistrationFunction = (server
 			logger.debug({ name, masterTimeout, waitForCompletion }, "Executing enrich policy");
 
 			// Send initial notification with policy execution details
-			await sendExecuteStartNotifications(params);
+			await sendExecuteStartInfo(params);
 
 			await tracker.updateProgress(10, "Initiating enrich policy execution");
+			await sendSyncModeWarning(params);
 			await tracker.updateProgress(25, "Submitting policy execution request");
 
 			const result: ExecutePolicyResult = await esClient.enrich.executePolicy({

@@ -10566,7 +10566,3 @@ export function formatFleetUpgradeSummary(state: IacStateType): string {
 	// blocked | failed
 	return `Fleet upgrade ${result.status}: ${result.note ?? "see logs"}.${bfPid}${skipNote}`;
 }
-
-// SIO-1047: re-export -- parseMrState/parseApplyResult now live in mr-live-state.ts (see the import
-// above), but pipeline-status.test.ts still imports both from "./nodes.ts".
-export { parseApplyResult, parseMrState } from "./mr-live-state.ts";

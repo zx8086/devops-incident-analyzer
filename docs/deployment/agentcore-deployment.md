@@ -561,7 +561,7 @@ The script:
 
 1. Pre-flights `EXECUTION_ROLE_ARN` (`iam:GetRole`).
 2. Builds the container with `MCP_SERVER_PACKAGE=mcp-server-aws` build arg.
-3. Pushes to the production ECR repo via `scripts/agentcore/push-to-production-ecr.sh` (smoke-tested by's `scripts/agentcore/smoke-test-agentcore.ts`).
+3. Pushes to the production ECR repo via `scripts/agentcore/push-to-production-ecr.sh`.
 4. Creates or updates the AgentCore runtime, attaches `EXECUTION_ROLE_ARN`, and sets `AWS_ESTATES` as a runtime environment variable.
 5. Returns the runtime ARN; copy it into `AWS_AGENTCORE_RUNTIME_ARN` for the agent's `.env`.
 
