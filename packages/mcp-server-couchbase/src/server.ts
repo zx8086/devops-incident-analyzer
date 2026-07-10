@@ -84,16 +84,17 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 				// straight to the DocumentationHandler, mirroring the playbook fast path above.
 				if (protocol === "docs" && docsHandler) {
 					const parts = rest === "" ? [] : rest.split("/");
+					const [scope = "", collection = ""] = parts;
 					if (parts.length === 0) {
 						return docsHandler.listDocumentation();
 					}
 					if (parts.length === 1) {
-						return docsHandler.getScopeDocumentation(parts[0]);
+						return docsHandler.getScopeDocumentation(scope);
 					}
 					if (parts.length === 2) {
-						return docsHandler.getCollectionDocumentation(parts[0], parts[1]);
+						return docsHandler.getCollectionDocumentation(scope, collection);
 					}
-					return docsHandler.getDocumentationFile(parts[0], parts[1], parts.slice(2).join("/"));
+					return docsHandler.getDocumentationFile(scope, collection, parts.slice(2).join("/"));
 				}
 
 				// SIO-1052: generic fallback rewritten against SDK 1.29's actual internals, mirroring
