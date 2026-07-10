@@ -40,26 +40,35 @@ indices returned no matching documents for <criteria>" as a finding. Do not
 call the same tool a third time with a similar query.
 
 ### One required exception: named-service discovery before declaring absence
-Application logs are OpenTelemetry APM logs in the `logs-apm.app.*` data streams,
-and an incident's short service name is frequently NOT the Elasticsearch
-`service.name` (e.g. `styles-v3` is `pvh-services-styles-v3` in APM; its index is
-`.ds-logs-apm.app.pvh_services_styles_v3-default-*`). So a zero-hit `logs-*` query
-filtered on the literal short name is EXPECTED and does NOT prove the service is
-absent. Before you report a NAMED service as having "zero documents," you MUST run
-exactly ONE discovery aggregation: a `service.name` terms aggregation (size 0) over
-`logs-apm.app.*`, then match the anchor short-name against the returned real
-`service.name`s and search that. This single, bounded step is not "permutation" --
-it is name resolution, and it takes precedence over the two-empties stop rule for
-that service. After it, the stop rule resumes normally.
+A service may ship to `logs-*` AND/OR to the OpenTelemetry APM streams
+`logs-apm.app.*` (app logs) and `logs-apm.error-*` (errors) -- it can be in either
+or both, so treat NEITHER family as authoritative. An incident's short service name
+is also frequently NOT the Elasticsearch `service.name` (e.g. `styles-v3` is
+`pvh-services-styles-v3` in APM; its index is
+`.ds-logs-apm.app.pvh_services_styles_v3-default-*`), and other datasources may
+anchor on either form. So a zero-hit query against ONE index family filtered on the
+literal short name is EXPECTED and does NOT prove the service is absent. Before you
+report a NAMED service as having "zero documents," you MUST run exactly ONE discovery
+aggregation: a `service.name` terms aggregation (size 0) over BOTH families
+(`logs-*,logs-apm.*`), then match the anchor against the returned real `service.name`s
+under BOTH forms -- the bare short-name (`styles-v3`) and the prefixed form
+(`pvh-services-styles-v3`), in either direction -- and search wherever it resolves.
+This single, bounded step is not "permutation" -- it is name resolution, and it takes
+precedence over the two-empties stop rule for that service. After it, the stop rule
+resumes normally.
 
 Then distinguish two different findings, and never conflate them:
-- "service NOT present": discovery found no matching `service.name` at all.
+- "service NOT present": discovery found no matching `service.name` in either family.
 - "service present, cited error NOT observed": the service's logs exist, but the
-  specific error string/level named in the incident context is not in them. Report
-  this literally (e.g. "pvh-services-styles-v3 is shipping ~2.4M INFO logs/24h;
-  the cited EndpointConnectionFailedEvent WARN is not present in any field"), and
-  treat externally-supplied error counts as unverified upstream context, not as
-  Elasticsearch-confirmed.
+  specific error string/level named in the incident context is not in them. Before
+  you claim this, you MUST also check the APM ERROR stream (`logs-apm.error-*`) --
+  SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection refused` from a
+  Couchbase endpoint) live there, NOT in the app-log INFO stream, so "no WARN in the
+  app logs" does not mean "no error anywhere." Only after checking the error stream,
+  report literally (e.g. "pvh-services-styles-v3 ships ~2M app-log docs/24h and the
+  Couchbase `finishConnect Connection refused` error is present in `logs-apm.error-*`
+  at N occurrences"), and treat externally-supplied error counts as unverified upstream
+  context unless corroborated in one of these streams.
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)

@@ -192,17 +192,23 @@ tool_mapping:
   action_descriptions:
     search: >-
       when querying logs by service, time window, and search terms (the primary log-search
-      path; covers structured queries, aggregations, and free-text). IMPORTANT -- application
-      logs are OpenTelemetry APM logs in the `logs-apm.app.*` data streams, NOT in `logs-*`.
-      An incident's short service name is often NOT the Elasticsearch `service.name`: the APM
-      `service.name` may carry a prefix/suffix (e.g. the incident name `styles-v3` is
-      `pvh-services-styles-v3` in APM), and the backing index sanitizes it (dots/dashes ->
-      underscores, e.g. `.ds-logs-apm.app.pvh_services_styles_v3-default-*`). Do NOT conclude a
-      service is absent from a single `logs-*` + literal-`service.name` query. When a named
-      service returns zero, FIRST run one discovery aggregation -- a `service.name` terms agg
-      over `logs-apm.app.*` (size 0) -- to resolve the real `service.name`, then search that.
+      path; covers structured queries, aggregations, and free-text). IMPORTANT -- a service may
+      ship to `logs-*` AND/OR to the OpenTelemetry APM streams `logs-apm.app.*` (app logs) and
+      `logs-apm.error-*` (errors/exceptions); it can be in either or both. Do NOT treat any one
+      family as authoritative and do NOT assume `logs-*` is empty just because APM has data (or
+      vice versa) -- search across `logs-*,logs-apm.*`. An incident's short service name is often
+      NOT the Elasticsearch `service.name`: the APM `service.name` may carry a prefix/suffix (e.g.
+      the incident name `styles-v3` is `pvh-services-styles-v3` in APM; the backing index
+      sanitizes it to `.ds-logs-apm.app.pvh_services_styles_v3-default-*`), and other datasources
+      may anchor on either form. Do NOT conclude a service is absent from a single index-pattern +
+      literal-`service.name` query. When a named service returns zero, FIRST run one discovery
+      aggregation -- a `service.name` terms agg (size 0) over BOTH families (`logs-*,logs-apm.*`)
+      -- and match the anchor against the returned names under BOTH forms (bare `styles-v3` and
+      prefixed `pvh-services-styles-v3`, in either direction), then search wherever it resolved.
       Distinguish "service not present" from "service present but the cited error string is not
-      observed at the expected level" (report the latter explicitly). For billion-doc indices
+      observed" -- and before claiming an error is unobserved, check the APM ERROR stream
+      (`logs-apm.error-*`): SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection
+      refused`) surface there, not in the app-log INFO stream. For billion-doc indices
       (traces-apm*, logs-apm*), narrow the index pattern (date suffix or specific index name
       beats `traces-apm*`), use the shortest viable time window (prefer `now-24h` over
       `now-7d`), project only needed fields via `_source` or `fields`, and avoid fanning out
