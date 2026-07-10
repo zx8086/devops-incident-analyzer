@@ -85,6 +85,7 @@ export {
 	recordIncident,
 	recordPipeline,
 	recordRootCause,
+	repairChangeMrUrl,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,

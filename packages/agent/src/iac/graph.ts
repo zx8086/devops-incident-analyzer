@@ -214,7 +214,14 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		)
 		// SIO-875: after opening the MR, watch the pipeline (bounded) then render.
 		// SIO-954: openMr -> watchPipeline, with recordIacEntities spliced in when the KG is enabled.
-		.addConditionalEdges("openMr", recordTarget, ["recordIacEntities", "watchPipeline"])
+		// SIO-1062: a failed MR create (blockedReason) ends the turn -- no KG ConfigChange, no
+		// pipeline watch, no teardown iac-change fact (matching the guard-block precedent). Any
+		// pre-existing blockedReason would have ended the turn at guard/draftChange already.
+		.addConditionalEdges("openMr", (s) => (s.blockedReason ? END : recordTarget()), [
+			"recordIacEntities",
+			"watchPipeline",
+			END,
+		])
 		.addEdge("recordIacEntities", "watchPipeline")
 		// SIO-965: watchPipeline -> teardown, with recordIacOutcome spliced in when the KG is enabled.
 		.addConditionalEdges("watchPipeline", outcomeTarget, ["recordIacOutcome", "teardown"])

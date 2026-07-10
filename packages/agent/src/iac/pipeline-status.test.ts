@@ -92,6 +92,13 @@ describe("parseMrState (SIO-992)", () => {
 	test("parses a closed MR", () => {
 		expect(parseMrState('[200] {"state":"closed"}')).toEqual({ state: "closed" });
 	});
+	// SIO-1062: web_url is captured so the KG reconcile sweep can repair a blob mrUrl.
+	test("captures web_url when present", () => {
+		expect(parseMrState('[200] {"state":"opened","web_url":"https://gitlab.com/x/-/merge_requests/256"}')).toEqual({
+			state: "opened",
+			webUrl: "https://gitlab.com/x/-/merge_requests/256",
+		});
+	});
 	test("null on a non-JSON / unreadable body", () => {
 		expect(parseMrState("[404] not found")).toBeNull();
 		expect(parseMrState("nope")).toBeNull();

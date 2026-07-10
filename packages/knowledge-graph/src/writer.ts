@@ -253,6 +253,37 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1062: re-key a ConfigChange's MergeRequest from a poisoned url (a "[409] {...}" GitLab
+// error blob stored as mrUrl before the openMr guard existed) to the MR's real web_url.
+// MERGE-first ordering so a crash mid-repair leaves both links (safe: reconcile still works via
+// the good one). DETACH DELETE of the bad node is best-effort -- lbug's support for it is
+// unverified (only relationship DELETE is proven in this file, see recordRootCause); an orphaned
+// MergeRequest node is unreachable by every reader query (all traverse PROPOSED_IN / RAN edges)
+// and therefore harmless. Plain DELETE is NOT a safe fallback: recordPipeline may have attached
+// RAN edges to the blob node, which makes a non-detach delete fail.
+export async function repairChangeMrUrl(
+	store: GraphStore,
+	changeId: string,
+	badUrl: string,
+	goodUrl: string,
+): Promise<void> {
+	if (!changeId || !badUrl || !goodUrl || badUrl === goodUrl) return;
+	await store.run("MERGE (m:MergeRequest {url: $url})", { url: goodUrl });
+	await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $url}) MERGE (c)-[:PROPOSED_IN]->(m)", {
+		id: changeId,
+		url: goodUrl,
+	});
+	await store.run("MATCH (c:ConfigChange {id: $id})-[r:PROPOSED_IN]->(:MergeRequest {url: $bad}) DELETE r", {
+		id: changeId,
+		bad: badUrl,
+	});
+	try {
+		await store.run("MATCH (m:MergeRequest {url: $bad}) DETACH DELETE m", { bad: badUrl });
+	} catch {
+		// Best-effort only: the orphaned blob node is unreachable by all reader queries.
+	}
+}
+
 // SIO-1038: persist one elastic-iac turn's VERBATIM user prompt. id is the turn's
 // requestId (== its ConfigChange id when it opens an MR). text is RAW and NOT
 // truncated -- unlike Incident.summary's .slice(0, 280) cap. When threadId is
