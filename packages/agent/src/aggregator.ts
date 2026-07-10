@@ -185,6 +185,20 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// healthy components fill the Gaps section and pin confidence below 0.6.
 	const healthCheckGapRule = `\n\nHEALTH-CHECK GAPS RULE: If a *_health_check or ksql_cluster_status tool returned status:"up" for a component, do NOT list that component under "## Gaps". Do NOT write "REST Proxy NOT DETECTED" or "deployment status is unconfirmed" for a component whose health-check returned up. Gaps is reserved for genuinely missing data, never for components that were probed and found healthy.`;
 
+	// SIO-1059: the Couchbase PrivateLink report paired a cumulative-time figure (38m47s, from the
+	// expensive-query tool, count 1,829) with an execution count from a DIFFERENT tool row (2,604,
+	// from the frequency tool), and attached an engine "~analysis" flag ("filter eliminating over
+	// 90%") from one query onto a different query (53% pass rate). Every scalar must come from the
+	// SAME tool row as the other scalars cited alongside it.
+	const numericGroundingRule = `\n\nNUMERIC PROVENANCE: When you cite several numbers about one query/entity (execution count, cumulative time, average, result count, fetch/pass rate), they MUST all come from the SAME tool-output row. Do NOT pair a count from one tool with a cumulative/average from another -- e.g. an execution count from a "most_frequent_queries" row does not describe the cumulative time in a "most_expensive_queries" row, even for the same-looking statement. When you quote an engine analysis flag (e.g. "filter eliminating over 90%", "high fetch count"), it MUST belong to the exact query row you are describing; never transfer a flag from one query to another. If two rows cannot be confirmed as the same query, report them separately rather than merging their numbers.`;
+
+	// SIO-1059: the report asserted an AWS Health EC2 lifecycle event (in one of our accounts) as
+	// the causal TRIGGER for a Couchbase Capella node rotation -- but Capella runs in the vendor's
+	// own AWS account (its fleet never surfaces in our Health console) and the incident timeline
+	// predated the event. An event observed in one account/vendor cannot be asserted as the cause
+	// of infrastructure managed in another.
+	const causalGroundingRule = `\n\nCAUSAL SCOPING: Do NOT assert an event observed in one account or one vendor's control plane as the CAUSE of a failure in infrastructure managed by a different account or vendor (e.g. an AWS Health event in our estate "triggering" a change on a third-party-managed service like Couchbase Capella, Confluent Cloud, or Kong Konnect). Such a link is at most a candidate correlation to confirm via that vendor's console/support -- phrase it as "candidate correlation, unconfirmed" and never place it as the head of a causal chain. Also check direction of time: an event that occurred AFTER the onset it supposedly caused is not the trigger.`;
+
 	// SIO-750: when an investigation focus is established AND we have a prior
 	// answer, replace the loose "do not repeat the full prior report" framing
 	// with continuation-aware guidance that names the anchored services + time
@@ -200,7 +214,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 

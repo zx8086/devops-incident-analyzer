@@ -77,6 +77,8 @@ tool_mapping:
       - aws_ec2_describe_instances
       - aws_ec2_describe_security_groups
       - aws_ec2_describe_vpcs
+      - aws_ec2_describe_vpc_endpoints
+      - aws_ec2_describe_network_interfaces
     rds_state:
       - aws_rds_describe_db_instances
       - aws_rds_describe_db_clusters
@@ -134,7 +136,10 @@ tool_mapping:
     cloudwatch_alarms: when triaging which CloudWatch alarms are in ALARM/INSUFFICIENT_DATA state for an estate or service
     cloudwatch_metrics: when pulling time-series metric data (CPU, memory, latency, error count) to confirm or quantify a degradation
     ecs_state: when an ECS service is unhealthy -- task counts, stopped-task reasons (CannotPullContainerError, OOM), service events, or task-definition config
-    ec2_state: when investigating EC2 instance health, instance state/type, security-group rules, or VPC layout behind a degraded service
+    ec2_state: >-
+      when investigating EC2 instance health, instance state/type, security-group rules, or VPC
+      layout behind a degraded service. Also resolves VPC endpoints (vpce-...) to backing ENIs and
+      ENIs to private IPs -- to confirm whether a PrivateLink/endpoint target IP is still registered
     rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
     lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
     logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results

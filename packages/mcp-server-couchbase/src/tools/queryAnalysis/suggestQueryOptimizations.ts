@@ -5,6 +5,21 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
 
+// SIO-1058: Couchbase GSI has NO `INCLUDE (col-list)` covering clause (that is SQL Server syntax;
+// only INCLUDE MISSING on the leading key exists). A covering index appends the projected fields
+// as trailing index keys -- predicate keys first, then projected keys. Verified against the
+// createindex.html grammar and the live cluster's own idx_article_required_fields_covered.
+export function buildCoveringIndexDdl(
+	bucket: string,
+	scope: string,
+	collection: string,
+	indexFields: string[],
+	coveringFields: string[],
+): string {
+	const allKeys = [...indexFields, ...coveringFields].join(", ");
+	return `CREATE INDEX idx_covering ON \`${bucket}\`.\`${scope}\`.\`${collection}\`(${allKeys});`;
+}
+
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
 		"capella_suggest_query_optimizations",
@@ -354,9 +369,9 @@ function formatOptimizationSuggestions(
 				if (coveringFields.length > 0 && indexFields.length > 0) {
 					output += `### Covering Index (Includes Projected Fields)\n\n`;
 					output += `\`\`\`sql\n`;
-					output += `CREATE INDEX idx_covering ON \`${bucket}\`.\`${scope}\`.\`${collection}\`(${indexFields.join(", ")}) INCLUDE (${coveringFields.join(", ")});\n`;
+					output += `${buildCoveringIndexDdl(bucket, scope, collection, indexFields, coveringFields)}\n`;
 					output += `\`\`\`\n\n`;
-					output += `A covering index includes all fields needed by the query, eliminating the need for document fetch.\n\n`;
+					output += `A covering index includes all query fields as index keys (predicate keys first, then projected keys), eliminating the document fetch.\n\n`;
 				}
 			}
 		} else {

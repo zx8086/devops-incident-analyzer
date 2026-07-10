@@ -18,6 +18,7 @@
 				"ec2:DescribeRouteTables",
 				"ec2:DescribeSecurityGroups",
 				"ec2:DescribeNetworkInterfaces",
+				"ec2:DescribeVpcEndpoints",
 				"ec2:DescribeAddresses",
 				"elasticloadbalancing:DescribeLoadBalancers",
 				"elasticloadbalancing:DescribeListeners",

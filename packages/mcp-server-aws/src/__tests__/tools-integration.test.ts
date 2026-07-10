@@ -13,7 +13,12 @@ import {
 	GetDiscoveredResourceCountsCommand,
 } from "@aws-sdk/client-config-service";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { DescribeVpcsCommand, EC2Client } from "@aws-sdk/client-ec2";
+import {
+	DescribeNetworkInterfacesCommand,
+	DescribeVpcEndpointsCommand,
+	DescribeVpcsCommand,
+	EC2Client,
+} from "@aws-sdk/client-ec2";
 import { DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
 import { DescribeCacheClustersCommand, ElastiCacheClient } from "@aws-sdk/client-elasticache";
 import {
@@ -49,6 +54,8 @@ import { describeAlarms } from "../tools/cloudwatch/describe-alarms.ts";
 import { describeConfigRules } from "../tools/config/describe-config-rules.ts";
 import { getDiscoveredResourceCounts } from "../tools/config/get-discovered-resource-counts.ts";
 import { listTables } from "../tools/dynamodb/list-tables.ts";
+import { describeNetworkInterfaces } from "../tools/ec2/describe-network-interfaces.ts";
+import { describeVpcEndpoints } from "../tools/ec2/describe-vpc-endpoints.ts";
 import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
 import { describeTaskDefinition } from "../tools/ecs/describe-task-definition.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
@@ -57,7 +64,7 @@ import { getDetector } from "../tools/guardduty/get-detector.ts";
 import { getFindings as guardDutyGetFindings } from "../tools/guardduty/get-findings.ts";
 import { listDetectors } from "../tools/guardduty/list-detectors.ts";
 import { listFindings as guardDutyListFindings } from "../tools/guardduty/list-findings.ts";
-import { describeEvents } from "../tools/health/describe-events.ts";
+import { coerceFilterDates, describeEvents, describeEventsSchema } from "../tools/health/describe-events.ts";
 import { listFunctions } from "../tools/lambda/list-functions.ts";
 import { describeLogGroups } from "../tools/logs/describe-log-groups.ts";
 import { listTopics } from "../tools/messaging/sns/list-topics.ts";
@@ -91,6 +98,39 @@ describe("ec2 integration", () => {
 		const handler = describeVpcs(config);
 		const result = (await handler({ estate: E })) as { Vpcs: unknown[] };
 		expect(result.Vpcs).toHaveLength(1);
+	});
+
+	// SIO-1057: endpoint -> ENI ids
+	test("describeVpcEndpoints returns VpcEndpoints[] with backing ENIs", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeVpcEndpointsCommand).resolves({
+			VpcEndpoints: [
+				{ VpcEndpointId: "vpce-045853bfc0d45e1e0", State: "Available", NetworkInterfaceIds: ["eni-aaa", "eni-bbb"] },
+			],
+		});
+
+		const handler = describeVpcEndpoints(config);
+		const result = (await handler({ estate: E, vpcEndpointIds: ["vpce-045853bfc0d45e1e0"] })) as {
+			VpcEndpoints: { NetworkInterfaceIds: string[] }[];
+		};
+		expect(result.VpcEndpoints).toHaveLength(1);
+		expect(result.VpcEndpoints[0]?.NetworkInterfaceIds).toEqual(["eni-aaa", "eni-bbb"]);
+	});
+
+	// SIO-1057: ENI -> private IP
+	test("describeNetworkInterfaces returns NetworkInterfaces[] with private IP", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeNetworkInterfacesCommand).resolves({
+			NetworkInterfaces: [{ NetworkInterfaceId: "eni-aaa", PrivateIpAddress: "10.34.50.147", Status: "in-use" }],
+		});
+
+		const handler = describeNetworkInterfaces(config);
+		const result = (await handler({
+			estate: E,
+			filters: [{ Name: "private-ip-address", Values: ["10.34.50.147"] }],
+		})) as { NetworkInterfaces: { PrivateIpAddress: string }[] };
+		expect(result.NetworkInterfaces).toHaveLength(1);
+		expect(result.NetworkInterfaces[0]?.PrivateIpAddress).toBe("10.34.50.147");
 	});
 });
 
@@ -201,6 +241,49 @@ describe("health integration", () => {
 		const handler = describeEvents(config);
 		const result = (await handler({ estate: E })) as { events: unknown[] };
 		expect(result.events).toHaveLength(1);
+	});
+
+	// SIO-1056: the schema must stay JSON-Schema-safe (string|number bounds, NOT z.date, which
+	// breaks tools/list serialization). It validates but does not coerce; coerceFilterDates does.
+	test("describeEventsSchema accepts string and number date bounds without coercing to Date", () => {
+		const parsed = describeEventsSchema.parse({
+			filter: {
+				services: ["EC2"],
+				startTimes: [{ from: "2026-07-01T00:00:00Z", to: 1783000000000 }],
+			},
+		});
+		// schema keeps them as primitives (Date in the schema would break JSON Schema output)
+		expect(typeof parsed.filter?.startTimes?.[0]?.from).toBe("string");
+		expect(typeof parsed.filter?.startTimes?.[0]?.to).toBe("number");
+		expect(parsed.filter?.services).toEqual(["EC2"]);
+	});
+
+	// SIO-1056: an ISO string previously reached the SDK's Date->epoch serializer and threw
+	// "STRING_VALUE cannot be converted to milliseconds since epoch". The handler must coerce
+	// string/number bounds to real Date objects before the SDK call.
+	test("describeEvents forwards coerced Date bounds to the SDK command", async () => {
+		const healthMock = mockClient(HealthClient);
+		healthMock.on(DescribeEventsCommand).resolves({ events: [] });
+
+		const handler = describeEvents(config);
+		await handler({
+			estate: E,
+			filter: describeEventsSchema.parse({
+				filter: { startTimes: [{ from: "2026-07-01T00:00:00Z", to: 1783000000000 }] },
+			}).filter,
+		});
+
+		const call = healthMock.commandCalls(DescribeEventsCommand)[0];
+		const range = call?.args[0].input.filter?.startTimes?.[0];
+		expect(range?.from).toBeInstanceOf(Date);
+		expect(range?.to).toBeInstanceOf(Date);
+		expect((range?.from as Date).toISOString()).toBe("2026-07-01T00:00:00.000Z");
+	});
+
+	test("coerceFilterDates drops an unparseable date bound instead of sending Invalid Date", () => {
+		const out = coerceFilterDates({ startTimes: [{ from: "not-a-date", to: "2026-07-01T00:00:00Z" }] });
+		expect(out?.startTimes?.[0]?.from).toBeUndefined();
+		expect(out?.startTimes?.[0]?.to).toBeInstanceOf(Date);
 	});
 });
 

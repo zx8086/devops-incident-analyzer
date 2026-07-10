@@ -39,6 +39,28 @@ Concretely: get one or two empties in a row -> stop and report "the searched
 indices returned no matching documents for <criteria>" as a finding. Do not
 call the same tool a third time with a similar query.
 
+### One required exception: named-service discovery before declaring absence
+Application logs are OpenTelemetry APM logs in the `logs-apm.app.*` data streams,
+and an incident's short service name is frequently NOT the Elasticsearch
+`service.name` (e.g. `styles-v3` is `pvh-services-styles-v3` in APM; its index is
+`.ds-logs-apm.app.pvh_services_styles_v3-default-*`). So a zero-hit `logs-*` query
+filtered on the literal short name is EXPECTED and does NOT prove the service is
+absent. Before you report a NAMED service as having "zero documents," you MUST run
+exactly ONE discovery aggregation: a `service.name` terms aggregation (size 0) over
+`logs-apm.app.*`, then match the anchor short-name against the returned real
+`service.name`s and search that. This single, bounded step is not "permutation" --
+it is name resolution, and it takes precedence over the two-empties stop rule for
+that service. After it, the stop rule resumes normally.
+
+Then distinguish two different findings, and never conflate them:
+- "service NOT present": discovery found no matching `service.name` at all.
+- "service present, cited error NOT observed": the service's logs exist, but the
+  specific error string/level named in the incident context is not in them. Report
+  this literally (e.g. "pvh-services-styles-v3 is shipping ~2.4M INFO logs/24h;
+  the cited EndpointConnectionFailedEvent WARN is not present in any field"), and
+  treat externally-supplied error counts as unverified upstream context, not as
+  Elasticsearch-confirmed.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
 - Include ISO 8601 timestamps and metric values in all findings
