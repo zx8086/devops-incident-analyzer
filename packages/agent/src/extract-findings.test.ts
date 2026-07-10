@@ -1,6 +1,6 @@
 // agent/src/extract-findings.test.ts
 import { describe, expect, test } from "bun:test";
-import type { DataSourceResult } from "@devops-agent/shared";
+import type { DataSourceResult, ToolOutput } from "@devops-agent/shared";
 import { extractFindings } from "./extract-findings.ts";
 import type { AgentStateType } from "./state.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
@@ -161,6 +161,521 @@ describe("extractFindings node", () => {
 		const out = await extractFindings(state);
 		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
 		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
+	});
+});
+
+// SIO-1047 Task B1: characterization coverage for the 3 complex functions fallow
+// flagged in this file (`fallow health --format json`, "targets" section, path
+// packages/agent/src/extract-findings.ts): collectFocusServices (cognitive 8,
+// crap 31.6), countRawConsumerGroups (cognitive 25, crap 97.0), and the `elastic`
+// extractor closure inside extractFindings's `extractors` map (cognitive 10,
+// crap 106.4 -- highest of the three despite the lowest cognitive score, because
+// CRAP = CC^2 * (1 - cov/100)^3 + CC uses cyclomatic 20 there). These functions are
+// NOT modified by this task -- zero production changes, characterization only:
+// assert CURRENT behavior so a future refactor has a safety net.
+//
+// collectFocusServices and countRawConsumerGroups are file-private (not exported),
+// so they are exercised indirectly through extractFindings, same as the rest of
+// this file. The `elastic` closure is likewise only reachable via extractFindings
+// with a dataSourceId: "elastic" result.
+
+describe("extractFindings: collectFocusServices branch coverage (SIO-1047)", () => {
+	// collectFocusServices unions state.investigationFocus?.services and
+	// state.normalizedIncident?.affectedServices[].name into a deduped Set, then
+	// Array.from()s it. Every extractor call reads it via the shared `focusServices`
+	// closure variable, so we observe its output through the kafka extractor's
+	// focus-scoping (already proven wired in the "focus scoping" tests above) --
+	// here the assertions are about which entries end up in the union, not
+	// about the kafka filter logic itself.
+
+	// NOTE: fixture ids below deliberately use distinctive service names
+	// (notification-service / payments-service / orders-service / catalog-service),
+	// not generic "service-a"/"service-b". matchesFocus (correlation/focus-match.ts)
+	// tokenizes on `-_.` and matches on token overlap for tokens >=4 chars; ids that
+	// only differ by a single short suffix (e.g. "service-a" vs "service-b") both
+	// reduce to the shared token "service" and cross-match, which would make these
+	// focus/off-focus assertions flaky for the wrong reason (token collision, not
+	// collectFocusServices' own union logic).
+
+	test("no investigationFocus and no normalizedIncident: empty union, show-all", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "payments-service", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		// Empty focus union -> kafka's isRelevantById show-all guardrail keeps both.
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
+	});
+
+	test("investigationFocus.services present, normalizedIncident absent: services alone populate the union", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["notification-service"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "payments-service", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id)).toEqual(["notification-service"]);
+	});
+
+	test("normalizedIncident.affectedServices present, investigationFocus absent: affectedServices alone populate the union", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			normalizedIncident: { affectedServices: [{ name: "payments-service" }] },
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "payments-service", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id)).toEqual(["payments-service"]);
+	});
+
+	test("both sources present with an overlapping name: deduped by the Set, not double-counted", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["notification-service"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			normalizedIncident: {
+				affectedServices: [{ name: "notification-service" }, { name: "orders-service" }],
+			},
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "orders-service", state: "STABLE" },
+							{ id: "catalog-service", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		// Union has 2 distinct entries (notification-service deduped), so exactly 2 groups match.
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id).sort()).toEqual([
+			"notification-service",
+			"orders-service",
+		]);
+	});
+
+	test("falsy entries are filtered out of both sources (empty-string service, nameless affectedService)", async () => {
+		// collectFocusServices does `if (s) set.add(s)` for services[] and
+		// `if (s?.name) set.add(s.name)` for affectedServices[] -- an empty string
+		// or an affectedService with no `name` field must not enter the union.
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["", "notification-service"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			normalizedIncident: {
+				affectedServices: [{ name: undefined }, { name: "payments-service" }],
+			},
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "notification-service", state: "STABLE" },
+							{ id: "payments-service", state: "STABLE" },
+							{ id: "catalog-service", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id).sort()).toEqual([
+			"notification-service",
+			"payments-service",
+		]);
+	});
+
+	test("investigationFocus.services is an empty array (present but empty): behaves like show-all when normalizedIncident is also absent", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: { services: [], datasources: [], summary: "", establishedAtTurn: 1 },
+			dataSourceResults: [
+				kafkaResult([
+					{ toolName: "kafka_list_consumer_groups", rawJson: [{ id: "notification-service", state: "STABLE" }] },
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(1);
+	});
+});
+
+describe("extractFindings: countRawConsumerGroups branch coverage (SIO-1047)", () => {
+	// countRawConsumerGroups is a pure diagnostic counter (feeds the KafkaFindingsCard
+	// log payload only -- it does not affect kafkaFindings). We can't assert on its
+	// return value directly since it's file-private and only reaches a logger.warn/
+	// info call, so these tests characterize it by NOT THROWING across every branch
+	// it visibly handles, using the kafka extractor's real output as the sole
+	// externally-observable proxy that extractFindings completed successfully.
+	// (Grep-verified: logCard's payload including rawCount/sampleRawIds only reaches
+	// pino, which is not asserted on elsewhere in this repo's unit tests either --
+	// see kafka focus-scoping tests above, which only assert kafkaFindings.)
+
+	test("kafka_list_consumer_groups as a bare array: counts unique ids", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "group-a", state: "STABLE" },
+							{ id: "group-b", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		};
+		// No throw, and the kafkaFindings side-effect still lands (both branches share
+		// the same toolOutputs, proving countRawConsumerGroups' array-shape branch
+		// (Array.isArray(o.rawJson)) does not disturb the real extractor's own parse).
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(2);
+	});
+
+	test("kafka_list_consumer_groups wrapped in {groups: [...]}: counts unique ids via the wrapper branch", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: { groups: [{ id: "group-a", state: "STABLE" }] },
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(1);
+	});
+
+	test("kafka_list_consumer_groups with neither array nor {groups} shape: falls through to empty rows, no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: { unexpectedShape: true },
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		// The real extractor's own safeParse also rejects this shape -> no findings.
+		expect(kafka?.kafkaFindings?.consumerGroups).toBeUndefined();
+	});
+
+	test("rows with non-string/missing id are not counted (typeof/`in` guards), no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: 12345, state: "STABLE" }, // id is a number, not a string
+							{ state: "STABLE" }, // no id field at all
+							"not-an-object", // not an object
+							{ id: "group-valid", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		// Only the well-formed row survives the real extractor's own zod parse too.
+		expect(kafka?.kafkaFindings?.consumerGroups?.map((g) => g.id)).toEqual(["group-valid"]);
+	});
+
+	test("kafka_get_consumer_group_lag: well-formed groupId counted, malformed groupId skipped, no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{ toolName: "kafka_get_consumer_group_lag", rawJson: { groupId: "group-a", totalLag: "42" } },
+					{ toolName: "kafka_get_consumer_group_lag", rawJson: { groupId: 999, totalLag: "1" } }, // groupId not a string
+					{ toolName: "kafka_get_consumer_group_lag", rawJson: { totalLag: "1" } }, // no groupId field
+					{ toolName: "kafka_get_consumer_group_lag", rawJson: "not-an-object" }, // not an object at all
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups?.[0]).toMatchObject({ id: "group-a", totalLag: 42 });
+	});
+
+	test("more than 3 unique ids across both tool types: sampleIds caps at 3 internally, still no throw and findings unaffected", async () => {
+		// Documents the `.slice(0, 3)` cap on sampleIds. Not directly assertable
+		// (file-private, log-only), but exercising >3 unique ids proves the branch
+		// executes without throwing and doesn't affect the real findings count.
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{
+						toolName: "kafka_list_consumer_groups",
+						rawJson: [
+							{ id: "group-1", state: "STABLE" },
+							{ id: "group-2", state: "STABLE" },
+							{ id: "group-3", state: "STABLE" },
+							{ id: "group-4", state: "STABLE" },
+							{ id: "group-5", state: "STABLE" },
+						],
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(5);
+	});
+
+	test("empty toolOutputs array: count is 0, no throw", async () => {
+		const state: AgentStateType = { ...baseState(), dataSourceResults: [kafkaResult([])] };
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings).toEqual({});
+	});
+
+	test("unrelated tool names are ignored by both branches, no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				kafkaResult([
+					{ toolName: "kafka_list_topics", rawJson: { topics: ["a", "b"] } },
+					{ toolName: "kafka_list_consumer_groups", rawJson: [{ id: "group-a", state: "STABLE" }] },
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const kafka = out.dataSourceResults?.find((r) => r.dataSourceId === "kafka");
+		expect(kafka?.kafkaFindings?.consumerGroups).toHaveLength(1);
+	});
+});
+
+describe("extractFindings: the `elastic` extractors-map closure branch coverage (SIO-1047)", () => {
+	// The `elastic` closure (extract-findings.ts extractors.elastic) calls
+	// extractElasticFindings twice (focused + unfocused-as-"raw"), sums
+	// apmServices/logClusters/syntheticMonitors lengths for both, and calls logCard.
+	// These tests exercise every combination of the three arrays being
+	// present/absent/focus-filtered, mirroring the real MCP tool-output shapes used
+	// in correlation/extractors/elastic.test.ts (SIO-787/788 fixtures).
+
+	function elasticResult(toolOutputs: DataSourceResult["toolOutputs"]): DataSourceResult {
+		return { dataSourceId: "elastic", data: "prose summary", status: "success", duration: 100, toolOutputs };
+	}
+
+	test("all three arrays populated simultaneously (synthetic + apm + log-cluster in one call)", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				elasticResult([
+					{
+						toolName: "elasticsearch_search",
+						toolArgs: { index: "synthetics-prod-*" },
+						rawJson: {
+							hits: {
+								hits: [
+									{
+										_source: {
+											monitor: { name: "phase-a-monitor", status: "up" },
+											"@timestamp": "2026-05-18T07:00:00.000Z",
+										},
+									},
+								],
+							},
+						},
+					} as unknown as ToolOutput,
+					{
+						toolName: "elasticsearch_search",
+						toolArgs: { index: "traces-apm-*" },
+						rawJson: {
+							aggregations: {
+								by_service: {
+									buckets: [
+										{
+											key: "phase-b-service",
+											doc_count: 100,
+											errors: { doc_count: 5 },
+											avg_duration: { value: 250000 },
+										},
+									],
+								},
+							},
+						},
+					} as unknown as ToolOutput,
+					{
+						toolName: "elasticsearch_search",
+						toolArgs: { index: "logs-app-*" },
+						rawJson: {
+							hits: {
+								hits: [
+									{
+										_source: {
+											message: "Phase-c distinctive repeating failure pattern xyzzy",
+											level: "error",
+										},
+									},
+								],
+							},
+						},
+					} as unknown as ToolOutput,
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings?.syntheticMonitors).toHaveLength(1);
+		expect(elastic?.elasticFindings?.apmServices).toHaveLength(1);
+		expect(elastic?.elasticFindings?.logClusters).toHaveLength(1);
+	});
+
+	test("only syntheticMonitors populated (apmServices and logClusters both undefined)", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [
+				elasticResult([
+					{
+						toolName: "elasticsearch_search",
+						rawJson: {
+							hits: {
+								hits: [
+									{
+										_source: {
+											monitor: { name: "solo-monitor", status: "down" },
+											"@timestamp": "2026-05-18T07:00:00.000Z",
+										},
+									},
+								],
+							},
+						},
+					},
+				]),
+			],
+		};
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings?.syntheticMonitors).toHaveLength(1);
+		expect(elastic?.elasticFindings?.apmServices).toBeUndefined();
+		expect(elastic?.elasticFindings?.logClusters).toBeUndefined();
+	});
+
+	test("no elasticsearch outputs at all: all three arrays undefined, rawCount and filteredCount both 0, no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [elasticResult([{ toolName: "kafka_list_topics", rawJson: { topics: [] } }])],
+		};
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings).toEqual({});
+	});
+
+	test("empty toolOutputs array: elasticFindings is {}", async () => {
+		const state: AgentStateType = { ...baseState(), dataSourceResults: [elasticResult([])] };
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings).toEqual({});
+	});
+
+	test("focus scoping drops an off-focus APM service (raw vs filtered counts diverge inside the closure)", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["prices-api-v2-service"],
+				datasources: ["elastic"],
+				summary: "investigating prices-api-v2-service errors",
+				establishedAtTurn: 1,
+			},
+			dataSourceResults: [
+				elasticResult([
+					{
+						toolName: "elasticsearch_search",
+						toolArgs: { index: "traces-apm-*" },
+						rawJson: {
+							aggregations: {
+								by_service: {
+									buckets: [
+										{ key: "prices-api-v2-service", doc_count: 10, errors: { doc_count: 1 } },
+										{ key: "unrelated-service", doc_count: 10, errors: { doc_count: 1 } },
+									],
+								},
+							},
+						},
+					} as unknown as ToolOutput,
+				]),
+			],
+		} as unknown as AgentStateType;
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		// Focused call keeps only the matching service; the closure's "raw" re-run
+		// (empty focus) is used only for the diagnostic log, not the returned findings.
+		expect(elastic?.elasticFindings?.apmServices?.map((s) => s.serviceName)).toEqual(["prices-api-v2-service"]);
+	});
+
+	test("malformed rawJson (not parseable as any known elastic shape): soft-fails to elasticFindings {}, no throw", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			dataSourceResults: [elasticResult([{ toolName: "elasticsearch_search", rawJson: "not json at all { broken" }])],
+		};
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings).toEqual({});
 	});
 });
 
