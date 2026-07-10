@@ -13,7 +13,8 @@ import { getToolsForDataSource } from "../mcp-bridge.ts";
 
 const AGENT = "elastic-iac";
 
-// Best-effort single-tool call, mirroring nodes.ts's private callTool. Returns a placeholder when the
+// Best-effort single-tool call, mirroring nodes.ts's private callTool with its findTool indirection
+// inlined (same getToolsForDataSource lookup, same fallback). Returns a placeholder when the
 // unified server (and therefore the tool) is not connected so the graph degrades instead of throwing.
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
 	const tool = getToolsForDataSource(AGENT).find((t) => t.name === name);
