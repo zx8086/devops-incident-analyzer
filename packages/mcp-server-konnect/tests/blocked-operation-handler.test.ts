@@ -5,9 +5,10 @@
  * and returns structured elicitation responses instead of plain errors.
  */
 
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
+import { MandatoryElicitationGate } from "../src/enforcement/mandatory-elicitation-gate.js";
 import { createBlockedOperationHandler } from "../src/enforcement/mcp-server-integration.js";
 
 // Empty stub for the MCP RequestHandlerExtra parameter; this test does not
@@ -15,6 +16,20 @@ import { createBlockedOperationHandler } from "../src/enforcement/mcp-server-int
 const fakeExtra = {} as unknown as RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 describe("INFO: Blocked Operation Handler", () => {
+	// SIO-1045: MandatoryElicitationGate is a process-wide singleton keyed by a
+	// deterministic hash of (operation, userMessage). A prior test file that completed
+	// elicitation for the same "create_service" + userMessage combo would leave this
+	// operation's context cached as elicitationComplete, so the handler falls through
+	// to the real (non-blocked) branch and the test flips to CI-only-fail depending on
+	// bun's file execution order. Clear the singleton's session state before this test
+	// runs so it never depends on what ran before it in the process.
+	beforeEach(() => {
+		const gate = MandatoryElicitationGate.getInstance();
+		for (const [sessionId] of gate.getActiveSessions()) {
+			gate.clearSession(sessionId);
+		}
+	});
+
 	it("should catch KongOperationBlockedError and return structured elicitation response", async () => {
 		console.log("INFO: Testing blocked operation handler...");
 
