@@ -216,6 +216,26 @@ export async function changeHistoryForStackInstance(
 	}));
 }
 
+// SIO-1053: every ConfigChange still at outcome 'proposed' (or with no outcome set) that
+// has an MR to re-check. The reconcile sweep derives the MR iid from mrUrl and advances the
+// outcome to its true merged+apply state -- terminal outcomes (applied/failed/rejected) are
+// never returned, so they are not re-checked (mirrors enumerateUnreconciledChanges' terminal skip).
+export interface ProposedConfigChange {
+	id: string; // == the proposal turn's requestId == the agent-memory configChangeId
+	mrUrl: string;
+	outcome: string;
+}
+
+export async function proposedChangesWithMr(store: GraphStore, limit = 200): Promise<ProposedConfigChange[]> {
+	const rows = await store.run<{ id: string; mrUrl: string | null; outcome: string | null }>(
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'proposed' OR c.outcome IS NULL RETURN c.id AS id, m.url AS mrUrl, c.outcome AS outcome LIMIT $limit",
+		{ limit },
+	);
+	return rows
+		.filter((r) => r.mrUrl)
+		.map((r) => ({ id: String(r.id), mrUrl: String(r.mrUrl), outcome: r.outcome ? String(r.outcome) : "proposed" }));
+}
+
 // SIO-965: blast radius -- which stacks wire a given module (cross-stack reuse).
 export async function stacksUsingModule(store: GraphStore, module: string): Promise<string[]> {
 	if (!module) return [];

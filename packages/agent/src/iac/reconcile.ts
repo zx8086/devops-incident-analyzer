@@ -7,6 +7,14 @@
 // mutating the stale one; recall then prefers the terminal fact per MR (dedupePreferring +
 // lifecycleRank). Driven by an in-process Bun.cron sweep and a bounded refresh in bootstrapIac.
 
+import {
+	type ChangeOutcome,
+	type GraphStore,
+	getGraphStore,
+	isKnowledgeGraphEnabled,
+	proposedChangesWithMr,
+	setChangeOutcome,
+} from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import type { AnnotationMap } from "@devops-agent/shared";
 import { dedupeHitsBy, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
@@ -142,7 +150,17 @@ export async function reconcileOne(target: ReconcileTarget): Promise<ReconcileRe
 	return { ...base, recorded: true };
 }
 
-// SIO-1005: sweep all unreconciled MRs. One target's failure never aborts the sweep.
+// SIO-1053: the two lifecycle stores are gated independently -- agent-memory reconciliation needs the
+// agent-memory backend, KG reconciliation needs KNOWLEDGE_GRAPH_ENABLED. The sweep should do useful
+// work when EITHER is on, so this predicate drives both the bootstrap sweep's decision to run and the
+// cron's decision to register (imported by apps/web via @devops-agent/agent).
+export function reconcileEnabled(): boolean {
+	return selectedBackend() === "agent-memory" || isKnowledgeGraphEnabled();
+}
+
+// SIO-1005/SIO-1053: sweep all unreconciled changes across BOTH stores. One item's failure never
+// aborts the sweep. The agent-memory loop runs only under the agent-memory backend; the KG pass runs
+// only under KNOWLEDGE_GRAPH_ENABLED. Either store being off is a legitimate no-op (logged, not silent).
 export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSummary> {
 	const summary: ReconcileSummary = {
 		source: opts.source,
@@ -154,36 +172,106 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 		stillOpen: 0,
 		errors: 0,
 	};
-	// SIO-1005: a disabled backend is a legitimate no-op, but log it so a "why did nothing happen?"
-	// question has an answer in the logs instead of silence.
-	if (selectedBackend() !== "agent-memory") {
-		log.info({ source: opts.source }, "reconcile sweep skipped: agent-memory backend not selected");
-		return summary;
+
+	// Agent-memory store (SIO-1005): unchanged behaviour, only when the backend is selected.
+	if (selectedBackend() === "agent-memory") {
+		const targets = await enumerateUnreconciledChanges(opts.limit ?? 50);
+		log.info({ source: opts.source, targets: targets.length, limit: opts.limit ?? 50 }, "reconcile sweep start");
+		for (const target of targets) {
+			try {
+				const result = await reconcileOne(target);
+				summary.checked += 1;
+				if (result.recorded) summary.advanced += 1;
+				if (result.lifecycle === "applied") summary.applied += 1;
+				else if (result.lifecycle === "apply-failed") summary.failed += 1;
+				else if (result.lifecycle === "closed") summary.closed += 1;
+				else summary.stillOpen += 1;
+			} catch (error) {
+				summary.errors += 1;
+				log.warn(
+					{ mrIid: target.mrIid, error: error instanceof Error ? error.message : String(error) },
+					"reconcileOne failed; continuing sweep",
+				);
+			}
+		}
+	} else {
+		log.info({ source: opts.source }, "agent-memory reconcile skipped: backend not selected");
 	}
 
-	const targets = await enumerateUnreconciledChanges(opts.limit ?? 50);
-	log.info({ source: opts.source, targets: targets.length, limit: opts.limit ?? 50 }, "reconcile sweep start");
-	for (const target of targets) {
-		try {
-			const result = await reconcileOne(target);
-			summary.checked += 1;
-			if (result.recorded) summary.advanced += 1;
-			if (result.lifecycle === "applied") summary.applied += 1;
-			else if (result.lifecycle === "apply-failed") summary.failed += 1;
-			else if (result.lifecycle === "closed") summary.closed += 1;
-			else summary.stillOpen += 1;
-		} catch (error) {
-			summary.errors += 1;
-			log.warn(
-				{ mrIid: target.mrIid, error: error instanceof Error ? error.message : String(error) },
-				"reconcileOne failed; continuing sweep",
-			);
-		}
-	}
+	// Knowledge-graph store (SIO-1053): independent gate; reports via its own log line, does not
+	// change the agent-memory summary counts (keeps the summary shape stable for the cron log).
+	await reconcileKnowledgeGraph(opts);
+
 	// SIO-1005: one summary line per sweep, ALWAYS -- so cron, bootstrap, and a direct live-probe call
 	// all report their outcome (including checked:0) in one place, and the callers don't each repeat it.
 	log.info(summary, "reconcile sweep complete");
 	return summary;
+}
+
+// SIO-1053: GitLab MR urls end in ".../-/merge_requests/<iid>"; derive the numeric iid so a KG
+// ConfigChange (which stores its MR by url, not iid) can be re-checked via fetchMrLiveState.
+export function mrIidFromUrl(url: string): number | null {
+	const m = /\/merge_requests\/(\d+)/.exec(url);
+	return m ? Number(m[1]) : null;
+}
+
+// SIO-1053: map the reconciler's live IacLifecycle to the KG's ChangeOutcome. Returns null for
+// transient lifecycles (open / apply-running / apply-not-started) -> no KG write, re-checked next
+// sweep. "closed" (MR closed unmerged) maps to the KG's "rejected" (its closest existing value).
+export function lifecycleToChangeOutcome(lifecycle: IacLifecycle): ChangeOutcome | null {
+	if (lifecycle === "applied") return "applied";
+	if (lifecycle === "apply-failed") return "failed";
+	if (lifecycle === "closed") return "rejected";
+	return null;
+}
+
+// SIO-1053: reconcile the KG ConfigChange.outcome for every proposed change with an MR. Reuses the
+// process-wide getGraphStore() singleton -- the SAME lbug handle the agent pipeline and the in-process
+// KG MCP already hold (one exclusive-lock opener). It NEVER constructs a store and NEVER closes one
+// (a second opener contends the lock; native close segfaults Bun). Best-effort per change; a single
+// failure never aborts the pass.
+export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<void> {
+	if (!isKnowledgeGraphEnabled()) {
+		log.info({ source: opts.source }, "KG reconcile skipped: KNOWLEDGE_GRAPH_ENABLED not set");
+		return;
+	}
+	let store: GraphStore;
+	try {
+		store = await getGraphStore();
+	} catch (error) {
+		log.warn(
+			{ source: opts.source, error: error instanceof Error ? error.message : String(error) },
+			"KG reconcile skipped: getGraphStore failed",
+		);
+		return;
+	}
+	// A bit wider than the agent-memory limit: KG ConfigChanges and agent-memory facts are not 1:1.
+	const proposed = await proposedChangesWithMr(store, opts.limit ? opts.limit * 4 : 200);
+	log.info({ source: opts.source, proposed: proposed.length }, "KG reconcile start");
+	let advanced = 0;
+	for (const change of proposed) {
+		try {
+			const iid = mrIidFromUrl(change.mrUrl);
+			if (iid == null) {
+				// A persistently malformed MR url would otherwise be silently re-skipped every sweep.
+				log.warn({ changeId: change.id, mrUrl: change.mrUrl }, "KG reconcile: MR url has no derivable iid, skipping");
+				continue;
+			}
+			const live = await fetchMrLiveState(iid);
+			const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
+			const outcome = lifecycleToChangeOutcome(lifecycle);
+			if (!outcome) continue; // transient -> leave "proposed", re-check next sweep
+			await setChangeOutcome(store, change.id, outcome);
+			advanced += 1;
+			log.info({ changeId: change.id, iid, lifecycle, outcome }, "KG reconcile: advanced ConfigChange.outcome");
+		} catch (error) {
+			log.warn(
+				{ changeId: change.id, mrUrl: change.mrUrl, error: error instanceof Error ? error.message : String(error) },
+				"KG reconcile one failed; continuing",
+			);
+		}
+	}
+	log.info({ source: opts.source, proposed: proposed.length, advanced }, "KG reconcile complete");
 }
 
 // SIO-1005: the authoritative annotations. Mirrors buildIacChangeAnnotations' identity keys
