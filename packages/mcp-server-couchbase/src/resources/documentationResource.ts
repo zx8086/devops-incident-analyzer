@@ -23,9 +23,11 @@ interface MarkdownDocsConfig {
 }
 
 /**
- * Documentation handler class that manages access to documentation content
+ * Documentation handler class that manages access to documentation content.
+ * Exported for the docs:// fast path in server.ts's readResourceByUri (SIO-1052): the SDK-registered
+ * docs resources only cover the exact root URI, so scoped lookups dispatch straight to this handler.
  */
-class DocumentationHandler {
+export class DocumentationHandler {
 	baseDirectory: string;
 	fileExtension: string;
 
@@ -232,7 +234,7 @@ export function registerMarkdownDocumentationResource(
 	server: McpServer,
 	_bucket: Bucket,
 	config: MarkdownDocsConfig,
-): void {
+): DocumentationHandler {
 	// Validate config
 	if (!config.baseDirectory) {
 		throw createError("CONFIG_ERROR", "baseDirectory is required for markdown documentation resource");
@@ -284,21 +286,10 @@ export function registerMarkdownDocumentationResource(
 		},
 	);
 
-	// Fix the templates/list issue
-	logger.info("Setting up custom handler for resources/templates/list");
-	const serverRecord = server as unknown as Record<string, (...args: unknown[]) => unknown>;
-	const setRequestHandler = serverRecord.setRequestHandler ?? (() => {});
-	serverRecord.setRequestHandler = setRequestHandler;
-	setRequestHandler(
-		{
-			method: "resources/templates/list",
-		},
-		async () => {
-			logger.info("Custom handler for resources/templates/list called");
-			// Return an empty templates array to avoid the error
-			return { templates: [] };
-		},
-	);
+	// SIO-1052: the old "custom handler for resources/templates/list" block here was dead code --
+	// McpServer has no own setRequestHandler, so it always fell through to a no-op (same verified
+	// pattern removed from playbookResource.ts in SIO-1044); the SDK registers its own real
+	// resources/templates/list handler.
 
 	logger.info(
 		{
@@ -307,4 +298,6 @@ export function registerMarkdownDocumentationResource(
 		},
 		"Markdown documentation resources registered successfully",
 	);
+
+	return handler;
 }
