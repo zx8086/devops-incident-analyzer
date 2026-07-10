@@ -9,7 +9,6 @@ import { registerAll } from "./lib/toolRegistry";
 import { registerSqlppQueryGenerator } from "./prompts/sqlppQueryGenerator";
 import { registerAllResources } from "./resources";
 import type { PlaybookRegistry } from "./resources/playbookResource";
-import { logger } from "./utils/logger";
 
 // SIO-1044: playbooks is pre-enumerated once in initDatasource (loadPlaybooks, async/fs-bound) so
 // registerAll below can stay fully synchronous, as required by createCachedServerFactory.
@@ -57,8 +56,9 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 			// Register our SQL++ query generator prompt
 			registerSqlppQueryGenerator(server);
 
-			// Register all Couchbase resources (sync -- playbooks already enumerated)
-			registerAllResources(server, ds.bucket, ds.playbooks);
+			// Register all Couchbase resources (sync -- playbooks already enumerated).
+			// SIO-1052: capture the documentation handler for the docs:// fast path below.
+			const docsHandler = registerAllResources(server, ds.bucket, ds.playbooks);
 
 			// Add a public method to read resources by URI.
 			// Assigned on the boot template only; tool handlers resolve it lazily off their
@@ -67,16 +67,9 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 			// biome-ignore lint/suspicious/noExplicitAny: accessing internal MCP SDK resource registry
 			const serverInternal = server as Record<string, any>;
 			serverInternal.readResourceByUri = async (resourceUri: string) => {
-				// SIO-1044 final review: restore the playbook:// fast path that used to live at the
-				// end of the old resources/playbookResource.ts (deleted by this branch; see
-				// `git show 0f8f098:packages/mcp-server-couchbase/src/resources/playbookResource.ts`).
-				// The generic registry walk below uses `.uri`/`.handler` field names that do not exist
-				// on SDK 1.29's `_registeredResources` (keyed BY uri, values carry `readCallback`), so
-				// it never finds a match for playbook:// URIs -- this fast path serves them directly
-				// off the boot-time playbook registry, matching the old implementation's exact URI
-				// parsing and return shape. The generic walk remains the fallback for other protocols
-				// (docs:// stays broken pre-existing -- fixing the registry-walk field names is an
-				// out-of-scope follow-up).
+				// SIO-1044: playbook:// fast path serving the boot-time playbook registry directly,
+				// matching the pre-monorepo implementation's exact URI parsing and return shape.
+				// SIO-1052 added the docs:// fast path and fixed the generic SDK-registry fallback below.
 				const protocol = resourceUri.split("://")[0];
 				const rest = resourceUri.split("://")[1] || "";
 				if (protocol === "playbook" && ds.playbooks) {
@@ -86,37 +79,54 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 					return ds.playbooks.handler.getPlaybook(rest);
 				}
 
-				// Some SDK versions store resources as a Map (iterable), others as a plain object (not iterable).
-				const resourceMap =
-					serverInternal._resources || serverInternal.resources || serverInternal._registeredResources;
-				if (!resourceMap) {
-					logger.error("No resource registry found on server instance.");
-					throw new Error(
-						"No resource registry found on server instance (tried _resources, resources, _registeredResources)",
-					);
-				}
-				interface InternalResource {
-					uri?: string;
-					template?: { match: (uri: string) => Record<string, string> | null };
-					handler: (href: { href: string }, params: Record<string, unknown>) => Promise<unknown>;
-				}
-				let resourcesIterable: Iterable<InternalResource>;
-				if (resourceMap instanceof Map) {
-					resourcesIterable = resourceMap.values();
-				} else if (typeof resourceMap === "object") {
-					resourcesIterable = Object.values(resourceMap);
-				} else {
-					throw new Error("Resource registry is not iterable");
-				}
-				for (const resource of resourcesIterable) {
-					if (resource.template?.match) {
-						const match = resource.template.match(resourceUri);
-						if (match) {
-							return await resource.handler({ href: resourceUri }, match);
-						}
+				// SIO-1052: docs:// fast path. The SDK-registered docs resources only cover the exact
+				// root URI ("docs://"); scoped lookups (docs://<scope>[/<collection>[/<file>]]) dispatch
+				// straight to the DocumentationHandler, mirroring the playbook fast path above.
+				if (protocol === "docs" && docsHandler) {
+					const parts = rest === "" ? [] : rest.split("/");
+					const [scope = "", collection = ""] = parts;
+					if (parts.length === 0) {
+						return docsHandler.listDocumentation();
 					}
-					if (resource.uri && resource.uri === resourceUri) {
-						return await resource.handler({ href: resourceUri }, {});
+					if (parts.length === 1) {
+						return docsHandler.getScopeDocumentation(scope);
+					}
+					if (parts.length === 2) {
+						return docsHandler.getCollectionDocumentation(scope, collection);
+					}
+					return docsHandler.getDocumentationFile(scope, collection, parts.slice(2).join("/"));
+				}
+
+				// SIO-1052: generic fallback rewritten against SDK 1.29's actual internals, mirroring
+				// its ReadResourceRequestSchema dispatch: _registeredResources is keyed BY uri string
+				// (values carry readCallback + enabled), templates live in _registeredResourceTemplates
+				// (resourceTemplate.uriTemplate.match). The old walk used .uri/.handler field names that
+				// never existed, so it threw "No resource handler found" for every URI.
+				interface RegisteredResource {
+					enabled?: boolean;
+					readCallback: (uri: URL, extra: Record<string, unknown>) => Promise<unknown>;
+				}
+				interface RegisteredResourceTemplate {
+					resourceTemplate: { uriTemplate: { match: (uri: string) => Record<string, unknown> | null } };
+					readCallback: (
+						uri: URL,
+						variables: Record<string, unknown>,
+						extra: Record<string, unknown>,
+					) => Promise<unknown>;
+				}
+				const registeredResources = (serverInternal._registeredResources ?? {}) as Record<string, RegisteredResource>;
+				const exact = registeredResources[resourceUri];
+				if (exact && exact.enabled !== false) {
+					return await exact.readCallback(new URL(resourceUri), {});
+				}
+				const registeredTemplates = (serverInternal._registeredResourceTemplates ?? {}) as Record<
+					string,
+					RegisteredResourceTemplate
+				>;
+				for (const template of Object.values(registeredTemplates)) {
+					const variables = template.resourceTemplate.uriTemplate.match(resourceUri);
+					if (variables) {
+						return await template.readCallback(new URL(resourceUri), variables, {});
 					}
 				}
 				throw new Error(`No resource handler found for URI: ${resourceUri}`);
