@@ -155,6 +155,8 @@ mock.module("@devops-agent/shared", () => {
 		createMcpApplication: () => undefined,
 		createReadinessProbe: () => undefined,
 		buildTelemetryConfig: () => undefined,
+		// SIO-1044: knowledge-graph server.ts now imports createCachedServerFactory at module load.
+		createCachedServerFactory: () => () => undefined,
 	};
 });
 
