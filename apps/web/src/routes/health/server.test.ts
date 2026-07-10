@@ -14,13 +14,57 @@ let mockRuntime = {
 	checkpointerType: "memory" as "memory" | "sqlite",
 };
 
+// SIO-1045: mock.module is process-global + last-wins in bun. Both blocks below must
+// be a superset of every named import any sibling web test file (or the real modules
+// those tests transitively load, e.g. agent.test.ts's real ./agent.ts) touches from
+// these two specifiers, or a sibling test fails to link when this file's mock wins
+// the process-global cache race. See agent.test.ts / stream/server.test.ts for the
+// canonical full-union blocks.
 mock.module("@devops-agent/agent", () => ({
 	getServerStates: () => mockServerStates,
 	getConnectedServers: () => mockConnected,
+	AttachmentError: class AttachmentError extends Error {},
+	buildGraph: () => Promise.resolve({}),
+	buildIacGraph: () => Promise.resolve({}),
+	createMcpClient: () => Promise.resolve(),
+	flushLangSmithCallbacks: () => Promise.resolve(),
+	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	iacTurnOutcome: () => "completed" as const,
+	processAttachments: () => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] }),
+	mcpEvents: undefined,
+	appliedSkillsForNames: () => [] as unknown[],
+	installSkillLearner: () => undefined,
+	installAgentMemory: () => undefined,
+	installGraphWarmer: () => undefined,
+	installMemoryPromotion: () => undefined,
+	needsPruning: () => false,
+	pruneState: () => ({ removeIds: [] as string[] }),
+	runBootstrap: () => Promise.resolve({ stepsRun: [] }),
+	runPostTurn: () => Promise.resolve(),
+	runTeardown: () => Promise.resolve([]),
+	setSessionOutcome: () => undefined,
+	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	selectedBackend: () => "file" as const,
+	promoteToMemory: () => Promise.resolve(),
+	executeAction: () => Promise.resolve(),
+	getAvailableActionTools: () => [] as unknown[],
 }));
 mock.module("$lib/server/agent", () => ({
 	getActiveSseConnections: () => mockActiveSse,
 	getAgentRuntimeStatus: () => mockRuntime,
+	ensureMcpConnected: async () => undefined,
+	invokeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
+	resumeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
+	getPendingInterrupt: async () => undefined,
+	getIacTurnOutcome: async () => "completed",
+	getLastAssistantText: async () => "",
+	pruneThreadState: async () => undefined,
+	runPostTurn: async () => undefined,
+	setSessionOutcome: () => undefined,
+	incrementSseConnections: () => undefined,
+	decrementSseConnections: () => undefined,
+	sessionTeardown: async () => undefined,
 }));
 
 const { GET } = await import("./+server.ts");

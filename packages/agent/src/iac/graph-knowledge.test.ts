@@ -1,7 +1,27 @@
 // agent/src/iac/graph-knowledge.test.ts
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+//
+// SIO-1045: this file OWNS a mock.module("../memory-backend.ts", ...) registered at file scope,
+// BEFORE the static imports below (both this file and ./graph-knowledge.ts / ./nodes.ts statically
+// import ../memory-backend.ts). See fleet-upgrade.test.ts for the full rationale: bun's mock.module
+// is process-global and last-registration-wins, and a sibling file's own restore
+// (iac-change-memory.test.ts / reconcile.test.ts) is not sufficient to protect this file across every
+// CI execution order. The factory re-exports the REAL module verbatim, so this file's direct use of
+// __setAgentMemoryClient / clearActiveMemorySession / __resetMemoryQueue is unchanged.
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { HumanMessage } from "@langchain/core/messages";
+import * as realMemoryBackendNs from "../memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
+
+mock.module("../memory-backend.ts", () => realMemoryBackend);
+
 import { __resetMemoryQueue, __setAgentMemoryClient, clearActiveMemorySession } from "../memory-backend.ts";
 import {
 	graphEnrichIac,
@@ -33,6 +53,9 @@ function iacState(over: Partial<IacStateType> = {}): IacStateType {
 
 beforeEach(() => {
 	_setGraphStoreForTesting(null);
+	// SIO-1045: re-claim ownership before every test in this file, so it is self-claiming even if a
+	// sibling suite poisoned the module between this file's load and this test's execution.
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
 });
 
 afterEach(() => {
@@ -48,6 +71,8 @@ afterEach(() => {
 	__setAgentMemoryClient(null);
 	__resetMemoryQueue();
 	clearActiveMemorySession();
+	// SIO-1045: re-claim ownership after every test in this file (see the file-scope comment above).
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
 });
 
 describe("recordIacEntities", () => {
