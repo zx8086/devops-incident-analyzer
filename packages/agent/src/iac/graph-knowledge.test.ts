@@ -10,7 +10,15 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { HumanMessage } from "@langchain/core/messages";
-import * as realMemoryBackend from "../memory-backend.ts";
+import * as realMemoryBackendNs from "../memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
 
 mock.module("../memory-backend.ts", () => realMemoryBackend);
 
@@ -45,6 +53,9 @@ function iacState(over: Partial<IacStateType> = {}): IacStateType {
 
 beforeEach(() => {
 	_setGraphStoreForTesting(null);
+	// SIO-1045: re-claim ownership before every test in this file, so it is self-claiming even if a
+	// sibling suite poisoned the module between this file's load and this test's execution.
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
 });
 
 afterEach(() => {

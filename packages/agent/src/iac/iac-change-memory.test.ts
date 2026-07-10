@@ -11,8 +11,15 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 // (e.g. iac/local-tools.test.ts, iac/fleet-upgrade.test.ts), which is CI-only because CI's bun
 // schedules test files in a different order than a local run. Same class of bug as SIO-1028
 // (reference_prompt_context_mock_pollutes_direct_imports).
-import * as realMemoryBackend from "../memory-backend.ts";
-import * as realMemoryWriter from "../memory-writer.ts";
+//
+// A namespace import (`import * as ns`) is itself a LIVE VIEW: once ANY file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING these
+// captured `real*Ns` objects -- so restoring with `() => real*Ns` re-registers the very poison it
+// meant to undo (a circular no-op). Spreading into a plain object at load time (before any
+// mock.module() call in this file runs) copies the function VALUES, which are immune to that later
+// live-patching.
+import * as realMemoryBackendNs from "../memory-backend.ts";
+import * as realMemoryWriterNs from "../memory-writer.ts";
 import {
 	AGENT_MR_LABELS,
 	buildIacChangeAnnotations,
@@ -20,6 +27,9 @@ import {
 	buildIacChangeRationale,
 } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
+
+const realMemoryBackend = { ...realMemoryBackendNs };
+const realMemoryWriter = { ...realMemoryWriterNs };
 
 // SIO-1045: re-registers the real modules so a later test FILE (not just a later test in this file)
 // never observes this file's stub. Call from every describe block's afterEach, after mock.restore().

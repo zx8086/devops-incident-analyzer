@@ -13,8 +13,16 @@
 // applyFleetUpgrade/recallPriorFleetUpgrades exercise the real searchAgentMemory/selectedBackend/
 // dedupeHitsBy/dedupePreferring/recallInFlightFleetUpgrades logic; per-test control is layered on
 // top via the real __setAgentMemoryClient injection seam (unchanged from before this fix).
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import * as realMemoryBackend from "../memory-backend.ts";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackendNs from "../memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
 
 mock.module("../memory-backend.ts", () => realMemoryBackend);
 
@@ -41,11 +49,17 @@ import {
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
 
-// SIO-1045: re-claim ownership after every test in this file. mockTools() (below) mocks a DIFFERENT
-// module (../mcp-bridge.ts) via mock.restore()-surviving registration, and several tests in this file
-// dynamically `await import("../memory-backend.ts")` mid-test to call __setAgentMemoryClient -- none
-// of that re-registers this module's mock.module entry, but re-asserting here is a cheap, explicit
-// guarantee that this file's own tests never depend on load-order relative to any other file.
+// SIO-1045: re-claim ownership before AND after every test in this file. mockTools() (below) mocks a
+// DIFFERENT module (../mcp-bridge.ts) via mock.restore()-surviving registration, and several tests in
+// this file dynamically `await import("../memory-backend.ts")` mid-test to call
+// __setAgentMemoryClient -- none of that re-registers this module's mock.module entry, but
+// re-asserting in beforeEach makes this file self-claiming even if a sibling suite poisoned the module
+// between this file's load and the first test's execution; the afterEach guards the same for the
+// tests that follow within this same file/process.
+beforeEach(() => {
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+});
+
 afterEach(() => {
 	mock.module("../memory-backend.ts", () => realMemoryBackend);
 });

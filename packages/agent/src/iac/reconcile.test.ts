@@ -2,18 +2,61 @@
 // SIO-1005: the proposed -> applied/failed reconciliation core. The pure decision/annotation
 // builders are tested directly; reconcileOne/reconcileAll/enumerate are exercised with mocked
 // nodes.fetchMrLiveState + memory-backend + memory-writer so no MCP/REST is touched.
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import * as realMemoryBackend from "../memory-backend.ts";
-import * as realMemoryWriter from "../memory-writer.ts";
-// SIO-1045: captured BEFORE the mock.module() calls below run, so afterAll can restore the real
-// implementations. mock.module() is process-global and bun:test's mock.restore() does NOT undo it
-// (only resets spy call state) -- these are TOP-LEVEL (file-scope, not describe-scoped) mock.module
-// calls, so without an explicit restore they leak into EVERY test file that runs later in the same
-// bun test process for the rest of the run (proven: iac/fleet-upgrade.test.ts's bootstrapIac/
-// watchPipeline/recallPriorFleetUpgrades tests failed on CI because this file's stub ./nodes.ts /
-// ../memory-backend.ts / ../memory-writer.ts modules were still active). Same class of bug as
-// SIO-1028 (reference_prompt_context_mock_pollutes_direct_imports).
-import * as realNodes from "./nodes.ts";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackendNs from "../memory-backend.ts";
+import * as realMemoryWriterNs from "../memory-writer.ts";
+import * as realNodesNs from "./nodes.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING these
+// captured `real*Ns` objects, so restoring with `() => real*Ns` re-registers the very poison it
+// meant to undo (a circular no-op). A value snapshot (spread into a plain object at load time, before
+// any mock.module() call below runs) copies the function VALUES and is immune to that later
+// live-patching. See SIO-1028 (reference_prompt_context_mock_pollutes_direct_imports) for the same
+// class of live-binding bug.
+const realNodes = { ...realNodesNs };
+const realMemoryBackend = { ...realMemoryBackendNs };
+const realMemoryWriter = { ...realMemoryWriterNs };
+
+// SIO-1045: this file's stub mocks used to be registered at FILE SCOPE, which meant any other test
+// file loaded after this one (module graph order, not describe/test order) would statically import an
+// already-poisoned ./nodes.ts / ../memory-backend.ts / ../memory-writer.ts before this file's afterAll
+// ever ran. Registering them in beforeAll (paired with an afterAll restore, both against the value
+// snapshots above) keeps the load phase pristine for every other file's own snapshot.
+beforeAll(() => {
+	mock.module("./nodes.ts", () => ({
+		...realNodes,
+		fetchMrLiveState: async (iid: number): Promise<LiveState> =>
+			liveByIid.get(iid) ?? { mrState: "", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" },
+	}));
+
+	mock.module("../memory-backend.ts", () => ({
+		...realMemoryBackend,
+		selectedBackend: () => backend,
+		searchAgentMemory: async () => searchHits,
+		// real dedupeHitsBy semantics: first-hit-wins, keyless never collapse
+		dedupeHitsBy: <T extends { annotations: Record<string, string> }>(
+			hits: T[],
+			keyFn: (h: T) => string | undefined,
+		): T[] => {
+			const seen = new Set<string>();
+			const out: T[] = [];
+			for (const [i, h] of hits.entries()) {
+				const key = keyFn(h) ?? `\0nokey:${i}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				out.push(h);
+			}
+			return out;
+		},
+	}));
+
+	mock.module("../memory-writer.ts", () => ({
+		...realMemoryWriter,
+		recordKeyDecision: (d: { decision: string; annotations?: Record<string, string> }) => recordedDecisions.push(d),
+		appendDailyLog: (e: { summary?: string }) => dailyLogs.push(e),
+	}));
+});
 
 // --- mock seams (complete stubs; re-asserted in beforeEach to survive sibling mock pollution) ---
 type LiveState = {
@@ -29,38 +72,9 @@ const dailyLogs: Array<{ summary?: string }> = [];
 let searchHits: Array<{ text: string; annotations: Record<string, string> }> = [];
 let backend = "agent-memory";
 
-mock.module("./nodes.ts", () => ({
-	fetchMrLiveState: async (iid: number): Promise<LiveState> =>
-		liveByIid.get(iid) ?? { mrState: "", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" },
-}));
-
-mock.module("../memory-backend.ts", () => ({
-	selectedBackend: () => backend,
-	searchAgentMemory: async () => searchHits,
-	// real dedupeHitsBy semantics: first-hit-wins, keyless never collapse
-	dedupeHitsBy: <T extends { annotations: Record<string, string> }>(
-		hits: T[],
-		keyFn: (h: T) => string | undefined,
-	): T[] => {
-		const seen = new Set<string>();
-		const out: T[] = [];
-		for (const [i, h] of hits.entries()) {
-			const key = keyFn(h) ?? `\0nokey:${i}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			out.push(h);
-		}
-		return out;
-	},
-}));
-
-mock.module("../memory-writer.ts", () => ({
-	recordKeyDecision: (d: { decision: string; annotations?: Record<string, string> }) => recordedDecisions.push(d),
-	appendDailyLog: (e: { summary?: string }) => dailyLogs.push(e),
-}));
-
-// SIO-1045: undo the three file-scope mocks above once this file's tests finish, so a later test
-// file in the same process sees the real modules again.
+// SIO-1045: undo the three beforeAll mocks above once this file's tests finish, so a later test
+// file in the same process sees the real modules again. Restoring against the value snapshots (not
+// the live namespace bindings) is what makes this restore actually take effect on Linux CI.
 afterAll(() => {
 	mock.module("./nodes.ts", () => realNodes);
 	mock.module("../memory-backend.ts", () => realMemoryBackend);

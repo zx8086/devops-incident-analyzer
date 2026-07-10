@@ -14,14 +14,28 @@
 // trusting another file's cleanup. The factory below re-exports the REAL module's implementation for
 // everything (so runMemorySearch's real logic + the real searchAgentMemory/selectedBackend behavior
 // is exercised), with per-test control only where a test needs to observe/stub the network boundary.
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import * as realMemoryBackend from "../memory-backend.ts";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackendNs from "../memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
 
 mock.module("../memory-backend.ts", () => realMemoryBackend);
 
 import { createSearchMemoryTool, runMemorySearch } from "./local-tools.ts";
 
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+
+// SIO-1045: re-claim in beforeEach too (not just afterEach) so this file is self-claiming even if a
+// sibling suite poisoned the module between this file's load and the first test's execution.
+beforeEach(() => {
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+});
 
 afterEach(() => {
 	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
