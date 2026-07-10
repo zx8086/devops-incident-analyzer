@@ -95,6 +95,109 @@ describe("detectUngroundedBlockers", () => {
 	});
 });
 
+// SIO-1054: the fabricated IAM prescription surfaces not only in "## Gaps" but in the
+// "## Recommendations" section, written by the ungrounded proposeInvestigate mitigation
+// branch. detectUngroundedBlockers must scan Recommendations too so the same grounding
+// (and the same 0.59 cap + honest rewrite) applies there.
+describe("detectUngroundedBlockers SIO-1054 Recommendations section", () => {
+	test("flags an ungrounded IAM prescription in Recommendations when no auth error observed", () => {
+		const answer = [
+			"## Recommendations",
+			"",
+			"### Investigate (safe, read-only)",
+			"",
+			"- [AWS] Resolve the CloudWatch Logs Insights gap on `/ecs/fargate/shared-services-prd-log-group` — add `logs:DescribeLogGroups` to `DevOpsAgentReadOnlyPolicy` per the IAM runbook, then re-query.",
+			"- [GitLab] Inspect the commit history for CouchbaseRepository.java.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(1);
+		expect(ungrounded[0]).toContain("logs:DescribeLogGroups");
+	});
+
+	test("does NOT flag the Recommendations IAM bullet when a real auth toolError exists", () => {
+		const answer = [
+			"## Recommendations",
+			"",
+			"- [AWS] Add `logs:DescribeLogGroups` to `DevOpsAgentReadOnlyPolicy` — IAM gap persists.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const results = [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [{ toolName: "aws_logs_start_query", category: "auth", message: "AccessDenied", retryable: false }],
+			}),
+		];
+		const { ungrounded } = detectUngroundedBlockers(answer, results);
+		expect(ungrounded).toHaveLength(0);
+	});
+
+	test("does NOT flag a benign non-denial Recommendations bullet", () => {
+		const answer =
+			"## Recommendations\n\n- [AWS] Diff the connectors-service task definitions to confirm the env var change.\n\nConfidence: 0.81";
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(0);
+	});
+
+	// SIO-1054: the IAM-prescription detector must not swallow benign recommendations that
+	// happen to say "add" / "policy" / "permission" in a non-IAM sense.
+	test("does NOT flag benign 'add' / 'policy' recommendations", () => {
+		const answer = [
+			"## Recommendations",
+			"",
+			"- Add a warning CloudWatch alarm at 35% CPU to catch anomalous spikes.",
+			"- [Couchbase] Consider adding an index on the PRICE_ key pattern to speed lookups.",
+			"- Enforce a code review policy: MR !70 had zero reviewers.",
+			"- Create a Jira ticket to track the CouchbaseRepository log-level fix.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(0);
+	});
+
+	// SIO-1054: the exact production hallucination string must be caught.
+	test("flags the exact production 'add logs:DescribeLogGroups to DevOpsAgentReadOnlyPolicy' bullet", () => {
+		const answer = [
+			"## Recommendations",
+			"",
+			"### Investigate (safe, read-only)",
+			"",
+			"- [AWS] Resolve the CloudWatch Logs Insights gap on `/ecs/fargate/shared-services-prd-log-group` — add `logs:DescribeLogGroups` to `DevOpsAgentReadOnlyPolicy` per the IAM runbook, then re-query to directly confirm the WARN pattern from the ECS log stream.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(1);
+		// And it is suppressed when a real auth error was observed.
+		const grounded = detectUngroundedBlockers(answer, [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [{ toolName: "aws_logs_start_query", category: "auth", message: "AccessDenied", retryable: false }],
+			}),
+		]);
+		expect(grounded.ungrounded).toHaveLength(0);
+	});
+
+	test("flags ungrounded IAM bullets in BOTH Gaps and Recommendations", () => {
+		const answer = [
+			"## Gaps",
+			"",
+			"- `logs:DescribeLogGroups` IAM gap persists; access is unconfirmed.",
+			"",
+			"## Recommendations",
+			"",
+			"- [AWS] Add `logs:DescribeLogGroups` to `DevOpsAgentReadOnlyPolicy` per the IAM runbook.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
+		expect(ungrounded).toHaveLength(2);
+	});
+});
+
 describe("rewriteUngroundedBlockers", () => {
 	test("replaces a flagged bullet with an honest 'not retrieved' statement", () => {
 		const flagged =

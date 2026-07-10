@@ -230,6 +230,57 @@ export function normalizeToolContent(content: unknown): string {
 	return String(content);
 }
 
+// SIO-1054: the AWS MCP wrap layer returns tool errors as a *successful* payload carrying
+// { "_error": { kind, ... } } rather than throwing, so LangGraph sets status="success" and
+// the status gate below dropped them -- the _error blob leaked into r.data as model-visible
+// text and no toolError was recorded, so SIO-1031 grounding never fired on non-authz AWS
+// failures. Map the AWS ToolErrorKind onto the agent's ToolErrorCategory so ONLY a genuine
+// authz kind reads as "auth" (which is what the grounding gate keys on).
+type AwsErrorKind =
+	| "assume-role-denied"
+	| "iam-permission-missing"
+	| "aws-throttled"
+	| "bad-input"
+	| "resource-not-found"
+	| "aws-server-error"
+	| "aws-network-error"
+	| "aws-unknown";
+
+const AWS_KIND_TO_CATEGORY: Record<AwsErrorKind, ToolErrorCategory> = {
+	"iam-permission-missing": "auth",
+	"assume-role-denied": "auth",
+	"resource-not-found": "transient",
+	"aws-network-error": "transient",
+	"aws-server-error": "transient",
+	"aws-throttled": "transient",
+	"bad-input": "unknown",
+	"aws-unknown": "unknown",
+};
+
+// SIO-1054: pull the AWS { _error } payload out of a (status:"success") tool result body.
+// Returns null when the content is not an AWS _error envelope, so the caller can fall through
+// to the normal status-gated path unchanged.
+function extractAwsError(content: unknown): { kind: AwsErrorKind; message: string } | null {
+	const raw = typeof content === "string" ? content : JSON.stringify(content ?? "");
+	if (!raw.includes('"_error"')) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return null;
+	}
+	if (parsed == null || typeof parsed !== "object") return null;
+	const err = (parsed as { _error?: unknown })._error;
+	if (err == null || typeof err !== "object") return null;
+	const kind = (err as { kind?: unknown }).kind;
+	if (typeof kind !== "string" || !(kind in AWS_KIND_TO_CATEGORY)) return null;
+	const message =
+		(err as { awsErrorMessage?: unknown }).awsErrorMessage ??
+		(err as { advice?: unknown }).advice ??
+		`AWS tool error: ${kind}`;
+	return { kind: kind as AwsErrorKind, message: typeof message === "string" ? message : String(message) };
+}
+
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
 // when the MCP server emitted them. Redaction runs on the human part only -- hostnames in the
@@ -240,10 +291,28 @@ export function extractToolErrors(
 	const errors: ToolError[] = [];
 	for (const msg of messages) {
 		if (msg._getType() !== "tool") continue;
+
+		// SIO-1054: capture AWS _error envelopes that ride on a status:"success" message
+		// BEFORE the status gate would drop them. Classification is by kind, not text regex,
+		// so a non-authz failure (resource-not-found / aws-unknown) never reads as "auth".
+		if (msg.status !== "error") {
+			const awsErr = extractAwsError(msg.content);
+			if (awsErr) {
+				const category = AWS_KIND_TO_CATEGORY[awsErr.kind];
+				errors.push({
+					toolName: msg.name ?? "unknown",
+					category,
+					message: redactPiiContent(awsErr.message.slice(0, 500)),
+					// Only transient kinds are worth retrying; auth/unknown are not.
+					retryable: category === "transient",
+				});
+			}
+			continue;
+		}
+
 		// Use LangGraph ToolMessage.status as the error gate instead of regex on content.
 		// LangGraph ToolNode sets status="error" when the tool throws (including MCP isError:true).
 		// The old regex matched domain vocabulary like "totalErrorCount" causing false positives.
-		if (msg.status !== "error") continue;
 
 		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 

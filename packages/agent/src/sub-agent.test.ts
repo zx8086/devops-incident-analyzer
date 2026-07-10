@@ -176,6 +176,76 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 	});
 });
 
+// SIO-1054: the AWS MCP wrap layer returns tool errors as a SUCCESSFUL MCP payload
+// carrying { "_error": { kind, ... } } (no isError), so LangGraph sets status="success"
+// and the pre-1054 status!=="error" gate dropped them entirely -- the _error blob leaked
+// into r.data as model-visible text and no toolError was recorded. extractToolErrors must
+// now recognise these payloads even on non-error messages and classify by _error.kind:
+// iam-permission-missing / assume-role-denied -> "auth" (so SIO-1031 grounding fires ONLY
+// on a genuine authz kind), resource-not-found / aws-network-error / aws-server-error /
+// aws-throttled -> "transient", everything else (aws-unknown, bad-input) -> "unknown".
+describe("extractToolErrors SIO-1054 AWS _error capture", () => {
+	function awsErrorMsg(errorObj: Record<string, unknown>, name = "aws_logs_start_query"): FakeToolMessage {
+		// AWS wrap.ts returns { _error } as a normal (status:"success") tool result.
+		return { _getType: () => "tool", content: JSON.stringify({ _error: errorObj }), name, status: "success" };
+	}
+
+	test("captures a resource-not-found _error as a transient (NON-auth) toolError", () => {
+		const errors = extractToolErrors([
+			awsErrorMsg({ kind: "resource-not-found", awsErrorName: "ResourceNotFoundException" }),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("transient");
+		expect(errors[0]?.toolName).toBe("aws_logs_start_query");
+	});
+
+	test("captures an aws-unknown _error (e.g. MalformedQueryException) as NON-auth", () => {
+		const errors = extractToolErrors([awsErrorMsg({ kind: "aws-unknown", awsErrorName: "MalformedQueryException" })]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("unknown");
+		// The whole point of SIO-1054: a non-authz kind must NOT read as auth.
+		expect(errors[0]?.category).not.toBe("auth");
+	});
+
+	test("captures an iam-permission-missing _error as an auth toolError", () => {
+		const errors = extractToolErrors([
+			awsErrorMsg({
+				kind: "iam-permission-missing",
+				action: "logs:StartQuery",
+				awsErrorName: "AccessDeniedException",
+			}),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("auth");
+	});
+
+	test("captures an assume-role-denied _error as an auth toolError", () => {
+		const errors = extractToolErrors([awsErrorMsg({ kind: "assume-role-denied", awsErrorName: "AccessDenied" })]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("auth");
+	});
+
+	test("a successful (non-_error) AWS tool result records no toolError", () => {
+		const ok = {
+			_getType: () => "tool",
+			content: JSON.stringify({ groups: [] }),
+			name: "aws_logs_start_query",
+			status: "success",
+		} as FakeToolMessage;
+		expect(extractToolErrors([ok])).toHaveLength(0);
+	});
+
+	test("still records a status='error' tool message (legacy path untouched)", () => {
+		// A thrown MCP error (status:"error") whose text matches an auth pattern is
+		// classified via the unchanged classifyToolError text path, not the _error blob.
+		const errors = extractToolErrors([
+			toolMsg("403 Forbidden: access denied on ec2:DescribeVpcs", "aws_ec2_describe", "error"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("auth");
+	});
+});
+
 // SIO-728: the kafka MCP's ResponseBuilder.error appends a ---STRUCTURED--- sentinel
 // followed by a JSON payload when upstream metadata (hostname, content-type, real
 // HTTP status) is available. extractToolErrors must split it off, parse the trailing

@@ -259,6 +259,17 @@ export function rewriteConfidenceInAnswer(answer: string, score: number): string
 const GAPS_HEADING_RE = /^#{1,6}\s+gaps\s*$/im;
 const TOP_LEVEL_BULLET_RE = /^\s{0,1}[-*]\s+\S/;
 const ANY_HEADING_RE = /^#{1,6}\s+\S/;
+// SIO-1054: the Recommendations section (## Recommendations) is where the ungrounded IAM
+// prescription surfaces. Unlike Gaps it contains ### sub-headings (Investigate / Monitor /
+// Escalate), so the grounding scan must stay "inside" it until the next same-or-higher-level
+// heading, not break on the first ### sub-heading.
+const RECOMMENDATIONS_HEADING_RE = /^#{1,6}\s+recommendations\s*$/im;
+// Match the heading level (number of leading #) so we can decide whether a heading ends the
+// current section (same-or-shallower) or is a sub-heading within it (deeper).
+function headingLevel(line: string): number | null {
+	const m = line.match(/^(#{1,6})\s+\S/);
+	return m?.[1] ? m[1].length : null;
+}
 
 export function extractGapsBulletCount(answer: string): number {
 	const lines = answer.split("\n");
@@ -291,20 +302,46 @@ export function extractGapsBulletCount(answer: string): number {
 const PERMISSION_DENIAL_RE =
 	/\b(not permitted|not authorized|unauthorized|access denied|accessdenied|forbidden|iam (?:permission|gap|access)|permission (?:gap|denied|missing)|lacks? permission)\b/i;
 
+// SIO-1054: the Recommendations section fabricates a *prescription* rather than a *denial*:
+// "add `logs:DescribeLogGroups` to `DevOpsAgentReadOnlyPolicy` per the IAM runbook". That text
+// matches none of PERMISSION_DENIAL_RE (there is no denial verb), so the denial detector alone
+// would miss the exact bullet we are hunting. This catches a policy-edit prescription that names
+// the read-only policy or the IAM runbook, or an "update/add ... policy to include <action>"
+// instruction -- all of which are only legitimate when a real authz error was observed.
+const IAM_PRESCRIPTION_RE =
+	/\b(devopsagentreadonly|iam runbook|(?:add|update|grant|include|attach)[^.\n]{0,60}\b(?:policy|permission|iam)\b|(?:policy|permission)[^.\n]{0,40}\bto include\b)/i;
+
+// SIO-1054: scan both "## Gaps" and "## Recommendations" for ungrounded permission-denial
+// bullets. A section runs from its heading until the next heading of the same-or-shallower
+// level (so ### Investigate/Monitor/Escalate sub-headings inside Recommendations stay in
+// scope). A permission-denial bullet found in either section, with NO observed auth tool
+// error, is fabricated.
 export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));
 	if (authErrorObserved) return { ungrounded: [] };
 
 	const lines = answer.split("\n");
-	let inGapsSection = false;
 	const ungrounded: string[] = [];
+	// Level of the heading that opened the current in-scope section, or null when outside one.
+	let sectionLevel: number | null = null;
 	for (const line of lines) {
-		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
-		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
-			inGapsSection = true;
+		const level = headingLevel(line);
+		if (level !== null) {
+			if (sectionLevel !== null && level <= sectionLevel) {
+				// A heading at the same or shallower level ends the current section...
+				sectionLevel = null;
+			}
+			// ...and any heading (including the terminator) may itself open a new section.
+			if (GAPS_HEADING_RE.test(line) || RECOMMENDATIONS_HEADING_RE.test(line)) {
+				sectionLevel = level;
+			}
 			continue;
 		}
-		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line) && PERMISSION_DENIAL_RE.test(line)) {
+		if (
+			sectionLevel !== null &&
+			TOP_LEVEL_BULLET_RE.test(line) &&
+			(PERMISSION_DENIAL_RE.test(line) || IAM_PRESCRIPTION_RE.test(line))
+		) {
 			ungrounded.push(line);
 		}
 	}
