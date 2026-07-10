@@ -4,6 +4,7 @@ import {
 	buildTelemetryConfig,
 	canonicalizeUpstream,
 	createBootstrapAdapter,
+	createCachedServerFactory,
 	createMcpApplication,
 	createReadinessProbe,
 } from "@devops-agent/shared";
@@ -117,11 +118,13 @@ if (import.meta.main) {
 				return { config };
 			},
 
-			createServerFactory: (ds) => () => {
-				const server = new McpServer({ name: "aws-mcp-server", version: pkg.version });
-				registerAllTools(server, ds.config.aws);
-				return server;
-			},
+			// SIO-1044: record-once / replay-many. registerAllTools (sync, config-only) runs
+			// ONCE at boot instead of rebuilding every tool's wrapped Zod schema per request.
+			createServerFactory: (ds) =>
+				createCachedServerFactory({
+					createBareServer: () => new McpServer({ name: "aws-mcp-server", version: pkg.version }),
+					registerAll: (server) => registerAllTools(server, ds.config.aws),
+				}),
 
 			// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 			createTransport: (serverFactory, ds, identityCard) => {

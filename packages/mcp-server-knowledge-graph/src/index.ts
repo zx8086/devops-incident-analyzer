@@ -9,7 +9,7 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { type Config, loadConfig } from "./config.ts";
 import { logger } from "./logger.ts";
-import { createServer } from "./server.ts";
+import { createMcpServerFactory } from "./server.ts";
 import { createTransport } from "./transport.ts";
 
 // SIO-967: build the MCP application. Exported (not just import.meta.main) so the
@@ -47,7 +47,9 @@ export async function startKnowledgeGraphServer(): Promise<McpApplication<Config
 			return config;
 		},
 
-		createServerFactory: (config) => () => createServer(config),
+		// SIO-1044: record-once / replay-many. registerAll runs ONCE at boot instead of
+		// rebuilding every tool's wrapped Zod schema per request.
+		createServerFactory: (config) => createMcpServerFactory(config),
 
 		createTransport: (serverFactory, config, identityCard) => {
 			const readinessProbe = createReadinessProbe({

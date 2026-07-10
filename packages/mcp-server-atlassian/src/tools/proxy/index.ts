@@ -12,17 +12,6 @@ const log = createContextLogger("proxy-tools");
 
 const TOOL_PREFIX = "atlassian_";
 
-// SIO-703: log once per process, not once per request. See server.ts for context.
-let proxyToolsRegisteredLogged = false;
-
-export function _resetProxyToolsRegisteredLoggedForTest(): void {
-	proxyToolsRegisteredLogged = false;
-}
-
-export function _isProxyToolsRegisteredLoggedForTest(): boolean {
-	return proxyToolsRegisteredLogged;
-}
-
 interface ProxyCallResult {
 	content?: Array<{ type: string; text: string }>;
 	isError?: boolean;
@@ -108,9 +97,6 @@ export function registerProxyTools(
 		registered.push(prefixedName);
 	}
 
-	if (!proxyToolsRegisteredLogged) {
-		log.info({ registered: registered.length, filtered, readOnly: opts.readOnly }, "Atlassian proxy tools registered");
-		proxyToolsRegisteredLogged = true;
-	}
+	log.info({ registered: registered.length, filtered, readOnly: opts.readOnly }, "Atlassian proxy tools registered");
 	return { registered: registered.length, filtered };
 }

@@ -13,7 +13,8 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { config } from "./config";
 import { connectionManager } from "./lib/connectionManager";
-import { createServer } from "./server.ts";
+import { loadPlaybooks } from "./resources/playbookResource.ts";
+import { createMcpServerFactory } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { logger } from "./utils/logger";
 import { initializeTracing } from "./utils/tracing";
@@ -79,10 +80,14 @@ if (import.meta.main) {
 				"Starting Couchbase MCP Server",
 			);
 			await connectWithBackoffAndCircuitBreaker();
-			return connectionManager.getConnection();
+			const bucket = await connectionManager.getConnection();
+			// SIO-1044: playbook directory enumeration is async (fs.readdir/access); it must
+			// happen here, once, so the cached server factory's registerAll can stay synchronous.
+			const playbooks = await loadPlaybooks();
+			return { bucket, playbooks };
 		},
 
-		createServerFactory: (bucket) => () => createServer(bucket),
+		createServerFactory: (ds) => createMcpServerFactory(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		createTransport: (serverFactory, _ds, identityCard) => {

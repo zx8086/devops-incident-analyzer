@@ -9,10 +9,12 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { KongApi } from "./api/kong-api.js";
 import { type Config, loadConfiguration } from "./config/index.js";
-import { createKonnectServer } from "./server.ts";
+import { createMcpServerFactory } from "./server.ts";
+import { ElicitationOperations } from "./tools/elicitation-tool.js";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
+import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
 import { initializeTracing } from "./utils/tracing.js";
 
 const serverLog = createContextLogger("server");
@@ -20,6 +22,11 @@ const serverLog = createContextLogger("server");
 interface KonnectDatasource {
 	api: KongApi;
 	config: Config;
+	// SIO-1044: hoisted out of createKonnectServer -- boot-once under the cached factory means these
+	// closures over per-request `new` instances would otherwise freeze at the first request. Made
+	// explicitly process-global here instead. Cheap/bounded: see server.ts hoist comment.
+	performanceCollector: ToolPerformanceCollector;
+	elicitationOps: ElicitationOperations;
 }
 
 if (import.meta.main) {
@@ -54,10 +61,15 @@ if (import.meta.main) {
 				apiRegion: config.kong.region,
 			});
 
-			return { api, config };
+			return {
+				api,
+				config,
+				performanceCollector: new ToolPerformanceCollector(),
+				elicitationOps: new ElicitationOperations(),
+			};
 		},
 
-		createServerFactory: (ds) => () => createKonnectServer(ds.api, ds.config),
+		createServerFactory: (ds) => createMcpServerFactory(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		createTransport: (serverFactory, ds, identityCard) => {

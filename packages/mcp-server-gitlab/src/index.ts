@@ -11,7 +11,7 @@ import pkg from "../package.json" with { type: "json" };
 import { loadConfiguration } from "./config/index.js";
 import { GitLabRestClient } from "./gitlab-client/index.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
-import { createGitLabServer, discoverRemoteTools, type GitLabDatasource } from "./server.ts";
+import { createMcpServerFactory, discoverRemoteTools, type GitLabDatasource } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
@@ -82,8 +82,9 @@ if (import.meta.main) {
 			return { proxy, restClient, config, discoveredTools };
 		},
 
-		// Sync factory: creates a new McpServer per request with pre-discovered tools
-		createServerFactory: (ds) => () => createGitLabServer(ds),
+		// SIO-1044: record-once / replay-many factory (createMcpServerFactory already returns
+		// the sync () => McpServer required by createServerFactory).
+		createServerFactory: (ds) => createMcpServerFactory(ds),
 
 		// SIO-779: proxy mode is not used for this server; non-null assertion is safe
 		createTransport: (serverFactory, ds, identityCard) => {

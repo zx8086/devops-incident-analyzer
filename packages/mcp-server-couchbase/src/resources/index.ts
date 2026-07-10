@@ -6,13 +6,15 @@ import { config } from "../config";
 import { registerDatabaseStructureResource } from "./databaseStructureResource";
 import { registerMarkdownDocumentationResource } from "./documentationResource";
 import { registerDocumentResource } from "./documentResource";
-import { registerPlaybookResources } from "./playbookResource";
+import { type PlaybookRegistry, registerPlaybookResources } from "./playbookResource";
 import { registerQueryResource } from "./queryResource";
 import { registerSchemaResource } from "./schemaResource";
 
-export async function registerAllResources(server: McpServer, bucket: Bucket): Promise<void> {
+// SIO-1044: sync -- playbooks is pre-enumerated once (loadPlaybooks, in initDatasource) so this
+// can run inside registerAll under the cached server factory, which must stay synchronous.
+export function registerAllResources(server: McpServer, bucket: Bucket, playbooks: PlaybookRegistry | null): void {
 	// Register playbook resources first - this is important for proper URI registration
-	await registerPlaybookResources(server);
+	registerPlaybookResources(server, playbooks);
 
 	// Register other resources
 	registerDatabaseStructureResource(server, bucket);

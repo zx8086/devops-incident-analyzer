@@ -1,4 +1,5 @@
 // src/server.ts
+import { createCachedServerFactory } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "./config/index.js";
 import type { GitLabRestClient } from "./gitlab-client/index.js";
@@ -8,21 +9,6 @@ import { registerProxyTools } from "./tools/proxy/index.js";
 import { createContextLogger } from "./utils/logger.js";
 
 const log = createContextLogger("server");
-
-// SIO-703: in HTTP stateless mode, createServerFactory fires per request, so the
-// "MCP server created" log fired N times per tool call and polluted the trace
-// timeline. The factory's output is identical across requests (discoveredTools
-// is captured once at startup), so logging once on the first invocation gives
-// operators the same visibility without the per-request noise.
-let serverCreatedLogged = false;
-
-export function _resetServerCreatedLoggedForTest(): void {
-	serverCreatedLogged = false;
-}
-
-export function _isServerCreatedLoggedForTest(): boolean {
-	return serverCreatedLogged;
-}
 
 export interface GitLabDatasource {
 	proxy: GitLabMcpProxy;
@@ -46,31 +32,42 @@ export async function discoverRemoteTools(proxy: GitLabMcpProxy): Promise<ProxyT
 	}
 }
 
-// Create a new McpServer instance with all tools registered (sync)
-export function createGitLabServer(datasource: GitLabDatasource): McpServer {
-	const { config, proxy, restClient, discoveredTools } = datasource;
-
-	const server = new McpServer({
+// Sync -- allocates a bare McpServer with capabilities/instructions but NO tools.
+function createBareServer(config: Config): McpServer {
+	return new McpServer({
 		name: config.application.name,
 		version: config.application.version,
 	});
+}
 
-	// Register proxy tools from pre-discovered tool list
+// discoveredTools is a boot-time snapshot (initDatasource discovers it once via
+// discoverRemoteTools), so iterating the frozen array here is sound under the SIO-1044 factory.
+// NOTE: if the boot-time proxy connect fails, initDatasource passes discoveredTools=[] and
+// registerAll runs (and is cached) against that empty set -- proxy tools stay unavailable until
+// the process restarts, same as the pre-SIO-1044 per-request behavior.
+function registerAll(server: McpServer, datasource: GitLabDatasource): void {
+	const { proxy, restClient, discoveredTools } = datasource;
+
 	let proxyCount = 0;
 	if (discoveredTools && discoveredTools.length > 0) {
 		proxyCount = registerProxyTools(server, proxy, discoveredTools, restClient);
 	}
 
-	// Register code analysis tools via REST API
 	const codeAnalysisCount = registerCodeAnalysisTools(server, restClient);
 
-	if (!serverCreatedLogged) {
-		log.info(
-			{ proxyTools: proxyCount, codeAnalysisTools: codeAnalysisCount, total: proxyCount + codeAnalysisCount },
-			"GitLab MCP server created",
-		);
-		serverCreatedLogged = true;
-	}
+	log.info(
+		{ proxyTools: proxyCount, codeAnalysisTools: codeAnalysisCount, total: proxyCount + codeAnalysisCount },
+		"GitLab MCP server created",
+	);
+}
 
-	return server;
+// SIO-1044: record-once / replay-many factory. registerAll runs ONCE at boot (against the
+// datasource's frozen discoveredTools snapshot); each request replays the recorded tool tuples
+// onto a fresh bare server. The "GitLab MCP server created" log now fires once, at boot, making
+// the SIO-703 once-flag redundant.
+export function createMcpServerFactory(datasource: GitLabDatasource): () => McpServer {
+	return createCachedServerFactory({
+		createBareServer: () => createBareServer(datasource.config),
+		registerAll: (server) => registerAll(server, datasource),
+	});
 }

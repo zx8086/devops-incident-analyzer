@@ -1,44 +1,61 @@
 // src/server.ts
+import { createCachedServerFactory } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { KongApi } from "./api/kong-api.js";
 import type { Config } from "./config/index.js";
-import { ElicitationOperations } from "./tools/elicitation-tool.js";
+import type { ElicitationOperations } from "./tools/elicitation-tool.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
 import { formatError } from "./utils/error-handling.js";
 import { createContextLogger } from "./utils/logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
-import { ToolPerformanceCollector } from "./utils/tool-tracer.js";
+import type { ToolPerformanceCollector } from "./utils/tool-tracer.js";
 import { traceToolCall } from "./utils/tracing.js";
 
 const log = createContextLogger("server");
 const toolsLog = createContextLogger("tools");
 
-export function createKonnectServer(api: KongApi, config: Config): McpServer {
-	const server = new McpServer({
+export interface KonnectServerDatasource {
+	api: KongApi;
+	config: Config;
+	performanceCollector: ToolPerformanceCollector;
+	elicitationOps: ElicitationOperations;
+}
+
+// Sync -- allocates a bare McpServer with no tools registered.
+function createBareServer(config: Config): McpServer {
+	return new McpServer({
 		name: config.application.name,
 		version: config.application.version,
 		description:
 			"Comprehensive Kong Konnect API Gateway management with analytics, configuration, certificates, and more",
 	});
+}
 
-	const performanceCollector = new ToolPerformanceCollector();
-	const elicitationOps = new ElicitationOperations();
+// SIO-1044: record-once / replay-many factory. performanceCollector and elicitationOps are hoisted
+// to initDatasource (index.ts) and shared across every replayed server -- process-global by design
+// (see index.ts hoist comment). elicitationOps itself is nearly stateless: its session state lives
+// in the module-level singletons elicitationManager/kongElicitationPatterns (utils/elicitation.ts),
+// the same singletons enforcement/mcp-server-integration.ts:394 already keeps its own module-level
+// ElicitationOperations instance against (unifying the two instances is out of scope here).
+// registerAll runs validateToolRegistry() once at boot -- misconfiguration now fails at boot
+// instead of per request.
+export function createMcpServerFactory(ds: KonnectServerDatasource): () => McpServer {
+	return createCachedServerFactory({
+		createBareServer: () => createBareServer(ds.config),
+		registerAll: (server) => {
+			const validation = validateToolRegistry();
+			if (!validation.isValid) {
+				log.fatal({ errors: validation.errors }, "Tool registry validation failed");
+				throw new Error(`Invalid tool registry: ${validation.errors.join(", ")}`);
+			}
 
-	// Validate tool registry
-	const validation = validateToolRegistry();
-	if (!validation.isValid) {
-		log.fatal({ errors: validation.errors }, "Tool registry validation failed");
-		throw new Error(`Invalid tool registry: ${validation.errors.join(", ")}`);
-	}
+			registerTools(server, ds.api, ds.performanceCollector, ds.elicitationOps);
 
-	// Register all tools
-	registerTools(server, api, performanceCollector, elicitationOps);
-
-	// Override default tools/list handler to provide pagination
-	// TEMPORARILY DISABLED: registerPaginatedToolsList(server);
-
-	return server;
+			// Override default tools/list handler to provide pagination
+			// TEMPORARILY DISABLED: registerPaginatedToolsList(server);
+		},
+	});
 }
 
 // TEMPORARILY DISABLED: This function is not called but kept for future reference.
