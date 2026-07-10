@@ -252,7 +252,11 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 	for (const change of proposed) {
 		try {
 			const iid = mrIidFromUrl(change.mrUrl);
-			if (iid == null) continue;
+			if (iid == null) {
+				// A persistently malformed MR url would otherwise be silently re-skipped every sweep.
+				log.warn({ changeId: change.id, mrUrl: change.mrUrl }, "KG reconcile: MR url has no derivable iid, skipping");
+				continue;
+			}
 			const live = await fetchMrLiveState(iid);
 			const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
 			const outcome = lifecycleToChangeOutcome(lifecycle);
@@ -262,7 +266,7 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 			log.info({ changeId: change.id, iid, lifecycle, outcome }, "KG reconcile: advanced ConfigChange.outcome");
 		} catch (error) {
 			log.warn(
-				{ mrUrl: change.mrUrl, error: error instanceof Error ? error.message : String(error) },
+				{ changeId: change.id, mrUrl: change.mrUrl, error: error instanceof Error ? error.message : String(error) },
 				"KG reconcile one failed; continuing",
 			);
 		}

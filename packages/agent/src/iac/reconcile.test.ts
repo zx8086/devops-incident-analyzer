@@ -68,7 +68,10 @@ beforeAll(() => {
 	mock.module("@devops-agent/knowledge-graph", () => ({
 		...realKnowledgeGraph,
 		isKnowledgeGraphEnabled: () => kgEnabled,
-		getGraphStore: async () => ({}) as unknown,
+		getGraphStore: async () => {
+			if (kgStoreThrows) throw new Error("store init failed");
+			return {} as unknown;
+		},
 		proposedChangesWithMr: async () => kgProposed,
 		setChangeOutcome: async (_store: unknown, id: string, outcome: string) => {
 			kgSetCalls.push({ id, outcome });
@@ -93,6 +96,7 @@ let backend = "agent-memory";
 let kgEnabled = false;
 let kgProposed: Array<{ id: string; mrUrl: string; outcome: string }> = [];
 const kgSetCalls: Array<{ id: string; outcome: string }> = [];
+let kgStoreThrows = false;
 
 // SIO-1045: undo the three beforeAll mocks above once this file's tests finish, so a later test
 // file in the same process sees the real modules again. Restoring against the value snapshots (not
@@ -139,6 +143,7 @@ beforeEach(() => {
 	kgEnabled = false;
 	kgProposed = [];
 	kgSetCalls.length = 0;
+	kgStoreThrows = false;
 });
 
 afterEach(() => {
@@ -378,6 +383,15 @@ describe("reconcileKnowledgeGraph (SIO-1053)", () => {
 			applyPipelineUrl: "",
 		});
 		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("best-effort no-op (does not throw, no writes) when getGraphStore fails", async () => {
+		kgEnabled = true;
+		kgStoreThrows = true;
+		kgProposed = [{ id: "req-1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" }];
+		liveByIid.set(264, { mrState: "merged", applyStatus: "success", applyPipelineId: 1, applyPipelineUrl: "" });
+		await expect(reconcileKnowledgeGraph({ source: "cron" })).resolves.toBeUndefined();
 		expect(kgSetCalls).toHaveLength(0);
 	});
 

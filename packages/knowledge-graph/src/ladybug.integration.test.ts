@@ -185,6 +185,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		await store.init();
 
 		// One proposed change WITH an MR (re-checkable), one proposed change WITHOUT an MR (skipped).
+		// req-a also TARGETS a stack instance so the panel read-back below can find it.
 		await recordIacChange(store, {
 			id: "req-a",
 			deployment: "eu-b2b",
@@ -192,6 +193,7 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			filePaths: ["lifecycle-policies/alerts.json"],
 			summary: "alerts add 90d delete",
 			mrUrl: "https://gitlab.com/x/-/merge_requests/264",
+			stackInstanceId: "eu-b2b/lifecycle-policies",
 			outcome: "proposed",
 			createdAt: "2026-07-10T00:00:00.000Z",
 		});
@@ -214,10 +216,10 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		await setChangeOutcome(store, "req-a", "applied");
 		expect(await proposedChangesWithMr(store)).toEqual([]);
 
-		// And the panel query now reads the terminal outcome.
+		// And the panel query now reads the terminal outcome (req-a TARGETS this stack instance).
 		const history = await changeHistoryForStackInstance(store, "eu-b2b/lifecycle-policies");
 		const reconciled = history.find((c) => c.id === "req-a");
-		if (reconciled) expect(reconciled.outcome).toBe("applied");
+		expect(reconciled?.outcome).toBe("applied");
 
 		await store.close();
 	});
