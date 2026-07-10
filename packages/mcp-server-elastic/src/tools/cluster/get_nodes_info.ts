@@ -7,6 +7,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
+import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -226,10 +227,7 @@ export const registerGetNodesInfoTool: ToolRegistrationFunction = (server: McpSe
 		} catch (error) {
 			// Error handling
 			if (error instanceof z.ZodError) {
-				throw createNodesInfoMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-					type: "validation",
-					details: { validationErrors: error.issues, providedArgs: args },
-				});
+				throwZodValidationMcpError(error, args, createNodesInfoMcpError);
 			}
 
 			if (error instanceof Error) {

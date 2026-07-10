@@ -32,6 +32,11 @@ import {
 	renderLiveParity,
 } from "./live-parity.ts";
 import { createSearchMemoryTool } from "./local-tools.ts";
+// SIO-1047: parseMrState/parseApplyResult moved to mr-live-state.ts (kept it a dependency-free leaf,
+// breaking the nodes.ts <-> reconcile.ts import cycle). watchPipeline below still calls both; they
+// are also re-exported near the bottom of this file for pipeline-status.test.ts, which imports both
+// from "./nodes.ts".
+import { parseApplyResult, parseMrState } from "./mr-live-state.ts";
 import { iacProposalFactTtlSeconds, reconcileAll } from "./reconcile.ts";
 import type {
 	DriftReport,
@@ -90,7 +95,7 @@ export function isMissingClusterClarification(clarification: string): boolean {
 // thread (a prior AIMessage exists). The classifier derives the converse gate from this rather than
 // trusting only the UI-supplied state.isFollowUp flag (which the client can omit on a reload).
 // (Pure; unit-testable via classifyIacIntent.)
-export function hasPriorAgentTurn(state: IacStateType): boolean {
+function hasPriorAgentTurn(state: IacStateType): boolean {
 	return state.messages.some((m) => m?.getType() === "ai");
 }
 
@@ -629,7 +634,7 @@ export function looksLikeCorrection(text: string): boolean {
 // SIO-982: does the user want watchPipeline to keep polling until the pipeline reaches a terminal
 // status (vs the default one-shot bounded poll)? A cold CI runner can take >90s, so "watch until
 // done"/"wait for it to finish" extends the poll budget for THIS call only. (Pure; unit-tested.)
-export function looksLikeWatchUntilDone(text: string): boolean {
+function looksLikeWatchUntilDone(text: string): boolean {
 	const r = text.toLowerCase();
 	const CUES = [
 		"until done",
@@ -830,7 +835,7 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 
 // SIO-960: a one-line "you have work in flight" note from durable memory, or "" when
 // nothing is in flight / recall is unavailable. Best-effort: never throws.
-export async function buildInFlightSessionNote(): Promise<string> {
+async function buildInFlightSessionNote(): Promise<string> {
 	try {
 		const items: string[] = [];
 		// In-flight fleet binary upgrades (no MR; re-pollable imperative pipelines).
@@ -6517,7 +6522,7 @@ function fallbackMrDescription(review: IacPlanReview | null): string {
 // Build the MR description by having the LLM fill the agent's own mr-template.md
 // (already in the system prompt) per the open-mr skill, from the gathered context.
 // Falls back to the deterministic stub on any error.
-export async function buildMrDescription(state: IacStateType): Promise<string> {
+async function buildMrDescription(state: IacStateType): Promise<string> {
 	const review = state.planReview;
 	const req = state.iacRequest;
 	try {
@@ -6747,103 +6752,6 @@ export function parseApprovalState(toolResult: string): IacApprovalState | null 
 	} catch {
 		return null;
 	}
-}
-
-// SIO-992: parse the MR lifecycle state from gitlab_get_merge_request's "[status] {json}" body.
-// GitLab's GET /merge_requests/:iid returns state ("opened"|"merged"|"closed") + merged_at +
-// detailed_merge_status. We only need state (+ mergedAt for context) to distinguish "MR open, plan
-// ready" from "MR merged, apply runs on main". null on a non-2xx/unparseable body. (Pure.)
-// SIO-993: also capture merge_commit_sha so a merged MR can find its apply pipeline on main.
-export function parseMrState(
-	toolResult: string,
-): { state: string; mergedAt?: string; detailedMergeStatus?: string; mergeCommitSha?: string } | null {
-	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return null;
-	try {
-		const m = JSON.parse(toolResult.slice(jsonStart)) as {
-			state?: unknown;
-			merged_at?: unknown;
-			detailed_merge_status?: unknown;
-			merge_commit_sha?: unknown;
-		};
-		if (typeof m.state !== "string") return null;
-		return {
-			state: m.state,
-			...(typeof m.merged_at === "string" && m.merged_at ? { mergedAt: m.merged_at } : {}),
-			...(typeof m.detailed_merge_status === "string" ? { detailedMergeStatus: m.detailed_merge_status } : {}),
-			...(typeof m.merge_commit_sha === "string" && m.merge_commit_sha ? { mergeCommitSha: m.merge_commit_sha } : {}),
-		};
-	} catch {
-		return null;
-	}
-}
-
-// SIO-995: the REAL post-merge apply outcome, from gitlab_get_merge_commit_apply_result's JSON
-// {applyStatus, jobId?, pipelineId?, webUrl?, parentStatus?, reason?}. applyStatus is the APPLY JOB's
-// status (success=change live, running/pending=applying-not-live, failed=NOT live), NOT the parent
-// pipeline's (which reports success transiently before the child apply job runs/fails -- the SIO-993
-// false-positive). applyStatus is "" when the apply job hasn't appeared yet (treat as "starting",
-// never success). null on an unparseable body. (Pure.)
-export function parseApplyResult(
-	toolResult: string,
-): { applyStatus: string; pipelineId?: number; webUrl?: string; reason?: string } | null {
-	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return null;
-	try {
-		const r = JSON.parse(toolResult.slice(jsonStart)) as {
-			applyStatus?: unknown;
-			pipelineId?: unknown;
-			webUrl?: unknown;
-			reason?: unknown;
-		};
-		return {
-			applyStatus: typeof r.applyStatus === "string" ? r.applyStatus : "",
-			...(typeof r.pipelineId === "number" ? { pipelineId: r.pipelineId } : {}),
-			...(typeof r.webUrl === "string" ? { webUrl: r.webUrl } : {}),
-			...(typeof r.reason === "string" ? { reason: r.reason } : {}),
-		};
-	} catch {
-		return null;
-	}
-}
-
-export interface MrLiveState {
-	mrState: string; // "opened" | "merged" | "closed" | "" (unread)
-	mergeCommitSha?: string;
-	applyStatus: string; // apply-JOB status; "" when not merged or the apply job hasn't appeared
-	applyPipelineId: number | null;
-	applyPipelineUrl: string;
-}
-
-// SIO-1005: the live MR -> apply-job lookup, extracted from watchPipeline (the SIO-992/SIO-995
-// sequence) so the reconciliation pass (reconcile.ts) re-checks a proposed MR's true state with the
-// EXACT same reads -- read the MR's lifecycle state, and once merged read the apply JOB's status
-// (parent -> child -> apply:* job), never the parent pipeline's. Reuses this module's private
-// callTool so the reconcile module needs no MCP wiring of its own. Best-effort: every field falls
-// back to its empty value when a tool is unavailable or a body is unparseable.
-export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
-	const mrInfo = parseMrState(await callTool("gitlab_get_merge_request", { iid }));
-	const mrState = mrInfo?.state ?? "";
-	let applyStatus = "";
-	let applyPipelineId: number | null = null;
-	let applyPipelineUrl = "";
-	if (mrState === "merged" && mrInfo?.mergeCommitSha) {
-		const apply = parseApplyResult(
-			await callTool("gitlab_get_merge_commit_apply_result", { sha: mrInfo.mergeCommitSha }),
-		);
-		if (apply) {
-			applyStatus = apply.applyStatus;
-			applyPipelineId = apply.pipelineId ?? null;
-			applyPipelineUrl = apply.webUrl ?? "";
-		}
-	}
-	return {
-		mrState,
-		...(mrInfo?.mergeCommitSha ? { mergeCommitSha: mrInfo.mergeCommitSha } : {}),
-		applyStatus,
-		applyPipelineId,
-		applyPipelineUrl,
-	};
 }
 
 // A pipeline status is terminal when CI has stopped running.
@@ -8923,7 +8831,7 @@ export function buildFleetFactRationale(state: IacStateType, result: FleetUpgrad
 
 // SIO-961: human note for a partial apply. Leads with the in-flight/pending majority so the
 // user is not alarmed by the CI "failed" exit, then names the small env-side failure set.
-export function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
+function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
 	const parts: string[] = [];
 	parts.push(`${outcome.succeeded}/${outcome.created} upgraded`);
 	if (outcome.unsettled > 0) parts.push(`${outcome.unsettled} still pending (offline; upgrade when they reconnect)`);
@@ -8942,7 +8850,7 @@ export function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
 // from a terminal one ("fleet-upgrade-terminal") -- a terminal status-check writes
 // a terminal-kind fact that no longer matches the in-flight filter, superseding the
 // dispatched record so a finished upgrade is never reported as still running.
-export function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
+function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
 	const a: AnnotationMap = {
 		kind: result.status === "dispatched" ? "fleet-upgrade-dispatched" : "fleet-upgrade-terminal",
 		status: result.status,
@@ -9161,7 +9069,7 @@ export async function recallLastIacChange(deployment?: string): Promise<Recalled
 // states "I never merge or apply." -- but a clean success reads as good-news + ready-to-merge
 // instead of the flat "review and apply manually" that fought the actual state. Non-terminal /
 // still-running keeps the original line (a follow-up re-checks).
-export function iacClosingLine(state: IacStateType): string {
+function iacClosingLine(state: IacStateType): string {
 	const merge = "I never merge or apply.";
 	if (state.pipelineStatus === "success") {
 		// SIO-992: the plan pipeline succeeding only means the CI `terraform plan` job ran clean. The

@@ -23,7 +23,7 @@ export const InputSchema = z.object({
 	siteUrl: z.string().optional().describe("Atlassian Confluence base URL for building page links"),
 });
 
-export const ConfluencePageSchema = z.object({
+const ConfluencePageSchema = z.object({
 	id: z.string(),
 	title: z.string(),
 	spaceKey: z.string(),
@@ -32,7 +32,7 @@ export const ConfluencePageSchema = z.object({
 	excerpt: z.string(),
 });
 
-export const MatchedPageSchema = ConfluencePageSchema.extend({
+const MatchedPageSchema = ConfluencePageSchema.extend({
 	relevanceScore: z.number(),
 	url: z.string().optional(),
 });

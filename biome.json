@@ -9,7 +9,8 @@
 			"!current",
 			"!.claude/worktrees",
 			"!guides",
-			"!docs/reference/agent-memory-openapi.json"
+			"!docs/reference/agent-memory-openapi.json",
+			"!.fallow"
 		]
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },

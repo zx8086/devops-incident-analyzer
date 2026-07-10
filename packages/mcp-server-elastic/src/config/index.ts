@@ -1,14 +1,5 @@
 // src/config/index.ts
-import { defaultConfig } from "./defaults.js";
-import { envVarMapping } from "./envMapping.js";
 import { loadConfig } from "./loader.js";
-import {
-	ElasticsearchConfigSchema,
-	LangSmithConfigSchema,
-	LoggingConfigSchema,
-	SecurityConfigSchema,
-	ServerConfigSchema,
-} from "./schemas.js";
 
 export { defaultConfig } from "./defaults.js";
 export { listDeploymentIds, loadDeploymentFromEnv } from "./deployments.js";
@@ -57,18 +48,4 @@ export function getConfigWarnings(): string[] {
 
 export function clearConfigWarnings(): void {
 	_configWarnings = [];
-}
-
-export function getConfigDocumentation(): Record<string, unknown> {
-	return {
-		environmentVariables: envVarMapping,
-		defaults: defaultConfig,
-		schemas: {
-			server: ServerConfigSchema.describe("Server configuration options"),
-			elasticsearch: ElasticsearchConfigSchema.describe("Elasticsearch connection configuration"),
-			logging: LoggingConfigSchema.describe("Logging configuration"),
-			security: SecurityConfigSchema.describe("Security and permission configuration"),
-			langsmith: LangSmithConfigSchema.describe("LangSmith tracing configuration"),
-		},
-	};
 }

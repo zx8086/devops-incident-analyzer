@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 
-export const kafkaSchema = z
+const kafkaSchema = z
 	.object({
 		provider: z.enum(["local", "msk", "confluent"]).describe("Kafka provider type"),
 		clientId: z.string().describe("Kafka client identifier"),
@@ -20,7 +20,7 @@ export const kafkaSchema = z
 	})
 	.strict();
 
-export const mskSchema = z
+const mskSchema = z
 	.object({
 		bootstrapBrokers: z.string().describe("Comma-separated MSK bootstrap broker endpoints"),
 		clusterArn: z.string().describe("MSK cluster ARN for IAM authentication"),
@@ -33,7 +33,7 @@ export const mskSchema = z
 	})
 	.strict();
 
-export const confluentSchema = z
+const confluentSchema = z
 	.object({
 		bootstrapServers: z.string().describe("Confluent Cloud bootstrap server endpoints"),
 		apiKey: z.string().describe("Confluent Cloud API key"),
@@ -43,13 +43,13 @@ export const confluentSchema = z
 	})
 	.strict();
 
-export const localSchema = z
+const localSchema = z
 	.object({
 		bootstrapServers: z.string().describe("Local Kafka bootstrap server endpoints"),
 	})
 	.strict();
 
-export const schemaRegistrySchema = z
+const schemaRegistrySchema = z
 	.object({
 		enabled: z.boolean().describe("Whether Schema Registry integration is enabled"),
 		url: z
@@ -70,7 +70,7 @@ export const schemaRegistrySchema = z
 	})
 	.strict();
 
-export const ksqlSchema = z
+const ksqlSchema = z
 	.object({
 		enabled: z.boolean().describe("Whether ksqlDB integration is enabled"),
 		endpoint: z
@@ -91,7 +91,7 @@ export const ksqlSchema = z
 	})
 	.strict();
 
-export const connectSchema = z
+const connectSchema = z
 	.object({
 		enabled: z.boolean().describe("Whether Kafka Connect integration is enabled"),
 		url: z
@@ -112,7 +112,7 @@ export const connectSchema = z
 	})
 	.strict();
 
-export const restproxySchema = z
+const restproxySchema = z
 	.object({
 		enabled: z.boolean().describe("Whether REST Proxy integration is enabled"),
 		url: z.string().describe("REST Proxy URL (e.g., http://kafka-rest:8082 for self-hosted)"),
@@ -129,14 +129,14 @@ export const restproxySchema = z
 	})
 	.strict();
 
-export const loggingSchema = z
+const loggingSchema = z
 	.object({
 		level: z.enum(["silent", "debug", "info", "warn", "error"]).describe("Log verbosity level"),
 		backend: z.enum(["pino"]).describe("Logging backend to use"),
 	})
 	.strict();
 
-export const telemetrySchema = z
+const telemetrySchema = z
 	.object({
 		enabled: z.boolean().describe("Whether OpenTelemetry tracing is enabled"),
 		serviceName: z.string().describe("Service name reported in telemetry spans"),
@@ -145,7 +145,7 @@ export const telemetrySchema = z
 	})
 	.strict();
 
-export const transportSchema = z
+const transportSchema = z
 	.object({
 		mode: z.enum(["stdio", "http", "both", "agentcore"]).describe("Transport mode"),
 		port: z.number().int().min(1024).max(65535).describe("HTTP server port"),

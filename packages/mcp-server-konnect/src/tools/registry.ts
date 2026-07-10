@@ -63,39 +63,6 @@ export function getAllTools(): MCPTool[] {
 }
 
 /**
- * Get tools by category
- */
-export function getToolsByCategory(category: string): MCPTool[] {
-	return getAllTools().filter((tool) => tool.category === category);
-}
-
-/**
- * Get tool by method name
- */
-export function getToolByMethod(method: string): MCPTool | undefined {
-	return getAllTools().find((tool) => tool.method === method);
-}
-
-/**
- * Get all available categories
- */
-export function getAllCategories(): string[] {
-	const categories = new Set(getAllTools().map((tool) => tool.category));
-	return Array.from(categories).sort();
-}
-
-/**
- * Get tool count by category
- */
-export function getToolStats(): Record<string, number> {
-	const stats: Record<string, number> = {};
-	getAllTools().forEach((tool) => {
-		stats[tool.category] = (stats[tool.category] || 0) + 1;
-	});
-	return stats;
-}
-
-/**
  * Validate that all tools have unique method names
  */
 export function validateToolRegistry(): { isValid: boolean; errors: string[] } {

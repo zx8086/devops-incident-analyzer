@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../../utils/logger.js";
+import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
 
 // Direct JSON Schema definition
@@ -66,10 +67,7 @@ export const registerEnrichDeletePolicyTool: ToolRegistrationFunction = (server:
 		} catch (error) {
 			// Error handling
 			if (error instanceof z.ZodError) {
-				throw createDeletePolicyMcpError(`Validation failed: ${error.issues.map((e) => e.message).join(", ")}`, {
-					type: "validation",
-					details: { validationErrors: error.issues, providedArgs: args },
-				});
+				throwZodValidationMcpError(error, args, createDeletePolicyMcpError);
 			}
 
 			if (error instanceof Error) {

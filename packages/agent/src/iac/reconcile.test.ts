@@ -1,11 +1,11 @@
 // agent/src/iac/reconcile.test.ts
 // SIO-1005: the proposed -> applied/failed reconciliation core. The pure decision/annotation
 // builders are tested directly; reconcileOne/reconcileAll/enumerate are exercised with mocked
-// nodes.fetchMrLiveState + memory-backend + memory-writer so no MCP/REST is touched.
+// mr-live-state.fetchMrLiveState + memory-backend + memory-writer so no MCP/REST is touched.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realMemoryBackendNs from "../memory-backend.ts";
 import * as realMemoryWriterNs from "../memory-writer.ts";
-import * as realNodesNs from "./nodes.ts";
+import * as realMrLiveStateNs from "./mr-live-state.ts";
 
 // SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
 // mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING these
@@ -14,18 +14,20 @@ import * as realNodesNs from "./nodes.ts";
 // any mock.module() call below runs) copies the function VALUES and is immune to that later
 // live-patching. See SIO-1028 (reference_prompt_context_mock_pollutes_direct_imports) for the same
 // class of live-binding bug.
-const realNodes = { ...realNodesNs };
+const realMrLiveState = { ...realMrLiveStateNs };
 const realMemoryBackend = { ...realMemoryBackendNs };
 const realMemoryWriter = { ...realMemoryWriterNs };
 
 // SIO-1045: this file's stub mocks used to be registered at FILE SCOPE, which meant any other test
 // file loaded after this one (module graph order, not describe/test order) would statically import an
-// already-poisoned ./nodes.ts / ../memory-backend.ts / ../memory-writer.ts before this file's afterAll
-// ever ran. Registering them in beforeAll (paired with an afterAll restore, both against the value
-// snapshots above) keeps the load phase pristine for every other file's own snapshot.
+// already-poisoned ./mr-live-state.ts / ../memory-backend.ts / ../memory-writer.ts before this file's
+// afterAll ever ran. Registering them in beforeAll (paired with an afterAll restore, both against the
+// value snapshots above) keeps the load phase pristine for every other file's own snapshot.
 beforeAll(() => {
-	mock.module("./nodes.ts", () => ({
-		...realNodes,
+	// SIO-1047: fetchMrLiveState moved from nodes.ts to mr-live-state.ts (cycle-break extraction);
+	// mock the new home so reconcile.ts's import resolves to this stub.
+	mock.module("./mr-live-state.ts", () => ({
+		...realMrLiveState,
 		fetchMrLiveState: async (iid: number): Promise<LiveState> =>
 			liveByIid.get(iid) ?? { mrState: "", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" },
 	}));
@@ -76,7 +78,7 @@ let backend = "agent-memory";
 // file in the same process sees the real modules again. Restoring against the value snapshots (not
 // the live namespace bindings) is what makes this restore actually take effect on Linux CI.
 afterAll(() => {
-	mock.module("./nodes.ts", () => realNodes);
+	mock.module("./mr-live-state.ts", () => realMrLiveState);
 	mock.module("../memory-backend.ts", () => realMemoryBackend);
 	mock.module("../memory-writer.ts", () => realMemoryWriter);
 });

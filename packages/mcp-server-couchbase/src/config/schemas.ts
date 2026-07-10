@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 
-export const ServerConfigSchema = z.object({
+const ServerConfigSchema = z.object({
 	name: z.string().min(1),
 	version: z.string().min(1),
 	readOnlyQueryMode: z.boolean().default(true),
@@ -10,7 +10,7 @@ export const ServerConfigSchema = z.object({
 	maxResultsPerQuery: z.number().min(1).max(10000).default(1000),
 });
 
-export const TransportConfigSchema = z.object({
+const TransportConfigSchema = z.object({
 	mode: z.enum(["stdio", "http", "both", "agentcore"]).default("stdio"),
 	port: z.number().min(1).max(65535).default(9082),
 	host: z.string().min(1).default("0.0.0.0"),
@@ -21,7 +21,7 @@ export const TransportConfigSchema = z.object({
 	allowedOrigins: z.string().optional(),
 });
 
-export const DatabaseConfigSchema = z.object({
+const DatabaseConfigSchema = z.object({
 	connectionString: z.string().url(),
 	username: z.string().min(1),
 	password: z.string().min(1),
@@ -31,19 +31,19 @@ export const DatabaseConfigSchema = z.object({
 	connectionTimeout: z.number().min(1000).max(30000).default(5000),
 });
 
-export const LoggingConfigSchema = z.object({
+const LoggingConfigSchema = z.object({
 	level: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	format: z.enum(["json", "text"]).default("json"),
 	includeMetadata: z.boolean().default(true),
 });
 
-export const DocumentationConfigSchema = z.object({
+const DocumentationConfigSchema = z.object({
 	enabled: z.boolean().default(false),
 	baseDirectory: z.string().min(1).default("/tmp/docs"),
 	fileExtension: z.string().default(".md"),
 });
 
-export const PlaybooksConfigSchema = z.object({
+const PlaybooksConfigSchema = z.object({
 	enabled: z.boolean().default(false),
 	baseDirectory: z.string().min(1).default("./playbook"),
 	fileExtension: z.string().default(".md"),
