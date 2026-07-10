@@ -113,10 +113,11 @@ mock.module("@devops-agent/agent", () => ({
 	promoteToMemory: mock(() => Promise.resolve()),
 	executeAction: mock(() => Promise.resolve()),
 	getAvailableActionTools: mock(() => [] as unknown[]),
-	// SIO-1045: iac-reconcile-cron.ts is imported (and its module-scope startIacReconcileCron
-	// call reads selectedBackend()) transitively via agent.ts -- must resolve on this same
-	// process-global mock cache entry.
+	// SIO-1045/SIO-1053: iac-reconcile-cron.ts is imported (and its module-scope startIacReconcileCron
+	// call reads reconcileEnabled()) transitively via agent.ts -- must resolve on this same
+	// process-global mock cache entry. reconcileEnabled() false keeps the cron unregistered under test.
 	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
+	reconcileEnabled: mock(() => false),
 	selectedBackend: mock(() => "file" as const),
 }));
 

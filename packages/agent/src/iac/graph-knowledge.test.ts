@@ -442,7 +442,9 @@ describe("recordIacOutcome", () => {
 		expect(store.calls).toEqual([]);
 	});
 
-	test("records the pipeline and promotes a successful change to applied", async () => {
+	// SIO-1053: a green PLAN pipeline is not a merge, so it no longer promotes to "applied"
+	// at proposal time -- the change stays "proposed" until the post-merge reconciler advances it.
+	test("records the pipeline and leaves a successful-plan change as proposed", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
@@ -450,7 +452,7 @@ describe("recordIacOutcome", () => {
 		expect(store.calls.some((c) => c.cypher.includes("MERGE (pl:Pipeline") && c.params?.id === "148")).toBe(true);
 		expect(store.calls.some((c) => c.cypher.includes("RAN"))).toBe(true);
 		const set = store.calls.find((c) => c.cypher.includes("SET c.outcome"));
-		expect(set?.params?.outcome).toBe("applied");
+		expect(set?.params?.outcome).toBe("proposed");
 	});
 
 	test("maps a rejected review to rejected and a failed pipeline to failed", async () => {

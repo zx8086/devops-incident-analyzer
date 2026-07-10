@@ -48,15 +48,17 @@ function stackInstanceId(state: IacStateType): string {
 	return deployment && stack ? `${deployment}/${stack}` : "";
 }
 
-// SIO-965: map the user-facing turn outcome to the graph's ChangeOutcome. Only a
-// terminally-successful pipeline counts as "applied" (a human still merges, but
-// pipeline success is the best automatic proxy the maker observes).
+// SIO-965/SIO-1053: map the user-facing turn outcome to the graph's ChangeOutcome at
+// PROPOSAL time. Only the two outcomes genuinely known during the turn are recorded:
+// a rejected plan and a failed PLAN pipeline. "applied" is deliberately NOT set here --
+// a green plan pipeline is not a merge, and the pre-SIO-1053 `pipelineStatus === "success"
+// -> applied` was an over-claim (nothing had merged). The real merged+apply-JOB state is
+// written later by the reconcile sweep (reconcile.ts reconcileKnowledgeGraph -> setChangeOutcome).
 function changeOutcome(state: IacStateType): ChangeOutcome {
 	const outcome = iacTurnOutcome(state);
 	if (outcome === "rejected") return "rejected";
 	if (outcome === "pipeline-failed") return "failed";
-	if (state.pipelineStatus === "success") return "applied";
-	return "proposed";
+	return "proposed"; // real apply state comes from the post-merge reconciler
 }
 
 // Compact one-line summary of the change, reused as the ConfigChange.summary.

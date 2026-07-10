@@ -11,11 +11,12 @@
 // no Bun dependency. Bun.cron guarantees no-overlap; setInterval does not, so the Node path emulates
 // it with a `sweeping` re-entrancy flag.
 //
-// Enabled implicitly by the agent-memory backend: reconcile has nothing to read or write on any
-// other backend (reconcileAll early-returns), so the cron is driven purely by
-// LIVE_MEMORY_BACKEND=agent-memory -- no separate on/off flag. Only the cadence is tunable
+// SIO-1053: enabled when EITHER lifecycle store can be reconciled -- the agent-memory backend
+// (LIVE_MEMORY_BACKEND=agent-memory) OR the knowledge graph (KNOWLEDGE_GRAPH_ENABLED). reconcileAll
+// reconciles both stores under their own independent gates; `reconcileEnabled()` is the OR of the two
+// so a KG-only deployment still registers the sweep. Only the cadence is tunable
 // (IAC_RECONCILE_CRON_SCHEDULE).
-import { reconcileAll, selectedBackend } from "@devops-agent/agent";
+import { reconcileAll, reconcileEnabled } from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 
 const log = getLogger("agent:iac:reconcile-cron");
@@ -45,10 +46,11 @@ export function scheduleToIntervalMs(schedule: string, onUnsupported?: (schedule
 
 export function startIacReconcileCron(): void {
 	if (started) return; // module load can run more than once under HMR; register the job once
-	// Driven by the agent-memory backend: on any other backend reconcile is a no-op, so don't even
-	// register the timer. Set LIVE_MEMORY_BACKEND=agent-memory to enable.
-	if (selectedBackend() !== "agent-memory") {
-		log.info({ backend: selectedBackend() }, "iac-reconcile cron not started: agent-memory backend not selected");
+	// SIO-1053: reconcile is a no-op unless at least one store can be reconciled (agent-memory backend
+	// OR KNOWLEDGE_GRAPH_ENABLED), so don't even register the timer otherwise. Set
+	// LIVE_MEMORY_BACKEND=agent-memory and/or KNOWLEDGE_GRAPH_ENABLED=true to enable.
+	if (!reconcileEnabled()) {
+		log.info("iac-reconcile cron not started: neither agent-memory backend nor knowledge graph enabled");
 		return;
 	}
 	const schedule = process.env.IAC_RECONCILE_CRON_SCHEDULE || DEFAULT_SCHEDULE;

@@ -16,6 +16,7 @@ import {
 	deploymentsRunningStack,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
+	proposedChangesWithMr,
 	stacksUsingModule,
 	topology,
 } from "./reader.ts";
@@ -172,6 +173,51 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			{ url: "https://gitlab.com/x/-/merge_requests/42" },
 		);
 		expect(pipelines).toEqual([{ id: "148", status: "success" }]);
+
+		await store.close();
+	});
+
+	// SIO-1053: the KG reconcile enumeration + terminal advance against the real engine.
+	// proposedChangesWithMr must return only still-proposed changes that have an MR, and once
+	// setChangeOutcome advances one to a terminal outcome it must drop out of the enumeration.
+	test("proposedChangesWithMr enumerate -> setChangeOutcome terminal advance round-trip", async () => {
+		const store = new LadybugStore(join(dir, "db4"));
+		await store.init();
+
+		// One proposed change WITH an MR (re-checkable), one proposed change WITHOUT an MR (skipped).
+		await recordIacChange(store, {
+			id: "req-a",
+			deployment: "eu-b2b",
+			workflow: "ilm-rollout",
+			filePaths: ["lifecycle-policies/alerts.json"],
+			summary: "alerts add 90d delete",
+			mrUrl: "https://gitlab.com/x/-/merge_requests/264",
+			outcome: "proposed",
+			createdAt: "2026-07-10T00:00:00.000Z",
+		});
+		await recordIacChange(store, {
+			id: "req-nomr",
+			deployment: "eu-b2b",
+			workflow: "ilm-rollout",
+			filePaths: ["lifecycle-policies/logs.json"],
+			summary: "logs proposal not yet MR'd",
+			outcome: "proposed",
+			createdAt: "2026-07-10T00:05:00.000Z",
+		});
+
+		const proposed = await proposedChangesWithMr(store);
+		expect(proposed).toEqual([
+			{ id: "req-a", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" },
+		]);
+
+		// The reconciler advances req-a to its true terminal outcome; it must then drop from the enum.
+		await setChangeOutcome(store, "req-a", "applied");
+		expect(await proposedChangesWithMr(store)).toEqual([]);
+
+		// And the panel query now reads the terminal outcome.
+		const history = await changeHistoryForStackInstance(store, "eu-b2b/lifecycle-policies");
+		const reconciled = history.find((c) => c.id === "req-a");
+		if (reconciled) expect(reconciled.outcome).toBe("applied");
 
 		await store.close();
 	});

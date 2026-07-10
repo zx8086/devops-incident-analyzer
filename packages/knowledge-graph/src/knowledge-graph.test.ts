@@ -16,6 +16,7 @@ import {
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	priorRootCauses,
+	proposedChangesWithMr,
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,
@@ -458,6 +459,25 @@ describe("reader", () => {
 			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "proposed", mrUrl: "u9", createdAt: "2026-06-19" },
 		]);
 		expect(await changeHistoryForStackInstance(store, "")).toEqual([]);
+	});
+
+	// SIO-1053: enumeration source for the KG reconcile sweep.
+	test("proposedChangesWithMr filters proposed, joins PROPOSED_IN, drops mrUrl-less rows", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("PROPOSED_IN", [
+			{ id: "c1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" },
+			{ id: "c2", mrUrl: null, outcome: "proposed" }, // no MR url -> dropped
+			{ id: "c3", mrUrl: "https://gitlab.com/x/-/merge_requests/265", outcome: null }, // coalesces to proposed
+		]);
+		const rows = await proposedChangesWithMr(store);
+		expect(rows).toEqual([
+			{ id: "c1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" },
+			{ id: "c3", mrUrl: "https://gitlab.com/x/-/merge_requests/265", outcome: "proposed" },
+		]);
+		// The query must constrain to still-proposed changes and join the MR node.
+		const call = store.calls.find((c) => c.cypher.includes("PROPOSED_IN"));
+		expect(call?.cypher).toContain("c.outcome = 'proposed'");
+		expect(call?.cypher).toContain("MergeRequest");
 	});
 
 	test("stacksUsingModule / deploymentsRunningStack map rows, [] for empty input", async () => {

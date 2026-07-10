@@ -3,6 +3,7 @@
 // builders are tested directly; reconcileOne/reconcileAll/enumerate are exercised with mocked
 // mr-live-state.fetchMrLiveState + memory-backend + memory-writer so no MCP/REST is touched.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realKnowledgeGraphNs from "@devops-agent/knowledge-graph";
 import * as realMemoryBackendNs from "../memory-backend.ts";
 import * as realMemoryWriterNs from "../memory-writer.ts";
 import * as realMrLiveStateNs from "./mr-live-state.ts";
@@ -17,6 +18,8 @@ import * as realMrLiveStateNs from "./mr-live-state.ts";
 const realMrLiveState = { ...realMrLiveStateNs };
 const realMemoryBackend = { ...realMemoryBackendNs };
 const realMemoryWriter = { ...realMemoryWriterNs };
+// SIO-1053: same value-snapshot discipline for the KG package, which reconcile.ts now imports.
+const realKnowledgeGraph = { ...realKnowledgeGraphNs };
 
 // SIO-1045: this file's stub mocks used to be registered at FILE SCOPE, which meant any other test
 // file loaded after this one (module graph order, not describe/test order) would statically import an
@@ -58,6 +61,19 @@ beforeAll(() => {
 		recordKeyDecision: (d: { decision: string; annotations?: Record<string, string> }) => recordedDecisions.push(d),
 		appendDailyLog: (e: { summary?: string }) => dailyLogs.push(e),
 	}));
+
+	// SIO-1053: KG seam. isKnowledgeGraphEnabled/getGraphStore/proposedChangesWithMr/setChangeOutcome
+	// are the only KG symbols reconcile.ts calls; stub them so reconcileKnowledgeGraph runs without a
+	// real lbug store. setChangeOutcome pushes to kgSetCalls so tests assert the exact (id, outcome).
+	mock.module("@devops-agent/knowledge-graph", () => ({
+		...realKnowledgeGraph,
+		isKnowledgeGraphEnabled: () => kgEnabled,
+		getGraphStore: async () => ({}) as unknown,
+		proposedChangesWithMr: async () => kgProposed,
+		setChangeOutcome: async (_store: unknown, id: string, outcome: string) => {
+			kgSetCalls.push({ id, outcome });
+		},
+	}));
 });
 
 // --- mock seams (complete stubs; re-asserted in beforeEach to survive sibling mock pollution) ---
@@ -73,6 +89,10 @@ const recordedDecisions: Array<{ decision: string; annotations?: Record<string, 
 const dailyLogs: Array<{ summary?: string }> = [];
 let searchHits: Array<{ text: string; annotations: Record<string, string> }> = [];
 let backend = "agent-memory";
+// SIO-1053: KG seam state.
+let kgEnabled = false;
+let kgProposed: Array<{ id: string; mrUrl: string; outcome: string }> = [];
+const kgSetCalls: Array<{ id: string; outcome: string }> = [];
 
 // SIO-1045: undo the three beforeAll mocks above once this file's tests finish, so a later test
 // file in the same process sees the real modules again. Restoring against the value snapshots (not
@@ -81,6 +101,7 @@ afterAll(() => {
 	mock.module("./mr-live-state.ts", () => realMrLiveState);
 	mock.module("../memory-backend.ts", () => realMemoryBackend);
 	mock.module("../memory-writer.ts", () => realMemoryWriter);
+	mock.module("@devops-agent/knowledge-graph", () => realKnowledgeGraph);
 });
 
 import {
@@ -88,8 +109,12 @@ import {
 	buildReconciledIacDecision,
 	enumerateUnreconciledChanges,
 	iacProposalFactTtlSeconds,
+	lifecycleToChangeOutcome,
+	mrIidFromUrl,
 	type ReconcileTarget,
 	reconcileAll,
+	reconcileEnabled,
+	reconcileKnowledgeGraph,
 	reconcileOne,
 } from "./reconcile.ts";
 
@@ -111,6 +136,9 @@ beforeEach(() => {
 	dailyLogs.length = 0;
 	searchHits = [];
 	backend = "agent-memory";
+	kgEnabled = false;
+	kgProposed = [];
+	kgSetCalls.length = 0;
 });
 
 afterEach(() => {
@@ -288,5 +316,129 @@ describe("iacProposalFactTtlSeconds (SIO-1005)", () => {
 		backend = "agent-memory";
 		process.env.IAC_PROPOSAL_FACT_TTL_SECONDS = "not-a-number";
 		expect(iacProposalFactTtlSeconds()).toBe(7_776_000);
+	});
+});
+
+describe("mrIidFromUrl (SIO-1053)", () => {
+	test("derives the iid from a GitLab MR url", () => {
+		expect(mrIidFromUrl("https://gitlab.com/x/y/-/merge_requests/264")).toBe(264);
+	});
+
+	test("null on a url with no merge_requests segment", () => {
+		expect(mrIidFromUrl("https://gitlab.com/x/y")).toBeNull();
+	});
+
+	test("null on an empty string", () => {
+		expect(mrIidFromUrl("")).toBeNull();
+	});
+});
+
+describe("lifecycleToChangeOutcome (SIO-1053)", () => {
+	test("terminal lifecycles map to KG outcomes", () => {
+		expect(lifecycleToChangeOutcome("applied")).toBe("applied");
+		expect(lifecycleToChangeOutcome("apply-failed")).toBe("failed");
+		expect(lifecycleToChangeOutcome("closed")).toBe("rejected");
+	});
+
+	test("transient lifecycles map to null (no KG write)", () => {
+		expect(lifecycleToChangeOutcome("open")).toBeNull();
+		expect(lifecycleToChangeOutcome("apply-running")).toBeNull();
+		expect(lifecycleToChangeOutcome("apply-not-started")).toBeNull();
+	});
+});
+
+describe("reconcileEnabled (SIO-1053)", () => {
+	test("true when the agent-memory backend is selected", () => {
+		backend = "agent-memory";
+		kgEnabled = false;
+		expect(reconcileEnabled()).toBe(true);
+	});
+
+	test("true when only the knowledge graph is enabled", () => {
+		backend = "file";
+		kgEnabled = true;
+		expect(reconcileEnabled()).toBe(true);
+	});
+
+	test("false when neither store is enabled", () => {
+		backend = "file";
+		kgEnabled = false;
+		expect(reconcileEnabled()).toBe(false);
+	});
+});
+
+describe("reconcileKnowledgeGraph (SIO-1053)", () => {
+	test("no-op (no store calls) when KG is disabled", async () => {
+		kgEnabled = false;
+		kgProposed = [{ id: "req-1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" }];
+		liveByIid.set(264, {
+			mrState: "merged",
+			applyStatus: "success",
+			applyPipelineId: 1,
+			applyPipelineUrl: "",
+		});
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("advances a merged+apply-success change to applied", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" }];
+		liveByIid.set(264, {
+			mrState: "merged",
+			applyStatus: "success",
+			applyPipelineId: 1,
+			applyPipelineUrl: "",
+		});
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toEqual([{ id: "req-1", outcome: "applied" }]);
+	});
+
+	test("maps closed-unmerged -> rejected and apply-failed -> failed", async () => {
+		kgEnabled = true;
+		kgProposed = [
+			{ id: "req-closed", mrUrl: "https://gitlab.com/x/-/merge_requests/267", outcome: "proposed" },
+			{ id: "req-failed", mrUrl: "https://gitlab.com/x/-/merge_requests/268", outcome: "proposed" },
+		];
+		liveByIid.set(267, { mrState: "closed", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" });
+		liveByIid.set(268, { mrState: "merged", applyStatus: "failed", applyPipelineId: 2, applyPipelineUrl: "" });
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toEqual([
+			{ id: "req-closed", outcome: "rejected" },
+			{ id: "req-failed", outcome: "failed" },
+		]);
+	});
+
+	test("does NOT write for a transient (still-open) change", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-open", mrUrl: "https://gitlab.com/x/-/merge_requests/269", outcome: "proposed" }];
+		liveByIid.set(269, { mrState: "opened", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" });
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("skips a change whose mr url has no derivable iid", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-badurl", mrUrl: "https://gitlab.com/x/no-mr-here", outcome: "proposed" }];
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
+	});
+});
+
+describe("reconcileAll reconciles the KG independently of the backend (SIO-1053)", () => {
+	test("backend=file + KG enabled: agent-memory summary is zeros but the KG outcome still advances", async () => {
+		backend = "file"; // agent-memory path skipped
+		kgEnabled = true;
+		kgProposed = [{ id: "req-1", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" }];
+		liveByIid.set(264, {
+			mrState: "merged",
+			applyStatus: "success",
+			applyPipelineId: 1,
+			applyPipelineUrl: "",
+		});
+		const summary = await reconcileAll({ source: "cron" });
+		expect(summary).toMatchObject({ checked: 0, advanced: 0 }); // agent-memory did nothing
+		expect(recordedDecisions).toHaveLength(0); // no agent-memory fact appended
+		expect(kgSetCalls).toEqual([{ id: "req-1", outcome: "applied" }]); // but the KG advanced
 	});
 });

@@ -37,6 +37,7 @@ mock.module("@devops-agent/agent", () => ({
 	runTeardown: mock(() => Promise.resolve([])),
 	setSessionOutcome: mock(() => undefined),
 	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
+	reconcileEnabled: mock(() => false),
 	selectedBackend: mock(() => "file" as const),
 	promoteToMemory: mock(() => Promise.resolve()),
 	executeAction: mock(() => Promise.resolve()),
