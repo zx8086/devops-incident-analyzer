@@ -25,6 +25,17 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-906: events route test imports mcpEvents from this specifier; include it so
 	// the shared process-global mock stays link-compatible across files.
 	mcpEvents: new EventEmitter(),
+	// SIO-1045: agent.ts (real module, loaded when agent.test.ts runs) imports these at
+	// module scope; iac-reconcile-cron.ts (imported transitively by agent.ts) imports
+	// reconcileAll/selectedBackend. The memory/promote and actions routes import
+	// promoteToMemory/executeAction/getAvailableActionTools from this same specifier.
+	appliedSkillsForNames: () => [] as unknown[],
+	installSkillLearner: () => undefined,
+	promoteToMemory: () => Promise.resolve(),
+	executeAction: () => Promise.resolve(),
+	getAvailableActionTools: () => [] as unknown[],
+	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	selectedBackend: () => "file" as const,
 }));
 // SIO-780: sibling tests register additional exports on $lib/server/agent; mirror
 // them here so the global mock cache stays link-compatible across files.
@@ -35,6 +46,22 @@ mock.module("$lib/server/agent", () => ({
 	getPendingInterrupt: async () => undefined,
 	// SIO-930: keep the process-global mock link-compatible with the stream route test.
 	getIacTurnOutcome: async () => "completed",
+	// SIO-1045: union of every sibling route test's $lib/server/agent imports, so the
+	// process-global mock cache stays link-compatible regardless of file ordering.
+	getLastAssistantText: async () => "",
+	pruneThreadState: async () => {},
+	runPostTurn: async () => {},
+	setSessionOutcome: () => undefined,
+	incrementSseConnections: () => undefined,
+	decrementSseConnections: () => undefined,
+	getActiveSseConnections: () => 0,
+	getAgentRuntimeStatus: () => ({
+		graphReady: false,
+		iacGraphReady: false,
+		mcpInitialized: false,
+		checkpointerType: "memory" as const,
+	}),
+	sessionTeardown: async () => {},
 }));
 
 const { GET } = await import("./+server.ts");

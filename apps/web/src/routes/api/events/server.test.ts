@@ -26,6 +26,26 @@ mock.module("@devops-agent/agent", () => ({
 	iacTurnOutcome: () => "completed",
 	processAttachments: () => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] }),
 	mcpEvents,
+	// SIO-1045: agent.test.ts's REAL import of ./agent.ts needs the full module-scope
+	// import set (installSkillLearner is CALLED at load time) + iac-reconcile-cron.ts's
+	// transitive reconcileAll/selectedBackend, or agent.test.ts fails to link when this
+	// file's mock wins the process-global last-wins cache.
+	appliedSkillsForNames: () => [] as unknown[],
+	installSkillLearner: () => undefined,
+	installAgentMemory: () => undefined,
+	installGraphWarmer: () => undefined,
+	installMemoryPromotion: () => undefined,
+	needsPruning: () => false,
+	pruneState: () => ({ removeIds: [] as string[] }),
+	runBootstrap: () => Promise.resolve({ stepsRun: [] }),
+	runPostTurn: () => Promise.resolve(),
+	runTeardown: () => Promise.resolve([]),
+	setSessionOutcome: () => undefined,
+	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	selectedBackend: () => "file" as const,
+	promoteToMemory: () => Promise.resolve(),
+	executeAction: () => Promise.resolve(),
+	getAvailableActionTools: () => [] as unknown[],
 }));
 
 const { GET } = await import("./+server.ts");
