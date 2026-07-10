@@ -13,6 +13,7 @@ import {
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	proposedChangesWithMr,
+	repairChangeMrUrl,
 	setChangeOutcome,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
@@ -20,7 +21,7 @@ import type { AnnotationMap } from "@devops-agent/shared";
 import { dedupeHitsBy, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { classifyLiveState, type IacLifecycle, isTerminalLifecycle } from "./lifecycle.ts";
-import { fetchMrLiveState } from "./mr-live-state.ts";
+import { fetchMrLiveState, mrIidFromConflictMessage } from "./mr-live-state.ts";
 
 const log = getLogger("agent:iac:reconcile");
 const AGENT = "elastic-iac";
@@ -251,13 +252,45 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 	let advanced = 0;
 	for (const change of proposed) {
 		try {
-			const iid = mrIidFromUrl(change.mrUrl);
+			let iid = mrIidFromUrl(change.mrUrl);
+			let needsRepair = false;
+			// SIO-1062: a pre-guard openMr stored gitlabFetch's raw "[409] {...}" error blob as the
+			// MR url (poisoning the MergeRequest node). Self-heal: derive the iid from the blob's
+			// "!NNN" and repair the url below once the MR's real web_url is read. A blob with no
+			// derivable iid is structurally unhealable -> mark terminal so it stops re-qualifying
+			// (and re-warning) every sweep. "failed" over "rejected": rejected means human-closed.
+			if (iid == null && /^\[\d{3}\]/.test(change.mrUrl)) {
+				iid = mrIidFromConflictMessage(change.mrUrl);
+				if (iid == null) {
+					await setChangeOutcome(store, change.id, "failed");
+					advanced += 1;
+					log.warn(
+						{ changeId: change.id, mrUrl: change.mrUrl.slice(0, 120) },
+						"KG reconcile: error-blob mrUrl with no derivable iid; marked failed (terminal)",
+					);
+					continue;
+				}
+				needsRepair = true;
+			}
 			if (iid == null) {
 				// A persistently malformed MR url would otherwise be silently re-skipped every sweep.
 				log.warn({ changeId: change.id, mrUrl: change.mrUrl }, "KG reconcile: MR url has no derivable iid, skipping");
 				continue;
 			}
 			const live = await fetchMrLiveState(iid);
+			if (needsRepair) {
+				if (live.webUrl) {
+					await repairChangeMrUrl(store, change.id, change.mrUrl, live.webUrl);
+					log.info({ changeId: change.id, iid, url: live.webUrl }, "KG reconcile: repaired error-blob mrUrl");
+				} else {
+					// GitLab unreachable / MR unreadable this sweep: never mark failed on a transport
+					// error; leave the blob in place and retry next sweep.
+					log.warn(
+						{ changeId: change.id, iid },
+						"KG reconcile: could not resolve web_url for blob repair; retrying next sweep",
+					);
+				}
+			}
 			const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
 			const outcome = lifecycleToChangeOutcome(lifecycle);
 			if (!outcome) continue; // transient -> leave "proposed", re-check next sweep

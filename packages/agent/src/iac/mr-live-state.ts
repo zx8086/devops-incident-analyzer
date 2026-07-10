@@ -32,9 +32,11 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // detailed_merge_status. We only need state (+ mergedAt for context) to distinguish "MR open, plan
 // ready" from "MR merged, apply runs on main". null on a non-2xx/unparseable body. (Pure.)
 // SIO-993: also capture merge_commit_sha so a merged MR can find its apply pipeline on main.
+// SIO-1062: also capture web_url so the KG reconcile sweep can repair a ConfigChange whose
+// stored mrUrl is an error blob (re-keying it to the MR's real url).
 export function parseMrState(
 	toolResult: string,
-): { state: string; mergedAt?: string; detailedMergeStatus?: string; mergeCommitSha?: string } | null {
+): { state: string; mergedAt?: string; detailedMergeStatus?: string; mergeCommitSha?: string; webUrl?: string } | null {
 	const jsonStart = toolResult.indexOf("{");
 	if (jsonStart < 0) return null;
 	try {
@@ -43,6 +45,7 @@ export function parseMrState(
 			merged_at?: unknown;
 			detailed_merge_status?: unknown;
 			merge_commit_sha?: unknown;
+			web_url?: unknown;
 		};
 		if (typeof m.state !== "string") return null;
 		return {
@@ -50,10 +53,20 @@ export function parseMrState(
 			...(typeof m.merged_at === "string" && m.merged_at ? { mergedAt: m.merged_at } : {}),
 			...(typeof m.detailed_merge_status === "string" ? { detailedMergeStatus: m.detailed_merge_status } : {}),
 			...(typeof m.merge_commit_sha === "string" && m.merge_commit_sha ? { mergeCommitSha: m.merge_commit_sha } : {}),
+			...(typeof m.web_url === "string" && m.web_url ? { webUrl: m.web_url } : {}),
 		};
 	} catch {
 		return null;
 	}
+}
+
+// SIO-1062: iid from GitLab's 409 duplicate-MR message
+// ("...already exists for this source branch: !256"). Lives in this leaf module so both
+// nodes.ts (openMr's 409 recovery) and reconcile.ts (blob-mrUrl self-heal) can share it
+// without re-forming the nodes.ts <-> reconcile.ts cycle. (Pure; unit-tested.)
+export function mrIidFromConflictMessage(toolResult: string): number | null {
+	const m = /!(\d+)/.exec(toolResult);
+	return m ? Number(m[1]) : null;
 }
 
 // SIO-995: the REAL post-merge apply outcome, from gitlab_get_merge_commit_apply_result's JSON
@@ -88,6 +101,7 @@ export function parseApplyResult(
 export interface MrLiveState {
 	mrState: string; // "opened" | "merged" | "closed" | "" (unread)
 	mergeCommitSha?: string;
+	webUrl?: string; // SIO-1062: the MR's real web_url (for blob-mrUrl repair)
 	applyStatus: string; // apply-JOB status; "" when not merged or the apply job hasn't appeared
 	applyPipelineId: number | null;
 	applyPipelineUrl: string;
@@ -117,6 +131,7 @@ export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
 	return {
 		mrState,
 		...(mrInfo?.mergeCommitSha ? { mergeCommitSha: mrInfo.mergeCommitSha } : {}),
+		...(mrInfo?.webUrl ? { webUrl: mrInfo.webUrl } : {}),
 		applyStatus,
 		applyPipelineId,
 		applyPipelineUrl,

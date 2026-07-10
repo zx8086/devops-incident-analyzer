@@ -22,6 +22,7 @@ import {
 	recordIncident,
 	recordPipeline,
 	recordRootCause,
+	repairChangeMrUrl,
 	rootCauseForIncident,
 	seedDeployments,
 	seedModules,
@@ -341,6 +342,43 @@ describe("writer (parameterized, injection-safe)", () => {
 		const empty = new InMemoryGraphStore();
 		await setChangeOutcome(empty, "", "failed");
 		expect(empty.calls).toEqual([]);
+	});
+
+	// SIO-1062: re-key a ConfigChange's MergeRequest from a poisoned "[409] {...}" blob url to the
+	// MR's real web_url. MERGE-first so a crash mid-repair leaves both links; the bad node's
+	// DETACH DELETE is best-effort (lbug support unverified).
+	test("repairChangeMrUrl merges the good url, re-links PROPOSED_IN, unlinks + detach-deletes the bad", async () => {
+		const store = new InMemoryGraphStore();
+		const bad = '[409] {"message":["Another open merge request already exists for this source branch: !256"]}';
+		const good = "https://gl/-/merge_requests/256";
+		await repairChangeMrUrl(store, "req-1", bad, good);
+		expect(store.calls[0]?.cypher).toContain("MERGE (m:MergeRequest");
+		expect(store.calls[0]?.params).toEqual({ url: good });
+		expect(store.calls[1]?.cypher).toContain("MERGE (c)-[:PROPOSED_IN]->(m)");
+		expect(store.calls[1]?.params).toEqual({ id: "req-1", url: good });
+		expect(store.calls[2]?.cypher).toContain("DELETE r");
+		expect(store.calls[2]?.params).toEqual({ id: "req-1", bad });
+		expect(store.calls[3]?.cypher).toContain("DETACH DELETE m");
+		expect(store.calls[3]?.params).toEqual({ bad });
+	});
+
+	test("repairChangeMrUrl is a no-op on missing args or identical urls, and survives a DETACH DELETE failure", async () => {
+		const empty = new InMemoryGraphStore();
+		await repairChangeMrUrl(empty, "", "bad", "good");
+		await repairChangeMrUrl(empty, "req-1", "", "good");
+		await repairChangeMrUrl(empty, "req-1", "bad", "");
+		await repairChangeMrUrl(empty, "req-1", "same", "same");
+		expect(empty.calls).toEqual([]);
+
+		const store = new InMemoryGraphStore();
+		const failingStore = {
+			run: async (cypher: string, params?: Record<string, unknown>) => {
+				if (cypher.includes("DETACH DELETE")) throw new Error("DETACH DELETE unsupported");
+				return store.run(cypher, params);
+			},
+		} as unknown as InMemoryGraphStore;
+		await expect(repairChangeMrUrl(failingStore, "req-1", "bad", "good")).resolves.toBeUndefined();
+		expect(store.calls).toHaveLength(3); // the three repair writes landed before the failed delete
 	});
 
 	test("seed* writers + linkStackModule merge the repo skeleton (idempotent MERGE)", async () => {

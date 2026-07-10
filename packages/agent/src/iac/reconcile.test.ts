@@ -76,6 +76,10 @@ beforeAll(() => {
 		setChangeOutcome: async (_store: unknown, id: string, outcome: string) => {
 			kgSetCalls.push({ id, outcome });
 		},
+		// SIO-1062: capture blob-mrUrl repairs so tests assert the exact (id, badUrl, goodUrl).
+		repairChangeMrUrl: async (_store: unknown, id: string, badUrl: string, goodUrl: string) => {
+			kgRepairCalls.push({ id, badUrl, goodUrl });
+		},
 	}));
 });
 
@@ -83,6 +87,7 @@ beforeAll(() => {
 type LiveState = {
 	mrState: string;
 	mergeCommitSha?: string;
+	webUrl?: string; // SIO-1062: for blob-mrUrl repair
 	applyStatus: string;
 	applyPipelineId: number | null;
 	applyPipelineUrl: string;
@@ -96,6 +101,8 @@ let backend = "agent-memory";
 let kgEnabled = false;
 let kgProposed: Array<{ id: string; mrUrl: string; outcome: string }> = [];
 const kgSetCalls: Array<{ id: string; outcome: string }> = [];
+// SIO-1062: blob-mrUrl repair captures.
+const kgRepairCalls: Array<{ id: string; badUrl: string; goodUrl: string }> = [];
 let kgStoreThrows = false;
 
 // SIO-1045: undo the three beforeAll mocks above once this file's tests finish, so a later test
@@ -143,6 +150,7 @@ beforeEach(() => {
 	kgEnabled = false;
 	kgProposed = [];
 	kgSetCalls.length = 0;
+	kgRepairCalls.length = 0;
 	kgStoreThrows = false;
 });
 
@@ -436,6 +444,72 @@ describe("reconcileKnowledgeGraph (SIO-1053)", () => {
 		kgProposed = [{ id: "req-badurl", mrUrl: "https://gitlab.com/x/no-mr-here", outcome: "proposed" }];
 		await reconcileKnowledgeGraph({ source: "cron" });
 		expect(kgSetCalls).toHaveLength(0);
+		expect(kgRepairCalls).toHaveLength(0);
+	});
+});
+
+// SIO-1062: a pre-guard openMr stored gitlabFetch's raw "[409] {...}" error blob as mrUrl. The
+// sweep self-heals: derive the iid from "!NNN", repair the MergeRequest url to the live web_url,
+// and reconcile normally. Blobs with no derivable iid are marked failed (terminal) so they stop
+// re-qualifying; transport failures never mark failed.
+describe("reconcileKnowledgeGraph self-heals error-blob mr urls (SIO-1062)", () => {
+	const BLOB = '[409] {"message":["Another open merge request already exists for this source branch: !256"]}';
+	const REAL_URL = "https://gitlab.com/x/-/merge_requests/256";
+
+	test("blob with !NNN + readable MR: repairs the url and advances the outcome", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-blob", mrUrl: BLOB, outcome: "proposed" }];
+		liveByIid.set(256, {
+			mrState: "merged",
+			webUrl: REAL_URL,
+			applyStatus: "success",
+			applyPipelineId: 1,
+			applyPipelineUrl: "",
+		});
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgRepairCalls).toEqual([{ id: "req-blob", badUrl: BLOB, goodUrl: REAL_URL }]);
+		expect(kgSetCalls).toEqual([{ id: "req-blob", outcome: "applied" }]);
+	});
+
+	test("blob with !NNN but GitLab unreachable: no repair, no outcome write (retries next sweep)", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-blob", mrUrl: BLOB, outcome: "proposed" }];
+		// no liveByIid entry -> fetchMrLiveState stub returns the empty state (mrState "", no webUrl)
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgRepairCalls).toHaveLength(0);
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("blob with !NNN + readable but still-open MR: repairs the url, leaves the outcome transient", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-blob", mrUrl: BLOB, outcome: "proposed" }];
+		liveByIid.set(256, {
+			mrState: "opened",
+			webUrl: REAL_URL,
+			applyStatus: "",
+			applyPipelineId: null,
+			applyPipelineUrl: "",
+		});
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgRepairCalls).toEqual([{ id: "req-blob", badUrl: BLOB, goodUrl: REAL_URL }]);
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("blob without !NNN: marked failed (terminal) so it stops re-qualifying", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-noiid", mrUrl: '[500] {"message":"boom"}', outcome: "proposed" }];
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toEqual([{ id: "req-noiid", outcome: "failed" }]);
+		expect(kgRepairCalls).toHaveLength(0);
+	});
+
+	test("a normal https mr url is untouched by the heal path", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-ok", mrUrl: "https://gitlab.com/x/-/merge_requests/264", outcome: "proposed" }];
+		liveByIid.set(264, { mrState: "merged", applyStatus: "success", applyPipelineId: 1, applyPipelineUrl: "" });
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgRepairCalls).toHaveLength(0);
+		expect(kgSetCalls).toEqual([{ id: "req-ok", outcome: "applied" }]);
 	});
 });
 

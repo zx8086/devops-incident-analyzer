@@ -1,8 +1,10 @@
 // agent/src/iac/version-upgrade.test.ts
 import { describe, expect, test } from "bun:test";
+import { mrIidFromConflictMessage } from "./mr-live-state.ts";
 import {
 	applyLiveTopology,
 	branchSlug,
+	classifyCreateMrResult,
 	deploymentJsonPath,
 	extractMrUrl,
 	isUnchangedConfig,
@@ -169,9 +171,77 @@ describe("extractMrUrl", () => {
 		);
 	});
 
-	test("falls back to the raw result when web_url is absent / unparseable", () => {
-		expect(extractMrUrl('[400] {"message":"boom"}')).toBe('[400] {"message":"boom"}');
-		expect(extractMrUrl("[gitlab token not configured]")).toBe("[gitlab token not configured]");
+	// SIO-1062: null (never the raw result) when web_url is absent -- returning the raw body
+	// let a "[409] {...}" GitLab error blob be stored as mrUrl.
+	test("returns null when web_url is absent / unparseable", () => {
+		expect(extractMrUrl('[400] {"message":"boom"}')).toBeNull();
+		expect(extractMrUrl("[gitlab token not configured]")).toBeNull();
+		expect(
+			extractMrUrl('[409] {"message":["Another open merge request already exists for this source branch: !256"]}'),
+		).toBeNull();
+	});
+});
+
+// SIO-1062: classify gitlab_create_merge_request's "[status] body" so openMr never stores an
+// error body as mrUrl (409 -> reuse the existing MR; other 4xx/5xx and url-less bodies -> block).
+describe("classifyCreateMrResult (SIO-1062)", () => {
+	test("2xx with web_url -> created with url + iid", () => {
+		const body = '[201] {"web_url":"https://gitlab.com/group/repo/-/merge_requests/41","iid":41}';
+		expect(classifyCreateMrResult(body)).toEqual({
+			kind: "created",
+			url: "https://gitlab.com/group/repo/-/merge_requests/41",
+			iid: 41,
+		});
+	});
+
+	test("409 duplicate-MR -> conflict with the iid from the !NNN message", () => {
+		const body = '[409] {"message":["Another open merge request already exists for this source branch: !256"]}';
+		expect(classifyCreateMrResult(body)).toEqual({ kind: "conflict", iid: 256 });
+	});
+
+	test("409 without a !NNN reference -> conflict with null iid", () => {
+		expect(classifyCreateMrResult('[409] {"message":["Conflict"]}')).toEqual({ kind: "conflict", iid: null });
+	});
+
+	test("other 4xx/5xx -> failed with the body as reason", () => {
+		expect(classifyCreateMrResult('[500] {"message":"boom"}')).toEqual({
+			kind: "failed",
+			reason: '[500] {"message":"boom"}',
+		});
+		expect(classifyCreateMrResult('[403] {"message":"forbidden"}')).toEqual({
+			kind: "failed",
+			reason: '[403] {"message":"forbidden"}',
+		});
+	});
+
+	test("callTool placeholders (no status prefix, no web_url) -> failed", () => {
+		expect(classifyCreateMrResult("[gitlab token not configured]")).toEqual({
+			kind: "failed",
+			reason: "[gitlab token not configured]",
+		});
+		expect(classifyCreateMrResult("[gitlab_create_merge_request error: fetch failed]")).toEqual({
+			kind: "failed",
+			reason: "[gitlab_create_merge_request error: fetch failed]",
+		});
+	});
+
+	test("2xx body without web_url -> failed (never a garbage url)", () => {
+		expect(classifyCreateMrResult('[201] {"iid":41}')).toEqual({ kind: "failed", reason: '[201] {"iid":41}' });
+	});
+});
+
+describe("mrIidFromConflictMessage (SIO-1062)", () => {
+	test("extracts the bang-iid from the 409 message", () => {
+		expect(
+			mrIidFromConflictMessage(
+				'[409] {"message":["Another open merge request already exists for this source branch: !256"]}',
+			),
+		).toBe(256);
+	});
+
+	test("null when there is no !NNN token", () => {
+		expect(mrIidFromConflictMessage('[409] {"message":["Conflict"]}')).toBeNull();
+		expect(mrIidFromConflictMessage("")).toBeNull();
 	});
 });
 

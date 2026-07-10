@@ -36,7 +36,7 @@ import { createSearchMemoryTool } from "./local-tools.ts";
 // breaking the nodes.ts <-> reconcile.ts import cycle). watchPipeline below still calls both; they
 // are also re-exported near the bottom of this file for pipeline-status.test.ts, which imports both
 // from "./nodes.ts".
-import { parseApplyResult, parseMrState } from "./mr-live-state.ts";
+import { mrIidFromConflictMessage, parseApplyResult, parseMrState } from "./mr-live-state.ts";
 import { iacProposalFactTtlSeconds, reconcileAll } from "./reconcile.ts";
 import type {
 	DriftReport,
@@ -6497,7 +6497,10 @@ export function planReviewGate(state: IacStateType): Partial<IacStateType> {
 
 // Extract the merge_request web_url from callTool's "[status] {json}" response.
 // (Not a regex over the whole body -- the JSON also contains avatar URLs.)
-export function extractMrUrl(toolResult: string): string {
+// SIO-1062: null when no web_url -- NEVER the raw result. Returning the raw body let a
+// "[409] {...}" GitLab error blob be stored as mrUrl (poisoning the KG MergeRequest node
+// and the iac-change fact, and breaking every downstream iid derivation).
+export function extractMrUrl(toolResult: string): string | null {
 	const jsonStart = toolResult.indexOf("{");
 	if (jsonStart >= 0) {
 		try {
@@ -6507,10 +6510,27 @@ export function extractMrUrl(toolResult: string): string {
 				if (typeof url === "string" && url.length > 0) return url;
 			}
 		} catch {
-			// fall through to the raw result
+			// fall through to null
 		}
 	}
-	return toolResult;
+	return null;
+}
+
+export type CreateMrResult =
+	| { kind: "created"; url: string; iid: number | null }
+	| { kind: "conflict"; iid: number | null } // 409: an open MR already exists for this source branch
+	| { kind: "failed"; reason: string };
+
+// SIO-1062: classify gitlab_create_merge_request's "[status] body" (or a callTool placeholder).
+// A body without a web_url is a failure even without a [4xx/5xx] prefix (token-missing /
+// server-unavailable / "[tool error: ...]" placeholders all land there). (Pure; unit-tested.)
+export function classifyCreateMrResult(toolResult: string): CreateMrResult {
+	if (toolResult.startsWith("[409")) return { kind: "conflict", iid: mrIidFromConflictMessage(toolResult) };
+	if (toolResult.startsWith("[4") || toolResult.startsWith("[5"))
+		return { kind: "failed", reason: toolResult.slice(0, 200) };
+	const url = extractMrUrl(toolResult);
+	if (!url) return { kind: "failed", reason: toolResult.slice(0, 200) };
+	return { kind: "created", url, iid: extractMrIid(toolResult) };
 }
 
 // Minimal deterministic MR body, used as the fallback when the LLM step fails so the
@@ -6659,8 +6679,62 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		description,
 		labels: [...AGENT_MR_LABELS],
 	});
-	const mrUrl = extractMrUrl(mr);
-	const mrIid = extractMrIid(mr);
+	const result = classifyCreateMrResult(mr);
+
+	// SIO-1062: a failed create must END the turn (blockedReason short-circuit in graph.ts) --
+	// storing the raw error body as mrUrl poisoned the KG MergeRequest node and the iac-change
+	// fact, and the turn falsely reported success.
+	if (result.kind === "failed") {
+		log.error({ branch: state.branch, mr: mr.slice(0, 200) }, "openMr: MR creation failed; ending turn");
+		return {
+			blockedReason: `MR creation failed: ${result.reason}`,
+			messages: [
+				new AIMessage(
+					`Opening the merge request failed (branch ${state.branch} is committed and pushed, but no MR exists): ${result.reason}. Nothing was recorded; retry, or open the MR manually in GitLab.`,
+				),
+			],
+		};
+	}
+
+	let mrUrl: string;
+	let mrIid: number | null;
+	if (result.kind === "conflict") {
+		// SIO-1062: an open MR already exists for this deterministic branch (e.g. a fresh thread
+		// re-proposed the same change). draftChange already committed this turn's change onto that
+		// branch, so the open MR carries it -- recover it and proceed idempotently (mirrors
+		// reconcileStack's [409 -> "reused"] path).
+		let iid = result.iid;
+		let url = "";
+		if (iid != null) url = extractMrUrl(await callTool("gitlab_get_merge_request", { iid })) ?? "";
+		if (!url) {
+			url = parseAgentMrBySourceBranch(await callTool("gitlab_list_agent_merge_requests", {}), state.branch);
+			if (url && iid == null) {
+				const m = /\/merge_requests\/(\d+)/.exec(url);
+				iid = m ? Number(m[1]) : null;
+			}
+		}
+		if (!url) {
+			log.error(
+				{ branch: state.branch, mr: mr.slice(0, 200) },
+				"openMr: 409 but existing MR unresolvable; ending turn",
+			);
+			return {
+				blockedReason: `MR creation failed: an MR already exists for branch ${state.branch} but could not be resolved.`,
+				messages: [
+					new AIMessage(
+						`An open merge request already exists for branch ${state.branch}, but I could not resolve it. Check GitLab for open agent MRs on that branch.`,
+					),
+				],
+			};
+		}
+		log.info({ branch: state.branch, iid, url }, "openMr: reusing already-open MR for this branch (409)");
+		mrUrl = url;
+		mrIid = iid;
+	} else {
+		mrUrl = result.url;
+		mrIid = result.iid;
+	}
+
 	// SIO-990: merge the opened MR into the durable active-change context (set at propose time by
 	// reviewPlan) so a follow-up "check my MR" and any amend target the right MR. Best-effort: only
 	// when reviewPlan populated activeChange this turn (it always does on the gitops path).
@@ -8300,6 +8374,17 @@ async function openReconcileMr(
 		};
 	}
 	const mrUrl = extractMrUrl(mr);
+	// SIO-1062: a 2xx body without a web_url (unexpected shape) must block, not report a
+	// garbage "opened" url.
+	if (!mrUrl) {
+		return {
+			stack: stack.stack,
+			direction,
+			status: "blocked",
+			note: `MR response had no web_url: ${mr.slice(0, 120)}`,
+			branch,
+		};
+	}
 	log.info({ deployment, stack: stack.stack, branch, mrUrl }, "iac reconcile: MR opened");
 	return { stack: stack.stack, direction, status: "opened", mrUrl, branch };
 }
