@@ -1,5 +1,26 @@
 // agent/src/skill-learner.test.ts
+//
+// SIO-1045: this file OWNS a mock.module("./memory-backend.ts", ...) registered at file scope,
+// BEFORE the static import of ./skill-learner.ts below (which statically imports enqueueFact /
+// searchAgentMemory / selectedBackend from ./memory-backend.ts). See fleet-upgrade.test.ts for the
+// full rationale: bun's mock.module is process-global and last-registration-wins, so a sibling file
+// that mocks the same module path (packages/agent/src/iac/iac-change-memory.test.ts and
+// reconcile.test.ts both mock the identical absolute file via a "../memory-backend.ts" specifier) can
+// leak into this file on CI even with the polluter's own restore in place. The factory re-exports the
+// REAL module verbatim, so learnFromTurn exercises the real backend logic; the existing
+// __setAgentMemoryClient injection in afterEach is unchanged.
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackendNs from "./memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
+
+mock.module("./memory-backend.ts", () => realMemoryBackend);
 
 // Drive the worthiness judge's output. createLlm wraps ChatBedrockConverse from
 // @langchain/aws; mocking it keeps createLlm("skillLearner") inert + observable.
@@ -51,6 +72,9 @@ const prevFlag = process.env.SKILL_LEARNING_ENABLED;
 beforeEach(() => {
 	invokeCalls = 0;
 	llmContent = '{"worthy":false}';
+	// SIO-1045: re-claim ownership before every test in this file, so it is self-claiming even if a
+	// sibling suite poisoned the module between this file's load and this test's execution.
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 afterEach(async () => {
@@ -61,6 +85,8 @@ afterEach(async () => {
 	const { __setAgentMemoryClient, __resetMemoryQueue } = await import("./memory-backend.ts");
 	__setAgentMemoryClient(null);
 	__resetMemoryQueue();
+	// SIO-1045: re-claim ownership after every test in this file (see the file-scope comment above).
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 describe("isSkillLearningEnabled", () => {

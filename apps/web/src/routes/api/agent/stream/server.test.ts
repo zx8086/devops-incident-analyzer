@@ -17,6 +17,30 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-906: events route test imports mcpEvents from this specifier; keep it in the
 	// shared mock so the link succeeds when this file's mock wins the last-write race.
 	mcpEvents: new EventEmitter(),
+	// SIO-1045: agent.test.ts's REAL import of ./agent.ts needs the full module-scope
+	// import set (installSkillLearner is CALLED at load time) + iac-reconcile-cron.ts's
+	// transitive reconcileAll/selectedBackend, or agent.test.ts fails to link when this
+	// file's mock wins the process-global last-wins cache.
+	buildGraph: mock(() => Promise.resolve({})),
+	createMcpClient: mock(() => Promise.resolve()),
+	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	iacTurnOutcome: mock(() => "completed" as const),
+	appliedSkillsForNames: mock(() => [] as unknown[]),
+	installSkillLearner: mock(() => undefined),
+	installAgentMemory: mock(() => undefined),
+	installGraphWarmer: mock(() => undefined),
+	installMemoryPromotion: mock(() => undefined),
+	needsPruning: () => false,
+	pruneState: () => ({ removeIds: [] as string[] }),
+	runBootstrap: mock(() => Promise.resolve({ stepsRun: [] })),
+	runPostTurn: mock(() => Promise.resolve()),
+	runTeardown: mock(() => Promise.resolve([])),
+	setSessionOutcome: mock(() => undefined),
+	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
+	selectedBackend: mock(() => "file" as const),
+	promoteToMemory: mock(() => Promise.resolve()),
+	executeAction: mock(() => Promise.resolve()),
+	getAvailableActionTools: mock(() => [] as unknown[]),
 }));
 
 const sharedLogger = {
@@ -36,10 +60,22 @@ mock.module("@devops-agent/observability", () => ({
 // SIO-586: AttachmentBlockSchema and DataSourceContextSchema are composed via real
 // Zod operators (z.array(...), .optional()) at module load. They must be real Zod
 // schemas, not plain `.parse` stubs, or the handler module will fail to import.
+// SIO-1045: mock.module is process-global + last-wins; this block must also cover
+// what agent.test.ts's REAL import of ./agent.ts needs from this specifier (isKillSwitchActive,
+// KillSwitchError, isBenignStreamCancel + the knowledge-graph transport's transitive imports),
+// or agent.test.ts fails to link when this file's mock wins the cache race.
 mock.module("@devops-agent/shared", () => ({
 	AttachmentBlockSchema: z.any(),
 	DataSourceContextSchema: z.any(),
+	PendingActionSchema: z.any(),
 	redactPiiContent: (s: string) => s,
+	isKillSwitchActive: () => false,
+	KillSwitchError: class KillSwitchError extends Error {},
+	isBenignStreamCancel: () => false,
+	createBootstrapAdapter: () => undefined,
+	createMcpApplication: () => undefined,
+	createReadinessProbe: () => undefined,
+	buildTelemetryConfig: () => undefined,
 }));
 
 const invokeAgentMock = mock(
@@ -76,6 +112,19 @@ mock.module("$lib/server/agent", () => ({
 	// SIO-482: stream/+server.ts tracks active SSE connections for /health.
 	incrementSseConnections: mock(() => undefined),
 	decrementSseConnections: mock(() => undefined),
+	// SIO-1045: union of every sibling route test's $lib/server/agent imports (ensureMcpConnected,
+	// resumeAgent, sessionTeardown, getActiveSseConnections, getAgentRuntimeStatus), so the
+	// process-global mock cache stays link-compatible regardless of file ordering.
+	ensureMcpConnected: mock(async () => undefined),
+	resumeAgent: mock(async () => ({ async *[Symbol.asyncIterator]() {} })),
+	sessionTeardown: mock(async () => undefined),
+	getActiveSseConnections: mock(() => 0),
+	getAgentRuntimeStatus: mock(() => ({
+		graphReady: false,
+		iacGraphReady: false,
+		mcpInitialized: false,
+		checkpointerType: "memory" as const,
+	})),
 }));
 
 const { POST } = await import("./+server.ts");

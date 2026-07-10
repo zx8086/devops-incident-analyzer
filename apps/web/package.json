@@ -6,7 +6,7 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
-		"test": "bun test",
+		"test": "bunx svelte-kit sync && bun test",
 		"typecheck": "bunx svelte-kit sync && bunx svelte-check --tsconfig ./tsconfig.json"
 	},
 	"dependencies": {

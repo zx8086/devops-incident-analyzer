@@ -1,9 +1,31 @@
 // agent/src/memory-writer.test.ts
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+//
+// SIO-1045: this file OWNS a mock.module("./memory-backend.ts", ...) registered at file scope,
+// BEFORE the static import of ./memory-writer.ts below (which statically imports selectedBackend
+// from ./memory-backend.ts and branches on it). See fleet-upgrade.test.ts for the full rationale.
+// This file already pins LIVE_MEMORY_BACKEND to "file" in every beforeEach (its own long-standing
+// defense against env-var pollution from a sibling test), but that only protects against the ENV
+// VALUE being wrong -- a sibling file's mock.module("../memory-backend.ts", () => ({ selectedBackend:
+// () => "agent-memory", ... })) leaking here replaces the FUNCTION itself, ignoring env entirely and
+// silently rerouting these file-path assertions to the write-behind queue. Re-exporting the real
+// module verbatim closes that gap without changing this file's existing LIVE_MEMORY_BACKEND pinning.
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redactPiiContent, verifyHashChain } from "@devops-agent/shared";
+import * as realMemoryBackendNs from "./memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
+
+mock.module("./memory-backend.ts", () => realMemoryBackend);
+
 import { appendDailyLog, readLiveMemory, recordKeyDecision } from "./memory-writer.ts";
 
 // SIO-845: aggregator.test.ts mocks @devops-agent/shared with a passthrough
@@ -34,6 +56,9 @@ beforeEach(() => {
 	// LIVE_MEMORY_BACKEND=agent-memory (process-global env) cannot reroute these
 	// file-path assertions to the write-behind queue.
 	delete process.env.LIVE_MEMORY_BACKEND;
+	// SIO-1045: re-claim ownership before every test in this file, so it is self-claiming even if a
+	// sibling suite poisoned the module between this file's load and this test's execution.
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 afterEach(() => {
@@ -44,6 +69,8 @@ afterEach(() => {
 	else process.env.LIVE_MEMORY_IMMUTABLE = prevImmutable;
 	if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
 	else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	// SIO-1045: re-claim ownership after every test in this file (see the file-scope comment above).
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 describe("readLiveMemory", () => {

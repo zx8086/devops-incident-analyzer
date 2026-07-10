@@ -104,6 +104,20 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-906: events route test imports mcpEvents from this specifier; include it so
 	// the shared process-global mock stays link-compatible across files.
 	mcpEvents: new EventEmitter(),
+	// SIO-1045: agent.ts itself imports these at module scope (installSkillLearner is
+	// CALLED at load time; appliedSkillsForNames is used in readCompletedTurn). Also
+	// cover the memory/promote and actions routes that import the same specifier so
+	// the process-global mock cache stays link-compatible regardless of file order.
+	appliedSkillsForNames: mock(() => [] as unknown[]),
+	installSkillLearner: mock(() => undefined),
+	promoteToMemory: mock(() => Promise.resolve()),
+	executeAction: mock(() => Promise.resolve()),
+	getAvailableActionTools: mock(() => [] as unknown[]),
+	// SIO-1045: iac-reconcile-cron.ts is imported (and its module-scope startIacReconcileCron
+	// call reads selectedBackend()) transitively via agent.ts -- must resolve on this same
+	// process-global mock cache entry.
+	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
+	selectedBackend: mock(() => "file" as const),
 }));
 
 mock.module("@devops-agent/gitagent-bridge", () => ({
@@ -129,7 +143,18 @@ mock.module("@devops-agent/shared", () => {
 		KillSwitchError: class KillSwitchError extends Error {},
 		AttachmentBlockSchema: z.any(),
 		DataSourceContextSchema: z.any(),
+		PendingActionSchema: z.any(),
 		redactPiiContent: (s: string) => s,
+		// SIO-1045: agent.ts imports startKnowledgeGraphServer from
+		// @devops-agent/mcp-server-knowledge-graph (unmocked, real module), whose
+		// transport.ts imports isBenignStreamCancel + createBootstrapAdapter +
+		// createMcpApplication + createReadinessProbe from this same specifier at
+		// module load. Must be present or that real import throws a link error.
+		isBenignStreamCancel: () => false,
+		createBootstrapAdapter: () => undefined,
+		createMcpApplication: () => undefined,
+		createReadinessProbe: () => undefined,
+		buildTelemetryConfig: () => undefined,
 	};
 });
 

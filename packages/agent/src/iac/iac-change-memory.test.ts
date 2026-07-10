@@ -4,6 +4,22 @@
 // annotations. These join Agent Memory to the knowledge graph on shared values
 // (thread_id == KG Session.threadId, config_change_id == KG ConfigChange.id).
 import { afterEach, describe, expect, mock, test } from "bun:test";
+// SIO-1045: captured BEFORE any mock.module() call in this file runs, so afterEach can restore the
+// real implementations. mock.module() is process-global and bun:test's mock.restore() does NOT undo
+// it (only resets spy call state) -- without this, the last mock.module("../memory-backend.ts", ...)
+// registered here leaks into every OTHER test file that runs later in the same bun test process
+// (e.g. iac/local-tools.test.ts, iac/fleet-upgrade.test.ts), which is CI-only because CI's bun
+// schedules test files in a different order than a local run. Same class of bug as SIO-1028
+// (reference_prompt_context_mock_pollutes_direct_imports).
+//
+// A namespace import (`import * as ns`) is itself a LIVE VIEW: once ANY file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING these
+// captured `real*Ns` objects -- so restoring with `() => real*Ns` re-registers the very poison it
+// meant to undo (a circular no-op). Spreading into a plain object at load time (before any
+// mock.module() call in this file runs) copies the function VALUES, which are immune to that later
+// live-patching.
+import * as realMemoryBackendNs from "../memory-backend.ts";
+import * as realMemoryWriterNs from "../memory-writer.ts";
 import {
 	AGENT_MR_LABELS,
 	buildIacChangeAnnotations,
@@ -11,6 +27,16 @@ import {
 	buildIacChangeRationale,
 } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
+
+const realMemoryBackend = { ...realMemoryBackendNs };
+const realMemoryWriter = { ...realMemoryWriterNs };
+
+// SIO-1045: re-registers the real modules so a later test FILE (not just a later test in this file)
+// never observes this file's stub. Call from every describe block's afterEach, after mock.restore().
+function restoreRealMemoryMocks(): void {
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+	mock.module("../memory-writer.ts", () => realMemoryWriter);
+}
 
 function gitopsState(over: Partial<IacStateType> = {}): IacStateType {
 	return {
@@ -134,6 +160,9 @@ describe("buildIacChangeDecision / Rationale", () => {
 describe("teardownIac durable iac-change fact (gate)", () => {
 	afterEach(() => {
 		mock.restore();
+		// SIO-1045: undo this block's mock.module("../memory-backend.ts", ...) so it cannot leak into
+		// a test file that runs later in the same bun test process.
+		restoreRealMemoryMocks();
 	});
 
 	async function runTeardown(state: Partial<IacStateType>, backend: "agent-memory" | "file") {
@@ -197,6 +226,9 @@ describe("teardownIac durable iac-change fact (gate)", () => {
 describe("teardownIac message (footer + intent enrichment)", () => {
 	afterEach(() => {
 		mock.restore();
+		// SIO-1045: undo this block's mock.module("../memory-backend.ts", ...) so it cannot leak into
+		// a test file that runs later in the same bun test process.
+		restoreRealMemoryMocks();
 	});
 
 	const OLD_FOOTER = "Review and apply manually in GitLab. I never merge or apply.";
@@ -445,6 +477,9 @@ describe("teardownIac message (footer + intent enrichment)", () => {
 describe("recallLastIacChange (SIO-990)", () => {
 	afterEach(() => {
 		mock.restore();
+		// SIO-1045: undo this block's mock.module("../memory-backend.ts", ...) so it cannot leak into
+		// a test file that runs later in the same bun test process.
+		restoreRealMemoryMocks();
 	});
 
 	async function recall(opts: {
@@ -533,6 +568,9 @@ describe("recallLastIacChange (SIO-990)", () => {
 describe("recallSessionProgress (SIO-992)", () => {
 	afterEach(() => {
 		mock.restore();
+		// SIO-1045: undo this block's mock.module("../memory-backend.ts", ...) so it cannot leak into
+		// a test file that runs later in the same bun test process.
+		restoreRealMemoryMocks();
 	});
 
 	async function recall(opts: {

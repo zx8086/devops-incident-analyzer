@@ -1,5 +1,13 @@
 // agent/src/memory-backend.test.ts
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+//
+// SIO-1045: this file is the canonical unit-test suite for ./memory-backend.ts, so it must exercise
+// the REAL exports, never a sibling test file's stub. It OWNS a mock.module("./memory-backend.ts",
+// ...) registered at file scope, BEFORE the named imports below bind. See fleet-upgrade.test.ts for
+// the full rationale: bun's mock.module is process-global and last-registration-wins, so
+// packages/agent/src/iac/iac-change-memory.test.ts / reconcile.test.ts (which mock the identical
+// absolute file via a "../memory-backend.ts" specifier) could otherwise leak a stub into the very
+// suite meant to verify the real implementation.
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
 	type AgentMemoryClient,
 	type AgentMemoryUserRef,
@@ -9,6 +17,18 @@ import {
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
 } from "@devops-agent/shared";
+import * as realMemoryBackendNs from "./memory-backend.ts";
+
+// SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
+// mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
+// captured `realMemoryBackendNs` object, so re-claiming with `() => realMemoryBackendNs` would
+// re-register the very poison it means to undo (a circular no-op). A value snapshot (spread into a
+// plain object at load time, before any mock.module() call below runs) copies the function VALUES and
+// is immune to that later live-patching.
+const realMemoryBackend = { ...realMemoryBackendNs };
+
+mock.module("./memory-backend.ts", () => realMemoryBackend);
+
 import {
 	__resetMemoryQueue,
 	__setAgentMemoryClient,
@@ -114,6 +134,9 @@ beforeEach(() => {
 	clearActiveMemorySession();
 	// Drop any queued writes left by a sibling test (queue is process-global).
 	__resetMemoryQueue();
+	// SIO-1045: re-claim ownership before every test in this file, so it is self-claiming even if a
+	// sibling suite poisoned the module between this file's load and this test's execution.
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 afterEach(() => {
@@ -124,6 +147,8 @@ afterEach(() => {
 	if (prevRawPrompts === undefined) delete process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED;
 	else process.env.LIVE_MEMORY_RAW_PROMPTS_ENABLED = prevRawPrompts;
 	__setAgentMemoryClient(null);
+	// SIO-1045: re-claim ownership after every test in this file (see the file-scope comment above).
+	mock.module("./memory-backend.ts", () => realMemoryBackend);
 });
 
 describe("selectedBackend / resolveUserId", () => {

@@ -14,6 +14,32 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-906: events route test imports mcpEvents from this specifier; include it so
 	// the shared process-global mock stays link-compatible across files.
 	mcpEvents: new EventEmitter(),
+	// SIO-1045: agent.test.ts's REAL import of ./agent.ts needs the full module-scope
+	// import set (installSkillLearner is CALLED at load time) + iac-reconcile-cron.ts's
+	// transitive reconcileAll/selectedBackend, or agent.test.ts fails to link when this
+	// file's mock wins the process-global last-wins cache.
+	AttachmentError: class AttachmentError extends Error {},
+	buildGraph: mock(() => Promise.resolve({})),
+	createMcpClient: mock(() => Promise.resolve()),
+	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
+	iacTurnOutcome: mock(() => "completed" as const),
+	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
+	appliedSkillsForNames: mock(() => [] as unknown[]),
+	installSkillLearner: mock(() => undefined),
+	installAgentMemory: mock(() => undefined),
+	installGraphWarmer: mock(() => undefined),
+	installMemoryPromotion: mock(() => undefined),
+	needsPruning: () => false,
+	pruneState: () => ({ removeIds: [] as string[] }),
+	runBootstrap: mock(() => Promise.resolve({ stepsRun: [] })),
+	runPostTurn: mock(() => Promise.resolve()),
+	runTeardown: mock(() => Promise.resolve([])),
+	setSessionOutcome: mock(() => undefined),
+	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
+	selectedBackend: mock(() => "file" as const),
+	promoteToMemory: mock(() => Promise.resolve()),
+	executeAction: mock(() => Promise.resolve()),
+	getAvailableActionTools: mock(() => [] as unknown[]),
 }));
 
 const sharedLogger = {
@@ -55,6 +81,21 @@ mock.module("$lib/server/agent", () => ({
 	// SIO-930: keep the process-global $lib/server/agent mock link-compatible with the stream
 	// route test (last-wins mock cache); stream/+server.ts imports getIacTurnOutcome.
 	getIacTurnOutcome: mock(async () => "completed"),
+	// SIO-1045: union of every sibling route test's $lib/server/agent imports, so the
+	// process-global mock cache stays link-compatible regardless of file ordering.
+	invokeAgent: mock(async () => ({ async *[Symbol.asyncIterator]() {} })),
+	ensureMcpConnected: mock(async () => undefined),
+	getLastAssistantText: mock(async () => ""),
+	incrementSseConnections: mock(() => undefined),
+	decrementSseConnections: mock(() => undefined),
+	sessionTeardown: mock(async () => undefined),
+	getActiveSseConnections: mock(() => 0),
+	getAgentRuntimeStatus: mock(() => ({
+		graphReady: false,
+		iacGraphReady: false,
+		mcpInitialized: false,
+		checkpointerType: "memory" as const,
+	})),
 }));
 
 mock.module("$lib/server/sse-pump", () => ({
