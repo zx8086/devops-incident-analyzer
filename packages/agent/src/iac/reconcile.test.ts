@@ -2,7 +2,18 @@
 // SIO-1005: the proposed -> applied/failed reconciliation core. The pure decision/annotation
 // builders are tested directly; reconcileOne/reconcileAll/enumerate are exercised with mocked
 // nodes.fetchMrLiveState + memory-backend + memory-writer so no MCP/REST is touched.
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realMemoryBackend from "../memory-backend.ts";
+import * as realMemoryWriter from "../memory-writer.ts";
+// SIO-1045: captured BEFORE the mock.module() calls below run, so afterAll can restore the real
+// implementations. mock.module() is process-global and bun:test's mock.restore() does NOT undo it
+// (only resets spy call state) -- these are TOP-LEVEL (file-scope, not describe-scoped) mock.module
+// calls, so without an explicit restore they leak into EVERY test file that runs later in the same
+// bun test process for the rest of the run (proven: iac/fleet-upgrade.test.ts's bootstrapIac/
+// watchPipeline/recallPriorFleetUpgrades tests failed on CI because this file's stub ./nodes.ts /
+// ../memory-backend.ts / ../memory-writer.ts modules were still active). Same class of bug as
+// SIO-1028 (reference_prompt_context_mock_pollutes_direct_imports).
+import * as realNodes from "./nodes.ts";
 
 // --- mock seams (complete stubs; re-asserted in beforeEach to survive sibling mock pollution) ---
 type LiveState = {
@@ -47,6 +58,14 @@ mock.module("../memory-writer.ts", () => ({
 	recordKeyDecision: (d: { decision: string; annotations?: Record<string, string> }) => recordedDecisions.push(d),
 	appendDailyLog: (e: { summary?: string }) => dailyLogs.push(e),
 }));
+
+// SIO-1045: undo the three file-scope mocks above once this file's tests finish, so a later test
+// file in the same process sees the real modules again.
+afterAll(() => {
+	mock.module("./nodes.ts", () => realNodes);
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+	mock.module("../memory-writer.ts", () => realMemoryWriter);
+});
 
 import {
 	buildReconciledIacAnnotations,
