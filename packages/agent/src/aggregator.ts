@@ -49,11 +49,11 @@ function readCapEnv(raw: string | undefined, def: number): number | null {
 	return Math.floor(parsed);
 }
 
-export function getAggregateResultCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
+function getAggregateResultCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
 	return readCapEnv(env.AGGREGATE_RESULT_CAP_BYTES, AGGREGATE_RESULT_CAP_BYTES_DEFAULT);
 }
 
-export function getAggregateTotalCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
+function getAggregateTotalCapBytes(env: NodeJS.ProcessEnv = process.env): number | null {
 	return readCapEnv(env.AGGREGATE_TOTAL_CAP_BYTES, AGGREGATE_TOTAL_CAP_BYTES_DEFAULT);
 }
 
@@ -214,7 +214,7 @@ const STRICT_CONFIDENCE_RE = /^\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\*
 // Loose fallback: old pattern, but we additionally require the number to be in [0, 1].
 const LOOSE_CONFIDENCE_RE = /confidence[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?)/i;
 
-export function extractConfidenceScore(answer: string): number {
+function extractConfidenceScore(answer: string): number {
 	const strict = answer.match(STRICT_CONFIDENCE_RE);
 	if (strict) {
 		const n = Number.parseFloat(strict[1] ?? "");

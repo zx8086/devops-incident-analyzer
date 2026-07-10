@@ -31,42 +31,6 @@ export class AppError extends Error {
 		super(message);
 		this.name = "AppError";
 	}
-
-	/**
-	 * Converts to a MCP protocol error if needed
-	 * This provides a bridge between app errors and protocol errors
-	 */
-	toMcpError(): unknown {
-		// Import inside the method to avoid circular dependencies
-		const { createMcpError } = require("./mcpErrors");
-
-		// Map app error codes to MCP error codes
-		const mcpErrorCode = this.getMcpErrorCode();
-		return createMcpError(mcpErrorCode, this.message, this.details);
-	}
-
-	/**
-	 * Maps app error codes to MCP error codes
-	 */
-	private getMcpErrorCode(): number {
-		// Import inside the method to avoid circular dependencies
-		const { MCP_ERROR_CODES } = require("./mcpErrors");
-
-		switch (this.code) {
-			case "DOCUMENT_NOT_FOUND":
-				return MCP_ERROR_CODES.INVALID_PARAMS;
-			case "QUERY_ERROR":
-				return MCP_ERROR_CODES.INVALID_PARAMS;
-			case "VALIDATION_ERROR":
-				return MCP_ERROR_CODES.INVALID_PARAMS;
-			case "CONFIG_ERROR":
-				return MCP_ERROR_CODES.SERVER_NOT_INITIALIZED;
-			case "DB_ERROR":
-				return MCP_ERROR_CODES.INTERNAL_ERROR;
-			default:
-				return MCP_ERROR_CODES.UNKNOWN_ERROR_CODE;
-		}
-	}
 }
 
 export const errorMessages: Record<ErrorCode, string> = {

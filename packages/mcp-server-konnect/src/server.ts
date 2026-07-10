@@ -35,9 +35,7 @@ function createBareServer(config: Config): McpServer {
 // SIO-1044: record-once / replay-many factory. performanceCollector and elicitationOps are hoisted
 // to initDatasource (index.ts) and shared across every replayed server -- process-global by design
 // (see index.ts hoist comment). elicitationOps itself is nearly stateless: its session state lives
-// in the module-level singletons elicitationManager/kongElicitationPatterns (utils/elicitation.ts),
-// the same singletons enforcement/mcp-server-integration.ts:394 already keeps its own module-level
-// ElicitationOperations instance against (unifying the two instances is out of scope here).
+// in the module-level singletons elicitationManager/kongElicitationPatterns (utils/elicitation.ts).
 // registerAll runs validateToolRegistry() once at boot -- misconfiguration now fails at boot
 // instead of per request.
 export function createMcpServerFactory(ds: KonnectServerDatasource): () => McpServer {

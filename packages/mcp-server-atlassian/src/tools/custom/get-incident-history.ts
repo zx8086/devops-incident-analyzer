@@ -17,14 +17,14 @@ export const InputSchema = z.object({
 	incidentProjects: z.array(z.string()).default([]).describe("Jira project keys to scope the search"),
 });
 
-export const BucketSchema = z.object({
+const BucketSchema = z.object({
 	bucketKey: z.string().describe("ISO date string for the bucket start (YYYY-MM-DD)"),
 	incidentCount: z.number(),
 	unresolvedCount: z.number(),
 	mttrMinutes: z.number().nullable().describe("Mean MTTR for resolved incidents in this bucket, null if none resolved"),
 });
 
-export const TotalsSchema = z.object({
+const TotalsSchema = z.object({
 	incidentCount: z.number(),
 	unresolvedCount: z.number(),
 	mttrMinutes: z.number().nullable().describe("Overall mean MTTR for resolved incidents, null if none resolved"),

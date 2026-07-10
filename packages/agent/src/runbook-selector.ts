@@ -31,14 +31,14 @@ export class RunbookSelectionFallbackError extends Error {
 
 // Thrown at agent load time if selectRunbooks is wired into the graph but the
 // loaded agent has no runbook_selection config. Opt-in all-or-nothing.
-export class RunbookSelectionConfigError extends Error {
+class RunbookSelectionConfigError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = "RunbookSelectionConfigError";
 	}
 }
 
-export const RunbookSelectionResponseSchema = z.object({
+const RunbookSelectionResponseSchema = z.object({
 	filenames: z.array(z.string()).max(10),
 	reasoning: z.string(),
 });

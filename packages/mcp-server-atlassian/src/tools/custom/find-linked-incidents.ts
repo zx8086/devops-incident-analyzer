@@ -28,7 +28,7 @@ export const InputSchema = z.object({
 		.describe("Atlassian site URL for building browse links (e.g. https://tommy.atlassian.net)"),
 });
 
-export const ShapedIssueSchema = z.object({
+const ShapedIssueSchema = z.object({
 	key: z.string(),
 	summary: z.string(),
 	status: z.string(),

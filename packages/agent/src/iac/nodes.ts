@@ -95,7 +95,7 @@ export function isMissingClusterClarification(clarification: string): boolean {
 // thread (a prior AIMessage exists). The classifier derives the converse gate from this rather than
 // trusting only the UI-supplied state.isFollowUp flag (which the client can omit on a reload).
 // (Pure; unit-testable via classifyIacIntent.)
-export function hasPriorAgentTurn(state: IacStateType): boolean {
+function hasPriorAgentTurn(state: IacStateType): boolean {
 	return state.messages.some((m) => m?.getType() === "ai");
 }
 
@@ -634,7 +634,7 @@ export function looksLikeCorrection(text: string): boolean {
 // SIO-982: does the user want watchPipeline to keep polling until the pipeline reaches a terminal
 // status (vs the default one-shot bounded poll)? A cold CI runner can take >90s, so "watch until
 // done"/"wait for it to finish" extends the poll budget for THIS call only. (Pure; unit-tested.)
-export function looksLikeWatchUntilDone(text: string): boolean {
+function looksLikeWatchUntilDone(text: string): boolean {
 	const r = text.toLowerCase();
 	const CUES = [
 		"until done",
@@ -835,7 +835,7 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 
 // SIO-960: a one-line "you have work in flight" note from durable memory, or "" when
 // nothing is in flight / recall is unavailable. Best-effort: never throws.
-export async function buildInFlightSessionNote(): Promise<string> {
+async function buildInFlightSessionNote(): Promise<string> {
 	try {
 		const items: string[] = [];
 		// In-flight fleet binary upgrades (no MR; re-pollable imperative pipelines).
@@ -6522,7 +6522,7 @@ function fallbackMrDescription(review: IacPlanReview | null): string {
 // Build the MR description by having the LLM fill the agent's own mr-template.md
 // (already in the system prompt) per the open-mr skill, from the gathered context.
 // Falls back to the deterministic stub on any error.
-export async function buildMrDescription(state: IacStateType): Promise<string> {
+async function buildMrDescription(state: IacStateType): Promise<string> {
 	const review = state.planReview;
 	const req = state.iacRequest;
 	try {
@@ -8831,7 +8831,7 @@ export function buildFleetFactRationale(state: IacStateType, result: FleetUpgrad
 
 // SIO-961: human note for a partial apply. Leads with the in-flight/pending majority so the
 // user is not alarmed by the CI "failed" exit, then names the small env-side failure set.
-export function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
+function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
 	const parts: string[] = [];
 	parts.push(`${outcome.succeeded}/${outcome.created} upgraded`);
 	if (outcome.unsettled > 0) parts.push(`${outcome.unsettled} still pending (offline; upgrade when they reconnect)`);
@@ -8850,7 +8850,7 @@ export function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
 // from a terminal one ("fleet-upgrade-terminal") -- a terminal status-check writes
 // a terminal-kind fact that no longer matches the in-flight filter, superseding the
 // dispatched record so a finished upgrade is never reported as still running.
-export function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
+function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
 	const a: AnnotationMap = {
 		kind: result.status === "dispatched" ? "fleet-upgrade-dispatched" : "fleet-upgrade-terminal",
 		status: result.status,
@@ -9069,7 +9069,7 @@ export async function recallLastIacChange(deployment?: string): Promise<Recalled
 // states "I never merge or apply." -- but a clean success reads as good-news + ready-to-merge
 // instead of the flat "review and apply manually" that fought the actual state. Non-terminal /
 // still-running keeps the original line (a follow-up re-checks).
-export function iacClosingLine(state: IacStateType): string {
+function iacClosingLine(state: IacStateType): string {
 	const merge = "I never merge or apply.";
 	if (state.pipelineStatus === "success") {
 		// SIO-992: the plan pipeline succeeding only means the CI `terraform plan` job ran clean. The

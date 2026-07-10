@@ -235,7 +235,7 @@ export function buildReconciledIacDecision(target: ReconcileTarget, lifecycle: I
 	return `Elastic IaC change CLOSED without merging on ${scope}: ${title}.${mr} Nothing was applied.`;
 }
 
-export function buildReconciledIacRationale(target: ReconcileTarget, applyPipelineUrl: string): string {
+function buildReconciledIacRationale(target: ReconcileTarget, applyPipelineUrl: string): string {
 	const bits: string[] = [];
 	if (target.mrUrl) bits.push(`MR ${target.mrUrl}`);
 	if (applyPipelineUrl) bits.push(`apply ${applyPipelineUrl}`);
