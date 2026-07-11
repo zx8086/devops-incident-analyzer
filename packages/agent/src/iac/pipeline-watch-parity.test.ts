@@ -107,3 +107,83 @@ describe("watchPipeline post-MR step sequence (SIO-984)", () => {
 		expect(out.pipelineStatus).toBe("success");
 	});
 });
+
+// SIO-1071: the SIO-959 cross-session fleet recovery must never hijack a gitops approve leg. The
+// observed failure: a stale fleet-upgrade-dispatched fact for the SAME deployment named in the
+// prompt made watchPipeline poll the OLD fleet pipeline instead of the just-opened MR's plan
+// pipeline (and the iac-change fact was then written without pipeline_id/pipeline_status).
+describe("watchPipeline fleet-recovery gate (SIO-1071)", () => {
+	test("a gitops leg with an MR polls the MR plan pipeline, never the recalled fleet pipeline", async () => {
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		// A stale in-flight fleet upgrade for ap-cld sits in memory. With the gate, the gitops leg
+		// must not even search for it -- record every searchMemory call to prove that.
+		const memorySearches: Array<Record<string, string> | undefined> = [];
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory(_ref, _query, opts) {
+				memorySearches.push(opts?.annotations);
+				if (opts?.annotations?.kind !== "fleet-upgrade-dispatched") return [];
+				return [
+					{
+						text: "Fleet agents on ap-cld upgrade DISPATCHED to 9.4.2.",
+						score: 0.9,
+						annotations: {
+							kind: "fleet-upgrade-dispatched",
+							deployment: "ap-cld",
+							version: "9.4.2",
+							pipeline_id: "2662295942",
+						},
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		});
+		const sink = captureProgress();
+		const seen: string[] = [];
+		mockTools({
+			gitlab_get_pipeline: (args) => {
+				seen.push(`gitlab_get_pipeline:${args.pipelineId}`);
+				return '[200] {"id":2662295942,"status":"failed"}';
+			},
+			gitlab_get_merge_request_pipelines: () => '[200] [{"id":999,"status":"success"}]',
+			gitlab_get_pipeline_terraform_report: () => "[no child pipeline yet]",
+			gitlab_get_merge_request_approvals: () => '[200] {"approved":false,"approved_by":[]}',
+			gitlab_get_merge_request: () => '[200] {"state":"opened"}',
+		});
+		const { watchPipeline } = await import("./nodes.ts");
+		// The demo failure shape: gitops turn, MR just opened by openMr, prompt names the deployment
+		// that has the stale dispatched fleet fact.
+		const state = {
+			intent: "gitops",
+			mrIid: 277,
+			mrUrl: "https://gitlab.com/x/-/merge_requests/277",
+			messages: [{ getType: () => "human", content: "In ap-cld deployment: reduce the frozen tier ceiling" }],
+		} as unknown as IacStateType;
+
+		const out = await watchPipeline(state);
+
+		// recovery not even attempted; the MR plan pipeline was polled instead
+		expect(memorySearches.filter((a) => a?.kind === "fleet-upgrade-dispatched")).toHaveLength(0);
+		expect(seen).toHaveLength(0);
+		expect(out.pipelineStatus).toBe("success");
+		expect(out.fleetUpgradeResult).toBeUndefined();
+		expect(sink.steps.map((s) => s.status)).toContain("plan succeeded");
+
+		__setAgentMemoryClient(null);
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	});
+});

@@ -3000,6 +3000,7 @@ async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Pro
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		previousVersion: updated.previous ?? "",
 		proposedDiff: diff,
 		precheckPassed: committed,
@@ -3090,6 +3091,7 @@ async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
 	};
@@ -3773,6 +3775,7 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff,
 		precheckPassed: committed,
 		integrationMajorBump: isMajorVersionBump(updated.previousVersion, version),
@@ -3900,6 +3903,7 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
 		sloTargetLowered: targetLowered,
@@ -4035,6 +4039,7 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
 		alertDisabled,
@@ -4155,7 +4160,7 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 		);
 	}
 
-	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+	return { branch, proposedFilePath: filePath, proposedFiles: [filePath], proposedDiff: diffLines.join("\n"), precheckPassed: committed };
 }
 
 // SIO-979: read -> merge a freeform settingsPatch into ONE cluster-defaults file, returning the
@@ -4630,6 +4635,7 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff,
 		precheckPassed: committed,
 		shardsLowered,
@@ -4865,7 +4871,7 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 		);
 	}
 
-	return { branch, proposedFilePath: filePath, proposedDiff: diffLines.join("\n"), precheckPassed: committed };
+	return { branch, proposedFilePath: filePath, proposedFiles: [filePath], proposedDiff: diffLines.join("\n"), precheckPassed: committed };
 }
 
 // SIO-918: propose a security ROLE privilege grant -- ADD privileges to one existing role in the
@@ -5000,6 +5006,7 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 	return {
 		branch,
 		proposedFilePath: filePath,
+		proposedFiles: [filePath],
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
 		privilegeEscalation: escalation,
@@ -5385,7 +5392,7 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		driftNotes.length > 0
 			? `${diffLines.join("\n")}\n\nLive cluster (drift):\n${driftNotes.map((n) => `- ${n}`).join("\n")}`
 			: diffLines.join("\n");
-	return { branch, proposedFilePath: filePath, proposedDiff: diffWithDrift, precheckPassed: committed };
+	return { branch, proposedFilePath: filePath, proposedFiles: [filePath], proposedDiff: diffWithDrift, precheckPassed: committed };
 }
 
 // SIO-920: validate a Kibana dashboard NDJSON payload WITHOUT parsing the whole file as one JSON
@@ -5595,7 +5602,7 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 	const proposedDiff = `${filePath} (dashboard ${action}): ${validated.objectCount} saved object${validated.objectCount === 1 ? "" : "s"} + export summary, ${Buffer.byteLength(ndjson, "utf8")} bytes`;
 
 	// The commit returned 2xx (non-2xx returned early above), so the change is on the branch.
-	return { branch, proposedFilePath: filePath, proposedDiff, precheckPassed: true };
+	return { branch, proposedFilePath: filePath, proposedFiles: [filePath], proposedDiff, precheckPassed: true };
 }
 
 // SIO-978: propose creating one or more NEW index-template JSON files under
@@ -6462,7 +6469,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	const isAmend = state.intent === "gitops-amend";
 	const activeChange: IacActiveChange = {
 		deployment: req?.cluster ?? "",
-		stack: stackFromPaths(state.proposedFiles),
+		stack: stackFromPaths(state.proposedFiles) || stackForWorkflow(req?.workflow),
 		kind: req?.workflow ?? "other",
 		branch,
 		proposedFiles: state.proposedFiles,
@@ -7005,7 +7012,11 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// Recover the dispatched pipeline id from durable memory (structured annotations)
 	// and re-poll THAT pipeline. Prefer the deployment named in the query/state; else
 	// take the sole in-flight upgrade. Best-effort -- no recall -> fall through.
-	{
+	// SIO-1071: ONLY on a status-check turn with no MR context of its own. On the gitops
+	// approve leg openMr just set mrIid/mrUrl and this node must poll THAT plan pipeline;
+	// unconditional recovery let a stale dispatched fleet fact (deployment named in the
+	// prompt) hijack the turn and poll an old fleet pipeline instead.
+	if (state.intent === "pipeline-status" && state.mrIid == null && !state.mrUrl) {
 		const inFlight = await recallInFlightFleetUpgrades("elastic-iac");
 		const withId = inFlight.filter((u) => u.pipelineId != null);
 		if (withId.length > 0) {
@@ -8959,7 +8970,11 @@ export function buildIacChangeAnnotations(state: IacStateType): AnnotationMap {
 	if (state.threadId) a.thread_id = state.threadId;
 	const dep = state.targetDeployment || state.iacRequest?.cluster;
 	if (dep) a.deployment = dep;
-	const stack = stackFromPaths(state.proposedFiles);
+	// SIO-1071: same derivation as the recall side (stackInstanceId in graph-knowledge.ts) --
+	// without the workflow fallback a proposer that misses proposedFiles writes a fact the
+	// deterministic {stack_instance} recall can never find, and "Prior learnings (memory)"
+	// silently never renders for that stack.
+	const stack = stackFromPaths(state.proposedFiles) || stackForWorkflow(state.iacRequest?.workflow);
 	if (stack) a.stack = stack;
 	if (dep && stack) a.stack_instance = `${dep}/${stack}`;
 	if (state.iacRequest?.workflow) a.workflow = state.iacRequest.workflow;
@@ -8983,7 +8998,7 @@ export function buildIacChangeAnnotations(state: IacStateType): AnnotationMap {
 // contained so a future session's semantic recall reads it without context.
 export function buildIacChangeDecision(state: IacStateType): string {
 	const dep = state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
-	const stack = stackFromPaths(state.proposedFiles);
+	const stack = stackFromPaths(state.proposedFiles) || stackForWorkflow(state.iacRequest?.workflow);
 	const scope = stack ? `${dep}/${stack}` : dep;
 	const title = state.planReview?.title || state.iacRequest?.workflow || "config change";
 	const outcome = iacTurnOutcome(state);
