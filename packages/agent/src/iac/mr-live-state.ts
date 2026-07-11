@@ -137,3 +137,14 @@ export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
 		applyPipelineUrl,
 	};
 }
+
+// SIO-1072: read-only raw fetchers for the fleet-settlement reconcile pass (reconcile.ts). They
+// return the tool's raw "[status] {...}" body; the pure parsers live in fleet-apply-result.ts so
+// this module stays a leaf. Same degrade-not-throw semantics as every callTool result above.
+export async function fetchFleetPipelineRaw(pipelineId: number): Promise<string> {
+	return callTool("gitlab_get_pipeline", { pipelineId });
+}
+
+export async function fetchFleetApplyResultRaw(pipelineId: number): Promise<string> {
+	return callTool("gitlab_get_fleet_upgrade_apply_result", { pipelineId });
+}
