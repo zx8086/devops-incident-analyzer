@@ -163,7 +163,10 @@ export function applyNotStartedSettleDays(): number {
 // and the KG pass (reconcileKnowledgeGraph) so the two stores settle identically (SIO-1053 parity).
 export function settleLifecycle(live: MrLiveState, now = new Date()): { lifecycle: IacLifecycle; outOfBand: boolean } {
 	const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
-	if (lifecycle === "apply-not-started" && isOrphanedApply(live, now, applyNotStartedSettleDays())) {
+	// SIO-1075: gate on non-terminal rather than apply-not-started alone -- an untriggered manual
+	// apply gate classifies as apply-running, yet is equally orphaned once aged. isOrphanedApply
+	// itself restricts settlement to the never-ran statuses.
+	if (!isTerminalLifecycle(lifecycle) && isOrphanedApply(live, now, applyNotStartedSettleDays())) {
 		return { lifecycle: "applied", outOfBand: true };
 	}
 	return { lifecycle, outOfBand: false };

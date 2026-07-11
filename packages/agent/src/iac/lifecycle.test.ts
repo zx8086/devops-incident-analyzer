@@ -93,11 +93,23 @@ describe("isOrphanedApply (SIO-1074)", () => {
 		expect(isOrphanedApply({ ...orphan, mergedAt: "not-a-date" }, NOW, 7)).toBe(false);
 	});
 
-	test("only the merged + apply-never-appeared shape qualifies", () => {
+	test("only the merged + apply-never-ran shape qualifies", () => {
 		expect(isOrphanedApply({ ...orphan, mrState: "opened" }, NOW, 7)).toBe(false);
 		expect(isOrphanedApply({ ...orphan, mrState: "closed" }, NOW, 7)).toBe(false);
 		expect(isOrphanedApply({ ...orphan, applyStatus: "running" }, NOW, 7)).toBe(false);
+		expect(isOrphanedApply({ ...orphan, applyStatus: "pending" }, NOW, 7)).toBe(false);
 		expect(isOrphanedApply({ ...orphan, applyStatus: "success" }, NOW, 7)).toBe(false);
+	});
+
+	// SIO-1075: an apply job that EXISTS but never ran -- an untriggered manual gate or a
+	// rules-skipped job -- is just as orphaned as an absent one once aged past the window.
+	test("aged untriggered manual or skipped apply job -> orphaned (SIO-1075)", () => {
+		expect(isOrphanedApply({ ...orphan, applyStatus: "manual" }, NOW, 7)).toBe(true);
+		expect(isOrphanedApply({ ...orphan, applyStatus: "skipped" }, NOW, 7)).toBe(true);
+	});
+
+	test("fresh manual gate stays transient -- someone may still trigger it (SIO-1075)", () => {
+		expect(isOrphanedApply({ ...orphan, applyStatus: "manual", mergedAt: "2026-07-10T09:00:00Z" }, NOW, 7)).toBe(false);
 	});
 });
 

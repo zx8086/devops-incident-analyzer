@@ -599,6 +599,52 @@ describe("out-of-band settlement (SIO-1074)", () => {
 		expect(kgSetCalls).toHaveLength(0);
 	});
 
+	// SIO-1075: an apply job that exists but never ran (untriggered manual gate / rules-skipped)
+	// classifies as apply-running, so the SIO-1074 apply-not-started gate missed it and the change
+	// re-qualified every sweep. Aged manual/skipped orphans settle identically to absent ones.
+	test("settleLifecycle promotes an aged untriggered-manual or skipped orphan to applied (out-of-band)", () => {
+		expect(settleLifecycle(orphanLive({ applyStatus: "manual" }))).toEqual({
+			lifecycle: "applied",
+			outOfBand: true,
+		});
+		expect(settleLifecycle(orphanLive({ applyStatus: "skipped" }))).toEqual({
+			lifecycle: "applied",
+			outOfBand: true,
+		});
+	});
+
+	test("settleLifecycle leaves a fresh manual gate transient (still triggerable)", () => {
+		expect(settleLifecycle(orphanLive({ applyStatus: "manual", mergedAt: daysAgo(1) }))).toEqual({
+			lifecycle: "apply-running",
+			outOfBand: false,
+		});
+	});
+
+	test("settleLifecycle never settles a genuinely running apply", () => {
+		expect(settleLifecycle(orphanLive({ applyStatus: "running" }))).toEqual({
+			lifecycle: "apply-running",
+			outOfBand: false,
+		});
+	});
+
+	test("reconcileOne settles an aged manual-gate orphan with the out-of-band marker", async () => {
+		liveByIid.set(9, orphanLive({ applyStatus: "manual" }));
+		const result = await reconcileOne(target());
+		expect(result.lifecycle).toBe("applied");
+		expect(result.outOfBand).toBe(true);
+		expect(result.recorded).toBe(true);
+		expect(recordedDecisions[0]?.annotations?.applied_out_of_band).toBe("true");
+		expect(recordedDecisions[0]?.decision).toContain("APPLIED (out-of-band)");
+	});
+
+	test("KG sweep settles an aged manual-gate orphan to applied", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-manual", mrUrl: "https://gitlab.com/x/-/merge_requests/208", outcome: "proposed" }];
+		liveByIid.set(208, orphanLive({ applyStatus: "manual" }));
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toEqual([{ id: "req-manual", outcome: "applied" }]);
+	});
+
 	test("KG sweep leaves an orphan whose parent pipeline is not success", async () => {
 		kgEnabled = true;
 		kgProposed = [

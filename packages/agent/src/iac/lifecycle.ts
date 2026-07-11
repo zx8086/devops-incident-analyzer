@@ -30,13 +30,13 @@ export function isTerminalLifecycle(lifecycle: IacLifecycle): boolean {
 	return lifecycle === "applied" || lifecycle === "apply-failed" || lifecycle === "closed";
 }
 
-// SIO-1074: a merged MR whose merge-commit PARENT pipeline finished successfully without ever
-// spawning the apply child job. classifyLiveState calls this apply-not-started (transient), but the
-// apply will never start on that pipeline -- applies run per-stack, often batched or via a later
-// full-stack refresh -- so without settlement the change re-qualifies for the reconcile sweep
-// forever. Requirements are deliberately strict: only a SUCCESSFUL, terminal parent qualifies (a
-// running/pending parent may still spawn the apply; a failed parent is a different problem), and the
-// merge must be at least settleAfterDays old so a late batched apply still gets to report normally.
+// SIO-1074: a merged MR whose merge-commit PARENT pipeline finished successfully but whose apply
+// job never RAN. The apply will never run on that pipeline -- applies run per-stack, often batched
+// or via a later full-stack refresh -- so without settlement the change re-qualifies for the
+// reconcile sweep forever. Requirements are deliberately strict: only a SUCCESSFUL, terminal parent
+// qualifies (a running/pending parent may still run the apply; a failed parent is a different
+// problem), and the merge must be at least settleAfterDays old so a late batched apply (or a human
+// pressing a manual gate) still gets to report through the normal applyStatus path first.
 export interface OrphanedApplyInput {
 	mrState: string;
 	applyStatus: string;
@@ -44,8 +44,15 @@ export interface OrphanedApplyInput {
 	mergedAt?: string;
 }
 
+// SIO-1075: "never ran" covers the job being absent ("", the SIO-1074 case), an untriggered manual
+// gate ("manual" -- classifies as apply-running, so the apply-not-started gate alone missed it),
+// and a rules-skipped job ("skipped"). running/pending are genuinely in flight and never orphaned.
+function applyNeverRan(applyStatus: string): boolean {
+	return applyStatus === "" || applyStatus === "manual" || applyStatus === "skipped";
+}
+
 export function isOrphanedApply(live: OrphanedApplyInput, now: Date, settleAfterDays: number): boolean {
-	if (live.mrState !== "merged" || live.applyStatus !== "") return false;
+	if (live.mrState !== "merged" || !applyNeverRan(live.applyStatus)) return false;
 	if (live.parentStatus !== "success") return false;
 	if (!live.mergedAt) return false;
 	const mergedMs = Date.parse(live.mergedAt);
