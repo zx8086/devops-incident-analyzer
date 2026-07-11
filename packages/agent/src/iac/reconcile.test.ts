@@ -602,8 +602,12 @@ describe("out-of-band settlement (SIO-1074)", () => {
 	// SIO-1075: an apply job that exists but never ran (untriggered manual gate / rules-skipped)
 	// classifies as apply-running, so the SIO-1074 apply-not-started gate missed it and the change
 	// re-qualified every sweep. Aged manual/skipped orphans settle identically to absent ones.
-	test("settleLifecycle promotes an aged untriggered-manual orphan to applied (out-of-band)", () => {
+	test("settleLifecycle promotes an aged untriggered-manual or skipped orphan to applied (out-of-band)", () => {
 		expect(settleLifecycle(orphanLive({ applyStatus: "manual" }))).toEqual({
+			lifecycle: "applied",
+			outOfBand: true,
+		});
+		expect(settleLifecycle(orphanLive({ applyStatus: "skipped" }))).toEqual({
 			lifecycle: "applied",
 			outOfBand: true,
 		});
