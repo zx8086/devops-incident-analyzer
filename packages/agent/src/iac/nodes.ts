@@ -1873,20 +1873,23 @@ export function isPlausibleDeploymentId(id: string): boolean {
 	return /^[0-9a-f]{32}$/.test(id);
 }
 
+// SIO-1073: one deployments row from an elastic_cloud_list_deployments body. Real rows carry many
+// more fields; unknown keys are stripped, but a non-object row (e.g. a null element) fails the
+// parse so the caller degrades to UNVERIFIED instead of crashing on `r.id`.
+const DeploymentsRowSchema = z.object({ id: z.string().optional(), name: z.string().optional() });
+
 // SIO-1073: parse an elastic_cloud_list_deployments "[status] {json}" body into its deployments
-// rows. undefined when the body is unparseable, so callers can tell "the id is not in the list"
-// (rows without the id) apart from "the list could not be read" (undefined -> UNVERIFIED, never
-// a false warning). (Pure; unit-tested.)
+// rows. undefined when the body or any row is unparseable, so callers can tell "the id is not in
+// the list" (rows without the id) apart from "the list could not be read" (undefined ->
+// UNVERIFIED, never a false warning). (Pure; unit-tested.)
 export function parseDeploymentsList(listText: string): Array<{ id?: string; name?: string }> | undefined {
 	const jsonStart = listText.indexOf("{");
 	if (jsonStart < 0) return undefined;
 	try {
 		const parsed: unknown = JSON.parse(listText.slice(jsonStart));
-		return typeof parsed === "object" &&
-			parsed !== null &&
-			Array.isArray((parsed as { deployments?: unknown }).deployments)
-			? (parsed as { deployments: Array<{ id?: string; name?: string }> }).deployments
-			: undefined;
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		const rows = z.array(DeploymentsRowSchema).safeParse((parsed as { deployments?: unknown }).deployments);
+		return rows.success ? rows.data : undefined;
 	} catch {
 		return undefined;
 	}
@@ -1901,8 +1904,35 @@ export function deploymentNameById(listText: string, id: string): string | undef
 	return hit ? (hit.name ?? "") : undefined;
 }
 
-type ObservabilityBlock = { deployment_id?: string; ref_id?: string; logs?: boolean; metrics?: boolean };
+// SIO-1073: the observability block shape the deployment module accepts. strict() so an unknown
+// key in an existing block surfaces as an actionable error instead of being silently dropped by
+// the update rewrite.
+const ObservabilityBlockSchema = z
+	.object({
+		deployment_id: z.string().optional(),
+		ref_id: z.string().optional(),
+		logs: z.boolean().optional(),
+		metrics: z.boolean().optional(),
+	})
+	.strict();
+type ObservabilityBlock = z.infer<typeof ObservabilityBlockSchema>;
 
+// Strict read for the SET path: an absent key is a CREATE; anything present but malformed (wrong
+// types, unknown keys, non-object) throws an actionable error -- the update rewrite would
+// otherwise commit or silently drop the invalid values.
+function readObservabilityBlockStrict(obj: Record<string, unknown>): ObservabilityBlock | undefined {
+	if (obj.observability === undefined) return undefined;
+	const parsed = ObservabilityBlockSchema.safeParse(obj.observability);
+	if (!parsed.success) {
+		throw new Error(
+			"the existing observability block is malformed (expected { deployment_id: string, ref_id?: string, logs?: boolean, metrics?: boolean }); fix the file manually or remove the block first",
+		);
+	}
+	return parsed.data;
+}
+
+// Tolerant read for the REMOVE path and diff echo: deleting a malformed block is a legitimate fix,
+// and the previous value is only displayed, never rewritten.
 function readObservabilityBlock(obj: Record<string, unknown>): ObservabilityBlock | undefined {
 	const block = obj.observability;
 	return block && typeof block === "object" && !Array.isArray(block) ? (block as ObservabilityBlock) : undefined;
@@ -1912,11 +1942,11 @@ function readObservabilityBlock(obj: Record<string, unknown>): ObservabilityBloc
 // this deployment's logs/metrics to a monitoring deployment). CREATE (no existing block):
 // deploymentId is REQUIRED and the block is written in full with the deployment module's defaults
 // made explicit (ref_id "main-elasticsearch", logs true, metrics true) so the file self-documents
-// what applies. UPDATE (block exists): only the provided fields change; missing fields keep their
-// existing values, falling back to the module defaults for a sparse block (same effective values
-// Terraform already applies, so normalization is not a behavior change). Captures the previous
-// block for the diff. Preserves every sibling field + trailing newline. Throws on bad JSON or a
-// create without a deploymentId. (Pure; unit-tested.)
+// what applies. UPDATE (block exists): ONLY the provided fields change -- a sparse block stays
+// sparse (Terraform applies the same defaults either way, and the diff must report every actual
+// file mutation). Captures the previous block for the diff. Preserves every sibling field +
+// trailing newline. Throws on bad JSON, a create without a deploymentId, or a malformed existing
+// block. (Pure; unit-tested.)
 export function setDeploymentObservability(
 	json: string,
 	changes: { deploymentId?: string; refId?: string; logs?: boolean; metrics?: boolean },
@@ -1926,18 +1956,26 @@ export function setDeploymentObservability(
 		throw new Error("deployment JSON is not an object");
 	}
 	const obj = parsed as Record<string, unknown>;
-	const existing = readObservabilityBlock(obj);
+	const existing = readObservabilityBlockStrict(obj);
 	const previous = existing ? { ...existing } : undefined;
 	const created = existing === undefined;
 	if (created && changes.deploymentId === undefined) {
 		throw new Error("deployment JSON has no observability block; a monitoring deployment_id is required to add one");
 	}
-	const next: ObservabilityBlock = {
-		deployment_id: changes.deploymentId ?? existing?.deployment_id,
-		ref_id: changes.refId ?? existing?.ref_id ?? "main-elasticsearch",
-		logs: changes.logs ?? existing?.logs ?? true,
-		metrics: changes.metrics ?? existing?.metrics ?? true,
-	};
+	const next: ObservabilityBlock = created
+		? {
+				deployment_id: changes.deploymentId,
+				ref_id: changes.refId ?? "main-elasticsearch",
+				logs: changes.logs ?? true,
+				metrics: changes.metrics ?? true,
+			}
+		: { ...existing };
+	if (!created) {
+		if (changes.deploymentId !== undefined) next.deployment_id = changes.deploymentId;
+		if (changes.refId !== undefined) next.ref_id = changes.refId;
+		if (changes.logs !== undefined) next.logs = changes.logs;
+		if (changes.metrics !== undefined) next.metrics = changes.metrics;
+	}
 	const changed =
 		created ||
 		next.deployment_id !== existing?.deployment_id ||
@@ -5521,21 +5559,42 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	if (observabilitySet) {
 		let effectiveId = req.observabilityDeploymentId;
 		let listText: string | undefined;
-		if (effectiveId === undefined && req.observabilityDeploymentName !== undefined) {
+		if (req.observabilityDeploymentName !== undefined) {
 			listText = await callTool("elastic_cloud_list_deployments", {});
 			const resolved = parseDeploymentId(listText, req.observabilityDeploymentName);
-			if (!resolved) {
+			if (effectiveId === undefined) {
+				if (!resolved) {
+					return {
+						blockedReason: `Could not resolve monitoring deployment '${req.observabilityDeploymentName}' to a deployment id.`,
+						messages: [
+							new AIMessage(
+								`Cannot propose the change: I could not resolve '${req.observabilityDeploymentName}' to an Elastic Cloud deployment id from the live deployments list. Check the name, or give me the 32-hex deployment id directly.`,
+							),
+						],
+					};
+				}
+				effectiveId = resolved;
+				liveCheckNotes.push(`resolved monitoring deployment '${req.observabilityDeploymentName}' -> ${resolved}.`);
+			} else if (resolved === "") {
+				// Both an id and a name were given but the name cannot be resolved (unknown name OR an
+				// unreadable list) -- the id drives the change; warn-only, per the live-check contract.
+				liveCheckNotes.push(
+					`could not cross-check name '${req.observabilityDeploymentName}' against deployment_id ${effectiveId} -- verify they refer to the same deployment before merge.`,
+				);
+			} else if (resolved !== effectiveId) {
+				// Conflicting identifiers must never silently pick one -- a stale planner value could
+				// point monitoring at the wrong deployment.
 				return {
-					blockedReason: `Could not resolve monitoring deployment '${req.observabilityDeploymentName}' to a deployment id.`,
+					blockedReason: `Conflicting monitoring deployment identifiers: '${req.observabilityDeploymentName}' resolves to ${resolved}, but deployment_id ${effectiveId} was given.`,
 					messages: [
 						new AIMessage(
-							`Cannot propose the change: I could not resolve '${req.observabilityDeploymentName}' to an Elastic Cloud deployment id from the live deployments list. Check the name, or give me the 32-hex deployment id directly.`,
+							`Cannot propose the change: '${req.observabilityDeploymentName}' resolves to deployment id ${resolved}, which conflicts with the deployment_id you gave (${effectiveId}). Re-issue with just one of them (or matching values).`,
 						),
 					],
 				};
+			} else {
+				liveCheckNotes.push(`confirmed '${req.observabilityDeploymentName}' resolves to ${effectiveId}.`);
 			}
-			effectiveId = resolved;
-			liveCheckNotes.push(`resolved monitoring deployment '${req.observabilityDeploymentName}' -> ${resolved}.`);
 		}
 		let obs: ReturnType<typeof setDeploymentObservability>;
 		try {

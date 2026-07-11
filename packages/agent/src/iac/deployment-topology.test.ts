@@ -1374,6 +1374,17 @@ describe("parseDeploymentsList / deploymentNameById", () => {
 		expect(parseDeploymentsList("[200] not json {")).toBeUndefined();
 		expect(deploymentNameById("[error: connect timeout]", MONITOR_ID)).toBeUndefined();
 	});
+	test("malformed rows -> undefined (a null element must degrade to UNVERIFIED, not crash)", () => {
+		expect(parseDeploymentsList('[200] {"deployments":[null]}')).toBeUndefined();
+		expect(parseDeploymentsList(`[200] {"deployments":[{"id":42,"name":"eu-b2b"}]}`)).toBeUndefined();
+		expect(deploymentNameById('[200] {"deployments":[null]}', MONITOR_ID)).toBeUndefined();
+	});
+	test("extra per-row fields (the real EC response shape) are stripped, not rejected", () => {
+		const rich = `[200] ${JSON.stringify({
+			deployments: [{ id: MONITOR_ID, name: "eu-cld-monitor", healthy: true, resources: { elasticsearch: [] } }],
+		})}`;
+		expect(deploymentNameById(rich, MONITOR_ID)).toBe("eu-cld-monitor");
+	});
 });
 
 describe("setDeploymentObservability", () => {
@@ -1417,14 +1428,12 @@ describe("setDeploymentObservability", () => {
 		expect(parsed.observability.metrics).toBe(false);
 	});
 
-	test("UPDATE normalizes a sparse existing block with the module defaults (Terraform's effective values)", () => {
+	test("UPDATE on a sparse block touches ONLY the provided field (no silent default normalization)", () => {
 		const sparse = JSON.stringify({ name: "eu-b2b", observability: { deployment_id: MONITOR_ID } }, null, 2);
 		const { content, changed } = setDeploymentObservability(sparse, { logs: false });
-		const parsed = JSON.parse(content) as { observability: { ref_id: string; logs: boolean; metrics: boolean } };
+		const parsed = JSON.parse(content) as { observability: Record<string, unknown> };
 		expect(changed).toBe(true);
-		expect(parsed.observability.ref_id).toBe("main-elasticsearch");
-		expect(parsed.observability.logs).toBe(false);
-		expect(parsed.observability.metrics).toBe(true);
+		expect(parsed.observability).toEqual({ deployment_id: MONITOR_ID, logs: false });
 	});
 
 	test("changed=false when every provided value already matches", () => {
@@ -1438,6 +1447,15 @@ describe("setDeploymentObservability", () => {
 
 	test("throws on a non-object deployment JSON", () => {
 		expect(() => setDeploymentObservability("[1,2]", { deploymentId: MONITOR_ID })).toThrow("not an object");
+	});
+
+	test("throws an actionable error on a malformed existing block (wrong types / unknown keys / non-object)", () => {
+		const badTypes = JSON.stringify({ name: "x", observability: { deployment_id: MONITOR_ID, logs: "false" } });
+		expect(() => setDeploymentObservability(badTypes, { metrics: false })).toThrow("malformed");
+		const unknownKey = JSON.stringify({ name: "x", observability: { deployment_id: MONITOR_ID, extra: 1 } });
+		expect(() => setDeploymentObservability(unknownKey, { metrics: false })).toThrow("malformed");
+		const nonObject = JSON.stringify({ name: "x", observability: "yes" });
+		expect(() => setDeploymentObservability(nonObject, { deploymentId: MONITOR_ID })).toThrow("malformed");
 	});
 });
 
@@ -1458,6 +1476,13 @@ describe("removeDeploymentObservability", () => {
 		const { changed, previous } = removeDeploymentObservability(DEPLOYMENT);
 		expect(changed).toBe(false);
 		expect(previous).toBeUndefined();
+	});
+
+	test("removal is deliberately tolerant of a malformed block (deleting it IS the fix)", () => {
+		const malformed = JSON.stringify({ name: "x", observability: { deployment_id: MONITOR_ID, logs: "false" } });
+		const { content, changed } = removeDeploymentObservability(malformed);
+		expect(changed).toBe(true);
+		expect("observability" in (JSON.parse(content) as Record<string, unknown>)).toBe(false);
 	});
 });
 
@@ -1693,6 +1718,97 @@ describe("draftChange -> proposeTopologyChange observability (SIO-1073)", () => 
 		expect(result.proposedDiff).toContain(`resolved monitoring deployment 'eu-cld-monitor' -> ${MONITOR_ID}`);
 		const written = JSON.parse(String(committed.content)) as { observability: { deployment_id: string } };
 		expect(written.observability.deployment_id).toBe(MONITOR_ID);
+	});
+
+	test("id + name given and CONSISTENT: proceeds with a confirmation note", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: MONITOR_ID,
+				observabilityDeploymentName: "eu-cld-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain(`confirmed 'eu-cld-monitor' resolves to ${MONITOR_ID}`);
+	});
+
+	test("id + name given and CONFLICTING: blocks instead of silently picking one", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				// the OWN_ID conflicts with the name, which resolves to MONITOR_ID
+				observabilityDeploymentId: OWN_ID,
+				observabilityDeploymentName: "eu-cld-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(false);
+		expect(result.blockedReason).toContain("Conflicting monitoring deployment identifiers");
+	});
+
+	test("id + name given but the list is unreadable: warn-only cross-check note, the id drives the change", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => "[error: connect timeout]",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: MONITOR_ID,
+				observabilityDeploymentName: "eu-cld-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(true);
+		expect(result.proposedDiff).toContain("could not cross-check name 'eu-cld-monitor'");
+	});
+
+	test("update atop a malformed existing block blocks with the actionable error", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const malformed = JSON.stringify({ name: "eu-b2b", observability: { deployment_id: MONITOR_ID, logs: "false" } });
+		const malformedFile = `[200] ${JSON.stringify({ content: Buffer.from(malformed).toString("base64"), encoding: "base64" })}`;
+		mockTools({ gitlab_get_file_content: () => malformedFile });
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityMetrics: false,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("malformed");
 	});
 
 	test("blocks on an unresolvable monitoring deployment name", async () => {

@@ -69,7 +69,7 @@ Source of truth: `environments/_deployments/<cluster>.json` -- the per-deploymen
 - Editing `remote_clusters` or `trust_accounts` (cross-cluster trust; out of scope this cut).
 - **Container / Wolfi agent image-tag bumps are NOT here**: those tags do NOT live in the `_deployments` JSON (they are Fleet/agent-policy config). If the user asks to bump a service's container/agent image, that is a different surface -- do not attempt it from this file.
 - Setting any `zone_count` outside 1-3, or to a non-integer.
-- A non-32-hex `observability_deployment_id`, or `observability_remove` combined with the observability set fields in one request.
+- A non-32-hex `observability_deployment_id`, `observability_remove` combined with the observability set fields, or an `observability_deployment_name` that resolves to a DIFFERENT id than the `observability_deployment_id` given alongside it (conflicting identifiers are never silently resolved).
 
 ## MR body
 
