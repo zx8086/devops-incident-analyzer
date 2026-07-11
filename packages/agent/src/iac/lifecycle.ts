@@ -30,6 +30,29 @@ export function isTerminalLifecycle(lifecycle: IacLifecycle): boolean {
 	return lifecycle === "applied" || lifecycle === "apply-failed" || lifecycle === "closed";
 }
 
+// SIO-1074: a merged MR whose merge-commit PARENT pipeline finished successfully without ever
+// spawning the apply child job. classifyLiveState calls this apply-not-started (transient), but the
+// apply will never start on that pipeline -- applies run per-stack, often batched or via a later
+// full-stack refresh -- so without settlement the change re-qualifies for the reconcile sweep
+// forever. Requirements are deliberately strict: only a SUCCESSFUL, terminal parent qualifies (a
+// running/pending parent may still spawn the apply; a failed parent is a different problem), and the
+// merge must be at least settleAfterDays old so a late batched apply still gets to report normally.
+export interface OrphanedApplyInput {
+	mrState: string;
+	applyStatus: string;
+	parentStatus?: string;
+	mergedAt?: string;
+}
+
+export function isOrphanedApply(live: OrphanedApplyInput, now: Date, settleAfterDays: number): boolean {
+	if (live.mrState !== "merged" || live.applyStatus !== "") return false;
+	if (live.parentStatus !== "success") return false;
+	if (!live.mergedAt) return false;
+	const mergedMs = Date.parse(live.mergedAt);
+	if (Number.isNaN(mergedMs)) return false;
+	return now.getTime() - mergedMs >= settleAfterDays * 86_400_000;
+}
+
 // SIO-1005: rank a recalled iac-change hit's annotations so dedupePreferring picks the most
 // informative fact per MR. A reconciled fact carries a `lifecycle` annotation; a legacy proposal
 // fact does not (rank 0, always loses to a reconciled fact for the same MR). Terminal states

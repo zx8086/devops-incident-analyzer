@@ -75,9 +75,12 @@ export function mrIidFromConflictMessage(toolResult: string): number | null {
 // pipeline's (which reports success transiently before the child apply job runs/fails -- the SIO-993
 // false-positive). applyStatus is "" when the apply job hasn't appeared yet (treat as "starting",
 // never success). null on an unparseable body. (Pure.)
+// SIO-1074: parentStatus IS captured (never as a success signal) -- a terminal-success parent with
+// applyStatus "" proves the apply job will never start on that pipeline, which is what the
+// orphaned-apply settlement in reconcile.ts keys on.
 export function parseApplyResult(
 	toolResult: string,
-): { applyStatus: string; pipelineId?: number; webUrl?: string; reason?: string } | null {
+): { applyStatus: string; pipelineId?: number; webUrl?: string; reason?: string; parentStatus?: string } | null {
 	const jsonStart = toolResult.indexOf("{");
 	if (jsonStart < 0) return null;
 	try {
@@ -86,12 +89,14 @@ export function parseApplyResult(
 			pipelineId?: unknown;
 			webUrl?: unknown;
 			reason?: unknown;
+			parentStatus?: unknown;
 		};
 		return {
 			applyStatus: typeof r.applyStatus === "string" ? r.applyStatus : "",
 			...(typeof r.pipelineId === "number" ? { pipelineId: r.pipelineId } : {}),
 			...(typeof r.webUrl === "string" ? { webUrl: r.webUrl } : {}),
 			...(typeof r.reason === "string" ? { reason: r.reason } : {}),
+			...(typeof r.parentStatus === "string" && r.parentStatus ? { parentStatus: r.parentStatus } : {}),
 		};
 	} catch {
 		return null;
@@ -101,8 +106,10 @@ export function parseApplyResult(
 export interface MrLiveState {
 	mrState: string; // "opened" | "merged" | "closed" | "" (unread)
 	mergeCommitSha?: string;
+	mergedAt?: string; // SIO-1074: ages the orphaned-apply settlement window
 	webUrl?: string; // SIO-1062: the MR's real web_url (for blob-mrUrl repair)
 	applyStatus: string; // apply-JOB status; "" when not merged or the apply job hasn't appeared
+	parentStatus?: string; // SIO-1074: the merge-commit PARENT pipeline's status (never a success signal)
 	applyPipelineId: number | null;
 	applyPipelineUrl: string;
 }
@@ -116,6 +123,7 @@ export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
 	const mrInfo = parseMrState(await callTool("gitlab_get_merge_request", { iid }));
 	const mrState = mrInfo?.state ?? "";
 	let applyStatus = "";
+	let parentStatus: string | undefined;
 	let applyPipelineId: number | null = null;
 	let applyPipelineUrl = "";
 	if (mrState === "merged" && mrInfo?.mergeCommitSha) {
@@ -124,6 +132,7 @@ export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
 		);
 		if (apply) {
 			applyStatus = apply.applyStatus;
+			parentStatus = apply.parentStatus;
 			applyPipelineId = apply.pipelineId ?? null;
 			applyPipelineUrl = apply.webUrl ?? "";
 		}
@@ -131,8 +140,10 @@ export async function fetchMrLiveState(iid: number): Promise<MrLiveState> {
 	return {
 		mrState,
 		...(mrInfo?.mergeCommitSha ? { mergeCommitSha: mrInfo.mergeCommitSha } : {}),
+		...(mrInfo?.mergedAt ? { mergedAt: mrInfo.mergedAt } : {}),
 		...(mrInfo?.webUrl ? { webUrl: mrInfo.webUrl } : {}),
 		applyStatus,
+		...(parentStatus ? { parentStatus } : {}),
 		applyPipelineId,
 		applyPipelineUrl,
 	};
