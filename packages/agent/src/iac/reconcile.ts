@@ -33,11 +33,12 @@ import {
 	parseFleetApplyOutcome,
 	parseSinglePipeline,
 } from "./fleet-apply-result.ts";
-import { classifyLiveState, type IacLifecycle, isTerminalLifecycle } from "./lifecycle.ts";
+import { classifyLiveState, type IacLifecycle, isOrphanedApply, isTerminalLifecycle } from "./lifecycle.ts";
 import {
 	fetchFleetApplyResultRaw,
 	fetchFleetPipelineRaw,
 	fetchMrLiveState,
+	type MrLiveState,
 	mrIidFromConflictMessage,
 } from "./mr-live-state.ts";
 
@@ -78,6 +79,7 @@ export interface ReconcileTarget {
 export interface ReconcileResult {
 	target: ReconcileTarget;
 	lifecycle: IacLifecycle;
+	outOfBand: boolean; // SIO-1074: applied was settled by the aging rule, not an observed apply job
 	applyPipelineId: number | null;
 	applyPipelineUrl: string;
 	recorded: boolean; // did we append an authoritative fact this sweep?
@@ -88,6 +90,7 @@ export interface ReconcileSummary {
 	checked: number;
 	advanced: number; // terminal facts appended
 	applied: number;
+	appliedOutOfBand: number; // SIO-1074: subset of applied settled by the aging rule
 	failed: number; // apply-failed
 	closed: number;
 	stillOpen: number; // open / apply-running / apply-not-started (skipped, re-checked next sweep)
@@ -140,16 +143,43 @@ function targetFromAnnotations(mrIid: number, a: AnnotationMap): ReconcileTarget
 	};
 }
 
+// SIO-1074: the days a merged-but-apply-never-started change must age before the sweep settles it
+// as applied out-of-band. Read defensively (mirrors iacProposalFactTtlSeconds): an unset/invalid
+// override falls back to the 7-day default -- wide enough that a late batched apply still reports
+// through the normal applyStatus path first.
+const DEFAULT_APPLY_NOT_STARTED_SETTLE_DAYS = 7;
+
+export function applyNotStartedSettleDays(): number {
+	const raw = process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS;
+	if (!raw) return DEFAULT_APPLY_NOT_STARTED_SETTLE_DAYS;
+	const n = Number(raw);
+	return Number.isInteger(n) && n > 0 ? n : DEFAULT_APPLY_NOT_STARTED_SETTLE_DAYS;
+}
+
+// SIO-1074: classify the live state, then promote an aged orphaned apply (merged, parent pipeline
+// terminal-success, apply job never appeared -- see isOrphanedApply) to "applied". GitOps semantics
+// make merged config on main authoritative; the actual apply ran out-of-band on a later per-stack or
+// batched pipeline this MR's merge commit cannot see. Shared by the agent-memory pass (reconcileOne)
+// and the KG pass (reconcileKnowledgeGraph) so the two stores settle identically (SIO-1053 parity).
+export function settleLifecycle(live: MrLiveState, now = new Date()): { lifecycle: IacLifecycle; outOfBand: boolean } {
+	const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
+	if (lifecycle === "apply-not-started" && isOrphanedApply(live, now, applyNotStartedSettleDays())) {
+		return { lifecycle: "applied", outOfBand: true };
+	}
+	return { lifecycle, outOfBand: false };
+}
+
 // SIO-1005: re-check one proposed MR's live state and, ONLY on a terminal advance, append an
 // authoritative fact + a dailylog breadcrumb. Open / apply-running / apply-not-started are returned
 // (so the summary counts them) but NOT recorded -- they are re-checked next sweep, avoiding a churn
 // of near-duplicate transient facts in the append-only store. Best-effort: never throws.
 export async function reconcileOne(target: ReconcileTarget): Promise<ReconcileResult> {
 	const live = await fetchMrLiveState(target.mrIid);
-	const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
+	const { lifecycle, outOfBand } = settleLifecycle(live);
 	const base: ReconcileResult = {
 		target,
 		lifecycle,
+		outOfBand,
 		applyPipelineId: live.applyPipelineId,
 		applyPipelineUrl: live.applyPipelineUrl,
 		recorded: false,
@@ -158,18 +188,24 @@ export async function reconcileOne(target: ReconcileTarget): Promise<ReconcileRe
 
 	recordKeyDecision({
 		requestId: target.configChangeId ?? `reconcile:${target.mrIid}`,
-		decision: buildReconciledIacDecision(target, lifecycle),
+		decision: buildReconciledIacDecision(target, lifecycle, outOfBand),
 		rationale: buildReconciledIacRationale(target, live.applyPipelineUrl),
-		annotations: buildReconciledIacAnnotations(target, lifecycle, live.applyPipelineId, live.applyPipelineUrl),
+		annotations: buildReconciledIacAnnotations(
+			target,
+			lifecycle,
+			live.applyPipelineId,
+			live.applyPipelineUrl,
+			outOfBand,
+		),
 	});
 	appendDailyLog({
 		requestId: target.configChangeId ?? `reconcile:${target.mrIid}`,
 		services: [],
 		datasources: ["gitlab"],
-		summary: `Reconciled MR !${target.mrIid} -> ${lifecycle}${target.stackInstance ? ` (${target.stackInstance})` : ""}`,
+		summary: `Reconciled MR !${target.mrIid} -> ${lifecycle}${outOfBand ? " (out-of-band)" : ""}${target.stackInstance ? ` (${target.stackInstance})` : ""}`,
 	});
 	log.info(
-		{ mrIid: target.mrIid, mrUrl: target.mrUrl, lifecycle, applyPipelineId: live.applyPipelineId },
+		{ mrIid: target.mrIid, mrUrl: target.mrUrl, lifecycle, outOfBand, applyPipelineId: live.applyPipelineId },
 		"reconcileOne: recorded authoritative iac-change fact",
 	);
 	return { ...base, recorded: true };
@@ -338,6 +374,7 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 		checked: 0,
 		advanced: 0,
 		applied: 0,
+		appliedOutOfBand: 0,
 		failed: 0,
 		closed: 0,
 		stillOpen: 0,
@@ -357,6 +394,7 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 				const result = await reconcileOne(target);
 				summary.checked += 1;
 				if (result.recorded) summary.advanced += 1;
+				if (result.outOfBand) summary.appliedOutOfBand += 1;
 				if (result.lifecycle === "applied") summary.applied += 1;
 				else if (result.lifecycle === "apply-failed") summary.failed += 1;
 				else if (result.lifecycle === "closed") summary.closed += 1;
@@ -432,6 +470,8 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 	const proposed = await proposedChangesWithMr(store, opts.limit ? opts.limit * 4 : 200);
 	log.info({ source: opts.source, proposed: proposed.length }, "KG reconcile start");
 	let advanced = 0;
+	// SIO-1074: ConfigChange ids settled as applied by the out-of-band aging rule this sweep.
+	const settledOutOfBand: string[] = [];
 	for (const change of proposed) {
 		try {
 			let iid = mrIidFromUrl(change.mrUrl);
@@ -473,12 +513,16 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 					);
 				}
 			}
-			const lifecycle = classifyLiveState(live.mrState, live.applyStatus);
+			const { lifecycle, outOfBand } = settleLifecycle(live);
 			const outcome = lifecycleToChangeOutcome(lifecycle);
 			if (!outcome) continue; // transient -> leave "proposed", re-check next sweep
 			await setChangeOutcome(store, change.id, outcome);
 			advanced += 1;
-			log.info({ changeId: change.id, iid, lifecycle, outcome }, "KG reconcile: advanced ConfigChange.outcome");
+			if (outOfBand) settledOutOfBand.push(change.id);
+			log.info(
+				{ changeId: change.id, iid, lifecycle, outcome, outOfBand },
+				"KG reconcile: advanced ConfigChange.outcome",
+			);
 		} catch (error) {
 			log.warn(
 				{ changeId: change.id, mrUrl: change.mrUrl, error: error instanceof Error ? error.message : String(error) },
@@ -486,7 +530,18 @@ export async function reconcileKnowledgeGraph(opts: ReconcileOptions): Promise<v
 			);
 		}
 	}
-	log.info({ source: opts.source, proposed: proposed.length, advanced }, "KG reconcile complete");
+	// SIO-1074: one line per sweep naming the changes the aging rule settled, so out-of-band applies
+	// are auditable without grepping per-change lines.
+	if (settledOutOfBand.length > 0) {
+		log.info(
+			{ source: opts.source, count: settledOutOfBand.length, changeIds: settledOutOfBand },
+			"KG reconcile: settled merged-but-apply-never-started changes as applied (out-of-band)",
+		);
+	}
+	log.info(
+		{ source: opts.source, proposed: proposed.length, advanced, settledOutOfBand: settledOutOfBand.length },
+		"KG reconcile complete",
+	);
 }
 
 // SIO-1005: the authoritative annotations. Mirrors buildIacChangeAnnotations' identity keys
@@ -498,8 +553,11 @@ export function buildReconciledIacAnnotations(
 	lifecycle: IacLifecycle,
 	applyPipelineId: number | null,
 	applyPipelineUrl: string,
+	outOfBand = false,
 ): AnnotationMap {
 	const a: AnnotationMap = { kind: "iac-change", lifecycle, outcome: terminalOutcome(lifecycle) };
+	// SIO-1074: distinguishes an aging-rule settle from an observed apply-job success.
+	if (outOfBand) a.applied_out_of_band = "true";
 	a.mr_iid = String(target.mrIid);
 	if (target.mrUrl) a.mr_url = target.mrUrl;
 	if (target.configChangeId) a.config_change_id = target.configChangeId;
@@ -525,11 +583,20 @@ function terminalOutcome(lifecycle: IacLifecycle): string {
 // SIO-1005: the durable Profile-fact statement. States the truth plainly so even after the
 // agent-memory service paraphrases the body, the semantic tokens say applied/live (or
 // apply-failed / closed), not "proposed".
-export function buildReconciledIacDecision(target: ReconcileTarget, lifecycle: IacLifecycle): string {
+export function buildReconciledIacDecision(
+	target: ReconcileTarget,
+	lifecycle: IacLifecycle,
+	outOfBand = false,
+): string {
 	const scope = target.stackInstance || target.deployment || "an Elastic deployment";
 	const title = target.changeSummary || target.workflow || "config change";
 	const mr = target.mrUrl ? ` (MR ${target.mrUrl})` : ` (MR !${target.mrIid})`;
 	if (lifecycle === "applied") {
+		if (outOfBand) {
+			// SIO-1074: merged, but no apply job ever ran on the merge-commit pipeline -- the change
+			// landed via a later per-stack or batched apply. Merged config on main is authoritative.
+			return `Elastic IaC change APPLIED (out-of-band) on ${scope}: ${title}. Merged${mr}; no apply job ran on the merge-commit pipeline -- the merged config on main was applied by a later per-stack or batched apply.`;
+		}
 		return `Elastic IaC change APPLIED (live) on ${scope}: ${title}. Merged${mr}; the terraform apply job on main succeeded.`;
 	}
 	if (lifecycle === "apply-failed") {

@@ -114,12 +114,14 @@ describe("parseApplyResult (SIO-995)", () => {
 			applyStatus: "failed",
 			pipelineId: 50,
 			webUrl: "https://gitlab/jobs/2",
+			parentStatus: "success", // SIO-1074: the orphaned-apply settlement reads the parent's status
 		});
 	});
 	test("applyStatus '' (apply job not started yet) is preserved -- caller must NOT treat as success", () => {
 		const r = parseApplyResult('[200] {"applyStatus":"","parentStatus":"success","reason":"apply pipeline starting"}');
 		expect(r?.applyStatus).toBe("");
 		expect(r?.reason).toBe("apply pipeline starting");
+		expect(r?.parentStatus).toBe("success");
 	});
 	test("a running apply job stays 'running' (not collapsed to success)", () => {
 		expect(parseApplyResult('[200] {"applyStatus":"running","pipelineId":9}')?.applyStatus).toBe("running");

@@ -102,8 +102,10 @@ beforeAll(() => {
 type LiveState = {
 	mrState: string;
 	mergeCommitSha?: string;
+	mergedAt?: string; // SIO-1074: for the orphaned-apply aging window
 	webUrl?: string; // SIO-1062: for blob-mrUrl repair
 	applyStatus: string;
+	parentStatus?: string; // SIO-1074: the merge-commit PARENT pipeline's status
 	applyPipelineId: number | null;
 	applyPipelineUrl: string;
 };
@@ -138,6 +140,7 @@ afterAll(() => {
 });
 
 import {
+	applyNotStartedSettleDays,
 	buildReconciledIacAnnotations,
 	buildReconciledIacDecision,
 	buildSettledFleetDecision,
@@ -154,6 +157,7 @@ import {
 	reconcileFleetUpgrades,
 	reconcileKnowledgeGraph,
 	reconcileOne,
+	settleLifecycle,
 } from "./reconcile.ts";
 
 const target = (over: Partial<ReconcileTarget> = {}): ReconcileTarget => ({
@@ -466,6 +470,143 @@ describe("fleet settlement (SIO-1072)", () => {
 		expect(buildSettledFleetDecision(target, "partial", "Partial: 3/5 upgraded")).toContain("PARTIALLY applied");
 		expect(buildSettledFleetDecision(target, "partial", "Partial: 3/5 upgraded")).toContain("Partial: 3/5 upgraded");
 		expect(buildSettledFleetDecision(target, "unknown")).toContain("no longer retrievable");
+	});
+});
+
+// SIO-1074: merged MRs whose merge-commit pipeline succeeded WITHOUT ever spawning the apply child
+// job. classifyLiveState keeps calling them apply-not-started (transient), so before this they were
+// re-checked forever and never settled in either store. Dates are relative to the real clock (no
+// time bombs); the pure boundary math lives in lifecycle.test.ts's isOrphanedApply block.
+describe("out-of-band settlement (SIO-1074)", () => {
+	const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+	const orphanLive = (over: Partial<LiveState> = {}): LiveState => ({
+		mrState: "merged",
+		mergeCommitSha: "abc",
+		mergedAt: daysAgo(10),
+		applyStatus: "",
+		parentStatus: "success",
+		applyPipelineId: null,
+		applyPipelineUrl: "",
+		...over,
+	});
+	const prevDays = process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS;
+	beforeEach(() => {
+		delete process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS;
+	});
+	afterEach(() => {
+		if (prevDays === undefined) delete process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS;
+		else process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS = prevDays;
+	});
+
+	test("applyNotStartedSettleDays: 7-day default, valid override, invalid -> default", () => {
+		expect(applyNotStartedSettleDays()).toBe(7);
+		process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS = "3";
+		expect(applyNotStartedSettleDays()).toBe(3);
+		process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS = "not-a-number";
+		expect(applyNotStartedSettleDays()).toBe(7);
+	});
+
+	test("settleLifecycle promotes an aged orphan to applied (out-of-band)", () => {
+		expect(settleLifecycle(orphanLive())).toEqual({ lifecycle: "applied", outOfBand: true });
+	});
+
+	test("settleLifecycle leaves a fresh orphan transient", () => {
+		expect(settleLifecycle(orphanLive({ mergedAt: daysAgo(1) }))).toEqual({
+			lifecycle: "apply-not-started",
+			outOfBand: false,
+		});
+	});
+
+	test("settleLifecycle never marks a normally-applied change out-of-band", () => {
+		expect(settleLifecycle(orphanLive({ applyStatus: "success" }))).toEqual({
+			lifecycle: "applied",
+			outOfBand: false,
+		});
+	});
+
+	test("reconcileOne settles an aged orphan: applied fact with the out-of-band marker + wording", async () => {
+		liveByIid.set(9, orphanLive());
+		const result = await reconcileOne(target());
+		expect(result.lifecycle).toBe("applied");
+		expect(result.outOfBand).toBe(true);
+		expect(result.recorded).toBe(true);
+		expect(recordedDecisions).toHaveLength(1);
+		expect(recordedDecisions[0]?.annotations).toMatchObject({
+			lifecycle: "applied",
+			outcome: "applied",
+			applied_out_of_band: "true",
+		});
+		expect(recordedDecisions[0]?.decision).toContain("APPLIED (out-of-band)");
+		expect(recordedDecisions[0]?.decision).toContain("no apply job");
+		expect(dailyLogs[0]?.summary).toContain("out-of-band");
+	});
+
+	test("reconcileOne leaves a fresh orphan for the next sweep (no fact)", async () => {
+		liveByIid.set(9, orphanLive({ mergedAt: daysAgo(1) }));
+		const result = await reconcileOne(target());
+		expect(result.lifecycle).toBe("apply-not-started");
+		expect(result.recorded).toBe(false);
+		expect(recordedDecisions).toHaveLength(0);
+	});
+
+	test("a normally-applied change carries NO out-of-band marker", async () => {
+		liveByIid.set(9, orphanLive({ applyStatus: "success", applyPipelineId: 222 }));
+		const result = await reconcileOne(target());
+		expect(result.outOfBand).toBe(false);
+		expect(recordedDecisions[0]?.annotations?.applied_out_of_band).toBeUndefined();
+		expect(recordedDecisions[0]?.decision).toContain("APPLIED (live)");
+	});
+
+	test("the settle window honors the env override", async () => {
+		process.env.IAC_APPLY_NOT_STARTED_SETTLE_DAYS = "1";
+		liveByIid.set(9, orphanLive({ mergedAt: daysAgo(2) }));
+		const result = await reconcileOne(target());
+		expect(result.outOfBand).toBe(true);
+		expect(result.recorded).toBe(true);
+	});
+
+	test("reconcileAll counts out-of-band settles in the sweep summary", async () => {
+		searchHits = [
+			{ text: "proposed A", annotations: { mr_url: "uA", mr_iid: "10", config_change_id: "rA" } },
+			{ text: "proposed B", annotations: { mr_url: "uB", mr_iid: "11", config_change_id: "rB" } },
+		];
+		liveByIid.set(10, orphanLive());
+		liveByIid.set(11, orphanLive({ mergedAt: daysAgo(1) }));
+		const summary = await reconcileAll({ source: "cron" });
+		expect(summary).toMatchObject({
+			checked: 2,
+			advanced: 1,
+			applied: 1,
+			appliedOutOfBand: 1,
+			stillOpen: 1,
+			errors: 0,
+		});
+	});
+
+	test("KG sweep settles an aged orphan to applied (parity with the agent-memory pass)", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-orphan", mrUrl: "https://gitlab.com/x/-/merge_requests/240", outcome: "proposed" }];
+		liveByIid.set(240, orphanLive());
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toEqual([{ id: "req-orphan", outcome: "applied" }]);
+	});
+
+	test("KG sweep leaves a fresh orphan proposed (re-checked next sweep)", async () => {
+		kgEnabled = true;
+		kgProposed = [{ id: "req-fresh", mrUrl: "https://gitlab.com/x/-/merge_requests/278", outcome: "proposed" }];
+		liveByIid.set(278, orphanLive({ mergedAt: daysAgo(1) }));
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
+	});
+
+	test("KG sweep leaves an orphan whose parent pipeline is not success", async () => {
+		kgEnabled = true;
+		kgProposed = [
+			{ id: "req-parent-running", mrUrl: "https://gitlab.com/x/-/merge_requests/281", outcome: "proposed" },
+		];
+		liveByIid.set(281, orphanLive({ parentStatus: "running" }));
+		await reconcileKnowledgeGraph({ source: "cron" });
+		expect(kgSetCalls).toHaveLength(0);
 	});
 });
 
