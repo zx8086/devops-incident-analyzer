@@ -179,6 +179,19 @@ export interface IacRequest {
 	sizeComponent?: "integrations_server" | "kibana";
 	componentSize?: string;
 	componentZoneCount?: number;
+	// SIO-1073: topology-edit also covers the top-level `observability` block (ships this
+	// deployment's logs/metrics to a monitoring deployment; stacks/deployments reads
+	// try(each.value.observability, null); the module defaults ref_id="main-elasticsearch",
+	// logs=true, metrics=true). The set fields ADD/UPDATE the block (deployment id required only
+	// when the block does not exist yet; a NAME is resolved to an id via the live deployments
+	// list). observabilityRemove=true DELETES the whole block -- destructive (disconnects
+	// monitoring shipping), surfaced HIGH, never combined with the set fields.
+	observabilityDeploymentId?: string;
+	observabilityDeploymentName?: string;
+	observabilityRefId?: string;
+	observabilityLogs?: boolean;
+	observabilityMetrics?: boolean;
+	observabilityRemove?: boolean;
 	// SIO-920: dashboard-edit -- whole-file add/replace of a Kibana NDJSON saved-object export
 	// at environments/<dep>/dashboards/<space>__<name>.ndjson. MEDIUM risk (display-only; a
 	// malformed NDJSON fails CI's import job, not prod). Whole-file only -- no surgical panel edits.
