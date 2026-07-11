@@ -107,6 +107,32 @@ describe("buildIacChangeAnnotations (KG join keys)", () => {
 		expect(a.outcome).toBe("pipeline-failed");
 	});
 
+	// SIO-1071: a proposer that misses proposedFiles must still produce the stack_instance key the
+	// deterministic recall (memoryEnrichIac) filters on -- fall back to the workflow's stack, the
+	// same derivation the recall side uses (stackInstanceId in graph-knowledge.ts). Without it the
+	// fact is unfindable by {stack_instance} and "Prior learnings (memory)" never renders.
+	test("falls back to the workflow's stack when proposedFiles is empty (SIO-1071)", () => {
+		const a = buildIacChangeAnnotations(
+			gitopsState({
+				iacRequest: { workflow: "tier-resize", cluster: "ap-cld" },
+				proposedFiles: [],
+			} as unknown as Partial<IacStateType>),
+		);
+		expect(a.stack).toBe("deployments");
+		expect(a.stack_instance).toBe("ap-cld/deployments");
+	});
+
+	test("omits stack when neither proposedFiles nor a known workflow resolves one", () => {
+		const a = buildIacChangeAnnotations(
+			gitopsState({
+				iacRequest: { workflow: "other", cluster: "ap-cld" },
+				proposedFiles: [],
+			} as unknown as Partial<IacStateType>),
+		);
+		expect(a.stack).toBeUndefined();
+		expect(a.stack_instance).toBeUndefined();
+	});
+
 	test("omits unknown pipeline status and absent fields", () => {
 		const a = buildIacChangeAnnotations(
 			gitopsState({ threadId: "", pipelineId: null, pipelineStatus: "unknown", mrUrl: "" }),
@@ -129,6 +155,18 @@ describe("buildIacChangeDecision / Rationale", () => {
 
 	test("decision reflects a failed pipeline", () => {
 		expect(buildIacChangeDecision(gitopsState({ pipelineStatus: "failed" }))).toContain("change FAILED CI");
+	});
+
+	// SIO-1071: the decision scope gets the same workflow fallback as the annotations.
+	test("decision scope falls back to the workflow's stack when proposedFiles is empty", () => {
+		const decision = buildIacChangeDecision(
+			gitopsState({
+				iacRequest: { workflow: "tier-resize", cluster: "ap-cld" },
+				proposedFiles: [],
+				planReview: { title: "[ap-cld] frozen -> max 8g: tier-resize" },
+			} as unknown as Partial<IacStateType>),
+		);
+		expect(decision).toContain("on ap-cld/deployments:");
 	});
 
 	// SIO-989: the richer per-field title flows verbatim into the durable decision (the fact that is
