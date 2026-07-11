@@ -116,6 +116,12 @@ export interface AgentMemoryClient {
 		patch: { annotations?: AnnotationMap; metadata?: AnnotationMap },
 	): Promise<void>;
 	endSession(ref: AgentMemoryUserRef): Promise<void>;
+	// SIO-1072: delete blocks by id (DELETE /users/{u}/sessions/{s}/memory). Works on ENDED
+	// sessions (unlike the block PUT, which 400s SESSION_ALREADY_ENDED) -- which is what the
+	// reconcile sweep needs to retire a stale fleet-upgrade-dispatched fact whose conversation
+	// is long closed. Optional so the many test fakes implementing this interface need no stub;
+	// callers guard with `client.deleteMemoryBlocks?.(...)`.
+	deleteMemoryBlocks?(ref: AgentMemoryUserRef, blockIds: string[]): Promise<{ deletedCount: number }>;
 	// Readiness probe (GET /health). Never throws; returns ok:false on any failure.
 	checkHealth(): Promise<AgentMemoryHealth>;
 }
@@ -306,6 +312,14 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 		async endSession(ref) {
 			// SIO-952: the end endpoint is on the session, not nested under /memory.
 			await amFetch(config, "POST", `/users/${enc(ref.userId)}/sessions/${enc(ref.sessionId)}/end`);
+		},
+
+		async deleteMemoryBlocks(ref, blockIds) {
+			if (blockIds.length === 0) return { deletedCount: 0 };
+			const res = await amFetch<{ deleted_count?: number }>(config, "DELETE", memoryPath(ref), {
+				block_ids: blockIds,
+			});
+			return { deletedCount: typeof res?.deleted_count === "number" ? res.deleted_count : 0 };
 		},
 
 		async checkHealth() {

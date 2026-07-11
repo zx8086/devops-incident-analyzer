@@ -18,10 +18,28 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import type { AnnotationMap } from "@devops-agent/shared";
-import { dedupeHitsBy, searchAgentMemory, selectedBackend } from "../memory-backend.ts";
+import {
+	dedupeHitsBy,
+	deleteAgentMemoryBlocks,
+	recordAgentFactNow,
+	searchAgentMemory,
+	selectedBackend,
+} from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
+import {
+	classifyFleetApplyResult,
+	isTerminalPipelineStatus,
+	parseDriftCheckResult,
+	parseFleetApplyOutcome,
+	parseSinglePipeline,
+} from "./fleet-apply-result.ts";
 import { classifyLiveState, type IacLifecycle, isTerminalLifecycle } from "./lifecycle.ts";
-import { fetchMrLiveState, mrIidFromConflictMessage } from "./mr-live-state.ts";
+import {
+	fetchFleetApplyResultRaw,
+	fetchFleetPipelineRaw,
+	fetchMrLiveState,
+	mrIidFromConflictMessage,
+} from "./mr-live-state.ts";
 
 const log = getLogger("agent:iac:reconcile");
 const AGENT = "elastic-iac";
@@ -74,6 +92,12 @@ export interface ReconcileSummary {
 	closed: number;
 	stillOpen: number; // open / apply-running / apply-not-started (skipped, re-checked next sweep)
 	errors: number;
+	// SIO-1072: the fleet-settlement pass (dispatched fleet-upgrade facts re-checked against their
+	// live pipeline). settled = terminal fact recorded AND the stale dispatched block deleted.
+	fleetChecked: number;
+	fleetSettled: number;
+	fleetStillRunning: number;
+	fleetErrors: number;
 }
 
 export interface ReconcileOptions {
@@ -151,6 +175,152 @@ export async function reconcileOne(target: ReconcileTarget): Promise<ReconcileRe
 	return { ...base, recorded: true };
 }
 
+// SIO-1072: a dispatched fleet-upgrade fact worth settling: the block's identity (so it can be
+// retired once terminal) + the pipeline to re-check. blockId/sessionId come from the search hit;
+// the DELETE endpoint is session-scoped and works on ended sessions (unlike the block PUT).
+export interface FleetSettleTarget {
+	blockId: string;
+	sessionId: string;
+	pipelineId: number;
+	deployment?: string;
+	version?: string;
+}
+
+export type FleetSettleOutcome = "settled" | "still-running" | "write-failed";
+
+// SIO-1072: enumerate dispatched fleet facts eligible for settlement. Deterministic filter-only
+// recall (mirrors enumerateUnreconciledChanges). A hit missing blockId/sessionId (older service
+// responses) or a numeric pipeline_id can neither be re-checked nor retired -> skipped.
+export async function enumerateDispatchedFleetFacts(limit = 50): Promise<FleetSettleTarget[]> {
+	if (selectedBackend() !== "agent-memory") return [];
+	const hits = await searchAgentMemory(AGENT, "", { kind: "fleet-upgrade-dispatched" }, limit, {
+		deterministic: true,
+	});
+	const targets: FleetSettleTarget[] = [];
+	for (const hit of hits) {
+		const pid = hit.annotations.pipeline_id ? Number(hit.annotations.pipeline_id) : Number.NaN;
+		if (!hit.blockId || !hit.sessionId || !Number.isFinite(pid)) {
+			log.warn(
+				{ blockId: hit.blockId, sessionId: hit.sessionId, pipelineId: hit.annotations.pipeline_id },
+				"fleet settle: dispatched fact not settleable (missing block/session/pipeline id), skipping",
+			);
+			continue;
+		}
+		targets.push({
+			blockId: hit.blockId,
+			sessionId: hit.sessionId,
+			pipelineId: pid,
+			...(hit.annotations.deployment ? { deployment: hit.annotations.deployment } : {}),
+			...(hit.annotations.version ? { version: hit.annotations.version } : {}),
+		});
+	}
+	return targets;
+}
+
+// SIO-1072: the terminal fleet fact's annotations. Mirrors buildFleetFactAnnotations (nodes.ts)
+// so recallPriorFleetUpgrades reads sweep-settled and turn-recorded facts identically; settled_by
+// marks the reconcile provenance.
+export function buildSettledFleetAnnotations(target: FleetSettleTarget, status: string): AnnotationMap {
+	const a: AnnotationMap = {
+		kind: "fleet-upgrade-terminal",
+		status,
+		pipeline_id: String(target.pipelineId),
+		settled_by: "reconcile",
+	};
+	if (target.deployment) a.deployment = target.deployment;
+	if (target.version) a.version = target.version;
+	return a;
+}
+
+// SIO-1072: the durable Profile-fact statement. Mirrors buildFleetFactDecision's wording (nodes.ts)
+// so semantic recall reads sweep-settled outcomes in the same voice as turn-recorded ones.
+export function buildSettledFleetDecision(target: FleetSettleTarget, status: string, note?: string): string {
+	const dep = target.deployment ?? "unknown deployment";
+	const version = target.version ?? "?";
+	const line =
+		status === "applied"
+			? `Fleet agents on ${dep} upgraded to ${version}.`
+			: status === "partial"
+				? `Fleet agents on ${dep} upgrade PARTIALLY applied to ${version}.`
+				: status === "failed"
+					? `Fleet agents on ${dep} upgrade FAILED to ${version}.`
+					: `Fleet agents on ${dep} upgrade to ${version} has an UNKNOWN outcome (pipeline #${target.pipelineId} no longer retrievable).`;
+	const suffix = note ? ` ${note}` : "";
+	return `${line}${suffix} (Settled by the reconcile sweep from pipeline #${target.pipelineId}.)`;
+}
+
+// SIO-1072: re-check one dispatched fleet upgrade against its live pipeline. Still-running is left
+// for the next sweep (genuinely in flight). Terminal: record the fleet-upgrade-terminal fact
+// SYNCHRONOUSLY, then retire the dispatched block ONLY once the write is confirmed -- never delete
+// history the terminal fact hasn't durably replaced. A pipeline GitLab has purged (404) can never
+// become terminal, so it is settled with an explicit unknown outcome instead of re-checked forever.
+export async function reconcileFleetOne(target: FleetSettleTarget): Promise<FleetSettleOutcome> {
+	const raw = await fetchFleetPipelineRaw(target.pipelineId);
+	const gone = /^\[404\]/.test(raw);
+	const status = parseSinglePipeline(raw)?.status ?? "unknown";
+	if (!gone && !isTerminalPipelineStatus(status)) return "still-running";
+
+	let settledStatus: string;
+	let note: string | undefined;
+	if (gone) {
+		settledStatus = "unknown";
+	} else {
+		const res = parseDriftCheckResult(await fetchFleetApplyResultRaw(target.pipelineId));
+		const outcome = res.report ? parseFleetApplyOutcome(res.report) : null;
+		// Mirrors checkFleetApplyStatus's ciStatus derivation (nodes.ts).
+		const ciStatus = res.status === "success" || status === "success" ? "success" : res.status || status;
+		const classified = classifyFleetApplyResult(ciStatus, outcome, res.failureLog, res.stateLocked);
+		settledStatus = classified.status;
+		note = classified.note;
+	}
+
+	const recorded = await recordAgentFactNow(
+		AGENT,
+		buildSettledFleetDecision(target, settledStatus, note),
+		buildSettledFleetAnnotations(target, settledStatus),
+	);
+	if (!recorded) return "write-failed"; // retried next sweep; the dispatched block stays
+
+	await deleteAgentMemoryBlocks(AGENT, target.sessionId, [target.blockId]);
+	appendDailyLog({
+		requestId: `reconcile-fleet:${target.pipelineId}`,
+		services: target.deployment ? [target.deployment] : [],
+		datasources: ["gitlab"],
+		summary: `Settled fleet upgrade pipeline #${target.pipelineId} -> ${settledStatus}${target.deployment ? ` (${target.deployment})` : ""}`,
+	});
+	log.info(
+		{ pipelineId: target.pipelineId, deployment: target.deployment, status: settledStatus, blockId: target.blockId },
+		"reconcileFleetOne: settled dispatched fleet fact",
+	);
+	return "settled";
+}
+
+// SIO-1072: sweep all dispatched fleet facts. One item's failure never aborts the pass.
+export async function reconcileFleetUpgrades(
+	opts: ReconcileOptions,
+): Promise<{ checked: number; settled: number; stillRunning: number; errors: number }> {
+	const counts = { checked: 0, settled: 0, stillRunning: 0, errors: 0 };
+	if (selectedBackend() !== "agent-memory") return counts;
+	const targets = await enumerateDispatchedFleetFacts(opts.limit ?? 50);
+	log.info({ source: opts.source, targets: targets.length }, "fleet settle start");
+	for (const target of targets) {
+		try {
+			const outcome = await reconcileFleetOne(target);
+			counts.checked += 1;
+			if (outcome === "settled") counts.settled += 1;
+			else if (outcome === "still-running") counts.stillRunning += 1;
+			else counts.errors += 1;
+		} catch (error) {
+			counts.errors += 1;
+			log.warn(
+				{ pipelineId: target.pipelineId, error: error instanceof Error ? error.message : String(error) },
+				"reconcileFleetOne failed; continuing sweep",
+			);
+		}
+	}
+	return counts;
+}
+
 // SIO-1053: the two lifecycle stores are gated independently -- agent-memory reconciliation needs the
 // agent-memory backend, KG reconciliation needs KNOWLEDGE_GRAPH_ENABLED. The sweep should do useful
 // work when EITHER is on, so this predicate drives both the bootstrap sweep's decision to run and the
@@ -172,6 +342,10 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 		closed: 0,
 		stillOpen: 0,
 		errors: 0,
+		fleetChecked: 0,
+		fleetSettled: 0,
+		fleetStillRunning: 0,
+		fleetErrors: 0,
 	};
 
 	// Agent-memory store (SIO-1005): unchanged behaviour, only when the backend is selected.
@@ -195,6 +369,14 @@ export async function reconcileAll(opts: ReconcileOptions): Promise<ReconcileSum
 				);
 			}
 		}
+		// SIO-1072: settle dispatched fleet upgrades whose pipelines have reached terminal state --
+		// without this they accumulate forever (the dispatched->terminal supersession was previously
+		// user-triggered only) and pollute the session-start in-flight note and cross-session recovery.
+		const fleet = await reconcileFleetUpgrades(opts);
+		summary.fleetChecked = fleet.checked;
+		summary.fleetSettled = fleet.settled;
+		summary.fleetStillRunning = fleet.stillRunning;
+		summary.fleetErrors = fleet.errors;
 	} else {
 		log.info({ source: opts.source }, "agent-memory reconcile skipped: backend not selected");
 	}

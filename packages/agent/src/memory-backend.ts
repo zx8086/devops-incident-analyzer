@@ -318,6 +318,9 @@ export interface MemorySearchHit {
 	// SIO-991: the Couchbase memory-block document id (when the service returned it), so a recall
 	// log can be cross-referenced against the exact block in Capella.
 	blockId?: string;
+	// SIO-1072: the block's OWN session id (not the active conversation's) -- the DELETE endpoint
+	// is session-scoped, so retiring a block found by cross-session search needs its home session.
+	sessionId?: string;
 }
 
 // SIO-973: dedup recall hits by a stable identity key (e.g. pipeline_id, config_change_id)
@@ -424,10 +427,72 @@ export async function searchAgentMemory(
 			text: h.text,
 			annotations: h.annotations ?? {},
 			...(h.blockId && { blockId: h.blockId }),
+			...(h.sessionId && { sessionId: h.sessionId }),
 		}));
 	} catch (error) {
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory search failed");
 		return [];
+	}
+}
+
+// SIO-1072: synchronous (non-queued) durable fact write. The fleet-settlement reconcile pass
+// DELETES the stale dispatched block right after recording its terminal fact, so the write must be
+// CONFIRMED stored before the delete -- the async write-behind queue can drop writes when no
+// session is bound (headless cron sweep after a conversation ended), which would lose the
+// upgrade's history entirely. Returns true only when the service accepted the fact.
+export async function recordAgentFactNow(
+	agentName: string,
+	text: string,
+	annotations: AnnotationMap,
+): Promise<boolean> {
+	if (selectedBackend() !== "agent-memory") return false;
+	const userId = resolveUserId(agentName);
+	// Mirrors searchAgentMemory's transient-session binding: any session id works as the write
+	// container; recall is user-scoped (allSessions), not session-scoped.
+	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	try {
+		const c = client();
+		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
+		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		const res = await c.addFacts(ref, [text], { annotations });
+		logger.info(
+			{ userId, sessionId: ref.sessionId, blockIds: res.blockIds, accepted: res.acceptedCount },
+			"agent-memory direct fact write",
+		);
+		return res.acceptedCount > 0;
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"agent-memory direct fact write failed",
+		);
+		return false;
+	}
+}
+
+// SIO-1072: delete memory blocks by id. sessionId is the block's OWN home session (from the search
+// hit), not the active conversation -- deletes work on ended sessions, which is the whole point
+// (the dispatched fact's conversation is long closed; its PUT would 400 SESSION_ALREADY_ENDED).
+// Best-effort: returns the deleted count, 0 on any failure or when the injected client predates
+// the optional deleteMemoryBlocks method.
+export async function deleteAgentMemoryBlocks(
+	agentName: string,
+	sessionId: string,
+	blockIds: string[],
+): Promise<number> {
+	if (selectedBackend() !== "agent-memory" || blockIds.length === 0) return 0;
+	const userId = resolveUserId(agentName);
+	try {
+		const c = client();
+		if (!c.deleteMemoryBlocks) return 0;
+		const res = await c.deleteMemoryBlocks({ userId, sessionId }, blockIds);
+		logger.info({ userId, sessionId, blockIds, deleted: res.deletedCount }, "agent-memory blocks deleted");
+		return res.deletedCount;
+	} catch (error) {
+		logger.warn(
+			{ sessionId, blockIds, error: error instanceof Error ? error.message : String(error) },
+			"agent-memory block delete failed",
+		);
+		return 0;
 	}
 }
 

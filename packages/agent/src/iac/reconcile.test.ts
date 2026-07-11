@@ -33,12 +33,27 @@ beforeAll(() => {
 		...realMrLiveState,
 		fetchMrLiveState: async (iid: number): Promise<LiveState> =>
 			liveByIid.get(iid) ?? { mrState: "", applyStatus: "", applyPipelineId: null, applyPipelineUrl: "" },
+		// SIO-1072: fleet-settlement raw fetchers; per-pipeline bodies seeded by each test.
+		fetchFleetPipelineRaw: async (pipelineId: number) => pipelineRawById.get(pipelineId) ?? "[404] not found",
+		fetchFleetApplyResultRaw: async (pipelineId: number) => applyResultRawById.get(pipelineId) ?? "[404] not found",
 	}));
 
 	mock.module("../memory-backend.ts", () => ({
 		...realMemoryBackend,
 		selectedBackend: () => backend,
-		searchAgentMemory: async () => searchHits,
+		// SIO-1072: filter-aware -- the fleet-settlement pass enumerates by a different kind than
+		// the iac-change pass, so the stub must not feed iac-change hits to the fleet enumerator.
+		searchAgentMemory: async (_agent: string, _query: string, filter?: Record<string, string>) =>
+			filter?.kind === "fleet-upgrade-dispatched" ? fleetHits : searchHits,
+		// SIO-1072: fleet settlement's confirmed-synchronous write + block retirement seams.
+		recordAgentFactNow: async (_agent: string, text: string, annotations: Record<string, string>) => {
+			recordedNowFacts.push({ text, annotations });
+			return recordNowSucceeds;
+		},
+		deleteAgentMemoryBlocks: async (_agent: string, sessionId: string, blockIds: string[]) => {
+			deletedBlocks.push({ sessionId, blockIds });
+			return blockIds.length;
+		},
 		// real dedupeHitsBy semantics: first-hit-wins, keyless never collapse
 		dedupeHitsBy: <T extends { annotations: Record<string, string> }>(
 			hits: T[],
@@ -97,6 +112,13 @@ const recordedDecisions: Array<{ decision: string; annotations?: Record<string, 
 const dailyLogs: Array<{ summary?: string }> = [];
 let searchHits: Array<{ text: string; annotations: Record<string, string> }> = [];
 let backend = "agent-memory";
+// SIO-1072: fleet-settlement seam state.
+const pipelineRawById = new Map<number, string>();
+const applyResultRawById = new Map<number, string>();
+let fleetHits: Array<{ text: string; annotations: Record<string, string>; blockId?: string; sessionId?: string }> = [];
+const recordedNowFacts: Array<{ text: string; annotations: Record<string, string> }> = [];
+const deletedBlocks: Array<{ sessionId: string; blockIds: string[] }> = [];
+let recordNowSucceeds = true;
 // SIO-1053: KG seam state.
 let kgEnabled = false;
 let kgProposed: Array<{ id: string; mrUrl: string; outcome: string }> = [];
@@ -118,13 +140,18 @@ afterAll(() => {
 import {
 	buildReconciledIacAnnotations,
 	buildReconciledIacDecision,
+	buildSettledFleetDecision,
+	enumerateDispatchedFleetFacts,
 	enumerateUnreconciledChanges,
+	type FleetSettleTarget,
 	iacProposalFactTtlSeconds,
 	lifecycleToChangeOutcome,
 	mrIidFromUrl,
 	type ReconcileTarget,
 	reconcileAll,
 	reconcileEnabled,
+	reconcileFleetOne,
+	reconcileFleetUpgrades,
 	reconcileKnowledgeGraph,
 	reconcileOne,
 } from "./reconcile.ts";
@@ -147,6 +174,12 @@ beforeEach(() => {
 	dailyLogs.length = 0;
 	searchHits = [];
 	backend = "agent-memory";
+	pipelineRawById.clear();
+	applyResultRawById.clear();
+	fleetHits = [];
+	recordedNowFacts.length = 0;
+	deletedBlocks.length = 0;
+	recordNowSucceeds = true;
 	kgEnabled = false;
 	kgProposed = [];
 	kgSetCalls.length = 0;
@@ -296,7 +329,143 @@ describe("reconcileAll (SIO-1005)", () => {
 	test("no-op summary when backend is not agent-memory", async () => {
 		backend = "file";
 		const summary = await reconcileAll({ source: "bootstrap" });
-		expect(summary).toMatchObject({ checked: 0, advanced: 0 });
+		expect(summary).toMatchObject({ checked: 0, advanced: 0, fleetChecked: 0, fleetSettled: 0 });
+	});
+});
+
+// SIO-1072: fleet settlement -- dispatched fleet-upgrade facts re-checked against their live
+// pipeline; terminal ones get a fleet-upgrade-terminal fact and the stale dispatched block deleted.
+describe("fleet settlement (SIO-1072)", () => {
+	const fleetHit = (over: Partial<(typeof fleetHits)[number]> = {}) => ({
+		text: "Fleet agents on ap-cld upgrade DISPATCHED to 9.4.2.",
+		annotations: {
+			kind: "fleet-upgrade-dispatched",
+			deployment: "ap-cld",
+			version: "9.4.2",
+			pipeline_id: "2662295942",
+			status: "dispatched",
+		},
+		blockId: "block-1",
+		sessionId: "session-1",
+		...over,
+	});
+
+	test("failed pipeline -> terminal fact recorded, dispatched block deleted", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[200] {"id":2662295942,"status":"failed"}');
+		applyResultRawById.set(2662295942, `[200] ${JSON.stringify({ status: "failed", report: "", failureLog: "" })}`);
+
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+
+		expect(counts).toEqual({ checked: 1, settled: 1, stillRunning: 0, errors: 0 });
+		expect(recordedNowFacts).toHaveLength(1);
+		expect(recordedNowFacts[0]?.annotations).toMatchObject({
+			kind: "fleet-upgrade-terminal",
+			status: "failed",
+			deployment: "ap-cld",
+			version: "9.4.2",
+			pipeline_id: "2662295942",
+			settled_by: "reconcile",
+		});
+		expect(recordedNowFacts[0]?.text).toContain("upgrade FAILED to 9.4.2");
+		expect(deletedBlocks).toEqual([{ sessionId: "session-1", blockIds: ["block-1"] }]);
+		expect(dailyLogs.some((d) => d.summary?.includes("Settled fleet upgrade pipeline #2662295942"))).toBe(true);
+	});
+
+	test("successful pipeline -> settled as applied", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[200] {"id":2662295942,"status":"success"}');
+		applyResultRawById.set(2662295942, `[200] ${JSON.stringify({ status: "success", report: "" })}`);
+
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+
+		expect(counts.settled).toBe(1);
+		expect(recordedNowFacts[0]?.annotations?.status).toBe("applied");
+		expect(recordedNowFacts[0]?.text).toContain("upgraded to 9.4.2");
+	});
+
+	test("running pipeline -> left in flight (no fact, no delete)", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[200] {"id":2662295942,"status":"running"}');
+
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+
+		expect(counts).toEqual({ checked: 1, settled: 0, stillRunning: 1, errors: 0 });
+		expect(recordedNowFacts).toHaveLength(0);
+		expect(deletedBlocks).toHaveLength(0);
+	});
+
+	test("purged pipeline (404) -> settled with an explicit unknown outcome, never re-checked forever", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[404] {"message":"404 Not Found"}');
+
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+
+		expect(counts.settled).toBe(1);
+		expect(recordedNowFacts[0]?.annotations?.status).toBe("unknown");
+		expect(recordedNowFacts[0]?.text).toContain("UNKNOWN outcome");
+		expect(deletedBlocks).toHaveLength(1);
+	});
+
+	test("terminal-fact write failure -> dispatched block is NOT deleted (never lose history)", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[200] {"id":2662295942,"status":"failed"}');
+		applyResultRawById.set(2662295942, `[200] ${JSON.stringify({ status: "failed" })}`);
+		recordNowSucceeds = false;
+
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+
+		expect(counts).toEqual({ checked: 1, settled: 0, stillRunning: 0, errors: 1 });
+		expect(deletedBlocks).toHaveLength(0);
+	});
+
+	test("hit without block/session/pipeline id is skipped (cannot re-check or retire)", async () => {
+		fleetHits = [fleetHit({ blockId: undefined }), fleetHit({ annotations: { kind: "fleet-upgrade-dispatched" } })];
+		const targets = await enumerateDispatchedFleetFacts();
+		expect(targets).toHaveLength(0);
+	});
+
+	test("no-op on the file backend", async () => {
+		backend = "file";
+		fleetHits = [fleetHit()];
+		const counts = await reconcileFleetUpgrades({ source: "cron" });
+		expect(counts).toEqual({ checked: 0, settled: 0, stillRunning: 0, errors: 0 });
+	});
+
+	test("reconcileAll merges the fleet counts into the sweep summary", async () => {
+		fleetHits = [fleetHit()];
+		pipelineRawById.set(2662295942, '[200] {"id":2662295942,"status":"failed"}');
+		applyResultRawById.set(2662295942, `[200] ${JSON.stringify({ status: "failed" })}`);
+
+		const summary = await reconcileAll({ source: "cron" });
+
+		expect(summary).toMatchObject({ fleetChecked: 1, fleetSettled: 1, fleetStillRunning: 0, fleetErrors: 0 });
+	});
+
+	test("still-running fleet fact leaves the SIO-959 recovery data intact", async () => {
+		const target: FleetSettleTarget = {
+			blockId: "b",
+			sessionId: "s",
+			pipelineId: 77,
+			deployment: "us-cld",
+			version: "9.4.2",
+		};
+		pipelineRawById.set(77, '[200] {"id":77,"status":"pending"}');
+		expect(await reconcileFleetOne(target)).toBe("still-running");
+	});
+
+	test("decision wording mirrors the turn-recorded fleet facts", () => {
+		const target: FleetSettleTarget = {
+			blockId: "b",
+			sessionId: "s",
+			pipelineId: 5,
+			deployment: "eu-cld",
+			version: "9.4.2",
+		};
+		expect(buildSettledFleetDecision(target, "applied")).toContain("Fleet agents on eu-cld upgraded to 9.4.2.");
+		expect(buildSettledFleetDecision(target, "partial", "Partial: 3/5 upgraded")).toContain("PARTIALLY applied");
+		expect(buildSettledFleetDecision(target, "partial", "Partial: 3/5 upgraded")).toContain("Partial: 3/5 upgraded");
+		expect(buildSettledFleetDecision(target, "unknown")).toContain("no longer retrievable");
 	});
 });
 
