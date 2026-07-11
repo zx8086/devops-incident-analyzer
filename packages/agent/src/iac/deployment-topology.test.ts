@@ -4,15 +4,20 @@ import { parse } from "yaml";
 import {
 	branchSlug,
 	classifyUserSettingsDrift,
+	deploymentNameById,
+	isPlausibleDeploymentId,
 	mergeDeploymentUserSettingsKey,
 	mergeUserSettingsKey,
+	parseDeploymentsList,
 	parseIntentJson,
 	parseLiveUserSettingsYaml,
 	readDeploymentUserSettings,
+	removeDeploymentObservability,
 	removeDeploymentUserSettingsKeys,
 	removeUserSettingsKeys,
 	reviewPlan,
 	setComponentSize,
+	setDeploymentObservability,
 	setDeploymentTopology,
 	setDeploymentUserSettings,
 } from "./nodes.ts";
@@ -1321,6 +1326,505 @@ describe("draftChange -> proposeTopologyChange live drift (SIO-1000)", () => {
 		const result = await draftChange(asIacState(state));
 		const text = String(result.messages?.[0]?.content ?? "");
 		expect(text).toContain("genuinely nothing to reconcile");
+	});
+});
+
+// SIO-1073: the observability monitoring-shipping block (add/update/remove + live identification).
+const MONITOR_ID = "e0d0b78a2c5a4f67872cfe178289b070";
+const OWN_ID = "1111aaaa2222bbbb3333cccc4444dddd";
+const LIST_OK = `[200] ${JSON.stringify({
+	deployments: [
+		{ id: OWN_ID, name: "eu-b2b" },
+		{ id: MONITOR_ID, name: "eu-cld-monitor" },
+	],
+})}`;
+const DEPLOYMENT_WITH_OBS = `${JSON.stringify(
+	{
+		...(JSON.parse(DEPLOYMENT) as Record<string, unknown>),
+		observability: { deployment_id: MONITOR_ID, ref_id: "main-elasticsearch", logs: true, metrics: true },
+	},
+	null,
+	2,
+)}\n`;
+
+describe("isPlausibleDeploymentId", () => {
+	test("accepts a 32-char lowercase hex id", () => {
+		expect(isPlausibleDeploymentId(MONITOR_ID)).toBe(true);
+	});
+	test("rejects uppercase, wrong length, non-hex, and empty", () => {
+		expect(isPlausibleDeploymentId(MONITOR_ID.toUpperCase())).toBe(false);
+		expect(isPlausibleDeploymentId(MONITOR_ID.slice(0, 31))).toBe(false);
+		expect(isPlausibleDeploymentId(`${MONITOR_ID.slice(0, 31)}g`)).toBe(false);
+		expect(isPlausibleDeploymentId("")).toBe(false);
+		expect(isPlausibleDeploymentId("eu-cld-monitor")).toBe(false);
+	});
+});
+
+describe("parseDeploymentsList / deploymentNameById", () => {
+	test("parses the deployments rows and resolves an id to its name", () => {
+		expect(parseDeploymentsList(LIST_OK)?.length).toBe(2);
+		expect(deploymentNameById(LIST_OK, MONITOR_ID)).toBe("eu-cld-monitor");
+	});
+	test("absent id -> undefined name, but the list still parses (NOT-found vs UNVERIFIED)", () => {
+		expect(deploymentNameById(LIST_OK, "ffffffffffffffffffffffffffffffff")).toBeUndefined();
+		expect(parseDeploymentsList(LIST_OK)).toBeDefined();
+	});
+	test("unparseable body -> undefined list (UNVERIFIED, never a false warning)", () => {
+		expect(parseDeploymentsList("[error: connect timeout]")).toBeUndefined();
+		expect(parseDeploymentsList("[200] not json {")).toBeUndefined();
+		expect(deploymentNameById("[error: connect timeout]", MONITOR_ID)).toBeUndefined();
+	});
+});
+
+describe("setDeploymentObservability", () => {
+	test("CREATE writes the full block with explicit defaults, preserves siblings byte-for-byte", () => {
+		const { content, previous, created, changed } = setDeploymentObservability(DEPLOYMENT, {
+			deploymentId: MONITOR_ID,
+		});
+		const parsed = JSON.parse(content) as {
+			observability: { deployment_id: string; ref_id: string; logs: boolean; metrics: boolean };
+			elasticsearch_config: { user_settings_yaml: string };
+			kibana: { user_settings_yaml: string };
+		};
+		expect(created).toBe(true);
+		expect(changed).toBe(true);
+		expect(previous).toBeUndefined();
+		expect(parsed.observability).toEqual({
+			deployment_id: MONITOR_ID,
+			ref_id: "main-elasticsearch",
+			logs: true,
+			metrics: true,
+		});
+		expect(parsed.elasticsearch_config.user_settings_yaml).toBe(ES_SSO);
+		expect(parsed.kibana.user_settings_yaml).toBe(KB_SSO);
+		expect(content.endsWith("}\n")).toBe(true);
+	});
+
+	test("CREATE without a deploymentId throws (the id is required to add the block)", () => {
+		expect(() => setDeploymentObservability(DEPLOYMENT, { logs: false })).toThrow("deployment_id is required");
+	});
+
+	test("UPDATE only touches the provided fields and captures the previous block", () => {
+		const { content, previous, created, changed } = setDeploymentObservability(DEPLOYMENT_WITH_OBS, {
+			metrics: false,
+		});
+		const parsed = JSON.parse(content) as { observability: { deployment_id: string; logs: boolean; metrics: boolean } };
+		expect(created).toBe(false);
+		expect(changed).toBe(true);
+		expect(previous?.metrics).toBe(true);
+		expect(parsed.observability.deployment_id).toBe(MONITOR_ID);
+		expect(parsed.observability.logs).toBe(true);
+		expect(parsed.observability.metrics).toBe(false);
+	});
+
+	test("UPDATE normalizes a sparse existing block with the module defaults (Terraform's effective values)", () => {
+		const sparse = JSON.stringify({ name: "eu-b2b", observability: { deployment_id: MONITOR_ID } }, null, 2);
+		const { content, changed } = setDeploymentObservability(sparse, { logs: false });
+		const parsed = JSON.parse(content) as { observability: { ref_id: string; logs: boolean; metrics: boolean } };
+		expect(changed).toBe(true);
+		expect(parsed.observability.ref_id).toBe("main-elasticsearch");
+		expect(parsed.observability.logs).toBe(false);
+		expect(parsed.observability.metrics).toBe(true);
+	});
+
+	test("changed=false when every provided value already matches", () => {
+		const { changed, created } = setDeploymentObservability(DEPLOYMENT_WITH_OBS, {
+			deploymentId: MONITOR_ID,
+			logs: true,
+		});
+		expect(created).toBe(false);
+		expect(changed).toBe(false);
+	});
+
+	test("throws on a non-object deployment JSON", () => {
+		expect(() => setDeploymentObservability("[1,2]", { deploymentId: MONITOR_ID })).toThrow("not an object");
+	});
+});
+
+describe("removeDeploymentObservability", () => {
+	test("removes the block, captures previous, preserves siblings + trailing newline", () => {
+		const { content, previous, changed } = removeDeploymentObservability(DEPLOYMENT_WITH_OBS);
+		const parsed = JSON.parse(content) as Record<string, unknown> & {
+			elasticsearch_config: { user_settings_yaml: string };
+		};
+		expect(changed).toBe(true);
+		expect(previous?.deployment_id).toBe(MONITOR_ID);
+		expect("observability" in parsed).toBe(false);
+		expect(parsed.elasticsearch_config.user_settings_yaml).toBe(ES_SSO);
+		expect(content.endsWith("}\n")).toBe(true);
+	});
+
+	test("changed=false when there is no block (idempotent no-op)", () => {
+		const { changed, previous } = removeDeploymentObservability(DEPLOYMENT);
+		expect(changed).toBe(false);
+		expect(previous).toBeUndefined();
+	});
+});
+
+describe("parseIntentJson — topology-edit observability (SIO-1073)", () => {
+	test("maps all six observability fields", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "topology-edit",
+				cluster: "eu-cld",
+				observabilityDeploymentId: MONITOR_ID,
+				observabilityDeploymentName: "eu-cld-monitor",
+				observabilityRefId: "main-elasticsearch",
+				observabilityLogs: true,
+				observabilityMetrics: true,
+				observabilityRemove: false,
+			}),
+		);
+		expect(req?.workflow).toBe("topology-edit");
+		expect(req?.observabilityDeploymentId).toBe(MONITOR_ID);
+		expect(req?.observabilityDeploymentName).toBe("eu-cld-monitor");
+		expect(req?.observabilityRefId).toBe("main-elasticsearch");
+		expect(req?.observabilityLogs).toBe(true);
+		expect(req?.observabilityMetrics).toBe(true);
+		expect(req?.observabilityRemove).toBe(false);
+	});
+
+	test("explicit nulls normalize to undefined", () => {
+		const req = parseIntentJson(
+			JSON.stringify({
+				workflow: "topology-edit",
+				cluster: "eu-cld",
+				observabilityDeploymentId: null,
+				observabilityRemove: null,
+			}),
+		);
+		expect(req?.observabilityDeploymentId).toBeUndefined();
+		expect(req?.observabilityRemove).toBeUndefined();
+	});
+});
+
+describe("branchSlug — observability (SIO-1073)", () => {
+	test("observability-only add slugs by the surface", () => {
+		const req: IacRequest = {
+			workflow: "topology-edit",
+			isProd: false,
+			cluster: "eu-cld",
+			observabilityDeploymentId: MONITOR_ID,
+		};
+		expect(branchSlug(req)).toBe("eu-cld-observability-topology-edit");
+	});
+	test("observability remove slugs distinctly (40-char cap truncates the tail)", () => {
+		const req: IacRequest = { workflow: "topology-edit", isProd: false, cluster: "eu-b2b", observabilityRemove: true };
+		expect(branchSlug(req)).toContain("eu-b2b-observability-remove");
+	});
+});
+
+describe("draftChange -> proposeTopologyChange observability (SIO-1073)", () => {
+	const fileResult = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT).toString("base64"), encoding: "base64" })}`;
+	const fileWithObs = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT_WITH_OBS).toString("base64"), encoding: "base64" })}`;
+
+	test("happy add: commits the full block, diff has the new block + positive target identification", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: MONITOR_ID,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain("[observability] + (new block)");
+		expect(result.proposedDiff).toContain("Live check (observability)");
+		expect(result.proposedDiff).toContain(`target ${MONITOR_ID} is live deployment 'eu-cld-monitor'`);
+		expect(result.proposedDiff).not.toContain("NOT found");
+		expect(result.proposedDiff).not.toContain("SELF-MONITORING");
+		const written = JSON.parse(String(committed.content)) as {
+			observability: { deployment_id: string; ref_id: string; logs: boolean; metrics: boolean };
+			elasticsearch_config: { user_settings_yaml: string };
+		};
+		expect(written.observability).toEqual({
+			deployment_id: MONITOR_ID,
+			ref_id: "main-elasticsearch",
+			logs: true,
+			metrics: true,
+		});
+		expect(written.elasticsearch_config.user_settings_yaml).toBe(ES_SSO);
+	});
+
+	test("update: metrics -> false on an existing block; deployment_id untouched; no list call needed", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileWithObs,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+			// deliberately NO elastic_cloud_list_deployments -- an update without an id must not call it
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityMetrics: false,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain('- "metrics": true\n+ "metrics": false');
+		const written = JSON.parse(String(committed.content)) as { observability: { deployment_id: string } };
+		expect(written.observability.deployment_id).toBe(MONITOR_ID);
+	});
+
+	test("remove: commit drops the block; diff leads with the disconnect warning", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileWithObs,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityRemove: true,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain("DISCONNECTS monitoring shipping");
+		const written = JSON.parse(String(committed.content)) as Record<string, unknown>;
+		expect("observability" in written).toBe(false);
+	});
+
+	test("remove no-op: no block in the repo -> noopReason, no commit", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityRemove: true,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(false);
+		expect(result.noopReason).toContain("no observability block");
+		expect(result.blockedReason).toBeFalsy();
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only");
+	});
+
+	test("blocks on a non-32-hex deployment_id before any repo read", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({}); // no tools -> proves the guard fires before reading
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: "eu-cld-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("Invalid observability deployment_id");
+	});
+
+	test("blocks remove + set fields in one request (mutually exclusive)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityRemove: true,
+				observabilityLogs: false,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("mutually exclusive");
+	});
+
+	test("name resolution: a monitoring deployment NAME resolves to its id and commits it", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed: Record<string, unknown> = {};
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: (args) => {
+				committed = args;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentName: "eu-cld-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.proposedDiff).toContain(`resolved monitoring deployment 'eu-cld-monitor' -> ${MONITOR_ID}`);
+		const written = JSON.parse(String(committed.content)) as { observability: { deployment_id: string } };
+		expect(written.observability.deployment_id).toBe(MONITOR_ID);
+	});
+
+	test("blocks on an unresolvable monitoring deployment name", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentName: "ghost-monitor",
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.blockedReason).toContain("Could not resolve monitoring deployment 'ghost-monitor'");
+	});
+
+	test("unknown id: warns in the diff but still commits (warn-only)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const unknownId = "ffffffffffffffffffffffffffffffff";
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: unknownId,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(true);
+		expect(result.proposedDiff).toContain("NOT found among the live Elastic Cloud deployments");
+	});
+
+	test("self-monitoring: pointing a deployment at its own id warns but still commits", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => LIST_OK,
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: OWN_ID,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(true);
+		expect(result.proposedDiff).toContain("SELF-MONITORING");
+	});
+
+	test("list read failure: UNVERIFIED note, still commits (never blocks on the live check)", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		let committed = false;
+		mockTools({
+			gitlab_get_file_content: () => fileResult,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => {
+				committed = true;
+				return "[201] {}";
+			},
+			elastic_cloud_list_deployments: () => "[error: connect timeout]",
+		});
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityDeploymentId: MONITOR_ID,
+			},
+		};
+		const result = await draftChange(asIacState(state));
+		expect(committed).toBe(true);
+		expect(result.proposedDiff).toContain("UNVERIFIED");
+	});
+});
+
+describe("reviewPlan — topology observability (SIO-1073)", () => {
+	test("removal leads the risk list with the disconnect warning, above the shared-state line", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-b2b",
+				observabilityRemove: true,
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.risks?.[0]).toContain("DISCONNECTS MONITORING SHIPPING");
+		expect(result.risks?.[1]).toContain("SINGLE shared Terraform state");
+		expect(result.planReview?.title).toContain("observability removed");
+	});
+
+	test("set/update points the reviewer at the live-check notes", async () => {
+		const state = {
+			iacRequest: {
+				workflow: "topology-edit" as const,
+				isProd: false,
+				cluster: "eu-cld",
+				observabilityDeploymentId: MONITOR_ID,
+			},
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+		};
+		const result = await reviewPlan(asIacState(state));
+		expect(result.risks?.[0]).toContain("SINGLE shared Terraform state");
+		expect(result.risks?.some((r: string) => r.includes("wrong-but-valid deployment_id"))).toBe(true);
+		expect(result.planReview?.title).toContain(`observability -> ${MONITOR_ID}`);
 	});
 });
 

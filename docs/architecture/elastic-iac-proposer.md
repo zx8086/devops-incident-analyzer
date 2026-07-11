@@ -69,7 +69,7 @@ A change is a JSON config edit (config-edit `kind`) committed via the API; CI co
 | **tier-resize** (SIO-879) | `elasticsearch.<tier>.size` / `.max_size` (string `"<N>g"`) in `_deployments/<cluster>.json` | tier-resize / MEDIUM |
 | **ilm-rollout** (SIO-880/931/932) | nested phase patch(es) into `environments/<cluster>/lifecycle-policies/<policy>.json` | ilm / MEDIUM, **HIGH on retention reduction** |
 | **ilm-delete** (SIO-1037) | deletes an ILM policy file under `environments/<cluster>/lifecycle-policies/` | ilm / LOW (destructive delete advisory) |
-| **topology-edit** (SIO-919) | autoscale toggle, tier `zone_count`, per-tier autoscale, SSO/OIDC `user_settings_yaml` in `_deployments/<cluster>.json` | deployments-topology / MEDIUM (shared state) |
+| **topology-edit** (SIO-919/997/999/1073) | autoscale toggle, tier `zone_count`, per-tier autoscale, SSO/OIDC `user_settings_yaml` (replace/merge/remove keys), `integrations_server`/`kibana` sizing, and the top-level `observability` monitoring-shipping block (add/update/remove) in `_deployments/<cluster>.json` | deployment-topology / HIGH (shared state; observability removal flagged destructive) |
 | **slo-edit** (SIO-915) | SLO objective target, time-window duration, tags | slo / LOW |
 | **alerting-edit** (SIO-916) | threshold, `windowSize`, `windowUnit`, `enabled`, `interval` | alerting / LOW |
 | **dataview-edit** (SIO-917) | runtime fields, title/displayName | dataview / LOW |

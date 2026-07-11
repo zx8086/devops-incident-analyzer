@@ -33,6 +33,11 @@ describe("capabilityMessage", () => {
 		expect(msg).toContain("persistent");
 	});
 
+	test("advertises the observability monitoring-shipping surface (SIO-1073)", () => {
+		expect(msg).toContain("observability monitoring-shipping block");
+		expect(msg).toContain("disconnects monitoring shipping");
+	});
+
 	test("explains a Fleet agent BINARY upgrade is a different, not-yet-wired path", () => {
 		expect(msg).toContain("Fleet");
 		// must distinguish the binary upgrade from a Terraform config change

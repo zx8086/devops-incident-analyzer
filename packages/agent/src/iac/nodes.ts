@@ -264,6 +264,14 @@ const IntentSchema = z.object({
 	sizeComponent: z.enum(["integrations_server", "kibana"]).nullish(),
 	componentSize: z.string().nullish(),
 	componentZoneCount: z.number().nullish(),
+	// SIO-1073: the top-level observability monitoring-shipping block (add/update via the set
+	// fields, delete via observabilityRemove). Name is an alternative to the 32-hex id.
+	observabilityDeploymentId: z.string().nullish(),
+	observabilityDeploymentName: z.string().nullish(),
+	observabilityRefId: z.string().nullish(),
+	observabilityLogs: z.boolean().nullish(),
+	observabilityMetrics: z.boolean().nullish(),
+	observabilityRemove: z.boolean().nullish(),
 	dashboardSpace: z.string().nullish(),
 	dashboardName: z.string().nullish(),
 	dashboardNdjson: z.string().nullish(),
@@ -442,6 +450,13 @@ export function parseIntentJson(raw: string): IacRequest {
 					sizeComponent: nn(p.sizeComponent),
 					componentSize: nn(p.componentSize),
 					componentZoneCount: nn(p.componentZoneCount),
+					// SIO-1073: observability monitoring-shipping block.
+					observabilityDeploymentId: nn(p.observabilityDeploymentId),
+					observabilityDeploymentName: nn(p.observabilityDeploymentName),
+					observabilityRefId: nn(p.observabilityRefId),
+					observabilityLogs: nn(p.observabilityLogs),
+					observabilityMetrics: nn(p.observabilityMetrics),
+					observabilityRemove: nn(p.observabilityRemove),
 					dashboardSpace: nn(p.dashboardSpace),
 					dashboardName: nn(p.dashboardName),
 					dashboardNdjson: nn(p.dashboardNdjson),
@@ -509,7 +524,7 @@ export function capabilityMessage(): string {
 		'- **Cluster-settings edits** -- set, change, or REMOVE the cluster-level persistent/transient settings (the PUT _cluster/settings surface), e.g. "set xpack.monitoring.collection.interval to 60s on eu-b2b", "raise cluster.max_shards_per_node to 2000", or "remove xpack.monitoring.collection.interval from the persistent block on eu-b2b" (any cluster setting in environments/<dep>/cluster-settings/settings.json; distinct from per-template cluster-defaults)\n' +
 		'- **Space edits** -- e.g. "change the developer-experience space description on eu-cld"\n' +
 		'- **Security role privilege grants** -- e.g. "grant the developer role read on logs-* on eu-b2b" (HIGH risk; additive only)\n' +
-		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, or integrations_server/kibana sizing; e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b" (HIGH risk; single shared state, long apply; SSO edits can lock out login)\n' +
+		'- **Deployment topology** -- autoscale, a tier zone_count/autoscale, SSO user_settings_yaml, integrations_server/kibana sizing, or the observability monitoring-shipping block (add/update/REMOVE); e.g. "turn on autoscaling for eu-onboarding", "set the hot tier zone_count to 3 on eu-b2b", "ship eu-cld logs and metrics to monitoring deployment e0d0b78a2c5a4f67872cfe178289b070" (HIGH risk; single shared state, long apply; SSO edits can lock out login; removing the observability block disconnects monitoring shipping)\n' +
 		'- **Dashboards** -- add or replace a whole Kibana dashboard NDJSON in a space; e.g. "add this dashboard to the developer-experience space on eu-b2b" (paste the Kibana export) (MEDIUM risk; whole-file only, no panel edits)\n' +
 		'- **Index templates** -- add a high-priority index template so an index pattern lands on a short-retention ILM policy; e.g. "route dev/staging metrics and traces to their short-retention policies on eu-b2b" (new-file create; composes component templates + binds the ILM policy via the template settings)\n' +
 		'- **Ingest pipelines** -- add a NEW @custom ingest pipeline, e.g. "create an ingest pipeline logs-cisco_ftd.log@custom that drops flow-expiration events on us-cld", or REPLACE the body of an EXISTING one, e.g. "replace the entire contents of environments/ap-cld/ingest-pipelines/drop-cisco-meraki-ip-session.json with exactly {...}" (paste the complete pipeline JSON; committed verbatim, one MR; the file must already exist for an edit)\n\n' +
@@ -908,7 +923,9 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"grantIndexNames, grantIndexPrivileges, grantKibanaApplication, grantKibanaPrivileges, autoscaleEnabled, " +
 		"topologyTier, tierZoneCount, tierAutoscale, userSettingsTarget, userSettingsYaml, userSettingsMergeTarget, " +
 		"userSettingsMergeKey, userSettingsMergeValue, userSettingsRemoveKeys, sizeComponent, componentSize, " +
-		"componentZoneCount, dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, ingestPipelines, ingestPipelineEdits, reason, isProd (true only if " +
+		"componentZoneCount, observabilityDeploymentId, observabilityDeploymentName, observabilityRefId, " +
+		"observabilityLogs, observabilityMetrics, observabilityRemove, " +
+		"dashboardSpace, dashboardName, dashboardNdjson, dashboardAction, indexTemplates, ingestPipelines, ingestPipelineEdits, reason, isProd (true only if " +
 		"the user explicitly named a production " +
 		"cluster), and clarification. " +
 		"Extract `cluster` ONLY from the deployment the user names in this request; NEVER default to a cluster that " +
@@ -1089,7 +1106,18 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 		"(a1) and (a3): a key under xpack.*/cluster.*/indices.*/search.* (an Elasticsearch setting) is 'elasticsearch_config'; " +
 		"a Kibana setting (xpack.fleet, server.*, Kibana feature) is 'kibana'; when unstated, default to 'elasticsearch_config'. " +
 		"And (b) component sizing -- to resize the integrations_server or kibana node, set " +
-		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. Set at " +
+		"sizeComponent ('integrations_server'|'kibana') with componentSize (e.g. '2g') and/or componentZoneCount. " +
+		"And (c) observability shipping -- the TOP-LEVEL `observability` block that ships this deployment's logs/metrics " +
+		"to a monitoring deployment. To ADD or UPDATE it ('ship eu-cld logs and metrics to monitoring deployment " +
+		"e0d0b78a2c5a4f67872cfe178289b070', 'add the observability block pointing at eu-cld-monitor', 'turn off metrics " +
+		"shipping on eu-b2b'), set observabilityDeploymentId to the 32-hex Elastic Cloud deployment id VERBATIM when the " +
+		"user gives one (an id is REQUIRED when the deployment has no observability block yet), or " +
+		"observabilityDeploymentName when the user names the monitoring deployment instead (the agent resolves the name " +
+		"to an id from the live deployments list); optionally observabilityRefId (default 'main-elasticsearch'), " +
+		"observabilityLogs (true/false), observabilityMetrics (true/false). To REMOVE the whole block ('stop shipping " +
+		"monitoring from eu-b2b', 'disconnect eu-b2b from the monitoring deployment', 'remove the observability block on " +
+		"eu-b2b'), set observabilityRemove to true and NO other observability field -- removal is destructive (monitoring " +
+		"shipping stops at apply). Set at " +
 		"least one topology field. NEVER propose deleting a deployment. " +
 		"For a DASHBOARD change ('add this dashboard to the developer-experience space on eu-b2b', 'replace the kong " +
 		"dashboard on eu-b2b' followed by a pasted Kibana export) -- adding or replacing a WHOLE Kibana dashboard NDJSON " +
@@ -1840,6 +1868,107 @@ export function setComponentSize(
 	return { content: `${JSON.stringify(obj, null, 2)}\n`, previousSize, previousZoneCount, changed };
 }
 
+// SIO-1073: an Elastic Cloud deployment id is 32 lowercase hex chars. (Pure; unit-tested.)
+export function isPlausibleDeploymentId(id: string): boolean {
+	return /^[0-9a-f]{32}$/.test(id);
+}
+
+// SIO-1073: parse an elastic_cloud_list_deployments "[status] {json}" body into its deployments
+// rows. undefined when the body is unparseable, so callers can tell "the id is not in the list"
+// (rows without the id) apart from "the list could not be read" (undefined -> UNVERIFIED, never
+// a false warning). (Pure; unit-tested.)
+export function parseDeploymentsList(listText: string): Array<{ id?: string; name?: string }> | undefined {
+	const jsonStart = listText.indexOf("{");
+	if (jsonStart < 0) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(listText.slice(jsonStart));
+		return typeof parsed === "object" &&
+			parsed !== null &&
+			Array.isArray((parsed as { deployments?: unknown }).deployments)
+			? (parsed as { deployments: Array<{ id?: string; name?: string }> }).deployments
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// SIO-1073: inverse of parseDeploymentId -- resolve a deployment id to its name. undefined when
+// the body is unparseable OR the id is absent; "" when the deployment exists but carries no name.
+// (Pure; unit-tested.)
+export function deploymentNameById(listText: string, id: string): string | undefined {
+	if (!id) return undefined;
+	const hit = parseDeploymentsList(listText)?.find((r) => r.id === id);
+	return hit ? (hit.name ?? "") : undefined;
+}
+
+type ObservabilityBlock = { deployment_id?: string; ref_id?: string; logs?: boolean; metrics?: boolean };
+
+function readObservabilityBlock(obj: Record<string, unknown>): ObservabilityBlock | undefined {
+	const block = obj.observability;
+	return block && typeof block === "object" && !Array.isArray(block) ? (block as ObservabilityBlock) : undefined;
+}
+
+// SIO-1073: read-modify-write the top-level `observability` block of a _deployments JSON (ships
+// this deployment's logs/metrics to a monitoring deployment). CREATE (no existing block):
+// deploymentId is REQUIRED and the block is written in full with the deployment module's defaults
+// made explicit (ref_id "main-elasticsearch", logs true, metrics true) so the file self-documents
+// what applies. UPDATE (block exists): only the provided fields change; missing fields keep their
+// existing values, falling back to the module defaults for a sparse block (same effective values
+// Terraform already applies, so normalization is not a behavior change). Captures the previous
+// block for the diff. Preserves every sibling field + trailing newline. Throws on bad JSON or a
+// create without a deploymentId. (Pure; unit-tested.)
+export function setDeploymentObservability(
+	json: string,
+	changes: { deploymentId?: string; refId?: string; logs?: boolean; metrics?: boolean },
+): { content: string; previous?: ObservabilityBlock; created: boolean; changed: boolean } {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const existing = readObservabilityBlock(obj);
+	const previous = existing ? { ...existing } : undefined;
+	const created = existing === undefined;
+	if (created && changes.deploymentId === undefined) {
+		throw new Error("deployment JSON has no observability block; a monitoring deployment_id is required to add one");
+	}
+	const next: ObservabilityBlock = {
+		deployment_id: changes.deploymentId ?? existing?.deployment_id,
+		ref_id: changes.refId ?? existing?.ref_id ?? "main-elasticsearch",
+		logs: changes.logs ?? existing?.logs ?? true,
+		metrics: changes.metrics ?? existing?.metrics ?? true,
+	};
+	const changed =
+		created ||
+		next.deployment_id !== existing?.deployment_id ||
+		next.ref_id !== existing?.ref_id ||
+		next.logs !== existing?.logs ||
+		next.metrics !== existing?.metrics;
+	obj.observability = next;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, created, changed };
+}
+
+// SIO-1073: DELETE the top-level `observability` block -- the destructive counterpart of
+// setDeploymentObservability (monitoring shipping stops at apply; surfaced HIGH upstream).
+// changed=false when no block exists (idempotent no-op). Preserves every sibling field + trailing
+// newline. Throws on bad JSON. (Pure; unit-tested.)
+export function removeDeploymentObservability(json: string): {
+	content: string;
+	previous?: ObservabilityBlock;
+	changed: boolean;
+} {
+	const parsed: unknown = JSON.parse(json);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("deployment JSON is not an object");
+	}
+	const obj = parsed as Record<string, unknown>;
+	const existing = readObservabilityBlock(obj);
+	if (existing === undefined) return { content: `${JSON.stringify(obj, null, 2)}\n`, changed: false };
+	const previous = { ...existing };
+	delete obj.observability;
+	return { content: `${JSON.stringify(obj, null, 2)}\n`, previous, changed: true };
+}
+
 // reconcile-to-live: rewrite the deployment JSON's elasticsearch block to match the live cluster's
 // per-tier sizing. Sets max_size ("<N>g") + zone_count for each tier present in BOTH the JSON and
 // `topo`; never invents a tier the repo doesn't manage. The live "size" is the autoscaling ceiling
@@ -2114,7 +2243,17 @@ export function branchSlug(req: IacRequest): string {
 												: req.workflow === "security-edit"
 													? req.roleName
 													: req.workflow === "topology-edit"
-														? req.topologyTier
+														? // SIO-1073: an observability-only edit has no tier; slug by the surface instead.
+															(req.topologyTier ??
+															(req.observabilityRemove === true
+																? "observability-remove"
+																: req.observabilityDeploymentId !== undefined ||
+																		req.observabilityDeploymentName !== undefined ||
+																		req.observabilityRefId !== undefined ||
+																		req.observabilityLogs !== undefined ||
+																		req.observabilityMetrics !== undefined
+																	? "observability"
+																	: undefined))
 														: req.workflow === "dashboard-edit"
 															? // SIO-920: dashboard slugs repeat across spaces (default__foo vs observability__foo);
 																// include space + action so same-day edits don't collide on one branch.
@@ -5056,6 +5195,13 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 
+	// SIO-1073: any observability set field (id, name, ref_id, logs, metrics) counts as a change.
+	const observabilitySet =
+		req.observabilityDeploymentId !== undefined ||
+		req.observabilityDeploymentName !== undefined ||
+		req.observabilityRefId !== undefined ||
+		req.observabilityLogs !== undefined ||
+		req.observabilityMetrics !== undefined;
 	const hasChange =
 		req.autoscaleEnabled !== undefined ||
 		(req.topologyTier !== undefined && (req.tierZoneCount !== undefined || req.tierAutoscale !== undefined)) ||
@@ -5068,14 +5214,18 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		(req.userSettingsMergeTarget !== undefined &&
 			req.userSettingsRemoveKeys !== undefined &&
 			req.userSettingsRemoveKeys.length > 0) ||
-		(req.sizeComponent !== undefined && (req.componentSize !== undefined || req.componentZoneCount !== undefined));
+		(req.sizeComponent !== undefined && (req.componentSize !== undefined || req.componentZoneCount !== undefined)) ||
+		// SIO-1073: the observability monitoring-shipping block (add/update via the set fields,
+		// delete via observabilityRemove).
+		observabilitySet ||
+		req.observabilityRemove === true;
 	if (!cluster || !hasChange) {
 		return {
 			blockedReason:
-				"Topology change needs a cluster and at least one of autoscale / tier zone_count / tier autoscale / user_settings_yaml / component size.",
+				"Topology change needs a cluster and at least one of autoscale / tier zone_count / tier autoscale / user_settings_yaml / component size / observability shipping.",
 			messages: [
 				new AIMessage(
-					"Cannot propose the change: name the deployment and what to change (autoscale, a tier's zone_count/autoscale, an SSO user_settings_yaml block, adding/changing OR REMOVING a user_settings_yaml key, or integrations_server/kibana sizing).",
+					"Cannot propose the change: name the deployment and what to change (autoscale, a tier's zone_count/autoscale, an SSO user_settings_yaml block, adding/changing OR REMOVING a user_settings_yaml key, integrations_server/kibana sizing, or the observability monitoring-shipping block (add/update/REMOVE)).",
 				),
 			],
 		};
@@ -5087,6 +5237,28 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		return {
 			blockedReason: `Invalid zone_count ${req.tierZoneCount}.`,
 			messages: [new AIMessage("Cannot propose the change: zone_count must be an integer 1-3.")],
+		};
+	}
+	// SIO-1073: removing the observability block and setting its fields in one request is
+	// contradictory -- refuse rather than guess.
+	if (req.observabilityRemove === true && observabilitySet) {
+		return {
+			blockedReason: "Observability remove and set fields are mutually exclusive.",
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: asking to REMOVE the observability block and to set its fields in the same request is contradictory. Re-issue with one or the other.",
+				),
+			],
+		};
+	}
+	if (req.observabilityDeploymentId !== undefined && !isPlausibleDeploymentId(req.observabilityDeploymentId)) {
+		return {
+			blockedReason: `Invalid observability deployment_id '${req.observabilityDeploymentId}'.`,
+			messages: [
+				new AIMessage(
+					"Cannot propose the change: the monitoring deployment_id must be a 32-character lowercase hex Elastic Cloud deployment id (e.g. e0d0b78a2c5a4f67872cfe178289b070). If you only know the monitoring deployment's name, give me the name and I will resolve it.",
+				),
+			],
 		};
 	}
 
@@ -5130,6 +5302,10 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	const driftNotes: string[] = [];
 	let liveRemovalYaml: string | undefined;
 	let liveRemovalTarget: "elasticsearch_config" | "kibana" | undefined;
+	// SIO-1073: warn-only observability identification notes (name resolution, id-known/unknown,
+	// self-monitoring, unverifiable list). Appended under the diff; never block.
+	const liveCheckNotes: string[] = [];
+	let observabilityRemoveMissing = false;
 
 	if (
 		req.autoscaleEnabled !== undefined ||
@@ -5339,6 +5515,122 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		}
 	}
 
+	// SIO-1073: add/update the top-level observability block (monitoring shipping). One
+	// elastic_cloud_list_deployments read (made only when an id/name is involved, and reused across
+	// name resolution + the identification checks) keeps the checks warn-only and cheap.
+	if (observabilitySet) {
+		let effectiveId = req.observabilityDeploymentId;
+		let listText: string | undefined;
+		if (effectiveId === undefined && req.observabilityDeploymentName !== undefined) {
+			listText = await callTool("elastic_cloud_list_deployments", {});
+			const resolved = parseDeploymentId(listText, req.observabilityDeploymentName);
+			if (!resolved) {
+				return {
+					blockedReason: `Could not resolve monitoring deployment '${req.observabilityDeploymentName}' to a deployment id.`,
+					messages: [
+						new AIMessage(
+							`Cannot propose the change: I could not resolve '${req.observabilityDeploymentName}' to an Elastic Cloud deployment id from the live deployments list. Check the name, or give me the 32-hex deployment id directly.`,
+						),
+					],
+				};
+			}
+			effectiveId = resolved;
+			liveCheckNotes.push(`resolved monitoring deployment '${req.observabilityDeploymentName}' -> ${resolved}.`);
+		}
+		let obs: ReturnType<typeof setDeploymentObservability>;
+		try {
+			obs = setDeploymentObservability(content, {
+				deploymentId: effectiveId,
+				refId: req.observabilityRefId,
+				logs: req.observabilityLogs,
+				metrics: req.observabilityMetrics,
+			});
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
+		content = obs.content;
+		anyChange = anyChange || obs.changed;
+		if (obs.created) {
+			const written = readObservabilityBlock(JSON.parse(content) as Record<string, unknown>);
+			diffLines.push(`[observability] + (new block) ${JSON.stringify(written ?? {})}`);
+		} else {
+			const prev = obs.previous ?? {};
+			if (effectiveId !== undefined) {
+				diffLines.push(
+					`[observability] - "deployment_id": ${JSON.stringify(prev.deployment_id ?? "?")}\n+ "deployment_id": ${JSON.stringify(effectiveId)}`,
+				);
+			}
+			if (req.observabilityRefId !== undefined) {
+				diffLines.push(
+					`[observability] - "ref_id": ${JSON.stringify(prev.ref_id ?? "?")}\n+ "ref_id": ${JSON.stringify(req.observabilityRefId)}`,
+				);
+			}
+			if (req.observabilityLogs !== undefined) {
+				diffLines.push(
+					`[observability] - "logs": ${JSON.stringify(prev.logs ?? "?")}\n+ "logs": ${JSON.stringify(req.observabilityLogs)}`,
+				);
+			}
+			if (req.observabilityMetrics !== undefined) {
+				diffLines.push(
+					`[observability] - "metrics": ${JSON.stringify(prev.metrics ?? "?")}\n+ "metrics": ${JSON.stringify(req.observabilityMetrics)}`,
+				);
+			}
+		}
+		// Identify the monitoring target for the reviewer (warn-only; a wrong-but-valid id ships
+		// monitoring data nowhere and CI's plan will NOT catch it).
+		if (effectiveId !== undefined) {
+			listText = listText ?? (await callTool("elastic_cloud_list_deployments", {}));
+			const rows = parseDeploymentsList(listText);
+			if (rows === undefined) {
+				liveCheckNotes.push(
+					"could not read the live deployments list, so the monitoring deployment_id is UNVERIFIED -- confirm it before merge.",
+				);
+			} else {
+				const targetName = deploymentNameById(listText, effectiveId);
+				if (targetName === undefined) {
+					liveCheckNotes.push(
+						`deployment_id ${effectiveId} was NOT found among the live Elastic Cloud deployments -- a wrong-but-valid id ships monitoring data nowhere. Verify before merge.`,
+					);
+				} else {
+					liveCheckNotes.push(`target ${effectiveId} is live deployment '${targetName}'.`);
+				}
+				const ownId = parseDeploymentId(listText, cluster);
+				if (ownId !== "" && ownId === effectiveId) {
+					liveCheckNotes.push(
+						`SELF-MONITORING: ${effectiveId} is '${cluster}''s own deployment id -- it would ship its monitoring data to itself. Usually you want a separate monitoring deployment; confirm this is intentional.`,
+					);
+				}
+			}
+		}
+	}
+
+	// SIO-1073: REMOVE the observability block -- destructive: monitoring shipping stops at apply.
+	// An absent block is an idempotent no-op (dedicated message in the guard below).
+	if (req.observabilityRemove === true) {
+		let removal: ReturnType<typeof removeDeploymentObservability>;
+		try {
+			removal = removeDeploymentObservability(content);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {
+				blockedReason: `Could not edit ${filePath}: ${reason}.`,
+				messages: [new AIMessage(`Cannot propose the change: ${reason}.`)],
+			};
+		}
+		content = removal.content;
+		anyChange = anyChange || removal.changed;
+		observabilityRemoveMissing = !removal.changed;
+		if (removal.changed) {
+			diffLines.push(
+				`[observability] removed (was ${JSON.stringify(removal.previous ?? {})}) -- DISCONNECTS monitoring shipping at apply`,
+			);
+		}
+	}
+
 	if (!anyChange || isUnchangedConfig(content, extractFileContent(raw))) {
 		// SIO-999: a removal whose key(s) are ALREADY absent is an idempotent no-op -- but rather than a
 		// terse "no change", show the user the current user_settings_yaml so they can confirm the subtree
@@ -5393,6 +5685,19 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 				],
 			};
 		}
+		// SIO-1073: a remove with no block in the repo is an idempotent no-op -- but say what that
+		// means (monitoring shipping is not declared here) and flag possible live drift instead of a
+		// terse "no change". NOTE: this confirms the REPO file only.
+		if (req.observabilityRemove === true && observabilityRemoveMissing) {
+			return {
+				noopReason: `Deployment '${cluster}' has no observability block; nothing to remove.`,
+				messages: [
+					new AIMessage(
+						`No change needed: '${cluster}' has no observability block in ${filePath}, so monitoring shipping is not declared there and there is nothing to remove. NOTE: this confirms the REPO file only -- if the live deployment still ships monitoring data, that is drift; tell me and I can investigate.`,
+					),
+				],
+			};
+		}
 		return {
 			noopReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
 			messages: [
@@ -5422,11 +5727,15 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	const committed = true;
 
 	// SIO-1000: append the repo-vs-live drift notes (if any) under the diff so the reviewer sees which
-	// direction this removal reconciles.
+	// direction this removal reconciles. SIO-1073: likewise the observability identification notes.
+	const trailingNotes = [
+		...(driftNotes.length > 0 ? [`Live cluster (drift):\n${driftNotes.map((n) => `- ${n}`).join("\n")}`] : []),
+		...(liveCheckNotes.length > 0
+			? [`Live check (observability):\n${liveCheckNotes.map((n) => `- ${n}`).join("\n")}`]
+			: []),
+	];
 	const diffWithDrift =
-		driftNotes.length > 0
-			? `${diffLines.join("\n")}\n\nLive cluster (drift):\n${driftNotes.map((n) => `- ${n}`).join("\n")}`
-			: diffLines.join("\n");
+		trailingNotes.length > 0 ? `${diffLines.join("\n")}\n\n${trailingNotes.join("\n\n")}` : diffLines.join("\n");
 	return {
 		branch,
 		proposedFilePath: filePath,
@@ -6371,6 +6680,25 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 				"Enabling autoscale lets the cluster grow toward its max_size ceiling automatically -- confirm the ceiling and the cost envelope.",
 			);
 		}
+		// SIO-1073: observability removal disconnects monitoring shipping at apply -- destructive in
+		// the retention-cut sense: the loss is SILENT (the workload keeps running; the dashboards and
+		// alerts fed by its logs/metrics go dark). Lead the risk list with it (unshift after the
+		// shared-state line so it sorts above).
+		if (req?.observabilityRemove === true) {
+			risks.unshift(
+				"DISCONNECTS MONITORING SHIPPING: this REMOVES the observability block -- at apply, this deployment stops shipping its logs/metrics to the monitoring deployment. The loss is SILENT (nothing breaks in the workload; dashboards and alerts fed by this data go dark). Confirm this is intended; RECOMMEND HUMAN REVIEW before merge.",
+			);
+		} else if (
+			req?.observabilityDeploymentId !== undefined ||
+			req?.observabilityDeploymentName !== undefined ||
+			req?.observabilityRefId !== undefined ||
+			req?.observabilityLogs !== undefined ||
+			req?.observabilityMetrics !== undefined
+		) {
+			risks.push(
+				"Sets/updates the observability monitoring-shipping block. A wrong-but-valid deployment_id ships monitoring data nowhere and CI's plan will NOT catch it -- check the 'Live check (observability)' notes in the diff (target identification / unknown-id / self-monitoring) and confirm the target is the monitoring deployment. Disabling logs or metrics reduces monitoring visibility.",
+			);
+		}
 	}
 	if (req?.workflow === "dashboard-edit") {
 		// SIO-920: dashboards are display-only; a malformed NDJSON fails CI's saved-objects import
@@ -6467,7 +6795,7 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 														: req?.workflow === "topology-edit"
 															? // SIO-997: no leading cluster -- the title wrapper already prefixes "[<cluster>]" (other
 																// descriptors lead with their own id; only topology doubled the cluster).
-																`${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.userSettingsMergeKey !== undefined ? `${req.userSettingsMergeKey}=${req.userSettingsMergeValue ?? "?"}` : "", req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? `-${req.userSettingsRemoveKeys.length} key(s)` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : ""].filter(Boolean).join(", ") || "topology"}`
+																`${[req?.autoscaleEnabled !== undefined ? `autoscale ${req.autoscaleEnabled}` : "", req?.topologyTier ? `${req.topologyTier} ${[req?.tierZoneCount != null ? `zones ${req.tierZoneCount}` : "", req?.tierAutoscale !== undefined ? `autoscale ${req.tierAutoscale}` : ""].filter(Boolean).join(" ")}` : "", req?.userSettingsYaml !== undefined ? `${req.userSettingsTarget ?? ""} SSO` : "", req?.userSettingsMergeKey !== undefined ? `${req.userSettingsMergeKey}=${req.userSettingsMergeValue ?? "?"}` : "", req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? `-${req.userSettingsRemoveKeys.length} key(s)` : "", req?.sizeComponent ? `${req.sizeComponent} ${[req?.componentSize ? req.componentSize : "", req?.componentZoneCount != null ? `zones ${req.componentZoneCount}` : ""].filter(Boolean).join(" ")}` : "", req?.observabilityRemove === true ? "observability removed" : "", req?.observabilityDeploymentId !== undefined || req?.observabilityDeploymentName !== undefined || req?.observabilityRefId !== undefined || req?.observabilityLogs !== undefined || req?.observabilityMetrics !== undefined ? `observability -> ${req?.observabilityDeploymentName ?? req?.observabilityDeploymentId ?? "update"}` : ""].filter(Boolean).join(", ") || "topology"}`
 															: req?.workflow === "dashboard-edit"
 																? `${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}: ${req?.dashboardAction ?? "change"}`
 																: req?.workflow === "index-template-create"
@@ -6637,7 +6965,7 @@ async function buildMrDescription(state: IacStateType): Promise<string> {
 				? `Security role '${req?.roleName}' ADDITIVE privilege grant${state.privilegeEscalation ? " (PRIVILEGE ESCALATION -- recommend human security review)" : ""}. role_mappings + api_keys untouched.`
 				: "",
 			req?.workflow === "topology-edit"
-				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.userSettingsMergeKey !== undefined ? ` ${req?.userSettingsMergeTarget ?? ""}.user_settings_yaml ${req.userSettingsMergeKey} -> ${req.userSettingsMergeKey.startsWith("xpack.security.") ? "value withheld (xpack.security)" : req.userSettingsMergeValue} (siblings byte-for-byte)` : ""}${req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? ` ${req?.userSettingsMergeTarget ?? ""}.user_settings_yaml removed ${req.userSettingsRemoveKeys.some((k) => k.startsWith("xpack.security.")) ? `${req.userSettingsRemoveKeys.length} key(s) (names withheld: xpack.security)` : req.userSettingsRemoveKeys.join(", ")} (siblings byte-for-byte)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}.`
+				? `Deployment topology '${req?.cluster}' (SHARED deployments state):${req?.autoscaleEnabled !== undefined ? ` elasticsearch.autoscale -> ${req.autoscaleEnabled}` : ""}${req?.topologyTier ? ` ${req.topologyTier}${req?.tierZoneCount != null ? ` zone_count -> ${req.tierZoneCount}` : ""}${req?.tierAutoscale !== undefined ? ` autoscale -> ${req.tierAutoscale}` : ""}` : ""}${req?.userSettingsYaml !== undefined ? ` ${req?.userSettingsTarget ?? ""}.user_settings_yaml updated (SSO/login; value withheld)` : ""}${req?.userSettingsMergeKey !== undefined ? ` ${req?.userSettingsMergeTarget ?? ""}.user_settings_yaml ${req.userSettingsMergeKey} -> ${req.userSettingsMergeKey.startsWith("xpack.security.") ? "value withheld (xpack.security)" : req.userSettingsMergeValue} (siblings byte-for-byte)` : ""}${req?.userSettingsRemoveKeys !== undefined && req.userSettingsRemoveKeys.length > 0 ? ` ${req?.userSettingsMergeTarget ?? ""}.user_settings_yaml removed ${req.userSettingsRemoveKeys.some((k) => k.startsWith("xpack.security.")) ? `${req.userSettingsRemoveKeys.length} key(s) (names withheld: xpack.security)` : req.userSettingsRemoveKeys.join(", ")} (siblings byte-for-byte)` : ""}${req?.sizeComponent ? ` ${req.sizeComponent}${req?.componentSize ? ` size -> ${req.componentSize}` : ""}${req?.componentZoneCount != null ? ` zone_count -> ${req.componentZoneCount}` : ""}` : ""}${req?.observabilityRemove === true ? " observability block REMOVED (disconnects monitoring shipping at apply)" : ""}${req?.observabilityDeploymentId !== undefined || req?.observabilityDeploymentName !== undefined || req?.observabilityRefId !== undefined || req?.observabilityLogs !== undefined || req?.observabilityMetrics !== undefined ? ` observability monitoring-shipping ->${req?.observabilityDeploymentName !== undefined ? ` deployment '${req.observabilityDeploymentName}'` : ""}${req?.observabilityDeploymentId !== undefined ? ` deployment_id ${req.observabilityDeploymentId}` : ""}${req?.observabilityRefId !== undefined ? ` ref_id ${req.observabilityRefId}` : ""}${req?.observabilityLogs !== undefined ? ` logs ${req.observabilityLogs}` : ""}${req?.observabilityMetrics !== undefined ? ` metrics ${req.observabilityMetrics}` : ""}` : ""}.`
 				: "",
 			req?.workflow === "dashboard-edit"
 				? `Dashboard ${req?.dashboardAction ?? "?"} '${req?.dashboardSpace ?? "?"}__${req?.dashboardName ?? "?"}.ndjson' (whole-file Kibana NDJSON export; committed verbatim, no panel edits). ${review?.diff ?? ""}`
@@ -6680,7 +7008,7 @@ async function buildMrDescription(state: IacStateType): Promise<string> {
 											: req?.workflow === "security-edit"
 												? `Category security, Risk ${state.privilegeEscalation ? "HIGH (escalation)" : "HIGH"}`
 												: req?.workflow === "topology-edit"
-													? "Category deployment-topology, Risk HIGH"
+													? `Category deployment-topology, Risk HIGH${req?.observabilityRemove === true ? " (destructive: disconnects monitoring shipping)" : ""}`
 													: req?.workflow === "dashboard-edit"
 														? "Category dashboard, Risk MEDIUM"
 														: // SIO-1019: a new @custom ingest pipeline is an additive new-file create (mr-template.md
