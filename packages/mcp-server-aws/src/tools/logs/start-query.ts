@@ -57,6 +57,93 @@ export function resolveQueryFloor(groups: LogGroupRetention[], nowSeconds: numbe
 	return floor;
 }
 
+export type FloorResult = { floor: number; isReal: boolean };
+
+// Resolve a retention floor from describe data. `isReal` is true ONLY when a finite floor was
+// actually measured (a group with retentionInDays or creationTime). No-data (null/[]/[{}] -- a
+// never-expire group with no creationTime yields -Infinity) is NOT real.
+//
+// SIO-1082 note: we deliberately do NOT synthesize a fallback floor to DRIVE year-drift
+// correction. Without a real retention floor we cannot distinguish an LLM year-shift ("meant
+// recent, wrote 2025") from a legitimate historical query ("really want logs from ~400 days
+// ago") -- both look like "window ~1 year back". Correcting on a guessed floor would silently
+// rewrite a legitimate old query into recent logs (wrong data, no error). So year-drift
+// correction is gated on isReal. The cache + single-flight below is what makes a real floor
+// available on far more calls (the dominant cause of the residual failures was describe RACES
+// in the fan-out, not total denials), which is the safe way to widen the guard's coverage.
+export function resolveFloorFromGroups(
+	groups: LogGroupRetention[] | null | undefined,
+	nowSeconds: number,
+): FloorResult {
+	if (groups && groups.length > 0) {
+		const floor = resolveQueryFloor(groups, nowSeconds);
+		if (Number.isFinite(floor)) return { floor, isReal: true };
+	}
+	return { floor: Number.NEGATIVE_INFINITY, isReal: false };
+}
+
+// SIO-1082: cache + single-flight around an injected describe. Caches the RAW retention data
+// (retentionInDays/creationTime -- stable) not the computed floor (floors are now-relative), and
+// recomputes the floor per call. One successful describe protects every later call in the TTL
+// window with the REAL floor; concurrent callers collapse to one in-flight describe (the idiom
+// borrowed from shared/transport/readiness.ts), which also removes the race that used to return
+// null and skip the guard. describe() returning null/[] or throwing yields a non-real floor.
+export interface RetentionCacheEntry {
+	groups: LogGroupRetention[];
+	expiresAt: number;
+}
+const inflightDescribes = new Map<string, Promise<LogGroupRetention[] | null>>();
+
+export async function getRetentionFloor(opts: {
+	key: string;
+	describe: () => Promise<LogGroupRetention[] | null>;
+	nowSeconds: number;
+	cache: Map<string, RetentionCacheEntry>;
+	ttlMs: number;
+	clock?: () => number;
+}): Promise<FloorResult> {
+	const { key, describe, nowSeconds, cache, ttlMs } = opts;
+	const clock = opts.clock ?? (() => Date.now());
+
+	const hit = cache.get(key);
+	if (hit && hit.expiresAt > clock()) {
+		return resolveFloorFromGroups(hit.groups, nowSeconds);
+	}
+
+	let flight = inflightDescribes.get(key);
+	if (!flight) {
+		// Promise.resolve().then(describe) so a SYNCHRONOUS throw from describe() is normalized
+		// into a rejected promise (caught below -> non-real floor) rather than escaping this helper.
+		flight = Promise.resolve()
+			.then(describe)
+			.finally(() => {
+				inflightDescribes.delete(key);
+			});
+		inflightDescribes.set(key, flight);
+	}
+
+	let groups: LogGroupRetention[] | null;
+	try {
+		groups = await flight;
+	} catch {
+		groups = null;
+	}
+
+	// Only cache a real, non-empty result. A failure/empty leaves the entry absent so the next
+	// call retries the describe rather than being pinned for the whole TTL.
+	if (groups && groups.length > 0) {
+		// Opportunistic eviction: on a cache miss (this write), sweep entries already past their
+		// TTL so unused keys cannot accumulate over a long-running process. Bounded and cheap --
+		// runs only on describe-completing calls, not cache hits.
+		const nowMs = clock();
+		for (const [k, v] of cache) {
+			if (v.expiresAt <= nowMs) cache.delete(k);
+		}
+		cache.set(key, { groups, expiresAt: nowMs + ttlMs });
+	}
+	return resolveFloorFromGroups(groups, nowSeconds);
+}
+
 export type QueryWindowDecision = { action: "pass" | "clamp" | "reject"; startTime: number };
 
 // Decide how a requested [startTime, endTime] window relates to the retention floor:
@@ -128,41 +215,113 @@ class QueryWindowRejected extends Error {
 	}
 }
 
-// Resolve the retention floor for the targeted groups. Best-effort: any failure (IAM
-// denied, throttled, group list races) returns null so the caller proceeds unclamped and
-// the reactive wrap.ts advice becomes the backstop -- never worse than the pre-SIO-1078
-// behavior. Returns null when there is nothing to describe.
-async function fetchRetentionFloor(
+// SIO-1082: module-level retention-data cache keyed by ${estate}:${sorted log-group targets},
+// mirroring the client cache in services/client-factory.ts. Caches raw retentionInDays/creationTime
+// (stable) with a short TTL; the floor is recomputed per call against the current now.
+const RETENTION_CACHE_TTL_MS = 300_000;
+const retentionCache = new Map<string, RetentionCacheEntry>();
+
+function retentionCacheKey(params: StartQueryParams): string {
+	const targets = [...(params.logGroupNames ?? params.logGroupIdentifiers ?? [])].sort();
+	return `${params.estate}:${targets.join(",")}`;
+}
+
+// Describe the targeted log groups and collect their raw retention data. Returns null on any
+// failure (IAM denied, throttled) or when there is nothing to describe -- getRetentionFloor turns
+// that into a non-real floor (the guard is then skipped) rather than a wrong one.
+// A CloudWatch log-group ARN is `arn:aws:logs:<region>:<acct>:log-group:<name>` and DescribeLogGroups
+// returns it with a trailing `:*`. The <name> may itself contain slashes, so split off everything
+// after `:log-group:` (not the last colon segment) and drop an optional `:*` suffix.
+export function logGroupNameFromArn(arn: string): string {
+	const m = arn.match(/:log-group:(.+?)(?::\*)?$/);
+	return m?.[1] ?? arn;
+}
+
+// Strip the trailing `:*` DescribeLogGroups appends, so an ARN from the API compares equal to the
+// suffixless ARN a caller passes as a logGroupIdentifier.
+function stripArnSuffix(arn: string): string {
+	return arn.replace(/:\*$/, "");
+}
+
+// Minimal view of a DescribeLogGroups result row for exact-target matching.
+interface DescribedLogGroup {
+	logGroupName?: string;
+	arn?: string;
+	logGroupArn?: string;
+}
+
+// Exact-match a described group against the requested target. For a NAME target, only the exact
+// logGroupName matches (so a "/app" query never picks up "/app-canary"). For an ARN target, match
+// ONLY on the ARN (comparing both `arn` -- which carries a trailing ":*" -- and the clean
+// `logGroupArn`, suffixless on both sides); we do NOT fall back to logGroupName, which could
+// cross-match an unrelated same-named group in a linked account.
+export function matchesTarget(g: DescribedLogGroup, target: string, isNameTarget: boolean): boolean {
+	if (isNameTarget) return g.logGroupName === target;
+	const wanted = stripArnSuffix(target);
+	if (g.arn !== undefined && stripArnSuffix(g.arn) === wanted) return true;
+	if (g.logGroupArn !== undefined && stripArnSuffix(g.logGroupArn) === wanted) return true;
+	return false;
+}
+
+// Defensive page cap: a single exact group cannot need many pages, but a very crowded prefix
+// (50 siblings whose name our target prefixes) could push the exact match past page 1. Bound the
+// walk so a pathological prefix never loops unboundedly.
+const MAX_DESCRIBE_PAGES = 20;
+
+async function describeRetentionGroups(
 	config: AwsConfig,
 	params: StartQueryParams,
-	nowSeconds: number,
-): Promise<number | null> {
+): Promise<LogGroupRetention[] | null> {
 	const names = params.logGroupNames;
 	const identifiers = params.logGroupIdentifiers;
-	try {
-		const client = getCloudWatchLogsClient(config, params.estate);
-		// DescribeLogGroups matches by name prefix; identifiers (ARNs) aren't a prefix
-		// filter, so for the ARN path we fetch and match by arn/logGroupName suffix.
-		const collected: LogGroupRetention[] = [];
-		const targets = names ?? identifiers ?? [];
-		if (targets.length === 0) return null;
-		for (const target of targets) {
-			const prefix = names
-				? target
-				: (target
-						.split(":")
-						.pop()
-						?.replace(/^log-group\//, "") ?? target);
-			const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: prefix, limit: 50 }));
-			for (const g of res.logGroups ?? []) {
-				collected.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
+	const targets = names ?? identifiers ?? [];
+	if (targets.length === 0) return null;
+	const client = getCloudWatchLogsClient(config, params.estate);
+
+	// DescribeLogGroups matches by name PREFIX, so it returns sibling groups too (querying "/app"
+	// also returns "/app-canary"). We keep only the EXACT requested group -- a sibling's shorter
+	// retention would otherwise wrongly tighten (or reject) the floor. We PAGINATE (a crowded
+	// prefix can push the exact match past the first page) and stop as soon as it's found. Targets
+	// are described concurrently and each is independently try/caught so one throttled target does
+	// not discard the retention data already gathered from the others (best-effort resilience).
+	const perTarget = await Promise.all(
+		targets.map(async (target): Promise<LogGroupRetention[]> => {
+			const isNameTarget = names !== undefined;
+			const wantName = isNameTarget ? target : logGroupNameFromArn(target);
+			try {
+				let nextToken: string | undefined;
+				for (let page = 0; page < MAX_DESCRIBE_PAGES; page++) {
+					const res = await client.send(
+						new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50, nextToken }),
+					);
+					for (const g of res.logGroups ?? []) {
+						if (matchesTarget(g, target, isNameTarget)) {
+							return [{ retentionInDays: g.retentionInDays, creationTime: g.creationTime }];
+						}
+					}
+					if (!res.nextToken) break;
+					nextToken = res.nextToken;
+				}
+				return [];
+			} catch {
+				return [];
 			}
-		}
-		if (collected.length === 0) return null;
-		return resolveQueryFloor(collected, nowSeconds);
-	} catch {
-		return null;
-	}
+		}),
+	);
+	const collected = perTarget.flat();
+	return collected.length > 0 ? collected : null;
+}
+
+// Resilient floor resolution: cache + single-flight around describeRetentionGroups. isReal is
+// true only when a finite floor was actually measured; the guard runs only in that case.
+function fetchRetentionFloor(config: AwsConfig, params: StartQueryParams, nowSeconds: number): Promise<FloorResult> {
+	return getRetentionFloor({
+		key: retentionCacheKey(params),
+		describe: () => describeRetentionGroups(config, params),
+		nowSeconds,
+		cache: retentionCache,
+		ttlMs: RETENTION_CACHE_TTL_MS,
+	});
 }
 
 export function startQuery(config: AwsConfig) {
@@ -174,13 +333,16 @@ export function startQuery(config: AwsConfig) {
 			// sub-agent stops looping StartQuery against logs that no longer exist (each
 			// failure otherwise counts toward the aggregator tool-error confidence cap).
 			const nowSeconds = Math.floor(Date.now() / 1000);
-			const floor = await fetchRetentionFloor(config, params, nowSeconds);
+			// SIO-1082: cache + single-flight makes a REAL measured floor available on far more
+			// calls (the dominant residual-failure cause was describe RACES in the fan-out). The
+			// whole guard runs only when a real floor is known -- year-drift correction against a
+			// guessed floor could silently rewrite a legitimate historical query into recent logs.
+			const { floor, isReal } = await fetchRetentionFloor(config, params, nowSeconds);
 			let effectiveStart = params.startTime;
 			let effectiveEnd = params.endTime;
-			if (floor !== null && Number.isFinite(floor)) {
+			if (isReal) {
 				// SIO-1080: correct an LLM year-shift (e.g. 2026 incident queried as 2025) BEFORE
-				// clamping. Deterministic; only fires when a forward year-shift lands the window in
-				// range, and can move endTime too (clamp alone only adjusts startTime).
+				// clamping -- can move endTime too (clamp alone only adjusts startTime).
 				const drift = correctYearDrift(effectiveStart, effectiveEnd, floor, nowSeconds);
 				if (drift.shiftedYears > 0) {
 					logger.warn(
