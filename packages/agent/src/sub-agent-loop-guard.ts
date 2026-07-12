@@ -54,11 +54,19 @@ const CONSECUTIVE_EMPTY_LIMIT = 2;
 // = CONSECUTIVE_EMPTY_LIMIT (2 literal-name empties) + 1 discovery attempt + margin.
 const MAX_UNPRODUCTIVE_SEARCHES = 5;
 
+// SIO-1086: the stop must NOT steer the LLM to "absent" when a discovery agg already
+// surfaced a candidate service.name -- the data exists under that discovered name, and
+// the earlier version's "report ... no matching documents" wording converted a discovery
+// hit into a false "not shipping". Only permit an "absent" conclusion when discovery
+// surfaced no matching service at all.
 export const LOOP_GUARD_STOP_MESSAGE =
 	"No results for this query, and equivalent searches have already returned nothing. " +
-	"Stop searching -- do not call this tool again with a similar query. Synthesize your " +
-	"findings from the data you have gathered so far and report what you found (including " +
-	"that the searched indices/patterns returned no matching documents).";
+	"Stop searching -- do not call this tool again with a similar query. " +
+	"If a discovery step surfaced a candidate service name you have not confirmed, treat " +
+	"the service as present under that name. Synthesize your findings from the data you " +
+	"have gathered so far: report the discovered service.name and what you found, or -- " +
+	"only when discovery surfaced no matching service at all -- report that the searched " +
+	"indices/patterns returned no matching documents.";
 
 // SIO-1084: AWS start_query is stopped for a different reason -- a window outside
 // retention -- so it needs its own re-anchor instruction, not "no matching documents".
@@ -84,6 +92,14 @@ export interface LoopGuardState {
 	// _error; cleared by an intervening aws_logs_describe_log_groups. While set, the
 	// next aws_logs_start_query is short-circuited to force a re-anchor.
 	awsStartQueryNeedsReanchor: boolean;
+	// SIO-1086: one-shot grant. A PRODUCTIVE discovery agg (returned service.name
+	// buckets) means the agent just learned the real name and must be allowed exactly
+	// one non-discovery STEP-1 re-query against that discovered name -- even if the
+	// consecutive-empty soft stop is otherwise armed. Set when a productive discovery
+	// runs; consumed by the next non-discovery elasticsearch_search that reaches the
+	// soft stop. Prevents the guard from blocking the very recovery the discovery
+	// enabled (the false-"absent" trap). Bounded by MAX_UNPRODUCTIVE_SEARCHES.
+	postDiscoveryRequeryAllowed: boolean;
 }
 
 export function createLoopGuardState(): LoopGuardState {
@@ -93,6 +109,7 @@ export function createLoopGuardState(): LoopGuardState {
 		discoveryRan: false,
 		unproductiveSearches: 0,
 		awsStartQueryNeedsReanchor: false,
+		postDiscoveryRequeryAllowed: false,
 	};
 }
 
@@ -188,30 +205,56 @@ function safeStringify(value: unknown): string {
 	}
 }
 
+// SIO-1086: the elastic MCP renders a search/agg result as an ARRAY of MCP text
+// content blocks ([{type:"text",text:"..."},{type:"text",text:"{json}"}]), and
+// @langchain/mcp-adapters delivers that array RAW on ToolMessage.content -- the
+// instrumentation passes it to recordResult without normalizeToolContent. So the
+// string-only empty-agg detection (isEmptyAggregationResult) never ran on the real
+// wire path (SIO-1084's fix was dead code on production; only its string-form tests
+// exercised it). Coalesce a text-block array back to the string it logically is so
+// the string checks below apply. Non-text-block arrays return null (real empty
+// array / non-elastic shape) and keep the existing len===0 handling.
+function coalesceTextBlocks(content: unknown): string | null {
+	if (!Array.isArray(content) || content.length === 0) return null;
+	const texts: string[] = [];
+	for (const block of content) {
+		if (block && typeof block === "object" && "text" in block) {
+			const t = (block as { text?: unknown }).text;
+			if (typeof t === "string") texts.push(t);
+		}
+	}
+	return texts.length > 0 ? texts.join("\n\n") : null;
+}
+
 // A result is "unproductive" when it carries no usable data. For elasticsearch_search:
 // an explicit empty search ("Total results: 0"), an empty content type, an empty array,
-// or a trivially-small string. For aws_logs_start_query: an _error envelope with a
+// or a zero-bucket aggregation. For aws_logs_start_query: an _error envelope with a
 // looping kind (retention-window rejection / wrong group). Kept narrow so real
-// (non-empty) results -- including a successful { queryId } -- never trip it.
+// (non-empty) results -- including a successful { queryId } and a data-bearing agg --
+// never trip it.
 export function isUnproductiveResult(content: unknown, toolName?: string): boolean {
 	if (toolName === "aws_logs_start_query") {
 		const kind = awsErrorKind(content);
 		return kind !== null && AWS_LOOPING_ERROR_KINDS.has(kind);
 	}
-	const { shape } = describeToolResult(content);
+	// SIO-1086: the elastic agg arrives as an array of MCP text blocks on the real wire
+	// path; coalesce it back to the string it logically is so the string-based empty-agg
+	// detection (below) runs on it instead of falling through to the array-len check
+	// (which only catches a truly empty array, missing a zero-bucket agg render). A
+	// data-bearing agg stays productive; a zero-bucket agg is correctly unproductive.
+	const coalesced = coalesceTextBlocks(content);
+	const asText = typeof content === "string" ? content : coalesced;
+	if (typeof asText === "string") {
+		if (asText.length === 0) return true;
+		if (EMPTY_SEARCH_RE.test(asText)) return true;
+		if (isEmptyAggregationResult(asText)) return true;
+		// Fall through to the shape checks so a stringified empty array/object
+		// ("[]", {hits:{hits:[]}}) is still caught -- describeToolResult parses `asText`.
+	}
+	const { shape } = describeToolResult(asText ?? content);
 	if (shape.contentType === "empty") return true;
 	if (shape.contentType === "array" && shape.topLevelArrayLen === 0) return true;
 	if (shape.contentType === "object" && shape.hitsLen === 0) return true;
-	if (shape.contentType === "string") {
-		const text = typeof content === "string" ? content : "";
-		// SIO-1084: a zero-bucket discovery aggregation renders as
-		// "Search results with aggregations (N total hits, ...):" -- NOT "Total
-		// results: 0" -- so EMPTY_SEARCH_RE misses it and the empty discovery (the
-		// genuine "service absent" signal) would otherwise reset the streak. Treat an
-		// aggregation whose every terms agg has no buckets as unproductive too.
-		if (EMPTY_SEARCH_RE.test(text)) return true;
-		return isEmptyAggregationResult(text);
-	}
 	return false;
 }
 
@@ -281,6 +324,15 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 	// cap, never let the consecutive-empty soft stop block the FIRST one, so the
 	// SOUL discovery step can run even after two literal-name empties.
 	if (isDiscoveryCall(arg)) return false;
+	// SIO-1086: a productive discovery agg surfaced the real service.name; the SOUL
+	// mandates re-running STEP 1 with that discovered name. That re-query is a plain
+	// (non-discovery) search, so without this it would be killed by the soft stop
+	// below -- the exact false-"absent" trap. Allow exactly one such re-query
+	// (consumed here); the hard MAX_UNPRODUCTIVE_SEARCHES cap above still bounds the run.
+	if (state.postDiscoveryRequeryAllowed) {
+		state.postDiscoveryRequeryAllowed = false;
+		return false;
+	}
 	// Soft stop: after 2 consecutive empties, stop -- but only once discovery has
 	// run, so pre-discovery empties don't terminate before the discovery step.
 	return state.consecutiveEmpty >= CONSECUTIVE_EMPTY_LIMIT && state.discoveryRan;
@@ -321,12 +373,20 @@ export function recordResult(
 	}
 
 	// elasticsearch_search
-	if (isDiscoveryCall(arg)) state.discoveryRan = true;
-	if (isUnproductiveResult(content, toolName)) {
+	const wasDiscovery = isDiscoveryCall(arg);
+	if (wasDiscovery) state.discoveryRan = true;
+	const unproductive = isUnproductiveResult(content, toolName);
+	if (unproductive) {
 		state.consecutiveEmpty += 1;
 		state.unproductiveSearches += 1;
 	} else {
 		state.consecutiveEmpty = 0;
+		// SIO-1086: a discovery agg that RETURNED buckets means the agent now has the
+		// real service.name -- grant it one guaranteed non-discovery STEP-1 re-query
+		// against that name, so the soft stop can't block the recovery the discovery
+		// enabled. Only productive discoveries grant it (an empty discovery is the
+		// genuine "absent" signal and must not extend the budget).
+		if (wasDiscovery) state.postDiscoveryRequeryAllowed = true;
 	}
 }
 
