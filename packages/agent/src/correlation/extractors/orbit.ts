@@ -71,11 +71,26 @@ function queryTagOf(rawJson: unknown): string | undefined {
 	return top ? str(top.queryTag) : undefined;
 }
 
-// -- per-tag row mappers -----------------------------------------------------
+// SIO-1076: the blast-radius tool stitches the recent merged MR per changed
+// source file into a top-level `mrByFile` map (the Definition->MR path exceeds
+// Orbit's 3-hop cap, so it can't ride the traversal rows). Returns file -> MR
+// props so pushBlastRadius can attach mrId/mrMergedAt/mrWebUrl to each finding.
+function mrByFileOf(rawJson: unknown): Record<string, Row> {
+	const map = asRecord(rawJson)?.mrByFile;
+	const rec = asRecord(map);
+	if (!rec) return {};
+	const out: Record<string, Row> = {};
+	for (const [file, mr] of Object.entries(rec)) {
+		const props = nodeProps(mr);
+		if (Object.keys(props).length > 0) out[file] = props;
+	}
+	return out;
+}
 
 // Blast radius: each row pairs a Definition (def) with an ImportedSymbol (sym).
-// Group by definition and collect the distinct downstream import sites.
-function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], focus: string[]): void {
+// Group by definition, collect the distinct downstream import sites, and attach
+// the merged-MR metadata resolved for the definition's source file.
+function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], mrByFile: Record<string, Row>, focus: string[]): void {
 	const byDef = new Map<string, OrbitBlastRadius>();
 	for (const row of rows) {
 		const def = nodeProps(row.def);
@@ -87,15 +102,27 @@ function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], focus: string[]):
 		// the ImportedSymbol's own file_path, NOT its import_path (which names the
 		// imported source lib and would point back at the changed definition).
 		const symProject = projectFromPath(symFile);
+		const sourceFile = str(def.file_path);
 		const existing = byDef.get(defName) ?? {
 			definitionName: defName,
 			definitionKind: str(def.definition_type),
-			sourceProject: projectFromPath(str(def.file_path)),
-			sourceFile: str(def.file_path),
+			sourceProject: projectFromPath(sourceFile),
+			sourceFile,
 			importedByProjects: [],
 			importedByFiles: [],
 			importSiteCount: 0,
 		};
+		// Attach MR metadata resolved by the tool's enrichment query, keyed by the
+		// changed source file. Populates mrMergedAt, without which the flagship
+		// orbit-deploy-blast-radius-vs-elastic rule can never fire.
+		if (sourceFile && existing.mrMergedAt === undefined) {
+			const mr = mrByFile[sourceFile];
+			if (mr) {
+				existing.mrId = idVal(mr.id) ?? idVal(mr.iid);
+				existing.mrMergedAt = str(mr.merged_at);
+				existing.mrWebUrl = str(mr.web_url);
+			}
+		}
 		if (symFile) existing.importedByFiles.push({ project: symProject, file: symFile });
 		if (symProject && !existing.importedByProjects.includes(symProject)) existing.importedByProjects.push(symProject);
 		existing.importSiteCount += 1;
@@ -184,7 +211,7 @@ export function extractOrbitFindings(outputs: ToolOutput[], focusServices: strin
 		switch (queryTagOf(o.rawJson)) {
 			case "orbit_blast_radius":
 			case "orbit_cross_project_callers":
-				pushBlastRadius(blastRadius, rows, focusServices);
+				pushBlastRadius(blastRadius, rows, mrByFileOf(o.rawJson), focusServices);
 				break;
 			case "orbit_recent_deploys":
 				pushRecentDeploys(recentDeploys, rows, focusServices);
@@ -192,7 +219,7 @@ export function extractOrbitFindings(outputs: ToolOutput[], focusServices: strin
 			case "orbit_pipeline_failures":
 				pushPipelineFailures(pipelineFailures, rows, focusServices);
 				break;
-			case "orbit_vulns_recent_mr":
+			case "orbit_recent_vulnerabilities":
 				pushVulnerabilities(vulnerabilities, rows, focusServices);
 				break;
 			default:

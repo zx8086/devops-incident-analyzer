@@ -1,5 +1,6 @@
 // packages/agent/src/correlation/engine.test.ts
 import { describe, expect, test } from "bun:test";
+import type { AgentStateType } from "../state.ts";
 import { agentToDataSourceId, evaluate } from "./engine.ts";
 import type { CorrelationRule } from "./rules.ts";
 
@@ -55,7 +56,7 @@ describe("extractEntityNames reads context.services[] (via evaluate idempotency)
 	test("satisfied when elastic already covers a service in context.services[]", () => {
 		const state = {
 			dataSourceResults: [{ dataSourceId: "elastic", status: "success", data: { services: [{ name: "checkout" }] } }],
-		} as never;
+		} as unknown as AgentStateType;
 		const [decision] = evaluate(state, [serviceRule()]);
 		expect(decision?.status).toBe("satisfied");
 		expect(decision?.reason).toContain("already covered");
@@ -64,7 +65,7 @@ describe("extractEntityNames reads context.services[] (via evaluate idempotency)
 	test("needs-invocation when elastic does not cover the service", () => {
 		const state = {
 			dataSourceResults: [{ dataSourceId: "elastic", status: "success", data: { services: [{ name: "payments" }] } }],
-		} as never;
+		} as unknown as AgentStateType;
 		const [decision] = evaluate(state, [serviceRule()]);
 		expect(decision?.status).toBe("needs-invocation");
 	});

@@ -23,7 +23,7 @@ export const ORBIT_QUERY_TAGS = {
 	crossProjectCallers: "orbit_cross_project_callers",
 	recentDeploys: "orbit_recent_deploys",
 	pipelineFailures: "orbit_pipeline_failures",
-	vulnsRecentMr: "orbit_vulns_recent_mr",
+	recentVulnerabilities: "orbit_recent_vulnerabilities",
 } as const;
 
 export type OrbitQueryTag = (typeof ORBIT_QUERY_TAGS)[keyof typeof ORBIT_QUERY_TAGS];
@@ -47,6 +47,23 @@ function requireSelector(value: string, field: string): string {
 	const trimmed = value?.trim();
 	if (!trimmed) throw new Error(`Orbit query requires a non-empty ${field} for selectivity`);
 	return trimmed;
+}
+
+// SIO-1076: Orbit rejects a query with no selective node (a filter / node_ids /
+// id_range on at least one node), but still bills for it. The purpose-built
+// builders guarantee selectivity; the raw escape hatch must validate the LLM's
+// query BEFORE the billed call. A node is selective if it carries any of those.
+export function hasSelectiveAnchor(query: OrbitQuery): boolean {
+	const nodes: unknown[] = [];
+	if (Array.isArray(query.nodes)) nodes.push(...query.nodes);
+	if (query.node) nodes.push(query.node);
+	return nodes.some((n) => {
+		if (!n || typeof n !== "object") return false;
+		const rec = n as Record<string, unknown>;
+		const filters = rec.filters;
+		const hasFilters = !!filters && typeof filters === "object" && Object.keys(filters).length > 0;
+		return hasFilters || rec.node_ids !== undefined || rec.id_range !== undefined;
+	});
 }
 
 // Blast radius: a changed Definition (by symbol) and the cross-project files that
@@ -197,12 +214,13 @@ export function buildPipelineFailuresQuery(params: {
 	};
 }
 
-// Critical/high vulnerabilities in a group still detected. Selectivity via the
-// group full_path prefix + severity in-filter.
-export function buildVulnsRecentMrQuery(params: { groupPath: string; limit?: number }): TaggedOrbitQuery {
+// Critical/high vulnerabilities in a group still detected, ranked by severity.
+// Selectivity via the group full_path prefix + severity in-filter. (No MR join
+// or time window -- the name reflects severity/state filtering by project.)
+export function buildRecentVulnerabilitiesQuery(params: { groupPath: string; limit?: number }): TaggedOrbitQuery {
 	const groupPath = requireSelector(params.groupPath, "groupPath");
 	return {
-		queryTag: ORBIT_QUERY_TAGS.vulnsRecentMr,
+		queryTag: ORBIT_QUERY_TAGS.recentVulnerabilities,
 		dsl: {
 			query_type: "traversal",
 			nodes: [
@@ -225,6 +243,47 @@ export function buildVulnsRecentMrQuery(params: { groupPath: string; limit?: num
 			relationships: [{ type: "IN_PROJECT", from: "v", to: "p" }],
 			order_by: { node: "v", property: "severity", direction: "DESC" },
 			limit: clampLimit(params.limit, 50),
+		},
+	};
+}
+
+// SIO-1076: blast-radius enrichment. The blast-radius traversal (Definition <-
+// IMPORTS <- ImportedSymbol) cannot also reach the MergeRequest that changed the
+// definition -- Definition -> File -> DiffFile -> Diff -> MR is 4 hops, past the
+// 3-hop cap. So resolve MR metadata in a SECOND bounded query anchored on the
+// changed definition's source file: MergeRequestDiffFile.old_path == sourceFile
+// -> HAS_FILE(rev) MergeRequestDiff -> HAS_DIFF(rev) MergeRequest (merged), which
+// is 2 hops and selective. The tool stitches merged_at onto the finding.
+export function buildMrForFileQuery(params: { sourceFile: string; limit?: number }): TaggedOrbitQuery {
+	const sourceFile = requireSelector(params.sourceFile, "sourceFile");
+	return {
+		// Reuses the blastRadius tag so the extractor merges MR metadata into the
+		// same blast-radius findings (enrichment, not a distinct finding type).
+		queryTag: ORBIT_QUERY_TAGS.blastRadius,
+		dsl: {
+			query_type: "traversal",
+			nodes: [
+				{
+					id: "f",
+					entity: "MergeRequestDiffFile",
+					columns: ["old_path", "new_path"],
+					// old_path is stable across renames (dsl correctness rules).
+					filters: { old_path: { op: "eq", value: sourceFile } },
+				},
+				{ id: "d", entity: "MergeRequestDiff", columns: ["id"] },
+				{
+					id: "mr",
+					entity: "MergeRequest",
+					columns: ["id", "iid", "title", "state", "merged_at"],
+					filters: { state: { op: "eq", value: "merged" } },
+				},
+			],
+			relationships: [
+				{ type: "HAS_FILE", from: "d", to: "f" },
+				{ type: "HAS_DIFF", from: "mr", to: "d" },
+			],
+			order_by: { node: "mr", property: "merged_at", direction: "DESC" },
+			limit: clampLimit(params.limit, 10),
 		},
 	};
 }

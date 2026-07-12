@@ -4,6 +4,7 @@
 // deploy window never ages out and turns the suite red on a future run date.
 import { describe, expect, test } from "bun:test";
 import type { ElasticFindings, OrbitFindings } from "@devops-agent/shared";
+import type { AgentStateType } from "../state.ts";
 import { correlationRules } from "./rules.ts";
 
 function findRule(name: string) {
@@ -30,7 +31,7 @@ function makeState(opts: { orbit?: OrbitFindings; elastic?: ElasticFindings; foc
 		...(opts.focus
 			? { investigationFocus: { services: opts.focus, datasources: [], summary: "", establishedAtTurn: 1 } }
 			: {}),
-	} as never;
+	} as unknown as AgentStateType;
 }
 
 describe("orbit-deploy-needs-blast-radius (cost gate)", () => {

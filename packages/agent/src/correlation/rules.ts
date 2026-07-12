@@ -610,7 +610,7 @@ function elasticShowsPostMergeError(elastic: ElasticFindings, service: string, m
 	);
 }
 
-// -- Rule: gated blast-radius pre-fetch --------------------------------------
+// Rule: gated blast-radius pre-fetch.
 // Cost gate. Fires only when BOTH a recent deploy AND an elastic error signal
 // already exist, then re-fans to gitlab-agent to run the (billed) blast-radius
 // traversal. No incident pays for a traversal unless a deploy and a runtime
@@ -650,7 +650,7 @@ correlationRules.push({
 	retry: { attempts: 1, timeoutMs: 30_000 },
 });
 
-// -- Rule: flagship blast-radius vs elastic ----------------------------------
+// Rule: flagship blast-radius vs elastic.
 // A shared-lib change imported by a downstream service, with a post-merge elastic
 // error spike in that same service = strong shared-library root-cause correlation
 // (impossible with per-project REST). Regular dispatch: re-fans to elastic-agent
@@ -691,7 +691,7 @@ correlationRules.push({
 	retry: { attempts: 2, timeoutMs: 30_000 },
 });
 
-// -- Rule: pipeline failure vs incident --------------------------------------
+// Rule: pipeline failure vs incident.
 // A focus-service project with repeated cross-project pipeline failures in the
 // window; confirm the runtime symptom in that service via elastic.
 const ORBIT_PIPELINE_FAILURE_MIN = 2;
@@ -717,7 +717,7 @@ correlationRules.push({
 	retry: { attempts: 2, timeoutMs: 30_000 },
 });
 
-// -- Rule: vulnerability introduced by a recent MR ---------------------------
+// Rule: vulnerability introduced by a recent MR.
 // Self-signalling: a critical/high vuln on a focus project is a signal in itself.
 // skipCoverageCheck -> straight to aggregate, caps confidence, emits a banner.
 correlationRules.push({

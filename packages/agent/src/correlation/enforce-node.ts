@@ -13,23 +13,28 @@ const logger = getLogger("agent:enforceCorrelations");
 // confidence-gate.ts) so a capped run does not pass the gate.
 const CONFIDENCE_CAP_ON_DEGRADATION = 0.59;
 
-// SIO-1076: per-rule top-of-report banner for degraded skipCoverageCheck rules.
-// Only self-signalling rules produce a banner (a regular re-fan that failed to
-// cover is already reflected in the confidence cap). The deploy-vs-datastore
-// rule keeps its original SIO-712 wording; the Orbit vuln rule gets a security
-// banner so it does not read as a deploy contradiction.
-function bannerForDegraded(degraded: DegradedRule[], cap: number): string | undefined {
-	const selfSignalling = degraded.filter((d) => {
-		const ruleDef = correlationRules.find((r) => r.name === d.ruleName);
-		return ruleDef?.skipCoverageCheck === true;
-	});
-	if (selfSignalling.length === 0) return undefined;
+// SIO-1076: per-rule top-of-report banners for degraded skipCoverageCheck rules.
+// Keyed by rule name so each self-signalling rule reads correctly (a security
+// vuln must not read as a deploy contradiction), and so multiple distinct rules
+// degrading in one run each get their own banner instead of one silently
+// winning. An UNMAPPED skipCoverageCheck rule gets no banner (rather than a
+// misleading deploy-contradiction default) -- its cap still applies.
+const BANNER_BY_RULE_NAME: Record<string, (cap: number) => string> = {
+	"gitlab-deploy-vs-datastore-runtime": (cap) =>
+		`WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.`,
+	"orbit-vuln-introduced-by-recent-mr": (cap) =>
+		`WARNING: a critical/high security vulnerability was detected on an affected project during this incident. Confidence capped to ${cap}. Review the Findings section and remediate independently of the root cause.`,
+};
 
-	if (selfSignalling.some((d) => d.ruleName === "orbit-vuln-introduced-by-recent-mr")) {
-		return `WARNING: a critical/high security vulnerability was detected on an affected project during this incident. Confidence capped to ${cap}. Review the Findings section and remediate independently of the root cause.`;
+function bannerForDegraded(degraded: DegradedRule[], cap: number): string | undefined {
+	const banners = new Set<string>();
+	for (const d of degraded) {
+		const ruleDef = correlationRules.find((r) => r.name === d.ruleName);
+		if (ruleDef?.skipCoverageCheck !== true) continue;
+		const build = BANNER_BY_RULE_NAME[d.ruleName];
+		if (build) banners.add(build(cap));
 	}
-	// Default: the SIO-712 cross-source-contradiction wording.
-	return `WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.`;
+	return banners.size > 0 ? [...banners].join("\n\n") : undefined;
 }
 
 export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enforceCorrelationsAggregate" {

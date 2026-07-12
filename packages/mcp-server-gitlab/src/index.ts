@@ -98,7 +98,9 @@ if (import.meta.main) {
 				try {
 					const status = await orbitClient.getStatus();
 					orbitAvailable = isOrbitIndexed(status);
-					orbitIndexing = !orbitAvailable && (status.status === "indexing" || status.status !== undefined);
+					// Only "indexing" warrants a later free /status re-check; other
+					// defined statuses ("disabled", "error") go straight to fallback.
+					orbitIndexing = !orbitAvailable && status.status === "indexing";
 					serverLog.info({ orbitStatus: status.status, orbitAvailable }, "Orbit status probed");
 				} catch (error) {
 					serverLog.warn(

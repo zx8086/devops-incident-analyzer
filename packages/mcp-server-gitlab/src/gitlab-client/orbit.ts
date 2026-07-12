@@ -1,5 +1,6 @@
 // src/gitlab-client/orbit.ts
 
+import { z } from "zod";
 import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("orbit");
@@ -21,29 +22,37 @@ export type OrbitQuery = Record<string, unknown>;
 
 // POST /orbit/query returns { result: { rows, columns, group_columns, ... }, row_count }.
 // All entity ids come back as strings (JS precision), so downstream schemas use
-// z.union([z.number(), z.string()]) for ids.
-export interface OrbitQueryResponse {
-	result?: {
-		rows?: unknown[];
-		columns?: unknown[];
-		group_columns?: unknown[];
-		[key: string]: unknown;
-	};
-	query_type?: string;
-	row_count?: number;
-	[key: string]: unknown;
-}
+// z.union([z.number(), z.string()]) for ids. .catchall keeps unknown Beta fields.
+const OrbitQueryResponseSchema = z
+	.object({
+		result: z
+			.object({
+				rows: z.array(z.unknown()).optional(),
+				columns: z.array(z.unknown()).optional(),
+				group_columns: z.array(z.unknown()).optional(),
+			})
+			.catchall(z.unknown())
+			.optional(),
+		query_type: z.string().optional(),
+		row_count: z.number().optional(),
+	})
+	.catchall(z.unknown());
+export type OrbitQueryResponse = z.infer<typeof OrbitQueryResponseSchema>;
 
 // GET /orbit/status per-group indexing state.
-export interface OrbitStatusResponse {
-	status?: string; // "indexed" | "indexing" | ...
-	domains?: {
-		sdlc?: { indexed?: boolean; last_updated?: string };
-		code?: { indexed?: boolean; last_updated?: string };
-	};
-	projects?: { total?: number; indexed?: number };
-	[key: string]: unknown;
-}
+const OrbitStatusResponseSchema = z
+	.object({
+		status: z.string().optional(), // "indexed" | "indexing" | ...
+		domains: z
+			.object({
+				sdlc: z.object({ indexed: z.boolean().optional(), last_updated: z.string().optional() }).optional(),
+				code: z.object({ indexed: z.boolean().optional(), last_updated: z.string().optional() }).optional(),
+			})
+			.optional(),
+		projects: z.object({ total: z.number().optional(), indexed: z.number().optional() }).optional(),
+	})
+	.catchall(z.unknown());
+export type OrbitStatusResponse = z.infer<typeof OrbitStatusResponseSchema>;
 
 export class OrbitUnavailableError extends Error {
 	constructor(
@@ -77,12 +86,15 @@ export class OrbitRestClient {
 		this.statusPath = config.statusPath;
 	}
 
-	// GET /orbit/status -- free. Boot probe + "still indexing" check.
+	// GET /orbit/status -- free. Boot probe + "still indexing" check. Validated so
+	// availability logic never branches on an unvalidated/evolving Orbit shape.
 	async getStatus(): Promise<OrbitStatusResponse> {
-		return this.request<OrbitStatusResponse>({ path: this.statusPath, method: "GET" });
+		const raw = await this.request<unknown>({ path: this.statusPath, method: "GET" });
+		return OrbitStatusResponseSchema.parse(raw);
 	}
 
-	// GET /orbit/schema -- free. Ontology (node/edge types).
+	// GET /orbit/schema -- free. Ontology (node/edge types). Passed through to the
+	// LLM verbatim, so no schema is imposed on Orbit's own schema payload.
 	async getSchema(): Promise<unknown> {
 		return this.request<unknown>({ path: this.schemaPath, method: "GET" });
 	}
@@ -90,11 +102,12 @@ export class OrbitRestClient {
 	// POST /orbit/query -- BILLED (GitLab Credits). format:"raw" for structured JSON
 	// we parse; the default "llm" is compact text for direct model consumption.
 	async query(dsl: OrbitQuery, format: "raw" | "llm" = "raw"): Promise<OrbitQueryResponse> {
-		return this.request<OrbitQueryResponse>({
+		const raw = await this.request<unknown>({
 			path: this.queryPath,
 			method: "POST",
 			body: { query: dsl, format },
 		});
+		return OrbitQueryResponseSchema.parse(raw);
 	}
 
 	private async request<T>(options: { path: string; method: "GET" | "POST"; body?: unknown }): Promise<T> {

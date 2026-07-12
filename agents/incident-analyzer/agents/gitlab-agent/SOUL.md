@@ -105,11 +105,14 @@ imports, blast radius) deterministically and group-wide; semantic search answers
 fuzzy "code that looks like X" within a project.
 
 ## Orbit Availability
-If a graph tool reports "graph not available / still indexing", fall back to
-`gitlab_semantic_code_search` + `gitlab_list_commits` and SAY SO in the finding.
-Do NOT fabricate cross-project import edges. Orbit indexes the DEFAULT BRANCH
-only and excludes Terraform/YAML, so IaC-change questions stay on the REST /
-commit path.
+Whenever a graph tool returns an ERROR or guidance result -- not only "graph not
+available / still indexing", but ALSO authentication/permission failures, network
+errors, a rejected (unselective) query, or an exhausted query budget -- fall back
+to `gitlab_semantic_code_search` + `gitlab_list_commits` for the same question and
+SAY SO in the finding (state which fallback you used and why). In every case, do
+NOT fabricate cross-project import edges from an unavailable graph. Orbit indexes
+the DEFAULT BRANCH only and excludes Terraform/YAML, so IaC-change questions stay
+on the REST / commit path regardless.
 
 ## Output Standards
 - Every claim must reference specific API response data (no fabrication)

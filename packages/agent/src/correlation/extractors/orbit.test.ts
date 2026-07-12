@@ -8,7 +8,7 @@ import { extractOrbitFindings } from "./orbit.ts";
 // { alias: { type, id, properties } }; aggregation rows are scalar/count columns.
 
 function out(toolName: string, rawJson: unknown): ToolOutput {
-	return { toolName, rawJson } as ToolOutput;
+	return { toolName, rawJson } as Partial<ToolOutput> as unknown as ToolOutput;
 }
 
 describe("extractOrbitFindings", () => {
@@ -57,6 +57,32 @@ describe("extractOrbitFindings", () => {
 		expect(b?.importedByProjects).toContain("pvhcorp/orders");
 	});
 
+	test("blast radius: stitches MR metadata from the enrichment mrByFile map", () => {
+		const raw = {
+			queryTag: "orbit_blast_radius",
+			result: {
+				rows: [
+					{
+						def: { properties: { fqn: "Auth::verify", file_path: "pvhcorp/auth-lib/src/verify.rb" } },
+						sym: { properties: { file_path: "pvhcorp/checkout/app.rb", import_path: "pvhcorp/auth-lib/verify" } },
+					},
+				],
+			},
+			// The tool's second (enrichment) query result, keyed by source file.
+			mrByFile: {
+				"pvhcorp/auth-lib/src/verify.rb": {
+					type: "MergeRequest",
+					id: "42",
+					properties: { id: "42", merged_at: "2026-07-05T09:00:00Z", web_url: "https://gitlab.com/mr/42" },
+				},
+			},
+		};
+		const b = extractOrbitFindings([out("gitlab_blast_radius", raw)]).blastRadius?.[0];
+		expect(b?.mrMergedAt).toBe("2026-07-05T09:00:00Z");
+		expect(b?.mrId).toBe("42");
+		expect(b?.mrWebUrl).toBe("https://gitlab.com/mr/42");
+	});
+
 	test("recent deploys: maps mr + project nodes, keeps merged_at + id", () => {
 		const raw = {
 			queryTag: "orbit_recent_deploys",
@@ -96,7 +122,7 @@ describe("extractOrbitFindings", () => {
 
 	test("vulnerabilities: critical/high severity from v + p nodes", () => {
 		const raw = {
-			queryTag: "orbit_vulns_recent_mr",
+			queryTag: "orbit_recent_vulnerabilities",
 			result: {
 				rows: [
 					{

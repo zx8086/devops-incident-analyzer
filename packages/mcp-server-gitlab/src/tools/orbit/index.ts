@@ -13,9 +13,12 @@ import { traceToolCall } from "../../utils/tracing.js";
 import {
 	buildBlastRadiusQuery,
 	buildCrossProjectCallersQuery,
+	buildMrForFileQuery,
 	buildPipelineFailuresQuery,
 	buildRecentDeploysQuery,
-	buildVulnsRecentMrQuery,
+	buildRecentVulnerabilitiesQuery,
+	hasSelectiveAnchor,
+	ORBIT_QUERY_TAGS,
 	type OrbitQueryTag,
 	type TaggedOrbitQuery,
 } from "./dsl.js";
@@ -35,10 +38,19 @@ export interface OrbitToolContext {
 	// Optional re-check when a boot status said "indexing"; the handler calls
 	// getStatus() once before giving up (single retry, credit-free).
 	indexing?: boolean;
-	// Hard per-run cap on paid /orbit/query calls (credit guard). 0 disables the guard.
+	// Ceiling on paid /orbit/query calls per rolling time window (credit guard).
+	// 0 disables the guard. NOTE: registerOrbitTools is recorded ONCE by the
+	// SIO-1044 cached factory and replayed on every fresh per-request server, so a
+	// plain lifetime counter would become a process-wide cap that permanently
+	// locks out Orbit after the first burst. Instead this is a rolling window
+	// (see QUERY_WINDOW_MS) so a long-lived server always recovers budget.
 	maxQueriesPerRun: number;
 	defaultGroupPath: string;
 }
+
+// Rolling window for the credit guard. maxQueriesPerRun paid queries are allowed
+// per window; the window resets on the first query after it elapses.
+const QUERY_WINDOW_MS = 60_000;
 
 function textResult(text: string, isError = false) {
 	return { content: [{ type: "text" as const, text }], isError };
@@ -50,47 +62,157 @@ function taggedPayload(queryTag: OrbitQueryTag, raw: unknown) {
 	return JSON.stringify({ queryTag, ...(raw as Record<string, unknown>) }, null, 2);
 }
 
+// Cap on per-symbol MR-enrichment queries so one blast-radius call can't fan out
+// unboundedly across changed files (each enrich query still consumes budget).
+const MAX_ENRICH_FILES = 3;
+
+function orbitRows(raw: unknown): Array<Record<string, unknown>> {
+	const top = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+	const result = top?.result && typeof top.result === "object" ? (top.result as Record<string, unknown>) : undefined;
+	const rows = result?.rows ?? top?.rows;
+	return Array.isArray(rows) ? rows.filter((r): r is Record<string, unknown> => !!r && typeof r === "object") : [];
+}
+
+function nodeProperties(v: unknown): Record<string, unknown> {
+	const rec = v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+	const props =
+		rec?.properties && typeof rec.properties === "object" ? (rec.properties as Record<string, unknown>) : undefined;
+	return props ?? rec ?? {};
+}
+
+// Distinct changed-definition source files from a blast-radius result (def.file_path).
+function distinctDefFiles(raw: unknown): string[] {
+	const files = new Set<string>();
+	for (const row of orbitRows(raw)) {
+		const fp = nodeProperties(row.def).file_path;
+		if (typeof fp === "string" && fp) files.add(fp);
+	}
+	return Array.from(files);
+}
+
+// First MR node from a buildMrForFileQuery result (rows ordered merged_at DESC).
+function firstMrRow(raw: unknown): Record<string, unknown> | undefined {
+	for (const row of orbitRows(raw)) {
+		const mr = nodeProperties(row.mr);
+		if (Object.keys(mr).length > 0) return mr;
+	}
+	return undefined;
+}
+
 export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): number {
-	let queriesThisProcess = 0;
+	// Rolling-window counter. Reset when the window elapses so a long-lived server
+	// (this closure is replayed across every request) recovers budget instead of
+	// locking out Orbit permanently after the first burst.
+	let windowStart = Date.now();
+	let queriesThisWindow = 0;
+
+	// Returns false and does not increment when the paid-query budget is exhausted
+	// for the current window; otherwise records the query and returns true.
+	function tryConsumeBudget(): boolean {
+		if (ctx.maxQueriesPerRun <= 0) return true; // guard disabled
+		const now = Date.now();
+		if (now - windowStart >= QUERY_WINDOW_MS) {
+			windowStart = now;
+			queriesThisWindow = 0;
+		}
+		if (queriesThisWindow >= ctx.maxQueriesPerRun) return false;
+		queriesThisWindow += 1;
+		return true;
+	}
+
+	// Resolve availability: soft-fail unless indexed. One free /status re-check if
+	// boot saw "indexing". Returns a guidance result to short-circuit, or null when
+	// Orbit is usable.
+	async function ensureAvailable() {
+		if (!ctx.client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		if (ctx.available) return null;
+		if (ctx.indexing) {
+			try {
+				const status = await ctx.client.getStatus();
+				if (isOrbitIndexed(status)) {
+					ctx.available = true;
+					ctx.indexing = false;
+				}
+			} catch {
+				// fall through to guidance
+			}
+		}
+		return ctx.available ? null : textResult(UNAVAILABLE_GUIDANCE, true);
+	}
 
 	// Shared executor for the composed (billed) wrappers. Enforces availability,
-	// the per-run credit cap, and soft-fails on any Orbit error.
+	// the windowed credit cap, and soft-fails on any Orbit error.
 	async function runQuery(toolName: string, tagged: TaggedOrbitQuery) {
-		if (!ctx.client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		const unavailable = await ensureAvailable();
+		if (unavailable) return unavailable;
+		const client = ctx.client;
+		if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
 
-		if (!ctx.available) {
-			// One free /status re-check if boot saw "indexing".
-			if (ctx.indexing) {
-				try {
-					const status = await ctx.client.getStatus();
-					if (isOrbitIndexed(status)) {
-						ctx.available = true;
-						ctx.indexing = false;
-					}
-				} catch {
-					// fall through to guidance
-				}
-			}
-			if (!ctx.available) return textResult(UNAVAILABLE_GUIDANCE, true);
-		}
-
-		if (ctx.maxQueriesPerRun > 0 && queriesThisProcess >= ctx.maxQueriesPerRun) {
+		if (!tryConsumeBudget()) {
 			return textResult(
-				`Orbit query budget (${ctx.maxQueriesPerRun}) reached for this run; skipping ${toolName}. ` +
+				`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached; skipping ${toolName}. ` +
 					"Use the results already gathered or the per-project REST tools.",
 				true,
 			);
 		}
 
 		try {
-			queriesThisProcess += 1;
-			const raw = await ctx.client.query(tagged.dsl, "raw");
+			const raw = await client.query(tagged.dsl, "raw");
 			return textResult(taggedPayload(tagged.queryTag, raw));
 		} catch (error) {
 			const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
 			log.warn({ toolName, error: detail }, "Orbit query failed; soft-failing to guidance");
 			return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
 		}
+	}
+
+	// gitlab_blast_radius runs the import-traversal, then a SECOND bounded query per
+	// distinct changed-definition source file to resolve the merge request that
+	// touched it (the 4-hop Definition->MR path exceeds Orbit's 3-hop cap, so the MR
+	// metadata is stitched here instead). The payload carries an mrByFile map keyed
+	// by source file so the Layer-B extractor can attach mrId/mrMergedAt/mrWebUrl to
+	// each blast-radius finding -- without which the flagship deploy-vs-elastic rule
+	// (gated on mrMergedAt) can never fire.
+	async function runBlastRadius(symbol: string, groupPath: string, limit?: number) {
+		const unavailable = await ensureAvailable();
+		if (unavailable) return unavailable;
+		const client = ctx.client;
+		if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		if (!tryConsumeBudget()) {
+			return textResult(
+				`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached; skipping gitlab_blast_radius.`,
+				true,
+			);
+		}
+
+		let raw: unknown;
+		try {
+			raw = await client.query(buildBlastRadiusQuery({ symbol, groupPath, limit }).dsl, "raw");
+		} catch (error) {
+			const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
+			log.warn({ tool: "gitlab_blast_radius", error: detail }, "Orbit query failed; soft-failing to guidance");
+			return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
+		}
+
+		// Enrich: resolve the recent merged MR per distinct changed-definition file.
+		// Bounded to MAX_ENRICH_FILES so one symbol can't fan out unboundedly, and
+		// each enrich query still consumes budget (best-effort -- failures are
+		// non-fatal and just leave MR metadata absent).
+		const files = distinctDefFiles(raw).slice(0, MAX_ENRICH_FILES);
+		const mrByFile: Record<string, unknown> = {};
+		for (const file of files) {
+			if (!tryConsumeBudget()) break;
+			try {
+				const mrRaw = await client.query(buildMrForFileQuery({ sourceFile: file }).dsl, "raw");
+				const mr = firstMrRow(mrRaw);
+				if (mr) mrByFile[file] = mr;
+			} catch {
+				// leave this file's MR metadata absent; blast radius is still useful
+			}
+		}
+
+		const payload = { queryTag: ORBIT_QUERY_TAGS.blastRadius, ...(raw as Record<string, unknown>), mrByFile };
+		return textResult(JSON.stringify(payload, null, 2));
 	}
 
 	// -- gitlab_graph_schema (FREE) --
@@ -126,10 +248,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		async (args) =>
 			traceToolCall("gitlab_blast_radius", async () => {
 				const p = BlastRadiusParams.parse(args);
-				return runQuery(
-					"gitlab_blast_radius",
-					buildBlastRadiusQuery({ symbol: p.symbol, groupPath: p.group_path ?? ctx.defaultGroupPath, limit: p.limit }),
-				);
+				return runBlastRadius(p.symbol, p.group_path ?? ctx.defaultGroupPath, p.limit);
 			}),
 	);
 
@@ -211,7 +330,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				const p = VulnParams.parse(args);
 				return runQuery(
 					"gitlab_recent_vulnerabilities",
-					buildVulnsRecentMrQuery({ groupPath: p.group_path ?? ctx.defaultGroupPath, limit: p.limit }),
+					buildRecentVulnerabilitiesQuery({ groupPath: p.group_path ?? ctx.defaultGroupPath, limit: p.limit }),
 				);
 			}),
 	);
@@ -233,14 +352,26 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		async (args) =>
 			traceToolCall("gitlab_orbit_query_graph", async () => {
 				const p = RawParams.parse(args);
-				if (!ctx.client) return textResult(UNAVAILABLE_GUIDANCE, true);
-				if (!ctx.available) return textResult(UNAVAILABLE_GUIDANCE, true);
-				if (ctx.maxQueriesPerRun > 0 && queriesThisProcess >= ctx.maxQueriesPerRun) {
-					return textResult(`Orbit query budget (${ctx.maxQueriesPerRun}) reached for this run.`, true);
+				const query = p.query as OrbitQuery;
+				const unavailable = await ensureAvailable();
+				if (unavailable) return unavailable;
+				const client = ctx.client;
+				if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
+				// Selectivity guard: Orbit rejects (but still bills for) an unselective
+				// query. The purpose-built tools enforce this via requireSelector; the
+				// raw path must validate the LLM's query before the billed call.
+				if (!hasSelectiveAnchor(query)) {
+					return textResult(
+						"Orbit query rejected: every query must include a selective node (a `filters` object, " +
+							"`node_ids`, or `id_range`). Call gitlab_graph_schema to ground the query, then retry.",
+						true,
+					);
+				}
+				if (!tryConsumeBudget()) {
+					return textResult(`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached.`, true);
 				}
 				try {
-					queriesThisProcess += 1;
-					const raw = await ctx.client.query(p.query as OrbitQuery, "raw");
+					const raw = await client.query(query, "raw");
 					return textResult(JSON.stringify(raw, null, 2));
 				} catch (error) {
 					const detail = error instanceof OrbitUnavailableError ? error.message : String(error);

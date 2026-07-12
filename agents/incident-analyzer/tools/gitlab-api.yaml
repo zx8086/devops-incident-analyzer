@@ -27,7 +27,18 @@ input_schema:
     query:
       type: string
       description: Search query or file path
+  # project_id is required only for project-scoped actions; graph_analysis
+  # (Orbit, group-scoped) and search do not need it. Advisory guidance to the
+  # LLM -- the bridge treats input_schema as opaque, so this documents the
+  # contract rather than enforcing it at a validation boundary.
   required: []
+  allOf:
+    - if:
+        properties:
+          action:
+            enum: [issues, merge_requests, pipelines, code_analysis]
+      then:
+        required: [project_id]
 output_schema:
   type: object
   properties:

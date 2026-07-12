@@ -164,9 +164,10 @@ File: `agents/incident-analyzer/tools/gitlab-api.yaml`
 Action categories in `action_tool_map`:
 - `issues` -- `gitlab_create_issue`, `gitlab_get_issue`, `gitlab_create_workitem_note`, `gitlab_get_workitem_notes`
 - `merge_requests` -- `gitlab_get_merge_request`, `gitlab_get_merge_request_commits`, `gitlab_get_merge_request_diffs`, `gitlab_get_merge_request_pipelines`, `gitlab_create_merge_request`
-- `pipelines` -- `gitlab_manage_pipeline`, `gitlab_get_pipeline_jobs`
-- `search` -- `gitlab_search`, `gitlab_search_labels`, `gitlab_semantic_code_search`
+- `pipelines` -- `gitlab_manage_pipeline`, `gitlab_get_pipeline_jobs`, `gitlab_pipeline_failures`
+- `search` -- `gitlab_search`, `gitlab_search_labels`, `gitlab_semantic_code_search`, `gitlab_recent_deploys`
 - `code_analysis` -- `gitlab_get_file_content`, `gitlab_get_blame`, `gitlab_get_commit_diff`, `gitlab_list_commits`, `gitlab_get_repository_tree`
+- `graph_analysis` (SIO-1076, Orbit) -- `gitlab_graph_schema`, `gitlab_blast_radius`, `gitlab_cross_project_callers`, `gitlab_recent_vulnerabilities`, `gitlab_orbit_query_graph`
 
 `mcp_server: gitlab`, `mcp_patterns: ["gitlab_*"]`
 

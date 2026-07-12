@@ -4,9 +4,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildBlastRadiusQuery,
 	buildCrossProjectCallersQuery,
+	buildMrForFileQuery,
 	buildPipelineFailuresQuery,
 	buildRecentDeploysQuery,
-	buildVulnsRecentMrQuery,
+	buildRecentVulnerabilitiesQuery,
+	hasSelectiveAnchor,
 	ORBIT_QUERY_TAGS,
 } from "./dsl.js";
 
@@ -63,7 +65,7 @@ describe("Orbit DSL builders", () => {
 			buildCrossProjectCallersQuery({ fqn: "a::b" }),
 			buildRecentDeploysQuery({ groupPath: "g", since: "2026-01-01" }),
 			buildPipelineFailuresQuery({ groupPath: "g", since: "2026-01-01" }),
-			buildVulnsRecentMrQuery({ groupPath: "g" }),
+			buildRecentVulnerabilitiesQuery({ groupPath: "g" }),
 		];
 		for (const { dsl } of queries) {
 			expect(JSON.stringify(dsl)).not.toContain("HAS_LATEST_DIFF");
@@ -76,11 +78,38 @@ describe("Orbit DSL builders", () => {
 	});
 
 	test("vulns: critical/high, group-prefixed", () => {
-		const { queryTag, dsl } = buildVulnsRecentMrQuery({ groupPath: "pvhcorp" });
-		expect(queryTag).toBe(ORBIT_QUERY_TAGS.vulnsRecentMr);
+		const { queryTag, dsl } = buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" });
+		expect(queryTag).toBe(ORBIT_QUERY_TAGS.recentVulnerabilities);
 		expect(hasSelectiveNode(dsl)).toBe(true);
 		const s = JSON.stringify(dsl);
 		expect(s).toContain("critical");
 		expect(s).toContain("high");
+	});
+
+	test("MR-for-file enrichment: selective on old_path, merged, tagged as blast_radius", () => {
+		const { queryTag, dsl } = buildMrForFileQuery({ sourceFile: "pvhcorp/auth-lib/verify.rb" });
+		// Reuses blastRadius tag so the extractor merges MR metadata into the finding.
+		expect(queryTag).toBe(ORBIT_QUERY_TAGS.blastRadius);
+		expect(hasSelectiveNode(dsl)).toBe(true);
+		const s = JSON.stringify(dsl);
+		expect(s).toContain("old_path");
+		expect(s).toContain("pvhcorp/auth-lib/verify.rb");
+		expect(s).toContain("merged");
+		expect(s).not.toContain("HAS_LATEST_DIFF");
+	});
+});
+
+describe("hasSelectiveAnchor", () => {
+	test("true when a node carries filters", () => {
+		expect(
+			hasSelectiveAnchor({ query_type: "traversal", node: { entity: "Project", filters: { full_path: "x" } } }),
+		).toBe(true);
+	});
+	test("true when a node carries node_ids", () => {
+		expect(hasSelectiveAnchor({ nodes: [{ entity: "MergeRequest", node_ids: [1] }] })).toBe(true);
+	});
+	test("false when no node is selective (unbounded scan -> would be billed+rejected)", () => {
+		expect(hasSelectiveAnchor({ query_type: "traversal", node: { entity: "Project" } })).toBe(false);
+		expect(hasSelectiveAnchor({ nodes: [{ entity: "Project", filters: {} }] })).toBe(false);
 	});
 });
