@@ -19,6 +19,23 @@ describe("buildFocusBlock current-time anchor (SIO-1079)", () => {
 		expect(block.toLowerCase()).toContain("retention");
 	});
 
+	test("SIO-1080: asserts the current YEAR authoritatively and forbids adjusting the incident year", () => {
+		const block = buildFocusBlock(undefined, NOW);
+		// The year derived from nowIso (2026) must appear as a standalone assertion.
+		expect(block).toContain("2026");
+		const low = block.toLowerCase();
+		expect(low).toContain("current year");
+		// Must forbid shifting/correcting the incident year.
+		expect(low).toMatch(/never (shift|adjust|correct|reinterpret)/);
+		expect(low).toContain("year");
+	});
+
+	test("SIO-1080: the asserted year tracks nowIso (not hardcoded)", () => {
+		const block2027 = buildFocusBlock(undefined, "2027-01-02T00:00:00.000Z");
+		expect(block2027).toContain("2027");
+		expect(block2027).not.toContain("current year is 2026");
+	});
+
 	test("includes both the time anchor and the focus when focus is present", () => {
 		const focus: InvestigationFocus = {
 			services: ["localcore-service"],

@@ -5,11 +5,16 @@
 // two pure decision helpers that clamp or short-circuit the window before the SDK call.
 
 import { describe, expect, test } from "bun:test";
-import { decideQueryWindow, resolveQueryFloor } from "./start-query.ts";
+import { correctYearDrift, decideQueryWindow, resolveQueryFloor } from "./start-query.ts";
 
 // Fixed "now" so retention math is deterministic (no Date.now() dependence).
 const NOW = 1_700_000_000; // epoch seconds
 const DAY = 86_400;
+
+// Helper: epoch seconds for a UTC calendar moment.
+function utc(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): number {
+	return Math.floor(Date.UTC(y, mo - 1, d, h, mi, s) / 1000);
+}
 
 describe("resolveQueryFloor (SIO-1078)", () => {
 	test("retention-only floor: now - retentionInDays days", () => {
@@ -70,5 +75,85 @@ describe("decideQueryWindow (SIO-1078)", () => {
 	test("unbounded floor (-Infinity) always passes", () => {
 		const res = decideQueryWindow(NOW - 400 * DAY, NOW, Number.NEGATIVE_INFINITY);
 		expect(res.action).toBe("pass");
+	});
+});
+
+// SIO-1080: the AWS sub-agent LLM shifts the incident year back (2026 -> 2025) because its
+// training prior mis-dates "now", producing a window outside retention and MalformedQueryException.
+// correctYearDrift deterministically snaps a year-shifted window forward when doing so lands it
+// inside the queryable range; it never touches an already-valid or genuinely-old window.
+describe("correctYearDrift (SIO-1080)", () => {
+	// Real-shape scenario: incident 2026-07-11T23:07:59Z, 60-day retention, "now" = 2026-07-12.
+	const now2026 = utc(2026, 7, 12, 12, 0, 0);
+	const floor2026 = now2026 - 60 * DAY; // ~2026-05-13
+
+	test("1-year drift below floor -> shifts window forward one year into range (the SoldTo case)", () => {
+		const start = utc(2025, 7, 11, 22, 50, 0); // model's wrong 2025 anchor
+		const end = utc(2025, 7, 11, 23, 50, 0);
+		const res = correctYearDrift(start, end, floor2026, now2026);
+		expect(res.shiftedYears).toBe(1);
+		expect(res.startTime).toBe(utc(2026, 7, 11, 22, 50, 0));
+		expect(res.endTime).toBe(utc(2026, 7, 11, 23, 50, 0));
+		// And the corrected window is now inside retention.
+		expect(res.endTime).toBeGreaterThanOrEqual(floor2026);
+	});
+
+	test("already-valid window is returned unchanged (shiftedYears 0)", () => {
+		const start = utc(2026, 7, 11, 22, 50, 0);
+		const end = utc(2026, 7, 11, 23, 50, 0);
+		const res = correctYearDrift(start, end, floor2026, now2026);
+		expect(res.shiftedYears).toBe(0);
+		expect(res.startTime).toBe(start);
+		expect(res.endTime).toBe(end);
+	});
+
+	test("genuinely-old window that no year-shift can fix is left unchanged (reject path handles it)", () => {
+		// A window in 2019 with only creation ~2022 -> even shifting up to 5y lands before floor.
+		const start = utc(2019, 1, 1);
+		const end = utc(2019, 1, 2);
+		const res = correctYearDrift(start, end, floor2026, now2026);
+		expect(res.shiftedYears).toBe(0);
+		expect(res.startTime).toBe(start);
+	});
+
+	test("2-year drift -> shifts forward two years", () => {
+		const start = utc(2024, 7, 11, 22, 50, 0);
+		const end = utc(2024, 7, 11, 23, 50, 0);
+		const res = correctYearDrift(start, end, floor2026, now2026);
+		expect(res.shiftedYears).toBe(2);
+		expect(res.startTime).toBe(utc(2026, 7, 11, 22, 50, 0));
+	});
+
+	test("leap-year Feb-29 shifts to a valid date without rolling", () => {
+		// 2024 is a leap year; shifting +2 years to 2026 (non-leap) must not produce Mar-1 garbage.
+		const nowMar = utc(2026, 3, 15, 12, 0, 0);
+		const floorMar = nowMar - 60 * DAY;
+		const start = utc(2024, 2, 29, 10, 0, 0);
+		const end = utc(2024, 2, 29, 11, 0, 0);
+		const res = correctYearDrift(start, end, floorMar, nowMar);
+		// Feb-29-2024 + 2y -> Feb-28-2026 (clamped), still a real, in-range instant.
+		expect(res.shiftedYears).toBeGreaterThanOrEqual(1);
+		expect(res.startTime).toBeGreaterThanOrEqual(floorMar);
+		expect(res.startTime).toBeLessThanOrEqual(nowMar);
+	});
+
+	test("does not shift a window whose start would land in the future", () => {
+		// end is below floor, but the only shift that lifts end above floor pushes start past now.
+		// Guard must not produce a future-dated window.
+		const start = utc(2025, 12, 31, 23, 0, 0);
+		const end = utc(2025, 12, 31, 23, 30, 0);
+		// now is early 2026; a +1y shift would put start in Dec 2026 (future). Must NOT shift.
+		const nowEarly = utc(2026, 1, 5, 12, 0, 0);
+		const floorEarly = nowEarly - 60 * DAY; // ~2025-11-06
+		const res = correctYearDrift(start, end, floorEarly, nowEarly);
+		// The 2025-12-31 window is already >= floor (~2025-11-06), so it's valid: no shift.
+		expect(res.shiftedYears).toBe(0);
+	});
+
+	test("unbounded floor (-Infinity) never shifts", () => {
+		const start = utc(2025, 7, 11, 22, 50, 0);
+		const end = utc(2025, 7, 11, 23, 50, 0);
+		const res = correctYearDrift(start, end, Number.NEGATIVE_INFINITY, now2026);
+		expect(res.shiftedYears).toBe(0);
 	});
 });

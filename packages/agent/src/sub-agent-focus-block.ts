@@ -10,13 +10,23 @@ import type { InvestigationFocus } from "@devops-agent/shared";
 // The current-time line is the fix for the AWS sub-agent choosing CloudWatch query windows
 // with no "now" reference: without it the LLM invented Unix epoch seconds unmoored from the
 // real clock and anchored aws_logs_start_query outside the log group's retention window.
+//
+// SIO-1080: adding the current time was not enough -- the LLM OVERRODE it, shifting a 2026
+// incident timestamp back to 2025 (its training prior mis-dates "now") and landing outside
+// retention. So the year is now asserted as a standalone imperative fact derived from nowIso,
+// with an explicit prohibition on adjusting the incident year. (A deterministic guard in the
+// AWS start-query tool, correctYearDrift, is the load-bearing backstop when this is ignored.)
 export function buildFocusBlock(focus: InvestigationFocus | undefined, nowIso: string): string {
+	const currentYear = nowIso.slice(0, 4);
 	const timeAnchor =
-		`\n\n---\n\nCurrent time: ${nowIso}. ` +
-		"When a tool needs a time window (e.g. CloudWatch Logs Insights startTime/endTime, " +
-		"which are Unix epoch SECONDS), anchor it to the incident/event timestamp under " +
-		"investigation and to this current time -- never guess an absolute epoch, and keep the " +
-		"window within the data source's retention.";
+		`\n\n---\n\nCurrent time: ${nowIso}. THE CURRENT YEAR IS ${currentYear}. ` +
+		"Treat every incident/event timestamp given to you as literal ground truth -- never shift, " +
+		"adjust, correct, or reinterpret its YEAR, even if the timestamp appears to be in the future " +
+		"relative to your own sense of the date. Your internal sense of the current date may be stale; " +
+		`this "Current time" value is authoritative. When a tool needs a time window (e.g. CloudWatch ` +
+		"Logs Insights startTime/endTime, which are Unix epoch SECONDS), compute the epoch from the " +
+		"incident timestamp EXACTLY as given, anchor to it and to this current time, never guess an " +
+		"absolute epoch, and keep the window within the data source's retention.";
 
 	if (!focus) return timeAnchor;
 
