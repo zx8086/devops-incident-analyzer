@@ -132,7 +132,14 @@ export async function getRetentionFloor(opts: {
 	// Only cache a real, non-empty result. A failure/empty leaves the entry absent so the next
 	// call retries the describe rather than being pinned for the whole TTL.
 	if (groups && groups.length > 0) {
-		cache.set(key, { groups, expiresAt: clock() + ttlMs });
+		// Opportunistic eviction: on a cache miss (this write), sweep entries already past their
+		// TTL so unused keys cannot accumulate over a long-running process. Bounded and cheap --
+		// runs only on describe-completing calls, not cache hits.
+		const nowMs = clock();
+		for (const [k, v] of cache) {
+			if (v.expiresAt <= nowMs) cache.delete(k);
+		}
+		cache.set(key, { groups, expiresAt: nowMs + ttlMs });
 	}
 	return resolveFloorFromGroups(groups, nowSeconds);
 }
@@ -222,6 +229,20 @@ function retentionCacheKey(params: StartQueryParams): string {
 // Describe the targeted log groups and collect their raw retention data. Returns null on any
 // failure (IAM denied, throttled) or when there is nothing to describe -- getRetentionFloor turns
 // that into a non-real floor (the guard is then skipped) rather than a wrong one.
+// A CloudWatch log-group ARN is `arn:aws:logs:<region>:<acct>:log-group:<name>` and DescribeLogGroups
+// returns it with a trailing `:*`. The <name> may itself contain slashes, so split off everything
+// after `:log-group:` (not the last colon segment) and drop an optional `:*` suffix.
+export function logGroupNameFromArn(arn: string): string {
+	const m = arn.match(/:log-group:(.+?)(?::\*)?$/);
+	return m?.[1] ?? arn;
+}
+
+// Strip the trailing `:*` DescribeLogGroups appends, so an ARN from the API compares equal to the
+// suffixless ARN a caller passes as a logGroupIdentifier.
+function stripArnSuffix(arn: string): string {
+	return arn.replace(/:\*$/, "");
+}
+
 async function describeRetentionGroups(
 	config: AwsConfig,
 	params: StartQueryParams,
@@ -230,32 +251,33 @@ async function describeRetentionGroups(
 	const identifiers = params.logGroupIdentifiers;
 	const targets = names ?? identifiers ?? [];
 	if (targets.length === 0) return null;
-	try {
-		const client = getCloudWatchLogsClient(config, params.estate);
-		// DescribeLogGroups matches by name PREFIX, so it returns sibling groups too (querying
-		// "/app" also returns "/app-canary"). We must keep only the EXACT requested group -- a
-		// sibling's shorter retention would otherwise wrongly tighten (or reject) the floor.
-		const collected: LogGroupRetention[] = [];
-		for (const target of targets) {
-			// For an ARN identifier the log-group name is the ":log-group/<name>" segment.
-			const wantName = names
-				? target
-				: (target
-						.split(":")
-						.pop()
-						?.replace(/^log-group\//, "") ?? target);
-			const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50 }));
-			for (const g of res.logGroups ?? []) {
-				const exactMatch = names ? g.logGroupName === target : g.arn === target || g.logGroupName === wantName;
-				if (exactMatch) {
-					collected.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
+	const client = getCloudWatchLogsClient(config, params.estate);
+
+	// DescribeLogGroups matches by name PREFIX, so it returns sibling groups too (querying "/app"
+	// also returns "/app-canary"). We keep only the EXACT requested group -- a sibling's shorter
+	// retention would otherwise wrongly tighten (or reject) the floor. Targets are described
+	// concurrently (up to 50), and each is independently try/caught so one throttled target does
+	// not discard the retention data already gathered from the others (best-effort resilience).
+	const perTarget = await Promise.all(
+		targets.map(async (target): Promise<LogGroupRetention[]> => {
+			const wantName = names ? target : logGroupNameFromArn(target);
+			try {
+				const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50 }));
+				const out: LogGroupRetention[] = [];
+				for (const g of res.logGroups ?? []) {
+					const exactMatch = names
+						? g.logGroupName === target
+						: (g.arn !== undefined && stripArnSuffix(g.arn) === stripArnSuffix(target)) || g.logGroupName === wantName;
+					if (exactMatch) out.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
 				}
+				return out;
+			} catch {
+				return [];
 			}
-		}
-		return collected.length > 0 ? collected : null;
-	} catch {
-		return null;
-	}
+		}),
+	);
+	const collected = perTarget.flat();
+	return collected.length > 0 ? collected : null;
 }
 
 // Resilient floor resolution: cache + single-flight around describeRetentionGroups. isReal is

@@ -9,6 +9,7 @@ import {
 	correctYearDrift,
 	decideQueryWindow,
 	getRetentionFloor,
+	logGroupNameFromArn,
 	resolveFloorFromGroups,
 	resolveQueryFloor,
 } from "./start-query.ts";
@@ -297,5 +298,49 @@ describe("getRetentionFloor (SIO-1082 cache + single-flight)", () => {
 		t += TTL + 1; // advance past TTL
 		await getRetentionFloor({ key: "k", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
 		expect(describeCalls).toBe(2);
+	});
+});
+
+// SIO-1082 (CodeRabbit re-review): a CloudWatch log-group ARN from DescribeLogGroups carries a
+// trailing ":*" and the group name may contain slashes; extraction must not use the last colon
+// segment, and ARN equality must be suffixless.
+describe("logGroupNameFromArn (SIO-1082)", () => {
+	const name = "/ecs/fargate/catalog-prd-log-group";
+	const region = "arn:aws:logs:eu-central-1:762715229080:log-group:";
+
+	test("extracts the name from a plain ARN", () => {
+		expect(logGroupNameFromArn(`${region}${name}`)).toBe(name);
+	});
+
+	test("extracts the name from an ARN with the trailing :* (as DescribeLogGroups returns)", () => {
+		expect(logGroupNameFromArn(`${region}${name}:*`)).toBe(name);
+	});
+
+	test("handles names containing slashes (not just the last colon segment)", () => {
+		expect(logGroupNameFromArn("arn:aws:logs:us-east-1:111:log-group:/a/b/c:*")).toBe("/a/b/c");
+	});
+
+	test("returns the input unchanged when it is not an ARN", () => {
+		expect(logGroupNameFromArn("/plain/name")).toBe("/plain/name");
+	});
+});
+
+describe("getRetentionFloor eviction (SIO-1082)", () => {
+	const now = utc(2026, 7, 12, 12, 0, 0);
+	const TTL = 300_000;
+
+	test("expired entries are swept on a subsequent describe-completing call", async () => {
+		const cache = new Map<string, { groups: { retentionInDays?: number }[]; expiresAt: number }>();
+		let t = now * 1000;
+		const clock = () => t;
+		const describe = async () => [{ retentionInDays: 60 }];
+		// Populate key A, then let it expire.
+		await getRetentionFloor({ key: "A", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		expect(cache.has("A")).toBe(true);
+		t += TTL + 1;
+		// A miss on key B completes a describe and sweeps the now-expired A.
+		await getRetentionFloor({ key: "B", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		expect(cache.has("A")).toBe(false);
+		expect(cache.has("B")).toBe(true);
 	});
 });
