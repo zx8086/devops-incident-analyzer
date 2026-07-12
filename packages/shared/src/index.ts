@@ -151,6 +151,7 @@ export {
 	type KonnectConfig,
 	KonnectConfigSchema,
 } from "./datasource.ts";
+export { embeddingMaxChars, truncateForEmbedding } from "./embedding-truncate.ts";
 export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts";
 export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {

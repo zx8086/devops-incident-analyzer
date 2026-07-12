@@ -20,6 +20,7 @@ import {
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import { truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
@@ -50,10 +51,15 @@ export function createBedrockEmbedder(): EmbedFn {
 	return async (text: string) => {
 		if (!embedQuery) {
 			const { BedrockEmbeddings } = await import("@langchain/aws");
-			const instance = new BedrockEmbeddings({ model, region });
+			// SIO-1081: maxRetries: 0 -- a 400 ValidationException (input over Titan's 8192-token
+			// cap) is a non-retryable client error; the default AsyncCaller maxRetries: 6 turns one
+			// bad embed into ~7 identical console.error dumps.
+			const instance = new BedrockEmbeddings({ model, region, maxRetries: 0 });
 			embedQuery = (t) => instance.embedQuery(t);
 		}
-		return embedQuery(text);
+		// SIO-1081: head-truncate before embedding so a large pasted incident (used as the
+		// similarity seed) stays under the 8192-token cap instead of failing the embed.
+		return embedQuery(truncateForEmbedding(text));
 	};
 }
 
