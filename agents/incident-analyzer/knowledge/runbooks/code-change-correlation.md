@@ -16,7 +16,42 @@ triggers:
 - New error patterns appear that were not present before a recent merge
 - Performance degradation after a CI/CD pipeline completed
 
-## Investigation Steps
+## Preferred: Orbit blast-radius traversal (deterministic, cross-project)
+
+When GitLab Orbit is enabled, the whole call chain below becomes a single
+deterministic graph traversal instead of an 8-step per-project hunt. Prefer it
+for the "which shared change broke which services" question -- it is the only
+path that spans repositories.
+
+1. Extract anchor symbols from the Elasticsearch logs (exception classes, method
+   names) exactly as in step 1 below.
+2. Call `gitlab_blast_radius(symbol: "<anchor>")` -- group-scoped, no project
+   resolution needed. Orbit resolves the anchor to a `Definition` node and
+   returns every downstream project/file that `IMPORTS` it across `pvhcorp`.
+3. Read the result: `importedByProjects` is the deterministic set of affected
+   services (not a `gitlab_search` guess). `sourceProject`/`sourceFile` is where
+   the changed definition lives.
+4. For group-wide deploy/failure context, use `gitlab_recent_deploys` and
+   `gitlab_pipeline_failures` (both take a `since` timestamp) -- ranked across
+   all projects.
+5. Only drop to the per-project steps below when Orbit is disabled/indexing, the
+   symbol is on a non-default branch, or the code is Terraform/YAML (Orbit
+   indexes the default branch only and excludes HCL/YAML).
+
+The rules engine consumes these findings automatically: a blast-radius result
+plus a post-merge Elastic error spike in a downstream service fires
+`orbit-deploy-blast-radius-vs-elastic`, grounding the root cause deterministically
+rather than relying on the aggregator LLM to reconstruct it in prose.
+
+For "who calls this definition across repos" use `gitlab_cross_project_callers`,
+and for a group-wide security sweep use `gitlab_recent_vulnerabilities`.
+
+Note: `gitlab_blast_radius` and the other billed Orbit tools consume GitLab
+Credits. Call `gitlab_graph_schema` (free) first if you need to ground a raw
+query; prefer the purpose-built tools over the raw `gitlab_orbit_query_graph`
+escape hatch.
+
+## Investigation Steps (per-project fallback)
 
 ### 1. Extract Search Anchors from Logs
 Before querying GitLab, extract searchable symbols from Elasticsearch logs and error messages:
@@ -67,6 +102,7 @@ Use `gitlab_get_repository_tree` to understand the project layout when navigatin
 
 ## Cross-Datasource Correlation
 - Elasticsearch error timestamp + GitLab commit timestamp = deployment-caused regression
+- Orbit blast radius (shared definition imported by service X) + post-merge Elastic error spike in X = shared-library root cause (fires `orbit-deploy-blast-radius-vs-elastic`)
 - Kafka consumer lag spike + GitLab MR merged = consumer code change caused processing failure
 - Couchbase slow queries + GitLab commit touching query code = query regression
 - Kong gateway 5xx + GitLab pipeline deployment = upstream service deployment failure
@@ -78,4 +114,4 @@ Use `gitlab_get_repository_tree` to understand the project layout when navigatin
 - Rollback candidate identified: requires human approval before proceeding
 
 ## All Tools Used Are Read-Only
-gitlab_semantic_code_search, gitlab_get_file_content, gitlab_get_blame, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_repository_tree, gitlab_search
+gitlab_semantic_code_search, gitlab_get_file_content, gitlab_get_blame, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_repository_tree, gitlab_search, gitlab_graph_schema, gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_orbit_query_graph

@@ -38,6 +38,18 @@ export class ConfigurationManager {
 					10,
 				),
 			},
+			orbit: {
+				enabled: getEnvVarWithDefault("ORBIT_ENABLED", configDefaults.orbit.enabled) === "true",
+				personalAccessToken: getEnvVar("ORBIT_PERSONAL_ACCESS_TOKEN") || undefined,
+				queryPath: getEnvVarWithDefault("ORBIT_QUERY_PATH", configDefaults.orbit.queryPath),
+				schemaPath: getEnvVarWithDefault("ORBIT_SCHEMA_PATH", configDefaults.orbit.schemaPath),
+				statusPath: getEnvVarWithDefault("ORBIT_STATUS_PATH", configDefaults.orbit.statusPath),
+				timeout: parseInt(getEnvVarWithDefault("ORBIT_TIMEOUT", configDefaults.orbit.timeout), 10),
+				maxQueriesPerRun: parseInt(
+					getEnvVarWithDefault("ORBIT_MAX_QUERIES_PER_RUN", configDefaults.orbit.maxQueriesPerRun),
+					10,
+				),
+			},
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", configDefaults.tracing.enabled) === "true",
 				apiKey: getEnvVar("LANGSMITH_API_KEY"),

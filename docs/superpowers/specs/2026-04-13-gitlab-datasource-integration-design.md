@@ -164,9 +164,10 @@ File: `agents/incident-analyzer/tools/gitlab-api.yaml`
 Action categories in `action_tool_map`:
 - `issues` -- `gitlab_create_issue`, `gitlab_get_issue`, `gitlab_create_workitem_note`, `gitlab_get_workitem_notes`
 - `merge_requests` -- `gitlab_get_merge_request`, `gitlab_get_merge_request_commits`, `gitlab_get_merge_request_diffs`, `gitlab_get_merge_request_pipelines`, `gitlab_create_merge_request`
-- `pipelines` -- `gitlab_manage_pipeline`, `gitlab_get_pipeline_jobs`
-- `search` -- `gitlab_search`, `gitlab_search_labels`, `gitlab_semantic_code_search`
+- `pipelines` -- `gitlab_manage_pipeline`, `gitlab_get_pipeline_jobs`, `gitlab_pipeline_failures`
+- `search` -- `gitlab_search`, `gitlab_search_labels`, `gitlab_semantic_code_search`, `gitlab_recent_deploys`
 - `code_analysis` -- `gitlab_get_file_content`, `gitlab_get_blame`, `gitlab_get_commit_diff`, `gitlab_list_commits`, `gitlab_get_repository_tree`
+- `graph_analysis` (SIO-1076, Orbit) -- `gitlab_graph_schema`, `gitlab_blast_radius`, `gitlab_cross_project_callers`, `gitlab_recent_vulnerabilities`, `gitlab_orbit_query_graph`
 
 `mcp_server: gitlab`, `mcp_patterns: ["gitlab_*"]`
 
@@ -258,13 +259,16 @@ GitLab is treated as supplementary for all complex incident investigations. The 
 
 The supervisor validates that the GitLab MCP server is connected and has tools before dispatching the gitlab-agent, so if the server is down, it gracefully skips.
 
-## Future: GKG Integration Path
+## GKG Integration Path (IMPLEMENTED -- SIO-1076)
 
-This design supports future GitLab Knowledge Graph integration:
-- The `gitlab-client/` module can be extended with a `graph.ts` adapter
-- New tools can be added to `tools/code-analysis/` for graph queries (callers, callees, neighbors)
-- The `action_tool_map` in the tool YAML can be extended with a `graph_analysis` action category
-- The proxy mechanism can coexist with or be replaced by GKG endpoints
+The reserved GitLab Knowledge Graph slot is now filled by GitLab Orbit:
+- `gitlab-client/orbit.ts` is the graph adapter (`OrbitRestClient`; REST, PAT `read_api`, no OAuth)
+- Graph-query tools live in `tools/orbit/` (`gitlab_blast_radius`, `gitlab_cross_project_callers`, `gitlab_recent_deploys`, `gitlab_pipeline_failures`, `gitlab_recent_vulnerabilities`, `gitlab_graph_schema`, `gitlab_orbit_query_graph`), with the DSL builders in `tools/orbit/dsl.ts`
+- The `graph_analysis` action category was added to `agents/incident-analyzer/tools/gitlab-api.yaml`
+- Orbit coexists with the proxy: writes/live-status stay on `/api/v4/mcp`; Orbit (`/api/v4/orbit/*`) owns cross-project traversal only
+- Layer B adds typed `OrbitFindings` + correlation rules (`orbit-deploy-blast-radius-vs-elastic`, etc.) in `packages/agent/`
+
+See the SIO-1076 plan and `project_gitlab_orbit_positioning` memory for the full design.
 
 ## Verification
 

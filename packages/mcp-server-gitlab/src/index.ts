@@ -10,6 +10,7 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { loadConfiguration } from "./config/index.js";
 import { GitLabRestClient } from "./gitlab-client/index.js";
+import { isOrbitIndexed, OrbitRestClient } from "./gitlab-client/orbit.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
 import { createMcpServerFactory, discoverRemoteTools, type GitLabDatasource } from "./server.ts";
 import { createTransport } from "./transport/index.ts";
@@ -79,7 +80,37 @@ if (import.meta.main) {
 				timeout: config.gitlab.timeout,
 			});
 
-			return { proxy, restClient, config, discoveredTools };
+			// SIO-1076: Orbit REST client + free /status boot probe. Reuses the
+			// GitLab PAT (read_api) unless a dedicated ORBIT_PERSONAL_ACCESS_TOKEN
+			// is set. The probe never calls the billed /query endpoint.
+			let orbitClient: OrbitRestClient | undefined;
+			let orbitAvailable = false;
+			let orbitIndexing = false;
+			if (config.orbit.enabled) {
+				orbitClient = new OrbitRestClient({
+					instanceUrl: config.gitlab.instanceUrl,
+					personalAccessToken: config.orbit.personalAccessToken || config.gitlab.personalAccessToken,
+					queryPath: config.orbit.queryPath,
+					schemaPath: config.orbit.schemaPath,
+					statusPath: config.orbit.statusPath,
+					timeout: config.orbit.timeout,
+				});
+				try {
+					const status = await orbitClient.getStatus();
+					orbitAvailable = isOrbitIndexed(status);
+					// Only "indexing" warrants a later free /status re-check; other
+					// defined statuses ("disabled", "error") go straight to fallback.
+					orbitIndexing = !orbitAvailable && status.status === "indexing";
+					serverLog.info({ orbitStatus: status.status, orbitAvailable }, "Orbit status probed");
+				} catch (error) {
+					serverLog.warn(
+						{ error: error instanceof Error ? error.message : String(error) },
+						"Orbit unavailable at boot -- graph tools will soft-fail to the REST/semantic path",
+					);
+				}
+			}
+
+			return { proxy, restClient, config, discoveredTools, orbitClient, orbitAvailable, orbitIndexing };
 		},
 
 		// SIO-1044: record-once / replay-many factory (createMcpServerFactory already returns
@@ -109,6 +140,8 @@ if (import.meta.main) {
 					gitlabInstance: ds.config.gitlab.instanceUrl,
 					proxyConnected: ds.proxy.isConnected(),
 					proxyTools: ds.discoveredTools?.length ?? 0,
+					orbitEnabled: ds.config.orbit.enabled,
+					orbitAvailable: ds.orbitAvailable ?? false,
 					environment: ds.config.application.environment,
 					transport: ds.config.transport.mode,
 					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,

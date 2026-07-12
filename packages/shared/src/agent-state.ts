@@ -105,6 +105,82 @@ export const GitLabFindingsSchema = z.object({
 });
 export type GitLabFindings = z.infer<typeof GitLabFindingsSchema>;
 
+// SIO-1076: GitLab Orbit cross-project knowledge-graph findings. Source: the
+// gitlab datasource's Orbit tools (query_graph over the pvhcorp ClickHouse
+// graph). Distinct from GitLabFindings (per-project REST): every row here is
+// cross-project and default-branch-only. All entity ids come back as strings.
+
+// A changed definition from a deploy MR, plus the downstream projects/files that
+// IMPORT it -- the "shared library change breaks N services" signal impossible
+// with per-project REST.
+export const OrbitBlastRadiusSchema = z.object({
+	definitionName: z.string().describe("Fully-qualified definition (function/class/module) that changed"),
+	definitionKind: z.string().optional().describe("Orbit Definition kind: function | class | module"),
+	sourceProject: z.string().optional().describe("pvhcorp project path where the definition is DEFINED"),
+	sourceFile: z.string().optional().describe("File path of the definition on the default branch"),
+	mrId: z.union([z.number(), z.string()]).optional().describe("MergeRequest id whose diff touched the definition"),
+	mrMergedAt: z.string().optional().describe("ISO merge timestamp; used for post-merge time-ordering"),
+	mrWebUrl: z.string().optional().describe("Link to the MR for the report"),
+	importedByProjects: z.array(z.string()).describe("Distinct pvhcorp projects that IMPORT the definition (downstream)"),
+	importedByFiles: z
+		.array(
+			z.object({
+				project: z.string().optional().describe("Downstream project path"),
+				file: z.string().describe("Downstream file that imports the changed symbol"),
+			}),
+		)
+		.describe("Concrete import sites (project+file) for the report and rule scoping"),
+	importSiteCount: z.number().int().describe("Total IMPORTS edges resolved (may exceed importedByFiles length)"),
+});
+export type OrbitBlastRadius = z.infer<typeof OrbitBlastRadiusSchema>;
+
+// A recent deploy MR ranked across the whole group in the incident window.
+export const OrbitRecentDeploySchema = z.object({
+	mrId: z.union([z.number(), z.string()]),
+	project: z.string().optional().describe("pvhcorp project path the MR merged into"),
+	title: z.string().optional(),
+	mergedAt: z.string().describe("ISO merge timestamp"),
+	author: z.string().optional().describe("AUTHORED-edge user, for escalation tagging"),
+	changedFileCount: z.number().int().optional().describe("HAS_DIFF -> MergeRequestDiffFile count"),
+	webUrl: z.string().optional(),
+});
+export type OrbitRecentDeploy = z.infer<typeof OrbitRecentDeploySchema>;
+
+// Ranked pipeline/job failures across projects in the window (source=merge_request_event).
+export const OrbitPipelineFailureSchema = z.object({
+	project: z.string().optional(),
+	pipelineId: z.union([z.number(), z.string()]).optional(),
+	ref: z.string().optional().describe("Pipeline ref / branch"),
+	jobName: z.string().optional().describe("Job node name when resolvable"),
+	failureCount: z.number().int().describe("Repeated-failure count for this project/ref in the window"),
+	lastFailedAt: z.string().optional(),
+});
+export type OrbitPipelineFailure = z.infer<typeof OrbitPipelineFailureSchema>;
+
+// Critical/high vulnerabilities tied to a project (and, where resolvable, a recent MR).
+export const OrbitVulnerabilitySchema = z.object({
+	vulnerabilityId: z.union([z.number(), z.string()]).optional(),
+	title: z.string().optional(),
+	severity: z.string().describe("Orbit Vulnerability severity: critical | high | medium | low"),
+	project: z.string().optional(),
+	reportType: z.string().optional().describe("Scanner report type (e.g. sast, dependency_scanning)"),
+	introducedByMrId: z.union([z.number(), z.string()]).optional().describe("MR resolved via SecurityScan -> MR"),
+	introducedAt: z.string().optional(),
+	file: z.string().optional(),
+});
+export type OrbitVulnerability = z.infer<typeof OrbitVulnerabilitySchema>;
+
+export const OrbitFindingsSchema = z.object({
+	blastRadius: z
+		.array(OrbitBlastRadiusSchema)
+		.optional()
+		.describe("Populated only on a targeted blast-radius query, never speculatively"),
+	recentDeploys: z.array(OrbitRecentDeploySchema).optional(),
+	pipelineFailures: z.array(OrbitPipelineFailureSchema).optional(),
+	vulnerabilities: z.array(OrbitVulnerabilitySchema).optional(),
+});
+export type OrbitFindings = z.infer<typeof OrbitFindingsSchema>;
+
 // SIO-772: rows emitted by n1qlLongestRunningQueries + lastExecutionTime column.
 export const CouchbaseSlowQuerySchema = z.object({
 	statement: z.string(),
@@ -233,6 +309,8 @@ export const DataSourceResultSchema = z.object({
 	// SIO-764: structured findings derived from toolOutputs[] in extractFindings node.
 	kafkaFindings: KafkaFindingsSchema.optional(),
 	gitlabFindings: GitLabFindingsSchema.optional(),
+	// SIO-1076: Orbit cross-project findings ride the gitlab DataSourceResult.
+	orbitFindings: OrbitFindingsSchema.optional(),
 	couchbaseFindings: CouchbaseFindingsSchema.optional(),
 	// SIO-785 follow-up (2026-05-18).
 	elasticFindings: ElasticFindingsSchema.optional(),
@@ -348,6 +426,7 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		error: z.string().optional(),
 		kafkaFindings: KafkaFindingsSchema.optional(),
 		gitlabFindings: GitLabFindingsSchema.optional(),
+		orbitFindings: OrbitFindingsSchema.optional(),
 		couchbaseFindings: CouchbaseFindingsSchema.optional(),
 		elasticFindings: ElasticFindingsSchema.optional(),
 		// SIO-785 Phase 2 (2026-05-18).

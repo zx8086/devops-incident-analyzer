@@ -98,4 +98,31 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		expect(names).not.toContain("gitlab_list_issues");
 		expect(names.length).toBeGreaterThan(0);
 	});
+
+	// SIO-1076: Orbit tools register only when config.orbit.enabled is true, and the
+	// tool surface is stable regardless of boot availability (handlers soft-fail).
+	test("orbit tools register when enabled and are absent when disabled", async () => {
+		const disabled = await toolNames(createMcpServerFactory(makeDatasource([]))());
+		expect(disabled).not.toContain("gitlab_blast_radius");
+
+		const enabledDs: GitLabDatasource = {
+			proxy: stubProxy,
+			restClient: stubRestClient,
+			config: {
+				application: { name: "gitlab-mcp-server", version: "0.0.0" },
+				orbit: { enabled: true, maxQueriesPerRun: 8 },
+			} as unknown as Config,
+			discoveredTools: [],
+			// orbitClient omitted on purpose: registration must NOT require a live client.
+			orbitAvailable: false,
+		};
+		const enabled = await toolNames(createMcpServerFactory(enabledDs)());
+		expect(enabled).toContain("gitlab_graph_schema");
+		expect(enabled).toContain("gitlab_blast_radius");
+		expect(enabled).toContain("gitlab_cross_project_callers");
+		expect(enabled).toContain("gitlab_recent_deploys");
+		expect(enabled).toContain("gitlab_pipeline_failures");
+		expect(enabled).toContain("gitlab_recent_vulnerabilities");
+		expect(enabled).toContain("gitlab_orbit_query_graph");
+	});
 });
