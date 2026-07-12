@@ -83,6 +83,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 			selectedRunbooks: null,
 			skillsApplied: null,
 			investigationFocus: undefined,
+			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
 		} as unknown as AgentStateType;
 

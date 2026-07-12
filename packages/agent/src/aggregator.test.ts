@@ -101,6 +101,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		selectedRunbooks: null,
 		skillsApplied: null,
 		investigationFocus: undefined,
+		resolvedIdentifiers: undefined,
 		pendingTopicShiftPrompt: undefined,
 		...overrides,
 	} as AgentStateType;

@@ -5,10 +5,11 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
 	createLoopGuardState,
 	isGuardedTool,
-	LOOP_GUARD_STOP_MESSAGE,
+	isObservedTool,
 	type LoopGuardState,
 	recordResult,
 	shouldShortCircuit,
+	stopMessageFor,
 	toolCallSignature,
 } from "./sub-agent-loop-guard.ts";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
@@ -88,12 +89,16 @@ function instrumentTool(
 					runState.iteration += 1;
 					const iteration = runState.iteration;
 
-					// SIO-1029: short-circuit a repeated/unproductive guarded call
-					// (elasticsearch_search) before it re-hits MCP, so the LLM gets
-					// an explicit terminal signal instead of another silent empty.
+					// SIO-1029/SIO-1084: short-circuit a repeated/unproductive guarded
+					// call (elasticsearch_search, aws_logs_start_query) before it re-hits
+					// MCP, so the LLM gets an explicit terminal signal instead of another
+					// silent empty. `observed` also covers aws_logs_describe_log_groups,
+					// which is not guarded but must be recorded (it clears the AWS
+					// re-anchor gate).
 					const guarded = isGuardedTool(tool.name);
+					const observed = isObservedTool(tool.name);
 					const signature = guarded ? toolCallSignature(tool.name, arg) : "";
-					if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature)) {
+					if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
 						ctx.log.info(
 							{
 								event: "subagent.loop_guard_stop",
@@ -105,7 +110,7 @@ function instrumentTool(
 							},
 							"Loop guard short-circuited repeated/unproductive tool call",
 						);
-						return buildStopResult(arg);
+						return buildStopResult(arg, tool.name);
 					}
 
 					const result = await target.invoke(
@@ -113,8 +118,8 @@ function instrumentTool(
 						configArg as Parameters<StructuredToolInterface["invoke"]>[1],
 					);
 
-					if (guarded) {
-						recordResult(runState.loopGuard, tool.name, signature, extractContent(result));
+					if (observed) {
+						recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
 					}
 					return processResult(result, tool.name, iteration, ctx);
 				};
@@ -129,13 +134,14 @@ function instrumentTool(
 // SIO-1029: return the guard's stop message as a ToolMessage shaped like a real
 // tool result. When createReactAgent's ToolNode invokes a tool it passes the
 // full tool-call object ({ name, args, id }); we reuse that id so the message
-// pairs with its AIMessage tool_call (Bedrock requires the pairing).
-function buildStopResult(arg: unknown): ToolMessage {
+// pairs with its AIMessage tool_call (Bedrock requires the pairing). SIO-1084:
+// the message is tool-specific (elastic "stop searching" vs aws "re-anchor").
+function buildStopResult(arg: unknown, toolName: string): ToolMessage {
 	const toolCallId =
 		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
 			? (arg as { id: string }).id
 			: "loop-guard-stop";
-	return new ToolMessage({ content: LOOP_GUARD_STOP_MESSAGE, tool_call_id: toolCallId });
+	return new ToolMessage({ content: stopMessageFor(toolName), tool_call_id: toolCallId });
 }
 
 function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {

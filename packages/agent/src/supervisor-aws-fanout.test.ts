@@ -69,6 +69,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		graphContext: "",
 		dataSourceContext: undefined,
 		investigationFocus: undefined,
+		resolvedIdentifiers: undefined,
 		pendingTopicShiftPrompt: undefined,
 		requestId: "test-fanout",
 		attachmentMeta: [],
