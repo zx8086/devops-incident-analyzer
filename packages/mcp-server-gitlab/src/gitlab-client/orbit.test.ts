@@ -1,7 +1,25 @@
 // src/gitlab-client/orbit.test.ts
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { isOrbitIndexed, OrbitRestClient, OrbitUnavailableError } from "./orbit.js";
+import { isOrbitIndexed, OrbitRestClient, OrbitStatusResponseSchema, OrbitUnavailableError } from "./orbit.js";
+
+// SIO-1077: the REAL gitlab.com Orbit v0.86.0 GET /orbit/status response shape, captured
+// live. It has NO top-level `status` and NO `domains` -- the fields the original
+// isOrbitIndexed() checked -- so a healthy, fully-indexed Orbit was misread as unavailable.
+const LIVE_HEALTHY_STATUS = {
+	user: { available: true },
+	system: {
+		status: "healthy",
+		version: "0.86.0",
+		components: [
+			{ name: "gkg-indexer-sdlc", status: "healthy", replicas: { ready: 8, desired: 8 } },
+			{ name: "gkg-indexer-code", status: "healthy", replicas: { ready: 10, desired: 10 } },
+			{ name: "gkg-webserver", status: "healthy", replicas: { ready: 3, desired: 3 } },
+			{ name: "gkg-dispatcher", status: "healthy", replicas: { ready: 1, desired: 1 } },
+			{ name: "nats", status: "healthy", replicas: { ready: 3, desired: 3 } },
+		],
+	},
+};
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -65,7 +83,7 @@ describe("OrbitRestClient", () => {
 	});
 });
 
-describe("isOrbitIndexed", () => {
+describe("isOrbitIndexed (legacy shape)", () => {
 	test("true when status is 'indexed'", () => {
 		expect(isOrbitIndexed({ status: "indexed" })).toBe(true);
 	});
@@ -76,5 +94,55 @@ describe("isOrbitIndexed", () => {
 		expect(isOrbitIndexed({ status: "indexing", domains: { sdlc: { indexed: true }, code: { indexed: false } } })).toBe(
 			false,
 		);
+	});
+});
+
+describe("isOrbitIndexed (live gitlab.com system/components shape, SIO-1077)", () => {
+	test("true for a healthy Orbit with both indexers ready", () => {
+		const parsed = OrbitStatusResponseSchema.parse(LIVE_HEALTHY_STATUS);
+		expect(isOrbitIndexed(parsed)).toBe(true);
+	});
+
+	test("false when the sdlc indexer has zero ready replicas", () => {
+		const degraded = {
+			...LIVE_HEALTHY_STATUS,
+			system: {
+				...LIVE_HEALTHY_STATUS.system,
+				components: [
+					{ name: "gkg-indexer-sdlc", status: "healthy", replicas: { ready: 0, desired: 8 } },
+					{ name: "gkg-indexer-code", status: "healthy", replicas: { ready: 10, desired: 10 } },
+				],
+			},
+		};
+		expect(isOrbitIndexed(OrbitStatusResponseSchema.parse(degraded))).toBe(false);
+	});
+
+	test("false when system.status is not healthy", () => {
+		const unhealthy = { ...LIVE_HEALTHY_STATUS, system: { ...LIVE_HEALTHY_STATUS.system, status: "unhealthy" } };
+		expect(isOrbitIndexed(OrbitStatusResponseSchema.parse(unhealthy))).toBe(false);
+	});
+
+	test("false when an indexer component is absent", () => {
+		const missing = {
+			...LIVE_HEALTHY_STATUS,
+			system: {
+				...LIVE_HEALTHY_STATUS.system,
+				components: [{ name: "gkg-indexer-code", status: "healthy", replicas: { ready: 10, desired: 10 } }],
+			},
+		};
+		expect(isOrbitIndexed(OrbitStatusResponseSchema.parse(missing))).toBe(false);
+	});
+});
+
+describe("OrbitStatusResponseSchema (SIO-1077)", () => {
+	test("parses the live response without throwing and preserves system.components", () => {
+		const parsed = OrbitStatusResponseSchema.parse(LIVE_HEALTHY_STATUS);
+		expect(parsed.system?.components).toHaveLength(5);
+		expect(parsed.system?.status).toBe("healthy");
+	});
+
+	test("still parses the legacy documented shape", () => {
+		const parsed = OrbitStatusResponseSchema.parse({ status: "indexed", domains: { sdlc: { indexed: true } } });
+		expect(parsed.status).toBe("indexed");
 	});
 });

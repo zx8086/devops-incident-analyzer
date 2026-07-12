@@ -39,9 +39,32 @@ const OrbitQueryResponseSchema = z
 	.catchall(z.unknown());
 export type OrbitQueryResponse = z.infer<typeof OrbitQueryResponseSchema>;
 
-// GET /orbit/status per-group indexing state.
-const OrbitStatusResponseSchema = z
+// GET /orbit/status. SIO-1077: the live gitlab.com Orbit (v0.86.0) returns a
+// { user, system: { status, components[] } } shape -- NOT the top-level `status`/`domains`
+// shape originally assumed. We accept BOTH: the live system/components shape and the legacy
+// documented shape, so a self-hosted/older Orbit that reports `status: "indexed"` still
+// resolves. .catchall keeps unknown fields for forward-compat.
+const OrbitComponentSchema = z
 	.object({
+		name: z.string(),
+		status: z.string().optional(),
+		replicas: z.object({ ready: z.number().optional(), desired: z.number().optional() }).optional(),
+	})
+	.catchall(z.unknown());
+
+export const OrbitStatusResponseSchema = z
+	.object({
+		// Live shape (gitlab.com Orbit >= 0.86.0)
+		user: z.object({ available: z.boolean().optional() }).catchall(z.unknown()).optional(),
+		system: z
+			.object({
+				status: z.string().optional(), // "healthy" | "unhealthy" | ...
+				version: z.string().optional(),
+				components: z.array(OrbitComponentSchema).optional(),
+			})
+			.catchall(z.unknown())
+			.optional(),
+		// Legacy documented shape (kept for older/self-hosted Orbit)
 		status: z.string().optional(), // "indexed" | "indexing" | ...
 		domains: z
 			.object({
@@ -53,6 +76,9 @@ const OrbitStatusResponseSchema = z
 	})
 	.catchall(z.unknown());
 export type OrbitStatusResponse = z.infer<typeof OrbitStatusResponseSchema>;
+
+// The two indexer components that must be healthy for cross-project graph queries.
+const REQUIRED_INDEXERS = ["gkg-indexer-sdlc", "gkg-indexer-code"] as const;
 
 export class OrbitUnavailableError extends Error {
 	constructor(
@@ -144,8 +170,33 @@ export class OrbitRestClient {
 	}
 }
 
-// Derive availability from a status response: both SDLC and code domains indexed.
+// Derive availability from a status response. SIO-1077: supports BOTH the live gitlab.com
+// system/components shape and the legacy status/domains shape.
+//
+// Live shape: Orbit is available when system.status is "healthy" (or "indexed") AND both
+// required indexer components (gkg-indexer-sdlc, gkg-indexer-code) are present, healthy, and
+// have at least one ready replica -- i.e. the graph is actually being served, not just the
+// deployment object existing.
+//
+// Legacy shape: top-level status === "indexed", or both sdlc+code domains indexed.
 export function isOrbitIndexed(status: OrbitStatusResponse): boolean {
+	// Live shape first.
+	const system = status.system;
+	if (system) {
+		const systemOk = system.status === "healthy" || system.status === "indexed";
+		if (systemOk && Array.isArray(system.components)) {
+			const indexersReady = REQUIRED_INDEXERS.every((name) => {
+				const c = system.components?.find((comp) => comp.name === name);
+				if (!c) return false;
+				const statusOk = c.status === undefined || c.status === "healthy";
+				const ready = c.replicas?.ready ?? 0;
+				return statusOk && ready >= 1;
+			});
+			if (indexersReady) return true;
+		}
+	}
+
+	// Legacy shape.
 	if (status.status === "indexed") return true;
 	const sdlc = status.domains?.sdlc?.indexed === true;
 	const code = status.domains?.code?.indexed === true;
