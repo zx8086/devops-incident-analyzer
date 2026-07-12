@@ -1,5 +1,5 @@
 // agent/src/iac/change-descriptor.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { reviewPlan, summarizeNestedPatch } from "./nodes.ts";
 import type { IacStateType } from "./state.ts";
 
@@ -142,5 +142,79 @@ describe("reviewPlan title enrichment (SIO-989)", () => {
 		expect(title).toContain("logs");
 		expect(title).toContain("refresh_interval=30s");
 		expect(title).not.toContain("total_shards_per_node ?");
+	});
+});
+
+// SIO-1083: reviewPlan stamps a three-state status per recall source so the card can tell a
+// disabled backend ("off" -> hide) from an enabled-but-cold one ("empty" -> show a no-records
+// line) from one with hits ("populated" -> render the list). The status is derived from each
+// source's OWN backend gate, NOT from whether the context string is empty (both the disabled and
+// cold cases leave that string ""), which is exactly the ambiguity the card could not resolve.
+describe("reviewPlan recall status (SIO-1083)", () => {
+	const prevKg = process.env.KNOWLEDGE_GRAPH_ENABLED;
+	const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+	beforeEach(() => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		delete process.env.LIVE_MEMORY_BACKEND;
+	});
+	afterEach(() => {
+		if (prevKg === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		else process.env.KNOWLEDGE_GRAPH_ENABLED = prevKg;
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	});
+
+	const baseState = (over: Partial<IacStateType> = {}): IacStateType =>
+		asIacState({
+			iacRequest: { workflow: "cluster-default-edit", isProd: false, cluster: "eu-b2b", templateName: "logs" },
+			branch: "b",
+			proposedDiff: "(diff)",
+			precheckPassed: true,
+			...over,
+		});
+
+	test("both backends off -> both statuses 'off' (card hides both sections)", async () => {
+		const review = (await reviewPlan(baseState({ iacGraphContext: "", priorLearnings: "" }))).planReview;
+		expect(review?.recentChangesStatus).toBe("off");
+		expect(review?.priorLearningsStatus).toBe("off");
+	});
+
+	test("backends on but cold (no context) -> both statuses 'empty' (card shows no-records line)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const review = (await reviewPlan(baseState({ iacGraphContext: "", priorLearnings: "" }))).planReview;
+		expect(review?.recentChangesStatus).toBe("empty");
+		expect(review?.priorLearningsStatus).toBe("empty");
+	});
+
+	test("backends on with context -> both statuses 'populated' (card renders the list)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const review = (
+			await reviewPlan(baseState({ iacGraphContext: "## Recent changes\n- prior", priorLearnings: "- learned" }))
+		).planReview;
+		expect(review?.recentChangesStatus).toBe("populated");
+		expect(review?.priorLearningsStatus).toBe("populated");
+	});
+
+	test("statuses are independent: KG on+cold, memory off -> empty vs off (the gl-testing asymmetry surfaces)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		delete process.env.LIVE_MEMORY_BACKEND;
+		const review = (await reviewPlan(baseState({ iacGraphContext: "", priorLearnings: "" }))).planReview;
+		expect(review?.recentChangesStatus).toBe("empty");
+		expect(review?.priorLearningsStatus).toBe("off");
+	});
+
+	// SIO-1083 (CodeRabbit): whitespace-only context must normalize to undefined so the rendered
+	// field and its status agree on one definition of "empty" -- otherwise the card gets status
+	// "empty" alongside a truthy-but-blank string and renders an empty MarkdownRenderer.
+	test("whitespace-only context -> status 'empty' AND field undefined (no blank MarkdownRenderer)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const review = (await reviewPlan(baseState({ iacGraphContext: "   \n  ", priorLearnings: "\t" }))).planReview;
+		expect(review?.recentChangesStatus).toBe("empty");
+		expect(review?.recentChanges).toBeUndefined();
+		expect(review?.priorLearningsStatus).toBe("empty");
+		expect(review?.priorLearnings).toBeUndefined();
 	});
 });

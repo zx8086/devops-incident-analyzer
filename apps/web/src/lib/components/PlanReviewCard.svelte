@@ -56,11 +56,15 @@ const planLabel = "How this applies";
       <!-- SIO-969: knowledge-graph history for this deployment/stack -- prior changes with
            their pass/fail outcome + blast radius, so the reviewer sees whether a similar
            change applied or failed last time before approving. -->
-      {#if review.recentChanges}
+      {#if review.recentChangesStatus && review.recentChangesStatus !== "off"}
         <details class="mt-2" open>
           <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Recent changes (knowledge graph)</summary>
           <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
-            <MarkdownRenderer content={review.recentChanges} />
+            {#if review.recentChanges}
+              <MarkdownRenderer content={review.recentChanges} />
+            {:else}
+              <span class="text-tommy-navy/50">No prior changes recorded for this stack yet.</span>
+            {/if}
           </div>
         </details>
       {/if}
@@ -68,11 +72,15 @@ const planLabel = "How this applies";
       <!-- SIO-970: cross-session agent-memory recall -- prior learnings/decisions for this
            deployment/stack cell, so the reviewer sees what we learned last time we touched
            this stack before approving. -->
-      {#if review.priorLearnings}
+      {#if review.priorLearningsStatus && review.priorLearningsStatus !== "off"}
         <details class="mt-2" open>
           <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Prior learnings (memory)</summary>
           <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
-            <MarkdownRenderer content={review.priorLearnings} />
+            {#if review.priorLearnings}
+              <MarkdownRenderer content={review.priorLearnings} />
+            {:else}
+              <span class="text-tommy-navy/50">No prior learnings on record for this stack.</span>
+            {/if}
           </div>
         </details>
       {/if}

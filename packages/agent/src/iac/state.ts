@@ -270,6 +270,13 @@ export interface IacPlanReview {
 	// deployment/stack cell) surfaced to the reviewer. Undefined when the agent-memory
 	// backend is off or recall returned no hits.
 	priorLearnings?: string;
+	// SIO-1083: three-state status per recall source so the card can distinguish a
+	// disabled backend ("off" -> hide) from an enabled-but-cold one ("empty" -> show a
+	// "no records yet" line) from one with hits ("populated" -> render the list). Derived
+	// from the backend gate, not from whether the string above is empty (both the off and
+	// cold cases leave that string ""). Optional: a payload without them reads as "off".
+	recentChangesStatus?: "off" | "empty" | "populated";
+	priorLearningsStatus?: "off" | "empty" | "populated";
 	// SIO-983: rendered live-parity advisory -- the drafted change diffed against the LIVE
 	// cluster (fields in the draft but not live, value changes, fields live has that the draft
 	// drops). Undefined when no live equivalent was read or the draft matches live.
