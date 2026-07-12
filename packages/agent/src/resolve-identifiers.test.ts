@@ -227,4 +227,61 @@ describe("resolveIdentifiers node", () => {
 			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
 		});
 	});
+
+	test("konnect probe resolves the control plane then its matching service", async () => {
+		toolRegistry.konnect = [
+			{
+				name: "konnect_list_control_planes",
+				invoke: async () => JSON.stringify({ controlPlanes: [{ controlPlaneId: "cp-1", name: "orders-cp" }] }),
+			},
+			{
+				name: "konnect_list_services",
+				invoke: async () =>
+					JSON.stringify({
+						services: [
+							{ serviceId: "svc-1", name: "order-service" },
+							{ serviceId: "svc-2", name: "payments" },
+						],
+					}),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["konnect"] }));
+		expect(result.resolvedIdentifiers?.konnect?.controlPlaneId).toBe("cp-1");
+		expect(result.resolvedIdentifiers?.konnect?.serviceIds).toEqual(["svc-1"]);
+	});
+
+	test("atlassian probe resolves matching jira project + confluence space keys", async () => {
+		toolRegistry.atlassian = [
+			{
+				name: "atlassian_getVisibleJiraProjects",
+				invoke: async () =>
+					JSON.stringify([
+						{ key: "ORDER", name: "Order Service" },
+						{ key: "PAY", name: "Payments" },
+					]),
+			},
+			{
+				name: "atlassian_getConfluenceSpaces",
+				invoke: async () => JSON.stringify({ results: [{ key: "ORDERSVC", name: "order-service runbooks" }] }),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["atlassian"] }));
+		expect(result.resolvedIdentifiers?.atlassian?.jiraProjectKeys).toEqual(["ORDER"]);
+		expect(result.resolvedIdentifiers?.atlassian?.confluenceSpaceKeys).toEqual(["ORDERSVC"]);
+	});
+
+	test("a konnect probe failure omits konnect but other datasources still resolve", async () => {
+		toolRegistry.konnect = [
+			{
+				name: "konnect_list_control_planes",
+				invoke: async () => {
+					throw new Error("konnect unreachable");
+				},
+			},
+		];
+		toolRegistry.elastic = [{ name: "elasticsearch_search", invoke: async () => elasticAggPayload(["orders"]) }];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["konnect", "elastic"] }));
+		expect(result.resolvedIdentifiers?.konnect).toBeUndefined();
+		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toEqual(["orders"]);
+	});
 });

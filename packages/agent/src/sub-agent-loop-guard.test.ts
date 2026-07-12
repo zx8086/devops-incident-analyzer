@@ -11,6 +11,7 @@ import {
 	isUnproductiveResult,
 	LOOP_GUARD_STOP_MESSAGE,
 	recordResult,
+	reserveSignature,
 	shouldShortCircuit,
 	stopMessageFor,
 	toolCallSignature,
@@ -216,6 +217,26 @@ describe("SIO-1084 A1: elastic guard is discovery-aware", () => {
 		const sig = toolCallSignature("elasticsearch_search", args);
 		recordResult(state, "elasticsearch_search", sig, '[{"_source":{"x":1}}]', args);
 		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(true);
+	});
+
+	// SIO-1084 (finder-caught): parallel tool calls from one AIMessage could both pass
+	// shouldShortCircuit before either records. Reserving the signature pre-invoke makes
+	// the concurrent duplicate a detected loop.
+	test("reserveSignature makes a concurrent identical call a duplicate", () => {
+		const state = createLoopGuardState();
+		const args = { index: "logs-*", q: "same" };
+		const sig = toolCallSignature("elasticsearch_search", args);
+		// first call passes, then reserves before its await completes
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(false);
+		reserveSignature(state, "elasticsearch_search", sig);
+		// concurrent identical call now short-circuits before recordResult runs
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(true);
+	});
+
+	test("reserveSignature no-ops for non-guarded tools", () => {
+		const state = createLoopGuardState();
+		reserveSignature(state, "kafka_list_topics", "kafka_list_topics::{}");
+		expect(state.seenSignatures.size).toBe(0);
 	});
 });
 

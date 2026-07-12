@@ -286,6 +286,16 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 	return state.consecutiveEmpty >= CONSECUTIVE_EMPTY_LIMIT && state.discoveryRan;
 }
 
+// SIO-1084: reserve a guarded call's signature BEFORE invoking it. ToolNode can
+// dispatch multiple tool calls from one AIMessage concurrently, so two identical
+// guarded calls could both pass shouldShortCircuit before either reaches
+// recordResult -- reserving here makes the second one a detected duplicate. Adding
+// to the Set is idempotent, so recordResult re-adding it is a no-op.
+export function reserveSignature(state: LoopGuardState, toolName: string, signature: string): void {
+	if (!GUARDED_TOOLS.has(toolName)) return;
+	state.seenSignatures.add(signature);
+}
+
 // Update state AFTER a real (non-short-circuited) call completes. Records the
 // signature for duplicate detection, tracks the empty streak, marks discovery,
 // and manages the AWS re-anchor flag. `arg` is the raw tool-call object.

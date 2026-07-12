@@ -8,6 +8,7 @@ import {
 	isObservedTool,
 	type LoopGuardState,
 	recordResult,
+	reserveSignature,
 	shouldShortCircuit,
 	stopMessageFor,
 	toolCallSignature,
@@ -112,6 +113,11 @@ function instrumentTool(
 						);
 						return buildStopResult(arg, tool.name);
 					}
+
+					// Reserve the signature BEFORE the await so a concurrent identical
+					// guarded call (parallel tool calls from one AIMessage) is caught as a
+					// duplicate rather than both slipping through pre-recordResult.
+					if (guarded) reserveSignature(runState.loopGuard, tool.name, signature);
 
 					const result = await target.invoke(
 						arg as Parameters<StructuredToolInterface["invoke"]>[0],

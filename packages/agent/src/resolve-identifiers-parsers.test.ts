@@ -114,6 +114,11 @@ describe("parseAwsEcsServiceArns", () => {
 		};
 		expect(parseAwsEcsServiceArns(json)).toEqual(["order-service", "localcore-service"]);
 	});
+
+	test("returns [] on missing/malformed serviceArns", () => {
+		expect(parseAwsEcsServiceArns({})).toEqual([]);
+		expect(parseAwsEcsServiceArns(null)).toEqual([]);
+	});
 });
 
 describe("parseKafkaTopics", () => {
