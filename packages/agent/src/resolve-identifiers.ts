@@ -101,6 +101,15 @@ export async function resolveIdentifiers(
 	if (!focus || focus.services.length === 0) return { resolvedIdentifiers: undefined };
 
 	const inScope = new Set(computeTargetSources(state));
+	// SIO-1086: the elastic probe carries a mandatory x-elastic-deployment header, and
+	// @langchain/mcp-adapters forks a BRAND-NEW MCP session (full initialize handshake,
+	// no header-keyed pooling) on the first invoke with a given header set. resolveIdentifiers
+	// runs before fan-out, so that first forked connect happens INSIDE the timed probe and
+	// blows PROBE_TIMEOUT_MS (the connect is uncancellable and has no timeout of its own),
+	// even though the warm query is <1.2s. Establish the deployment-headed session OFF the
+	// probe budget first, so the timed agg pays only query cost. Best-effort: the sub-agent
+	// fan-out needs this exact session moments later anyway, so warming it early is free.
+	if (inScope.has("elastic")) await warmElasticDeployments(state);
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
 	if (inScope.has("elastic")) probes.push(safeProbe("elastic", () => probeElastic(state, focus.services)));
 	if (inScope.has("couchbase")) probes.push(safeProbe("couchbase", () => probeCouchbase()));
@@ -168,14 +177,53 @@ function toolFor(dataSourceId: string, name: string): StructuredToolInterface | 
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
 
+// SIO-1086: wall-clock bound for the off-budget warm-up. Generous enough to cover a
+// cold MCP fork/connect + initialize handshake (which has no timeout of its own), but
+// still bounded so a genuinely-unreachable elastic server can't stall the pipeline. This
+// is SEPARATE from PROBE_TIMEOUT_MS: the warm-up pays the connect cost so the timed probe
+// that follows only pays query cost.
+const ELASTIC_WARMUP_TIMEOUT_MS = 8000;
+
+// SIO-1086: open the deployment-headed MCP session(s) BEFORE the timed probe races the
+// PROBE_TIMEOUT_MS clock, so the uncancellable cold fork/connect happens off-budget.
+// A `size:0` + `terminate_after:1` match_all is the cheapest call that still forces the
+// header-fork/connect. Best-effort and fully swallowed: a warm-up failure just means the
+// timed probe pays the connect cost as before -- never worse than today.
+async function warmElasticDeployments(state: AgentStateType): Promise<void> {
+	const tool = toolFor("elastic", "elasticsearch_search");
+	if (!tool) return;
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : [undefined];
+	const warmArgs = { index: ELASTIC_DISCOVERY_INDEX, size: 0, terminate_after: 1, query: { match_all: {} } };
+	await Promise.allSettled(
+		deployments.map((deploymentId) => {
+			const invoke = () =>
+				deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(warmArgs)) : tool.invoke(warmArgs);
+			return withTimeout(invoke(), ELASTIC_WARMUP_TIMEOUT_MS).catch((err) => {
+				logger.warn({ deploymentId, error: msg(err) }, "elastic session warm-up failed (probe will pay connect cost)");
+			});
+		}),
+	);
+}
+
 async function probeElastic(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return {};
 	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : [undefined];
+	// SIO-1086: FILTER the discovery agg to the anchor tokens (a wildcard per token)
+	// BEFORE aggregating, instead of a global top-N terms agg. A plain
+	// `terms{size:50}` over the whole cluster ranks by document volume, so a
+	// low-volume service (e.g. `prana-order-service`) falls outside the top buckets
+	// and is wrongly reported absent. Filtering to `*<token>*` first makes the agg
+	// exhaustive for every name matching the anchor regardless of volume; the larger
+	// terms size is then just a safety bound. Verified live: the filtered agg surfaces
+	// prana-order-service (+ 11 other *order* services) that the top-50 dropped.
+	const shoulds = anchorWildcards(focusServices);
+	const query = shoulds.length > 0 ? { bool: { should: shoulds, minimum_should_match: 1 } } : { match_all: {} };
 	const args = {
 		index: ELASTIC_DISCOVERY_INDEX,
 		size: 0,
-		aggs: { by_service: { terms: { field: "service.name", size: 50 } } },
+		query,
+		aggs: { by_service: { terms: { field: "service.name", size: 200 } } },
 	};
 	// Probe deployments in PARALLEL: they share one PROBE_TIMEOUT_MS budget, so a
 	// sequential loop would compound latency and time the whole probe out (dropping
@@ -344,6 +392,16 @@ async function probeAtlassian(focusServices: string[]): Promise<Partial<Resolved
 function longestToken(focusServices: string[]): string | undefined {
 	const tokens = focusServices.flatMap((s) => [...tokenize(s)]);
 	return tokens.sort((a, b) => b.length - a.length)[0];
+}
+
+// SIO-1086: build a `wildcard` clause per anchor token so the elastic discovery agg
+// can filter to matching service names before aggregating. tokenize() already drops
+// sub-4-char noise and depluralizes, so these are meaningful anchors (e.g.
+// "order-service" -> ["order"] -> {wildcard:{service.name:"*order*"}}). Deduped and
+// bounded so a many-token focus can't explode the query.
+function anchorWildcards(focusServices: string[]): Array<{ wildcard: { "service.name": { value: string } } }> {
+	const tokens = dedupe(focusServices.flatMap((s) => [...tokenize(s)])).slice(0, 8);
+	return tokens.map((t) => ({ wildcard: { "service.name": { value: `*${t}*` } } }));
 }
 
 function safeJson(text: string): unknown {

@@ -298,3 +298,146 @@ describe("non-guarded tools", () => {
 		expect(shouldShortCircuit(state, "kafka_list_topics", sig)).toBe(false);
 	});
 });
+
+// The elastic MCP renders a size:0 agg as an ARRAY of MCP text content blocks
+// [{type:"text",text:summary},{type:"text",text:aggJSON}], and @langchain/mcp-adapters
+// delivers that array RAW to recordResult (no normalizeToolContent). The SIO-1084
+// string-only detection was therefore dead code on the real wire path.
+const DATA_BEARING_AGG_BLOCKS = [
+	{ type: "text", text: "Search results with aggregations (10000 total hits, 458ms):" },
+	{
+		type: "text",
+		text: JSON.stringify({ by_service: { buckets: [{ key: "prana-order-service", doc_count: 91632783 }] } }),
+	},
+];
+const EMPTY_AGG_BLOCKS = [
+	{ type: "text", text: "Search results with aggregations (0 total hits, 3ms):" },
+	{ type: "text", text: JSON.stringify({ by_service: { buckets: [] } }) },
+];
+
+describe("SIO-1086 D: array-of-blocks agg shape is classified (was dead code)", () => {
+	test("a DATA-BEARING agg delivered as a text-block array is productive", () => {
+		expect(isUnproductiveResult(DATA_BEARING_AGG_BLOCKS, "elasticsearch_search")).toBe(false);
+	});
+
+	test("a ZERO-BUCKET agg delivered as a text-block array is unproductive", () => {
+		// This is the shape SIO-1084 intended to catch but never reached on the real wire.
+		expect(isUnproductiveResult(EMPTY_AGG_BLOCKS, "elasticsearch_search")).toBe(true);
+	});
+
+	test("string-form aggs still classify correctly (no regression)", () => {
+		expect(isUnproductiveResult(DATA_BEARING_AGG_BLOCKS.map((b) => b.text).join("\n\n"))).toBe(false);
+		expect(isUnproductiveResult(EMPTY_AGG_BLOCKS.map((b) => b.text).join("\n\n"))).toBe(true);
+	});
+
+	test("a data-bearing discovery in array form resets the streak (recordResult path)", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
+		// pre-seed one empty so consecutiveEmpty=1, then a data-bearing discovery must reset it
+		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "x" }), EMPTY_SEARCH, {
+			q: "x",
+		});
+		recordResult(state, "elasticsearch_search", sig, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
+		expect(state.consecutiveEmpty).toBe(0);
+		expect(state.discoveryRan).toBe(true);
+	});
+});
+
+describe("SIO-1086 C: a productive discovery grants one guaranteed re-query", () => {
+	// Replays the :5173 failure: literal-name empty -> data-bearing discovery -> more
+	// literal empties trip the soft stop -> the STEP-1 re-run with the DISCOVERED name
+	// must NOT be blocked (the false-"absent" trap).
+	test("the post-discovery STEP-1 re-query is allowed even when the soft stop is armed", () => {
+		const state = createLoopGuardState();
+		// iter1: literal 'order-service' empty
+		const s1 = toolCallSignature("elasticsearch_search", { q: "order-service" });
+		recordResult(state, "elasticsearch_search", s1, EMPTY_SEARCH, { q: "order-service" });
+		// iter2: PRODUCTIVE discovery agg (surfaces prana-order-service) -> grants re-query
+		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
+		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
+		// iter3/4: two more literal empties arm the soft stop again
+		const s3 = toolCallSignature("elasticsearch_search", { q: "perm-1" });
+		recordResult(state, "elasticsearch_search", s3, EMPTY_SEARCH, { q: "perm-1" });
+		const s4 = toolCallSignature("elasticsearch_search", { q: "perm-2" });
+		recordResult(state, "elasticsearch_search", s4, EMPTY_SEARCH, { q: "perm-2" });
+		// the STEP-1 re-run with the discovered name is a plain search; it MUST be allowed
+		const sRequery = toolCallSignature("elasticsearch_search", { term: { "service.name": "prana-order-service" } });
+		expect(
+			shouldShortCircuit(state, "elasticsearch_search", sRequery, { term: { "service.name": "prana-order-service" } }),
+		).toBe(false);
+	});
+
+	test("the grant is one-shot: a second post-discovery permutation IS stopped", () => {
+		const state = createLoopGuardState();
+		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
+		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
+		// two empties arm the soft stop
+		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e1" }), EMPTY_SEARCH, {
+			q: "e1",
+		});
+		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e2" }), EMPTY_SEARCH, {
+			q: "e2",
+		});
+		// first post-discovery re-query consumes the grant (allowed)
+		const r1 = { q: "requery-1" };
+		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r1), r1)).toBe(
+			false,
+		);
+		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r1), EMPTY_SEARCH, r1);
+		// second permutation now hits the soft stop (grant already consumed)
+		const r2 = { q: "requery-2" };
+		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r2), r2)).toBe(
+			true,
+		);
+	});
+
+	test("an EMPTY discovery does NOT grant a re-query (genuine absent must still stop)", () => {
+		const state = createLoopGuardState();
+		// empty discovery arms discoveryRan but grants nothing
+		armDiscovery(state); // feeds EMPTY_SEARCH as the discovery result
+		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e1" }), EMPTY_SEARCH, {
+			q: "e1",
+		});
+		const r = { q: "after-empty-discovery" };
+		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r), r)).toBe(
+			true,
+		);
+	});
+
+	test("the hard MAX_UNPRODUCTIVE_SEARCHES cap fires even when the soft stop cannot (SIO-1029 non-regression)", () => {
+		// Reach the HARD cap specifically, NOT the soft stop: keep consecutiveEmpty reset
+		// (interleave a productive result after each empty) so `consecutiveEmpty >= LIMIT`
+		// never trips, while `unproductiveSearches` climbs to MAX_UNPRODUCTIVE_SEARCHES=5.
+		// A productive result also re-grants the discovery re-query, so this equally proves
+		// the grant cannot bypass the absolute cap.
+		const state = createLoopGuardState();
+		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
+		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
+		// 5 unproductive searches, each followed by a productive one to reset the empty streak.
+		for (let i = 0; i < 5; i++) {
+			const empty = { q: `empty-${i}` };
+			const eSig = toolCallSignature("elasticsearch_search", empty);
+			// never short-circuited before the cap (soft stop can't fire; grant/streak reset)
+			expect(shouldShortCircuit(state, "elasticsearch_search", eSig, empty)).toBe(false);
+			recordResult(state, "elasticsearch_search", eSig, EMPTY_SEARCH, empty);
+			const prod = { q: `prod-${i}` };
+			const pSig = toolCallSignature("elasticsearch_search", prod);
+			recordResult(state, "elasticsearch_search", pSig, '[{"_source":{"x":1}}]', prod);
+		}
+		expect(state.unproductiveSearches).toBe(5);
+		expect(state.consecutiveEmpty).toBe(0); // soft stop is NOT the reason we stop
+		// The hard cap now short-circuits unconditionally -- even a fresh DISCOVERY call, which
+		// the soft stop and the discovery bypass would otherwise let through.
+		const nextDisc = toolCallSignature("elasticsearch_search", { ...DISCOVERY_ARGS, index: "logs-2" });
+		expect(shouldShortCircuit(state, "elasticsearch_search", nextDisc, { ...DISCOVERY_ARGS, index: "logs-2" })).toBe(
+			true,
+		);
+	});
+});
+
+describe("SIO-1086 E: stop message does not steer to false absent", () => {
+	test("the stop message conditions 'absent' on discovery surfacing nothing", () => {
+		expect(LOOP_GUARD_STOP_MESSAGE).toContain("discovery");
+		expect(LOOP_GUARD_STOP_MESSAGE).toContain("present under that name");
+	});
+});

@@ -125,6 +125,81 @@ describe("resolveIdentifiers node", () => {
 		expect(result.resolvedIdentifiers?.resolvedForServices).toEqual(["order-service"]);
 	});
 
+	// SIO-1086: the discovery agg must FILTER to the anchor token (wildcard) before
+	// aggregating -- a plain global top-N terms agg drops low-volume services by
+	// volume ranking, which reported prana-order-service absent even though it exists.
+	test("elastic discovery query filters to the anchor token (not a global top-N agg)", async () => {
+		const allArgs: Array<Record<string, unknown>> = [];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					allArgs.push(args as Record<string, unknown>);
+					return elasticAggPayload(["prana-order-service"]);
+				},
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+		// low-volume prana-order-service is resolved because the query filtered to *order*
+		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toContain("prana-order-service");
+		// the PROBE query (the wildcard agg, not the warm-up match_all) carries a wildcard
+		// on the anchor token. Find it explicitly rather than assuming call order.
+		const probeArgs = allArgs.find((a) => JSON.stringify(a.query ?? {}).includes("wildcard"));
+		const q = JSON.stringify(probeArgs?.query ?? {});
+		expect(q).toContain("wildcard");
+		expect(q).toContain("service.name");
+		expect(q).toContain("order");
+	});
+
+	// SIO-1086 A: the probe carries a mandatory x-elastic-deployment header, and the MCP
+	// adapter forks a NEW (cold) session on the first invoke with that header -- which,
+	// inside the timed probe, blows PROBE_TIMEOUT_MS. resolveIdentifiers must warm the
+	// deployment-headed session OFF the probe budget FIRST (a cheap size:0/terminate_after:1
+	// match_all), so the timed agg pays only query cost.
+	test("elastic session is warmed (match_all + terminate_after) BEFORE the timed wildcard probe", async () => {
+		const allArgs: Array<Record<string, unknown>> = [];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					allArgs.push(args as Record<string, unknown>);
+					return elasticAggPayload(["prana-order-service"]);
+				},
+			},
+		];
+		await resolveIdentifiers(makeState({ targetDataSources: ["elastic"], targetDeployments: ["eu-b2b"] }));
+		// first call is the warm-up: match_all + terminate_after, NO wildcard/aggs
+		const warm = allArgs[0];
+		expect(warm?.terminate_after).toBe(1);
+		expect(JSON.stringify(warm?.query ?? {})).toContain("match_all");
+		expect(JSON.stringify(warm?.query ?? {})).not.toContain("wildcard");
+		// a later call is the real probe: wildcard-anchored agg
+		expect(allArgs.some((a) => JSON.stringify(a.query ?? {}).includes("wildcard"))).toBe(true);
+	});
+
+	// A warm-up failure must NEVER fail the probe -- it is best-effort; the probe still runs.
+	test("a warm-up throw is swallowed and the probe still resolves", async () => {
+		let call = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					call += 1;
+					// first call is the warm-up (match_all) -> throw; probe call succeeds
+					if (JSON.stringify((args as Record<string, unknown>).query ?? {}).includes("match_all")) {
+						throw new Error("cold connect failed");
+					}
+					return elasticAggPayload(["prana-order-service"]);
+				},
+			},
+		];
+		const result = await resolveIdentifiers(
+			makeState({ targetDataSources: ["elastic"], targetDeployments: ["eu-b2b"] }),
+		);
+		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toContain("prana-order-service");
+		expect(call).toBeGreaterThanOrEqual(2); // warm-up threw, probe still ran
+	});
+
 	test("resolves the FULL couchbase scope map (unfiltered)", async () => {
 		const tree =
 			"📁 Scope: new_model\n  └─ 📄 Collection: seasonal_assignment\n📁 Scope: _default\n  └─ (No collections)\n";

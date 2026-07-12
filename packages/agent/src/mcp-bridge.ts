@@ -215,20 +215,27 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 		serverEntries.map(async ({ name, url }) => {
 			// SIO-602: Inject W3C traceparent for OTEL span correlation with MCP servers.
 			// SIO-649: Elastic also gets X-Elastic-Deployment via injectElasticHeaders.
-			// The beforeToolCall hook is supported at runtime but missing from the TypeScript
-			// type definitions in @langchain/mcp-adapters@1.1.3, hence the type assertion.
+			// SIO-1086: `beforeToolCall` is a TOP-LEVEL client-config option in
+			// @langchain/mcp-adapters@1.1.3 (clientConfigSchema `.and(toolHooksSchema)`),
+			// NOT a per-server (connectionSchema) field. The previous code set it INSIDE
+			// mcpServers[name], where the per-server Zod parse silently stripped it -- so
+			// the hook was NEVER wired and NO elastic query ever carried x-elastic-deployment
+			// (every deployment-scoped search fell back to the default deployment, reporting
+			// services present only outside it as "absent"). One client per server here, so
+			// top-level == per-server scope. The old `as never` cast was masking exactly this
+			// shape mismatch; it is no longer needed.
 			const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
 			// SIO-893: elastic-iac drift tools poll a CI pipeline well past the 60s
 			// adapter default; set a per-server tool timeout above their internal budget.
 			const toolTimeout = toolTimeoutFor(name);
 			const client = new MultiServerMCPClient({
+				beforeToolCall: () => beforeToolCall(),
 				mcpServers: {
 					[name]: {
 						transport: "http",
 						url,
-						beforeToolCall: () => beforeToolCall(),
 						...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
-					} as never,
+					},
 				},
 			});
 			const tools = await withTimeout(client.getTools(), connectTimeoutFor(name), `MCP connect to '${name}' (${url})`);
@@ -505,14 +512,20 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 	try {
 		const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
 		// SIO-649: Keep elastic reconnects on injectElasticHeaders so deployment routing survives.
+		// SIO-1086: beforeToolCall is a TOP-LEVEL config field, not per-server (see createMcpClient).
 		const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
+		// SIO-893/SIO-1086: mirror createMcpClient and preserve the per-server tool timeout on
+		// reconnect too -- without it, elastic-iac drift tools (which poll CI well past the 60s
+		// adapter default) fall back to that default and start timing out after any reconnect.
+		const toolTimeout = toolTimeoutFor(name);
 		const client = new MultiServerMCPClient({
+			beforeToolCall: () => beforeToolCall(),
 			mcpServers: {
 				[name]: {
 					transport: "http",
 					url: mcpUrl,
-					beforeToolCall: () => beforeToolCall(),
-				} as never,
+					...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
+				},
 			},
 		});
 		const tools = await withTimeout(
