@@ -1,15 +1,13 @@
 // agent/src/graph-knowledge.embedder.test.ts
-//
-// SIO-1081: the real createBedrockEmbedder EmbedFn must head-truncate its input
-// before calling BedrockEmbeddings.embedQuery, so a large pasted incident stays
-// under Titan v2's 8192-token cap. Isolated in its own file because it mock.module's
-// @langchain/aws (module mocks are process-scoped and would poison sibling tests --
-// see reference_bun_mock_namespace_live_binding_poisoning).
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const seen: { text: string | null; maxRetries: number | undefined } = { text: null, maxRetries: undefined };
 
+// SIO-1081: the real createBedrockEmbedder EmbedFn must head-truncate its input before calling
+// BedrockEmbeddings.embedQuery so a large pasted incident stays under Titan v2's 8192-token cap.
+// This file mock.module's @langchain/aws in isolation: module mocks are process-scoped and would
+// poison sibling tests (see reference_bun_mock_namespace_live_binding_poisoning).
 mock.module("@langchain/aws", () => ({
 	BedrockEmbeddings: class {
 		maxRetries: number | undefined;
@@ -30,7 +28,7 @@ const prevMax = process.env.EMBEDDINGS_MAX_CHARS;
 beforeEach(() => {
 	seen.text = null;
 	seen.maxRetries = undefined;
-	delete process.env.EMBEDDINGS_MAX_CHARS; // default cap 30000
+	delete process.env.EMBEDDINGS_MAX_CHARS; // default cap 24000
 });
 
 afterEach(() => {
@@ -43,7 +41,7 @@ describe("createBedrockEmbedder", () => {
 		const embed = createBedrockEmbedder();
 		const huge = `HEAD_MARKER${"x".repeat(50_000)}`;
 		await embed(huge);
-		expect(seen.text?.length).toBe(30_000);
+		expect(seen.text?.length).toBe(24_000);
 		expect(seen.text?.startsWith("HEAD_MARKER")).toBe(true);
 	});
 

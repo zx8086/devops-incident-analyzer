@@ -304,11 +304,15 @@ describe("createFetchAgentMemoryClient", () => {
 		});
 		const client = createFetchAgentMemoryClient(CONFIG);
 		const huge = `HEAD_MARKER${"x".repeat(50_000)}`;
-		await client.searchMemory(REF, huge, { allSessions: true, relevantK: 8 });
-		const body = calls[0]?.body as { query: string };
-		expect(body.query.length).toBe(30_000); // default EMBEDDINGS_MAX_CHARS
-		expect(body.query.startsWith("HEAD_MARKER")).toBe(true); // front kept
-		restore();
+		try {
+			await client.searchMemory(REF, huge, { allSessions: true, relevantK: 8 });
+			const body = calls[0]?.body as { query: string };
+			expect(body.query.length).toBe(24_000); // default EMBEDDINGS_MAX_CHARS
+			expect(body.query.startsWith("HEAD_MARKER")).toBe(true); // front kept
+		} finally {
+			// restore even if an assertion throws, so the global fetch stub never leaks.
+			restore();
+		}
 	});
 
 	test("sets Authorization header only when a bearer token is configured", async () => {
