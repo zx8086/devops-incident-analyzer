@@ -49,10 +49,12 @@ function requireSelector(value: string, field: string): string {
 	return trimmed;
 }
 
-// SIO-1076: Orbit rejects a query with no selective node (a filter / node_ids /
-// id_range on at least one node), but still bills for it. The purpose-built
-// builders guarantee selectivity; the raw escape hatch must validate the LLM's
-// query BEFORE the billed call. A node is selective if it carries any of those.
+// SIO-1076: Orbit rejects a query with no selective node (a non-empty filter /
+// node_ids / id_range on at least one node), but still bills for it. The
+// purpose-built builders guarantee selectivity; the raw escape hatch must
+// validate the LLM's query BEFORE the billed call. Emptiness matters: an empty
+// node_ids:[] or id_range:{} does NOT satisfy Orbit's selectivity rule (per the
+// query-language reference), so each branch checks for content, not presence.
 export function hasSelectiveAnchor(query: OrbitQuery): boolean {
 	const nodes: unknown[] = [];
 	if (Array.isArray(query.nodes)) nodes.push(...query.nodes);
@@ -62,7 +64,15 @@ export function hasSelectiveAnchor(query: OrbitQuery): boolean {
 		const rec = n as Record<string, unknown>;
 		const filters = rec.filters;
 		const hasFilters = !!filters && typeof filters === "object" && Object.keys(filters).length > 0;
-		return hasFilters || rec.node_ids !== undefined || rec.id_range !== undefined;
+		const hasNodeIds = Array.isArray(rec.node_ids) && rec.node_ids.length > 0;
+		// id_range is an inclusive object; Orbit needs both start and end.
+		const range = rec.id_range;
+		const hasIdRange =
+			!!range &&
+			typeof range === "object" &&
+			(range as Record<string, unknown>).start !== undefined &&
+			(range as Record<string, unknown>).end !== undefined;
+		return hasFilters || hasNodeIds || hasIdRange;
 	});
 }
 

@@ -105,11 +105,18 @@ describe("hasSelectiveAnchor", () => {
 			hasSelectiveAnchor({ query_type: "traversal", node: { entity: "Project", filters: { full_path: "x" } } }),
 		).toBe(true);
 	});
-	test("true when a node carries node_ids", () => {
+	test("true when a node carries non-empty node_ids", () => {
 		expect(hasSelectiveAnchor({ nodes: [{ entity: "MergeRequest", node_ids: [1] }] })).toBe(true);
 	});
-	test("false when no node is selective (unbounded scan -> would be billed+rejected)", () => {
+	test("true when a node carries a full id_range (start + end)", () => {
+		expect(hasSelectiveAnchor({ node: { entity: "Project", id_range: { start: 1, end: 100 } } })).toBe(true);
+	});
+	test("false for empty selectors (Orbit rejects but still bills)", () => {
 		expect(hasSelectiveAnchor({ query_type: "traversal", node: { entity: "Project" } })).toBe(false);
 		expect(hasSelectiveAnchor({ nodes: [{ entity: "Project", filters: {} }] })).toBe(false);
+		// Empty node_ids / partial or empty id_range are NOT selective.
+		expect(hasSelectiveAnchor({ nodes: [{ entity: "Project", node_ids: [] }] })).toBe(false);
+		expect(hasSelectiveAnchor({ node: { entity: "Project", id_range: {} } })).toBe(false);
+		expect(hasSelectiveAnchor({ node: { entity: "Project", id_range: { start: 1 } } })).toBe(false);
 	});
 });
