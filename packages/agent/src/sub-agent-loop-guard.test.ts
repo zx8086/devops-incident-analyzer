@@ -404,22 +404,34 @@ describe("SIO-1086 C: a productive discovery grants one guaranteed re-query", ()
 		);
 	});
 
-	test("the grant never bypasses the hard MAX_UNPRODUCTIVE_SEARCHES cap (SIO-1029 non-regression)", () => {
+	test("the hard MAX_UNPRODUCTIVE_SEARCHES cap fires even when the soft stop cannot (SIO-1029 non-regression)", () => {
+		// Reach the HARD cap specifically, NOT the soft stop: keep consecutiveEmpty reset
+		// (interleave a productive result after each empty) so `consecutiveEmpty >= LIMIT`
+		// never trips, while `unproductiveSearches` climbs to MAX_UNPRODUCTIVE_SEARCHES=5.
+		// A productive result also re-grants the discovery re-query, so this equally proves
+		// the grant cannot bypass the absolute cap.
 		const state = createLoopGuardState();
 		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
 		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
-		// drive total unproductive searches to the hard cap
-		let stopped = false;
-		for (let i = 0; i < 40 && !stopped; i++) {
-			const args = { q: `distinct-${i}` };
-			const sig = toolCallSignature("elasticsearch_search", args);
-			if (shouldShortCircuit(state, "elasticsearch_search", sig, args)) {
-				stopped = true;
-				break;
-			}
-			recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, args);
+		// 5 unproductive searches, each followed by a productive one to reset the empty streak.
+		for (let i = 0; i < 5; i++) {
+			const empty = { q: `empty-${i}` };
+			const eSig = toolCallSignature("elasticsearch_search", empty);
+			// never short-circuited before the cap (soft stop can't fire; grant/streak reset)
+			expect(shouldShortCircuit(state, "elasticsearch_search", eSig, empty)).toBe(false);
+			recordResult(state, "elasticsearch_search", eSig, EMPTY_SEARCH, empty);
+			const prod = { q: `prod-${i}` };
+			const pSig = toolCallSignature("elasticsearch_search", prod);
+			recordResult(state, "elasticsearch_search", pSig, '[{"_source":{"x":1}}]', prod);
 		}
-		expect(stopped).toBe(true);
+		expect(state.unproductiveSearches).toBe(5);
+		expect(state.consecutiveEmpty).toBe(0); // soft stop is NOT the reason we stop
+		// The hard cap now short-circuits unconditionally -- even a fresh DISCOVERY call, which
+		// the soft stop and the discovery bypass would otherwise let through.
+		const nextDisc = toolCallSignature("elasticsearch_search", { ...DISCOVERY_ARGS, index: "logs-2" });
+		expect(shouldShortCircuit(state, "elasticsearch_search", nextDisc, { ...DISCOVERY_ARGS, index: "logs-2" })).toBe(
+			true,
+		);
 	});
 });
 

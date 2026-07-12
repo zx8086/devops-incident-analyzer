@@ -514,12 +514,17 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		// SIO-649: Keep elastic reconnects on injectElasticHeaders so deployment routing survives.
 		// SIO-1086: beforeToolCall is a TOP-LEVEL config field, not per-server (see createMcpClient).
 		const beforeToolCall = name === "elastic-mcp" ? injectElasticHeaders : injectTraceHeaders;
+		// SIO-893/SIO-1086: mirror createMcpClient and preserve the per-server tool timeout on
+		// reconnect too -- without it, elastic-iac drift tools (which poll CI well past the 60s
+		// adapter default) fall back to that default and start timing out after any reconnect.
+		const toolTimeout = toolTimeoutFor(name);
 		const client = new MultiServerMCPClient({
 			beforeToolCall: () => beforeToolCall(),
 			mcpServers: {
 				[name]: {
 					transport: "http",
 					url: mcpUrl,
+					...(toolTimeout !== undefined && { defaultToolTimeout: toolTimeout }),
 				},
 			},
 		});
