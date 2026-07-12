@@ -20,6 +20,7 @@ import {
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import { truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
@@ -50,10 +51,20 @@ export function createBedrockEmbedder(): EmbedFn {
 	return async (text: string) => {
 		if (!embedQuery) {
 			const { BedrockEmbeddings } = await import("@langchain/aws");
-			const instance = new BedrockEmbeddings({ model, region });
+			// SIO-1081: cap retries at 2 (down from the AsyncCaller default of 6). The original
+			// retry storm was a 400 ValidationException (input over Titan's 8192-token cap) that
+			// LangChain retried because the Bedrock error carries its status under $metadata, not
+			// error.status, so its STATUS_NO_RETRY 400-check never sees it. truncateForEmbedding
+			// below now prevents that 400 entirely, so retries only fire on genuinely transient
+			// errors (throttling / 5xx / network) -- keep a small budget for those (graphEnrich
+			// soft-fails, so a dropped embed just loses similarity context for one turn) while
+			// bounding any residual storm to 2 attempts instead of 6.
+			const instance = new BedrockEmbeddings({ model, region, maxRetries: 2 });
 			embedQuery = (t) => instance.embedQuery(t);
 		}
-		return embedQuery(text);
+		// SIO-1081: head-truncate before embedding so a large pasted incident (used as the
+		// similarity seed) stays under the 8192-token cap instead of failing the embed.
+		return embedQuery(truncateForEmbedding(text));
 	};
 }
 

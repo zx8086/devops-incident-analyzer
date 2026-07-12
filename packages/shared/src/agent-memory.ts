@@ -17,6 +17,7 @@
 // until ready, so a just-written block is immediately searchable.
 
 import { z } from "zod";
+import { truncateForEmbedding } from "./embedding-truncate.ts";
 
 export const AgentMemoryConfigSchema = z.object({
 	baseUrl: z.string().url(),
@@ -276,8 +277,12 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 			// query string can be truncated to 0 before the filter applies. See
 			// docs/architecture/agent-memory.md "Retrieval: TWO modes".
 			const deterministic = query.length === 0;
+			// SIO-1081: the service embeds `query` server-side with Bedrock Titan v2 (8192-token
+			// cap); a large pasted incident used as the recall seed 400s ("maximum input length is
+			// 8192 tokens"), surfaced as a 502 MODEL_SERVICE_ERROR. Head-truncate before sending.
+			const boundedQuery = truncateForEmbedding(query);
 			const res = await amFetch<MemoryResponseShape>(config, "POST", `${memoryPath(ref)}/search`, {
-				...(deterministic ? {} : { query }),
+				...(deterministic ? {} : { query: boundedQuery }),
 				filters: {
 					session_ids: opts?.allSessions ? "all" : undefined,
 					// In deterministic mode relevant_k must be absent (it implies/enables the ranked path).

@@ -293,6 +293,28 @@ describe("createFetchAgentMemoryClient", () => {
 		restore();
 	});
 
+	// SIO-1081: the service embeds `query` server-side (Titan v2, 8192-token cap). A large pasted
+	// incident used as the recall seed 400s; head-truncate before the POST body so it stays bounded.
+	test("searchMemory head-truncates an oversized query before sending (SIO-1081)", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory/search": {
+				status: 200,
+				body: { count: 0, memory_blocks: [] },
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const huge = `HEAD_MARKER${"x".repeat(50_000)}`;
+		try {
+			await client.searchMemory(REF, huge, { allSessions: true, relevantK: 8 });
+			const body = calls[0]?.body as { query: string };
+			expect(body.query.length).toBe(24_000); // default EMBEDDINGS_MAX_CHARS
+			expect(body.query.startsWith("HEAD_MARKER")).toBe(true); // front kept
+		} finally {
+			// restore even if an assertion throws, so the global fetch stub never leaks.
+			restore();
+		}
+	});
+
 	test("sets Authorization header only when a bearer token is configured", async () => {
 		const original = globalThis.fetch;
 		const captured: { auth: string | null } = { auth: null };
