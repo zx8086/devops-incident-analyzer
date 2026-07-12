@@ -24,6 +24,14 @@ const NETWORK_ERROR_PATTERNS = [/ENOTFOUND/, /ECONNREFUSED/, /ETIMEDOUT/, /EAI_A
 // to classify even if the error surfaces under an unexpected name.
 const RETENTION_WINDOW_PATTERN = /end date and time is either before the log group|exceeds the log group.*retention/i;
 
+// SIO-1085: a MalformedQueryException can ALSO be a query-STRING syntax error (e.g.
+// "Invalid syntax while using query definition snippets: unexpected symbol found ...",
+// "Unknown function", "unexpected token"). This is NOT a window problem -- re-anchoring
+// the time window does nothing; the queryString itself must be fixed. Distinguish it so
+// the advice steers the LLM to correct the syntax instead of endlessly re-anchoring.
+const QUERY_SYNTAX_PATTERN =
+	/invalid syntax|unexpected symbol|unexpected token|unknown function|parse error|query definition snippets/i;
+
 export function mapAwsError(err: unknown): ToolError {
 	if (!isAwsError(err)) {
 		return { kind: "aws-unknown", awsErrorMessage: String(err) };
@@ -102,6 +110,15 @@ export function mapAwsError(err: unknown): ToolError {
 	} else if (kind === "resource-not-found") {
 		toolError.advice =
 			"The named resource does not exist in this account/region. Verify the identifier and the region; this may be a routine finding (resource deleted or never created).";
+	} else if (kind === "bad-input" && err.name === "MalformedQueryException" && QUERY_SYNTAX_PATTERN.test(err.message)) {
+		// SIO-1085: a query-STRING syntax error, NOT a window problem. Re-anchoring the
+		// time window does nothing. Steer the LLM to fix the queryString and give it a
+		// known-good example so it stops re-issuing the same broken query. GATED on the
+		// exact error NAME so a generic ValidationException/InvalidParameterException
+		// (also bad-input) that happens to contain "unexpected token"/"parse error" in
+		// its message keeps its own remediation instead of being told to rewrite a query.
+		toolError.advice =
+			"This is a query SYNTAX error in queryString, NOT a time-window/retention problem -- do NOT re-anchor the window or retry the same query. Fix the CloudWatch Logs Insights syntax. A known-good minimal query is: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20` (each command on its own is separated by `|`; use `filter ... like /regex/` to match text, `fields` to select columns). If the account rejects standard Logs Insights syntax, drop the query to just `fields @timestamp, @message | limit 20` and filter client-side.";
 	} else if (
 		kind === "bad-input" &&
 		(err.name === "MalformedQueryException" || RETENTION_WINDOW_PATTERN.test(err.message))

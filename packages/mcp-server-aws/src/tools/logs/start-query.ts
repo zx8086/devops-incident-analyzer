@@ -19,7 +19,12 @@ export const startQueryObjectSchema = z.object({
 		.min(1)
 		.optional()
 		.describe("ARNs of log groups to query, including cross-account. Mutually exclusive with logGroupNames."),
-	queryString: z.string().min(1).describe("CloudWatch Logs Insights query string"),
+	queryString: z
+		.string()
+		.min(1)
+		.describe(
+			"CloudWatch Logs Insights query string. Commands are chained with `|`. Known-good example to find a service's errors: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20`. Use `filter @message like /regex/` for text matching. If you get a MalformedQueryException about syntax/'unexpected symbol', simplify to `fields @timestamp, @message | limit 20` -- that is a SYNTAX error, not a time-window error, so do NOT re-anchor the window.",
+		),
 	startTime: z
 		.number()
 		.int()

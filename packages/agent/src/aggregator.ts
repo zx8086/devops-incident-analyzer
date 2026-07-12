@@ -438,6 +438,116 @@ export function rewriteUngroundedExpiry(answer: string, ungrounded: string[]): s
 		.join("\n");
 }
 
+// SIO-1085: two premature-conclusion failure modes, one guard.
+//
+// (A) CONTRADICTED absence: the report says a service is "not present" / "0 hits" /
+//     "does not ship logs" for a datasource whose OWN sub-agent actually returned data
+//     this turn (the elastic false-negative: agent fetched 91 hits then wrote "absent").
+// (B) OVER-GENERALIZED absence: the report makes a sweeping "absent from ALL records" /
+//     "entirely absent" / "no ... anywhere" / "whole pipeline empty" claim. Such claims
+//     are unverifiable from a partial query (the couchbase case: it queried 1 of several
+//     seasonal scopes -- seasons.dates/delivery_dates hold data -- then generalized
+//     "afs absent from all records"). We do not know the claim is FALSE, only that it is
+//     UNGROUNDED as stated, so we soften it to the scoped truth rather than deleting it.
+//
+// Both are caught by scanning report lines; the rewrite makes the claim honest (scoped to
+// what was actually queried) and the caller caps confidence below the HITL gate.
+
+// A datasource-wide ABSENCE assertion (the service/data isn't there at all).
+const ABSENCE_CLAIM_RE =
+	/\b(not present|does not (?:ship|exist)|no (?:matching )?(?:documents?|hits|records?|logs?)\b|0 hits|zero hits|not onboarded|not shipped|no data for)\b/i;
+
+// A SWEEPING quantifier that turns a partial observation into a universal claim.
+const OVERGENERALIZED_RE =
+	/\b(all records|all documents|every (?:record|document)|entirely absent|absent from all|no .{0,30}\banywhere\b|whole pipeline|entire pipeline|never (?:populated|written|loaded)|no .{0,40}\bat all\b)\b/i;
+
+// True when a datasource's sub-agent returned NON-TRIVIAL data this turn: typed findings
+// present, OR a tool output whose payload is a non-empty array / has hits / non-empty rows.
+// Deliberately conservative -- only counts clear data, so a genuinely empty datasource is
+// never falsely credited with data.
+function dataSourceReturnedData(r: DataSourceResult): boolean {
+	const findings = [r.elasticFindings, r.kafkaFindings, r.couchbaseFindings, r.gitlabFindings].filter(Boolean);
+	for (const f of findings) {
+		if (f && typeof f === "object" && Object.values(f).some((v) => Array.isArray(v) && v.length > 0)) return true;
+	}
+	for (const out of r.toolOutputs ?? []) {
+		const raw = out.rawJson;
+		if (Array.isArray(raw) && raw.length > 0) return true;
+		if (raw && typeof raw === "object") {
+			const o = raw as Record<string, unknown>;
+			const hits = (o.hits as { hits?: unknown[] } | undefined)?.hits;
+			if (Array.isArray(hits) && hits.length > 0) return true;
+			if (Array.isArray(o.results) && o.results.length > 0) return true;
+			if (typeof o.total === "number" && o.total > 0) return true;
+		}
+		// String tool outputs: a real elastic hit renders as "Total results: N" with N>0.
+		if (typeof raw === "string") {
+			const m = raw.match(/Total results:\s*([0-9]+)/i);
+			if (m?.[1] && Number.parseInt(m[1], 10) > 0) return true;
+		}
+	}
+	return false;
+}
+
+// Datasource ownership of a report line: which sub-agent's data would ground/contradict it.
+// A line naming a datasource keyword is checked against THAT datasource's result.
+const DATASOURCE_KEYWORDS: Record<string, RegExp> = {
+	elastic: /\b(elastic|elasticsearch|logs-apm|service\.name|apm)\b/i,
+	couchbase: /\b(couchbase|capella|scope|collection|seasonal_assignment|n1ql|sql\+\+)\b/i,
+	kafka: /\b(kafka|topic|consumer group|partition|offset)\b/i,
+};
+
+export function detectPrematureAbsence(
+	answer: string,
+	results: DataSourceResult[],
+): { contradicted: string[]; overgeneralized: string[] } {
+	const dataByDs = new Map<string, boolean>();
+	for (const r of results) {
+		dataByDs.set(r.dataSourceId, (dataByDs.get(r.dataSourceId) ?? false) || dataSourceReturnedData(r));
+	}
+	const contradicted: string[] = [];
+	const overgeneralized: string[] = [];
+	for (const line of answer.split("\n")) {
+		if (headingLevel(line) !== null) continue;
+		const isAbsence = ABSENCE_CLAIM_RE.test(line);
+		const isSweeping = OVERGENERALIZED_RE.test(line);
+		if (!isAbsence && !isSweeping) continue;
+		// (A) contradicted: an absence line about a datasource that returned data.
+		if (isAbsence) {
+			for (const [ds, kw] of Object.entries(DATASOURCE_KEYWORDS)) {
+				if (kw.test(line) && dataByDs.get(ds)) {
+					contradicted.push(line);
+					break;
+				}
+			}
+		}
+		// (B) over-generalized: a sweeping absence/completeness claim (any datasource).
+		if (isSweeping && (isAbsence || /\b(absent|empty|missing|no )\b/i.test(line))) {
+			if (!contradicted.includes(line)) overgeneralized.push(line);
+		}
+	}
+	return { contradicted, overgeneralized };
+}
+
+const CONTRADICTED_ABSENCE_SUFFIX =
+	" [CORRECTION: this datasource's sub-agent returned matching data this turn, so it is NOT absent -- the earlier phrasing was a synthesis error; treat the returned data as ground truth.]";
+const OVERGENERALIZED_ABSENCE_SUFFIX =
+	" [SCOPE: this states absence more broadly than was verified -- it holds only for the specific collection/index/window actually queried, not the whole namespace; other scopes/collections may hold the data and were not all checked.]";
+
+export function rewritePrematureAbsence(answer: string, contradicted: string[], overgeneralized: string[]): string {
+	if (contradicted.length === 0 && overgeneralized.length === 0) return answer;
+	const contra = new Set(contradicted);
+	const over = new Set(overgeneralized);
+	return answer
+		.split("\n")
+		.map((line) => {
+			if (contra.has(line)) return line + CONTRADICTED_ABSENCE_SUFFIX;
+			if (over.has(line)) return line + OVERGENERALIZED_ABSENCE_SUFFIX;
+			return line;
+		})
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -567,8 +677,19 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const { ungrounded: ungroundedExpiry } = detectUngroundedExpiry(answer, results);
 	const expiryCapTriggered = ungroundedExpiry.length > 0;
 
+	// SIO-1085: (A) an absence claim contradicted by the sub-agent's own returned data
+	// (elastic "not present" after fetching hits), and (B) a sweeping "all records / whole
+	// pipeline" absence claim that a partial query can't support (couchbase generalizing
+	// from one of several seasonal collections). Rewrite to honest scoped text + cap.
+	const { contradicted, overgeneralized } = detectPrematureAbsence(answer, results);
+	const prematureAbsenceCapTriggered = contradicted.length > 0 || overgeneralized.length > 0;
+
 	const anyCapTriggered =
-		degradedSubAgents.length > 0 || gapsCapTriggered || ungroundedCapTriggered || expiryCapTriggered;
+		degradedSubAgents.length > 0 ||
+		gapsCapTriggered ||
+		ungroundedCapTriggered ||
+		expiryCapTriggered ||
+		prematureAbsenceCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -611,13 +732,30 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	if (prematureAbsenceCapTriggered) {
+		logger.warn(
+			{
+				contradicted: contradicted.length,
+				overgeneralized: overgeneralized.length,
+				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Aggregator asserted absence contradicted by returned data, or over-generalized 'all records' absence; rewriting + capping confidence",
+		);
+	}
+
 	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
 	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
 	// SIO-1079: and rewrite any ungrounded "logs expired" bullets. Chain both rewrites.
 	const groundedBlockers = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
-	const rewrittenForGrounding = expiryCapTriggered
+	const rewrittenForExpiry = expiryCapTriggered
 		? rewriteUngroundedExpiry(groundedBlockers, ungroundedExpiry)
 		: groundedBlockers;
+	// SIO-1085: chain the premature-absence rewrite after the expiry/blocker rewrites.
+	const rewrittenForGrounding = prematureAbsenceCapTriggered
+		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
+		: rewrittenForExpiry;
 	const finalAnswer = anyCapTriggered
 		? rewriteConfidenceInAnswer(rewrittenForGrounding, cappedScore)
 		: rewrittenForGrounding;
