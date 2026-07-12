@@ -1,6 +1,5 @@
 // src/tools/logs/start-query.ts
 import { DescribeLogGroupsCommand, StartQueryCommand } from "@aws-sdk/client-cloudwatch-logs";
-import { parseRetentionPeriod } from "@devops-agent/shared";
 import { z } from "zod";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { getCloudWatchLogsClient } from "../../services/client-factory.ts";
@@ -58,28 +57,29 @@ export function resolveQueryFloor(groups: LogGroupRetention[], nowSeconds: numbe
 	return floor;
 }
 
-// SIO-1082: when DescribeLogGroups yields no retention data (denied, throttled, raced to
-// null under concurrent fan-out), the year-drift guard used to be skipped entirely, letting
-// a drifted 2025 window hit CloudWatch. A conservative fallback floor lets the guard still
-// run. 120 days is chosen to sit safely BETWEEN the largest plausible real retention (so a
-// legitimately in-range recent window is never wrongly flagged as drift) and a full year of
-// drift (so a ~365-day year-shift is still caught). parseRetentionPeriod returns ms.
-export const FALLBACK_RETENTION_SECONDS = Math.floor(parseRetentionPeriod("120d") / 1000);
-
 export type FloorResult = { floor: number; isReal: boolean };
 
-// Resolve a retention floor from describe data, or a conservative fallback. `isReal` is false
-// for the fallback so callers never issue a HARD reject on a guessed floor (that would fabricate
-// the "logs outside retention" outcome SIO-1079 fights); the fallback is only used to let the
-// year-drift correction and clamp run.
+// Resolve a retention floor from describe data. `isReal` is true ONLY when a finite floor was
+// actually measured (a group with retentionInDays or creationTime). No-data (null/[]/[{}] -- a
+// never-expire group with no creationTime yields -Infinity) is NOT real.
+//
+// SIO-1082 note: we deliberately do NOT synthesize a fallback floor to DRIVE year-drift
+// correction. Without a real retention floor we cannot distinguish an LLM year-shift ("meant
+// recent, wrote 2025") from a legitimate historical query ("really want logs from ~400 days
+// ago") -- both look like "window ~1 year back". Correcting on a guessed floor would silently
+// rewrite a legitimate old query into recent logs (wrong data, no error). So year-drift
+// correction is gated on isReal. The cache + single-flight below is what makes a real floor
+// available on far more calls (the dominant cause of the residual failures was describe RACES
+// in the fan-out, not total denials), which is the safe way to widen the guard's coverage.
 export function resolveFloorFromGroups(
 	groups: LogGroupRetention[] | null | undefined,
 	nowSeconds: number,
 ): FloorResult {
 	if (groups && groups.length > 0) {
-		return { floor: resolveQueryFloor(groups, nowSeconds), isReal: true };
+		const floor = resolveQueryFloor(groups, nowSeconds);
+		if (Number.isFinite(floor)) return { floor, isReal: true };
 	}
-	return { floor: nowSeconds - FALLBACK_RETENTION_SECONDS, isReal: false };
+	return { floor: Number.NEGATIVE_INFINITY, isReal: false };
 }
 
 // SIO-1082: cache + single-flight around an injected describe. Caches the RAW retention data
@@ -87,7 +87,7 @@ export function resolveFloorFromGroups(
 // recomputes the floor per call. One successful describe protects every later call in the TTL
 // window with the REAL floor; concurrent callers collapse to one in-flight describe (the idiom
 // borrowed from shared/transport/readiness.ts), which also removes the race that used to return
-// null and skip the guard. describe() returning null/[] or throwing yields the fallback floor.
+// null and skip the guard. describe() returning null/[] or throwing yields a non-real floor.
 export interface RetentionCacheEntry {
 	groups: LogGroupRetention[];
 	expiresAt: number;
@@ -112,9 +112,13 @@ export async function getRetentionFloor(opts: {
 
 	let flight = inflightDescribes.get(key);
 	if (!flight) {
-		flight = describe().finally(() => {
-			inflightDescribes.delete(key);
-		});
+		// Promise.resolve().then(describe) so a SYNCHRONOUS throw from describe() is normalized
+		// into a rejected promise (caught below -> non-real floor) rather than escaping this helper.
+		flight = Promise.resolve()
+			.then(describe)
+			.finally(() => {
+				inflightDescribes.delete(key);
+			});
 		inflightDescribes.set(key, flight);
 	}
 
@@ -126,7 +130,7 @@ export async function getRetentionFloor(opts: {
 	}
 
 	// Only cache a real, non-empty result. A failure/empty leaves the entry absent so the next
-	// call retries the describe rather than being pinned to the fallback for the whole TTL.
+	// call retries the describe rather than being pinned for the whole TTL.
 	if (groups && groups.length > 0) {
 		cache.set(key, { groups, expiresAt: clock() + ttlMs });
 	}
@@ -217,7 +221,7 @@ function retentionCacheKey(params: StartQueryParams): string {
 
 // Describe the targeted log groups and collect their raw retention data. Returns null on any
 // failure (IAM denied, throttled) or when there is nothing to describe -- getRetentionFloor turns
-// that into the conservative fallback floor rather than skipping the guard.
+// that into a non-real floor (the guard is then skipped) rather than a wrong one.
 async function describeRetentionGroups(
 	config: AwsConfig,
 	params: StartQueryParams,
@@ -228,19 +232,24 @@ async function describeRetentionGroups(
 	if (targets.length === 0) return null;
 	try {
 		const client = getCloudWatchLogsClient(config, params.estate);
-		// DescribeLogGroups matches by name prefix; identifiers (ARNs) aren't a prefix filter, so
-		// for the ARN path we fetch and match by arn/logGroupName suffix.
+		// DescribeLogGroups matches by name PREFIX, so it returns sibling groups too (querying
+		// "/app" also returns "/app-canary"). We must keep only the EXACT requested group -- a
+		// sibling's shorter retention would otherwise wrongly tighten (or reject) the floor.
 		const collected: LogGroupRetention[] = [];
 		for (const target of targets) {
-			const prefix = names
+			// For an ARN identifier the log-group name is the ":log-group/<name>" segment.
+			const wantName = names
 				? target
 				: (target
 						.split(":")
 						.pop()
 						?.replace(/^log-group\//, "") ?? target);
-			const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: prefix, limit: 50 }));
+			const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50 }));
 			for (const g of res.logGroups ?? []) {
-				collected.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
+				const exactMatch = names ? g.logGroupName === target : g.arn === target || g.logGroupName === wantName;
+				if (exactMatch) {
+					collected.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
+				}
 			}
 		}
 		return collected.length > 0 ? collected : null;
@@ -249,9 +258,8 @@ async function describeRetentionGroups(
 	}
 }
 
-// Resilient floor resolution: cache + single-flight around describeRetentionGroups, with a
-// conservative fallback when describe yields nothing. isReal distinguishes a measured floor from
-// the fallback so the caller only HARD-rejects on a real floor.
+// Resilient floor resolution: cache + single-flight around describeRetentionGroups. isReal is
+// true only when a finite floor was actually measured; the guard runs only in that case.
 function fetchRetentionFloor(config: AwsConfig, params: StartQueryParams, nowSeconds: number): Promise<FloorResult> {
 	return getRetentionFloor({
 		key: retentionCacheKey(params),
@@ -271,24 +279,22 @@ export function startQuery(config: AwsConfig) {
 			// sub-agent stops looping StartQuery against logs that no longer exist (each
 			// failure otherwise counts toward the aggregator tool-error confidence cap).
 			const nowSeconds = Math.floor(Date.now() / 1000);
-			// SIO-1082: floor is always resolvable now -- a real measured floor when describe
-			// succeeds (cached + single-flighted across the fan-out), or a conservative fallback
-			// (now - 120d, isReal:false) when it fails. So the year-drift guard runs even when the
-			// per-call describe fails/races, instead of being skipped.
+			// SIO-1082: cache + single-flight makes a REAL measured floor available on far more
+			// calls (the dominant residual-failure cause was describe RACES in the fan-out). The
+			// whole guard runs only when a real floor is known -- year-drift correction against a
+			// guessed floor could silently rewrite a legitimate historical query into recent logs.
 			const { floor, isReal } = await fetchRetentionFloor(config, params, nowSeconds);
 			let effectiveStart = params.startTime;
 			let effectiveEnd = params.endTime;
-			if (Number.isFinite(floor)) {
+			if (isReal) {
 				// SIO-1080: correct an LLM year-shift (e.g. 2026 incident queried as 2025) BEFORE
-				// clamping. Runs against a real OR fallback floor (a year-drifted window is far below
-				// even the fallback), so the correction no longer depends on describe succeeding.
+				// clamping -- can move endTime too (clamp alone only adjusts startTime).
 				const drift = correctYearDrift(effectiveStart, effectiveEnd, floor, nowSeconds);
 				if (drift.shiftedYears > 0) {
 					logger.warn(
 						{
 							tool: "aws_logs_start_query",
 							shiftedYears: drift.shiftedYears,
-							floorIsReal: isReal,
 							requestedStart: new Date(effectiveStart * 1000).toISOString(),
 							correctedStart: new Date(drift.startTime * 1000).toISOString(),
 							requestedEnd: new Date(effectiveEnd * 1000).toISOString(),
@@ -300,29 +306,21 @@ export function startQuery(config: AwsConfig) {
 					effectiveEnd = drift.endTime;
 				}
 
-				// SIO-1082: the general clamp/reject is only applied against a REAL measured floor.
-				// On a FALLBACK floor we do not actually know retention, so we neither reject (that
-				// would fabricate the "logs outside retention" outcome SIO-1079 fights) nor clamp
-				// (a guessed 120d floor could wrongly narrow a legitimately longer-retained query) --
-				// the year-drift correction above already ran, and CloudWatch + the reactive wrap.ts
-				// advice handle anything the fallback couldn't. Only a real floor drives clamp/reject.
-				if (isReal) {
-					const decision = decideQueryWindow(effectiveStart, effectiveEnd, floor);
-					if (decision.action === "reject") {
-						const floorIso = new Date(floor * 1000).toISOString();
-						// SIO-1079: the requested WINDOW is outside retention -- this does NOT mean the
-						// incident's logs are gone. The window was likely mis-anchored (an incident is
-						// almost always recent). Steer to re-anchoring, not to declaring the data absent.
-						throw new QueryWindowRejected(
-							`Skipped StartQuery: the requested time window ends before the earliest queryable time ` +
-								`for these log groups (${floorIso}). The requested window -- not necessarily the incident -- ` +
-								`is outside the retention window. Re-anchor startTime/endTime to the incident/event timestamp ` +
-								`(which is usually recent) and retry; do not conclude the logs are expired unless the incident ` +
-								`itself predates ${floorIso}.`,
-						);
-					}
-					effectiveStart = decision.startTime;
+				const decision = decideQueryWindow(effectiveStart, effectiveEnd, floor);
+				if (decision.action === "reject") {
+					const floorIso = new Date(floor * 1000).toISOString();
+					// SIO-1079: the requested WINDOW is outside retention -- this does NOT mean the
+					// incident's logs are gone. The window was likely mis-anchored (an incident is
+					// almost always recent). Steer to re-anchoring, not to declaring the data absent.
+					throw new QueryWindowRejected(
+						`Skipped StartQuery: the requested time window ends before the earliest queryable time ` +
+							`for these log groups (${floorIso}). The requested window -- not necessarily the incident -- ` +
+							`is outside the retention window. Re-anchor startTime/endTime to the incident/event timestamp ` +
+							`(which is usually recent) and retry; do not conclude the logs are expired unless the incident ` +
+							`itself predates ${floorIso}.`,
+					);
 				}
+				effectiveStart = decision.startTime;
 			}
 			const client = getCloudWatchLogsClient(config, params.estate);
 			return client.send(

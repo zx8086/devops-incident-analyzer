@@ -8,7 +8,6 @@ import { describe, expect, test } from "bun:test";
 import {
 	correctYearDrift,
 	decideQueryWindow,
-	FALLBACK_RETENTION_SECONDS,
 	getRetentionFloor,
 	resolveFloorFromGroups,
 	resolveQueryFloor,
@@ -167,11 +166,12 @@ describe("correctYearDrift (SIO-1080)", () => {
 	});
 });
 
-// SIO-1082: the year-drift guard was gated on a per-call DescribeLogGroups; when that
-// describe failed/raced/returned null the guard was skipped and the drifted window hit
-// CloudWatch. These cover the resilient floor resolution: a conservative fallback when no
-// data is known, plus a cache + single-flight around the (injected) describe.
-describe("resolveFloorFromGroups (SIO-1082 fallback)", () => {
+// SIO-1082: the year-drift guard was gated on a per-call DescribeLogGroups; when that describe
+// failed/raced/returned null the guard was skipped. The fix is cache + single-flight (so a real
+// floor is available on far more calls); we deliberately do NOT synthesize a floor to DRIVE the
+// correction (that would silently rewrite a legitimate historical query). isReal is true only
+// when a finite floor was actually measured.
+describe("resolveFloorFromGroups (SIO-1082)", () => {
 	const now = utc(2026, 7, 12, 12, 0, 0);
 
 	test("real groups -> real floor, isReal true", () => {
@@ -180,26 +180,27 @@ describe("resolveFloorFromGroups (SIO-1082 fallback)", () => {
 		expect(r.floor).toBe(now - 60 * DAY);
 	});
 
-	test("no groups -> conservative fallback floor (now - 120d), isReal false", () => {
-		const r = resolveFloorFromGroups([], now);
-		expect(r.isReal).toBe(false);
-		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
-	});
-
-	test("null groups -> fallback, isReal false", () => {
-		const r = resolveFloorFromGroups(null, now);
-		expect(r.isReal).toBe(false);
-		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
-	});
-
-	test("fallback floor catches a 366-day drift but not recent windows", () => {
-		const { floor } = resolveFloorFromGroups(null, now);
-		// year-drifted window (366d back) is below the fallback floor -> correction will fire
-		expect(correctYearDrift(now - 366 * DAY, now - 366 * DAY + 3600, floor, now).shiftedYears).toBe(1);
-		// recent windows are ABOVE the fallback floor -> untouched
-		for (const d of [1, 30, 90, 110]) {
-			expect(correctYearDrift(now - d * DAY, now - d * DAY + 3600, floor, now).shiftedYears).toBe(0);
+	test("no groups ([] / null) -> not real, no drivable floor", () => {
+		for (const g of [[], null, undefined]) {
+			const r = resolveFloorFromGroups(g, now);
+			expect(r.isReal).toBe(false);
+			expect(r.floor).toBe(Number.NEGATIVE_INFINITY);
 		}
+	});
+
+	test("non-empty rows with no usable retention/creation ([{}]) -> not real (floor is -Infinity)", () => {
+		// A never-expire group with no creationTime resolves to -Infinity; it must NOT be marked
+		// isReal:true (which would then skip the guard entirely under the finite check).
+		const r = resolveFloorFromGroups([{}], now);
+		expect(r.isReal).toBe(false);
+		expect(r.floor).toBe(Number.NEGATIVE_INFINITY);
+	});
+
+	test("regression (CodeRabbit): a legitimate ~400-day-old query is NOT year-shifted when no real floor is known", () => {
+		// Without a measured floor we cannot tell an LLM year-drift from a genuine historical
+		// query. The caller gates correction on isReal, so the window is left untouched here.
+		const { isReal } = resolveFloorFromGroups(null, now);
+		expect(isReal).toBe(false); // -> caller skips correctYearDrift entirely, window unchanged
 	});
 });
 
@@ -227,7 +228,7 @@ describe("getRetentionFloor (SIO-1082 cache + single-flight)", () => {
 		expect(a.floor).toBe(now - 60 * DAY);
 	});
 
-	test("describe failure -> fallback floor, isReal false, not cached as real", async () => {
+	test("async describe rejection -> not real, not cached", async () => {
 		const cache = freshCache();
 		const describe = async () => {
 			throw new Error("AccessDenied");
@@ -241,7 +242,23 @@ describe("getRetentionFloor (SIO-1082 cache + single-flight)", () => {
 			clock: () => now * 1000,
 		});
 		expect(r.isReal).toBe(false);
-		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
+		expect(cache.size).toBe(0);
+	});
+
+	test("SYNCHRONOUS describe throw is normalized (does not escape) -> not real", async () => {
+		const cache = freshCache();
+		const describe = (() => {
+			throw new Error("sync boom");
+		}) as () => Promise<{ retentionInDays?: number }[]>;
+		const r = await getRetentionFloor({
+			key: "k",
+			describe,
+			nowSeconds: now,
+			cache,
+			ttlMs: TTL,
+			clock: () => now * 1000,
+		});
+		expect(r.isReal).toBe(false);
 	});
 
 	test("single-flight: concurrent callers collapse to ONE describe", async () => {
