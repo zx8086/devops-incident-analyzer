@@ -51,9 +51,11 @@ describe("createBedrockEmbedder", () => {
 		expect(seen.text).toBe("kafka lag");
 	});
 
-	test("constructs BedrockEmbeddings with maxRetries: 0 (no retry storm on a 400)", async () => {
+	// SIO-1081: retries bounded to 2 (from AsyncCaller's default 6) -- truncation prevents the
+	// 400 storm, so this small budget only covers transient throttling/5xx/network errors.
+	test("constructs BedrockEmbeddings with a bounded maxRetries (transient-only, not the default 6)", async () => {
 		const embed = createBedrockEmbedder();
 		await embed("anything");
-		expect(seen.maxRetries).toBe(0);
+		expect(seen.maxRetries).toBe(2);
 	});
 });

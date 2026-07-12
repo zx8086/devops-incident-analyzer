@@ -1,17 +1,14 @@
 // shared/src/embedding-truncate.ts
 
-// SIO-1081: cap text before it reaches a Bedrock Titan v2 embedder. Both embed
-// entry points (the graphEnrich client-side embed and the agent-memory recall
-// query the service embeds server-side) fed the full, unbounded user message and
-// blew past the limit on large pasted incidents.
-//
-// Titan v2 enforces BOTH an 8192-token AND a 50000-character hard limit, and does
-// not auto-truncate. AWS's English heuristic is ~4.7 chars/token, but token-dense
-// content (code, JSON, stack traces -- exactly the pasted-log case here) runs
-// closer to ~3 chars/token. 8192 tokens x 3 chars ~= 24576, so a 24000-char cap
-// stays under BOTH limits even for the densest realistic input, without pulling in
-// a tokenizer dependency. Head-truncation is intentional: for similarity seeding a
-// pasted log's leading frames (the exception + first stack frames) carry the signal.
+// SIO-1081: cap text before it reaches a Bedrock Titan v2 embedder. Both embed entry points
+// (the graphEnrich client-side embed and the agent-memory recall query the service embeds
+// server-side) fed the full, unbounded user message and blew past the limit on large pasted
+// incidents. Titan v2 enforces BOTH an 8192-token AND a 50000-character hard limit, and does not
+// auto-truncate. AWS's English heuristic is ~4.7 chars/token, but token-dense content (code, JSON,
+// stack traces -- exactly the pasted-log case here) runs closer to ~3 chars/token. 8192 tokens x
+// 3 chars ~= 24576, so a 24000-char cap stays under BOTH limits even for the densest realistic
+// input, without a tokenizer dependency. Head-truncation is intentional: for similarity seeding a
+// pasted log's leading frames (the exception + first stack frames) carry the discriminating signal.
 const DEFAULT_EMBED_MAX_CHARS = 24_000;
 
 // Env reader mirroring getSubAgentToolCapBytes' contract: unset/invalid -> default,

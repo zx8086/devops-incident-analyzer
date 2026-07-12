@@ -51,10 +51,15 @@ export function createBedrockEmbedder(): EmbedFn {
 	return async (text: string) => {
 		if (!embedQuery) {
 			const { BedrockEmbeddings } = await import("@langchain/aws");
-			// SIO-1081: maxRetries: 0 -- a 400 ValidationException (input over Titan's 8192-token
-			// cap) is a non-retryable client error; the default AsyncCaller maxRetries: 6 turns one
-			// bad embed into ~7 identical console.error dumps.
-			const instance = new BedrockEmbeddings({ model, region, maxRetries: 0 });
+			// SIO-1081: cap retries at 2 (down from the AsyncCaller default of 6). The original
+			// retry storm was a 400 ValidationException (input over Titan's 8192-token cap) that
+			// LangChain retried because the Bedrock error carries its status under $metadata, not
+			// error.status, so its STATUS_NO_RETRY 400-check never sees it. truncateForEmbedding
+			// below now prevents that 400 entirely, so retries only fire on genuinely transient
+			// errors (throttling / 5xx / network) -- keep a small budget for those (graphEnrich
+			// soft-fails, so a dropped embed just loses similarity context for one turn) while
+			// bounding any residual storm to 2 attempts instead of 6.
+			const instance = new BedrockEmbeddings({ model, region, maxRetries: 2 });
 			embedQuery = (t) => instance.embedQuery(t);
 		}
 		// SIO-1081: head-truncate before embedding so a large pasted incident (used as the
