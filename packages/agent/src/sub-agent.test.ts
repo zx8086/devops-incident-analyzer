@@ -199,8 +199,10 @@ describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 		expect(errors[0]?.toolName).toBe("aws_logs_start_query");
 	});
 
-	test("captures an aws-unknown _error (e.g. MalformedQueryException) as NON-auth", () => {
-		const errors = extractToolErrors([awsErrorMsg({ kind: "aws-unknown", awsErrorName: "MalformedQueryException" })]);
+	test("captures a bad-input _error (e.g. MalformedQueryException) as NON-auth", () => {
+		// SIO-1078: MalformedQueryException from a retention-window rejection now maps to
+		// kind "bad-input" (still the "unknown" toolError category), not "aws-unknown".
+		const errors = extractToolErrors([awsErrorMsg({ kind: "bad-input", awsErrorName: "MalformedQueryException" })]);
 		expect(errors).toHaveLength(1);
 		expect(errors[0]?.category).toBe("unknown");
 		// The whole point of SIO-1054: a non-authz kind must NOT read as auth.

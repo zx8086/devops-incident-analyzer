@@ -20,6 +20,10 @@ function extractAction(message: string): string | undefined {
 
 const NETWORK_ERROR_PATTERNS = [/ENOTFOUND/, /ECONNREFUSED/, /ETIMEDOUT/, /EAI_AGAIN/, /socket hang up/];
 
+// SIO-1078: CloudWatch Logs Insights retention-window rejection text. Distinctive enough
+// to classify even if the error surfaces under an unexpected name.
+const RETENTION_WINDOW_PATTERN = /end date and time is either before the log group|exceeds the log group.*retention/i;
+
 export function mapAwsError(err: unknown): ToolError {
 	if (!isAwsError(err)) {
 		return { kind: "aws-unknown", awsErrorMessage: String(err) };
@@ -56,6 +60,14 @@ export function mapAwsError(err: unknown): ToolError {
 		case "TooManyRequestsException":
 			kind = "aws-throttled";
 			break;
+		// SIO-1078: CloudWatch Logs Insights rejects a query window that predates a log
+		// group's retention/creation with MalformedQueryException. It is a bad-input the LLM
+		// must fix (narrow the window) -- never transient; retrying the same window never
+		// succeeds. Reused kind "bad-input" already maps to the "unknown" toolError category
+		// agent-side, so no agent change is needed.
+		case "MalformedQueryException":
+			kind = "bad-input";
+			break;
 		case "ValidationException":
 		case "InvalidParameterValue":
 		case "InvalidParameterException":
@@ -71,7 +83,9 @@ export function mapAwsError(err: unknown): ToolError {
 			kind = "aws-server-error";
 			break;
 		default:
-			kind = "aws-unknown";
+			// SIO-1078: defensive fallback -- if the retention-window rejection ever arrives
+			// under a different error name, the message text is distinctive enough to classify.
+			kind = RETENTION_WINDOW_PATTERN.test(err.message) ? "bad-input" : "aws-unknown";
 	}
 
 	const toolError: ToolError = { ...base, kind };
@@ -88,6 +102,14 @@ export function mapAwsError(err: unknown): ToolError {
 	} else if (kind === "resource-not-found") {
 		toolError.advice =
 			"The named resource does not exist in this account/region. Verify the identifier and the region; this may be a routine finding (resource deleted or never created).";
+	} else if (
+		kind === "bad-input" &&
+		(err.name === "MalformedQueryException" || RETENTION_WINDOW_PATTERN.test(err.message))
+	) {
+		// SIO-1078: distinguish a retention-window rejection from a generic validation error
+		// so the LLM stops retrying an unrecoverable window and pivots to another source.
+		toolError.advice =
+			"The query window is outside the log group's retention or predates its creation. CloudWatch Logs Insights only returns data within the retention window. Call aws_logs_describe_log_groups for these groups to read retentionInDays and creationTime, then set startTime no earlier than max(creationTime, now - retentionInDays days). If the incident predates retention, the logs are gone -- do not retry this window; note the gap and use other data sources (metrics, traces, CloudTrail).";
 	}
 
 	return toolError;
