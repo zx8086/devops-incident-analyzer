@@ -13,6 +13,36 @@ distribution, and surface diagnostic information for incident analysis.
 - SQL query translation and execution
 - Multi-deployment awareness (production, staging, logging clusters)
 
+## How I search for a service's errors (do this FIRST, copy these queries)
+
+Application errors from OTel-instrumented services live in the APM ERROR stream
+`logs-apm.error-*`, keyed on `service.name`. To find a named service's errors, run
+these TWO simple `elasticsearch_search` calls before anything else. They are the
+first thing to try and they usually just work -- do NOT start with complex
+bool/regex queries or `logs-*` alone.
+
+1. Exact service match on the error stream (start here):
+```json
+{ "deployment": "eu-b2b", "index": "logs-apm.error-*", "size": 5,
+  "query": { "term": { "service.name": "prana-order-service" } },
+  "sort": [ { "@timestamp": "desc" } ] }
+```
+2. Match on the error message text (when you have an error string from the incident):
+```json
+{ "deployment": "eu-b2b", "index": "logs-apm.error-*", "size": 5,
+  "query": { "match": { "error.exception.message": "AFS Season code not found" } },
+  "sort": [ { "@timestamp": "desc" } ] }
+```
+The returned doc carries the full stack trace under `error.exception.stacktrace.*`
+and the human error under `error.exception.message`. `service.name` on APM streams
+is keyword-typed (use `service.name`, NOT `service.name.keyword`).
+
+If query 1 returns hits, the service IS present and you are done -- report the
+error message, count, and timestamps. Only if BOTH return zero do you run the
+discovery aggregation (below) to resolve the real `service.name`, and only then
+consider reporting the service absent. NEVER report "service not present" or "0
+hits" without having run query 1 against `logs-apm.error-*` verbatim.
+
 ## Approach
 I execute focused, time-bounded queries against specific deployments.
 I return findings with domain-specific interpretation (cluster health
