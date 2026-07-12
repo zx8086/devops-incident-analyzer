@@ -1,7 +1,12 @@
 // packages/agent/src/aggregator-grounding.test.ts
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
-import { detectUngroundedBlockers, rewriteUngroundedBlockers } from "./aggregator.ts";
+import {
+	detectPrematureAbsence,
+	detectUngroundedBlockers,
+	rewritePrematureAbsence,
+	rewriteUngroundedBlockers,
+} from "./aggregator.ts";
 
 const REPORT_TAIL = `## Gaps
 
@@ -212,5 +217,76 @@ describe("rewriteUngroundedBlockers", () => {
 	test("returns answer unchanged when nothing is flagged", () => {
 		const answer = "## Gaps\n\n- a real gap\n\nConfidence: 0.9";
 		expect(rewriteUngroundedBlockers(answer, [])).toBe(answer);
+	});
+});
+
+// SIO-1085: guard against premature-conclusion absence claims.
+describe("detectPrematureAbsence", () => {
+	// A. CONTRADICTED: elastic reports "not present" but its sub-agent returned hits.
+	test("flags an elastic 'not present' claim when the elastic sub-agent returned hits", () => {
+		const answer =
+			"### Elasticsearch\n\nprana-order-service does not ship logs to the connected Elasticsearch cluster; 0 hits for the AFS error.\n\nConfidence: 0.8";
+		const results = [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 91, showing 5 from position 0" }],
+			}),
+		];
+		const { contradicted } = detectPrematureAbsence(answer, results);
+		expect(contradicted).toHaveLength(1);
+		expect(contradicted[0]).toContain("does not ship logs");
+	});
+
+	test("does NOT flag an elastic absence claim when elastic genuinely returned nothing", () => {
+		const answer = "### Elasticsearch\n\nservice not present; 0 hits.\n\nConfidence: 0.8";
+		const results = [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 0, showing 0 from position 0" }],
+			}),
+		];
+		const { contradicted } = detectPrematureAbsence(answer, results);
+		expect(contradicted).toHaveLength(0);
+	});
+
+	// B. OVER-GENERALIZED: couchbase generalizes "absent from all records" from one collection.
+	test("flags a sweeping 'absent from all records' couchbase claim", () => {
+		const answer =
+			"### Couchbase\n\nThe new_model.seasonal_assignment collection has the afs field entirely absent from all records; the whole pipeline is empty.\n\nConfidence: 0.82";
+		const { overgeneralized } = detectPrematureAbsence(answer, [result({ dataSourceId: "couchbase" })]);
+		expect(overgeneralized.length).toBeGreaterThanOrEqual(1);
+		expect(overgeneralized[0]).toContain("entirely absent from all records");
+	});
+
+	test("does NOT flag a scoped, non-sweeping absence statement", () => {
+		const answer =
+			"### Couchbase\n\nThe queried collection new_model.seasonal_assignment returned 7 docs, 0 with an afs field.\n\nConfidence: 0.7";
+		const { contradicted, overgeneralized } = detectPrematureAbsence(answer, [result({ dataSourceId: "couchbase" })]);
+		expect(contradicted).toHaveLength(0);
+		expect(overgeneralized).toHaveLength(0);
+	});
+
+	test("ignores headings and returns empty on a clean report", () => {
+		const answer = "# Report\n\n## Findings\n\nAll services healthy.\n\nConfidence: 0.9";
+		const { contradicted, overgeneralized } = detectPrematureAbsence(answer, [result({ dataSourceId: "elastic" })]);
+		expect(contradicted).toHaveLength(0);
+		expect(overgeneralized).toHaveLength(0);
+	});
+});
+
+describe("rewritePrematureAbsence", () => {
+	test("appends a correction to a contradicted absence line and a scope caveat to an over-generalized one", () => {
+		const contra = "prana-order-service does not ship logs; 0 hits.";
+		const over = "the afs field is entirely absent from all records.";
+		const answer = `### Elasticsearch\n\n${contra}\n\n### Couchbase\n\n${over}\n\nConfidence: 0.8`;
+		const out = rewritePrematureAbsence(answer, [contra], [over]);
+		expect(out).toContain("CORRECTION: this datasource's sub-agent returned matching data");
+		expect(out).toContain("SCOPE: this states absence more broadly than was verified");
+		expect(out).toContain("Confidence: 0.8"); // untouched lines preserved
+	});
+
+	test("returns the answer unchanged when nothing is flagged", () => {
+		const answer = "### Elasticsearch\n\nall good.\n\nConfidence: 0.9";
+		expect(rewritePrematureAbsence(answer, [], [])).toBe(answer);
 	});
 });
