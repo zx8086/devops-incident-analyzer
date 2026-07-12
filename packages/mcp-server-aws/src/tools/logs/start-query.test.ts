@@ -10,6 +10,7 @@ import {
 	decideQueryWindow,
 	getRetentionFloor,
 	logGroupNameFromArn,
+	matchesTarget,
 	resolveFloorFromGroups,
 	resolveQueryFloor,
 } from "./start-query.ts";
@@ -342,5 +343,36 @@ describe("getRetentionFloor eviction (SIO-1082)", () => {
 		await getRetentionFloor({ key: "B", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
 		expect(cache.has("A")).toBe(false);
 		expect(cache.has("B")).toBe(true);
+	});
+});
+
+// SIO-1082 (CodeRabbit re-review 2): exact-target matching against a DescribeLogGroups row.
+// Name targets must not match prefix siblings; ARN targets must match ONLY by ARN (not by a
+// same log-group name in a linked account).
+describe("matchesTarget (SIO-1082)", () => {
+	const region = "arn:aws:logs:eu-central-1:762715229080:log-group:";
+	const otherAcct = "arn:aws:logs:eu-central-1:999999999999:log-group:";
+	const name = "/ecs/fargate/catalog-prd-log-group";
+
+	test("name target: exact name matches, prefix sibling does not", () => {
+		expect(matchesTarget({ logGroupName: "/app" }, "/app", true)).toBe(true);
+		expect(matchesTarget({ logGroupName: "/app-canary" }, "/app", true)).toBe(false);
+	});
+
+	test("ARN target: matches g.arn suffixlessly (API arn carries a trailing :*)", () => {
+		expect(matchesTarget({ arn: `${region}${name}:*` }, `${region}${name}`, false)).toBe(true);
+	});
+
+	test("ARN target: matches the clean logGroupArn field too", () => {
+		expect(matchesTarget({ logGroupArn: `${region}${name}` }, `${region}${name}:*`, false)).toBe(true);
+	});
+
+	test("ARN target: does NOT cross-match a same-named group in a different account", () => {
+		// Same logGroupName, different account ARN -> must not match (the name fallback is gone).
+		expect(matchesTarget({ logGroupName: name, arn: `${otherAcct}${name}:*` }, `${region}${name}`, false)).toBe(false);
+	});
+
+	test("ARN target with neither arn nor logGroupArn -> no match", () => {
+		expect(matchesTarget({ logGroupName: name }, `${region}${name}`, false)).toBe(false);
 	});
 });

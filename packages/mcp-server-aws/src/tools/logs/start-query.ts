@@ -243,6 +243,31 @@ function stripArnSuffix(arn: string): string {
 	return arn.replace(/:\*$/, "");
 }
 
+// Minimal view of a DescribeLogGroups result row for exact-target matching.
+interface DescribedLogGroup {
+	logGroupName?: string;
+	arn?: string;
+	logGroupArn?: string;
+}
+
+// Exact-match a described group against the requested target. For a NAME target, only the exact
+// logGroupName matches (so a "/app" query never picks up "/app-canary"). For an ARN target, match
+// ONLY on the ARN (comparing both `arn` -- which carries a trailing ":*" -- and the clean
+// `logGroupArn`, suffixless on both sides); we do NOT fall back to logGroupName, which could
+// cross-match an unrelated same-named group in a linked account.
+export function matchesTarget(g: DescribedLogGroup, target: string, isNameTarget: boolean): boolean {
+	if (isNameTarget) return g.logGroupName === target;
+	const wanted = stripArnSuffix(target);
+	if (g.arn !== undefined && stripArnSuffix(g.arn) === wanted) return true;
+	if (g.logGroupArn !== undefined && stripArnSuffix(g.logGroupArn) === wanted) return true;
+	return false;
+}
+
+// Defensive page cap: a single exact group cannot need many pages, but a very crowded prefix
+// (50 siblings whose name our target prefixes) could push the exact match past page 1. Bound the
+// walk so a pathological prefix never loops unboundedly.
+const MAX_DESCRIBE_PAGES = 20;
+
 async function describeRetentionGroups(
 	config: AwsConfig,
 	params: StartQueryParams,
@@ -255,22 +280,29 @@ async function describeRetentionGroups(
 
 	// DescribeLogGroups matches by name PREFIX, so it returns sibling groups too (querying "/app"
 	// also returns "/app-canary"). We keep only the EXACT requested group -- a sibling's shorter
-	// retention would otherwise wrongly tighten (or reject) the floor. Targets are described
-	// concurrently (up to 50), and each is independently try/caught so one throttled target does
+	// retention would otherwise wrongly tighten (or reject) the floor. We PAGINATE (a crowded
+	// prefix can push the exact match past the first page) and stop as soon as it's found. Targets
+	// are described concurrently and each is independently try/caught so one throttled target does
 	// not discard the retention data already gathered from the others (best-effort resilience).
 	const perTarget = await Promise.all(
 		targets.map(async (target): Promise<LogGroupRetention[]> => {
-			const wantName = names ? target : logGroupNameFromArn(target);
+			const isNameTarget = names !== undefined;
+			const wantName = isNameTarget ? target : logGroupNameFromArn(target);
 			try {
-				const res = await client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50 }));
-				const out: LogGroupRetention[] = [];
-				for (const g of res.logGroups ?? []) {
-					const exactMatch = names
-						? g.logGroupName === target
-						: (g.arn !== undefined && stripArnSuffix(g.arn) === stripArnSuffix(target)) || g.logGroupName === wantName;
-					if (exactMatch) out.push({ retentionInDays: g.retentionInDays, creationTime: g.creationTime });
+				let nextToken: string | undefined;
+				for (let page = 0; page < MAX_DESCRIBE_PAGES; page++) {
+					const res = await client.send(
+						new DescribeLogGroupsCommand({ logGroupNamePrefix: wantName, limit: 50, nextToken }),
+					);
+					for (const g of res.logGroups ?? []) {
+						if (matchesTarget(g, target, isNameTarget)) {
+							return [{ retentionInDays: g.retentionInDays, creationTime: g.creationTime }];
+						}
+					}
+					if (!res.nextToken) break;
+					nextToken = res.nextToken;
 				}
-				return out;
+				return [];
 			} catch {
 				return [];
 			}
