@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { AppError } from "../lib/errors";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
@@ -58,9 +59,15 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 		};
 	} catch (error) {
 		logger.error({ error }, "Failed to execute query");
-		// SIO-744: surface the underlying N1QL error so the LLM can recover (e.g.
-		// fix a syntax issue or drop an unindexed predicate) instead of looping.
-		const message = error instanceof Error ? error.message : String(error);
+		// SIO-744/SIO-1078: surface the underlying N1QL error so the LLM can recover (e.g.
+		// fix a syntax issue or drop an unindexed predicate) instead of looping. The lib
+		// layer wraps the real error via createError("QUERY_ERROR", "Failed to execute
+		// query", originalError), so AppError.message is the generic prefix and the actual
+		// N1QL detail lives on AppError.originalError -- prefer that cause. Falling back to
+		// error.message alone produced the doubled "Failed to execute query: Failed to
+		// execute query" that told the LLM nothing.
+		const cause = error instanceof AppError ? error.originalError : undefined;
+		const message = cause?.message ?? (error instanceof Error ? error.message : String(error));
 		return {
 			content: [{ type: "text" as const, text: `Failed to execute query: ${message}` }],
 			isError: true,

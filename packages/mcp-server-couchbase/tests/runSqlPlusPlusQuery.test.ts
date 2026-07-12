@@ -27,10 +27,14 @@ describe("runSqlPlusPlusQuery error surfacing (SIO-744)", () => {
 		expect(result.isError).toBe(true);
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("Failed to execute query");
-		// The lib helper wraps the underlying error in a CouchbaseError whose
-		// message reads "Failed to execute query"; the cause (our stubbed text)
-		// is preserved on the Error chain.
-		expect(text.length).toBeGreaterThan("Failed to execute query".length);
+		// SIO-1078: the lib helper wraps the underlying error via createError(...,
+		// originalError), so AppError.message is the generic "Failed to execute query"
+		// and the real N1QL detail lives on AppError.originalError. The tool must surface
+		// that cause -- assert the actual stubbed syntax text is present, not merely that
+		// the string is longer than the generic prefix (which the old doubled message
+		// passed by accident).
+		expect(text).toContain("near 'WHRE'");
+		expect(text).not.toBe("Failed to execute query: Failed to execute query");
 	});
 
 	test("returns isError true when bucket is missing", async () => {

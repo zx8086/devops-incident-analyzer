@@ -379,6 +379,65 @@ export function rewriteUngroundedBlockers(answer: string, ungrounded: string[]):
 		.join("\n");
 }
 
+// SIO-1079: the aggregator hallucinated "CloudWatch logs are expired (80-day retention
+// exceeded)" from a MalformedQueryException -- a QUERY-WINDOW error, not evidence of expiry.
+// The raw CloudWatch message literally contains the word "retention", which leads the LLM to
+// this false conclusion. Live A/B (eu-oit-prd, retentionInDays=60) proved the logs existed
+// and a correctly-anchored query returned them. This guard mirrors the IAM guard above but is
+// scoped to expiry/retention claims: a "logs expired / retention exceeded / data expired"
+// gap bullet is fabricated UNLESS an actual absence/expiry was observed.
+const EXPIRY_CLAIM_RE =
+	/\b(logs? (?:are |were )?expired|(?:log )?retention (?:exceeded|window exceeded|policy exceeded)|data (?:is |was )?expired|logs? (?:are |were )?(?:no longer|not) (?:available|retained)|beyond (?:the )?retention)\b/i;
+
+// A genuine absence/expiry signal: a describe/list tool that actually reported the group or
+// data absent (empty result / no such group). When observed, an "expired/absent" claim is
+// grounded and must NOT be rewritten. Kept deliberately narrow so a mere query-window error
+// (which does NOT observe absence) never satisfies it.
+const OBSERVED_ABSENCE_RE =
+	/\b(no such log group|logGroups:?\s*\[\s*\]|no log groups found|ResourceNotFound|log group .* does not exist)\b/i;
+
+function expiryObserved(results: DataSourceResult[]): boolean {
+	return results.some((r) => {
+		const data = typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "");
+		return OBSERVED_ABSENCE_RE.test(data);
+	});
+}
+
+export function detectUngroundedExpiry(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
+	if (expiryObserved(results)) return { ungrounded: [] };
+
+	const lines = answer.split("\n");
+	const ungrounded: string[] = [];
+	let sectionLevel: number | null = null;
+	for (const line of lines) {
+		const level = headingLevel(line);
+		if (level !== null) {
+			if (sectionLevel !== null && level <= sectionLevel) sectionLevel = null;
+			if (GAPS_HEADING_RE.test(line) || RECOMMENDATIONS_HEADING_RE.test(line)) sectionLevel = level;
+			continue;
+		}
+		if (sectionLevel !== null && TOP_LEVEL_BULLET_RE.test(line) && EXPIRY_CLAIM_RE.test(line)) {
+			ungrounded.push(line);
+		}
+	}
+	return { ungrounded };
+}
+
+// The query-window truth: a MalformedQueryException means the window was outside retention,
+// not that the data is gone. We assert only what is verifiable -- the logs were not
+// retrieved and the queried window may have been outside retention -- and steer to re-anchoring.
+const UNGROUNDED_EXPIRY_REPLACEMENT =
+	"- CloudWatch logs were not retrieved during this investigation. The query returned a window error (the requested time range was likely outside the log group's retention window), which does NOT confirm the logs are expired or absent; re-anchoring the query to the incident time is required to confirm availability.";
+
+export function rewriteUngroundedExpiry(answer: string, ungrounded: string[]): string {
+	if (ungrounded.length === 0) return answer;
+	const flagged = new Set(ungrounded);
+	return answer
+		.split("\n")
+		.map((line) => (flagged.has(line) ? UNGROUNDED_EXPIRY_REPLACEMENT : line))
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -502,7 +561,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const { ungrounded } = detectUngroundedBlockers(answer, results);
 	const ungroundedCapTriggered = ungrounded.length > 0;
 
-	const anyCapTriggered = degradedSubAgents.length > 0 || gapsCapTriggered || ungroundedCapTriggered;
+	// SIO-1079: a Gaps bullet claiming "logs expired / retention exceeded" with NO observed
+	// absence (only a query-window MalformedQueryException) is fabricated. Cap + rewrite like
+	// the IAM blocker above.
+	const { ungrounded: ungroundedExpiry } = detectUngroundedExpiry(answer, results);
+	const expiryCapTriggered = ungroundedExpiry.length > 0;
+
+	const anyCapTriggered =
+		degradedSubAgents.length > 0 || gapsCapTriggered || ungroundedCapTriggered || expiryCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -538,9 +604,20 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	if (expiryCapTriggered) {
+		logger.warn(
+			{ ungroundedExpiry, cap: TOOL_ERROR_CONFIDENCE_CAP, originalScore: confidenceScore, cappedScore },
+			"Aggregator Gaps section claimed logs expired/retention exceeded with no observed absence; capping confidence",
+		);
+	}
+
 	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
 	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
-	const rewrittenForGrounding = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
+	// SIO-1079: and rewrite any ungrounded "logs expired" bullets. Chain both rewrites.
+	const groundedBlockers = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
+	const rewrittenForGrounding = expiryCapTriggered
+		? rewriteUngroundedExpiry(groundedBlockers, ungroundedExpiry)
+		: groundedBlockers;
 	const finalAnswer = anyCapTriggered
 		? rewriteConfidenceInAnswer(rewrittenForGrounding, cappedScore)
 		: rewrittenForGrounding;
