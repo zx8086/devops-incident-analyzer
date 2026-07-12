@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
+import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import type { AnnotationMap } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
@@ -6867,6 +6868,14 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 																			? // SIO-1024: "edit N ingest pipelines: <first name>[, +K more]".
 																				`edit ${req?.ingestPipelineEdits?.length ?? 0} ingest pipeline${(req?.ingestPipelineEdits?.length ?? 0) === 1 ? "" : "s"}: ${req?.ingestPipelineEdits?.[0]?.name ?? "?"}${(req?.ingestPipelineEdits?.length ?? 0) > 1 ? `, +${(req?.ingestPipelineEdits?.length ?? 0) - 1} more` : ""}`
 																			: (req?.tier ?? req?.resource ?? "change");
+	// SIO-1083: each recall source's three-state status, derived from its OWN backend gate
+	// (not from whether the context string is empty -- both the disabled and cold cases leave
+	// it ""). Lets the card distinguish "off" (hide) from "empty" (show a no-records line) from
+	// "populated" (render the list).
+	const kgOn = isKnowledgeGraphEnabled();
+	const memOn = selectedBackend() === "agent-memory";
+	const statusFor = (on: boolean, ctx: string | undefined): "off" | "empty" | "populated" =>
+		!on ? "off" : ctx?.trim() ? "populated" : "empty";
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -6880,9 +6889,13 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		precheckPassed,
 		// SIO-954: surface the deployment's recent change history (empty when the graph is off).
 		recentChanges: state.iacGraphContext || undefined,
+		// SIO-1083: status distinguishes graph-off from graph-on-but-cold for the card.
+		recentChangesStatus: statusFor(kgOn, state.iacGraphContext),
 		// SIO-970: surface recalled prior learnings/decisions for this stack-instance (empty
 		// when the agent-memory backend is off or recall found nothing).
 		priorLearnings: state.priorLearnings || undefined,
+		// SIO-1083: status distinguishes memory-off from memory-on-but-cold for the card.
+		priorLearningsStatus: statusFor(memOn, state.priorLearnings),
 		// SIO-983: surface the live-parity advisory (draft vs live cluster). Empty when no live
 		// equivalent was read (deployment not connected) or the draft matches live.
 		liveParity: state.liveParity || undefined,

@@ -44,6 +44,11 @@ export interface IacReview {
 	// recentChanges, the server passes it on the review payload; this field must exist here or
 	// the card can't read it (the SIO-969 silent-drop gotcha).
 	priorLearnings?: string;
+	// SIO-1083: three-state status per recall source ("off" | "empty" | "populated"), so the card
+	// tells a disabled backend from an enabled-but-cold one. Same silent-drop gotcha as above: the
+	// server sets these on the review payload, so they MUST exist here or the card drops them.
+	recentChangesStatus?: "off" | "empty" | "populated";
+	priorLearningsStatus?: "off" | "empty" | "populated";
 	// SIO-983: live-parity advisory -- the drafted change diffed against the LIVE cluster, markdown.
 	// Undefined when no live equivalent was read or the draft matches live. Same silent-drop gotcha:
 	// the server passes it on the review payload, so it MUST exist here or the card drops it.
