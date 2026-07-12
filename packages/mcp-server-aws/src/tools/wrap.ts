@@ -108,8 +108,12 @@ export function mapAwsError(err: unknown): ToolError {
 	) {
 		// SIO-1078: distinguish a retention-window rejection from a generic validation error
 		// so the LLM stops retrying an unrecoverable window and pivots to another source.
+		// SIO-1079: a MalformedQueryException means the requested WINDOW is outside retention,
+		// NOT that the incident's logs are expired. The window is almost always mis-anchored
+		// (an incident is usually recent). Steer to re-anchoring; only call it expired if the
+		// incident itself predates retention.
 		toolError.advice =
-			"The query window is outside the log group's retention or predates its creation. CloudWatch Logs Insights only returns data within the retention window. Call aws_logs_describe_log_groups for these groups to read retentionInDays and creationTime, then set startTime no earlier than max(creationTime, now - retentionInDays days). If the incident predates retention, the logs are gone -- do not retry this window; note the gap and use other data sources (metrics, traces, CloudTrail).";
+			"The requested query window is outside the log group's retention or predates its creation -- this does NOT mean the incident's logs are expired. CloudWatch Logs Insights only returns data within the retention window. Call aws_logs_describe_log_groups to read retentionInDays and creationTime, then re-anchor startTime/endTime to the incident/event timestamp (usually recent) within [now - retentionInDays, now]. Do not retry the same window; only conclude the logs are expired if the incident itself predates retention.";
 	}
 
 	return toolError;

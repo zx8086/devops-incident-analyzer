@@ -14,6 +14,7 @@ import { extractTextFromContent } from "./message-utils.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { buildFocusBlock } from "./sub-agent-focus-block.ts";
 import { instrumentTools } from "./sub-agent-instrumentation.ts";
 import {
 	getSubAgentStateOutputCapBytes,
@@ -274,12 +275,29 @@ function extractAwsError(content: unknown): { kind: AwsErrorKind; message: strin
 	if (err == null || typeof err !== "object") return null;
 	const kind = (err as { kind?: unknown }).kind;
 	if (typeof kind !== "string" || !(kind in AWS_KIND_TO_CATEGORY)) return null;
-	const message =
+	const rawMessage =
 		(err as { awsErrorMessage?: unknown }).awsErrorMessage ??
 		(err as { advice?: unknown }).advice ??
 		`AWS tool error: ${kind}`;
-	return { kind: kind as AwsErrorKind, message: typeof message === "string" ? message : String(message) };
+	let message = typeof rawMessage === "string" ? rawMessage : String(rawMessage);
+	// SIO-1079: a CloudWatch Logs retention-window rejection (MalformedQueryException) carries
+	// the word "retention" in its raw text, which led the aggregator LLM to report "logs
+	// expired". It is a QUERY-WINDOW error, not data expiry. Replace the raw text with an
+	// unambiguous, non-"expired" message so the aggregator cannot mischaracterize it. (Live
+	// A/B verified the logs existed; the window was simply outside retention.)
+	if (QUERY_WINDOW_ERROR_RE.test(message)) {
+		message =
+			"aws_logs_start_query time window was outside the log group's retention window (MalformedQueryException). " +
+			"This is a query-window error, NOT expired or absent data. Re-anchor the window to the incident time and retry.";
+	}
+	return { kind: kind as AwsErrorKind, message };
 }
+
+// SIO-1079: matches the CloudWatch Logs Insights retention-window rejection text. Kept in the
+// agent so the message is normalized even against the currently-deployed MCP server (which
+// still maps this to kind "aws-unknown" with the raw text).
+const QUERY_WINDOW_ERROR_RE =
+	/end date and time is either before the log group|exceeds the log group.*retention|MalformedQueryException/i;
 
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
@@ -527,9 +545,11 @@ async function runSubAgent(
 		// that helper is shared with non-investigation flows.
 		const baseSystemPrompt = buildSubAgentPrompt(agentName);
 		const focus = state.investigationFocus;
-		const focusBlock = focus
-			? `\n\n---\n\nINVESTIGATION FOCUS (continuing across turns):\n- Summary: ${focus.summary}\n- Anchored services: ${focus.services.join(", ") || "(none)"}\n- Anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none)"}\n\nAll tool calls must stay scoped to this investigation. Do not pivot to unrelated clusters, services, or time ranges. If the user's current message references "kafka" or "the broker" or similar pronouns, resolve them against the anchored services list, not the broadest possible interpretation.`
-			: "";
+		// SIO-1079: the focus block now always carries a current-time anchor (mirroring the
+		// normalizer) so a sub-agent choosing a time-windowed tool call (e.g.
+		// aws_logs_start_query epoch seconds) resolves it against a real clock instead of
+		// guessing an absolute epoch and landing outside the data source's retention window.
+		const focusBlock = buildFocusBlock(focus, new Date().toISOString());
 		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
 		// iterations and per-deployment fan-out share the Bedrock cache prefix within
 		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).

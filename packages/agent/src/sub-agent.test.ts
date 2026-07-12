@@ -209,6 +209,26 @@ describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 		expect(errors[0]?.category).not.toBe("auth");
 	});
 
+	test("SIO-1079: normalizes a retention-window message so the aggregator can't read it as 'expired'", () => {
+		// The raw CloudWatch text contains the word "retention", which the aggregator LLM
+		// mistook for data expiry. extractAwsError must replace it with an unambiguous
+		// query-window message. Works even for the deployed server's aws-unknown mapping.
+		const errors = extractToolErrors([
+			awsErrorMsg({
+				kind: "aws-unknown",
+				awsErrorName: "MalformedQueryException",
+				awsErrorMessage:
+					"Query's end date and time is either before the log groups creation time or exceeds the log groups log retention settings ([0,79])",
+			}),
+		]);
+		expect(errors).toHaveLength(1);
+		const msg = errors[0]?.message ?? "";
+		expect(msg.toLowerCase()).toContain("query-window error");
+		expect(msg.toLowerCase()).toContain("not expired");
+		// The raw retention-settings phrasing must be gone.
+		expect(msg).not.toContain("log retention settings ([0,79])");
+	});
+
 	test("captures an iam-permission-missing _error as an auth toolError", () => {
 		const errors = extractToolErrors([
 			awsErrorMsg({

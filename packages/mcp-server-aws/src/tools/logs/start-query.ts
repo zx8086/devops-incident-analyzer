@@ -138,10 +138,15 @@ export function startQuery(config: AwsConfig) {
 				const decision = decideQueryWindow(params.startTime, params.endTime, floor);
 				if (decision.action === "reject") {
 					const floorIso = new Date(floor * 1000).toISOString();
+					// SIO-1079: the requested WINDOW is outside retention -- this does NOT mean the
+					// incident's logs are gone. The window was likely mis-anchored (an incident is
+					// almost always recent). Steer to re-anchoring, not to declaring the data absent.
 					throw new QueryWindowRejected(
-						`Skipped StartQuery: the requested window ends before the earliest retained log event ` +
-							`(${floorIso}). The window predates the log groups' retention/creation, so these logs no ` +
-							`longer exist. Do not retry this window; record the gap and rely on metrics, traces, or CloudTrail.`,
+						`Skipped StartQuery: the requested time window ends before the earliest queryable time ` +
+							`for these log groups (${floorIso}). The requested window -- not necessarily the incident -- ` +
+							`is outside the retention window. Re-anchor startTime/endTime to the incident/event timestamp ` +
+							`(which is usually recent) and retry; do not conclude the logs are expired unless the incident ` +
+							`itself predates ${floorIso}.`,
 					);
 				}
 				effectiveStart = decision.startTime;
