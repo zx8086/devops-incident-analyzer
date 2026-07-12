@@ -204,4 +204,17 @@ describe("reviewPlan recall status (SIO-1083)", () => {
 		expect(review?.recentChangesStatus).toBe("empty");
 		expect(review?.priorLearningsStatus).toBe("off");
 	});
+
+	// SIO-1083 (CodeRabbit): whitespace-only context must normalize to undefined so the rendered
+	// field and its status agree on one definition of "empty" -- otherwise the card gets status
+	// "empty" alongside a truthy-but-blank string and renders an empty MarkdownRenderer.
+	test("whitespace-only context -> status 'empty' AND field undefined (no blank MarkdownRenderer)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const review = (await reviewPlan(baseState({ iacGraphContext: "   \n  ", priorLearnings: "\t" }))).planReview;
+		expect(review?.recentChangesStatus).toBe("empty");
+		expect(review?.recentChanges).toBeUndefined();
+		expect(review?.priorLearningsStatus).toBe("empty");
+		expect(review?.priorLearnings).toBeUndefined();
+	});
 });

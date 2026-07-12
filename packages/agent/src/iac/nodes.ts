@@ -6874,8 +6874,16 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 	// "populated" (render the list).
 	const kgOn = isKnowledgeGraphEnabled();
 	const memOn = selectedBackend() === "agent-memory";
+	// SIO-1083: normalize whitespace-only context to undefined so the rendered field and its
+	// status share ONE definition of "empty" (a trim). Today's builders return "" or non-blank
+	// content, but this keeps field + status consistent if a builder ever emits whitespace --
+	// otherwise the card could get status "empty" alongside a truthy-but-blank string and render
+	// an empty MarkdownRenderer instead of the empty-state line.
+	const normalizeContext = (ctx: string | undefined): string | undefined => (ctx?.trim() ? ctx : undefined);
 	const statusFor = (on: boolean, ctx: string | undefined): "off" | "empty" | "populated" =>
-		!on ? "off" : ctx?.trim() ? "populated" : "empty";
+		!on ? "off" : ctx ? "populated" : "empty";
+	const recentChanges = normalizeContext(state.iacGraphContext);
+	const priorLearnings = normalizeContext(state.priorLearnings);
 	const review: IacPlanReview = {
 		// SIO-912: every maker workflow is a config edit; the agent never produces a local
 		// terraform plan. The "terraform" review kind is retired.
@@ -6888,14 +6896,14 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		risks,
 		precheckPassed,
 		// SIO-954: surface the deployment's recent change history (empty when the graph is off).
-		recentChanges: state.iacGraphContext || undefined,
+		recentChanges,
 		// SIO-1083: status distinguishes graph-off from graph-on-but-cold for the card.
-		recentChangesStatus: statusFor(kgOn, state.iacGraphContext),
+		recentChangesStatus: statusFor(kgOn, recentChanges),
 		// SIO-970: surface recalled prior learnings/decisions for this stack-instance (empty
 		// when the agent-memory backend is off or recall found nothing).
-		priorLearnings: state.priorLearnings || undefined,
+		priorLearnings,
 		// SIO-1083: status distinguishes memory-off from memory-on-but-cold for the card.
-		priorLearningsStatus: statusFor(memOn, state.priorLearnings),
+		priorLearningsStatus: statusFor(memOn, priorLearnings),
 		// SIO-983: surface the live-parity advisory (draft vs live cluster). Empty when no live
 		// equivalent was read (deployment not connected) or the draft matches live.
 		liveParity: state.liveParity || undefined,
