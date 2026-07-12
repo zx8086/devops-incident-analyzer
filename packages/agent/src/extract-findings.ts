@@ -7,6 +7,7 @@ import { extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts"
 import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
+import { extractOrbitFindings } from "./correlation/extractors/orbit.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:extract-findings");
@@ -114,7 +115,29 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			const gitlabFindings = extractGitLabFindings(outs, focusServices);
 			const rawCount = extractGitLabFindings(outs).mergedRequests?.length ?? 0;
 			logCard("GitLabFindingsCard", focusServices, rawCount, gitlabFindings.mergedRequests?.length ?? 0);
-			return { gitlabFindings };
+			// SIO-1076: Orbit cross-project findings ride the same gitlab result.
+			// Pure and free -- parses outputs a sub-agent turn already produced.
+			const orbitFindings = extractOrbitFindings(outs, focusServices);
+			const orbitRaw = extractOrbitFindings(outs);
+			const orbitFilteredCount =
+				(orbitFindings.blastRadius?.length ?? 0) +
+				(orbitFindings.recentDeploys?.length ?? 0) +
+				(orbitFindings.pipelineFailures?.length ?? 0) +
+				(orbitFindings.vulnerabilities?.length ?? 0);
+			const orbitRawCount =
+				(orbitRaw.blastRadius?.length ?? 0) +
+				(orbitRaw.recentDeploys?.length ?? 0) +
+				(orbitRaw.pipelineFailures?.length ?? 0) +
+				(orbitRaw.vulnerabilities?.length ?? 0);
+			if (orbitRawCount > 0) {
+				logCard("OrbitFindingsCard", focusServices, orbitRawCount, orbitFilteredCount, {
+					blastRadius: orbitFindings.blastRadius?.length ?? 0,
+					recentDeploys: orbitFindings.recentDeploys?.length ?? 0,
+					pipelineFailures: orbitFindings.pipelineFailures?.length ?? 0,
+					vulnerabilities: orbitFindings.vulnerabilities?.length ?? 0,
+				});
+			}
+			return orbitFilteredCount > 0 ? { gitlabFindings, orbitFindings } : { gitlabFindings };
 		},
 		couchbase: (r) => {
 			const outs = r.toolOutputs ?? [];

@@ -72,6 +72,13 @@ function extractEntityNames(context: Record<string, unknown>): string[] {
 	if (Array.isArray(context.groupIds)) {
 		for (const x of context.groupIds) if (typeof x === "string") names.push(x);
 	}
+	// SIO-1076: Orbit regular-dispatch rules (orbit-deploy-blast-radius-vs-elastic,
+	// orbit-pipeline-failure-vs-incident) carry the downstream/affected services as
+	// context.services[] (string[]). Without reading them here the idempotency check
+	// finds no entities and the rule re-fans every pass -- wasted elastic turns.
+	if (Array.isArray(context.services)) {
+		for (const x of context.services) if (typeof x === "string") names.push(x);
+	}
 	if (Array.isArray(context.topics)) {
 		for (const x of context.topics) {
 			if (x && typeof x === "object" && "name" in x && typeof (x as { name: unknown }).name === "string") {

@@ -14,6 +14,14 @@ export const configDefaults = {
 		retryDelay: "1000",
 		oauthCallbackPort: "9184",
 	},
+	orbit: {
+		enabled: "false",
+		queryPath: "/api/v4/orbit/query",
+		schemaPath: "/api/v4/orbit/schema",
+		statusPath: "/api/v4/orbit/status",
+		timeout: "30000",
+		maxQueriesPerRun: "8",
+	},
 	tracing: {
 		enabled: "false",
 		project: "gitlab-mcp-server",

@@ -13,6 +13,25 @@ const logger = getLogger("agent:enforceCorrelations");
 // confidence-gate.ts) so a capped run does not pass the gate.
 const CONFIDENCE_CAP_ON_DEGRADATION = 0.59;
 
+// SIO-1076: per-rule top-of-report banner for degraded skipCoverageCheck rules.
+// Only self-signalling rules produce a banner (a regular re-fan that failed to
+// cover is already reflected in the confidence cap). The deploy-vs-datastore
+// rule keeps its original SIO-712 wording; the Orbit vuln rule gets a security
+// banner so it does not read as a deploy contradiction.
+function bannerForDegraded(degraded: DegradedRule[], cap: number): string | undefined {
+	const selfSignalling = degraded.filter((d) => {
+		const ruleDef = correlationRules.find((r) => r.name === d.ruleName);
+		return ruleDef?.skipCoverageCheck === true;
+	});
+	if (selfSignalling.length === 0) return undefined;
+
+	if (selfSignalling.some((d) => d.ruleName === "orbit-vuln-introduced-by-recent-mr")) {
+		return `WARNING: a critical/high security vulnerability was detected on an affected project during this incident. Confidence capped to ${cap}. Review the Findings section and remediate independently of the root cause.`;
+	}
+	// Default: the SIO-712 cross-source-contradiction wording.
+	return `WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.`;
+}
+
 export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enforceCorrelationsAggregate" {
 	const decisions = evaluate(state, correlationRules);
 	const needsInvocation = decisions.filter((d) => d.status === "needs-invocation");
@@ -120,21 +139,19 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		"One or more correlation rules degraded; capping confidence",
 	);
 
-	// SIO-712: when a skipCoverageCheck rule degraded (e.g. cross-source
-	// contradiction), prepend a top-of-report banner so the human reader sees
-	// the warning before any prose. The HITL gate already catches the cap, but
-	// the banner makes the contradiction visible even if a reader skims past
-	// the confidence number.
-	const hasContradictionRule = degraded.some((d) => {
-		const ruleDef = correlationRules.find((r) => r.name === d.ruleName);
-		return ruleDef?.skipCoverageCheck === true;
-	});
+	// SIO-712 / SIO-1076: when a skipCoverageCheck rule degraded, prepend a
+	// top-of-report banner so the human reader sees the warning before any prose.
+	// The HITL gate already catches the cap, but the banner makes the signal
+	// visible even if a reader skims past the confidence number. The banner text
+	// is per-rule so a security vuln reads as security, not as a deploy
+	// contradiction.
+	const bannerText = bannerForDegraded(degraded, cap);
 	// SIO-860: rewrite the printed confidence to the capped value so the report prose
-	// matches the gate's confidenceScore. Compose with (not replace) the SIO-712
-	// contradiction banner, which is prepended above the rewritten body.
+	// matches the gate's confidenceScore. Compose with (not replace) the banner,
+	// which is prepended above the rewritten body.
 	let updatedFinalAnswer = state.finalAnswer ? rewriteConfidenceInAnswer(state.finalAnswer, cappedScore) : undefined;
-	if (hasContradictionRule && updatedFinalAnswer) {
-		updatedFinalAnswer = `WARNING: unresolved cross-source contradiction -- a deployment was reported but the buggy behaviour was observed afterward. Confidence capped to ${cap}. See the Gaps and Findings sections below.\n\n${updatedFinalAnswer}`;
+	if (bannerText && updatedFinalAnswer) {
+		updatedFinalAnswer = `${bannerText}\n\n${updatedFinalAnswer}`;
 	}
 
 	return {

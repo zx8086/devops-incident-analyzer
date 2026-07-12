@@ -3,7 +3,9 @@ import type {
 	AwsCloudWatchAlarm,
 	AwsFindings,
 	CouchbaseSlowQuery,
+	ElasticFindings,
 	GitLabMergedRequest,
+	OrbitFindings,
 	ToolError,
 } from "@devops-agent/shared";
 import type { AgentName, AgentStateType } from "../state";
@@ -567,6 +569,176 @@ correlationRules.push({
 			}
 		}
 		return null;
+	},
+	requiredAgent: "gitlab-agent",
+	retry: { attempts: 1, timeoutMs: 30_000 },
+	skipCoverageCheck: true,
+});
+
+// SIO-1076: Orbit cross-project correlation. Readers mirror getGitLabMergedRequests
+// -- they read the typed sibling extractFindings populated on the gitlab / elastic
+// DataSourceResult; result.data stays prose for the aggregator/UI.
+function getOrbitFindings(state: AgentStateType): OrbitFindings {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
+	if (!result || result.status !== "success") return {};
+	return result.orbitFindings ?? {};
+}
+
+function getElasticFindings(state: AgentStateType): ElasticFindings {
+	const result = state.dataSourceResults.find((r) => r.dataSourceId === "elastic");
+	if (!result || result.status !== "success") return {};
+	return result.elasticFindings ?? {};
+}
+
+// An elastic observation timestamp is "after" an MR merge when it parses and is
+// strictly later. Absence (no timestamp) is NOT after -- Orbit/elastic silence
+// must never manufacture a post-merge correlation.
+function postMerge(ts: string | undefined, mergedTs: number): boolean {
+	if (!ts) return false;
+	const t = Date.parse(ts);
+	return Number.isFinite(t) && t > mergedTs;
+}
+
+// Does elastic show a post-merge error signal in a downstream service?
+function elasticShowsPostMergeError(elastic: ElasticFindings, service: string, mergedTs: number): boolean {
+	const apmHit = (elastic.apmServices ?? []).some(
+		(a) => (a.errorRate ?? 0) > 0 && matchesFocus(a.serviceName, [service]) && postMerge(a.observedAt, mergedTs),
+	);
+	if (apmHit) return true;
+	return (elastic.logClusters ?? []).some(
+		(c) => c.service !== undefined && matchesFocus(c.service, [service]) && postMerge(c.lastSeen, mergedTs),
+	);
+}
+
+// -- Rule: gated blast-radius pre-fetch --------------------------------------
+// Cost gate. Fires only when BOTH a recent deploy AND an elastic error signal
+// already exist, then re-fans to gitlab-agent to run the (billed) blast-radius
+// traversal. No incident pays for a traversal unless a deploy and a runtime
+// symptom already coincide. Not skipCoverageCheck: once blastRadius is present
+// the idempotency check suppresses a repeat re-fan.
+correlationRules.push({
+	name: "orbit-deploy-needs-blast-radius",
+	description:
+		"A recent group-wide deploy MR coincides with an Elastic error signal, but cross-project blast radius has not been fetched; re-fan to gitlab-agent to run the Orbit blast-radius traversal.",
+	trigger: (state) => {
+		const orbit = getOrbitFindings(state);
+		if (orbit.blastRadius && orbit.blastRadius.length > 0) return null; // already fetched
+		const deploys = orbit.recentDeploys ?? [];
+		if (deploys.length === 0) return null;
+		const elastic = getElasticFindings(state);
+		const hasElasticError =
+			(elastic.apmServices ?? []).some((a) => (a.errorRate ?? 0) > 0) || (elastic.logClusters ?? []).length > 0;
+		if (!hasElasticError) return null;
+		const now = Date.now();
+		const inWindow = deploys.filter((d) => {
+			const ts = Date.parse(d.mergedAt);
+			return Number.isFinite(ts) && now - ts <= DEPLOY_RUNTIME_WINDOW_MS;
+		});
+		if (inWindow.length === 0) return null;
+		const services = new Set<string>();
+		for (const a of elastic.apmServices ?? []) if ((a.errorRate ?? 0) > 0) services.add(a.serviceName);
+		for (const c of elastic.logClusters ?? []) if (c.service) services.add(c.service);
+		return {
+			context: {
+				requestBlastRadius: true,
+				services: Array.from(services),
+				deployMrs: inWindow.map((d) => d.mrId),
+			},
+		};
+	},
+	requiredAgent: "gitlab-agent",
+	retry: { attempts: 1, timeoutMs: 30_000 },
+});
+
+// -- Rule: flagship blast-radius vs elastic ----------------------------------
+// A shared-lib change imported by a downstream service, with a post-merge elastic
+// error spike in that same service = strong shared-library root-cause correlation
+// (impossible with per-project REST). Regular dispatch: re-fans to elastic-agent
+// with the downstream services in context.services so the second turn confirms.
+correlationRules.push({
+	name: "orbit-deploy-blast-radius-vs-elastic",
+	description:
+		"A recent cross-project deploy MR changed a shared definition imported by downstream service X, and Elastic shows a post-merge error spike in X -- strong shared-library root-cause correlation.",
+	trigger: (state) => {
+		const blast = getOrbitFindings(state).blastRadius ?? [];
+		if (blast.length === 0) return null;
+		const elastic = getElasticFindings(state);
+		const now = Date.now();
+		for (const b of blast) {
+			if (!b.mrMergedAt) continue;
+			const mergedTs = Date.parse(b.mrMergedAt);
+			if (!Number.isFinite(mergedTs) || now - mergedTs > DEPLOY_RUNTIME_WINDOW_MS) continue;
+			const downstream = new Set<string>([...b.importedByProjects, ...b.importedByFiles.map((f) => f.project ?? "")]);
+			const impacted: string[] = [];
+			for (const svc of downstream) {
+				if (!svc) continue;
+				if (elasticShowsPostMergeError(elastic, svc, mergedTs)) impacted.push(svc);
+			}
+			if (impacted.length > 0) {
+				return {
+					context: {
+						definition: b.definitionName,
+						sourceProject: b.sourceProject,
+						mrId: b.mrId,
+						services: impacted,
+					},
+				};
+			}
+		}
+		return null;
+	},
+	requiredAgent: "elastic-agent",
+	retry: { attempts: 2, timeoutMs: 30_000 },
+});
+
+// -- Rule: pipeline failure vs incident --------------------------------------
+// A focus-service project with repeated cross-project pipeline failures in the
+// window; confirm the runtime symptom in that service via elastic.
+const ORBIT_PIPELINE_FAILURE_MIN = 2;
+correlationRules.push({
+	name: "orbit-pipeline-failure-vs-incident",
+	description:
+		"A focus-service project shows repeated group-wide pipeline failures in the incident window; correlate with elastic-agent to confirm the runtime symptom in that service.",
+	trigger: (state) => {
+		const failures = getOrbitFindings(state).pipelineFailures ?? [];
+		if (failures.length === 0) return null;
+		const focusServices = state.investigationFocus?.services ?? [];
+		const impacted: string[] = [];
+		for (const f of failures) {
+			if (f.failureCount < ORBIT_PIPELINE_FAILURE_MIN) continue;
+			if (!f.project) continue;
+			if (!matchesFocus(f.project, focusServices)) continue;
+			impacted.push(f.project);
+		}
+		if (impacted.length === 0) return null;
+		return { context: { signal: "orbit-pipeline-failures", services: impacted } };
+	},
+	requiredAgent: "elastic-agent",
+	retry: { attempts: 2, timeoutMs: 30_000 },
+});
+
+// -- Rule: vulnerability introduced by a recent MR ---------------------------
+// Self-signalling: a critical/high vuln on a focus project is a signal in itself.
+// skipCoverageCheck -> straight to aggregate, caps confidence, emits a banner.
+correlationRules.push({
+	name: "orbit-vuln-introduced-by-recent-mr",
+	description:
+		"Orbit reports a critical/high vulnerability on a focus project (optionally tied to a recent MR); surface it to the human even if it is not the proven root cause.",
+	trigger: (state) => {
+		const vulns = getOrbitFindings(state).vulnerabilities ?? [];
+		if (vulns.length === 0) return null;
+		const focusServices = state.investigationFocus?.services ?? [];
+		const flagged = vulns.filter(
+			(v) =>
+				/^(critical|high)$/i.test(v.severity) && matchesFocus(`${v.project ?? ""} ${v.title ?? ""}`, focusServices),
+		);
+		if (flagged.length === 0) return null;
+		return {
+			context: {
+				signal: "orbit-vulnerability",
+				vulnerabilities: flagged.map((v) => ({ severity: v.severity, project: v.project, title: v.title })),
+			},
+		};
 	},
 	requiredAgent: "gitlab-agent",
 	retry: { attempts: 1, timeoutMs: 30_000 },

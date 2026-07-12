@@ -258,13 +258,16 @@ GitLab is treated as supplementary for all complex incident investigations. The 
 
 The supervisor validates that the GitLab MCP server is connected and has tools before dispatching the gitlab-agent, so if the server is down, it gracefully skips.
 
-## Future: GKG Integration Path
+## GKG Integration Path (IMPLEMENTED -- SIO-1076)
 
-This design supports future GitLab Knowledge Graph integration:
-- The `gitlab-client/` module can be extended with a `graph.ts` adapter
-- New tools can be added to `tools/code-analysis/` for graph queries (callers, callees, neighbors)
-- The `action_tool_map` in the tool YAML can be extended with a `graph_analysis` action category
-- The proxy mechanism can coexist with or be replaced by GKG endpoints
+The reserved GitLab Knowledge Graph slot is now filled by GitLab Orbit:
+- `gitlab-client/orbit.ts` is the graph adapter (`OrbitRestClient`; REST, PAT `read_api`, no OAuth)
+- Graph-query tools live in `tools/orbit/` (`gitlab_blast_radius`, `gitlab_cross_project_callers`, `gitlab_recent_deploys`, `gitlab_pipeline_failures`, `gitlab_recent_vulnerabilities`, `gitlab_graph_schema`, `gitlab_orbit_query_graph`), with the DSL builders in `tools/orbit/dsl.ts`
+- The `graph_analysis` action category was added to `agents/incident-analyzer/tools/gitlab-api.yaml`
+- Orbit coexists with the proxy: writes/live-status stay on `/api/v4/mcp`; Orbit (`/api/v4/orbit/*`) owns cross-project traversal only
+- Layer B adds typed `OrbitFindings` + correlation rules (`orbit-deploy-blast-radius-vs-elastic`, etc.) in `packages/agent/`
+
+See the SIO-1076 plan and `project_gitlab_orbit_positioning` memory for the full design.
 
 ## Verification
 

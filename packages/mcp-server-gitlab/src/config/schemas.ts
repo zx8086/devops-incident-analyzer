@@ -29,6 +29,29 @@ export const ConfigSchema = z.object({
 		})
 		.describe("GitLab API configuration"),
 
+	// SIO-1076: GitLab Orbit cross-project knowledge graph. REST-only integration
+	// (POST /orbit/query billed; GET /orbit/{status,schema} free), authenticated
+	// with the same PAT (read_api scope) as the code-analysis tools. Orbit owns
+	// cross-project traversal; the local KG stays incident/IaC-only.
+	orbit: z
+		.object({
+			enabled: z.boolean().describe("Enable GitLab Orbit knowledge-graph tools (Beta; off by default)"),
+			personalAccessToken: z
+				.string()
+				.optional()
+				.describe("Dedicated Orbit PAT (read_api scope); falls back to the GitLab PAT when unset"),
+			queryPath: z.string().startsWith("/").describe("Orbit REST query endpoint path (billed)"),
+			schemaPath: z.string().startsWith("/").describe("Orbit REST schema endpoint path (free)"),
+			statusPath: z.string().startsWith("/").describe("Orbit REST indexing-status endpoint path (free)"),
+			timeout: z.number().min(1000).max(60000).describe("Orbit REST request timeout in milliseconds"),
+			maxQueriesPerRun: z
+				.number()
+				.int()
+				.min(0)
+				.describe("Hard cap on paid /orbit/query calls per agent run (credit guard)"),
+		})
+		.describe("GitLab Orbit knowledge-graph configuration"),
+
 	tracing: z
 		.object({
 			enabled: z.boolean().describe("Enable LangSmith tracing"),

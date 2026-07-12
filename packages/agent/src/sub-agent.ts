@@ -361,8 +361,13 @@ const MIN_FILTERED_TOOLS = 1;
 // call 404'd. Union these in before the MAX_TOOLS_PER_AGENT slice so the agent
 // can always search-first. Keep the count small (gitlab code_analysis=5 + this=1
 // is well under 25).
+// SIO-1076: also always include the Orbit entry points -- gitlab_graph_schema
+// (FREE, grounds the graph) and gitlab_blast_radius (the marquee cross-project
+// case). These are group-scoped and need NO project resolution, so they must
+// stay reachable even when the action filter picks code_analysis. If Orbit is
+// disabled the tools are simply absent from allTools and this is a no-op.
 const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
-	gitlab: ["gitlab_search"],
+	gitlab: ["gitlab_search", "gitlab_graph_schema", "gitlab_blast_radius"],
 };
 
 // SIO-1029: union the datasource's always-include resolution tools into a

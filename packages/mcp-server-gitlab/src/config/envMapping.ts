@@ -28,6 +28,19 @@ export const envMapping: readonly EnvMappingEntry[] = [
 		default: configDefaults.gitlab.oauthCallbackPort,
 	},
 
+	// orbit (SIO-1076)
+	{ configPath: "orbit.enabled", envVar: "ORBIT_ENABLED", default: configDefaults.orbit.enabled },
+	{ configPath: "orbit.personalAccessToken", envVar: "ORBIT_PERSONAL_ACCESS_TOKEN", default: "" },
+	{ configPath: "orbit.queryPath", envVar: "ORBIT_QUERY_PATH", default: configDefaults.orbit.queryPath },
+	{ configPath: "orbit.schemaPath", envVar: "ORBIT_SCHEMA_PATH", default: configDefaults.orbit.schemaPath },
+	{ configPath: "orbit.statusPath", envVar: "ORBIT_STATUS_PATH", default: configDefaults.orbit.statusPath },
+	{ configPath: "orbit.timeout", envVar: "ORBIT_TIMEOUT", default: configDefaults.orbit.timeout },
+	{
+		configPath: "orbit.maxQueriesPerRun",
+		envVar: "ORBIT_MAX_QUERIES_PER_RUN",
+		default: configDefaults.orbit.maxQueriesPerRun,
+	},
+
 	// tracing
 	{ configPath: "tracing.enabled", envVar: "LANGSMITH_TRACING", default: configDefaults.tracing.enabled },
 	{ configPath: "tracing.apiKey", envVar: "LANGSMITH_API_KEY", default: "" },
