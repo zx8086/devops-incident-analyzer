@@ -17,43 +17,62 @@ distribution, and surface diagnostic information for incident analysis.
 
 Application errors from OTel services live in `logs-apm.error-*`, keyed on
 `service.name` (keyword; use `service.name`, never `service.name.keyword`). Match
-error text on `error.exception.message` (never `body.text`/`message.text`).
+error text with `match_phrase` on `error.exception.message` (it is analyzed text,
+so plain `match` matches individual tokens and false-positives; never use
+`body.text`/`message.text`). The `<angle-bracket>` values below are PLACEHOLDERS --
+substitute the current incident's deployment, service name, error text, and window
+before running. Both queries carry `track_total_hits: true` so the count is exact
+(without it `hits.total` caps at 10000 with `relation: gte`); always bound to the
+incident `@timestamp` window so an old document can't falsely mark the service
+present or the error observed.
 
-STEP 1 -- run this exact query (copy it, swap the service name):
+STEP 1 -- is the service present in the incident window?
 ```json
-{ "deployment": "eu-b2b", "index": "logs-apm.error-*", "size": 5,
-  "query": { "term": { "service.name": "prana-order-service" } },
+{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
+  "track_total_hits": true,
+  "query": { "bool": { "filter": [
+    { "term": { "service.name": "<service-name>" } },
+    { "range": { "@timestamp": { "gte": "<incident-start>", "lte": "<incident-end>" } } } ] } },
   "sort": [ { "@timestamp": "desc" } ] }
 ```
-- Hits (>=1) => the service IS PRESENT. Go to STEP 2. Do NOT run the discovery
-  aggregation and do NOT search other index patterns to "double-check".
+- Hits (>=1) => the service IS PRESENT. Go to STEP 2. Do NOT run discovery and do
+  NOT search other index patterns to "double-check".
 - Zero hits => go to STEP 3 (discovery).
 
 STEP 2 -- confirm the cited error on that service (scoped so another service's
 error can't be mistaken for it):
 ```json
-{ "deployment": "eu-b2b", "index": "logs-apm.error-*", "size": 5,
-  "query": { "bool": { "must": [
-    { "term": { "service.name": "prana-order-service" } },
-    { "match": { "error.exception.message": "AFS Season code not found" } } ] } },
+{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
+  "track_total_hits": true,
+  "query": { "bool": {
+    "must": [ { "match_phrase": { "error.exception.message": "<cited-error>" } } ],
+    "filter": [
+      { "term": { "service.name": "<service-name>" } },
+      { "range": { "@timestamp": { "gte": "<incident-start>", "lte": "<incident-end>" } } } ] } },
   "sort": [ { "@timestamp": "desc" } ] }
 ```
-- Hits => report the error message, count, and timestamps (stack trace is under
-  `error.exception.stacktrace.*`). STOP -- you are done.
+- Hits => report the error message, exact count, and timestamps (stack trace is
+  under `error.exception.stacktrace.*`). STOP -- you are done.
 - Zero => report "service present, cited error not observed in window" (NOT
   "absent"). STOP.
 
-STEP 3 -- only reached when STEP 1 was zero. Run ONE discovery aggregation to
-resolve the real name (the incident name is often prefixed, e.g. `styles-v3` ->
-`pvh-services-styles-v3`):
+STEP 3 -- only reached when STEP 1 was zero. Resolve the real name (the incident
+name is often prefixed, e.g. `styles-v3` -> `pvh-services-styles-v3`) with a
+discovery aggregation FILTERED to the anchor -- a plain top-N terms agg is NOT
+exhaustive (a low-volume service falls outside the top buckets), so filter by a
+`service.name` wildcard on the anchor token so every matching name is returned:
 ```json
-{ "deployment": "eu-b2b", "index": "logs-*,logs-apm.*", "size": 0,
-  "aggs": { "by_service": { "terms": { "field": "service.name", "size": 50 } } } }
+{ "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 0,
+  "query": { "wildcard": { "service.name": "*<anchor-token>*" } },
+  "aggs": { "by_service": { "terms": { "field": "service.name", "size": 100 } } } }
 ```
-- If a returned bucket matches the anchor (bare OR prefixed form), re-run STEP 1
-  with that real name.
-- If no bucket matches, THEN report the service absent. This is the ONLY path to an
-  "absent"/"0 hits" conclusion.
+- A bucket matches the anchor (bare OR prefixed form) AND you have NOT already run
+  STEP 1 with it => re-run STEP 1 with that real name.
+- A bucket matches but it is the SAME name STEP 1 already returned zero for =>
+  terminal: report "service discovered in logs but no matching APM error documents
+  in the window" (NOT generic "absent").
+- No bucket matches the anchor at all => THEN report the service absent. This is the
+  ONLY path to an "absent"/"0 hits" conclusion.
 
 THE ONE RULE THAT OVERRIDES EVERYTHING: once any STEP-1 query returns a hit, the
 service is present -- that is final. A later empty query never flips it back to
