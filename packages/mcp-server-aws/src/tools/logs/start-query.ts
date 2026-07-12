@@ -73,11 +73,12 @@ export function decideQueryWindow(startTime: number, endTime: number, floor: num
 // training prior mis-dates "now", producing a window entirely outside retention and repeated
 // MalformedQueryException. This deterministic guard cannot be overridden by the model: when the
 // requested window ends before the retention floor BUT shifting it forward by whole CALENDAR years
-// lands it inside [floor, now], the year was almost certainly shifted -- snap forward by the
+// lands it wholly inside [floor, now], the year was almost certainly shifted -- snap forward by the
 // minimal number of years that fixes it. It never touches an already-valid window (endTime >= floor)
-// and never produces a future-dated window (shifted startTime must stay <= now). A genuinely-old
-// window that no shift can fix is returned unchanged so the existing reject path handles it.
-// Calendar-year shifting via setUTCFullYear keeps leap-year dates correct (Feb-29 clamps sanely).
+// and never produces a future-dated window (BOTH shifted start AND shifted end must stay <= now). A
+// genuinely-old window that no shift can fix is returned unchanged so the existing reject path
+// handles it. Calendar-year shifting via setUTCFullYear keeps leap-year dates real (Feb-29 rolls to
+// Mar-1 in a non-leap target year, which is still a valid, in-range instant).
 const MAX_YEAR_SHIFT = 5;
 
 function shiftYears(epochSeconds: number, years: number): number {
@@ -99,9 +100,10 @@ export function correctYearDrift(
 	for (let years = 1; years <= MAX_YEAR_SHIFT; years++) {
 		const shiftedStart = shiftYears(startTime, years);
 		const shiftedEnd = shiftYears(endTime, years);
-		// Accept the smallest shift that brings the window into [floor, now]: end must reach the
-		// retained slice, and start must not run past "now" (never fabricate a future window).
-		if (shiftedEnd >= floor && shiftedStart <= nowSeconds) {
+		// Accept the smallest shift that brings the window wholly into [floor, now]: end must reach
+		// the retained slice (>= floor) AND neither bound may run past "now" -- shiftedEnd <= now
+		// ensures we never hand CloudWatch a future-dated endTime.
+		if (shiftedEnd >= floor && shiftedEnd <= nowSeconds && shiftedStart <= nowSeconds) {
 			return { startTime: shiftedStart, endTime: shiftedEnd, shiftedYears: years };
 		}
 	}
@@ -187,6 +189,8 @@ export function startQuery(config: AwsConfig) {
 							shiftedYears: drift.shiftedYears,
 							requestedStart: new Date(effectiveStart * 1000).toISOString(),
 							correctedStart: new Date(drift.startTime * 1000).toISOString(),
+							requestedEnd: new Date(effectiveEnd * 1000).toISOString(),
+							correctedEnd: new Date(drift.endTime * 1000).toISOString(),
 						},
 						"Corrected a year-shifted CloudWatch query window (likely LLM mis-dated the incident year)",
 					);

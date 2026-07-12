@@ -31,9 +31,11 @@ describe("buildFocusBlock current-time anchor (SIO-1079)", () => {
 	});
 
 	test("SIO-1080: the asserted year tracks nowIso (not hardcoded)", () => {
-		const block2027 = buildFocusBlock(undefined, "2027-01-02T00:00:00.000Z");
-		expect(block2027).toContain("2027");
-		expect(block2027).not.toContain("current year is 2026");
+		const low2027 = buildFocusBlock(undefined, "2027-01-02T00:00:00.000Z").toLowerCase();
+		// Assert the rendered year-assertion sentence, not the echoed nowIso -- so the test fails
+		// if currentYear regresses to a hardcoded value.
+		expect(low2027).toContain("the current year is 2027");
+		expect(low2027).not.toContain("the current year is 2026");
 	});
 
 	test("includes both the time anchor and the focus when focus is present", () => {

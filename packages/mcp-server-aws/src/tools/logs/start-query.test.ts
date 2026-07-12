@@ -137,17 +137,19 @@ describe("correctYearDrift (SIO-1080)", () => {
 		expect(res.startTime).toBeLessThanOrEqual(nowMar);
 	});
 
-	test("does not shift a window whose start would land in the future", () => {
-		// end is below floor, but the only shift that lifts end above floor pushes start past now.
-		// Guard must not produce a future-dated window.
-		const start = utc(2025, 12, 31, 23, 0, 0);
-		const end = utc(2025, 12, 31, 23, 30, 0);
-		// now is early 2026; a +1y shift would put start in Dec 2026 (future). Must NOT shift.
-		const nowEarly = utc(2026, 1, 5, 12, 0, 0);
-		const floorEarly = nowEarly - 60 * DAY; // ~2025-11-06
+	test("does not shift when every in-range shift would push the window past now (no future-dated window)", () => {
+		// The window's end IS below floor (so the loop runs), but retention is tiny and the window
+		// is ~1 year back, so any shift that lifts end to/above floor also pushes it past now. The
+		// guard must refuse to fabricate a future-dated window and return shiftedYears 0.
+		const nowEarly = utc(2026, 1, 10, 12, 0, 0); // 2026-01-10
+		const floorEarly = nowEarly - 5 * DAY; // ~2026-01-05 (5-day retention)
+		const start = utc(2025, 1, 15, 0, 0, 0); // 2025-01-15
+		const end = utc(2025, 1, 15, 1, 0, 0);
+		expect(end).toBeLessThan(floorEarly); // precondition: loop is actually entered
 		const res = correctYearDrift(start, end, floorEarly, nowEarly);
-		// The 2025-12-31 window is already >= floor (~2025-11-06), so it's valid: no shift.
 		expect(res.shiftedYears).toBe(0);
+		expect(res.startTime).toBe(start);
+		expect(res.endTime).toBe(end);
 	});
 
 	test("unbounded floor (-Infinity) never shifts", () => {
