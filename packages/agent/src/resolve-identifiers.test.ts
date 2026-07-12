@@ -99,14 +99,21 @@ describe("gating and helpers", () => {
 });
 
 describe("resolveIdentifiers node", () => {
-	test("returns {} when disabled", async () => {
+	test("returns {} (pure no-op, does not touch state) when disabled", async () => {
 		process.env.RESOLVE_IDENTIFIERS_ENABLED = "false";
 		expect(await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }))).toEqual({});
 	});
 
-	test("returns {} when there is no focus service", async () => {
+	test("CLEARS stale resolvedIdentifiers when there is no focus service", async () => {
 		const state = makeState({ investigationFocus: undefined });
-		expect(await resolveIdentifiers(state)).toEqual({});
+		expect(await resolveIdentifiers(state)).toEqual({ resolvedIdentifiers: undefined });
+	});
+
+	test("CLEARS stale resolvedIdentifiers when this turn produces no candidates", async () => {
+		// enabled, focus present, elastic in scope, but the probe returns nothing.
+		toolRegistry.elastic = [{ name: "elasticsearch_search", invoke: async () => elasticAggPayload([]) }];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+		expect(result).toEqual({ resolvedIdentifiers: undefined });
 	});
 
 	test("resolves elastic service.name from the discovery agg", async () => {
@@ -152,9 +159,10 @@ describe("resolveIdentifiers node", () => {
 				},
 			},
 		];
-		// aws in scope but awsTargetEstates empty -> probe returns nothing, no throw.
+		// aws in scope but awsTargetEstates empty -> probe returns nothing, no throw;
+		// with a valid focus this turn, stale prior resolution is cleared.
 		const result = await resolveIdentifiers(makeState({ targetDataSources: ["aws"], awsTargetEstates: [] }));
-		expect(result).toEqual({});
+		expect(result).toEqual({ resolvedIdentifiers: undefined });
 	});
 
 	test("a failing probe omits its datasource but others still resolve", async () => {
@@ -175,11 +183,6 @@ describe("resolveIdentifiers node", () => {
 		const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic", "couchbase"] }));
 		expect(result.resolvedIdentifiers?.elastic).toBeUndefined();
 		expect(result.resolvedIdentifiers?.couchbase?.scopes).toEqual({ orders: ["order_lines"] });
-	});
-
-	test("returns {} when every in-scope probe yields nothing", async () => {
-		toolRegistry.elastic = [{ name: "elasticsearch_search", invoke: async () => elasticAggPayload([]) }];
-		expect(await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }))).toEqual({});
 	});
 
 	test("kafka probe never passes a `filter` regex arg (avoids -32603)", async () => {

@@ -47,12 +47,11 @@ function collectBucketKeys(node: Record<string, unknown>): string[] {
 	return out;
 }
 
-// COUCHBASE: capella_get_scopes_and_collections returns a text tree:
-//   📁 Scope: <name>
-//     └─ 📄 Collection: <name>
-//     └─ (No collections)
-// Match on the "Scope:" / "Collection:" substrings (not the emoji bytes) so the
-// parser survives whitespace/emoji drift.
+// COUCHBASE: capella_get_scopes_and_collections returns a text tree with a
+// "[folder icon] Scope: <name>" line per scope and an indented
+// "[page icon] Collection: <name>" line per collection ("(No collections)" for
+// empty scopes). Match on the "Scope:" / "Collection:" substrings (not the
+// leading glyph bytes) so the parser survives whitespace/glyph drift.
 export function parseCouchbaseScopeTree(normalized: string): Record<string, string[]> {
 	const scopes: Record<string, string[]> = {};
 	let current: string | null = null;

@@ -91,9 +91,14 @@ export async function resolveIdentifiers(
 	state: AgentStateType,
 	_config?: RunnableConfig,
 ): Promise<Partial<AgentStateType>> {
+	// Disabled: pure no-op -- never touch state (the node effectively doesn't exist).
 	if (!isResolveIdentifiersEnabled()) return {};
+	// Enabled but nothing to resolve this turn: CLEAR any prior-turn resolution so a
+	// stale result can't render as "probed this turn". The replace reducer only
+	// overwrites on a returned key, so an empty {} would silently keep the old value
+	// -- which the stamp guard would still accept when focus.services is unchanged.
 	const focus = state.investigationFocus;
-	if (!focus || focus.services.length === 0) return {};
+	if (!focus || focus.services.length === 0) return { resolvedIdentifiers: undefined };
 
 	const inScope = new Set(computeTargetSources(state));
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
@@ -105,7 +110,7 @@ export async function resolveIdentifiers(
 	if (inScope.has("gitlab")) probes.push(safeProbe("gitlab", () => probeGitlab(focus.services)));
 	if (inScope.has("atlassian")) probes.push(safeProbe("atlassian", () => probeAtlassian(focus.services)));
 
-	if (probes.length === 0) return {};
+	if (probes.length === 0) return { resolvedIdentifiers: undefined };
 
 	const settled = await Promise.allSettled(probes);
 	const merged: ResolvedIdentifiers = {
@@ -119,7 +124,7 @@ export async function resolveIdentifiers(
 			any = true;
 		}
 	}
-	if (!any) return {};
+	if (!any) return { resolvedIdentifiers: undefined };
 
 	logger.info(
 		{
@@ -130,8 +135,6 @@ export async function resolveIdentifiers(
 	);
 	return { resolvedIdentifiers: merged };
 }
-
-// --- probe wrappers ---------------------------------------------------------
 
 async function safeProbe(
 	dataSourceId: string,
@@ -165,8 +168,6 @@ function toolFor(dataSourceId: string, name: string): StructuredToolInterface | 
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
 
-// --- per-datasource probes --------------------------------------------------
-
 async function probeElastic(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return {};
@@ -176,18 +177,25 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 		size: 0,
 		aggs: { by_service: { terms: { field: "service.name", size: 50 } } },
 	};
+	// Probe deployments in PARALLEL: they share one PROBE_TIMEOUT_MS budget, so a
+	// sequential loop would compound latency and time the whole probe out (dropping
+	// every partial result) on multi-deployment setups.
+	const settled = await Promise.allSettled(
+		deployments.map((deploymentId) =>
+			deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+		),
+	);
 	const all: string[] = [];
-	for (const deploymentId of deployments) {
-		const run = deploymentId
-			? () => withElasticDeployment(deploymentId, () => tool.invoke(args))
-			: () => tool.invoke(args);
-		try {
-			const raw = await run();
-			all.push(...parseElasticServiceAgg(normalizeToolContent(raw)));
-		} catch (err) {
-			logger.warn({ deploymentId, error: msg(err) }, "elastic discovery probe failed for deployment");
+	settled.forEach((r, i) => {
+		if (r.status === "fulfilled") {
+			all.push(...parseElasticServiceAgg(normalizeToolContent(r.value)));
+		} else {
+			logger.warn(
+				{ deploymentId: deployments[i], error: msg(r.reason) },
+				"elastic discovery probe failed for deployment",
+			);
 		}
-	}
+	});
 	const serviceNames = pickServiceCandidates(all, focusServices);
 	return serviceNames.length > 0 ? { elastic: { serviceNames } } : {};
 }
@@ -214,16 +222,21 @@ async function probeAws(state: AgentStateType, focusServices: string[]): Promise
 	// here: aws_ecs_list_services requires a `cluster` arg (a prior list-clusters
 	// hop), too heavy for a cheap pre-fan-out probe -- the aws-agent RULES.md
 	// (SIO-1084) drives the ECS -> awslogs-group derivation on the sub-agent side.
+	// Probe estates in PARALLEL (they share one PROBE_TIMEOUT_MS budget, so a
+	// sequential loop would compound latency across estates).
+	const estates = state.awsTargetEstates;
+	const settled = await Promise.allSettled(
+		estates.map((estate) => withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 }))),
+	);
 	const logGroups: string[] = [];
-	for (const estate of state.awsTargetEstates) {
-		try {
-			const raw = await withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 }));
-			const parsed = parseAwsLogGroups(safeJson(normalizeToolContent(raw)));
+	settled.forEach((r, i) => {
+		if (r.status === "fulfilled") {
+			const parsed = parseAwsLogGroups(safeJson(normalizeToolContent(r.value)));
 			logGroups.push(...parsed.logGroups.filter((n) => matchesFocus(n, focusServices)));
-		} catch (err) {
-			logger.warn({ estate, error: msg(err) }, "aws log-group probe failed for estate");
+		} else {
+			logger.warn({ estate: estates[i], error: msg(r.reason) }, "aws log-group probe failed for estate");
 		}
-	}
+	});
 	return logGroups.length > 0 ? { aws: { logGroups: dedupe(logGroups) } } : {};
 }
 
@@ -327,8 +340,6 @@ async function probeAtlassian(focusServices: string[]): Promise<Partial<Resolved
 		? { atlassian: { jiraProjectKeys: dedupe(jiraProjectKeys), confluenceSpaceKeys: dedupe(confluenceSpaceKeys) } }
 		: {};
 }
-
-// --- helpers ----------------------------------------------------------------
 
 function longestToken(focusServices: string[]): string | undefined {
 	const tokens = focusServices.flatMap((s) => [...tokenize(s)]);
