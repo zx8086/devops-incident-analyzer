@@ -90,8 +90,26 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				lines.push(
 					"- Couchbase scopes -> collections (query with a collection-only FROM and the matching scope_name; do NOT write a bucket.scope.collection path):",
 				);
+				// SIO-1087: tag each collection [indexed] vs [NO INDEX] when the index probe ran, so
+				// the agent runs a plain SELECT only on indexed collections and reaches for key-based
+				// lookup (capella_get_document_by_id / USE KEYS) on the rest -- instead of SELECT *-ing
+				// index-less collections and generating "no index available" planning failures. Keep
+				// EVERY collection listed (a collection with data but no index is itself a finding).
+				const indexedByScope = resolved.couchbase.indexedCollections;
+				const indexProbeRan = indexedByScope !== undefined;
 				for (const [scope, collections] of Object.entries(resolved.couchbase.scopes)) {
-					lines.push(`    ${scope}: [${collections.join(", ")}]`);
+					if (!indexProbeRan) {
+						lines.push(`    ${scope}: [${collections.join(", ")}]`);
+						continue;
+					}
+					const indexedSet = new Set(indexedByScope[scope] ?? []);
+					const tagged = collections.map((c) => (indexedSet.has(c) ? `${c} [indexed]` : `${c} [NO INDEX]`));
+					lines.push(`    ${scope}: [${tagged.join(", ")}]`);
+				}
+				if (indexProbeRan) {
+					lines.push(
+						"    A [NO INDEX] collection has no queryable index -- do NOT SELECT * from it (it throws a 'no index available' planning failure). Use capella_get_document_by_id / USE KEYS, or report the missing index as a finding. Run plain SELECTs only on [indexed] collections.",
+					);
 				}
 			}
 			break;

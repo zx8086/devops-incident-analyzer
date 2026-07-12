@@ -54,6 +54,8 @@ export {
 	GitLabMergedRequestSchema,
 	type InvestigationFocus,
 	InvestigationFocusSchema,
+	isDegradingCategory,
+	isRetryableCategory,
 	type KafkaFindings,
 	KafkaFindingsSchema,
 	type MitigationSteps,
@@ -74,9 +76,12 @@ export {
 	ResolvedIdentifiersSchema,
 	type StreamEvent,
 	StreamEventSchema,
+	TOOL_ERROR_KIND_TO_CATEGORY,
 	type ToolError,
 	type ToolErrorCategory,
 	ToolErrorCategorySchema,
+	type ToolErrorKind,
+	ToolErrorKindSchema,
 	ToolErrorSchema,
 	type ToolOutput,
 	ToolOutputSchema,
@@ -234,6 +239,12 @@ export {
 	traceSpan,
 } from "./telemetry/telemetry.ts";
 export { installToolCallLogging, type ToolCallLogger } from "./tool-call-logging.ts";
+export {
+	buildToolErrorEnvelope,
+	mapHttpStatusToKind,
+	type StructuredToolError,
+	type ToolErrorEnvelope,
+} from "./tool-error.ts";
 export {
 	type ConnectionContext,
 	createServerTracing,

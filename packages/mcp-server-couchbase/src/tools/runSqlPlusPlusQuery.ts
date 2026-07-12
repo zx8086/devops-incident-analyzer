@@ -3,9 +3,11 @@
 // IMPORTANT: When using the SDK's scope context, queries must only reference the collection name in the FROM clause.
 // Example: SELECT COUNT(*) FROM `_default` (NOT FROM `bucket`.`scope`.`collection`)
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
 import { AppError } from "../lib/errors";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
@@ -68,8 +70,15 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 		// execute query" that told the LLM nothing.
 		const cause = error instanceof AppError ? error.originalError : undefined;
 		const message = cause?.message ?? (error instanceof Error ? error.message : String(error));
+		// SIO-1087: classify on the SDK error CLASS + N1QL first_error_code (not the message
+		// string) and emit the shared { _error: { kind, category } } envelope. A "no index
+		// available" planning failure becomes kind "no-index" (category no-data) so the agent
+		// treats it as a routine discovery outcome that does NOT cap confidence, rather than a
+		// generic "unknown" tool malfunction. The human text still carries the N1QL detail.
+		const kind = classifyCouchbaseError(error);
+		const envelope = buildToolErrorEnvelope({ kind, message: `Failed to execute query: ${message}` });
 		return {
-			content: [{ type: "text" as const, text: `Failed to execute query: ${message}` }],
+			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,
 		};
 	}

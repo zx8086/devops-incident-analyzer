@@ -1,6 +1,6 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
-import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
+import { type DataSourceResult, isDegradingCategory, redactPiiContent } from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -548,6 +548,56 @@ export function rewritePrematureAbsence(answer: string, contradicted: string[], 
 		.join("\n");
 }
 
+// SIO-1087 (Fix D): a confident POSITIVE root-cause MECHANISM claim that no tool output supports.
+// The prana-order-service report asserted "Couchbase schema field-name mismatch" and "AWS epoch-0
+// log-group metadata corruption" -- both narrated on top of query FAILURES, neither observed in any
+// returned document/row. The existing guards catch ABSENCE over-claims; this catches fabricated
+// PRESENCE-of-mechanism claims. Mirrors detectUngroundedExpiry: scan the Root Cause section, flag a
+// specific-mechanism line, and soften (not delete -- "ungrounded as stated" != proven false) unless
+// a tool output actually returned data that could carry the evidence.
+const ROOT_CAUSE_HEADING_RE = /^#{1,6}\s+root cause/im;
+
+// Specific mechanism claims that require observed evidence (a returned schema/document/error), not
+// just a query that failed. Deliberately narrow (like SIO-1013's PERMISSION_DENIAL_RE) to avoid
+// over-firing on legitimate, evidence-backed root causes.
+const UNGROUNDED_MECHANISM_RE =
+	/\b(schema mismatch|field names? (?:do not|don't|does not|doesn't) exist|wrong field names?|metadata corruption|epoch[- ]?0|corrupt(?:ed)? metadata|schema (?:drift|change))\b/i;
+
+export function detectUngroundedRootCause(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
+	// If ANY datasource actually returned data this turn, a mechanism claim could plausibly be
+	// grounded in it -- do not flag (conservative, mirrors detectUngroundedExpiry's expiryObserved).
+	const anyDataReturned = results.some((r) => dataSourceReturnedData(r));
+	if (anyDataReturned) return { ungrounded: [] };
+
+	const lines = answer.split("\n");
+	const ungrounded: string[] = [];
+	let sectionLevel: number | null = null;
+	for (const line of lines) {
+		const level = headingLevel(line);
+		if (level !== null) {
+			if (sectionLevel !== null && level <= sectionLevel) sectionLevel = null;
+			if (ROOT_CAUSE_HEADING_RE.test(line)) sectionLevel = level;
+			continue;
+		}
+		if (sectionLevel !== null && UNGROUNDED_MECHANISM_RE.test(line)) {
+			ungrounded.push(line);
+		}
+	}
+	return { ungrounded };
+}
+
+const UNGROUNDED_ROOT_CAUSE_SUFFIX =
+	" [UNVERIFIED: this specific mechanism was not observed in any returned document/row/error this turn -- the queries against the relevant datasource FAILED rather than returning contradicting data, so this root cause is inferred, not confirmed. Confirm by retrieving the actual schema/records before acting on it.]";
+
+export function rewriteUngroundedRootCause(answer: string, ungrounded: string[]): string {
+	if (ungrounded.length === 0) return answer;
+	const flagged = new Set(ungrounded);
+	return answer
+		.split("\n")
+		.map((line) => (flagged.has(line) ? line + UNGROUNDED_ROOT_CAUSE_SUFFIX : line))
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -645,7 +695,12 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const TOOL_ERROR_CONFIDENCE_CAP = 0.59;
 	const degradedSubAgents = results
 		.map((r) => {
-			const errorCount = r.toolErrors?.length ?? 0;
+			// SIO-1087: only count DEGRADING tool errors toward the rate. A routine discovery
+			// outcome -- a collection with no index (no-data) or a resource that does not exist
+			// (not-found) -- is a finding, not a malfunction, and must not drag confidence below
+			// the HITL gate. isDegradingCategory excludes those; a toolError with no category
+			// (regex-fallback path) still counts, preserving prior behaviour.
+			const errorCount = (r.toolErrors ?? []).filter((e) => isDegradingCategory(e.category)).length;
 			const messageCount = r.messageCount ?? 0;
 			if (messageCount === 0 || errorCount === 0) return null;
 			const rate = errorCount / messageCount;
@@ -684,12 +739,18 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const { contradicted, overgeneralized } = detectPrematureAbsence(answer, results);
 	const prematureAbsenceCapTriggered = contradicted.length > 0 || overgeneralized.length > 0;
 
+	// SIO-1087 (Fix D): a Root Cause line asserting a specific mechanism (schema mismatch, field
+	// names absent, metadata corruption, epoch-0) that no returned data supports. Cap + soften.
+	const { ungrounded: ungroundedRootCause } = detectUngroundedRootCause(answer, results);
+	const ungroundedRootCauseCapTriggered = ungroundedRootCause.length > 0;
+
 	const anyCapTriggered =
 		degradedSubAgents.length > 0 ||
 		gapsCapTriggered ||
 		ungroundedCapTriggered ||
 		expiryCapTriggered ||
-		prematureAbsenceCapTriggered;
+		prematureAbsenceCapTriggered ||
+		ungroundedRootCauseCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -745,6 +806,18 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	if (ungroundedRootCauseCapTriggered) {
+		logger.warn(
+			{
+				ungroundedRootCause: ungroundedRootCause.length,
+				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Aggregator asserted a specific root-cause mechanism no returned data supports; softening + capping confidence",
+		);
+	}
+
 	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
 	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
 	// SIO-1079: and rewrite any ungrounded "logs expired" bullets. Chain both rewrites.
@@ -756,9 +829,21 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const rewrittenForGrounding = prematureAbsenceCapTriggered
 		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
 		: rewrittenForExpiry;
-	const finalAnswer = anyCapTriggered
-		? rewriteConfidenceInAnswer(rewrittenForGrounding, cappedScore)
+	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
+	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
+	// have appended a suffix to a flagged root-cause line, so matching the ORIGINAL line strings
+	// against rewrittenForGrounding would miss it (exact-string Set lookup) -- the cap would apply
+	// with no visible "[UNVERIFIED...]" annotation on that line. Detecting on the mutated text
+	// keeps the match set aligned with what is actually being rewritten.
+	const rewrittenForRootCause = ungroundedRootCauseCapTriggered
+		? rewriteUngroundedRootCause(
+				rewrittenForGrounding,
+				detectUngroundedRootCause(rewrittenForGrounding, results).ungrounded,
+			)
 		: rewrittenForGrounding;
+	const finalAnswer = anyCapTriggered
+		? rewriteConfidenceInAnswer(rewrittenForRootCause, cappedScore)
+		: rewrittenForRootCause;
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },

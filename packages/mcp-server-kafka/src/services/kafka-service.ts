@@ -1,5 +1,6 @@
 // src/services/kafka-service.ts
 
+import type { ToolErrorKind } from "@devops-agent/shared";
 import type { Admin, Message } from "@platformatic/kafka";
 import {
 	type ConfigDescription,
@@ -36,28 +37,51 @@ const KAFKA_ERROR_NAMES: Record<number, string> = {
 	100: "UNKNOWN_TOPIC_ID",
 };
 
+// SIO-1087: map the Kafka protocol error code onto the shared ToolErrorKind so the agent can
+// classify structurally. Authorization codes -> auth-denied (non-retryable); unknown topic/
+// partition -> not-found; timeouts/leader-not-available/network -> transient. Codes not listed fall
+// through to "unknown" and the message-regex fallback.
+const KAFKA_CODE_TO_KIND: Record<number, ToolErrorKind> = {
+	1: "bad-input", // OFFSET_OUT_OF_RANGE
+	3: "not-found", // UNKNOWN_TOPIC_OR_PARTITION
+	5: "network", // LEADER_NOT_AVAILABLE
+	6: "network", // NOT_LEADER_OR_FOLLOWER
+	7: "timeout", // REQUEST_TIMED_OUT
+	9: "network", // REPLICA_NOT_AVAILABLE
+	13: "network", // NETWORK_EXCEPTION
+	17: "bad-input", // INVALID_TOPIC_EXCEPTION
+	29: "auth-denied", // TOPIC_AUTHORIZATION_FAILED
+	30: "auth-denied", // GROUP_AUTHORIZATION_FAILED
+	31: "auth-denied", // CLUSTER_AUTHORIZATION_FAILED
+	100: "not-found", // UNKNOWN_TOPIC_ID
+};
+
 interface ClassifiedKafkaError {
 	kafkaErrorCode: number | null;
 	kafkaErrorName: string | null;
+	kind: ToolErrorKind | null;
 	message: string;
 }
 
 function classifyKafkaError(err: unknown): ClassifiedKafkaError {
 	const message = err instanceof Error ? err.message : String(err);
 	if (!(err instanceof MultipleErrors)) {
-		return { kafkaErrorCode: null, kafkaErrorName: null, message };
+		return { kafkaErrorCode: null, kafkaErrorName: null, kind: null, message };
 	}
 	for (const child of err.errors) {
-		const code = (child as { errorCode?: number }).errorCode;
+		// SIO-1087: @platformatic/kafka's ProtocolError exposes the numeric code on `apiCode`; some
+		// wrapped errors use `errorCode`. Read both so a native-broker error isn't silently dropped.
+		const code = (child as { apiCode?: number }).apiCode ?? (child as { errorCode?: number }).errorCode;
 		if (typeof code === "number" && code !== 0) {
 			return {
 				kafkaErrorCode: code,
 				kafkaErrorName: KAFKA_ERROR_NAMES[code] ?? null,
+				kind: KAFKA_CODE_TO_KIND[code] ?? null,
 				message,
 			};
 		}
 	}
-	return { kafkaErrorCode: null, kafkaErrorName: null, message };
+	return { kafkaErrorCode: null, kafkaErrorName: null, kind: null, message };
 }
 
 async function getPartitionOffsetBounds(
@@ -196,6 +220,8 @@ export type GetMessageByOffsetResult =
 			code: "PARTITION_NOT_FOUND" | "TIMEOUT" | "BROKER_ERROR";
 			kafkaErrorCode?: number | null;
 			kafkaErrorName?: string | null;
+			// SIO-1087: shared ToolErrorKind derived from the Kafka protocol code.
+			kind?: ToolErrorKind | null;
 			message: string;
 	  };
 
@@ -725,6 +751,8 @@ export class KafkaService {
 				code: "BROKER_ERROR",
 				kafkaErrorCode: classified.kafkaErrorCode,
 				kafkaErrorName: classified.kafkaErrorName,
+				// SIO-1087: shared ToolErrorKind derived from the protocol code (auth/not-found/etc).
+				kind: classified.kind,
 				message: classified.message,
 			};
 		}
@@ -793,6 +821,8 @@ export class KafkaService {
 				code: "BROKER_ERROR",
 				kafkaErrorCode: classified.kafkaErrorCode,
 				kafkaErrorName: classified.kafkaErrorName,
+				// SIO-1087: shared ToolErrorKind derived from the protocol code (auth/not-found/etc).
+				kind: classified.kind,
 				message: classified.message,
 			};
 		} finally {

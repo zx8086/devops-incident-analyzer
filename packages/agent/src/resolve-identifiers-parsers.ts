@@ -74,6 +74,45 @@ export function parseCouchbaseScopeTree(normalized: string): Record<string, stri
 	return scopes;
 }
 
+// COUCHBASE (SIO-1087): capella_get_system_indexes returns the executeAnalysisQuery markdown --
+// a fenced ```json block wrapping an array of system:indexes rows. Each row has keyspace_id
+// (collection), scope_id, bucket_id, name, is_primary, and state ("online"|"deferred"|...). Return
+// scope -> the collections that have at least one ONLINE index (queryable with a plain SELECT).
+// A collection absent from the result has no index. Defensive: returns {} on any shape drift.
+export function parseCouchbaseSystemIndexes(normalized: string): Record<string, string[]> {
+	// executeAnalysisQuery wraps rows in a ```json fenced block after a "# Title" heading and
+	// followed by "## Query Execution Details" -- firstJson's slice-to-end would include the
+	// closing fence and trailing prose and fail to parse. Extract the fenced block first.
+	const fence = normalized.match(/```json\s*([\s\S]*?)```/);
+	let parsed: unknown = null;
+	if (fence?.[1]) {
+		try {
+			parsed = JSON.parse(fence[1].trim());
+		} catch {
+			parsed = null;
+		}
+	}
+	if (parsed == null) parsed = firstJson(normalized);
+	// The rows live under t.* -> flat row objects; the outer parse may be an array of rows.
+	const rows: unknown[] = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" ? [parsed] : [];
+	const indexed: Record<string, Set<string>> = {};
+	for (const row of rows) {
+		if (!row || typeof row !== "object") continue;
+		const r = row as Record<string, unknown>;
+		const scope = typeof r.scope_id === "string" ? r.scope_id : undefined;
+		const collection = typeof r.keyspace_id === "string" ? r.keyspace_id : undefined;
+		const state = typeof r.state === "string" ? r.state : undefined;
+		// Only ONLINE indexes make a collection queryable; a deferred/building index does not.
+		if (!scope || !collection || state !== "online") continue;
+		const set = indexed[scope] ?? new Set<string>();
+		set.add(collection);
+		indexed[scope] = set;
+	}
+	const out: Record<string, string[]> = {};
+	for (const [scope, set] of Object.entries(indexed)) out[scope] = [...set];
+	return out;
+}
+
 // AWS: aws_logs_describe_log_groups returns { logGroups: [{ logGroupName, ... }] }
 // OR { _error: { kind } } as a successful payload. Accepts the parsed JSON.
 export function parseAwsLogGroups(json: unknown): { logGroups: string[]; error?: string } {

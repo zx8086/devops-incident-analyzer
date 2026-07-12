@@ -2,6 +2,7 @@
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
+import { isNoIndexError } from "../lib/classifyCouchbaseError";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import type { DocumentContent } from "../lib/types";
 import { logger } from "../utils/logger";
@@ -49,7 +50,8 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket): void 
 						`No documents found in ${scopeName}.${collectionName} to infer schema.`,
 					).buildResourceResponse(uri.href);
 				} catch (queryError) {
-					if (queryError instanceof Error && queryError.message.includes("index")) {
+					// SIO-1087: classify on the SDK error class / N1QL code, not message text.
+					if (isNoIndexError(queryError)) {
 						return ResponseBuilder.error(
 							`Unable to query collection. You may need to create a primary index:\nCREATE PRIMARY INDEX ON \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\`;`,
 						).buildResourceResponse(uri.href);

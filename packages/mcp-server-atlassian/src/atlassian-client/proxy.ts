@@ -1,6 +1,6 @@
 // src/atlassian-client/proxy.ts
 
-import { OAuthRequiresInteractiveAuthError, waitForOAuthCallback } from "@devops-agent/shared";
+import { buildToolErrorEnvelope, OAuthRequiresInteractiveAuthError, waitForOAuthCallback } from "@devops-agent/shared";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -180,14 +180,18 @@ export class AtlassianMcpProxy {
 				} catch (retryError) {
 					if (retryError instanceof UnauthorizedError) {
 						log.warn({ tool: toolName }, "Still unauthorized after reauth, returning auth required error");
+						// SIO-1087: emit the shared structured envelope so the agent classifies this as
+						// kind "auth-expired" (category session, NON-retryable). Previously the bare
+						// "ATLASSIAN_AUTH_REQUIRED ... authorization expired" string matched no auth/
+						// session regex and fell through to unknown+retryable -- a real auth failure
+						// treated as a routine transient error.
+						const envelope = buildToolErrorEnvelope({
+							kind: "auth-expired",
+							message: "ATLASSIAN_AUTH_REQUIRED: Atlassian authorization expired. Please re-authenticate.",
+						});
 						return {
 							isError: true,
-							content: [
-								{
-									type: "text",
-									text: "ATLASSIAN_AUTH_REQUIRED: Atlassian authorization expired. Please re-authenticate.",
-								},
-							],
+							content: [{ type: "text", text: JSON.stringify(envelope) }],
 						};
 					}
 					throw retryError;

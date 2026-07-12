@@ -22,6 +22,7 @@ import {
 	parseAtlassianSpaces,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
+	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
 	parseGitlabProjects,
 	parseKafkaConsumerGroups,
@@ -249,12 +250,36 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 }
 
 async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
-	const tool = toolFor("couchbase", "capella_get_scopes_and_collections");
-	if (!tool) return {};
-	const raw = await tool.invoke({});
-	const scopes = parseCouchbaseScopeTree(normalizeToolContent(raw));
-	// Inject the ENTIRE map -- enumerating what exists is the fix; do not filter.
-	return Object.keys(scopes).length > 0 ? { couchbase: { scopes } } : {};
+	const scopesTool = toolFor("couchbase", "capella_get_scopes_and_collections");
+	if (!scopesTool) return {};
+	// SIO-1087: probe scopes AND indexes together (Promise.allSettled so an index-probe failure
+	// never blocks the scope map). The index probe tells us which collections are actually
+	// queryable, so the focus block can steer the agent away from SELECT *-ing index-less
+	// collections (the seasons.* planning-failure storm).
+	const indexesTool = toolFor("couchbase", "capella_get_system_indexes");
+	const [scopesRes, indexesRes] = await Promise.allSettled([
+		scopesTool.invoke({}),
+		indexesTool ? indexesTool.invoke({}) : Promise.reject(new Error("capella_get_system_indexes unavailable")),
+	]);
+	if (scopesRes.status !== "fulfilled") return {};
+	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
+	if (Object.keys(scopes).length === 0) return {};
+	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
+	// SIO-1087: key off the probe SUCCEEDING, not on a non-empty result. A probe that succeeds but
+	// returns zero online indexes (every collection unindexed) is the exact case the [NO INDEX]
+	// guidance must fire for -- gating on `> 0` would collapse it to `undefined` and the focus block
+	// would treat it as "probe never ran", rendering collections untagged. An empty-but-present map
+	// correctly tags every collection [NO INDEX]; a failed probe stays undefined (renders untagged).
+	let indexedCollections: Record<string, string[]> | undefined;
+	if (indexesRes.status === "fulfilled") {
+		indexedCollections = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
+	} else {
+		logger.warn(
+			{ error: msg(indexesRes.reason) },
+			"couchbase index probe failed; collections rendered without index tags",
+		);
+	}
+	return { couchbase: indexedCollections ? { scopes, indexedCollections } : { scopes } };
 }
 
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

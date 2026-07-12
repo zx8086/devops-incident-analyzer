@@ -38,6 +38,7 @@ import type {
 	UpstreamHealth,
 	UpstreamTarget,
 } from "../types.js";
+import { KongMCPError } from "../utils/error-handling.js";
 import { createContextLogger } from "../utils/logger.js";
 import { PortalApi, type PortalApiOptions } from "./portal-api.js";
 
@@ -131,11 +132,18 @@ export class KongApi {
 						errorMessage += "\n\nTroubleshooting: Rate limit exceeded. Please wait before making more requests.";
 					}
 
-					throw new Error(errorMessage);
+					// SIO-1087: preserve the real axios response.status on the thrown error so the
+					// server dispatcher can classify structurally (mapHttpStatusToKind) instead of
+					// regexing "Status (\d+)" back out of the message. Previously the status was lost
+					// at this throw and only recoverable by message-regex downstream.
+					throw new KongMCPError(errorMessage, { operation: "kongRequest" }, axiosError.response.status);
 				}
 				if (axiosError.request) {
-					throw new Error(
+					// Network error -- no HTTP status. Leave statusCode undefined so it classifies as
+					// a network/transient kind rather than a bad-input.
+					throw new KongMCPError(
 						"Network Error: No response received from Kong API. Please check your network connection and API endpoint configuration.",
+						{ operation: "kongRequest" },
 					);
 				}
 			}

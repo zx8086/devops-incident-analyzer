@@ -2,6 +2,7 @@
 
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
+import { isNotFoundError } from "../lib/classifyCouchbaseError";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import type { DocumentContent } from "../lib/types";
 import { logger } from "../utils/logger";
@@ -23,7 +24,8 @@ export function registerDocumentResource(server: McpServer, bucket: Bucket): voi
 					const doc = await bucket.scope(scopeName).collection(collectionName).get(docId);
 					return ResponseBuilder.success(doc.content as DocumentContent, "json").buildResourceResponse(uri.href);
 				} catch (error) {
-					if (error instanceof Error && error.message.includes("not found")) {
+					// SIO-1087: classify on the SDK error class (DocumentNotFoundError), not message text.
+					if (isNotFoundError(error)) {
 						return ResponseBuilder.error(`Document not found: ${docId}`).buildResourceResponse(uri.href);
 					}
 					throw error;
