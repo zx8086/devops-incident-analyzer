@@ -8,12 +8,96 @@ export const ToolOutputSchema = z.object({
 });
 export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 
-export const ToolErrorCategorySchema = z.enum(["auth", "session", "transient", "unknown"]);
+// SIO-1087: the coarse bucket the aggregator/loop-guard act on. Widened beyond the original
+// auth|session|transient|unknown so a routine outcome no longer masquerades as a failure:
+//   not-found  -- a named resource/index does not exist. NON-retryable (retrying never resolves it),
+//                 but it is a normal finding, not a malfunction.
+//   bad-query  -- the query STRING/DSL is malformed (fix the query, not the window/retry).
+//   no-data    -- an expected discovery outcome (e.g. a collection with no index, an empty result
+//                 that is informative). MUST NOT count toward the degraded-subagent confidence cap.
+//   server-error -- upstream 5xx / $fault:"server". Retryable.
+export const ToolErrorCategorySchema = z.enum([
+	"auth",
+	"session",
+	"transient",
+	"not-found",
+	"bad-query",
+	"no-data",
+	"server-error",
+	"unknown",
+]);
 export type ToolErrorCategory = z.infer<typeof ToolErrorCategorySchema>;
+
+// SIO-1087: the fine-grained, cross-datasource error kind. Each MCP server maps its OWN SDK's
+// documented error type (couchbase instanceof + first_error_code, elastic meta.body.error.type,
+// aws err.name/$fault/httpStatusCode, kafka .code/apiCode/canRetry, konnect axios status, gitlab/
+// atlassian HTTP status) onto one of these. The agent classifies on `kind` (structured) instead of
+// regexing message text. `category` is the coarse bucket derived from `kind` via
+// TOOL_ERROR_KIND_TO_CATEGORY below. Hoisted here (was bespoke to mcp-server-aws) so all seven
+// servers + the agent share ONE vocabulary.
+export const ToolErrorKindSchema = z.enum([
+	// auth / session
+	"auth-denied", // 401/403, security_exception, IAM/permission missing, invalid credentials
+	"assume-role-denied", // AWS STS AssumeRole trust failure (kept distinct: different remediation)
+	"auth-expired", // OAuth/token/session expired -- re-auth needed, NON-retryable
+	// bad input / query
+	"bad-query", // malformed query STRING/DSL (fix the query; do not re-anchor/retry as-is)
+	"bad-input", // other client-side validation failure (bad param, out-of-range)
+	// not found / no data
+	"not-found", // named resource/index/log-group/topic does not exist -- NON-retryable finding
+	"no-index", // couchbase planning failure: collection exists but has no queryable index (no-data)
+	"query-window", // AWS CloudWatch retention/creation window rejection -- re-anchor the window
+	// transient / server
+	"throttled", // rate-limited / 429 / too_many_requests / circuit_breaking
+	"timeout", // request timeout
+	"network", // connection reset/refused, socket hang up
+	"server-error", // upstream 5xx / $fault:"server"
+	// fallback
+	"unknown",
+]);
+export type ToolErrorKind = z.infer<typeof ToolErrorKindSchema>;
+
+// SIO-1087: single source of truth mapping the fine-grained kind -> the coarse category the
+// aggregator degraded-rate math and loop guard consume. `retryable` is derived from the category
+// (transient/server-error are worth a retry; everything else is not).
+export const TOOL_ERROR_KIND_TO_CATEGORY: Record<ToolErrorKind, ToolErrorCategory> = {
+	"auth-denied": "auth",
+	"assume-role-denied": "auth",
+	"auth-expired": "session",
+	"bad-query": "bad-query",
+	"bad-input": "unknown",
+	"not-found": "not-found",
+	"no-index": "no-data",
+	"query-window": "bad-query", // a fixable query-window mistake, not a transient failure
+	throttled: "transient",
+	timeout: "transient",
+	network: "transient",
+	"server-error": "server-error",
+	unknown: "unknown",
+};
+
+// SIO-1087: categories whose errors are worth retrying. Everything else (auth/bad-query/not-found/
+// no-data/unknown) never succeeds on a blind retry, so the loop guard must stop re-issuing.
+const RETRYABLE_CATEGORIES: ReadonlySet<ToolErrorCategory> = new Set<ToolErrorCategory>(["transient", "server-error"]);
+export function isRetryableCategory(category: ToolErrorCategory): boolean {
+	return RETRYABLE_CATEGORIES.has(category);
+}
+
+// SIO-1087: categories that are routine discovery outcomes, NOT tool malfunctions. Excluded from
+// the >15% degraded-subagent confidence cap so a collection-with-no-index or a non-existent log
+// group never drags confidence below the HITL gate.
+const NON_DEGRADING_CATEGORIES: ReadonlySet<ToolErrorCategory> = new Set<ToolErrorCategory>(["no-data", "not-found"]);
+export function isDegradingCategory(category: ToolErrorCategory): boolean {
+	return !NON_DEGRADING_CATEGORIES.has(category);
+}
 
 export const ToolErrorSchema = z.object({
 	toolName: z.string(),
 	category: ToolErrorCategorySchema,
+	// SIO-1087: the fine-grained SDK-mapped kind. Optional for backward-compat with fallback
+	// (regex) classification that only produces a category; present whenever a server emits the
+	// structured envelope.
+	kind: ToolErrorKindSchema.nullish(),
 	message: z.string(),
 	retryable: z.boolean(),
 	// SIO-725: upstream host that produced the error, sourced from MCP-side new URL(baseUrl).hostname.
@@ -389,7 +473,18 @@ export const ResolvedIdentifiersSchema = z.object({
 	resolvedForTurn: z.number(),
 	resolvedForServices: z.array(z.string()),
 	elastic: z.object({ serviceNames: z.array(z.string()) }).optional(),
-	couchbase: z.object({ scopes: z.record(z.string(), z.array(z.string())) }).optional(),
+	// SIO-1087: `scopes` = every scope -> its collection names (enumerated, never filtered).
+	// `indexedCollections` = scope -> the subset of those collections that have an ONLINE
+	// primary/secondary index (queryable with a plain SELECT). The focus block tags each collection
+	// [indexed] vs [NO INDEX -> key lookup] so the agent stops SELECT *-ing index-less collections
+	// (which throw "no index available" planning failures). Absent = index probe unavailable/failed;
+	// the renderer then omits the tag rather than falsely marking everything unindexed.
+	couchbase: z
+		.object({
+			scopes: z.record(z.string(), z.array(z.string())),
+			indexedCollections: z.record(z.string(), z.array(z.string())).optional(),
+		})
+		.optional(),
 	aws: z.object({ logGroups: z.array(z.string()), ecsServices: z.array(z.string()).optional() }).optional(),
 	kafka: z.object({ topics: z.array(z.string()), consumerGroups: z.array(z.string()) }).optional(),
 	konnect: z

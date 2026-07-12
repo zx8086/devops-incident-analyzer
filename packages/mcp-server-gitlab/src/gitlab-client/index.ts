@@ -4,6 +4,18 @@ import { createContextLogger } from "../utils/logger.js";
 
 const log = createContextLogger("gitlab-api");
 
+// SIO-1087: typed GitLab REST error carrying the real HTTP status so callers can classify
+// structurally (mapHttpStatusToKind) instead of regexing "GitLab API error (\d+)" from the message.
+export class GitLabApiError extends Error {
+	constructor(
+		message: string,
+		public readonly statusCode: number,
+	) {
+		super(message);
+		this.name = "GitLabApiError";
+	}
+}
+
 export interface GitLabRestConfig {
 	instanceUrl: string;
 	personalAccessToken: string;
@@ -59,7 +71,13 @@ export class GitLabRestClient {
 
 			if (!response.ok) {
 				const errorBody = await response.text().catch(() => "");
-				throw new Error(`GitLab API error ${response.status}: ${response.statusText}. ${errorBody}`);
+				// SIO-1087: preserve the real HTTP status on the thrown error so downstream can
+				// classify structurally (401/403->auth, 404->not-found, 429->throttled) instead of
+				// regexing the status back out of the message string.
+				throw new GitLabApiError(
+					`GitLab API error ${response.status}: ${response.statusText}. ${errorBody}`,
+					response.status,
+				);
 			}
 
 			return (await response.json()) as T;

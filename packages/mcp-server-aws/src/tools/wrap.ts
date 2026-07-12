@@ -6,6 +6,9 @@ import type { ToolError, ToolErrorKind } from "./types.ts";
 interface AwsLikeError extends Error {
 	$metadata?: { httpStatusCode?: number; requestId?: string };
 	$service?: string;
+	// SIO-1087: the documented smithy client/server discriminator. "client" = 4xx (bad input,
+	// authz, not-found -- not retryable); "server" = 5xx (retryable). Previously never read.
+	$fault?: "client" | "server";
 }
 
 function isAwsError(err: unknown): err is AwsLikeError {
@@ -19,6 +22,15 @@ function extractAction(message: string): string | undefined {
 }
 
 const NETWORK_ERROR_PATTERNS = [/ENOTFOUND/, /ECONNREFUSED/, /ETIMEDOUT/, /EAI_AGAIN/, /socket hang up/];
+
+// SIO-1087: HTTP-status class helpers so a novel/unmapped AWS error name still classifies by the
+// documented $metadata.httpStatusCode instead of collapsing to aws-unknown.
+function isServerStatus(status: number | undefined): boolean {
+	return status !== undefined && status >= 500 && status < 600;
+}
+function isClientStatus(status: number | undefined): boolean {
+	return status !== undefined && status >= 400 && status < 500;
+}
 
 // SIO-1078: CloudWatch Logs Insights retention-window rejection text. Distinctive enough
 // to classify even if the error surfaces under an unexpected name.
@@ -93,7 +105,18 @@ export function mapAwsError(err: unknown): ToolError {
 		default:
 			// SIO-1078: defensive fallback -- if the retention-window rejection ever arrives
 			// under a different error name, the message text is distinctive enough to classify.
-			kind = RETENTION_WINDOW_PATTERN.test(err.message) ? "bad-input" : "aws-unknown";
+			// SIO-1087: for any other novel error name, use the documented $fault/httpStatusCode
+			// discriminators instead of falling straight to aws-unknown -- a server-side (5xx)
+			// failure is retryable, a client-side (4xx) one is not.
+			if (RETENTION_WINDOW_PATTERN.test(err.message)) {
+				kind = "bad-input";
+			} else if (err.$fault === "server" || isServerStatus(err.$metadata?.httpStatusCode)) {
+				kind = "aws-server-error";
+			} else if (err.$fault === "client" || isClientStatus(err.$metadata?.httpStatusCode)) {
+				kind = "bad-input";
+			} else {
+				kind = "aws-unknown";
+			}
 	}
 
 	const toolError: ToolError = { ...base, kind };

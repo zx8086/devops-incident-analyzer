@@ -3,8 +3,14 @@
 import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { getAllActionToolNames, matchActionsByKeywords, resolveActionTools } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
-import type { DataSourceResult, ToolError, ToolErrorCategory } from "@devops-agent/shared";
-import { redactPiiContent } from "@devops-agent/shared";
+import type { DataSourceResult, ToolError, ToolErrorCategory, ToolErrorKind } from "@devops-agent/shared";
+import {
+	isRetryableCategory,
+	redactPiiContent,
+	TOOL_ERROR_KIND_TO_CATEGORY,
+	ToolErrorCategorySchema,
+	ToolErrorKindSchema,
+} from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -250,9 +256,12 @@ type AwsErrorKind =
 const AWS_KIND_TO_CATEGORY: Record<AwsErrorKind, ToolErrorCategory> = {
 	"iam-permission-missing": "auth",
 	"assume-role-denied": "auth",
-	"resource-not-found": "transient",
+	// SIO-1087: a resource that does not exist will NEVER exist on retry -- classify as the
+	// non-retryable "not-found" (a routine finding), not "transient". Previously "transient"
+	// made the agent re-issue a guessed log-group/resource name that could never resolve.
+	"resource-not-found": "not-found",
 	"aws-network-error": "transient",
-	"aws-server-error": "transient",
+	"aws-server-error": "server-error",
 	"aws-throttled": "transient",
 	"bad-input": "unknown",
 	"aws-unknown": "unknown",
@@ -275,29 +284,91 @@ function extractAwsError(content: unknown): { kind: AwsErrorKind; message: strin
 	if (err == null || typeof err !== "object") return null;
 	const kind = (err as { kind?: unknown }).kind;
 	if (typeof kind !== "string" || !(kind in AWS_KIND_TO_CATEGORY)) return null;
-	const rawMessage =
-		(err as { awsErrorMessage?: unknown }).awsErrorMessage ??
-		(err as { advice?: unknown }).advice ??
-		`AWS tool error: ${kind}`;
-	let message = typeof rawMessage === "string" ? rawMessage : String(rawMessage);
-	// SIO-1079: a CloudWatch Logs retention-window rejection (MalformedQueryException) carries
-	// the word "retention" in its raw text, which led the aggregator LLM to report "logs
-	// expired". It is a QUERY-WINDOW error, not data expiry. Replace the raw text with an
-	// unambiguous, non-"expired" message so the aggregator cannot mischaracterize it. (Live
-	// A/B verified the logs existed; the window was simply outside retention.)
-	if (QUERY_WINDOW_ERROR_RE.test(message)) {
-		message =
-			"aws_logs_start_query time window was outside the log group's retention window (MalformedQueryException). " +
-			"This is a query-window error, NOT expired or absent data. Re-anchor the window to the incident time and retry.";
+	const awsErrorMessage = (err as { awsErrorMessage?: unknown }).awsErrorMessage;
+	const advice = (err as { advice?: unknown }).advice;
+	// SIO-1079: a GENUINE CloudWatch Logs retention-window rejection carries the word "retention"
+	// in its raw text, which led the aggregator LLM to report "logs expired". It is a QUERY-WINDOW
+	// error, not data expiry -- normalize it to an unambiguous, non-"expired" message.
+	// SIO-1087: only do this when the raw message ACTUALLY matches the retention text. The old
+	// regex also matched the bare token "MalformedQueryException", so a query-STRING syntax error
+	// (identical error name, different cause) was overwritten with the retention/re-anchor message
+	// too -- destroying the real reason and trapping the agent in a re-anchor loop. Now: a real
+	// retention match is normalized; every other MalformedQueryException keeps its real message and
+	// prefers the server's `advice` (which wrap.ts already split into "fix the queryString" vs
+	// "re-anchor the window").
+	const rawMessageText =
+		typeof awsErrorMessage === "string"
+			? awsErrorMessage
+			: typeof advice === "string"
+				? advice
+				: `AWS tool error: ${kind}`;
+	if (RETENTION_WINDOW_ERROR_RE.test(rawMessageText)) {
+		return {
+			kind: kind as AwsErrorKind,
+			message:
+				"aws_logs_start_query time window was outside the log group's retention window (MalformedQueryException). " +
+				"This is a query-window error, NOT expired or absent data. Re-anchor the window to the incident time and retry.",
+		};
 	}
+	// Non-retention error: surface the server's advice when present (it distinguishes a query
+	// SYNTAX error from a window error), else the raw AWS message.
+	const message =
+		typeof advice === "string" ? advice : typeof awsErrorMessage === "string" ? awsErrorMessage : rawMessageText;
 	return { kind: kind as AwsErrorKind, message };
 }
 
-// SIO-1079: matches the CloudWatch Logs Insights retention-window rejection text. Kept in the
-// agent so the message is normalized even against the currently-deployed MCP server (which
-// still maps this to kind "aws-unknown" with the raw text).
-const QUERY_WINDOW_ERROR_RE =
-	/end date and time is either before the log group|exceeds the log group.*retention|MalformedQueryException/i;
+// SIO-1087: matches ONLY the genuine CloudWatch Logs retention-window rejection text (NOT the bare
+// "MalformedQueryException" token, which also fires for query-syntax errors). This is the sole
+// place the retention message is re-anchored; a syntax MalformedQueryException falls through with
+// its real message + the server's "fix the queryString" advice intact.
+const RETENTION_WINDOW_ERROR_RE = /end date and time is either before the log group|exceeds the log group.*retention/i;
+
+// SIO-1087: read the SHARED cross-server { _error: { kind, category, message, ... } } envelope
+// (buildToolErrorEnvelope in @devops-agent/shared) that couchbase/elastic/kafka/konnect/gitlab/
+// atlassian now emit. Classification is by the structured `kind`/`category`, never by message regex.
+// Returns null when the content is not a shared envelope (falls through to AWS-specific or regex).
+// Distinct from extractAwsError: AWS keeps its own reader for the retention-message special-case.
+function extractStructuredToolError(content: unknown): {
+	category: ToolErrorCategory;
+	kind: ToolErrorKind;
+	message: string;
+	statusCode?: number;
+	hostname?: string;
+	upstreamContentType?: string;
+} | null {
+	const raw = typeof content === "string" ? content : JSON.stringify(content ?? "");
+	if (!raw.includes('"_error"') || !raw.includes('"kind"')) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return null;
+	}
+	if (parsed == null || typeof parsed !== "object") return null;
+	const err = (parsed as { _error?: unknown })._error;
+	if (err == null || typeof err !== "object") return null;
+	const kindResult = ToolErrorKindSchema.safeParse((err as { kind?: unknown }).kind);
+	if (!kindResult.success) return null; // not a shared-taxonomy envelope (e.g. AWS bespoke kind)
+	const kind = kindResult.data;
+	// Prefer the category the server stamped; fall back to the canonical map if absent/invalid.
+	const categoryResult = ToolErrorCategorySchema.safeParse((err as { category?: unknown }).category);
+	const category = categoryResult.success ? categoryResult.data : TOOL_ERROR_KIND_TO_CATEGORY[kind];
+	const adviceRaw = (err as { advice?: unknown }).advice;
+	const messageRaw = (err as { message?: unknown }).message;
+	const message =
+		typeof adviceRaw === "string" ? adviceRaw : typeof messageRaw === "string" ? messageRaw : `tool error: ${kind}`;
+	const statusCode = (err as { statusCode?: unknown }).statusCode;
+	const hostname = (err as { hostname?: unknown }).hostname;
+	const upstreamContentType = (err as { upstreamContentType?: unknown }).upstreamContentType;
+	return {
+		category,
+		kind,
+		message,
+		statusCode: typeof statusCode === "number" ? statusCode : undefined,
+		hostname: typeof hostname === "string" ? hostname : undefined,
+		upstreamContentType: typeof upstreamContentType === "string" ? upstreamContentType : undefined,
+	};
+}
 
 // SIO-707: exported for tests. Redacts PII before ToolError.message lands in logs or state.
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
@@ -310,10 +381,26 @@ export function extractToolErrors(
 	for (const msg of messages) {
 		if (msg._getType() !== "tool") continue;
 
-		// SIO-1054: capture AWS _error envelopes that ride on a status:"success" message
-		// BEFORE the status gate would drop them. Classification is by kind, not text regex,
-		// so a non-authz failure (resource-not-found / aws-unknown) never reads as "auth".
+		// SIO-1087: capture the SHARED structured { _error: { kind, category } } envelope from any
+		// datasource, and the AWS-specific _error envelope, BEFORE the status gate. Both can ride on
+		// a status:"success" message (the MCP wrap returns them as a resolved result). Classification
+		// is by structured kind/category, never text regex -- so a routine outcome (no-index,
+		// not-found) never reads as a malfunction and never masquerades as "auth".
 		if (msg.status !== "error") {
+			const structured = extractStructuredToolError(msg.content);
+			if (structured) {
+				errors.push({
+					toolName: msg.name ?? "unknown",
+					category: structured.category,
+					kind: structured.kind,
+					message: redactPiiContent(structured.message.slice(0, 500)),
+					retryable: isRetryableCategory(structured.category),
+					statusCode: structured.statusCode,
+					hostname: structured.hostname,
+					upstreamContentType: structured.upstreamContentType,
+				});
+				continue;
+			}
 			const awsErr = extractAwsError(msg.content);
 			if (awsErr) {
 				const category = AWS_KIND_TO_CATEGORY[awsErr.kind];
@@ -321,11 +408,29 @@ export function extractToolErrors(
 					toolName: msg.name ?? "unknown",
 					category,
 					message: redactPiiContent(awsErr.message.slice(0, 500)),
-					// Only transient kinds are worth retrying; auth/unknown are not.
-					retryable: category === "transient",
+					retryable: isRetryableCategory(category),
 				});
 			}
 			continue;
+		}
+
+		// SIO-1087: a shared envelope can also arrive on a status:"error" message (a server that
+		// throws AND serializes the envelope). Prefer structured classification over the regex.
+		{
+			const structured = extractStructuredToolError(msg.content);
+			if (structured) {
+				errors.push({
+					toolName: msg.name ?? "unknown",
+					category: structured.category,
+					kind: structured.kind,
+					message: redactPiiContent(structured.message.slice(0, 500)),
+					retryable: isRetryableCategory(structured.category),
+					statusCode: structured.statusCode,
+					hostname: structured.hostname,
+					upstreamContentType: structured.upstreamContentType,
+				});
+				continue;
+			}
 		}
 
 		// Use LangGraph ToolMessage.status as the error gate instead of regex on content.
@@ -396,7 +501,10 @@ const MIN_FILTERED_TOOLS = 1;
 // MAX_TOOLS_PER_AGENT (25).
 const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	gitlab: ["gitlab_search", "gitlab_graph_schema", "gitlab_blast_radius"],
-	couchbase: ["capella_get_scopes_and_collections"],
+	// SIO-1087: include the index-check + key-lookup tools so the sub-agent can act on the
+	// [indexed]/[NO INDEX] tags the focus block injects -- verify an index before SELECT, and fall
+	// back to capella_get_document_by_id on an index-less collection instead of a doomed SELECT *.
+	couchbase: ["capella_get_scopes_and_collections", "capella_get_system_indexes", "capella_get_document_by_id"],
 	konnect: ["konnect_list_control_planes", "konnect_list_services"],
 	atlassian: ["atlassian_getVisibleJiraProjects", "atlassian_getConfluenceSpaces"],
 	// NOTE: kafka is deliberately NOT here. Force-including kafka_list_topics would

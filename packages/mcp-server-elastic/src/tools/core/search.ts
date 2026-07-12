@@ -1,9 +1,12 @@
 /* src/tools/core/search.ts */
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { classifyElasticError, esStatusCode } from "../../lib/classifyElasticError.js";
+import { validateRangeQuery } from "../../lib/validateRangeQuery.js";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
 import { getSearchRequestOptions } from "../../utils/searchRequestOptions.js";
@@ -183,6 +186,21 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				await notificationManager.sendInfo("Using match_all query", {
 					reason: "No query provided or empty query object",
 				});
+			}
+
+			// SIO-1087 (Fix B): pre-emptively reject the malformed multi-field `range` clause the LLM
+			// otherwise sends, which ES rejects with "[range] malformed query, expected [END_OBJECT]
+			// but found [FIELD_NAME]" only AFTER a round-trip (burning a retry). Emit the shared
+			// bad-query envelope with the known-good single-field shape so the model fixes it in place.
+			if (!isEmptyQuery) {
+				const rangeError = validateRangeQuery(finalQuery);
+				if (rangeError) {
+					const envelope = buildToolErrorEnvelope({
+						kind: "bad-query",
+						message: `[elasticsearch_search] ${rangeError}`,
+					});
+					throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), { query: finalQuery });
+				}
 			}
 
 			// Build search request from natural parameters. aggs/highlight/sort/fields/query
@@ -422,6 +440,12 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				content: responseContent,
 			};
 		} catch (error) {
+			// SIO-1087: a pre-built shared-envelope McpError (e.g. the Fix B range validator) is
+			// already correctly classified -- re-throw as-is so the outer path does not re-wrap it.
+			if (error instanceof McpError && typeof error.message === "string" && error.message.includes('"_error"')) {
+				throw error;
+			}
+
 			// Fail the progress tracker and send error notifications
 			const duration = performance.now() - perfStart;
 			const errorMessage = error instanceof Error ? error.message : String(error);
@@ -451,30 +475,30 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				});
 			}
 
-			if (error instanceof Error) {
-				if (error.message.includes("index_not_found_exception")) {
-					await notificationManager.sendError("Index not found", error, {
+			// SIO-1087: classify on the ES SDK structured error type (error.meta.body.error.type) +
+			// HTTP status instead of message.includes(...). Emit the shared { _error: { kind } }
+			// envelope so the agent classifies structurally: a malformed query DSL (bad-query) is
+			// distinguished from an absent index (not-found) or a security_exception (auth-denied),
+			// and the message the LLM sees is remediation-oriented, not a generic "execution" error.
+			const kind = classifyElasticError(error);
+			if (kind !== "unknown") {
+				if (kind === "not-found") {
+					await notificationManager.sendError("Index not found", error instanceof Error ? error : errorMessage, {
 						searchedIndex: params?.index || "*",
 						suggestion: "Verify index name and ensure it exists",
 					});
-
-					throw createSearchMcpError(`Index not found: ${params?.index || "*"}`, {
-						type: "index_not_found",
-						details: { originalError: error.message },
-					});
-				}
-
-				if (error.message.includes("parsing_exception") || error.message.includes("query_shard_exception")) {
-					await notificationManager.sendError("Query parsing failed", error, {
+				} else if (kind === "bad-query") {
+					await notificationManager.sendError("Query parsing failed", error instanceof Error ? error : errorMessage, {
 						providedQuery: params?.query,
 						suggestion: "Check query syntax and field names",
 					});
-
-					throw createSearchMcpError(`Query parsing failed: ${error.message}`, {
-						type: "query_parsing",
-						details: { query: params?.query },
-					});
 				}
+				const envelope = buildToolErrorEnvelope({
+					kind,
+					message: `[elasticsearch_search] ${errorMessage}`,
+					statusCode: esStatusCode(error),
+				});
+				throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), { params });
 			}
 
 			throw createSearchMcpError(errorMessage, {

@@ -1,12 +1,12 @@
 // src/server.ts
-import { createCachedServerFactory } from "@devops-agent/shared";
+import { buildToolErrorEnvelope, createCachedServerFactory, mapHttpStatusToKind } from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { KongApi } from "./api/kong-api.js";
 import type { Config } from "./config/index.js";
 import type { ElicitationOperations } from "./tools/elicitation-tool.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
-import { formatError } from "./utils/error-handling.js";
+import { formatError, KongMCPError } from "./utils/error-handling.js";
 import { createContextLogger } from "./utils/logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
 import type { ToolPerformanceCollector } from "./utils/tool-tracer.js";
@@ -178,6 +178,20 @@ function registerTools(
 				success = false;
 				const duration = Date.now() - startTime;
 				performanceCollector.recordToolExecution(`konnect_${tool.method}`, duration, success);
+				// SIO-1087: emit the shared { _error: { kind } } envelope so the agent classifies
+				// structurally on the preserved HTTP status (401/403->auth, 404->not-found,
+				// 429->throttled, 5xx->server-error) instead of regexing the message. A KongMCPError
+				// with no statusCode (network error) maps to "network". formatError still renders the
+				// human-readable troubleshooting text into the envelope message.
+				if (error instanceof KongMCPError) {
+					const kind = error.statusCode === undefined ? "network" : mapHttpStatusToKind(error.statusCode);
+					const envelope = buildToolErrorEnvelope({
+						kind,
+						message: formatError(error),
+						statusCode: error.statusCode,
+					});
+					return { content: [{ type: "text" as const, text: JSON.stringify(envelope) }], isError: true };
+				}
 				return {
 					content: [{ type: "text" as const, text: `Error: ${formatError(error)}` }],
 					isError: true,

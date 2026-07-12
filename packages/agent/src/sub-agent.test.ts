@@ -182,20 +182,24 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 // into r.data as model-visible text and no toolError was recorded. extractToolErrors must
 // now recognise these payloads even on non-error messages and classify by _error.kind:
 // iam-permission-missing / assume-role-denied -> "auth" (so SIO-1031 grounding fires ONLY
-// on a genuine authz kind), resource-not-found / aws-network-error / aws-server-error /
-// aws-throttled -> "transient", everything else (aws-unknown, bad-input) -> "unknown".
+// on a genuine authz kind), aws-network-error / aws-server-error / aws-throttled -> "transient",
+// everything else (aws-unknown, bad-input) -> "unknown".
+// SIO-1087: resource-not-found now -> "not-found" (NON-retryable) -- a resource that does not
+// exist will never exist on retry, and it is a routine finding, not a transient malfunction.
 describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 	function awsErrorMsg(errorObj: Record<string, unknown>, name = "aws_logs_start_query"): FakeToolMessage {
 		// AWS wrap.ts returns { _error } as a normal (status:"success") tool result.
 		return { _getType: () => "tool", content: JSON.stringify({ _error: errorObj }), name, status: "success" };
 	}
 
-	test("captures a resource-not-found _error as a transient (NON-auth) toolError", () => {
+	test("captures a resource-not-found _error as non-retryable not-found (NON-auth)", () => {
 		const errors = extractToolErrors([
 			awsErrorMsg({ kind: "resource-not-found", awsErrorName: "ResourceNotFoundException" }),
 		]);
 		expect(errors).toHaveLength(1);
-		expect(errors[0]?.category).toBe("transient");
+		// SIO-1087: not-found, NOT transient -- retrying a non-existent resource name never resolves.
+		expect(errors[0]?.category).toBe("not-found");
+		expect(errors[0]?.retryable).toBe(false);
 		expect(errors[0]?.toolName).toBe("aws_logs_start_query");
 	});
 

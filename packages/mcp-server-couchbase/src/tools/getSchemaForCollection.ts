@@ -3,6 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { isNoIndexError } from "../lib/classifyCouchbaseError";
 import { logger } from "../utils/logger";
 
 interface SchemaParams {
@@ -96,7 +97,8 @@ const getSchemaHandler = async (params: SchemaParams, bucket: Bucket): Promise<S
 			],
 		};
 	} catch (err: unknown) {
-		if (err instanceof Error && err.message.includes("index")) {
+		// SIO-1087: classify on the SDK error class / N1QL code, not err.message.includes("index").
+		if (isNoIndexError(err)) {
 			return {
 				content: [
 					{

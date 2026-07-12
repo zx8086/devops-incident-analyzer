@@ -22,6 +22,7 @@ import {
 	parseAtlassianSpaces,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
+	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
 	parseGitlabProjects,
 	parseKafkaConsumerGroups,
@@ -249,12 +250,32 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 }
 
 async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
-	const tool = toolFor("couchbase", "capella_get_scopes_and_collections");
-	if (!tool) return {};
-	const raw = await tool.invoke({});
-	const scopes = parseCouchbaseScopeTree(normalizeToolContent(raw));
-	// Inject the ENTIRE map -- enumerating what exists is the fix; do not filter.
-	return Object.keys(scopes).length > 0 ? { couchbase: { scopes } } : {};
+	const scopesTool = toolFor("couchbase", "capella_get_scopes_and_collections");
+	if (!scopesTool) return {};
+	// SIO-1087: probe scopes AND indexes together (Promise.allSettled so an index-probe failure
+	// never blocks the scope map). The index probe tells us which collections are actually
+	// queryable, so the focus block can steer the agent away from SELECT *-ing index-less
+	// collections (the seasons.* planning-failure storm).
+	const indexesTool = toolFor("couchbase", "capella_get_system_indexes");
+	const [scopesRes, indexesRes] = await Promise.allSettled([
+		scopesTool.invoke({}),
+		indexesTool ? indexesTool.invoke({}) : Promise.reject(new Error("capella_get_system_indexes unavailable")),
+	]);
+	if (scopesRes.status !== "fulfilled") return {};
+	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
+	if (Object.keys(scopes).length === 0) return {};
+	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
+	let indexedCollections: Record<string, string[]> | undefined;
+	if (indexesRes.status === "fulfilled") {
+		const parsed = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
+		if (Object.keys(parsed).length > 0) indexedCollections = parsed;
+	} else {
+		logger.warn(
+			{ error: msg(indexesRes.reason) },
+			"couchbase index probe failed; collections rendered without index tags",
+		);
+	}
+	return { couchbase: indexedCollections ? { scopes, indexedCollections } : { scopes } };
 }
 
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

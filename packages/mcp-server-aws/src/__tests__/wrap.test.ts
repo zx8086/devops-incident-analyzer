@@ -456,11 +456,27 @@ describe("mapAwsError", () => {
 		expect(mapAwsError(err).kind).toBe("aws-network-error");
 	});
 
-	test("Unknown error name -> aws-unknown", () => {
+	// SIO-1087: a novel/unmapped AWS error name now classifies by the documented
+	// $metadata.httpStatusCode / $fault instead of always falling to aws-unknown -- a 5xx is a
+	// retryable server error, a 4xx is bad-input, and only a truly statusless error is aws-unknown.
+	test("Unknown error name with 5xx status -> aws-server-error", () => {
 		const err = Object.assign(new Error("???"), {
 			name: "SomeNewAwsErrorType",
 			$metadata: { httpStatusCode: 500 },
 		});
+		expect(mapAwsError(err).kind).toBe("aws-server-error");
+	});
+
+	test("Unknown error name with 4xx status -> bad-input", () => {
+		const err = Object.assign(new Error("???"), {
+			name: "SomeNewAwsErrorType",
+			$metadata: { httpStatusCode: 400 },
+		});
+		expect(mapAwsError(err).kind).toBe("bad-input");
+	});
+
+	test("Unknown error name with no status/$fault -> aws-unknown", () => {
+		const err = Object.assign(new Error("???"), { name: "SomeNewAwsErrorType" });
 		expect(mapAwsError(err).kind).toBe("aws-unknown");
 	});
 });
