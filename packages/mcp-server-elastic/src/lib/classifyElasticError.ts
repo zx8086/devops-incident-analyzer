@@ -34,7 +34,13 @@ function readEsErrorType(err: unknown): string | undefined {
 	const cause = (body as { error?: unknown }).error;
 	if (cause == null || typeof cause !== "object") return undefined;
 	const c = cause as EsErrorCause;
-	// search_phase_execution_exception hides the real reason in root_cause[0] / caused_by.
+	// search_phase_execution_exception is a WRAPPER whose own `type` is always present -- the real
+	// per-shard cause (e.g. query_shard_exception, parsing_exception) is in root_cause[0]/caused_by.
+	// A plain `c.type ?? ...` would stop on the wrapper and never see the nested type, so unwrap it
+	// explicitly. For any other error, the top-level `type` is the real one.
+	if (c.type === "search_phase_execution_exception") {
+		return c.root_cause?.[0]?.type ?? c.caused_by?.type ?? c.type;
+	}
 	return c.type ?? c.root_cause?.[0]?.type ?? c.caused_by?.type;
 }
 

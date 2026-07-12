@@ -265,10 +265,14 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
 	if (Object.keys(scopes).length === 0) return {};
 	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
+	// SIO-1087: key off the probe SUCCEEDING, not on a non-empty result. A probe that succeeds but
+	// returns zero online indexes (every collection unindexed) is the exact case the [NO INDEX]
+	// guidance must fire for -- gating on `> 0` would collapse it to `undefined` and the focus block
+	// would treat it as "probe never ran", rendering collections untagged. An empty-but-present map
+	// correctly tags every collection [NO INDEX]; a failed probe stays undefined (renders untagged).
 	let indexedCollections: Record<string, string[]> | undefined;
 	if (indexesRes.status === "fulfilled") {
-		const parsed = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
-		if (Object.keys(parsed).length > 0) indexedCollections = parsed;
+		indexedCollections = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
 	} else {
 		logger.warn(
 			{ error: msg(indexesRes.reason) },

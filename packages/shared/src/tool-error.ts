@@ -1,4 +1,4 @@
-// shared/src/tool-error.ts
+// packages/shared/src/tool-error.ts
 // SIO-1087: the ONE cross-server structured-error mechanism. Every MCP server maps its OWN SDK's
 // documented error type into the shared ToolErrorKind, then serializes a { _error } envelope with
 // buildToolErrorEnvelope(). The agent reads that envelope structurally (kind/category) instead of

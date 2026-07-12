@@ -350,9 +350,15 @@ function extractStructuredToolError(content: unknown): {
 	const kindResult = ToolErrorKindSchema.safeParse((err as { kind?: unknown }).kind);
 	if (!kindResult.success) return null; // not a shared-taxonomy envelope (e.g. AWS bespoke kind)
 	const kind = kindResult.data;
-	// Prefer the category the server stamped; fall back to the canonical map if absent/invalid.
+	// SIO-1087: REQUIRE the stamped category. buildToolErrorEnvelope ALWAYS stamps it; the AWS
+	// bespoke envelope NEVER does. Some AWS kinds (e.g. "bad-input") also exist in the shared kind
+	// union, so keying on `kind` alone would let this reader steal an AWS envelope and bypass
+	// extractAwsError -- dropping the Fix A syntax-vs-retention message preservation. Gating on a
+	// valid `category` cleanly separates a shared envelope from the AWS one. Category is then
+	// canonicalized from the kind (the map is the single source of truth), not trusted off the wire.
 	const categoryResult = ToolErrorCategorySchema.safeParse((err as { category?: unknown }).category);
-	const category = categoryResult.success ? categoryResult.data : TOOL_ERROR_KIND_TO_CATEGORY[kind];
+	if (!categoryResult.success) return null;
+	const category = TOOL_ERROR_KIND_TO_CATEGORY[kind];
 	const adviceRaw = (err as { advice?: unknown }).advice;
 	const messageRaw = (err as { message?: unknown }).message;
 	const message =

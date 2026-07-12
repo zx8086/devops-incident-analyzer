@@ -561,7 +561,7 @@ const ROOT_CAUSE_HEADING_RE = /^#{1,6}\s+root cause/im;
 // just a query that failed. Deliberately narrow (like SIO-1013's PERMISSION_DENIAL_RE) to avoid
 // over-firing on legitimate, evidence-backed root causes.
 const UNGROUNDED_MECHANISM_RE =
-	/\b(schema mismatch|field names? (?:do not|don't|does not|doesn't) exist|wrong field names?|metadata corruption|epoch[- ]?0|corrupt(?:ed)? metadata|schema (?:drift|change) )\b/i;
+	/\b(schema mismatch|field names? (?:do not|don't|does not|doesn't) exist|wrong field names?|metadata corruption|epoch[- ]?0|corrupt(?:ed)? metadata|schema (?:drift|change))\b/i;
 
 export function detectUngroundedRootCause(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	// If ANY datasource actually returned data this turn, a mechanism claim could plausibly be
@@ -830,8 +830,16 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
 		: rewrittenForExpiry;
 	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
+	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
+	// have appended a suffix to a flagged root-cause line, so matching the ORIGINAL line strings
+	// against rewrittenForGrounding would miss it (exact-string Set lookup) -- the cap would apply
+	// with no visible "[UNVERIFIED...]" annotation on that line. Detecting on the mutated text
+	// keeps the match set aligned with what is actually being rewritten.
 	const rewrittenForRootCause = ungroundedRootCauseCapTriggered
-		? rewriteUngroundedRootCause(rewrittenForGrounding, ungroundedRootCause)
+		? rewriteUngroundedRootCause(
+				rewrittenForGrounding,
+				detectUngroundedRootCause(rewrittenForGrounding, results).ungrounded,
+			)
 		: rewrittenForGrounding;
 	const finalAnswer = anyCapTriggered
 		? rewriteConfidenceInAnswer(rewrittenForRootCause, cappedScore)

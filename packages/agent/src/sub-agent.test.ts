@@ -182,10 +182,11 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 // into r.data as model-visible text and no toolError was recorded. extractToolErrors must
 // now recognise these payloads even on non-error messages and classify by _error.kind:
 // iam-permission-missing / assume-role-denied -> "auth" (so SIO-1031 grounding fires ONLY
-// on a genuine authz kind), aws-network-error / aws-server-error / aws-throttled -> "transient",
+// on a genuine authz kind), aws-network-error / aws-throttled -> "transient",
 // everything else (aws-unknown, bad-input) -> "unknown".
 // SIO-1087: resource-not-found now -> "not-found" (NON-retryable) -- a resource that does not
-// exist will never exist on retry, and it is a routine finding, not a transient malfunction.
+// exist will never exist on retry, and it is a routine finding, not a transient malfunction;
+// aws-server-error now -> "server-error" (retryable), distinct from the transient bucket.
 describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 	function awsErrorMsg(errorObj: Record<string, unknown>, name = "aws_logs_start_query"): FakeToolMessage {
 		// AWS wrap.ts returns { _error } as a normal (status:"success") tool result.
@@ -201,6 +202,13 @@ describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 		expect(errors[0]?.category).toBe("not-found");
 		expect(errors[0]?.retryable).toBe(false);
 		expect(errors[0]?.toolName).toBe("aws_logs_start_query");
+	});
+
+	test("SIO-1087: captures an aws-server-error with the server-error category (retryable)", () => {
+		const errors = extractToolErrors([awsErrorMsg({ kind: "aws-server-error", awsErrorName: "InternalServerError" })]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("server-error");
+		expect(errors[0]?.retryable).toBe(true);
 	});
 
 	test("captures a bad-input _error (e.g. MalformedQueryException) as NON-auth", () => {

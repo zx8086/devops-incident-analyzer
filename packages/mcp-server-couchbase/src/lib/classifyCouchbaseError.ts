@@ -7,6 +7,7 @@
 import type { ToolErrorKind } from "@devops-agent/shared";
 import {
 	AuthenticationFailureError,
+	CollectionNotFoundError,
 	type CouchbaseError,
 	DocumentNotFoundError,
 	IndexFailureError,
@@ -50,7 +51,14 @@ export function classifyCouchbaseError(error: unknown): ToolErrorKind {
 	}
 	if (err instanceof IndexNotFoundError || err instanceof IndexFailureError) return "no-index";
 	if (err instanceof ParsingFailureError) return "bad-query";
-	if (err instanceof DocumentNotFoundError) return "not-found";
+	// A missing document / scope / collection is a not-found finding, not a malfunction.
+	if (
+		err instanceof DocumentNotFoundError ||
+		err instanceof ScopeNotFoundError ||
+		err instanceof CollectionNotFoundError
+	) {
+		return "not-found";
+	}
 	if (err instanceof AuthenticationFailureError) return "auth-denied";
 	if (err instanceof TimeoutError) return "timeout";
 
@@ -73,5 +81,7 @@ export function isNoIndexError(error: unknown): boolean {
 // collection that does not exist.
 export function isNotFoundError(error: unknown): boolean {
 	const err = unwrapCouchbaseError(error);
-	return err instanceof DocumentNotFoundError || err instanceof ScopeNotFoundError;
+	return (
+		err instanceof DocumentNotFoundError || err instanceof ScopeNotFoundError || err instanceof CollectionNotFoundError
+	);
 }

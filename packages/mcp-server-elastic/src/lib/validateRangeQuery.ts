@@ -31,21 +31,31 @@ export function validateRangeQuery(node: unknown): string | null {
 			const rangeObj = value as Record<string, unknown>;
 			const keys = Object.keys(rangeObj);
 
-			// A valid range clause names exactly ONE field, whose value is the bounds object.
-			const boundOpsAtTop = keys.filter((k) => RANGE_BOUND_OPS.has(k));
-			if (boundOpsAtTop.length > 0) {
+			// A valid range clause has EXACTLY ONE key (the field name) whose value is a non-array
+			// object (the bounds). Validate that shape directly instead of trying to classify keys as
+			// operators-vs-fields -- a field can legitimately be named "gte"/"format", and that
+			// heuristic also passed `{range:{}}` (0 keys) and `range:{age:42}` (scalar value).
+			if (keys.length !== 1) {
+				// Distinguish the two malformations for a clearer message: bounds hoisted directly under
+				// `range` (keys are operators) vs multiple field names in one clause.
+				const looksLikeHoistedBounds = keys.some((k) => RANGE_BOUND_OPS.has(k));
+				if (looksLikeHoistedBounds) {
+					return (
+						`Malformed 'range' clause: bound operators are directly under 'range' instead of under a field ` +
+						`name. A range clause names exactly one field; put the bounds inside it. Correct shape: ${CORRECT_RANGE_SHAPE}`
+					);
+				}
 				return (
-					`Malformed 'range' clause: bound operators (${boundOpsAtTop.join(", ")}) are directly under 'range' ` +
-					`instead of under a field name. A range clause names exactly one field; put the bounds inside it. ` +
-					`Correct shape: ${CORRECT_RANGE_SHAPE}`
+					`Malformed 'range' clause: it has ${keys.length} keys (${keys.join(", ") || "none"}); a range clause ` +
+					`takes exactly ONE field. To bound two fields, use two separate range clauses inside a bool.filter ` +
+					`array. Correct single-field shape: ${CORRECT_RANGE_SHAPE}`
 				);
 			}
-			const fieldKeys = keys.filter((k) => !RANGE_BOUND_OPS.has(k));
-			if (fieldKeys.length > 1) {
+			const boundsValue = rangeObj[keys[0] as string];
+			if (boundsValue == null || typeof boundsValue !== "object" || Array.isArray(boundsValue)) {
 				return (
-					`Malformed 'range' clause: it references ${fieldKeys.length} fields (${fieldKeys.join(", ")}) in a ` +
-					`single range object. A range clause takes exactly ONE field. To bound two fields, use two separate ` +
-					`range clauses inside a bool.filter array. Correct single-field shape: ${CORRECT_RANGE_SHAPE}`
+					`Malformed 'range' clause: the field '${keys[0]}' must map to a bounds object (e.g. { gte, lte }), ` +
+					`not a scalar or array. Correct shape: ${CORRECT_RANGE_SHAPE}`
 				);
 			}
 		}
