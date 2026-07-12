@@ -41,7 +41,7 @@ const KAFKA_ERROR_NAMES: Record<number, string> = {
 // classify structurally. Authorization codes -> auth-denied (non-retryable); unknown topic/
 // partition -> not-found; timeouts/leader-not-available/network -> transient. Codes not listed fall
 // through to "unknown" and the message-regex fallback.
-const KAFKA_CODE_TO_KIND: Record<number, ToolErrorKind> = {
+export const KAFKA_CODE_TO_KIND: Record<number, ToolErrorKind> = {
 	1: "bad-input", // OFFSET_OUT_OF_RANGE
 	3: "not-found", // UNKNOWN_TOPIC_OR_PARTITION
 	5: "network", // LEADER_NOT_AVAILABLE
@@ -63,7 +63,8 @@ interface ClassifiedKafkaError {
 	message: string;
 }
 
-function classifyKafkaError(err: unknown): ClassifiedKafkaError {
+// Exported for unit tests (SIO-1087).
+export function classifyKafkaError(err: unknown): ClassifiedKafkaError {
 	const message = err instanceof Error ? err.message : String(err);
 	if (!(err instanceof MultipleErrors)) {
 		return { kafkaErrorCode: null, kafkaErrorName: null, kind: null, message };

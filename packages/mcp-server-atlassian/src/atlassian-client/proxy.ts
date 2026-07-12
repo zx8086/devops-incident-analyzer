@@ -191,7 +191,7 @@ export class AtlassianMcpProxy {
 						});
 						return {
 							isError: true,
-							content: [{ type: "text", text: JSON.stringify(envelope) }],
+							content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 						};
 					}
 					throw retryError;
