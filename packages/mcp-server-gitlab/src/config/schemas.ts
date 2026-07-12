@@ -35,7 +35,9 @@ export const ConfigSchema = z.object({
 	// cross-project traversal; the local KG stays incident/IaC-only.
 	orbit: z
 		.object({
-			enabled: z.boolean().describe("Enable GitLab Orbit knowledge-graph tools (Beta; off by default)"),
+			enabled: z
+				.boolean()
+				.describe("Enable GitLab Orbit knowledge-graph tools (Beta; on by default, soft-fails if unreachable)"),
 			personalAccessToken: z
 				.string()
 				.optional()
