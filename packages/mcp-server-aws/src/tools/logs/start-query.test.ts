@@ -5,7 +5,14 @@
 // two pure decision helpers that clamp or short-circuit the window before the SDK call.
 
 import { describe, expect, test } from "bun:test";
-import { correctYearDrift, decideQueryWindow, resolveQueryFloor } from "./start-query.ts";
+import {
+	correctYearDrift,
+	decideQueryWindow,
+	FALLBACK_RETENTION_SECONDS,
+	getRetentionFloor,
+	resolveFloorFromGroups,
+	resolveQueryFloor,
+} from "./start-query.ts";
 
 // Fixed "now" so retention math is deterministic (no Date.now() dependence).
 const NOW = 1_700_000_000; // epoch seconds
@@ -157,5 +164,121 @@ describe("correctYearDrift (SIO-1080)", () => {
 		const end = utc(2025, 7, 11, 23, 50, 0);
 		const res = correctYearDrift(start, end, Number.NEGATIVE_INFINITY, now2026);
 		expect(res.shiftedYears).toBe(0);
+	});
+});
+
+// SIO-1082: the year-drift guard was gated on a per-call DescribeLogGroups; when that
+// describe failed/raced/returned null the guard was skipped and the drifted window hit
+// CloudWatch. These cover the resilient floor resolution: a conservative fallback when no
+// data is known, plus a cache + single-flight around the (injected) describe.
+describe("resolveFloorFromGroups (SIO-1082 fallback)", () => {
+	const now = utc(2026, 7, 12, 12, 0, 0);
+
+	test("real groups -> real floor, isReal true", () => {
+		const r = resolveFloorFromGroups([{ retentionInDays: 60 }], now);
+		expect(r.isReal).toBe(true);
+		expect(r.floor).toBe(now - 60 * DAY);
+	});
+
+	test("no groups -> conservative fallback floor (now - 120d), isReal false", () => {
+		const r = resolveFloorFromGroups([], now);
+		expect(r.isReal).toBe(false);
+		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
+	});
+
+	test("null groups -> fallback, isReal false", () => {
+		const r = resolveFloorFromGroups(null, now);
+		expect(r.isReal).toBe(false);
+		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
+	});
+
+	test("fallback floor catches a 366-day drift but not recent windows", () => {
+		const { floor } = resolveFloorFromGroups(null, now);
+		// year-drifted window (366d back) is below the fallback floor -> correction will fire
+		expect(correctYearDrift(now - 366 * DAY, now - 366 * DAY + 3600, floor, now).shiftedYears).toBe(1);
+		// recent windows are ABOVE the fallback floor -> untouched
+		for (const d of [1, 30, 90, 110]) {
+			expect(correctYearDrift(now - d * DAY, now - d * DAY + 3600, floor, now).shiftedYears).toBe(0);
+		}
+	});
+});
+
+describe("getRetentionFloor (SIO-1082 cache + single-flight)", () => {
+	const now = utc(2026, 7, 12, 12, 0, 0);
+	const TTL = 300_000;
+
+	function freshCache() {
+		return new Map<string, { groups: { retentionInDays?: number; creationTime?: number }[]; expiresAt: number }>();
+	}
+
+	test("cache miss describes once and caches; second call reuses (no re-describe)", async () => {
+		const cache = freshCache();
+		let describeCalls = 0;
+		const describe = async () => {
+			describeCalls++;
+			return [{ retentionInDays: 60 }];
+		};
+		const clock = () => now * 1000;
+		const a = await getRetentionFloor({ key: "eu-oit-prd:/lg", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		const b = await getRetentionFloor({ key: "eu-oit-prd:/lg", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		expect(describeCalls).toBe(1);
+		expect(a.isReal).toBe(true);
+		expect(b.isReal).toBe(true);
+		expect(a.floor).toBe(now - 60 * DAY);
+	});
+
+	test("describe failure -> fallback floor, isReal false, not cached as real", async () => {
+		const cache = freshCache();
+		const describe = async () => {
+			throw new Error("AccessDenied");
+		};
+		const r = await getRetentionFloor({
+			key: "eu-oit-prd:/lg",
+			describe,
+			nowSeconds: now,
+			cache,
+			ttlMs: TTL,
+			clock: () => now * 1000,
+		});
+		expect(r.isReal).toBe(false);
+		expect(r.floor).toBe(now - FALLBACK_RETENTION_SECONDS);
+	});
+
+	test("single-flight: concurrent callers collapse to ONE describe", async () => {
+		const cache = freshCache();
+		let describeCalls = 0;
+		let release: (v: { retentionInDays?: number }[]) => void = () => {};
+		const gate = new Promise<{ retentionInDays?: number }[]>((res) => {
+			release = res;
+		});
+		const describe = async () => {
+			describeCalls++;
+			return gate;
+		};
+		const opts = { key: "eu-oit-prd:/lg", describe, nowSeconds: now, cache, ttlMs: TTL, clock: () => now * 1000 };
+		const p1 = getRetentionFloor(opts);
+		const p2 = getRetentionFloor(opts);
+		const p3 = getRetentionFloor(opts);
+		release([{ retentionInDays: 45 }]);
+		const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+		expect(describeCalls).toBe(1);
+		expect(r1.floor).toBe(now - 45 * DAY);
+		expect(r2.floor).toBe(r1.floor);
+		expect(r3.floor).toBe(r1.floor);
+	});
+
+	test("expired cache entry triggers a fresh describe", async () => {
+		const cache = freshCache();
+		let describeCalls = 0;
+		const describe = async () => {
+			describeCalls++;
+			return [{ retentionInDays: 60 }];
+		};
+		let t = now * 1000;
+		const clock = () => t;
+		await getRetentionFloor({ key: "k", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		t += TTL + 1; // advance past TTL
+		await getRetentionFloor({ key: "k", describe, nowSeconds: now, cache, ttlMs: TTL, clock });
+		expect(describeCalls).toBe(2);
 	});
 });
