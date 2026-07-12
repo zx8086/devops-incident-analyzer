@@ -27,21 +27,42 @@ bool/regex queries or `logs-*` alone.
   "query": { "term": { "service.name": "prana-order-service" } },
   "sort": [ { "@timestamp": "desc" } ] }
 ```
-2. Match on the error message text (when you have an error string from the incident):
+2. Confirm the CITED error on THAT service (scope the message match to the
+   service so another service's matching error can't be mistaken for this one):
 ```json
 { "deployment": "eu-b2b", "index": "logs-apm.error-*", "size": 5,
-  "query": { "match": { "error.exception.message": "AFS Season code not found" } },
+  "query": { "bool": { "must": [
+    { "term": { "service.name": "prana-order-service" } },
+    { "match": { "error.exception.message": "AFS Season code not found" } } ] } },
   "sort": [ { "@timestamp": "desc" } ] }
 ```
 The returned doc carries the full stack trace under `error.exception.stacktrace.*`
 and the human error under `error.exception.message`. `service.name` on APM streams
 is keyword-typed (use `service.name`, NOT `service.name.keyword`).
 
-If query 1 returns hits, the service IS present and you are done -- report the
-error message, count, and timestamps. Only if BOTH return zero do you run the
-discovery aggregation (below) to resolve the real `service.name`, and only then
-consider reporting the service absent. NEVER report "service not present" or "0
-hits" without having run query 1 against `logs-apm.error-*` verbatim.
+Interpreting the two queries -- they answer DIFFERENT questions; correlate both,
+do not stop after query 1 alone:
+- Query 1 hits => the service IS PRESENT. That is ground truth: from here on you
+  may NOT report "service not present" or "0 hits" for it, regardless of any later
+  empty query. Skip the discovery aggregation (the name is already resolved).
+- Query 2 hits => the CITED error is observed on that service; report the message,
+  count, and timestamps.
+- Query 1 hits but query 2 empty => service present, cited error not (yet) seen in
+  window -- report "present, cited error not observed", NOT "absent". Broaden the
+  message terms or the window ONCE before concluding the error is unobserved.
+- Only when query 1 ALSO returns zero do you run the discovery aggregation (below)
+  to resolve the real `service.name` before considering the service absent.
+
+CRITICAL -- hits WIN over later empties (do not talk yourself out of data you
+already found). Once query 1 returns >= 1 hit, the "service present" conclusion is
+LOCKED: a later query returning zero does NOT overturn it -- it just means that
+later query was narrower or used a wrong field. NEVER let a trailing empty result
+flip a service you already found to "not present" or "0 hits".
+
+Field names matter -- use EXACTLY these (guessing a wrong field silently returns
+zero): match error text on `error.exception.message` (NOT `body.text`, NOT
+`message.text`); the service is `service.name` (keyword; NO `.keyword` suffix).
+If a query returns zero, first suspect a wrong FIELD NAME, not an absent service.
 
 ## Approach
 I execute focused, time-bounded queries against specific deployments.

@@ -110,10 +110,13 @@ export function mapAwsError(err: unknown): ToolError {
 	} else if (kind === "resource-not-found") {
 		toolError.advice =
 			"The named resource does not exist in this account/region. Verify the identifier and the region; this may be a routine finding (resource deleted or never created).";
-	} else if (kind === "bad-input" && QUERY_SYNTAX_PATTERN.test(err.message)) {
+	} else if (kind === "bad-input" && err.name === "MalformedQueryException" && QUERY_SYNTAX_PATTERN.test(err.message)) {
 		// SIO-1085: a query-STRING syntax error, NOT a window problem. Re-anchoring the
 		// time window does nothing. Steer the LLM to fix the queryString and give it a
-		// known-good example so it stops re-issuing the same broken query.
+		// known-good example so it stops re-issuing the same broken query. GATED on the
+		// exact error NAME so a generic ValidationException/InvalidParameterException
+		// (also bad-input) that happens to contain "unexpected token"/"parse error" in
+		// its message keeps its own remediation instead of being told to rewrite a query.
 		toolError.advice =
 			"This is a query SYNTAX error in queryString, NOT a time-window/retention problem -- do NOT re-anchor the window or retry the same query. Fix the CloudWatch Logs Insights syntax. A known-good minimal query is: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20` (each command on its own is separated by `|`; use `filter ... like /regex/` to match text, `fields` to select columns). If the account rejects standard Logs Insights syntax, drop the query to just `fields @timestamp, @message | limit 20` and filter client-side.";
 	} else if (

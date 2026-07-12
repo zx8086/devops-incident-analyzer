@@ -51,6 +51,19 @@ describe("mapAwsError retention-window handling (SIO-1078)", () => {
 		expect(mapped.advice).toContain("aws_logs_describe_log_groups");
 	});
 
+	// SIO-1085 (CodeRabbit): the syntax branch is gated on the exact error NAME, so a
+	// generic ValidationException whose message happens to contain syntax-like phrasing
+	// ("unexpected token") must NOT be told to rewrite queryString -- it keeps its own
+	// remediation (no advice here).
+	test("a ValidationException with syntax-like text does NOT get queryString-rewrite advice", () => {
+		const err = Object.assign(new Error("unexpected token near 'FOO' in parameter value"), {
+			name: "ValidationException",
+		});
+		const mapped = mapAwsError(err);
+		expect(mapped.kind).toBe("bad-input");
+		expect(mapped.advice).toBeUndefined();
+	});
+
 	test("a plain ValidationException stays bad-input WITHOUT retention advice", () => {
 		const err = Object.assign(new Error("The value 'x' is not valid"), { name: "ValidationException" });
 		const mapped = mapAwsError(err);
