@@ -38,5 +38,12 @@ export function embeddingMaxChars(env: NodeJS.ProcessEnv = process.env): number 
 export function truncateForEmbedding(text: string, maxChars: number | null = embeddingMaxChars()): string {
 	if (maxChars == null || !Number.isFinite(maxChars) || maxChars < 0) return text;
 	if (text.length <= maxChars) return text;
-	return text.slice(0, maxChars);
+	// Don't split a UTF-16 surrogate pair (emoji / non-BMP char) at the boundary --
+	// a lone surrogate is invalid Unicode. If maxChars lands on the low half of a
+	// pair, back off one code unit so the truncated head stays well-formed.
+	let end = maxChars;
+	const high = text.charCodeAt(end - 1);
+	const low = text.charCodeAt(end);
+	if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) end -= 1;
+	return text.slice(0, end);
 }

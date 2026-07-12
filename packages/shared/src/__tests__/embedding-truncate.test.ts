@@ -84,6 +84,20 @@ describe("truncateForEmbedding", () => {
 		expect(truncateForEmbedding(text, -1)).toBe(text);
 	});
 
+	test("does not split a surrogate pair at the boundary (backs off one code unit)", () => {
+		// "😀" is a surrogate pair (2 code units). Cap at 3 would land on its low half.
+		const text = `ab😀cd`; // code units: a b D83D DE00 c d
+		const result = truncateForEmbedding(text, 3);
+		expect(result).toBe("ab"); // dropped the whole emoji, not a lone high surrogate
+		// every code unit is a valid (non-lone-surrogate) scalar
+		for (const ch of result) expect(ch.codePointAt(0)).toBeLessThan(0xd800);
+	});
+
+	test("keeps a whole surrogate pair when the boundary falls after it", () => {
+		const text = `a😀bc`; // cap 3 -> a + full emoji (2 units)
+		expect(truncateForEmbedding(text, 3)).toBe("a😀");
+	});
+
 	describe("default from env", () => {
 		const prev = process.env.EMBEDDINGS_MAX_CHARS;
 		afterEach(() => {
