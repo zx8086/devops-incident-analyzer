@@ -31,8 +31,9 @@ path that spans repositories.
 3. Read the result: `importedByProjects` is the deterministic set of affected
    services (not a `gitlab_search` guess). `sourceProject`/`sourceFile` is where
    the changed definition lives.
-4. For group-wide deploy/failure context, use `gitlab_recent_deploys(since: ...)`
-   and `gitlab_pipeline_failures(since: ...)` -- ranked across all projects.
+4. For group-wide deploy/failure context, use `gitlab_recent_deploys` and
+   `gitlab_pipeline_failures` (both take a `since` timestamp) -- ranked across
+   all projects.
 5. Only drop to the per-project steps below when Orbit is disabled/indexing, the
    symbol is on a non-default branch, or the code is Terraform/YAML (Orbit
    indexes the default branch only and excludes HCL/YAML).
@@ -42,9 +43,13 @@ plus a post-merge Elastic error spike in a downstream service fires
 `orbit-deploy-blast-radius-vs-elastic`, grounding the root cause deterministically
 rather than relying on the aggregator LLM to reconstruct it in prose.
 
-Note: `gitlab_blast_radius` / the other Orbit `query_graph` tools consume GitLab
+For "who calls this definition across repos" use `gitlab_cross_project_callers`,
+and for a group-wide security sweep use `gitlab_recent_vulnerabilities`.
+
+Note: `gitlab_blast_radius` and the other billed Orbit tools consume GitLab
 Credits. Call `gitlab_graph_schema` (free) first if you need to ground a raw
-query; prefer the purpose-built tools over the raw escape hatch.
+query; prefer the purpose-built tools over the raw `gitlab_orbit_query_graph`
+escape hatch.
 
 ## Investigation Steps (per-project fallback)
 
