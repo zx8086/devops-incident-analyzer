@@ -248,9 +248,35 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 		return { tool: t, getCalls: () => calls };
 	}
 
-	test("short-circuits the third empty search without calling the underlying tool", async () => {
-		const { entries, logger } = makeLog();
-		const { tool: fake, getCalls } = buildCountingSearchTool(EMPTY_SEARCH);
+	function buildDiscoverySearchTool() {
+		// A discovery agg needs a service.name terms aggregation with size:0.
+		let calls = 0;
+		const t = tool(
+			async () => {
+				calls += 1;
+				return EMPTY_SEARCH;
+			},
+			{
+				name: "elasticsearch_search",
+				description: "Test fixture with an open schema so discovery aggs pass validation.",
+				schema: z
+					.object({
+						index: z.string().optional(),
+						q: z.string().optional(),
+						size: z.number().optional(),
+						aggs: z.unknown().optional(),
+					})
+					.passthrough(),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	// SIO-1084: discovery-aware guard. Two literal-name empties must NOT stop the
+	// agent before the service.name discovery aggregation runs.
+	test("does NOT short-circuit two literal empties before discovery has run", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildDiscoverySearchTool();
 		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
 		if (!wrapped) throw new Error("instrumentTools returned empty array");
 
@@ -263,9 +289,41 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 		await wrapped.invoke({
 			id: "c2",
 			name: "elasticsearch_search",
-			args: { index: "traces-*", q: "b" },
+			args: { index: "logs-apm.*", q: "b" },
 			type: "tool_call",
 		});
+		// The discovery agg is allowed through even though two empties preceded it.
+		await wrapped.invoke({
+			id: "c3",
+			name: "elasticsearch_search",
+			args: { size: 0, aggs: { by_service: { terms: { field: "service.name", size: 50 } } } },
+			type: "tool_call",
+		});
+
+		expect(getCalls()).toBe(3); // none short-circuited
+	});
+
+	test("short-circuits after discovery has run and the empty budget is exhausted", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: fake, getCalls } = buildDiscoverySearchTool();
+		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		// discovery empty (counts as 1) ...
+		await wrapped.invoke({
+			id: "c1",
+			name: "elasticsearch_search",
+			args: { size: 0, aggs: { by_service: { terms: { field: "service.name" } } } },
+			type: "tool_call",
+		});
+		// ... one more empty exhausts the budget of 2 ...
+		await wrapped.invoke({
+			id: "c2",
+			name: "elasticsearch_search",
+			args: { index: "logs-*", q: "b" },
+			type: "tool_call",
+		});
+		// ... the third is short-circuited.
 		const third = await wrapped.invoke({
 			id: "c3",
 			name: "elasticsearch_search",
@@ -273,7 +331,6 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 			type: "tool_call",
 		});
 
-		// Underlying tool ran only twice; the third was short-circuited by the guard.
 		expect(getCalls()).toBe(2);
 		const stopText = third instanceof ToolMessage ? String(third.content) : String(third);
 		expect(stopText).toContain("Stop searching");
@@ -306,5 +363,91 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 		});
 
 		expect(getCalls()).toBe(3);
+	});
+});
+
+// SIO-1084: the AWS start_query guard stops re-issuing an identical retention-window
+// rejection and forces an intervening describe_log_groups re-anchor.
+describe("SIO-1084: aws_logs_start_query loop guard", () => {
+	const RETENTION_ERROR = JSON.stringify({ _error: { kind: "bad-input", advice: "outside retention" } });
+
+	function buildStartQueryTool(payload: string) {
+		let calls = 0;
+		const t = tool(
+			async () => {
+				calls += 1;
+				return payload;
+			},
+			{
+				name: "aws_logs_start_query",
+				description: "Test fixture that counts underlying start_query invocations.",
+				schema: z
+					.object({
+						logGroupName: z.string().optional(),
+						startTime: z.number().optional(),
+						endTime: z.number().optional(),
+					})
+					.passthrough(),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	function buildDescribeTool() {
+		let calls = 0;
+		const t = tool(
+			async () => {
+				calls += 1;
+				return JSON.stringify({ logGroups: [{ logGroupName: "/ecs/x", retentionInDays: 60 }] });
+			},
+			{
+				name: "aws_logs_describe_log_groups",
+				description: "Test fixture describe.",
+				schema: z.object({ logGroupNamePattern: z.string().optional() }).passthrough(),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	test("blocks a second start_query after a retention rejection until describe runs", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: sq, getCalls: sqCalls } = buildStartQueryTool(RETENTION_ERROR);
+		const { tool: dlg } = buildDescribeTool();
+		const [wrappedSq, wrappedDlg] = instrumentTools([sq, dlg], { dataSourceId: "aws", log: logger });
+		if (!wrappedSq || !wrappedDlg) throw new Error("instrumentTools returned empty array");
+
+		// first start_query -> retention rejection, arms the re-anchor gate
+		await wrappedSq.invoke({
+			id: "s1",
+			name: "aws_logs_start_query",
+			args: { logGroupName: "/ecs/x", startTime: 1, endTime: 2 },
+			type: "tool_call",
+		});
+		// second start_query (different window) -> short-circuited
+		const blocked = await wrappedSq.invoke({
+			id: "s2",
+			name: "aws_logs_start_query",
+			args: { logGroupName: "/ecs/x", startTime: 3, endTime: 4 },
+			type: "tool_call",
+		});
+		expect(sqCalls()).toBe(1); // underlying tool ran once
+		const stopText = blocked instanceof ToolMessage ? String(blocked.content) : String(blocked);
+		expect(stopText).toContain("re-anchor");
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
+
+		// describe clears the gate; the next start_query runs
+		await wrappedDlg.invoke({
+			id: "d1",
+			name: "aws_logs_describe_log_groups",
+			args: { logGroupNamePattern: "order" },
+			type: "tool_call",
+		});
+		await wrappedSq.invoke({
+			id: "s3",
+			name: "aws_logs_start_query",
+			args: { logGroupName: "/ecs/x", startTime: 5, endTime: 6 },
+			type: "tool_call",
+		});
+		expect(sqCalls()).toBe(2); // ran again after re-anchor
 	});
 });

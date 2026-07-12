@@ -374,6 +374,36 @@ export const InvestigationFocusSchema = z.object({
 });
 export type InvestigationFocus = z.infer<typeof InvestigationFocusSchema>;
 
+// SIO-1084: Per-datasource canonical identifiers resolved BEFORE the sub-agent
+// fan-out by the resolveIdentifiers node. The loose incident service token (e.g.
+// "order-service") is enumerated against each store's real namespace so the
+// sub-agent queries the identifier that actually exists instead of guessing.
+// Every datasource block is optional (out of scope, disabled, or a failed probe
+// simply omits its block). Injected into each sub-agent's focus block. Per-turn
+// (replace reducer, NOT sticky) and stamped so a stale prior-turn resolution is
+// never rendered against a different service set.
+export const ResolvedIdentifiersSchema = z.object({
+	// Staleness stamps: the turn (messages.length) and the focus.services snapshot
+	// this resolution answers. The focus block only renders when resolvedForServices
+	// still set-equals the current focus.services.
+	resolvedForTurn: z.number(),
+	resolvedForServices: z.array(z.string()),
+	elastic: z.object({ serviceNames: z.array(z.string()) }).optional(),
+	couchbase: z.object({ scopes: z.record(z.string(), z.array(z.string())) }).optional(),
+	aws: z.object({ logGroups: z.array(z.string()), ecsServices: z.array(z.string()).optional() }).optional(),
+	kafka: z.object({ topics: z.array(z.string()), consumerGroups: z.array(z.string()) }).optional(),
+	konnect: z
+		.object({
+			controlPlaneId: z.string().optional(),
+			controlPlaneName: z.string().optional(),
+			serviceIds: z.array(z.string()).optional(),
+		})
+		.optional(),
+	gitlab: z.object({ projectId: z.string().optional(), pathWithNamespace: z.string().optional() }).optional(),
+	atlassian: z.object({ jiraProjectKeys: z.array(z.string()), confluenceSpaceKeys: z.array(z.string()) }).optional(),
+});
+export type ResolvedIdentifiers = z.infer<typeof ResolvedIdentifiersSchema>;
+
 // SIO-631: Mitigation steps produced by the propose-mitigation node
 export const MitigationStepsSchema = z.object({
 	investigate: z.array(z.string()),

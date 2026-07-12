@@ -70,6 +70,8 @@ export {
 	OrbitRecentDeploySchema,
 	type OrbitVulnerability,
 	OrbitVulnerabilitySchema,
+	type ResolvedIdentifiers,
+	ResolvedIdentifiersSchema,
 	type StreamEvent,
 	StreamEventSchema,
 	type ToolError,

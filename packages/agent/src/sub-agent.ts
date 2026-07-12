@@ -384,8 +384,27 @@ const MIN_FILTERED_TOOLS = 1;
 // case). These are group-scoped and need NO project resolution, so they must
 // stay reachable even when the action filter picks code_analysis. If Orbit is
 // disabled the tools are simply absent from allTools and this is a no-op.
+// SIO-1084: extend the search-first idiom to every datasource so each sub-agent
+// ALWAYS has its "where to look" enumerator, regardless of which action group the
+// filter selected -- the loose incident token must be resolvable to the real
+// identifier (couchbase scope/collection, kafka topic/group, konnect control-plane,
+// atlassian project/space) even on the lazy path (node disabled / probe failed).
+// gitlab already resolves name -> numeric project_id via gitlab_search. Elastic is
+// intentionally omitted: elasticsearch_search (which runs the service.name terms-agg)
+// is already in the `search` group, and list_indices/indices_summary resolve index
+// names, not service.name. Each set is tiny, keeping the datasource under
+// MAX_TOOLS_PER_AGENT (25).
 const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	gitlab: ["gitlab_search", "gitlab_graph_schema", "gitlab_blast_radius"],
+	couchbase: ["capella_get_scopes_and_collections"],
+	konnect: ["konnect_list_control_planes", "konnect_list_services"],
+	atlassian: ["atlassian_getVisibleJiraProjects", "atlassian_getConfluenceSpaces"],
+	// NOTE: kafka is deliberately NOT here. Force-including kafka_list_topics would
+	// reintroduce the SIO-785 regression -- the broad topic-listing tool crowds out
+	// the specialized dlq_messages tools (kafka_list_dlq_topics), breaking the typed
+	// KafkaFindingsCard DLQ extractor. Kafka identifier resolution is handled up-front
+	// by the resolveIdentifiers node (Part B) instead, which does not touch the
+	// per-action tool budget.
 };
 
 // SIO-1029: union the datasource's always-include resolution tools into a
@@ -507,7 +526,13 @@ export function selectToolsByAction(
 		}
 	}
 
-	return { tools: allTools.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+	// SIO-1084: even on the raw-slice fallback (reached when the action_tool_map
+	// names don't resolve to runtime tool names -- e.g. konnect's YAML uses bare
+	// `list_services` while runtime tools are `konnect_*`-prefixed), still union in
+	// the datasource's resolution tools so the "where to look" enumerator is always
+	// present, then slice. Guarantees the A5 invariant on every path.
+	const withResolution = withResolutionTools(allTools.slice(0, MAX_TOOLS_PER_AGENT), allTools, dataSourceId);
+	return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 }
 
 interface RunOptions {
@@ -549,7 +574,10 @@ async function runSubAgent(
 		// normalizer) so a sub-agent choosing a time-windowed tool call (e.g.
 		// aws_logs_start_query epoch seconds) resolves it against a real clock instead of
 		// guessing an absolute epoch and landing outside the data source's retention window.
-		const focusBlock = buildFocusBlock(focus, new Date().toISOString());
+		// SIO-1084: also inject this datasource's pre-resolved canonical identifiers
+		// (from the resolveIdentifiers node), so the sub-agent queries the real
+		// service.name / log group / scope that exists instead of guessing the token.
+		const focusBlock = buildFocusBlock(focus, new Date().toISOString(), state.resolvedIdentifiers, dataSourceId);
 		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
 		// iterations and per-deployment fan-out share the Bedrock cache prefix within
 		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).

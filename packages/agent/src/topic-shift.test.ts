@@ -65,6 +65,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		pendingCorrelations: [],
 		partialFailures: [],
 		investigationFocus: undefined,
+		resolvedIdentifiers: undefined,
 		pendingTopicShiftPrompt: undefined,
 		...overrides,
 	} as AgentStateType;

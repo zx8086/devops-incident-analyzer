@@ -83,6 +83,7 @@ describe("detectTopicShift interrupt round-trip (SIO-751)", () => {
 			confidenceCap: undefined,
 			pendingCorrelations: [],
 			partialFailures: [],
+			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
 		};
 
@@ -157,6 +158,7 @@ describe("detectTopicShift interrupt round-trip (SIO-751)", () => {
 			confidenceCap: undefined,
 			pendingCorrelations: [],
 			partialFailures: [],
+			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
 		};
 
@@ -212,6 +214,7 @@ describe("detectTopicShift interrupt round-trip (SIO-751)", () => {
 			confidenceCap: undefined,
 			pendingCorrelations: [],
 			partialFailures: [],
+			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
 		};
 

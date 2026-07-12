@@ -10,6 +10,7 @@ import type {
 	MitigationSteps,
 	NormalizedIncident,
 	PendingAction,
+	ResolvedIdentifiers,
 	ToolPlanStep,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
@@ -190,6 +191,17 @@ export const AgentState = Annotation.Root({
 	// prior value is preserved across turns via the checkpointer.
 	investigationFocus: Annotation<InvestigationFocus | undefined>({
 		reducer: (current, next) => next ?? current,
+		default: () => undefined,
+	}),
+
+	// SIO-1084: Per-datasource canonical identifiers resolved before fan-out by the
+	// resolveIdentifiers node. REPLACE reducer (not sticky) -- resolution is per-turn
+	// derived data, so each turn that runs the node overwrites the prior value; a
+	// stale prior-turn resolution can't linger. Stamped (resolvedForTurn /
+	// resolvedForServices) so the focus block suppresses injection when the stamp
+	// no longer matches the current focus.services.
+	resolvedIdentifiers: Annotation<ResolvedIdentifiers | undefined>({
+		reducer: (_current, next) => next,
 		default: () => undefined,
 	}),
 

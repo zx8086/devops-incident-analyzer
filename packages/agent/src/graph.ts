@@ -24,6 +24,7 @@ import { aggregateMitigation } from "./mitigation.ts";
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 import { normalizeIncident } from "./normalizer.ts";
 import { getAgent } from "./prompt-context.ts";
+import { resolveIdentifiers } from "./resolve-identifiers.ts";
 import { respond } from "./responder.ts";
 import { createSelectRunbooksNode } from "./runbook-selector.ts";
 import { AgentState, type AgentStateType } from "./state.ts";
@@ -117,6 +118,11 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// it can read targetDataSources, and before topic-shift/supervise so
 		// awsTargetEstates is populated when the AWS sub-agent fans out.
 		.addNode("awsEstateRouter", traceNode("awsEstateRouter", awsEstateRouter))
+		// SIO-1084: resolve the loose incident service to canonical per-datasource
+		// identifiers before fan-out. Always edged; self-skips (returns {}) when
+		// disabled via RESOLVE_IDENTIFIERS_ENABLED or when there is nothing to resolve
+		// -- same runtime early-return idiom as awsEstateRouter.
+		.addNode("resolveIdentifiers", traceNode("resolveIdentifiers", resolveIdentifiers))
 		// SIO-850: knowledge-graph nodes (opt-in; unreachable when disabled).
 		.addNode("recordEntities", traceNode("recordEntities", recordGraphEntities))
 		.addNode("graphEnrich", traceNode("graphEnrich", graphEnrich))
@@ -151,7 +157,12 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("entityExtractor", knowledgeGraphEnabled ? "recordEntities" : "awsEstateRouter")
 		.addEdge("recordEntities", "graphEnrich")
 		.addEdge("graphEnrich", "awsEstateRouter")
-		.addEdge("awsEstateRouter", "detectTopicShift")
+		// SIO-1084: awsEstateRouter -> resolveIdentifiers -> detectTopicShift. The
+		// resolver runs after awsEstateRouter (so awsTargetEstates is populated for
+		// the per-estate AWS probe) and before the fan-out (so resolvedIdentifiers
+		// reaches every sub-agent via the ...state spread in supervise()).
+		.addEdge("awsEstateRouter", "resolveIdentifiers")
+		.addEdge("resolveIdentifiers", "detectTopicShift")
 		.addConditionalEdges("detectTopicShift", supervise)
 
 		// Sub-agent results flow to alignment
