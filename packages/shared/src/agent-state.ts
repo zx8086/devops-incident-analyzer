@@ -474,15 +474,21 @@ export const ResolvedIdentifiersSchema = z.object({
 	resolvedForServices: z.array(z.string()),
 	elastic: z.object({ serviceNames: z.array(z.string()) }).optional(),
 	// SIO-1087: `scopes` = every scope -> its collection names (enumerated, never filtered).
-	// `indexedCollections` = scope -> the subset of those collections that have an ONLINE
-	// primary/secondary index (queryable with a plain SELECT). The focus block tags each collection
-	// [indexed] vs [NO INDEX -> key lookup] so the agent stops SELECT *-ing index-less collections
-	// (which throw "no index available" planning failures). Absent = index probe unavailable/failed;
-	// the renderer then omits the tag rather than falsely marking everything unindexed.
+	// SIO-1088: `indexInfo` = scope -> collection -> { hasPrimary, secondaryKeyFields }. A bare
+	// SELECT * needs a PRIMARY index; a collection with only SECONDARY indexes rejects SELECT *
+	// ("no index available") but IS queryable via a WHERE leading on a secondary index key. The
+	// focus block tags [PRIMARY - SELECT * ok] vs [SECONDARY ONLY - query WHERE on: <fields>] so the
+	// agent stops mistaking a SELECT * no-index failure for missing data. Absent = index probe
+	// unavailable/failed; the renderer then omits the tag rather than falsely guessing.
 	couchbase: z
 		.object({
 			scopes: z.record(z.string(), z.array(z.string())),
-			indexedCollections: z.record(z.string(), z.array(z.string())).optional(),
+			indexInfo: z
+				.record(
+					z.string(),
+					z.record(z.string(), z.object({ hasPrimary: z.boolean(), secondaryKeyFields: z.array(z.string()) })),
+				)
+				.optional(),
 		})
 		.optional(),
 	aws: z.object({ logGroups: z.array(z.string()), ecsServices: z.array(z.string()).optional() }).optional(),

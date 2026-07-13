@@ -90,25 +90,48 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				lines.push(
 					"- Couchbase scopes -> collections (query with a collection-only FROM and the matching scope_name; do NOT write a bucket.scope.collection path):",
 				);
-				// SIO-1087: tag each collection [indexed] vs [NO INDEX] when the index probe ran, so
-				// the agent runs a plain SELECT only on indexed collections and reaches for key-based
-				// lookup (capella_get_document_by_id / USE KEYS) on the rest -- instead of SELECT *-ing
-				// index-less collections and generating "no index available" planning failures. Keep
-				// EVERY collection listed (a collection with data but no index is itself a finding).
-				const indexedByScope = resolved.couchbase.indexedCollections;
-				const indexProbeRan = indexedByScope !== undefined;
+				// SIO-1088: a bare SELECT * needs a PRIMARY index. A collection with only SECONDARY
+				// indexes REJECTS SELECT * with "no index available" -- but its data is fully queryable
+				// via a WHERE clause LEADING on a secondary index key field. So tag each collection
+				// [PRIMARY] (SELECT * ok) vs [SECONDARY ONLY - query WHERE on: <fields>], and list the
+				// exact key fields so the agent builds a covered query instead of mis-reading the
+				// SELECT * failure as "no data / missing index". Keep EVERY collection listed.
+				const indexInfo = resolved.couchbase.indexInfo;
+				const indexProbeRan = indexInfo !== undefined;
+				// SIO-1088: these are DISTINCT states with DIFFERENT remediation. A [SECONDARY ONLY]
+				// collection is queryable via a WHERE that leads on a key field; a [NO USABLE INDEX]
+				// collection can't be satisfied by ANY WHERE (no index to plan against) and needs
+				// key-based lookup. Conflating them would hand the WHERE guidance to a no-index
+				// collection -> the agent tries a WHERE, it fails, and it may re-misread that as absence.
+				let anySecondaryOnly = false;
+				let anyNoUsableIndex = false;
 				for (const [scope, collections] of Object.entries(resolved.couchbase.scopes)) {
 					if (!indexProbeRan) {
 						lines.push(`    ${scope}: [${collections.join(", ")}]`);
 						continue;
 					}
-					const indexedSet = new Set(indexedByScope[scope] ?? []);
-					const tagged = collections.map((c) => (indexedSet.has(c) ? `${c} [indexed]` : `${c} [NO INDEX]`));
+					const byCollection = indexInfo[scope] ?? {};
+					const tagged = collections.map((c) => {
+						const info = byCollection[c];
+						if (info?.hasPrimary) return `${c} [PRIMARY index - SELECT * ok]`;
+						if (info && info.secondaryKeyFields.length > 0) {
+							anySecondaryOnly = true;
+							return `${c} [SECONDARY ONLY - query WHERE on: ${info.secondaryKeyFields.join(", ")}]`;
+						}
+						// Present in the scope map but no online index at all.
+						anyNoUsableIndex = true;
+						return `${c} [NO USABLE INDEX - use capella_get_document_by_id / USE KEYS]`;
+					});
 					lines.push(`    ${scope}: [${tagged.join(", ")}]`);
 				}
-				if (indexProbeRan) {
+				if (indexProbeRan && anySecondaryOnly) {
 					lines.push(
-						"    A [NO INDEX] collection has no queryable index -- do NOT SELECT * from it (it throws a 'no index available' planning failure). Use capella_get_document_by_id / USE KEYS, or report the missing index as a finding. Run plain SELECTs only on [indexed] collections.",
+						"    A [SECONDARY ONLY] collection HAS data but no primary index -- a bare SELECT * FAILS with 'no index available' (this is NOT missing data). Query it with a WHERE clause that LEADS on one of the listed key fields, e.g. SELECT <fields> FROM <collection> WHERE <firstKeyField> = <value> [AND ...]. Never conclude a collection is empty or has a schema problem from a SELECT * failure.",
+					);
+				}
+				if (indexProbeRan && anyNoUsableIndex) {
+					lines.push(
+						"    A [NO USABLE INDEX] collection may still have data -- NO WHERE query can be planned without any index (a WHERE will also fail with 'no index available'). Use capella_get_document_by_id or USE KEYS instead. Never conclude it is empty from a SELECT * or WHERE failure.",
 					);
 				}
 			}

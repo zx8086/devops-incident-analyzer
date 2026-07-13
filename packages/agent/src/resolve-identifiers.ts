@@ -18,6 +18,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { matchesFocus, tokenize } from "./correlation/focus-match.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
+	type CouchbaseIndexMap,
 	parseAtlassianProjects,
 	parseAtlassianSpaces,
 	parseAwsLogGroups,
@@ -265,21 +266,33 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
 	if (Object.keys(scopes).length === 0) return {};
 	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
-	// SIO-1087: key off the probe SUCCEEDING, not on a non-empty result. A probe that succeeds but
-	// returns zero online indexes (every collection unindexed) is the exact case the [NO INDEX]
-	// guidance must fire for -- gating on `> 0` would collapse it to `undefined` and the focus block
-	// would treat it as "probe never ran", rendering collections untagged. An empty-but-present map
-	// correctly tags every collection [NO INDEX]; a failed probe stays undefined (renders untagged).
-	let indexedCollections: Record<string, string[]> | undefined;
+	// SIO-1088: capture per-collection primary/secondary index info so the focus block can steer the
+	// agent to the RIGHT query shape (SELECT * only where a primary index exists; WHERE-on-key-field
+	// elsewhere). Key off the probe SUCCEEDING (an empty-but-present map correctly marks every
+	// collection secondary-less; a failed probe stays undefined -> renderer omits the tag).
+	let indexInfo: CouchbaseIndexMap | undefined;
 	if (indexesRes.status === "fulfilled") {
-		indexedCollections = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
+		const rawIndexes = normalizeToolContent(indexesRes.value);
+		indexInfo = parseCouchbaseSystemIndexes(rawIndexes);
+		// SIO-1088 (CodeRabbit): distinguish a GENUINE "no online indexes" response from PARSE DRIFT
+		// (the upstream shape changed and the parser silently extracted nothing). Both collapse to an
+		// empty map otherwise, which would mislabel every collection [NO USABLE INDEX]. If the raw
+		// payload plainly contained index rows (keyspace_id/scope_id keys) but we extracted zero,
+		// that's drift -- warn AND omit the tags (undefined) rather than asserting "no index".
+		if (Object.keys(indexInfo).length === 0 && /"(?:keyspace_id|scope_id)"\s*:/.test(rawIndexes)) {
+			logger.warn(
+				{ rawSample: rawIndexes.slice(0, 200) },
+				"couchbase index probe returned rows but parser extracted none (shape drift?); omitting index tags",
+			);
+			indexInfo = undefined;
+		}
 	} else {
 		logger.warn(
 			{ error: msg(indexesRes.reason) },
 			"couchbase index probe failed; collections rendered without index tags",
 		);
 	}
-	return { couchbase: indexedCollections ? { scopes, indexedCollections } : { scopes } };
+	return { couchbase: indexInfo ? { scopes, indexInfo } : { scopes } };
 }
 
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

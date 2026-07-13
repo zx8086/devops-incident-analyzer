@@ -76,10 +76,47 @@ export function parseCouchbaseScopeTree(normalized: string): Record<string, stri
 
 // COUCHBASE (SIO-1087): capella_get_system_indexes returns the executeAnalysisQuery markdown --
 // a fenced ```json block wrapping an array of system:indexes rows. Each row has keyspace_id
-// (collection), scope_id, bucket_id, name, is_primary, and state ("online"|"deferred"|...). Return
-// scope -> the collections that have at least one ONLINE index (queryable with a plain SELECT).
-// A collection absent from the result has no index. Defensive: returns {} on any shape drift.
-export function parseCouchbaseSystemIndexes(normalized: string): Record<string, string[]> {
+// (collection), scope_id, bucket_id, name, is_primary (true only for a primary index),
+// index_key (backtick-wrapped field expressions), and state ("online"|"deferred"|...).
+//
+// SIO-1088: the crucial distinction (validated live against seasons.dates): "has an ONLINE index"
+// is NOT the same as "supports SELECT *". A bare SELECT * needs a PRIMARY index; a collection with
+// only SECONDARY (GSI) indexes rejects SELECT * with "no index available" (code 4000) but IS
+// queryable via a WHERE clause that LEADS on the index's first key field. So per collection we
+// capture whether it has a primary index and the union of secondary index-key FIELD names (so the
+// focus block can tell the agent exactly which fields to filter on). Only ONLINE indexes count.
+// Defensive: returns {} on any shape drift.
+export interface CollectionIndexInfo {
+	hasPrimary: boolean;
+	// Field names appearing as index keys across the collection's ONLINE secondary indexes, in
+	// first-seen order (leading keys first). Function expressions (e.g. concat2(...)) are dropped --
+	// only plain field names, since those are what a WHERE predicate can filter on.
+	secondaryKeyFields: string[];
+}
+
+// scope -> collection -> index info.
+export type CouchbaseIndexMap = Record<string, Record<string, CollectionIndexInfo>>;
+
+// Pull plain field names out of an index_key array, preserving order and dropping function exprs.
+// e.g. ['`styleSeasonCodeFms`', '`divisionCode`', 'concat2("_", ...)'] -> ['styleSeasonCodeFms','divisionCode']
+function extractKeyFields(indexKey: unknown): string[] {
+	if (!Array.isArray(indexKey)) return [];
+	const fields: string[] = [];
+	for (const raw of indexKey) {
+		if (typeof raw !== "string") continue;
+		const trimmed = raw.trim();
+		// A plain field key is backtick-wrapped: `fieldName`. The real disambiguator is "is this a
+		// function/expression, not a field" -- so accept ANY backtick-wrapped name and reject only
+		// keys containing "(" (a function/expression like concat2(...)). This preserves legitimate
+		// field names that need escaping for other reasons (hyphens, spaces, leading digit) rather
+		// than silently dropping them -- a dropped LEADING key would misdirect the WHERE guidance.
+		const m = trimmed.match(/^`([^`]+)`$/);
+		if (m?.[1] && !m[1].includes("(")) fields.push(m[1]);
+	}
+	return fields;
+}
+
+export function parseCouchbaseSystemIndexes(normalized: string): CouchbaseIndexMap {
 	// executeAnalysisQuery wraps rows in a ```json fenced block after a "# Title" heading and
 	// followed by "## Query Execution Details" -- firstJson's slice-to-end would include the
 	// closing fence and trailing prose and fail to parse. Extract the fenced block first.
@@ -95,22 +132,29 @@ export function parseCouchbaseSystemIndexes(normalized: string): Record<string, 
 	if (parsed == null) parsed = firstJson(normalized);
 	// The rows live under t.* -> flat row objects; the outer parse may be an array of rows.
 	const rows: unknown[] = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" ? [parsed] : [];
-	const indexed: Record<string, Set<string>> = {};
+	const map: CouchbaseIndexMap = {};
 	for (const row of rows) {
 		if (!row || typeof row !== "object") continue;
 		const r = row as Record<string, unknown>;
 		const scope = typeof r.scope_id === "string" ? r.scope_id : undefined;
 		const collection = typeof r.keyspace_id === "string" ? r.keyspace_id : undefined;
 		const state = typeof r.state === "string" ? r.state : undefined;
-		// Only ONLINE indexes make a collection queryable; a deferred/building index does not.
+		// A collection-level index has BOTH scope_id and keyspace_id; skip bucket-level primary
+		// indexes (scope_id null). Only ONLINE indexes make a collection queryable.
 		if (!scope || !collection || state !== "online") continue;
-		const set = indexed[scope] ?? new Set<string>();
-		set.add(collection);
-		indexed[scope] = set;
+		const scopeMap = map[scope] ?? {};
+		map[scope] = scopeMap;
+		const info = scopeMap[collection] ?? { hasPrimary: false, secondaryKeyFields: [] };
+		scopeMap[collection] = info;
+		if (r.is_primary === true) {
+			info.hasPrimary = true;
+			continue;
+		}
+		for (const f of extractKeyFields(r.index_key)) {
+			if (!info.secondaryKeyFields.includes(f)) info.secondaryKeyFields.push(f);
+		}
 	}
-	const out: Record<string, string[]> = {};
-	for (const [scope, set] of Object.entries(indexed)) out[scope] = [...set];
-	return out;
+	return map;
 }
 
 // AWS: aws_logs_describe_log_groups returns { logGroups: [{ logGroupName, ... }] }
