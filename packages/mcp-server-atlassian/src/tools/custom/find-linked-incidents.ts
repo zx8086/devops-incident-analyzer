@@ -13,15 +13,33 @@ function escapeJqlString(value: string): string {
 	return value.replace(/[\\"]/g, "\\$&");
 }
 
+// SIO-1093 (CodeRabbit): bound domain-term input so a large/duplicated list can't blow up the JQL/CQL
+// OR-clause count or query length. Trim, drop blanks, cap per-term length, dedupe, cap total count.
+export const MAX_ERROR_KEYWORDS = 8;
+export const MAX_ERROR_KEYWORD_LENGTH = 100;
+
+export function sanitizeErrorKeywords(keywords: string[] | undefined): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of keywords ?? []) {
+		const term = raw.trim().slice(0, MAX_ERROR_KEYWORD_LENGTH);
+		if (term.length === 0 || seen.has(term)) continue;
+		seen.add(term);
+		out.push(term);
+		if (out.length >= MAX_ERROR_KEYWORDS) break;
+	}
+	return out;
+}
+
+// Shared Zod field so the tool registration schemas enforce the same bounds the sanitizer applies.
+export const errorKeywordsField = z.array(z.string().max(MAX_ERROR_KEYWORD_LENGTH)).max(MAX_ERROR_KEYWORDS).default([]);
+
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to search for in Jira incidents"),
 	componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
-	errorKeywords: z
-		.array(z.string())
-		.default([])
-		.describe(
-			"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']). Broadens the search beyond an exact service label so tickets that don't carry the service as a Jira label are still found.",
-		),
+	errorKeywords: errorKeywordsField.describe(
+		"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']). Broadens the search beyond an exact service label so tickets that don't carry the service as a Jira label are still found.",
+	),
 	withinDays: z.number().int().positive().default(30).describe("How many days back to search (default 30)"),
 	limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
 	incidentProjects: z
@@ -111,7 +129,7 @@ export function buildJql({
 		...(componentLabel
 			? [`component = "${escapeJqlString(componentLabel)}"`, `labels = "${escapeJqlString(componentLabel)}"`]
 			: []),
-		...(errorKeywords ?? []).filter((k) => k.trim().length > 0).map((k) => `text ~ "${escapeJqlString(k)}"`),
+		...sanitizeErrorKeywords(errorKeywords).map((k) => `text ~ "${escapeJqlString(k)}"`),
 	];
 	parts.push(`(${matchClauses.join(" OR ")})`);
 
@@ -197,12 +215,9 @@ export function registerFindLinkedIncidents(
 		{
 			service: z.string().describe("Service name to search for in Jira incidents"),
 			componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
-			errorKeywords: z
-				.array(z.string())
-				.default([])
-				.describe(
-					"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']) so tickets not labelled with the service are still found.",
-				),
+			errorKeywords: errorKeywordsField.describe(
+				"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']) so tickets not labelled with the service are still found.",
+			),
 			withinDays: z.number().int().positive().default(30).describe("How many days back to search"),
 			limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
 		},

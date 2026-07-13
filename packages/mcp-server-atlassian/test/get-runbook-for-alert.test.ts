@@ -22,10 +22,25 @@ describe("getRunbookForAlert.buildCql", () => {
 		expect(cql).toContain('title ~ "AFS season code"');
 	});
 
-	test("SIO-1093: blank terms are dropped", () => {
-		const cql = buildCql({ service: "svc", errorKeywords: ["", " "], spaceKey: undefined });
+	test("SIO-1093: blank/whitespace-only terms are dropped entirely", () => {
+		const cql = buildCql({ service: "svc", errorKeywords: ["", " ", "\t"], spaceKey: undefined });
 		expect(cql).not.toContain('text ~ ""');
 		expect(cql).not.toContain('title ~ ""');
+		// A retained whitespace term would render as `text ~ " "` -- assert it is absent too.
+		expect(cql).not.toContain('text ~ " "');
+		expect(cql).not.toContain('title ~ " "');
+		// The only surviving term is the service, matched as text OR title.
+		expect(cql).toBe('(text ~ "svc" OR title ~ "svc") ORDER BY lastModified DESC');
+	});
+
+	test("SIO-1093 (CodeRabbit): caps and dedupes errorKeywords", () => {
+		const many = Array.from({ length: 20 }, (_, i) => `kw${i}`);
+		const cql = buildCql({ service: "svc", errorKeywords: [...many, "kw0", "kw0"], spaceKey: undefined });
+		// MAX_ERROR_KEYWORDS = 8; service + 8 keywords = 9 terms, each as text AND title -> 18 clauses.
+		expect((cql.match(/text ~ /g) ?? []).length).toBe(9);
+		// Duplicate kw0 appears once.
+		expect((cql.match(/text ~ "kw0"/g) ?? []).length).toBe(1);
+		expect(cql).not.toContain("kw9"); // beyond the cap
 	});
 });
 

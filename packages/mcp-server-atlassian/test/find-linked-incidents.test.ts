@@ -40,15 +40,32 @@ describe("findLinkedIncidents.buildJql", () => {
 		expect(jql).toContain('text ~ "THE1"');
 	});
 
-	test("SIO-1093: blank errorKeywords are dropped", () => {
+	test("SIO-1093: blank/whitespace-only errorKeywords are dropped entirely", () => {
 		const jql = buildJql({
 			service: "svc",
 			componentLabel: undefined,
-			errorKeywords: ["", "  "],
+			errorKeywords: ["", "  ", "\t"],
 			withinDays: 30,
 			incidentProjects: [],
 		});
 		expect(jql).not.toContain('text ~ ""');
+		expect(jql).not.toContain('text ~ "  "');
+		expect(jql).not.toContain('text ~ "\t"');
+	});
+
+	test("SIO-1093 (CodeRabbit): caps and dedupes errorKeywords", () => {
+		const many = Array.from({ length: 20 }, (_, i) => `kw${i}`);
+		const jql = buildJql({
+			service: "svc",
+			componentLabel: undefined,
+			errorKeywords: [...many, "kw0"],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		// MAX_ERROR_KEYWORDS = 8, so only kw0..kw7 survive; kw8+ are dropped.
+		expect(jql).toContain('text ~ "kw7"');
+		expect(jql).not.toContain('text ~ "kw8"');
+		expect((jql.match(/text ~ "kw0"/g) ?? []).length).toBe(1);
 	});
 });
 

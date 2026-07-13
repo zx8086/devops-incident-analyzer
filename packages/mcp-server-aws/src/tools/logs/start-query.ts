@@ -152,6 +152,12 @@ export function matchesTarget(g: DescribedLogGroup, target: string, isNameTarget
 // the exact match past page 1. Bound the walk so a pathological prefix never loops unboundedly.
 const MAX_DESCRIBE_PAGES = 20;
 
+// SIO-1091: only run the retention describe (a serial hot-path round-trip) when the query start is
+// older than this. The default now-30d window and anything more recent sits inside any realistic
+// log-group retention, so clamping cannot fire and the describe is pure overhead. 45 days > the
+// 30-day default, so only an explicitly-widened, genuinely-old window pays the describe cost.
+const CLAMP_PROBE_MIN_AGE_SECONDS = 45 * 86_400;
+
 // Best-effort describe of the targeted log groups to read retention data for the clamp. Returns null
 // on any failure -- the clamp is then simply skipped and the query is sent as-is.
 async function describeRetentionGroups(
@@ -202,22 +208,29 @@ export function startQuery(config: AwsConfig) {
 			// SIO-1091: best-effort retention clamp. If we can cheaply read a real retention floor and
 			// the (relative) start predates it, nudge start forward to the earliest retained instant so
 			// CloudWatch does not 400. This never REJECTS, never year-shifts, and never gates the query:
-			// if the describe fails we just send the window as-is. The default now-30d window is inside
-			// any typical retention, so the clamp is a rare edge, not the load-bearing path it once was.
+			// if the describe fails we just send the window as-is.
+			//
+			// The describe is a serial round-trip on the incident hot path, so we ONLY pay it when a
+			// clamp could plausibly matter: a start older than CLAMP_PROBE_MIN_AGE_SECONDS. A recent
+			// window (incl. the default now-30d) sits inside any realistic retention, so we skip the
+			// describe entirely and send the query as-is. This keeps the clamp best-effort without
+			// re-introducing the retention cache that SIO-1091 deleted (CodeRabbit review).
 			let effectiveStart = startTime;
-			const groups = await describeRetentionGroups(config, params);
-			if (groups && groups.length > 0) {
-				const floor = resolveQueryFloor(groups, nowSeconds);
-				if (Number.isFinite(floor) && effectiveStart < floor && floor <= endTime) {
-					logger.info(
-						{
-							tool: "aws_logs_start_query",
-							requestedStart: new Date(effectiveStart * 1000).toISOString(),
-							clampedStart: new Date(floor * 1000).toISOString(),
-						},
-						"Clamped query start to the log group's earliest retained instant",
-					);
-					effectiveStart = floor;
+			if (startTime < nowSeconds - CLAMP_PROBE_MIN_AGE_SECONDS) {
+				const groups = await describeRetentionGroups(config, params);
+				if (groups && groups.length > 0) {
+					const floor = resolveQueryFloor(groups, nowSeconds);
+					if (Number.isFinite(floor) && effectiveStart < floor && floor <= endTime) {
+						logger.info(
+							{
+								tool: "aws_logs_start_query",
+								requestedStart: new Date(effectiveStart * 1000).toISOString(),
+								clampedStart: new Date(floor * 1000).toISOString(),
+							},
+							"Clamped query start to the log group's earliest retained instant",
+						);
+						effectiveStart = floor;
+					}
 				}
 			}
 

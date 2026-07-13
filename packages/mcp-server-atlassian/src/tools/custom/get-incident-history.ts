@@ -5,17 +5,16 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
-import { buildJql } from "./find-linked-incidents.js";
+import { buildJql, errorKeywordsField } from "./find-linked-incidents.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
 const log = createContextLogger("get-incident-history");
 
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to aggregate incident history for"),
-	errorKeywords: z
-		.array(z.string())
-		.default([])
-		.describe("Incident domain terms to text-match so tickets not labelled with the service are still counted."),
+	errorKeywords: errorKeywordsField.describe(
+		"Incident domain terms to text-match so tickets not labelled with the service are still counted.",
+	),
 	windowDays: z.number().int().positive().default(30).describe("Number of days to look back"),
 	groupBy: z.enum(["week", "month"]).default("week").describe("Time bucket granularity"),
 	incidentProjects: z.array(z.string()).default([]).describe("Jira project keys to scope the search"),
@@ -191,10 +190,9 @@ export function registerGetIncidentHistory(
 		"Aggregate Jira incident history for a service into time buckets. Returns per-bucket counts, MTTR, and totals.",
 		{
 			service: z.string().describe("Service name to aggregate incident history for"),
-			errorKeywords: z
-				.array(z.string())
-				.default([])
-				.describe("Incident domain terms to text-match so tickets not labelled with the service are still counted."),
+			errorKeywords: errorKeywordsField.describe(
+				"Incident domain terms to text-match so tickets not labelled with the service are still counted.",
+			),
 			windowDays: z.number().int().positive().default(30).describe("Number of days to look back"),
 			groupBy: z.enum(["week", "month"]).default("week").describe("Time bucket granularity"),
 		},
