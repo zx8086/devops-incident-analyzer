@@ -83,6 +83,17 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 		case "elastic":
 			if (resolved.elastic?.serviceNames.length) {
 				lines.push(`- Elastic service.name candidates: ${resolved.elastic.serviceNames.join(", ")}`);
+				// SIO-1089: hand the agent the WORKING query shape so it does not thrash into
+				// discovery/permutation. APM app errors live in logs-apm.error-*, keyed on
+				// service.name; and a zero result on a narrow @timestamp window is almost always
+				// a too-narrow window on a CHRONIC error -- widen it before concluding absence.
+				lines.push(
+					"  Query APM errors in index logs-apm.error-* with a term filter on the candidate " +
+						"service.name + match_phrase on error.exception.message. If a query returns 0 hits, " +
+						"WIDEN the @timestamp window (gte now-24h, then now-7d) and retry BEFORE running " +
+						"discovery or concluding the service/error is absent -- a chronic error is easily " +
+						"missed by a 1-hour slice.",
+				);
 			}
 			break;
 		case "couchbase":
