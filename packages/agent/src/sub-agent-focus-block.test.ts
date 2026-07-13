@@ -102,6 +102,31 @@ describe("SIO-1084 B5: resolved-identifiers injection", () => {
 		expect(block).not.toContain("/ecs/order-service");
 	});
 
+	test("elastic resolved block instructs a broad multi_match, not an error-logs pin", () => {
+		const block = buildFocusBlock(
+			FOCUS,
+			NOW,
+			{
+				resolvedForTurn: 1,
+				resolvedForServices: FOCUS.services,
+				elastic: { serviceNames: ["pvh-services-orders", "orders"] },
+			},
+			"elastic",
+		);
+		expect(block).toContain("pvh-services-orders");
+		expect(block).toContain("logs-*,logs-apm.*");
+		expect(block).toContain("multi_match");
+		expect(block).toContain("message");
+		expect(block).toContain("error.exception.message");
+		expect(block).toContain("body.text");
+		expect(block).toContain("now-30d");
+		// The old error-logs-only pin ("Query APM errors in index logs-apm.error-*") must be
+		// gone -- the block may still mention logs-apm.error-* inside the negative instruction
+		// ("Do NOT pin to logs-apm.error-* only"), so assert on the retired imperative phrasing
+		// rather than the bare index-pattern substring.
+		expect(block).not.toContain("Query APM errors in index logs-apm.error-*");
+	});
+
 	test("couchbase block includes the scope->collection map and collection-only FROM instruction", () => {
 		const block = buildFocusBlock(FOCUS, NOW, RESOLVED, "couchbase");
 		expect(block).toContain("orders: [orders, order_lines]");
