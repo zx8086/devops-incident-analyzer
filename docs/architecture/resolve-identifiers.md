@@ -43,7 +43,7 @@ Design invariants:
 
 ## Execution model
 
-```
+```text
 resolveIdentifiers(state)
   guard: RESOLVE_IDENTIFIERS_ENABLED?  -> no, return {}
   guard: focus.services present?       -> no, return { resolvedIdentifiers: undefined }  (clears stale)
@@ -198,7 +198,7 @@ WHERE on: …]` tags. The agent is told these are *candidates to verify*, not go
 | Env var | Default | Effect |
 |---|---|---|
 | `RESOLVE_IDENTIFIERS_ENABLED` | unset (off) | `true`/`1` enables the node; otherwise it is a pure no-op |
-| `RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS` | `8000` | Per-probe wall-clock budget; positive integer in `[1, 2147483647]`, else the default |
+| `RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS` (SIO-1095) | `8000` | Per-probe wall-clock budget; positive integer in `[1, 2147483647]`, else the default. Before SIO-1095 the budget was a hardcoded 4000ms with no override. |
 
 ---
 
