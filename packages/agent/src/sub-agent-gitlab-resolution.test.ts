@@ -108,3 +108,45 @@ describe("SIO-1029: gitlab_search is always in the gitlab tool budget", () => {
 		expect(names).not.toContain("gitlab_search");
 	});
 });
+
+// SIO-1096: the atlassian "resolution" tool -- force-included AND prepended on every path -- is the
+// broad Rovo atlassian_search, NOT getVisibleJiraProjects. Jira projects are team/org-named, so
+// name-matching resolved nothing and the model kept reporting "no prana project / 0 incidents".
+describe("SIO-1096: atlassian_search is the atlassian resolution tool (not getVisibleJiraProjects)", () => {
+	const atlassianDef: ToolDefinition = ToolDefinitionSchema.parse({
+		name: "atlassian-api",
+		description: "test fixture",
+		input_schema: { type: "object", properties: {}, required: [] },
+		tool_mapping: {
+			mcp_server: "atlassian",
+			mcp_patterns: ["atlassian_*", "findLinkedIncidents", "getRunbookForAlert", "getIncidentHistory"],
+			action_tool_map: {
+				incident_correlation: ["atlassian_search", "findLinkedIncidents", "getIncidentHistory"],
+				runbook_lookup: ["atlassian_search", "getRunbookForAlert", "atlassian_searchConfluenceUsingCql"],
+			},
+		},
+	});
+
+	test("atlassian_search is force-included even when the action does not request it", () => {
+		// incident_correlation is chosen, but atlassian_search must be present as the resolution tool
+		// (it happens to be in this action too; the guarantee is that it's always in the budget).
+		const allTools = fakeTools([
+			...Array.from({ length: 26 }, (_, i) => `atlassian_filler_${i}`),
+			"atlassian_search",
+			"findLinkedIncidents",
+			"getIncidentHistory",
+			"atlassian_getVisibleJiraProjects",
+		]);
+		const { tools, filtered } = selectToolsByAction(
+			allTools,
+			"atlassian",
+			{ atlassian: ["incident_correlation"] },
+			atlassianDef,
+		);
+		const names = tools.map((t) => t.name);
+		expect(filtered).toBe(true);
+		expect(names).toContain("atlassian_search"); // the resolution tool the model is steered toward
+		// getVisibleJiraProjects is NO LONGER force-injected -- it's not in this action, so it's absent.
+		expect(names).not.toContain("atlassian_getVisibleJiraProjects");
+	});
+});

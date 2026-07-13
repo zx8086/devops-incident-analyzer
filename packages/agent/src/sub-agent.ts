@@ -512,7 +512,13 @@ const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	// back to capella_get_document_by_id on an index-less collection instead of a doomed SELECT *.
 	couchbase: ["capella_get_scopes_and_collections", "capella_get_system_indexes", "capella_get_document_by_id"],
 	konnect: ["konnect_list_control_planes", "konnect_list_services"],
-	atlassian: ["atlassian_getVisibleJiraProjects", "atlassian_getConfluenceSpaces"],
+	// SIO-1096: the atlassian "resolution" tool is the broad Rovo `atlassian_search`, NOT
+	// getVisibleJiraProjects. withResolutionTools force-includes these on every path AND prepends
+	// them, so whatever is here is the tool the model is steered toward for discovery. Jira projects
+	// are team/org-named (DSD, BP, PANDP), so getVisibleJiraProjects + name-match resolves nothing
+	// and the model kept reporting "no prana project / 0 incidents". atlassian_search cross-searches
+	// Jira+Confluence by the incident's domain terms and returns the tickets/runbooks in one call.
+	atlassian: ["atlassian_search"],
 	// NOTE: kafka is deliberately NOT here. Force-including kafka_list_topics would
 	// reintroduce the SIO-785 regression -- the broad topic-listing tool crowds out
 	// the specialized dlq_messages tools (kafka_list_dlq_topics), breaking the typed
