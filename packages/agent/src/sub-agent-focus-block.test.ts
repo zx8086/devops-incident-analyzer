@@ -120,6 +120,12 @@ describe("SIO-1084 B5: resolved-identifiers injection", () => {
 		expect(block).toContain("error.exception.message");
 		expect(block).toContain("body.text");
 		expect(block).toContain("now-30d");
+		// SIO-1090 (CodeRabbit): assert the FULL broad-query contract, not just that the
+		// field/index words appear -- a bare word-presence check can pass on unrelated prose.
+		expect(block).toContain("multi_match` (`type: phrase`)"); // phrase match, not analyzed match
+		expect(block).toContain("track_total_hits: true"); // exact count
+		expect(block).toContain("terms` filter"); // one terms filter over all candidate names
+		expect(block).toContain("do NOT run per-name permutations"); // no query-per-name
 		// The old error-logs-only pin ("Query APM errors in index logs-apm.error-*") must be
 		// gone -- the block may still mention logs-apm.error-* inside the negative instruction
 		// ("Do NOT pin to logs-apm.error-* only"), so assert on the retired imperative phrasing

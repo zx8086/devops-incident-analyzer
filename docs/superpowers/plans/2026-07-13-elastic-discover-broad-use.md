@@ -541,7 +541,7 @@ git commit -m "SIO-1090: focus block -- broad multi_match guidance, drop error-l
 
 In `agents/incident-analyzer/agents/elastic-agent/SOUL.md`, replace the entire section from the header `## Searching for a named service's errors -- follow these steps IN ORDER` (line 16) through the end of the `THE ONE RULE THAT OVERRIDES EVERYTHING` paragraph (line 105) with:
 
-```markdown
+````markdown
 ## Searching for a named service's errors -- discover, then search broad, then use
 
 The incident message can live in ANY of three index families, under DIFFERENT fields:
@@ -592,7 +592,7 @@ service is an "absent" conclusion allowed. A zero from a narrow window you chose
 yourself is never grounds for "absent" -- PHASE 2 is wide by default precisely so a
 chronic, low-frequency error is not missed. Once any query returns a hit, the service is
 present -- that is final; do not keep permuting queries after you have your answer.
-```
+````
 
 - [ ] **Step 2: Replace the "Stop on Empty Results" section for consistency**
 

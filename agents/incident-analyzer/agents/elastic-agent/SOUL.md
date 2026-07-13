@@ -35,7 +35,12 @@ ONE aggregation (the incident's loose name is often prefixed, e.g. `styles-v3` -
 ```
 - Take every `by_service` bucket that matches the anchor (bare OR prefixed) as a
   candidate name. `by_index` tells you which index families hold the service.
-- No bucket matches the anchor at all => the service is genuinely absent; report that.
+- No bucket matches the anchor => the service MAY be absent, but the top-100 terms agg
+  is approximate: a low-volume service can be omitted from the top buckets. If
+  `by_service.sum_other_doc_count` is `0`, no buckets were dropped and absence is proven.
+  If it is `> 0`, buckets WERE omitted -- do NOT declare absence yet; run a bounded
+  follow-up `size: 5` search filtered on the exact anchor-token wildcard (`{ "wildcard":
+  { "service.name": "*<anchor-token>*" } }`) and treat any hit as the service present.
 
 PHASE 2 -- SEARCH BROAD. Run ONE query for the cited error across all candidate names
 and all three text fields, WIDE BY DEFAULT (`now-30d`, no `lte`). Put every candidate
@@ -82,10 +87,16 @@ For a NAMED service, follow the PHASE 1 -> 2 -> 3 procedure above -- it defines 
 "absent" conclusion is allowed (only when PHASE 2 is zero at `now-30d` AND PHASE 1
 discovery found no matching service). The most common cause of a false zero is searching
 too narrow -- the wrong index/field or a 1-hour window on a chronic error -- which PHASE 2
-avoids by searching `logs-*,logs-apm.*` across three fields at `now-30d`. For any OTHER
-search (not a named-service lookup), an empty result is a valid final answer only after a
-`now-30d` retry is also empty; then report "no matching documents for <criteria> (searched
-logs-*,logs-apm.* over now-30d)" rather than permuting queries.
+avoids by searching `logs-*,logs-apm.*` across three fields at `now-30d`.
+
+For any OTHER LOG/DOCUMENT search (not a named-service lookup), an empty result is a valid
+final answer only after a `now-30d` retry is also empty; then report "no matching documents
+for <criteria> (searched logs-*,logs-apm.* over now-30d)" rather than permuting queries.
+This `now-30d`/`logs-*,logs-apm.*` fallback applies ONLY to log/document searches -- it does
+NOT apply to cluster-health, mapping, shard, ILM, or SQL operations. Those carry their own
+index and time semantics; run them against their intended target and report their result
+directly (an empty mapping or a green health check is a valid answer, not a "widen and
+retry" case).
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)

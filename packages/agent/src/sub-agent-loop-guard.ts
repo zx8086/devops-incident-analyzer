@@ -230,8 +230,11 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 	// Hard termination backstop: once TOTAL unproductive searches hit the cap, stop
 	// unconditionally -- even a discovery call.
 	if (state.unproductiveSearches >= MAX_UNPRODUCTIVE_SEARCHES) return true;
-	// A fresh service.name discovery agg is bounded + load-bearing: below the cap, never
-	// stop the discover step.
+	// Below the cap nothing else stops an elasticsearch_search -- a fresh service.name
+	// discovery agg is bounded + load-bearing, and a distinct broad query is what SIO-1090
+	// wants. `isDiscoveryCall` is checked explicitly (even though the fallthrough is also
+	// `false`) as a deliberate guard-point: if a future stop rule is added here, it must be
+	// placed AFTER this line so it can never short-circuit the discover step.
 	if (isDiscoveryCall(arg)) return false;
 	return false;
 }
