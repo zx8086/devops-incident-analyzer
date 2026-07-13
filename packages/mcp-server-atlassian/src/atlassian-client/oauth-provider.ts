@@ -21,6 +21,14 @@ export { OAUTH_CALLBACK_PATH };
 // discovery attempt refreshes it in case Atlassian moves the endpoint.
 const ROVO_TOKEN_ENDPOINT_FALLBACK = "https://cf.mcp.atlassian.com/v1/token";
 
+// SIO-1097: bound both OAuth HTTP requests. A hung token POST would leave
+// refreshInFlight pending while holding the cross-process refresh lock, stalling
+// every queued upstream call and forcing other processes into lock timeouts. On
+// timeout the fetch rejects (AbortError), which settles refreshInFlight via the
+// finally in ensureFreshTokens/lockedRefresh and releases the lock; the raw abort
+// surfaces as a transient (retryable) error, not a dead-chain re-seed prompt.
+const OAUTH_HTTP_TIMEOUT_MS = 10_000;
+
 export interface AtlassianOAuthProviderOptions {
 	mcpEndpoint: string;
 	callbackPort: number;
@@ -111,6 +119,7 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 			method: "POST",
 			headers: { "content-type": "application/x-www-form-urlencoded" },
 			body,
+			signal: AbortSignal.timeout(OAUTH_HTTP_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {
@@ -150,7 +159,10 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 		if (this.tokenEndpoint) return this.tokenEndpoint;
 		try {
 			const wellKnown = new URL("/.well-known/oauth-authorization-server", this.mcpEndpoint);
-			const res = await fetch(wellKnown, { headers: { accept: "application/json" } });
+			const res = await fetch(wellKnown, {
+				headers: { accept: "application/json" },
+				signal: AbortSignal.timeout(OAUTH_HTTP_TIMEOUT_MS),
+			});
 			if (res.ok) {
 				const meta = (await res.json().catch(() => null)) as { token_endpoint?: string } | null;
 				if (meta?.token_endpoint) {

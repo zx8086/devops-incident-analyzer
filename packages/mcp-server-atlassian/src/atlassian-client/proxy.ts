@@ -267,7 +267,9 @@ export class AtlassianMcpProxy {
 	}
 
 	async listTools(): Promise<ProxyToolInfo[]> {
-		const response = await this.client.listTools();
+		// SIO-1097: serialize on the shared transport too (see upstreamQueue) so
+		// tool discovery can't overlap in-flight tool calls / the health poll.
+		const response = await this.enqueue(() => this.client.listTools());
 		const tools: ProxyToolInfo[] = response.tools.map((tool) => ({
 			name: tool.name,
 			description: tool.description ?? `${tool.name} tool`,
