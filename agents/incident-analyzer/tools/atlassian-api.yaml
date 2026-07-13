@@ -79,7 +79,7 @@ tool_mapping:
       - atlassian_searchConfluencePages
       - atlassian_getConfluencePage
   action_descriptions:
-    incident_correlation: finding Jira tickets for a service/incident. START with atlassian_search over the incident's DOMAIN TERMS (error phrase, entity, season/sales-org codes), THEN findLinkedIncidents/getIncidentHistory for MTTR. The service token alone misses most tickets.
-    runbook_lookup: searching Confluence for runbooks/ops docs. START with atlassian_search over the failure's domain terms (e.g. "AFS season code"), THEN getRunbookForAlert. A service-token-only search misses domain-named pages.
+    incident_correlation: Jira tickets for an incident. START with atlassian_search over the incident's domain terms, THEN findLinkedIncidents/getIncidentHistory. The service token misses most.
+    runbook_lookup: finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages.
     jira_query: when running an explicit JQL query against Jira (direct, not the smart incident-correlation composer)
     confluence_query: when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup composer)
