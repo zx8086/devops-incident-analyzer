@@ -2,8 +2,6 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-	parseAtlassianProjects,
-	parseAtlassianSpaces,
 	parseAwsEcsServiceArns,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
@@ -267,28 +265,5 @@ describe("parseGitlabProjects (lift numeric id)", () => {
 	test("skips rows without an id; returns [] for non-array", () => {
 		expect(parseGitlabProjects([{ name: "x" }])).toEqual([]);
 		expect(parseGitlabProjects({})).toEqual([]);
-	});
-});
-
-describe("parseAtlassian*", () => {
-	test("projects: bare array keyed on `key`", () => {
-		const json = [
-			{ key: "OIT", name: "OIT Incidents" },
-			{ key: "B2B", name: "B2B" },
-		];
-		expect(parseAtlassianProjects(json)).toEqual([
-			{ key: "OIT", name: "OIT Incidents" },
-			{ key: "B2B", name: "B2B" },
-		]);
-	});
-
-	test("projects: { values: [] } wrapper", () => {
-		expect(parseAtlassianProjects({ values: [{ key: "OIT" }] })).toEqual([{ key: "OIT", name: undefined }]);
-	});
-
-	test("spaces: { results: [] } wrapper", () => {
-		expect(parseAtlassianSpaces({ results: [{ key: "RUN", name: "Runbooks" }] })).toEqual([
-			{ key: "RUN", name: "Runbooks" },
-		]);
 	});
 });

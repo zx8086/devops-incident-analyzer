@@ -25,15 +25,18 @@ relevant Jira tickets or Confluence pages are indexed. A team's work often lives
 its product/entity name (Prana), a business concept (AFS/FMS season code), or a sales-org/
 division code (THE1) -- NOT a Jira label equal to the service. So:
 
-- ALWAYS pass the incident's cited error phrase and key entities as `errorKeywords` to
-  `findLinkedIncidents`, `getIncidentHistory`, and `getRunbookForAlert` (e.g.
-  `["AFS season code", "FMS", "THE1", "Prana"]`). These text-match the content; the bare
-  service token usually will not.
-- To DISCOVER whether a project/runbook exists at all, run a broad `atlassian_search` (Rovo)
-  or a `text ~ "<domain terms>"` CQL/JQL over the error phrase + entity BEFORE concluding
-  anything is missing. `getVisibleJiraProjects` filtered by a team name (`query=<team>`,
-  `action=create`) is NOT a discovery path -- there is usually no project literally named
-  for the team, and a 0 there is never proof of absence.
+- FIRST CALL, ALWAYS: run `atlassian_search` (Rovo cross-search of Jira + Confluence) over the
+  incident's DOMAIN TERMS -- the cited error phrase plus key entities (e.g.
+  `"prana AFS season code FMS THE1"`). This is the ONE call that reliably finds the tickets and
+  runbooks; it searches all projects/spaces by free text. Do this BEFORE `findLinkedIncidents` /
+  `getRunbookForAlert` and BEFORE concluding anything is missing.
+- THEN pass those same domain terms as `errorKeywords` to `findLinkedIncidents`,
+  `getIncidentHistory`, and `getRunbookForAlert` (e.g. `["AFS season code", "FMS", "THE1",
+  "Prana"]`) for time-bucketed / MTTR detail. These text-match the content; the bare service token
+  usually will not.
+- NEVER lead with `getVisibleJiraProjects` (esp. `query=<team>`, `action=create`) as a discovery
+  path -- there is usually no project literally named for the team, and a 0 there is never proof of
+  absence. Report the project keys from the `atlassian_search` hits instead.
 - Only after a wide domain-term search returns zero may you report "no project" / "no
   runbook". A 0 from a service-token-only query is a query-construction artifact, not a
   finding.

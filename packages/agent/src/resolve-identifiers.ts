@@ -19,8 +19,6 @@ import { matchesFocus, tokenize } from "./correlation/focus-match.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
 	type CouchbaseIndexMap,
-	parseAtlassianProjects,
-	parseAtlassianSpaces,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
 	parseCouchbaseSystemIndexes,
@@ -132,7 +130,9 @@ export async function resolveIdentifiers(
 	if (inScope.has("kafka")) probes.push(safeProbe("kafka", () => probeKafka(focus.services)));
 	if (inScope.has("konnect")) probes.push(safeProbe("konnect", () => probeKonnect(focus.services)));
 	if (inScope.has("gitlab")) probes.push(safeProbe("gitlab", () => probeGitlab(focus.services)));
-	if (inScope.has("atlassian")) probes.push(safeProbe("atlassian", () => probeAtlassian(focus.services)));
+	// SIO-1096: no atlassian probe. Jira projects are named by team/org (DSD, BP, PANDP), never by
+	// service, so a service->project name-match resolves nothing -- and the answer never needs a
+	// project key: the atlassian sub-agent searches all projects by incident domain terms (its SOUL).
 
 	if (probes.length === 0) return { resolvedIdentifiers: undefined };
 
@@ -408,36 +408,6 @@ async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIde
 	const match = rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices)) ?? rows[0];
 	if (!match) return {};
 	return { gitlab: { projectId: match.id, pathWithNamespace: match.pathWithNamespace } };
-}
-
-async function probeAtlassian(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
-	const projectsTool = toolFor("atlassian", "atlassian_getVisibleJiraProjects");
-	const spacesTool = toolFor("atlassian", "atlassian_getConfluenceSpaces");
-	const jiraProjectKeys: string[] = [];
-	const confluenceSpaceKeys: string[] = [];
-	if (projectsTool) {
-		try {
-			const rows = parseAtlassianProjects(safeJson(normalizeToolContent(await projectsTool.invoke({}))));
-			jiraProjectKeys.push(
-				...rows.filter((r) => matchesFocus(`${r.key} ${r.name ?? ""}`, focusServices)).map((r) => r.key),
-			);
-		} catch (err) {
-			logger.warn({ error: msg(err) }, "atlassian jira-project probe failed");
-		}
-	}
-	if (spacesTool) {
-		try {
-			const rows = parseAtlassianSpaces(safeJson(normalizeToolContent(await spacesTool.invoke({}))));
-			confluenceSpaceKeys.push(
-				...rows.filter((r) => matchesFocus(`${r.key} ${r.name ?? ""}`, focusServices)).map((r) => r.key),
-			);
-		} catch (err) {
-			logger.warn({ error: msg(err) }, "atlassian confluence-space probe failed");
-		}
-	}
-	return jiraProjectKeys.length > 0 || confluenceSpaceKeys.length > 0
-		? { atlassian: { jiraProjectKeys: dedupe(jiraProjectKeys), confluenceSpaceKeys: dedupe(confluenceSpaceKeys) } }
-		: {};
 }
 
 function longestToken(focusServices: string[]): string | undefined {

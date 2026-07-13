@@ -279,42 +279,9 @@ export function parseGitlabProjects(json: unknown): GitlabProject[] {
 	return out;
 }
 
-// ATLASSIAN Jira projects: getVisibleJiraProjects returns upstream pass-through
-// JSON. Accept both a bare array and a { values: [] } / { projects: [] } wrapper,
-// keying on `key` (+ `name` for matching).
-export function parseAtlassianProjects(json: unknown): Array<{ key: string; name?: string }> {
-	return parseKeyedRows(json, ["values", "projects"], "key");
-}
-
-// ATLASSIAN Confluence spaces: getConfluenceSpaces, same wrapper handling, key is
-// the space `key`.
-export function parseAtlassianSpaces(json: unknown): Array<{ key: string; name?: string }> {
-	return parseKeyedRows(json, ["values", "spaces", "results"], "key");
-}
-
-function parseKeyedRows(json: unknown, wrapperKeys: string[], keyField: string): Array<{ key: string; name?: string }> {
-	let rows: unknown = json;
-	if (json && typeof json === "object" && !Array.isArray(json)) {
-		const obj = json as Record<string, unknown>;
-		for (const wk of wrapperKeys) {
-			if (Array.isArray(obj[wk])) {
-				rows = obj[wk];
-				break;
-			}
-		}
-	}
-	if (!Array.isArray(rows)) return [];
-	const out: Array<{ key: string; name?: string }> = [];
-	for (const r of rows) {
-		if (!r || typeof r !== "object") continue;
-		const rec = r as Record<string, unknown>;
-		const key = rec[keyField];
-		if (typeof key === "string") {
-			out.push({ key, name: typeof rec.name === "string" ? rec.name : undefined });
-		}
-	}
-	return out;
-}
+// SIO-1096: parseAtlassianProjects / parseAtlassianSpaces (and their parseKeyedRows helper) were
+// removed with the atlassian resolveIdentifiers probe -- Jira projects are named by team/org, not
+// service, so name-matching resolved nothing. The atlassian sub-agent searches by domain terms.
 
 function dedupe(items: string[]): string[] {
 	return [...new Set(items)];

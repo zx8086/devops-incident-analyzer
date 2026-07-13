@@ -178,14 +178,9 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				lines.push(`- GitLab numeric project_id: ${resolved.gitlab.projectId}${path}`);
 			}
 			break;
-		case "atlassian":
-			if (resolved.atlassian?.jiraProjectKeys.length) {
-				lines.push(`- Jira project keys: ${resolved.atlassian.jiraProjectKeys.join(", ")}`);
-			}
-			if (resolved.atlassian?.confluenceSpaceKeys.length) {
-				lines.push(`- Confluence space keys: ${resolved.atlassian.confluenceSpaceKeys.join(", ")}`);
-			}
-			break;
+		// SIO-1096: no atlassian case -- the atlassian probe was removed (Jira projects are
+		// team/org-named, not service-named, so it resolved nothing). The atlassian sub-agent
+		// searches all projects by incident domain terms per its SOUL.
 	}
 	return lines;
 }

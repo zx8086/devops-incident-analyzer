@@ -327,24 +327,19 @@ describe("resolveIdentifiers node", () => {
 		expect(result.resolvedIdentifiers?.konnect?.serviceIds).toEqual(["svc-1"]);
 	});
 
-	test("atlassian probe resolves matching jira project + confluence space keys", async () => {
+	// SIO-1096: the atlassian probe was removed (Jira projects are team/org-named, not
+	// service-named, so name-matching resolved nothing). atlassian in scope resolves nothing.
+	test("atlassian is not probed -- it never contributes resolved identifiers", async () => {
 		toolRegistry.atlassian = [
-			{
-				name: "atlassian_getVisibleJiraProjects",
-				invoke: async () =>
-					JSON.stringify([
-						{ key: "ORDER", name: "Order Service" },
-						{ key: "PAY", name: "Payments" },
-					]),
-			},
-			{
-				name: "atlassian_getConfluenceSpaces",
-				invoke: async () => JSON.stringify({ results: [{ key: "ORDERSVC", name: "order-service runbooks" }] }),
-			},
+			{ name: "atlassian_getVisibleJiraProjects", invoke: async () => JSON.stringify([{ key: "ORDER" }]) },
 		];
-		const result = await resolveIdentifiers(makeState({ targetDataSources: ["atlassian"] }));
-		expect(result.resolvedIdentifiers?.atlassian?.jiraProjectKeys).toEqual(["ORDER"]);
-		expect(result.resolvedIdentifiers?.atlassian?.confluenceSpaceKeys).toEqual(["ORDERSVC"]);
+		toolRegistry.elastic = [
+			{ name: "elasticsearch_search", invoke: async () => elasticAggPayload(["pvh-services-orders"]) },
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["atlassian", "elastic"] }));
+		// `atlassian` is not a key on ResolvedIdentifiers anymore -- only elastic resolves.
+		expect(result.resolvedIdentifiers && "atlassian" in result.resolvedIdentifiers).toBe(false);
+		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toEqual(["pvh-services-orders"]);
 	});
 
 	test("a konnect probe failure omits konnect but other datasources still resolve", async () => {
