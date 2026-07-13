@@ -93,10 +93,15 @@ export const LOOP_GUARD_WIDEN_WINDOW_MESSAGE =
 export const LOOP_GUARD_LATCHED_STOP_LEAD =
 	"You have ALREADY retrieved valid data this run. Stop searching and use it as your finding.";
 
-// Build the latched-result stop message from the best result on record.
+// Build the latched-result stop message from the best result on record. SIO-1089
+// (CodeRabbit): when the latched query carried no @timestamp lower bound, say so
+// explicitly instead of silently implying an incident-scoped window -- so a wide/
+// windowless hit is never surfaced as if it were bounded to the incident window.
 export function latchedStopMessage(best: BestResult): string {
 	const svc = best.serviceName ? ` for service.name "${best.serviceName}"` : "";
-	const win = best.windowLabel ? ` over the window ${best.windowLabel}` : "";
+	const win = best.windowLabel
+		? ` over the window ${best.windowLabel}`
+		: " (that query had no @timestamp window -- confirm the hits fall inside the incident window before reporting)";
 	return (
 		`${LOOP_GUARD_LATCHED_STOP_LEAD} A prior query already returned ${best.hitCount} matching ` +
 		`document(s)${svc}${win}. Do NOT call this tool again and do NOT conclude the service or error is ` +

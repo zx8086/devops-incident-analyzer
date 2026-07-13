@@ -531,6 +531,21 @@ describe("SIO-1089: best-answer latch (find -> validate -> latch -> fall back)",
 		expect(state.bestResult).toBeUndefined();
 	});
 
+	// SIO-1089 (CodeRabbit): a service-scoped hit with NO @timestamp window is still valid
+	// data (it must latch so we don't discard the answer), but the stop message must NOT
+	// imply an incident-bounded window -- it explicitly flags the missing window instead.
+	test("a windowless service-scoped hit latches, and the message flags the missing window", () => {
+		const state = createLoopGuardState();
+		const windowless = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
+		const sig = toolCallSignature("elasticsearch_search", windowless);
+		recordResult(state, "elasticsearch_search", sig, "Total results: 141712, showing 5", windowless);
+		expect(state.bestResult).toEqual({ hitCount: 141712, serviceName: "prana-order-service", windowLabel: undefined });
+		const msg = stopMessageFor("elasticsearch_search", state);
+		expect(msg).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
+		expect(msg).toContain("no @timestamp window");
+		expect(msg).toContain("confirm the hits fall inside the incident window");
+	});
+
 	test("a latched result survives a later trailing empty (trailing-empty amnesia fix)", () => {
 		const state = createLoopGuardState();
 		const sig = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
