@@ -54,15 +54,17 @@ describe("findLinkedIncidents.buildJql", () => {
 	});
 
 	test("SIO-1093 (CodeRabbit): caps and dedupes errorKeywords", () => {
-		const many = Array.from({ length: 20 }, (_, i) => `kw${i}`);
+		// The duplicate kw0 must sit BEFORE the 8-term cap so the dedup path is actually exercised
+		// (sanitize breaks once it has 8 terms; a duplicate past that point is never reached).
+		const rest = Array.from({ length: 8 }, (_, i) => `kw${i + 1}`); // kw1..kw8
 		const jql = buildJql({
 			service: "svc",
 			componentLabel: undefined,
-			errorKeywords: [...many, "kw0"],
+			errorKeywords: ["kw0", "kw0", ...rest],
 			withinDays: 30,
 			incidentProjects: [],
 		});
-		// MAX_ERROR_KEYWORDS = 8, so only kw0..kw7 survive; kw8+ are dropped.
+		// If dedup were broken, the duplicate kw0 would consume a cap slot and kw7 would be dropped.
 		expect(jql).toContain('text ~ "kw7"');
 		expect(jql).not.toContain('text ~ "kw8"');
 		expect((jql.match(/text ~ "kw0"/g) ?? []).length).toBe(1);
