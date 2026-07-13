@@ -4,7 +4,7 @@
 // buildToolErrorEnvelope(). The agent reads that envelope structurally (kind/category) instead of
 // regexing the human message. This replaces the per-server flatten-to-string + agent-side message
 // regex with a single vocabulary defined in agent-state.ts.
-import { TOOL_ERROR_KIND_TO_CATEGORY, type ToolErrorKind } from "./agent-state.ts";
+import { TOOL_ERROR_KIND_TO_CATEGORY, type ToolErrorCategory, type ToolErrorKind } from "./agent-state.ts";
 
 // The structured payload a server attaches on a tool error. `kind` is the fine-grained, SDK-mapped
 // discriminator; the agent derives the coarse category from it via TOOL_ERROR_KIND_TO_CATEGORY.
@@ -22,7 +22,7 @@ export interface StructuredToolError {
 // The wire shape carried on a CallToolResult text block. Mirrors the AWS { _error } envelope so the
 // agent's extractToolErrors has ONE shape to parse for all seven datasources.
 export interface ToolErrorEnvelope {
-	_error: StructuredToolError & { category: string };
+	_error: StructuredToolError & { category: ToolErrorCategory };
 }
 
 export function buildToolErrorEnvelope(err: StructuredToolError): ToolErrorEnvelope {

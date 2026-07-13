@@ -479,6 +479,18 @@ describe("mapAwsError", () => {
 		const err = Object.assign(new Error("???"), { name: "SomeNewAwsErrorType" });
 		expect(mapAwsError(err).kind).toBe("aws-unknown");
 	});
+
+	// SIO-1087: $fault is the documented smithy discriminator; it must classify even when
+	// $metadata.httpStatusCode is absent (some SDK errors set only $fault).
+	test("Unknown error name with $fault='server' and no httpStatusCode -> aws-server-error", () => {
+		const err = Object.assign(new Error("???"), { name: "SomeNewAwsErrorType", $fault: "server" });
+		expect(mapAwsError(err).kind).toBe("aws-server-error");
+	});
+
+	test("Unknown error name with $fault='client' and no httpStatusCode -> bad-input", () => {
+		const err = Object.assign(new Error("???"), { name: "SomeNewAwsErrorType", $fault: "client" });
+		expect(mapAwsError(err).kind).toBe("bad-input");
+	});
 });
 
 describe("setDefaultCapBytes", () => {
