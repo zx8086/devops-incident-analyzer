@@ -111,7 +111,7 @@ function instrumentTool(
 							},
 							"Loop guard short-circuited repeated/unproductive tool call",
 						);
-						return buildStopResult(arg, tool.name);
+						return buildStopResult(arg, tool.name, runState.loopGuard);
 					}
 
 					// Reserve the signature BEFORE the await so a concurrent identical
@@ -142,12 +142,12 @@ function instrumentTool(
 // full tool-call object ({ name, args, id }); we reuse that id so the message
 // pairs with its AIMessage tool_call (Bedrock requires the pairing). SIO-1084:
 // the message is tool-specific (elastic "stop searching" vs aws "re-anchor").
-function buildStopResult(arg: unknown, toolName: string): ToolMessage {
+function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState): ToolMessage {
 	const toolCallId =
 		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
 			? (arg as { id: string }).id
 			: "loop-guard-stop";
-	return new ToolMessage({ content: stopMessageFor(toolName), tool_call_id: toolCallId });
+	return new ToolMessage({ content: stopMessageFor(toolName, state), tool_call_id: toolCallId });
 }
 
 function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {

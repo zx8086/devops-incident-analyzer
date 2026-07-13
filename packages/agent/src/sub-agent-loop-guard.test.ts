@@ -5,17 +5,23 @@ import {
 	AWS_START_QUERY_STOP_MESSAGE,
 	awsErrorKind,
 	createLoopGuardState,
+	extractHitCount,
+	hasTimeWindow,
 	isDiscoveryCall,
 	isGuardedTool,
 	isObservedTool,
 	isUnproductiveResult,
+	LOOP_GUARD_LATCHED_STOP_LEAD,
 	LOOP_GUARD_STOP_MESSAGE,
+	LOOP_GUARD_WIDEN_WINDOW_MESSAGE,
 	recordResult,
 	reserveSignature,
+	serviceNameFilter,
 	shouldShortCircuit,
 	stopMessageFor,
 	toolCallSignature,
 	unwrapCallArgs,
+	windowLabel,
 } from "./sub-agent-loop-guard.ts";
 
 const EMPTY_SEARCH = "Total results: 0, showing 0 from position 0"; // the 43-byte empty result
@@ -439,5 +445,253 @@ describe("SIO-1086 E: stop message does not steer to false absent", () => {
 	test("the stop message conditions 'absent' on discovery surfacing nothing", () => {
 		expect(LOOP_GUARD_STOP_MESSAGE).toContain("discovery");
 		expect(LOOP_GUARD_STOP_MESSAGE).toContain("present under that name");
+	});
+});
+
+describe("SIO-1089: detectors (hasTimeWindow / serviceNameFilter / extractHitCount / windowLabel)", () => {
+	const TIME_BOUNDED = {
+		index: "logs-apm.error-*",
+		query: {
+			bool: {
+				must: [{ match_phrase: { "error.exception.message": "AFS season code" } }],
+				filter: [
+					{ term: { "service.name": "prana-order-service" } },
+					{ range: { "@timestamp": { gte: "2026-07-12T23:50:44Z", lte: "2026-07-13T00:50:44Z" } } },
+				],
+			},
+		},
+	};
+
+	test("hasTimeWindow: true when a @timestamp range with a lower bound is present (nested in bool.filter)", () => {
+		expect(hasTimeWindow(TIME_BOUNDED)).toBe(true);
+	});
+
+	test("hasTimeWindow: false when no @timestamp range, or only an lte upper bound", () => {
+		expect(hasTimeWindow({ query: { term: { "service.name": "x" } } })).toBe(false);
+		expect(hasTimeWindow({ query: { range: { "@timestamp": { lte: "now" } } } })).toBe(false);
+		expect(hasTimeWindow({ query: { match_all: {} } })).toBe(false);
+	});
+
+	test("hasTimeWindow: unwraps the ReAct tool-call object { args }", () => {
+		expect(hasTimeWindow({ id: "x", name: "elasticsearch_search", args: TIME_BOUNDED })).toBe(true);
+	});
+
+	test("serviceNameFilter: extracts the term/match service.name value", () => {
+		expect(serviceNameFilter(TIME_BOUNDED)).toBe("prana-order-service");
+		expect(serviceNameFilter({ query: { match: { "service.name": { query: "orders" } } } })).toBe("orders");
+		expect(serviceNameFilter({ query: { match_all: {} } })).toBeUndefined();
+	});
+
+	test("extractHitCount: parses 'Total results: N' and non-empty array/hits shapes", () => {
+		expect(extractHitCount("Total results: 1100, showing 5 from position 0")).toBe(1100);
+		expect(extractHitCount('[{"_source":{"x":1}},{"_source":{"y":2}}]')).toBe(2);
+		expect(extractHitCount(EMPTY_SEARCH)).toBe(0);
+		expect(extractHitCount("[]")).toBe(0);
+	});
+
+	test("windowLabel: renders gte/lte for the latched message", () => {
+		expect(windowLabel(TIME_BOUNDED)).toBe("2026-07-12T23:50:44Z to 2026-07-13T00:50:44Z");
+		expect(windowLabel({ query: { range: { "@timestamp": { gte: "now-24h" } } } })).toBe("now-24h onward");
+		expect(windowLabel({ query: { match_all: {} } })).toBeUndefined();
+	});
+});
+
+describe("SIO-1089: best-answer latch (find -> validate -> latch -> fall back)", () => {
+	// A service-scoped, non-empty, time-bounded result -- the thing that should latch.
+	const SCOPED_ARGS = {
+		index: "logs-apm.error-*",
+		query: {
+			bool: {
+				filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-24h" } } }],
+			},
+		},
+	};
+
+	test("latches a valid (non-empty + service-scoped) result and injects it into the stop message", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
+		recordResult(state, "elasticsearch_search", sig, "Total results: 1100, showing 5 from position 0", SCOPED_ARGS);
+		expect(state.bestResult).toEqual({
+			hitCount: 1100,
+			serviceName: "prana-order-service",
+			windowLabel: "now-24h onward",
+		});
+		// The latched result wins the stop message -- the LLM's last context is the WIN, not an empty.
+		const msg = stopMessageFor("elasticsearch_search", state);
+		expect(msg).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
+		expect(msg).toContain("1100");
+		expect(msg).toContain("prana-order-service");
+	});
+
+	test("does NOT latch a non-empty result that was not service-scoped (broad/global hit)", () => {
+		const state = createLoopGuardState();
+		const broad = { index: "logs-*", query: { match_all: {} } };
+		const sig = toolCallSignature("elasticsearch_search", broad);
+		recordResult(state, "elasticsearch_search", sig, "Total results: 999, showing 5 from position 0", broad);
+		expect(state.bestResult).toBeUndefined();
+	});
+
+	// SIO-1089 (CodeRabbit): a service-scoped hit with NO @timestamp window is still valid
+	// data (it must latch so we don't discard the answer), but the stop message must NOT
+	// imply an incident-bounded window -- it explicitly flags the missing window instead.
+	test("a windowless service-scoped hit latches, and the message flags the missing window", () => {
+		const state = createLoopGuardState();
+		const windowless = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
+		const sig = toolCallSignature("elasticsearch_search", windowless);
+		recordResult(state, "elasticsearch_search", sig, "Total results: 141712, showing 5", windowless);
+		expect(state.bestResult).toEqual({ hitCount: 141712, serviceName: "prana-order-service", windowLabel: undefined });
+		const msg = stopMessageFor("elasticsearch_search", state);
+		expect(msg).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
+		expect(msg).toContain("no @timestamp window");
+		expect(msg).toContain("confirm the hits fall inside the incident window");
+	});
+
+	test("a latched result survives a later trailing empty (trailing-empty amnesia fix)", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
+		recordResult(state, "elasticsearch_search", sig, "Total results: 1100, showing 5", SCOPED_ARGS);
+		// Now a later, different empty search comes in.
+		const later = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
+		const lSig = toolCallSignature("elasticsearch_search", later);
+		recordResult(state, "elasticsearch_search", lSig, EMPTY_SEARCH, later);
+		// bestResult is untouched; the stop message STILL injects the win, not "absent".
+		expect(state.bestResult?.hitCount).toBe(1100);
+		expect(stopMessageFor("elasticsearch_search", state)).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
+	});
+
+	test("replaces the latch only with a strictly-better (more hits) result", () => {
+		const state = createLoopGuardState();
+		const a = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
+		recordResult(state, "elasticsearch_search", a, "Total results: 10, showing 5", SCOPED_ARGS);
+		const widened = {
+			index: "logs-apm.error-*",
+			query: {
+				bool: {
+					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-7d" } } }],
+				},
+			},
+		};
+		const b = toolCallSignature("elasticsearch_search", widened);
+		recordResult(state, "elasticsearch_search", b, "Total results: 500, showing 5", widened);
+		expect(state.bestResult?.hitCount).toBe(500);
+		// A weaker later result does NOT replace it.
+		const weaker = {
+			index: "logs-apm.error-*",
+			query: {
+				bool: {
+					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-1h" } } }],
+				},
+			},
+		};
+		const c = toolCallSignature("elasticsearch_search", weaker);
+		recordResult(state, "elasticsearch_search", c, "Total results: 3, showing 3", weaker);
+		expect(state.bestResult?.hitCount).toBe(500);
+	});
+});
+
+describe("SIO-1089: widen-on-empty (the prana 1h-window failure)", () => {
+	// The exact failing shape: service-scoped, time-bounded, returns 0.
+	const NARROW = {
+		index: "logs-apm.error-*",
+		query: {
+			bool: {
+				filter: [
+					{ term: { "service.name": "prana-order-service" } },
+					{ range: { "@timestamp": { gte: "2026-07-12T23:50:44Z", lte: "2026-07-13T00:50:44Z" } } },
+				],
+			},
+		},
+	};
+
+	test("an empty time-bounded search arms the widen-retry grant", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", NARROW);
+		recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, NARROW);
+		expect(state.widenRetryAllowed).toBe(true);
+		expect(state.timeWindowWidened).toBe(false);
+	});
+
+	test("the widened retry is allowed through the guard (one-shot), even with the empty streak armed", () => {
+		const state = createLoopGuardState();
+		armDiscovery(state); // discoveryRan = true so the soft stop is otherwise live
+		const sig1 = toolCallSignature("elasticsearch_search", NARROW);
+		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, NARROW);
+		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, { ...NARROW, index: "x" }); // 2nd empty -> streak armed
+		// The widened retry (different args) must be allowed through despite the soft stop.
+		const widened = {
+			...NARROW,
+			query: {
+				bool: {
+					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-7d" } } }],
+				},
+			},
+		};
+		const wSig = toolCallSignature("elasticsearch_search", widened);
+		expect(shouldShortCircuit(state, "elasticsearch_search", wSig, widened)).toBe(false);
+		expect(state.widenRetryAllowed).toBe(false); // consumed
+		expect(state.timeWindowWidened).toBe(true);
+	});
+
+	test("a DUPLICATE narrow query (the trace: #9==#11) stops with the WIDEN message, not 'absent'", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", NARROW);
+		// First run of the narrow query: empty -> arms widen.
+		recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, NARROW);
+		expect(state.widenRetryAllowed).toBe(true);
+		// The LLM re-issues the IDENTICAL narrow query -> duplicate short-circuit.
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NARROW)).toBe(true);
+		// And the stop message steers to WIDEN (it explicitly says do NOT conclude absent).
+		const msg = stopMessageFor("elasticsearch_search", state);
+		expect(msg).toBe(LOOP_GUARD_WIDEN_WINDOW_MESSAGE);
+		expect(msg).toContain("widen");
+		expect(msg).toContain("Do NOT conclude the service is absent");
+	});
+
+	test("after widening still empty, the stop falls back to the standard message (not widen forever)", () => {
+		const state = createLoopGuardState();
+		armDiscovery(state);
+		const sig1 = toolCallSignature("elasticsearch_search", NARROW);
+		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, NARROW); // arms widen
+		// widened (no time window) retry, still empty -> timeWindowWidened set, widen grant not re-armed
+		const widened = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
+		const wSig = toolCallSignature("elasticsearch_search", widened);
+		recordResult(state, "elasticsearch_search", wSig, EMPTY_SEARCH, widened);
+		expect(state.timeWindowWidened).toBe(true);
+		// No latch, widening exhausted -> standard stop message.
+		expect(stopMessageFor("elasticsearch_search", state)).toBe(LOOP_GUARD_STOP_MESSAGE);
+	});
+
+	test("a latched win takes precedence over the widen message", () => {
+		const state = createLoopGuardState();
+		// latch a win first
+		const scoped = {
+			index: "logs-apm.error-*",
+			query: {
+				bool: {
+					filter: [
+						{ term: { "service.name": "prana-order-service" } },
+						{ range: { "@timestamp": { gte: "now-24h" } } },
+					],
+				},
+			},
+		};
+		recordResult(
+			state,
+			"elasticsearch_search",
+			toolCallSignature("elasticsearch_search", scoped),
+			"Total results: 1100, showing 5",
+			scoped,
+		);
+		// then an empty narrow arms widen
+		recordResult(
+			state,
+			"elasticsearch_search",
+			toolCallSignature("elasticsearch_search", NARROW),
+			EMPTY_SEARCH,
+			NARROW,
+		);
+		expect(state.widenRetryAllowed).toBe(true);
+		// latched win still wins the stop message
+		expect(stopMessageFor("elasticsearch_search", state)).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
 	});
 });

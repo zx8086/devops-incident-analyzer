@@ -37,7 +37,32 @@ STEP 1 -- is the service present in the incident window?
 ```
 - Hits (>=1) => the service IS PRESENT. Go to STEP 2. Do NOT run discovery and do
   NOT search other index patterns to "double-check".
-- Zero hits => go to STEP 3 (discovery).
+- Zero hits => go to STEP 1.5 (WIDEN THE WINDOW) -- do NOT jump to discovery yet.
+
+STEP 1.5 -- widen the time window BEFORE assuming the name is wrong. Many incidents
+are CHRONIC (the error recurs for days/weeks at low frequency), so a narrow incident
+window -- especially a 1-hour slice -- can return zero even when the service is
+present and erroring. Zero hits in STEP 1 almost always means the WINDOW is too
+narrow, NOT that the service name is wrong. Re-run the EXACT STEP-1 query with only
+the `@timestamp` bounds widened, in this order, and stop at the first that returns
+hits:
+- widen `gte` to `now-24h` (keep `lte` as `now` or drop the `range` filter's `lte`),
+- then `now-7d`,
+- then `now-30d`.
+```json
+{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
+  "track_total_hits": true,
+  "query": { "bool": { "filter": [
+    { "term": { "service.name": "<service-name>" } },
+    { "range": { "@timestamp": { "gte": "now-24h" } } } ] } },
+  "sort": [ { "@timestamp": "desc" } ] }
+```
+- Hits at any widened window => the service IS PRESENT (report the widened window you
+  used). Go to STEP 2. Do NOT run discovery.
+- Still zero after widening to `now-30d` => ONLY THEN go to STEP 3 (discovery); the
+  name is genuinely the thing to question.
+Never conclude a service is absent, or permute index patterns / run a discovery agg,
+from a zero result on a narrow window you have not yet widened.
 
 STEP 2 -- confirm the cited error on that service (scoped so another service's
 error can't be mistaken for it):
@@ -56,7 +81,8 @@ error can't be mistaken for it):
 - Zero => report "service present, cited error not observed in window" (NOT
   "absent"). STOP.
 
-STEP 3 -- only reached when STEP 1 was zero. Resolve the real name (the incident
+STEP 3 -- only reached when STEP 1 AND the STEP 1.5 widened windows were ALL zero.
+Resolve the real name (the incident
 name is often prefixed, e.g. `styles-v3` -> `pvh-services-styles-v3`) with a
 discovery aggregation FILTERED to the anchor -- a plain top-N terms agg is NOT
 exhaustive (a low-volume service falls outside the top buckets), so filter by a
@@ -92,11 +118,15 @@ Triage priority:
 4. Slow queries and indexing bottlenecks
 
 ## Stop on Empty Results
-For a NAMED service, follow the STEP 1->2->3 procedure above -- it already defines
-exactly when to stop and when an "absent" conclusion is allowed (only after STEP 3
-discovery finds no matching bucket). For any OTHER search (not a named-service
-lookup), an empty result is a valid final answer: after two empties in a row, stop
-and report "no matching documents for <criteria>" rather than permuting queries.
+For a NAMED service, follow the STEP 1->1.5->2->3 procedure above -- it already
+defines exactly when to stop and when an "absent" conclusion is allowed (only after
+STEP 1.5 widening AND STEP 3 discovery both fail). The single most common cause of a
+zero result is a TIME WINDOW that is too narrow for a chronic error -- ALWAYS widen
+the `@timestamp` window (STEP 1.5) before treating a zero as meaningful. For any
+OTHER search (not a named-service lookup), an empty result is a valid final answer
+only after you have also tried it with a widened window: if a widened-window retry is
+still empty, then after two empties in a row stop and report "no matching documents
+for <criteria> (searched through <widest window>)" rather than permuting queries.
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)

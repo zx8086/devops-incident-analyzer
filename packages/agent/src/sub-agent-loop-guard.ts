@@ -68,6 +68,49 @@ export const LOOP_GUARD_STOP_MESSAGE =
 	"only when discovery surfaced no matching service at all -- report that the searched " +
 	"indices/patterns returned no matching documents.";
 
+// SIO-1089: when the unproductive searches all carried a bounded @timestamp window,
+// the zero is far more likely a too-narrow window on a CHRONIC (recurs for days/weeks,
+// low frequency) error than a wrong service name. Before the LLM permutes into
+// discovery or concludes absence, steer it to WIDEN the window and retry once. This
+// message is emitted in place of the standard stop when a time-window widen has not
+// yet been attempted (see timeWindowWidened); the widened retry itself is allowed
+// through by a one-shot grant so the guard does not block the recovery it just asked for.
+export const LOOP_GUARD_WIDEN_WINDOW_MESSAGE =
+	"No results, and equivalent searches have already returned nothing -- but every one " +
+	"of these queries carried a narrow `@timestamp` window. A chronic error (recurring for " +
+	"days/weeks at low frequency) is easily missed by a 1-hour or single-day slice. Do NOT " +
+	"conclude the service is absent and do NOT run a discovery aggregation yet. Instead, " +
+	"re-run the SAME query with only the time window widened, stepping up the ladder until " +
+	"you get hits: set the `@timestamp` range `gte` to `now-7d`, then `now-30d` (and drop or " +
+	"widen `lte`). Only if the widest window still returns nothing, THEN fall back to " +
+	"discovery or report no matching documents.";
+
+// SIO-1089: the load-bearing fix for trailing-empty amnesia. When a run has ALREADY
+// latched a valid result (non-empty + concerns the focus service) but then wandered
+// into empties, the LLM's last-observed context is "empty" and it wrongly concludes
+// absence. This stop message injects the latched result BACK so the LLM's final
+// context is the WIN, not the trailing empty. Rendered with the latched service/count/
+// window by latchedStopMessage(); this constant is the fixed lead-in for tests/greppability.
+export const LOOP_GUARD_LATCHED_STOP_LEAD =
+	"You have ALREADY retrieved valid data this run. Stop searching and use it as your finding.";
+
+// Build the latched-result stop message from the best result on record. SIO-1089
+// (CodeRabbit): when the latched query carried no @timestamp lower bound, say so
+// explicitly instead of silently implying an incident-scoped window -- so a wide/
+// windowless hit is never surfaced as if it were bounded to the incident window.
+export function latchedStopMessage(best: BestResult): string {
+	const svc = best.serviceName ? ` for service.name "${best.serviceName}"` : "";
+	const win = best.windowLabel
+		? ` over the window ${best.windowLabel}`
+		: " (that query had no @timestamp window -- confirm the hits fall inside the incident window before reporting)";
+	return (
+		`${LOOP_GUARD_LATCHED_STOP_LEAD} A prior query already returned ${best.hitCount} matching ` +
+		`document(s)${svc}${win}. Do NOT call this tool again and do NOT conclude the service or error is ` +
+		"absent -- that earlier result is your answer. Synthesize your findings from it now: report the " +
+		"service.name, the matching count, and the timestamps you already observed."
+	);
+}
+
 // SIO-1084: AWS start_query is stopped for a different reason -- a window outside
 // retention -- so it needs its own re-anchor instruction, not "no matching documents".
 export const AWS_START_QUERY_STOP_MESSAGE =
@@ -77,9 +120,33 @@ export const AWS_START_QUERY_STOP_MESSAGE =
 	"re-anchor startTime/endTime to the incident/event timestamp (usually recent) inside " +
 	"[now - retentionInDays, now] before calling aws_logs_start_query again.";
 
+// SIO-1089: the best (validated) elasticsearch_search result latched so far. A result
+// latches only when it is non-empty AND -- if the query filtered on a service.name --
+// concerns that service (validity != mere non-emptiness, so a wrong-service/stale hit
+// is never latched and mis-reported). Carries just enough to render latchedStopMessage.
+export interface BestResult {
+	hitCount: number;
+	serviceName?: string;
+	windowLabel?: string;
+}
+
 export interface LoopGuardState {
 	consecutiveEmpty: number;
 	seenSignatures: Set<string>;
+	// SIO-1089: the best validated result on record (undefined until one latches). Once
+	// set, the stop path injects it back into the LLM's context so a trailing empty can
+	// never flip a confirmed hit to "absent" (trailing-empty amnesia). Replaced only by a
+	// strictly-better result (more hits).
+	bestResult?: BestResult;
+	// SIO-1089: set true once at least one unproductive elasticsearch_search carried a
+	// bounded @timestamp window AND no wider retry has run yet -- gates the widen-window
+	// stop message. Cleared once a widened (window-relaxed) retry has been observed so we
+	// don't loop asking to widen forever.
+	timeWindowWidened: boolean;
+	// SIO-1089: one-shot grant, mirroring postDiscoveryRequeryAllowed. When the guard has
+	// asked the LLM to widen the window, the widened retry is a plain (non-discovery)
+	// search that the soft stop would otherwise kill -- allow exactly one through.
+	widenRetryAllowed: boolean;
 	// SIO-1084: set once a service.name discovery agg has run; gates the elastic
 	// consecutive-empty soft stop so pre-discovery literal-name empties don't
 	// terminate before the SOUL discovery step gets to run.
@@ -106,6 +173,9 @@ export function createLoopGuardState(): LoopGuardState {
 	return {
 		consecutiveEmpty: 0,
 		seenSignatures: new Set<string>(),
+		bestResult: undefined,
+		timeWindowWidened: false,
+		widenRetryAllowed: false,
 		discoveryRan: false,
 		unproductiveSearches: 0,
 		awsStartQueryNeedsReanchor: false,
@@ -171,6 +241,125 @@ function aggsTargetServiceName(aggs: unknown): boolean {
 		if (aggsTargetServiceName(nested)) return true;
 	}
 	return false;
+}
+
+// SIO-1089: does this elasticsearch_search query carry a bounded @timestamp range?
+// A `range` filter on @timestamp with a `gte`/`from`/`gt` bound is "time-bounded".
+// Used to decide whether a zero result is likely a too-narrow window (widen-on-empty)
+// vs a genuinely absent service. Walks the query object for any `range["@timestamp"]`.
+export function hasTimeWindow(arg: unknown): boolean {
+	const args = unwrapCallArgs(arg);
+	if (!args || typeof args !== "object") return false;
+	const query = (args as Record<string, unknown>).query;
+	return queryHasTimestampRange(query);
+}
+
+function queryHasTimestampRange(node: unknown): boolean {
+	if (!node || typeof node !== "object") return false;
+	if (Array.isArray(node)) return node.some(queryHasTimestampRange);
+	const obj = node as Record<string, unknown>;
+	const range = obj.range;
+	if (range && typeof range === "object") {
+		const ts = (range as Record<string, unknown>)["@timestamp"];
+		if (ts && typeof ts === "object") {
+			const b = ts as Record<string, unknown>;
+			// A lower bound is what makes a window "narrow"; an open-ended `lte`-only
+			// filter isn't the too-narrow case we widen for.
+			if (b.gte !== undefined || b.gt !== undefined || b.from !== undefined) return true;
+		}
+	}
+	for (const v of Object.values(obj)) {
+		if (queryHasTimestampRange(v)) return true;
+	}
+	return false;
+}
+
+// SIO-1089: the service.name a query filters on (term/match on service.name inside the
+// query), or undefined if none. A latched result is only valid when the query it came
+// from was scoped to a service -- so we never latch a broad/global hit as "the service's
+// data". Returns the first service.name term/match value found.
+export function serviceNameFilter(arg: unknown): string | undefined {
+	const args = unwrapCallArgs(arg);
+	if (!args || typeof args !== "object") return undefined;
+	return findServiceNameValue((args as Record<string, unknown>).query);
+}
+
+function findServiceNameValue(node: unknown): string | undefined {
+	if (!node || typeof node !== "object") return undefined;
+	if (Array.isArray(node)) {
+		for (const item of node) {
+			const v = findServiceNameValue(item);
+			if (v !== undefined) return v;
+		}
+		return undefined;
+	}
+	const obj = node as Record<string, unknown>;
+	for (const clause of ["term", "match", "match_phrase"] as const) {
+		const c = obj[clause];
+		if (c && typeof c === "object") {
+			const sn = (c as Record<string, unknown>)["service.name"];
+			if (typeof sn === "string") return sn;
+			if (sn && typeof sn === "object") {
+				const val = (sn as Record<string, unknown>).value ?? (sn as Record<string, unknown>).query;
+				if (typeof val === "string") return val;
+			}
+		}
+	}
+	for (const v of Object.values(obj)) {
+		const found = findServiceNameValue(v);
+		if (found !== undefined) return found;
+	}
+	return undefined;
+}
+
+// SIO-1089: parse the hit count out of an elastic search render ("Total results: N ...").
+// Returns 0 when unparseable so an unknown-shape result never latches as a phantom win.
+const TOTAL_RESULTS_RE = /Total results:\s*(\d+)/i;
+export function extractHitCount(content: unknown): number {
+	const asText = typeof content === "string" ? content : (coalesceTextBlocks(content) ?? "");
+	const m = TOTAL_RESULTS_RE.exec(asText);
+	if (m?.[1]) return Number.parseInt(m[1], 10);
+	// Non-empty array/hits shape with no explicit count -> treat as >=1 so a real hit latches.
+	const { shape } = describeToolResult(asText || content);
+	if (shape.contentType === "array" && (shape.topLevelArrayLen ?? 0) > 0) return shape.topLevelArrayLen ?? 1;
+	if (shape.contentType === "object" && (shape.hitsLen ?? 0) > 0) return shape.hitsLen ?? 1;
+	return 0;
+}
+
+// SIO-1089: a short human label of the @timestamp window used, for the latched message.
+// Best-effort: pulls gte/lte if present. Undefined when no window filter.
+export function windowLabel(arg: unknown): string | undefined {
+	const args = unwrapCallArgs(arg);
+	if (!args || typeof args !== "object") return undefined;
+	const bound = findTimestampBounds((args as Record<string, unknown>).query);
+	if (!bound) return undefined;
+	const gte = bound.gte ?? bound.gt ?? bound.from;
+	const lte = bound.lte ?? bound.lt ?? bound.to;
+	if (gte !== undefined && lte !== undefined) return `${gte} to ${lte}`;
+	if (gte !== undefined) return `${gte} onward`;
+	return undefined;
+}
+
+function findTimestampBounds(node: unknown): Record<string, unknown> | undefined {
+	if (!node || typeof node !== "object") return undefined;
+	if (Array.isArray(node)) {
+		for (const item of node) {
+			const b = findTimestampBounds(item);
+			if (b) return b;
+		}
+		return undefined;
+	}
+	const obj = node as Record<string, unknown>;
+	const range = obj.range;
+	if (range && typeof range === "object") {
+		const ts = (range as Record<string, unknown>)["@timestamp"];
+		if (ts && typeof ts === "object") return ts as Record<string, unknown>;
+	}
+	for (const v of Object.values(obj)) {
+		const b = findTimestampBounds(v);
+		if (b) return b;
+	}
+	return undefined;
 }
 
 // SIO-1084: extract the AWS _error kind from a tool result payload, if any.
@@ -333,6 +522,16 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 		state.postDiscoveryRequeryAllowed = false;
 		return false;
 	}
+	// SIO-1089: after an empty time-bounded search we asked the LLM to WIDEN the window.
+	// The widened retry is a plain (non-discovery, non-duplicate) search that the soft
+	// stop below would otherwise kill. Allow exactly one widened retry through (consumed
+	// here) so the guard doesn't block the recovery it just requested. The hard
+	// MAX_UNPRODUCTIVE_SEARCHES cap above still bounds the run.
+	if (state.widenRetryAllowed) {
+		state.widenRetryAllowed = false;
+		state.timeWindowWidened = true;
+		return false;
+	}
 	// Soft stop: after 2 consecutive empties, stop -- but only once discovery has
 	// run, so pre-discovery empties don't terminate before the discovery step.
 	return state.consecutiveEmpty >= CONSECUTIVE_EMPTY_LIMIT && state.discoveryRan;
@@ -379,8 +578,31 @@ export function recordResult(
 	if (unproductive) {
 		state.consecutiveEmpty += 1;
 		state.unproductiveSearches += 1;
+		// SIO-1089: widen-on-empty signal handling -- ONLY for non-discovery searches (a
+		// discovery agg has no @timestamp window and must never touch the widen state, or
+		// it would falsely mark the window "already widened"). For a real search:
+		// hasTimeWindow(arg) distinguishes "0 in a narrow slice" (arm the widen retry) from
+		// "0 with no window at all" i.e. an already-widened query (record that widening
+		// didn't help, so the stop message stops asking to widen).
+		if (!wasDiscovery) {
+			if (hasTimeWindow(arg) && !state.widenRetryAllowed && !state.timeWindowWidened) {
+				state.widenRetryAllowed = true;
+			} else if (!hasTimeWindow(arg)) {
+				state.timeWindowWidened = true;
+			}
+		}
 	} else {
 		state.consecutiveEmpty = 0;
+		// SIO-1089: latch this as the best result when it is VALID -- non-empty AND the
+		// query was scoped to a service.name (so we never latch a broad/global hit as the
+		// service's data). Replace an existing latch only when strictly better (more hits).
+		const svc = serviceNameFilter(arg);
+		if (!wasDiscovery && svc !== undefined) {
+			const hitCount = extractHitCount(content);
+			if (hitCount > 0 && (state.bestResult === undefined || hitCount > state.bestResult.hitCount)) {
+				state.bestResult = { hitCount, serviceName: svc, windowLabel: windowLabel(arg) };
+			}
+		}
 		// SIO-1086: a discovery agg that RETURNED buckets means the agent now has the
 		// real service.name -- grant it one guaranteed non-discovery STEP-1 re-query
 		// against that name, so the soft stop can't block the recovery the discovery
@@ -401,7 +623,15 @@ export function isObservedTool(toolName: string): boolean {
 	return GUARDED_TOOLS.has(toolName) || toolName === AWS_DESCRIBE_LOG_GROUPS;
 }
 
-// SIO-1084: select the stop message for a guarded tool.
-export function stopMessageFor(toolName: string): string {
-	return toolName === "aws_logs_start_query" ? AWS_START_QUERY_STOP_MESSAGE : LOOP_GUARD_STOP_MESSAGE;
+// SIO-1084/1089: select the stop message for a guarded tool. Result-aware for elastic:
+//  1. a latched valid result wins -- inject it back so the LLM's last context is the WIN,
+//     never a trailing empty (the trailing-empty-amnesia fix), and
+//  2. otherwise, if the empties were time-bounded and no widened retry has run yet, steer
+//     to WIDEN the window before concluding absence,
+//  3. otherwise the standard discovery-aware "no matching documents" stop.
+export function stopMessageFor(toolName: string, state?: LoopGuardState): string {
+	if (toolName === "aws_logs_start_query") return AWS_START_QUERY_STOP_MESSAGE;
+	if (state?.bestResult) return latchedStopMessage(state.bestResult);
+	if (state && !state.timeWindowWidened && state.widenRetryAllowed) return LOOP_GUARD_WIDEN_WINDOW_MESSAGE;
+	return LOOP_GUARD_STOP_MESSAGE;
 }
