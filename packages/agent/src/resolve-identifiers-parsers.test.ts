@@ -7,6 +7,7 @@ import {
 	parseAwsEcsServiceArns,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
+	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
 	parseGitlabProjects,
 	parseKafkaConsumerGroups,
@@ -82,6 +83,78 @@ describe("parseCouchbaseScopeTree", () => {
 
 	test("returns {} on empty input", () => {
 		expect(parseCouchbaseScopeTree("")).toEqual({});
+	});
+});
+
+describe("parseCouchbaseSystemIndexes (SIO-1088: primary vs secondary + key fields)", () => {
+	// Fixture rows mirror the LIVE system:indexes shape validated against the prana cluster:
+	// backtick-wrapped index_key fields, is_primary boolean, function-expr keys, deferred state.
+	function md(rows: unknown[]): string {
+		return `# System Indexes (${rows.length} results)\n\n\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\`\n\n## Query Execution Details`;
+	}
+
+	test("secondary-only collection: hasPrimary=false, extracts plain key fields, drops function exprs", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([
+				{
+					scope_id: "seasons",
+					keyspace_id: "dates",
+					state: "online",
+					name: "idx_fms",
+					index_key: ["`styleSeasonCodeFms`", "`divisionCode`", "`salesOrganizationCode`", "`articleType`"],
+				},
+				{
+					scope_id: "seasons",
+					keyspace_id: "dates",
+					state: "online",
+					name: "idx_concat",
+					index_key: ["`salesOrganizationCode`", 'concat2("_", `a`, `b`)', "`sapIdentifier`"],
+				},
+			]),
+		);
+		expect(out.seasons?.dates?.hasPrimary).toBe(false);
+		// deduped, first-seen order, function expr concat2(...) dropped
+		expect(out.seasons?.dates?.secondaryKeyFields).toEqual([
+			"styleSeasonCodeFms",
+			"divisionCode",
+			"salesOrganizationCode",
+			"articleType",
+			"sapIdentifier",
+		]);
+	});
+
+	test("primary index sets hasPrimary=true", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([
+				{
+					scope_id: "new_model",
+					keyspace_id: "seasonal_assignment",
+					state: "online",
+					is_primary: true,
+					name: "#primary",
+				},
+			]),
+		);
+		expect(out.new_model?.seasonal_assignment?.hasPrimary).toBe(true);
+	});
+
+	test("deferred (not online) indexes are ignored", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([{ scope_id: "seasons", keyspace_id: "building", state: "deferred", index_key: ["`x`"] }]),
+		);
+		expect(out.seasons?.building).toBeUndefined();
+	});
+
+	test("bucket-level primary (scope_id null) is skipped", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([{ scope_id: null, keyspace_id: "default", state: "online", is_primary: true, name: "#primary" }]),
+		);
+		expect(Object.keys(out)).toHaveLength(0);
+	});
+
+	test("returns {} on empty / malformed input", () => {
+		expect(parseCouchbaseSystemIndexes("")).toEqual({});
+		expect(parseCouchbaseSystemIndexes("no json here")).toEqual({});
 	});
 });
 

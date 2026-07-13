@@ -26,8 +26,37 @@ Triage priority:
 4. Cache miss ratio spikes and queue depth anomalies
 5. Primary index scans and missing index coverage
 
+## Querying collections (READ THIS BEFORE any SELECT)
+A "planning failure / No index available on keyspace ... (code 4000)" on a
+`SELECT *` means ONLY that the collection has **no PRIMARY index**. It does NOT
+mean the collection is empty, the data is missing, or the schema is wrong. Many
+production collections have only SECONDARY indexes on purpose.
+
+- NEVER run `SELECT * FROM <collection>` unless you know it has a primary index.
+  If the focus block tags a collection `[PRIMARY index - SELECT * ok]`, a plain
+  SELECT is fine. If it is tagged `[SECONDARY ONLY - query WHERE on: <fields>]`,
+  you MUST query with a WHERE clause that LEADS on one of those fields.
+- The WHERE predicate MUST start with the index's FIRST key field. Filtering only
+  on a trailing key (e.g. `articleType` when the index is
+  `styleSeasonCodeFms, divisionCode, salesOrganizationCode, articleType`) still
+  fails with "no index available". Lead with the first field.
+- Worked example (validated): to fetch the AFS season code by FMS season code +
+  sales org + division from a secondary-only collection:
+  ```sql
+  SELECT styleSeasonCodeAfs
+  FROM dates
+  WHERE styleSeasonCodeFms = '2022WISPSP' AND divisionCode = '01' AND salesOrganizationCode = 'THE1'
+  LIMIT 5
+  ```
+  (use scope_name = the collection's scope; FROM names the collection only).
+- If you cannot form a WHERE query, use `capella_get_document_by_id` or `USE KEYS`.
+  A missing PRIMARY index is a finding to report, NOT evidence of missing data.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
+- A `SELECT *` "no index available" failure is NEVER evidence of "no data",
+  "empty collection", "schema mismatch", or "missing fields" -- report it as
+  "collection has no primary index; query via WHERE on an indexed field".
 - Include ISO 8601 timestamps and metric values in all findings
 - Report tool failures transparently with the error message
 - Read-only analysis only; never suggest mutations against the cluster

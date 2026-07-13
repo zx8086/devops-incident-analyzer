@@ -598,6 +598,56 @@ export function rewriteUngroundedRootCause(answer: string, ungrounded: string[])
 		.join("\n");
 }
 
+// SIO-1088: a couchbase `SELECT *` that fails with "no index available" (structured kind
+// "no-index" / N1QL code 4000) means ONLY that the collection has no PRIMARY index. It is NOT
+// evidence that the collection is empty, that data is missing, or that the schema/field names are
+// wrong -- the data is queryable via a WHERE clause on a secondary index key. Validated live: the
+// seasons.dates collection returned 878+ rows and the AFS-by-FMS lookup works. When the ONLY
+// couchbase signal was a no-index failure (no returned rows), a report line claiming absence /
+// schema problem for couchbase is UNGROUNDED. Grounded in the STRUCTURED toolError kind, not text.
+const NO_DATA_OR_SCHEMA_CLAIM_RE =
+	/\b(no (?:data|records?|documents?|rows?)\b|empty (?:collection|scope|result)|does not exist|is empty|schema mismatch|field names? (?:do not|don't|does not|doesn't) exist|wrong field names?|missing fields?|data gap|no .{0,30}season data)\b/i;
+
+// A datasource keyword regex just for couchbase, reused from DATASOURCE_KEYWORDS.
+function couchbaseHadOnlyNoIndex(results: DataSourceResult[]): boolean {
+	const cb = results.filter((r) => r.dataSourceId === "couchbase");
+	if (cb.length === 0) return false;
+	// At least one no-index error observed...
+	const anyNoIndex = cb.some((r) => (r.toolErrors ?? []).some((e) => e.kind === "no-index"));
+	if (!anyNoIndex) return false;
+	// ...and couchbase did NOT actually return contradicting data this turn (if it did, an absence
+	// claim is separately handled by detectPrematureAbsence and we don't want to double-soften).
+	return !cb.some((r) => dataSourceReturnedData(r));
+}
+
+export function detectNoIndexMisread(answer: string, results: DataSourceResult[]): { flagged: string[] } {
+	if (!couchbaseHadOnlyNoIndex(results)) return { flagged: [] };
+	const couchbaseKw = DATASOURCE_KEYWORDS.couchbase;
+	if (!couchbaseKw) return { flagged: [] };
+	const flagged: string[] = [];
+	for (const line of answer.split("\n")) {
+		if (headingLevel(line) !== null) continue;
+		// Only flag lines that both make an absence/schema claim AND mention couchbase context, so we
+		// don't touch unrelated datasources' lines.
+		if (NO_DATA_OR_SCHEMA_CLAIM_RE.test(line) && couchbaseKw.test(line)) {
+			flagged.push(line);
+		}
+	}
+	return { flagged };
+}
+
+const NO_INDEX_MISREAD_SUFFIX =
+	" [CORRECTION: this is grounded only in a `SELECT *` failing with 'no index available', which means the collection has no PRIMARY index -- NOT that data is missing or the schema is wrong. The collection is queryable via a WHERE clause on a secondary index key; retrieve rows that way before concluding absence.]";
+
+export function rewriteNoIndexMisread(answer: string, flagged: string[]): string {
+	if (flagged.length === 0) return answer;
+	const set = new Set(flagged);
+	return answer
+		.split("\n")
+		.map((line) => (set.has(line) ? line + NO_INDEX_MISREAD_SUFFIX : line))
+		.join("\n");
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -744,13 +794,21 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const { ungrounded: ungroundedRootCause } = detectUngroundedRootCause(answer, results);
 	const ungroundedRootCauseCapTriggered = ungroundedRootCause.length > 0;
 
+	// SIO-1088: a couchbase no-data / schema-problem claim grounded ONLY in a `SELECT *` no-index
+	// failure (structured kind "no-index") -- the collection has no PRIMARY index but the data is
+	// queryable via a secondary index. Soften + cap so the report can't narrate "no data / schema
+	// mismatch / gap" from a SELECT * failure. Validated: seasons.dates has 878+ rows.
+	const { flagged: noIndexMisread } = detectNoIndexMisread(answer, results);
+	const noIndexMisreadCapTriggered = noIndexMisread.length > 0;
+
 	const anyCapTriggered =
 		degradedSubAgents.length > 0 ||
 		gapsCapTriggered ||
 		ungroundedCapTriggered ||
 		expiryCapTriggered ||
 		prematureAbsenceCapTriggered ||
-		ungroundedRootCauseCapTriggered;
+		ungroundedRootCauseCapTriggered ||
+		noIndexMisreadCapTriggered;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -818,6 +876,18 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
+	if (noIndexMisreadCapTriggered) {
+		logger.warn(
+			{
+				noIndexMisread: noIndexMisread.length,
+				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Aggregator claimed couchbase no-data/schema-problem grounded only in a SELECT * no-index failure; correcting + capping confidence",
+		);
+	}
+
 	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
 	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
 	// SIO-1079: and rewrite any ungrounded "logs expired" bullets. Chain both rewrites.
@@ -841,9 +911,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				detectUngroundedRootCause(rewrittenForGrounding, results).ungrounded,
 			)
 		: rewrittenForGrounding;
-	const finalAnswer = anyCapTriggered
-		? rewriteConfidenceInAnswer(rewrittenForRootCause, cappedScore)
+	// SIO-1088: chain the no-index-misread correction last, re-detecting against the mutated text.
+	const rewrittenForNoIndex = noIndexMisreadCapTriggered
+		? rewriteNoIndexMisread(rewrittenForRootCause, detectNoIndexMisread(rewrittenForRootCause, results).flagged)
 		: rewrittenForRootCause;
+	const finalAnswer = anyCapTriggered
+		? rewriteConfidenceInAnswer(rewrittenForNoIndex, cappedScore)
+		: rewrittenForNoIndex;
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
