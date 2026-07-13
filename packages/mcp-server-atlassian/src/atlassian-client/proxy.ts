@@ -10,6 +10,21 @@ import { AtlassianOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider.js
 
 const log = createContextLogger("proxy");
 
+// SIO-1097: proactive-refresh interval tunables (mirror gitlab proxy). The
+// keep-alive tick refreshes the OAuth chain before it expires so an idle gap
+// longer than Rovo's refresh_token TTL doesn't force an interactive re-seed.
+const DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS = 1_800_000;
+const MIN_PROACTIVE_REFRESH_INTERVAL_MS = 60_000;
+const MAX_PROACTIVE_REFRESH_INTERVAL_MS = 3_600_000;
+
+function parseProactiveRefreshIntervalMs(): number {
+	const raw = process.env.OAUTH_PROACTIVE_REFRESH_INTERVAL_MS;
+	if (raw === undefined || raw === "") return DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n <= 0) return DEFAULT_PROACTIVE_REFRESH_INTERVAL_MS;
+	return Math.min(MAX_PROACTIVE_REFRESH_INTERVAL_MS, Math.max(MIN_PROACTIVE_REFRESH_INTERVAL_MS, n));
+}
+
 export interface ProxyToolInfo {
 	name: string;
 	description: string;
@@ -42,6 +57,22 @@ export class AtlassianMcpProxy {
 	private injectedClient: McpClientLike | null = null;
 	private cloudId: string | null = null;
 	private connected = false;
+	// SIO-1097: kept as a field (not a connect-local) so callTool can ask it to
+	// refresh tokens when the SDK throws UnauthorizedError mid-flight, and so
+	// connect() can start the proactive-refresh keep-alive.
+	private oauthProvider: AtlassianOAuthProvider | null = null;
+	// SIO-1097: stop-handle for the proactive refresh interval. Started in
+	// connect() once the OAuth provider is live, cleared in disconnect().
+	private stopProactiveRefresh: (() => void) | null = null;
+	// SIO-1097: serialize every upstream request on the single shared transport.
+	// The agent fans out 6 sub-agents in parallel, each firing multiple tool
+	// calls at once, plus a 30s health-poll resolveCloudId -- all through one
+	// StreamableHTTPClientTransport. Concurrent requests raced the SDK's per-
+	// request OAuth refresh and produced intermittent 401/403. A promise-chain
+	// queue guarantees at most one in-flight upstream call, so no two auth flows
+	// contend. This is the structural equivalent of the pooled clients that
+	// couchbase/elastic use with their static credentials.
+	private upstreamQueue: Promise<unknown> = Promise.resolve();
 
 	constructor(options: AtlassianMcpProxyOptions) {
 		this.options = options;
@@ -50,6 +81,18 @@ export class AtlassianMcpProxy {
 			this.injectedClient = options.client;
 			this.connected = true;
 		}
+	}
+
+	// SIO-1097: run fn after all previously-enqueued upstream calls settle. The
+	// queue never rejects (each link swallows via the returned promise) so one
+	// failing call can't wedge the chain for the next caller.
+	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.upstreamQueue.then(fn, fn);
+		this.upstreamQueue = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	private get client(): McpClientLike {
@@ -62,7 +105,7 @@ export class AtlassianMcpProxy {
 		const mcpUrl = new URL(this.options.mcpEndpoint);
 		log.info({ url: mcpUrl.toString() }, "Connecting to Atlassian MCP endpoint");
 
-		const oauthProvider = new AtlassianOAuthProvider({
+		this.oauthProvider = new AtlassianOAuthProvider({
 			mcpEndpoint: this.options.mcpEndpoint,
 			callbackPort: this.options.callbackPort,
 			onRedirect: async (authUrl) => {
@@ -81,7 +124,7 @@ export class AtlassianMcpProxy {
 		this.sdkClient = new Client({ name: "atlassian-mcp-proxy", version: "0.1.0" }, { capabilities: {} });
 
 		this.transport = new StreamableHTTPClientTransport(mcpUrl, {
-			authProvider: oauthProvider,
+			authProvider: this.oauthProvider,
 		});
 
 		try {
@@ -101,7 +144,7 @@ export class AtlassianMcpProxy {
 				// Reconnect with authorized transport
 				this.sdkClient = new Client({ name: "atlassian-mcp-proxy", version: "0.1.0" }, { capabilities: {} });
 				this.transport = new StreamableHTTPClientTransport(mcpUrl, {
-					authProvider: oauthProvider,
+					authProvider: this.oauthProvider,
 				});
 				await this.sdkClient.connect(this.transport);
 				this.connected = true;
@@ -110,12 +153,24 @@ export class AtlassianMcpProxy {
 				throw error;
 			}
 		}
+
+		// SIO-1097: now that the chain is alive, start the keep-alive tick so idle
+		// gaps longer than Rovo's refresh_token TTL don't kill it. The base-class
+		// cross-process file lock around doRefresh makes this safe to run in every
+		// process (workspace dev + AgentCore) without racing on the rotating chain.
+		const intervalMs = parseProactiveRefreshIntervalMs();
+		this.stopProactiveRefresh = this.oauthProvider.startProactiveRefresh(intervalMs);
+		log.info({ intervalMs }, "OAuth proactive refresh started");
 	}
 
 	async resolveCloudId(): Promise<void> {
 		// Rovo's Zod schema requires an object for arguments even when the tool takes no params.
 		// Omitting it yields a -32602 "expected object, received undefined" from the server.
-		const response = await this.client.callTool({ name: "getAccessibleAtlassianResources", arguments: {} });
+		// SIO-1097: serialize on the shared transport (see upstreamQueue) so the 30s
+		// health-poll resolveCloudId never contends with in-flight tool calls.
+		const response = await this.enqueue(() =>
+			this.client.callTool({ name: "getAccessibleAtlassianResources", arguments: {} }),
+		);
 
 		const textContent = response.content.find(
 			(c): c is { type: string; text: string } =>
@@ -164,19 +219,29 @@ export class AtlassianMcpProxy {
 	async callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
 		const argsWithCloud: Record<string, unknown> = this.cloudId ? { ...args, cloudId: this.cloudId } : { ...args };
 
+		// SIO-1097: every upstream request runs one-at-a-time via the queue so
+		// concurrent sub-agent tool calls never race the SDK's per-request OAuth
+		// refresh on the single shared transport.
 		try {
-			return await this.client.callTool({ name: toolName, arguments: argsWithCloud });
+			return await this.enqueue(() => this.client.callTool({ name: toolName, arguments: argsWithCloud }));
 		} catch (error) {
 			if (error instanceof UnauthorizedError) {
 				log.info({ tool: toolName }, "UnauthorizedError on tool call, attempting reauth");
 
-				if (this.options.reauth) {
+				// SIO-1097: defense-in-depth refresh. lockedRefresh() (via the
+				// provider) reloads the on-disk chain and POSTs under the cross-
+				// process lock, so the one-shot retry replays with a fresh token
+				// instead of the stale one. Falls back to the injected reauth for
+				// test DI where no provider is wired.
+				if (this.oauthProvider) {
+					await this.oauthProvider.refreshTokens();
+				} else if (this.options.reauth) {
 					await this.options.reauth();
 				}
 
 				// One-shot retry
 				try {
-					return await this.client.callTool({ name: toolName, arguments: argsWithCloud });
+					return await this.enqueue(() => this.client.callTool({ name: toolName, arguments: argsWithCloud }));
 				} catch (retryError) {
 					if (retryError instanceof UnauthorizedError) {
 						log.warn({ tool: toolName }, "Still unauthorized after reauth, returning auth required error");
@@ -214,6 +279,12 @@ export class AtlassianMcpProxy {
 	}
 
 	async disconnect(): Promise<void> {
+		// SIO-1097: stop the keep-alive tick before closing the transport so a late
+		// tick doesn't fire a refresh against a closed connection.
+		if (this.stopProactiveRefresh) {
+			this.stopProactiveRefresh();
+			this.stopProactiveRefresh = null;
+		}
 		if (this.transport) {
 			await this.transport.close();
 			this.transport = null;
