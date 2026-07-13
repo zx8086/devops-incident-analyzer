@@ -380,4 +380,14 @@ describe("probeTimeoutMs (SIO-1095)", () => {
 		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "0" })).toBe(8000);
 		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "-500" })).toBe(8000);
 	});
+
+	test("rejects non-integers and values that overflow setTimeout (CodeRabbit)", () => {
+		// > 2^31-1 overflows setTimeout to 1ms -> near-instant false negatives; must fall back.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "2147483648" })).toBe(8000);
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "99999999999" })).toBe(8000);
+		// Decimals are not valid timer delays either.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "8000.5" })).toBe(8000);
+		// The max valid value is accepted as-is.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "2147483647" })).toBe(2147483647);
+	});
 });

@@ -44,15 +44,16 @@ configured with (`ATLASSIAN_INCIDENT_PROJECTS`); when that is unset they search 
 visible projects (`project is not EMPTY`). You do NOT pass project keys and you do NOT
 know a curated incident-project list. So:
 
-- NEVER write "searched INC/OPS/SE" (or any specific project-key list) unless those keys
-  actually appear in a tool result you received. Inventing a scope is a fabrication and
-  will contradict the real matches (the AFS/FMS tickets live in BP, DSP, DSDW, PANDP,
-  B2BS -- not INC/OPS/SE).
-- Report the ACTUAL project keys present in the returned issues ("matches in BP, DSP,
-  DSDW"), or say "searched all visible projects" when the result set is empty.
+- NEVER write "searched INC/OPS/SE" (or ANY specific project-key list) unless those exact
+  keys appear in a tool result you received THIS turn. Inventing a scope is a fabrication
+  and will contradict the real matches. Do not rely on any example, memory, or historical
+  project list -- only the keys the tool returned now.
+- Report the ACTUAL project keys present in the returned issues (read them from each
+  issue's `key`/project field), or say "searched all visible projects" when the result set
+  is empty.
 - A zero result means "no ticket matched these TERMS across the searched projects", never
   "no ticket exists in <projects I named>". If a broad `atlassian_search` still returns
-  hits, the incident IS tracked -- report those keys.
+  hits, the incident IS tracked -- report the project keys from those hits.
 
 Triage priority:
 1. Linked incidents in the last 30 days matching the service

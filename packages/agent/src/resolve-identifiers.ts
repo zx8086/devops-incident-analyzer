@@ -55,9 +55,14 @@ export function _setResolveIdentifiersLoggerForTesting(sink: NodeLogSink | null)
 // make it env-tunable. Read at call time (not module scope) per the no-module-scope-env
 // rule; falls back to the default on an unset/invalid value.
 export const DEFAULT_PROBE_TIMEOUT_MS = 8000;
+// setTimeout delays above the 32-bit signed max overflow to 1ms, which would turn a
+// mis-set env value into near-instant false-negative probes (CodeRabbit). Accept only a
+// positive INTEGER within that range; anything else falls back to the default.
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export function probeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
 	const parsed = Number(env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+	if (Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_TIMER_DELAY_MS) return parsed;
+	return DEFAULT_PROBE_TIMEOUT_MS;
 }
 const ELASTIC_DISCOVERY_INDEX = "logs-*,logs-apm.*";
 
