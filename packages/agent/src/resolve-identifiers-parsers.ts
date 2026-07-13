@@ -105,10 +105,13 @@ function extractKeyFields(indexKey: unknown): string[] {
 	for (const raw of indexKey) {
 		if (typeof raw !== "string") continue;
 		const trimmed = raw.trim();
-		// A plain field key is a single backtick-wrapped identifier: `fieldName`. Anything containing
-		// parens/quotes/operators is a function/expression key and cannot be used as a WHERE field.
-		const m = trimmed.match(/^`([A-Za-z_][A-Za-z0-9_]*)`$/);
-		if (m?.[1]) fields.push(m[1]);
+		// A plain field key is backtick-wrapped: `fieldName`. The real disambiguator is "is this a
+		// function/expression, not a field" -- so accept ANY backtick-wrapped name and reject only
+		// keys containing "(" (a function/expression like concat2(...)). This preserves legitimate
+		// field names that need escaping for other reasons (hyphens, spaces, leading digit) rather
+		// than silently dropping them -- a dropped LEADING key would misdirect the WHERE guidance.
+		const m = trimmed.match(/^`([^`]+)`$/);
+		if (m?.[1] && !m[1].includes("(")) fields.push(m[1]);
 	}
 	return fields;
 }

@@ -272,7 +272,20 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	// collection secondary-less; a failed probe stays undefined -> renderer omits the tag).
 	let indexInfo: CouchbaseIndexMap | undefined;
 	if (indexesRes.status === "fulfilled") {
-		indexInfo = parseCouchbaseSystemIndexes(normalizeToolContent(indexesRes.value));
+		const rawIndexes = normalizeToolContent(indexesRes.value);
+		indexInfo = parseCouchbaseSystemIndexes(rawIndexes);
+		// SIO-1088 (CodeRabbit): distinguish a GENUINE "no online indexes" response from PARSE DRIFT
+		// (the upstream shape changed and the parser silently extracted nothing). Both collapse to an
+		// empty map otherwise, which would mislabel every collection [NO USABLE INDEX]. If the raw
+		// payload plainly contained index rows (keyspace_id/scope_id keys) but we extracted zero,
+		// that's drift -- warn AND omit the tags (undefined) rather than asserting "no index".
+		if (Object.keys(indexInfo).length === 0 && /"(?:keyspace_id|scope_id)"\s*:/.test(rawIndexes)) {
+			logger.warn(
+				{ rawSample: rawIndexes.slice(0, 200) },
+				"couchbase index probe returned rows but parser extracted none (shape drift?); omitting index tags",
+			);
+			indexInfo = undefined;
+		}
 	} else {
 		logger.warn(
 			{ error: msg(indexesRes.reason) },

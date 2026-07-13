@@ -98,7 +98,13 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				// SELECT * failure as "no data / missing index". Keep EVERY collection listed.
 				const indexInfo = resolved.couchbase.indexInfo;
 				const indexProbeRan = indexInfo !== undefined;
+				// SIO-1088: these are DISTINCT states with DIFFERENT remediation. A [SECONDARY ONLY]
+				// collection is queryable via a WHERE that leads on a key field; a [NO USABLE INDEX]
+				// collection can't be satisfied by ANY WHERE (no index to plan against) and needs
+				// key-based lookup. Conflating them would hand the WHERE guidance to a no-index
+				// collection -> the agent tries a WHERE, it fails, and it may re-misread that as absence.
 				let anySecondaryOnly = false;
+				let anyNoUsableIndex = false;
 				for (const [scope, collections] of Object.entries(resolved.couchbase.scopes)) {
 					if (!indexProbeRan) {
 						lines.push(`    ${scope}: [${collections.join(", ")}]`);
@@ -113,7 +119,7 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 							return `${c} [SECONDARY ONLY - query WHERE on: ${info.secondaryKeyFields.join(", ")}]`;
 						}
 						// Present in the scope map but no online index at all.
-						anySecondaryOnly = true;
+						anyNoUsableIndex = true;
 						return `${c} [NO USABLE INDEX - use capella_get_document_by_id / USE KEYS]`;
 					});
 					lines.push(`    ${scope}: [${tagged.join(", ")}]`);
@@ -121,6 +127,11 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				if (indexProbeRan && anySecondaryOnly) {
 					lines.push(
 						"    A [SECONDARY ONLY] collection HAS data but no primary index -- a bare SELECT * FAILS with 'no index available' (this is NOT missing data). Query it with a WHERE clause that LEADS on one of the listed key fields, e.g. SELECT <fields> FROM <collection> WHERE <firstKeyField> = <value> [AND ...]. Never conclude a collection is empty or has a schema problem from a SELECT * failure.",
+					);
+				}
+				if (indexProbeRan && anyNoUsableIndex) {
+					lines.push(
+						"    A [NO USABLE INDEX] collection may still have data -- NO WHERE query can be planned without any index (a WHERE will also fail with 'no index available'). Use capella_get_document_by_id or USE KEYS instead. Never conclude it is empty from a SELECT * or WHERE failure.",
 					);
 				}
 			}

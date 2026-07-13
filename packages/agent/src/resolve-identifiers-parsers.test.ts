@@ -123,6 +123,22 @@ describe("parseCouchbaseSystemIndexes (SIO-1088: primary vs secondary + key fiel
 		]);
 	});
 
+	test("preserves backtick-wrapped field names with hyphens / leading digits; drops only function exprs", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([
+				{
+					scope_id: "s",
+					keyspace_id: "c",
+					state: "online",
+					name: "idx",
+					// a hyphenated field, a leading-digit field, a plain field, and a function expr
+					index_key: ["`order-id`", "`2ndKey`", "`plainField`", 'concat2("_", `a`, `b`)'],
+				},
+			]),
+		);
+		expect(out.s?.c?.secondaryKeyFields).toEqual(["order-id", "2ndKey", "plainField"]);
+	});
+
 	test("primary index sets hasPrimary=true", () => {
 		const out = parseCouchbaseSystemIndexes(
 			md([
