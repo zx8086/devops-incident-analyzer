@@ -7,31 +7,19 @@ import type { InvestigationFocus, ResolvedIdentifiers } from "@devops-agent/shar
 // caller passes new Date().toISOString(). Kept out of the cached base prompt because both
 // the time anchor and the focus change every turn.
 //
-// The current-time line is the fix for the AWS sub-agent choosing CloudWatch query windows
-// with no "now" reference: without it the LLM invented Unix epoch seconds unmoored from the
-// real clock and anchored aws_logs_start_query outside the log group's retention window.
+// The current-time line gives the sub-agent a real "now" reference for reasoning about recency.
 //
-// SIO-1080: adding the current time was not enough -- the LLM OVERRODE it, shifting a 2026
-// incident timestamp back to 2025 (its training prior mis-dates "now") and landing outside
-// retention. So the year is now asserted as a standalone imperative fact derived from nowIso,
-// with an explicit prohibition on adjusting the incident year. (A deterministic guard in the
-// AWS start-query tool, correctYearDrift, is the load-bearing backstop when this is ignored.)
+// SIO-1091: the AWS query window is now RELATIVE by default (aws_logs_start_query takes
+// startRelative/"now-30d"), so there is no absolute epoch for the LLM to mis-date and no year to
+// shift. The old "THE CURRENT YEAR IS ..." imperative + the correctYearDrift tool guard existed
+// only to defend the absolute-epoch path and are both gone; a plain current-time line is enough.
 export function buildFocusBlock(
 	focus: InvestigationFocus | undefined,
 	nowIso: string,
 	resolved?: ResolvedIdentifiers,
 	dataSourceId?: string,
 ): string {
-	const currentYear = nowIso.slice(0, 4);
-	const timeAnchor =
-		`\n\n---\n\nCurrent time: ${nowIso}. THE CURRENT YEAR IS ${currentYear}. ` +
-		"Treat every incident/event timestamp given to you as literal ground truth -- never shift, " +
-		"adjust, correct, or reinterpret its YEAR, even if the timestamp appears to be in the future " +
-		"relative to your own sense of the date. Your internal sense of the current date may be stale; " +
-		`this "Current time" value is authoritative. When a tool needs a time window (e.g. CloudWatch ` +
-		"Logs Insights startTime/endTime, which are Unix epoch SECONDS), compute the epoch from the " +
-		"incident timestamp EXACTLY as given, anchor to it and to this current time, never guess an " +
-		"absolute epoch, and keep the window within the data source's retention.";
+	const timeAnchor = `\n\n---\n\nCurrent time: ${nowIso}. Use this as the reference for any "recent"/relative reasoning.`;
 
 	if (!focus) return timeAnchor;
 
@@ -133,7 +121,13 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 						if (info?.hasPrimary) return `${c} [PRIMARY index - SELECT * ok]`;
 						if (info && info.secondaryKeyFields.length > 0) {
 							anySecondaryOnly = true;
-							return `${c} [SECONDARY ONLY - query WHERE on: ${info.secondaryKeyFields.join(", ")}]`;
+							// SIO-1092: the key fields are listed leading-first. A WHERE must equality-match a
+							// LEADING key -- a trailing-key-only predicate (e.g. salesOrganizationCode when an
+							// index leads with styleSeasonCodeFms) still fails "no index available". Mark the
+							// first field as the primary candidate leading key so the agent doesn't filter a
+							// trailing one. (The list can union several indexes; capella_get_detailed_indexes
+							// resolves which leading key belongs to which index when in doubt.)
+							return `${c} [SECONDARY ONLY - lead WHERE on: ${info.secondaryKeyFields.join(", ")}]`;
 						}
 						// Present in the scope map but no online index at all.
 						anyNoUsableIndex = true;
@@ -143,7 +137,7 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				}
 				if (indexProbeRan && anySecondaryOnly) {
 					lines.push(
-						"    A [SECONDARY ONLY] collection HAS data but no primary index -- a bare SELECT * FAILS with 'no index available' (this is NOT missing data). Query it with a WHERE clause that LEADS on one of the listed key fields, e.g. SELECT <fields> FROM <collection> WHERE <firstKeyField> = <value> [AND ...]. Never conclude a collection is empty or has a schema problem from a SELECT * failure.",
+						"    A [SECONDARY ONLY] collection HAS data but no primary index -- a bare SELECT * FAILS with 'no index available' (this is NOT missing data). Query it with a WHERE that EQUALITY-MATCHES the LEADING key field (the first listed), e.g. SELECT <fields> FROM <collection> WHERE <leadingKeyField> = <value> [AND <nextKey> = ...]. Filtering ONLY a trailing key (e.g. salesOrganizationCode when the index leads with styleSeasonCodeFms) also fails 'no index available' -- supply the leading key's value, or call capella_get_detailed_indexes to read the exact index then fetch by capella_get_document_by_id / USE KEYS. Never conclude a collection is empty or has a schema problem from a 'no index available' failure.",
 					);
 				}
 				if (indexProbeRan && anyNoUsableIndex) {

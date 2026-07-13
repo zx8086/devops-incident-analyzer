@@ -20,6 +20,55 @@ describe("findLinkedIncidents.buildJql", () => {
 		const jql = buildJql({ service: "x", componentLabel: undefined, withinDays: 7, incidentProjects: [] });
 		expect(jql).toContain("project is not EMPTY");
 	});
+
+	test("SIO-1093: broadens beyond an exact label to a text/label OR (service is matched as text too)", () => {
+		const jql = buildJql({ service: "order-service", componentLabel: undefined, withinDays: 30, incidentProjects: [] });
+		expect(jql).toContain('labels = "order-service"');
+		expect(jql).toContain('text ~ "order-service"');
+		expect(jql).toContain(" OR ");
+	});
+
+	test("SIO-1093: threads errorKeywords as text matches", () => {
+		const jql = buildJql({
+			service: "order-service",
+			componentLabel: undefined,
+			errorKeywords: ["AFS season code", "THE1"],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		expect(jql).toContain('text ~ "AFS season code"');
+		expect(jql).toContain('text ~ "THE1"');
+	});
+
+	test("SIO-1093: blank/whitespace-only errorKeywords are dropped entirely", () => {
+		const jql = buildJql({
+			service: "svc",
+			componentLabel: undefined,
+			errorKeywords: ["", "  ", "\t"],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		expect(jql).not.toContain('text ~ ""');
+		expect(jql).not.toContain('text ~ "  "');
+		expect(jql).not.toContain('text ~ "\t"');
+	});
+
+	test("SIO-1093 (CodeRabbit): caps and dedupes errorKeywords", () => {
+		// The duplicate kw0 must sit BEFORE the 8-term cap so the dedup path is actually exercised
+		// (sanitize breaks once it has 8 terms; a duplicate past that point is never reached).
+		const rest = Array.from({ length: 8 }, (_, i) => `kw${i + 1}`); // kw1..kw8
+		const jql = buildJql({
+			service: "svc",
+			componentLabel: undefined,
+			errorKeywords: ["kw0", "kw0", ...rest],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		// If dedup were broken, the duplicate kw0 would consume a cap slot and kw7 would be dropped.
+		expect(jql).toContain('text ~ "kw7"');
+		expect(jql).not.toContain('text ~ "kw8"');
+		expect((jql.match(/text ~ "kw0"/g) ?? []).length).toBe(1);
+	});
 });
 
 describe("findLinkedIncidents.shapeIssue", () => {

@@ -15,6 +15,35 @@ describe("getRunbookForAlert.buildCql", () => {
 		const cql = buildCql({ service: "svc", errorKeywords: ["err"], spaceKey: "RUNBOOKS" });
 		expect(cql).toContain('space = "RUNBOOKS"');
 	});
+
+	test("SIO-1093: also matches terms in the title (widens recall + lifts scoring)", () => {
+		const cql = buildCql({ service: "checkout-api", errorKeywords: ["AFS season code"], spaceKey: undefined });
+		expect(cql).toContain('title ~ "checkout-api"');
+		expect(cql).toContain('title ~ "AFS season code"');
+	});
+
+	test("SIO-1093: blank/whitespace-only terms are dropped entirely", () => {
+		const cql = buildCql({ service: "svc", errorKeywords: ["", " ", "\t"], spaceKey: undefined });
+		expect(cql).not.toContain('text ~ ""');
+		expect(cql).not.toContain('title ~ ""');
+		// A retained whitespace term would render as `text ~ " "` -- assert it is absent too.
+		expect(cql).not.toContain('text ~ " "');
+		expect(cql).not.toContain('title ~ " "');
+		// The only surviving term is the service, matched as text OR title.
+		expect(cql).toBe('(text ~ "svc" OR title ~ "svc") ORDER BY lastModified DESC');
+	});
+
+	test("SIO-1093 (CodeRabbit): caps and dedupes errorKeywords", () => {
+		// The duplicate kw0 must sit BEFORE the 8-term cap so the dedup path is actually exercised
+		// (sanitize breaks once it has 8 terms; a duplicate past that point is never reached).
+		const rest = Array.from({ length: 7 }, (_, i) => `kw${i + 1}`); // kw1..kw7
+		const cql = buildCql({ service: "svc", errorKeywords: ["kw0", "kw0", ...rest], spaceKey: undefined });
+		// After dedup: kw0..kw7 = 8 unique keywords; + service = 9 terms, each as text AND title.
+		expect((cql.match(/text ~ /g) ?? []).length).toBe(9);
+		// If dedup were broken, the duplicate kw0 would consume a cap slot and kw7 would be dropped.
+		expect(cql).toContain('text ~ "kw7"');
+		expect((cql.match(/text ~ "kw0"/g) ?? []).length).toBe(1);
+	});
 });
 
 describe("getRunbookForAlert.scorePage", () => {

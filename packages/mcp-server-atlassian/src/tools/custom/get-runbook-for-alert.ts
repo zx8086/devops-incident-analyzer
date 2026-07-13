@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { errorKeywordsField, sanitizeErrorKeywords } from "./find-linked-incidents.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
 const log = createContextLogger("get-runbook-for-alert");
@@ -17,7 +18,7 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1_000;
 
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to find runbooks for"),
-	errorKeywords: z.array(z.string()).default([]).describe("Error keywords to include in the search"),
+	errorKeywords: errorKeywordsField.describe("Error keywords to include in the search"),
 	spaceKey: z.string().optional().describe("Confluence space key to scope the search"),
 	limit: z.number().int().positive().default(5).describe("Maximum number of runbook pages to return"),
 	siteUrl: z.string().optional().describe("Atlassian Confluence base URL for building page links"),
@@ -62,8 +63,15 @@ export interface GetRunbookContext {
 }
 
 export function buildCql({ service, errorKeywords, spaceKey }: BuildCqlArgs): string {
-	const textTerms = [service, ...errorKeywords].map((t) => `text ~ "${escapeCqlString(t)}"`);
-	const parts: string[] = [`(${textTerms.join(" OR ")})`];
+	// SIO-1093: match the incident's DOMAIN TERMS (service + error keywords) as free text AND as
+	// title matches. A runbook is frequently titled by the domain concept ("Prana - Support Guide",
+	// "Corrected Delivery Dates service") rather than the service token, so a title ~ clause both
+	// widens recall and lifts scorePage (title hits score higher). errorKeywords must carry the cited
+	// error (e.g. "AFS season code") -- a service-token-only CQL misses these pages entirely.
+	const terms = [service.trim(), ...sanitizeErrorKeywords(errorKeywords)].filter((t) => t.length > 0);
+	const textTerms = terms.map((t) => `text ~ "${escapeCqlString(t)}"`);
+	const titleTerms = terms.map((t) => `title ~ "${escapeCqlString(t)}"`);
+	const parts: string[] = [`(${[...textTerms, ...titleTerms].join(" OR ")})`];
 
 	if (spaceKey) {
 		parts.push(`space = "${escapeCqlString(spaceKey)}"`);
@@ -147,7 +155,7 @@ export function registerGetRunbookForAlert(server: McpServer, proxy: AtlassianMc
 		"Search Confluence for runbooks relevant to a service alert. Returns pages ranked by relevance score.",
 		{
 			service: z.string().describe("Service name to find runbooks for"),
-			errorKeywords: z.array(z.string()).default([]).describe("Error keywords to include in the search"),
+			errorKeywords: errorKeywordsField.describe("Error keywords to include in the search"),
 			spaceKey: z.string().optional().describe("Confluence space key to scope the search"),
 			limit: z.number().int().positive().default(5).describe("Maximum number of runbook pages to return"),
 		},

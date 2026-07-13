@@ -34,12 +34,21 @@ production collections have only SECONDARY indexes on purpose.
 
 - NEVER run `SELECT * FROM <collection>` unless you know it has a primary index.
   If the focus block tags a collection `[PRIMARY index - SELECT * ok]`, a plain
-  SELECT is fine. If it is tagged `[SECONDARY ONLY - query WHERE on: <fields>]`,
-  you MUST query with a WHERE clause that LEADS on one of those fields.
-- The WHERE predicate MUST start with the index's FIRST key field. Filtering only
-  on a trailing key (e.g. `articleType` when the index is
+  SELECT is fine. If it is tagged `[SECONDARY ONLY - lead WHERE on: <fields>]`,
+  you MUST query with a WHERE clause that LEADS on the FIRST listed field.
+- DISCOVER THE INDEX FIRST (do this before composing any WHERE on a secondary-only
+  collection). If the focus block did not already give you the key order, call
+  `capella_get_detailed_indexes` (or `capella_get_system_indexes`) for the keyspace
+  and read the index's key list IN ORDER. The WHERE predicate MUST equality-match
+  the index's FIRST key field. Filtering only on a trailing key (e.g.
+  `salesOrganizationCode` when the index is
   `styleSeasonCodeFms, divisionCode, salesOrganizationCode, articleType`) still
-  fails with "no index available". Lead with the first field.
+  fails with "no index available" — that is a wrong-predicate error, NOT "no data".
+- If you only have a value for a TRAILING key (e.g. you know `salesOrganizationCode
+  = 'THE1'` but not the leading `styleSeasonCodeFms`), you cannot use that index.
+  Either supply the leading key's value from the incident context (season codes and
+  the `SEASON_{salesOrg}_{division}_{fms}` key shape are the usual source), or fetch
+  by `capella_get_document_by_id` / `USE KEYS`.
 - Worked example (validated): to fetch the AFS season code by FMS season code +
   sales org + division from a secondary-only collection:
   ```sql

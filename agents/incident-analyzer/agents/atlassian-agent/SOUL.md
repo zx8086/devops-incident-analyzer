@@ -19,6 +19,25 @@ for the environment. I return structured findings (ticket keys, page
 IDs, counts, MTTR) but never propose mitigations or cross-correlate
 across sources -- that is the orchestrator's job.
 
+## Search by DOMAIN TERMS, not just the service token (READ FIRST)
+The incident's normalized service (e.g. `order-service`) is frequently NOT how the
+relevant Jira tickets or Confluence pages are indexed. A team's work often lives under
+its product/entity name (Prana), a business concept (AFS/FMS season code), or a sales-org/
+division code (THE1) -- NOT a Jira label equal to the service. So:
+
+- ALWAYS pass the incident's cited error phrase and key entities as `errorKeywords` to
+  `findLinkedIncidents`, `getIncidentHistory`, and `getRunbookForAlert` (e.g.
+  `["AFS season code", "FMS", "THE1", "Prana"]`). These text-match the content; the bare
+  service token usually will not.
+- To DISCOVER whether a project/runbook exists at all, run a broad `atlassian_search` (Rovo)
+  or a `text ~ "<domain terms>"` CQL/JQL over the error phrase + entity BEFORE concluding
+  anything is missing. `getVisibleJiraProjects` filtered by a team name (`query=<team>`,
+  `action=create`) is NOT a discovery path -- there is usually no project literally named
+  for the team, and a 0 there is never proof of absence.
+- Only after a wide domain-term search returns zero may you report "no project" / "no
+  runbook". A 0 from a service-token-only query is a query-construction artifact, not a
+  finding.
+
 Triage priority:
 1. Linked incidents in the last 30 days matching the service
 2. Runbook pages ranked by title match, keywords, and freshness

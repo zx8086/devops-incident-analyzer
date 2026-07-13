@@ -13,9 +13,33 @@ function escapeJqlString(value: string): string {
 	return value.replace(/[\\"]/g, "\\$&");
 }
 
+// SIO-1093 (CodeRabbit): bound domain-term input so a large/duplicated list can't blow up the JQL/CQL
+// OR-clause count or query length. Trim, drop blanks, cap per-term length, dedupe, cap total count.
+export const MAX_ERROR_KEYWORDS = 8;
+export const MAX_ERROR_KEYWORD_LENGTH = 100;
+
+export function sanitizeErrorKeywords(keywords: string[] | undefined): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of keywords ?? []) {
+		const term = raw.trim().slice(0, MAX_ERROR_KEYWORD_LENGTH);
+		if (term.length === 0 || seen.has(term)) continue;
+		seen.add(term);
+		out.push(term);
+		if (out.length >= MAX_ERROR_KEYWORDS) break;
+	}
+	return out;
+}
+
+// Shared Zod field so the tool registration schemas enforce the same bounds the sanitizer applies.
+export const errorKeywordsField = z.array(z.string().max(MAX_ERROR_KEYWORD_LENGTH)).max(MAX_ERROR_KEYWORDS).default([]);
+
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to search for in Jira incidents"),
 	componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
+	errorKeywords: errorKeywordsField.describe(
+		"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']). Broadens the search beyond an exact service label so tickets that don't carry the service as a Jira label are still found.",
+	),
 	withinDays: z.number().int().positive().default(30).describe("How many days back to search (default 30)"),
 	limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
 	incidentProjects: z
@@ -52,6 +76,7 @@ export type FindLinkedIncidentsOutput = z.infer<typeof OutputSchema>;
 export interface FindLinkedIncidentsContext {
 	service: string;
 	componentLabel?: string;
+	errorKeywords?: string[];
 	withinDays: number;
 	limit: number;
 	incidentProjects: string[];
@@ -61,6 +86,7 @@ export interface FindLinkedIncidentsContext {
 export interface BuildJqlArgs {
 	service: string;
 	componentLabel: string | undefined;
+	errorKeywords?: string[];
 	withinDays: number;
 	incidentProjects: string[];
 }
@@ -77,7 +103,13 @@ export interface JiraIssueRaw {
 	};
 }
 
-export function buildJql({ service, componentLabel, withinDays, incidentProjects }: BuildJqlArgs): string {
+export function buildJql({
+	service,
+	componentLabel,
+	errorKeywords,
+	withinDays,
+	incidentProjects,
+}: BuildJqlArgs): string {
 	const parts: string[] = [];
 
 	if (incidentProjects.length > 0) {
@@ -86,13 +118,20 @@ export function buildJql({ service, componentLabel, withinDays, incidentProjects
 		parts.push("project is not EMPTY");
 	}
 
-	if (componentLabel) {
-		parts.push(
-			`(labels = "${escapeJqlString(componentLabel)}" OR component = "${escapeJqlString(componentLabel)}" OR text ~ "${escapeJqlString(service)}")`,
-		);
-	} else {
-		parts.push(`labels = "${escapeJqlString(service)}"`);
-	}
+	// SIO-1093: match by incident DOMAIN TERMS, not just an exact service label. Incident
+	// tickets are frequently NOT tagged with the normalized service as a Jira label (the prana
+	// AFS case: `labels = "order-service"` returned 0 while the tickets exist under AFS/FMS/season
+	// text). Build an OR across the label, a free-text match on the service, and a free-text match
+	// on each supplied error keyword so a ticket is found by any of them.
+	const matchClauses = [
+		`labels = "${escapeJqlString(service)}"`,
+		`text ~ "${escapeJqlString(service)}"`,
+		...(componentLabel
+			? [`component = "${escapeJqlString(componentLabel)}"`, `labels = "${escapeJqlString(componentLabel)}"`]
+			: []),
+		...sanitizeErrorKeywords(errorKeywords).map((k) => `text ~ "${escapeJqlString(k)}"`),
+	];
+	parts.push(`(${matchClauses.join(" OR ")})`);
 
 	parts.push(`created >= -${withinDays}d`);
 
@@ -137,6 +176,7 @@ export async function findLinkedIncidents(
 	const jql = buildJql({
 		service: ctx.service,
 		componentLabel: ctx.componentLabel,
+		errorKeywords: ctx.errorKeywords,
 		withinDays: ctx.withinDays,
 		incidentProjects: ctx.incidentProjects,
 	});
@@ -175,6 +215,9 @@ export function registerFindLinkedIncidents(
 		{
 			service: z.string().describe("Service name to search for in Jira incidents"),
 			componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
+			errorKeywords: errorKeywordsField.describe(
+				"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']) so tickets not labelled with the service are still found.",
+			),
 			withinDays: z.number().int().positive().default(30).describe("How many days back to search"),
 			limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
 		},
@@ -184,6 +227,7 @@ export function registerFindLinkedIncidents(
 					const output = await findLinkedIncidents(proxy, {
 						service: args.service,
 						componentLabel: args.componentLabel,
+						errorKeywords: args.errorKeywords ?? [],
 						withinDays: args.withinDays ?? 30,
 						limit: args.limit ?? 10,
 						incidentProjects,
