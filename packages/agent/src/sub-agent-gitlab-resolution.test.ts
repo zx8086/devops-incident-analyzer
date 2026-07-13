@@ -108,3 +108,49 @@ describe("SIO-1029: gitlab_search is always in the gitlab tool budget", () => {
 		expect(names).not.toContain("gitlab_search");
 	});
 });
+
+// SIO-1096: the atlassian "resolution" tool -- force-included AND prepended on every path -- is the
+// broad Rovo atlassian_search, NOT getVisibleJiraProjects. Jira projects are team/org-named, so
+// name-matching resolved nothing and the model kept reporting "no prana project / 0 incidents".
+describe("SIO-1096: atlassian_search is the atlassian resolution tool (not getVisibleJiraProjects)", () => {
+	const atlassianDef: ToolDefinition = ToolDefinitionSchema.parse({
+		name: "atlassian-api",
+		description: "test fixture",
+		input_schema: { type: "object", properties: {}, required: [] },
+		tool_mapping: {
+			mcp_server: "atlassian",
+			mcp_patterns: ["atlassian_*", "findLinkedIncidents", "getRunbookForAlert", "getIncidentHistory"],
+			// CodeRabbit: incident_correlation deliberately OMITS atlassian_search so the test proves
+			// the RESOLUTION MAPPING (not the action) is what force-includes it. A regression removing
+			// RESOLUTION_TOOLS_BY_DATASOURCE.atlassian would then make this test fail, as it should.
+			action_tool_map: {
+				incident_correlation: ["findLinkedIncidents", "getIncidentHistory"],
+				runbook_lookup: ["getRunbookForAlert", "atlassian_searchConfluenceUsingCql"],
+			},
+		},
+	});
+
+	test("atlassian_search is force-included AND prepended even when the action does not request it", () => {
+		// incident_correlation does NOT list atlassian_search -- it must appear ONLY via the resolution
+		// mapping, prepended to the front of the tool list (that's what steers the model toward it).
+		const allTools = fakeTools([
+			...Array.from({ length: 26 }, (_, i) => `atlassian_filler_${i}`),
+			"atlassian_search",
+			"findLinkedIncidents",
+			"getIncidentHistory",
+			"atlassian_getVisibleJiraProjects",
+		]);
+		const { tools, filtered } = selectToolsByAction(
+			allTools,
+			"atlassian",
+			{ atlassian: ["incident_correlation"] },
+			atlassianDef,
+		);
+		const names = tools.map((t) => t.name);
+		expect(filtered).toBe(true);
+		// Prepended by withResolutionTools -> first in the list, so the model leads with it.
+		expect(names[0]).toBe("atlassian_search");
+		// getVisibleJiraProjects is NO LONGER the resolution tool, so it is not force-injected.
+		expect(names).not.toContain("atlassian_getVisibleJiraProjects");
+	});
+});

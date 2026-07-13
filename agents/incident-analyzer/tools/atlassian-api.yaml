@@ -68,7 +68,7 @@ tool_mapping:
     runbook_lookup:
       - atlassian_search
       - getRunbookForAlert
-      - atlassian_searchConfluencePages
+      - atlassian_searchConfluenceUsingCql
     jira_query:
       - atlassian_search
       - atlassian_searchJiraIssuesUsingJql
@@ -76,7 +76,7 @@ tool_mapping:
       - atlassian_getJiraIssueComments
     confluence_query:
       - atlassian_search
-      - atlassian_searchConfluencePages
+      - atlassian_searchConfluenceUsingCql
       - atlassian_getConfluencePage
   action_descriptions:
     incident_correlation: Jira tickets for an incident. START with atlassian_search over the incident's domain terms, THEN findLinkedIncidents/getIncidentHistory. The service token misses most.
