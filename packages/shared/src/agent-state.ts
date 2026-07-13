@@ -501,7 +501,9 @@ export const ResolvedIdentifiersSchema = z.object({
 		})
 		.optional(),
 	gitlab: z.object({ projectId: z.string().optional(), pathWithNamespace: z.string().optional() }).optional(),
-	atlassian: z.object({ jiraProjectKeys: z.array(z.string()), confluenceSpaceKeys: z.array(z.string()) }).optional(),
+	// SIO-1096: no `atlassian` field -- the atlassian resolveIdentifiers probe was removed. Jira
+	// projects are team/org-named, not service-named, so a service->project name-match resolved
+	// nothing; the atlassian sub-agent searches all projects by incident domain terms instead.
 });
 export type ResolvedIdentifiers = z.infer<typeof ResolvedIdentifiersSchema>;
 

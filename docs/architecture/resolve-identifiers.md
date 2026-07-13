@@ -7,8 +7,9 @@
 sub-agent fan-out**. It turns the incident's loosely-named service (e.g. `order-service`) into the
 **canonical identifiers that actually exist** in each in-scope datasource — the real Elastic
 `service.name`, the CloudWatch log group, the Kafka topic/consumer group, the Couchbase scope map,
-the Konnect control plane, the GitLab numeric project id, the Jira project / Confluence space keys —
-and writes them to `state.resolvedIdentifiers`. The sub-agent focus block then injects them so each
+the Konnect control plane, and the GitLab numeric project id — and writes them to
+`state.resolvedIdentifiers`. (Atlassian is deliberately not probed; see below.) The sub-agent focus
+block then injects them so each
 specialist queries the right handle on its first call instead of guessing a prefixed form.
 
 - **Source:** `packages/agent/src/resolve-identifiers.ts`
@@ -148,14 +149,16 @@ unless noted.
 - **Selection:** the row matching the focus on `pathWithNamespace`/`name`, else the first; lifts the
   **numeric** `projectId` (guessing the path 404s — the numeric id is the reliable handle).
 
-### Atlassian — `probeAtlassian` → `atlassian: { jiraProjectKeys, confluenceSpaceKeys }`
+### Atlassian — not probed (SIO-1096)
 
-- **Tools:** `atlassian_getVisibleJiraProjects` and `atlassian_getConfluenceSpaces`, each try/caught.
-- **Parsers:** `parseAtlassianProjects`, `parseAtlassianSpaces`.
-- **Filter:** matches `matchesFocus("<key> <name>", focus)` and lifts the project/space **keys**.
-- **Scope note:** these are visibility-scoped by the OAuth token / configured site. This probe is a
-  *hint* for the sub-agent, not a scope limiter — the atlassian custom tools (`findLinkedIncidents`
-  etc.) search all visible projects by domain terms regardless (see the atlassian-agent SOUL).
+There is **no atlassian probe**. The enumerate-then-name-match model that works for the other
+datasources fundamentally does not fit Atlassian: **Jira projects are named by team/org (DSD, BP,
+PANDP, B2BS), never by service**, so matching a project key/name against `order-service` resolves
+nothing — the earlier `probeAtlassian` filtered every real project out and always returned `{}`.
+And the answer never needs a project key anyway: the atlassian sub-agent searches **all** visible
+projects by incident domain terms (`text ~ "AFS season code"` etc., per its SOUL), which returns the
+right tickets in one call regardless of which project they live in. Removing the probe deletes dead
+work and frees a hot-path probe slot.
 
 ---
 
@@ -174,7 +177,7 @@ unless noted.
   kafka?:      { topics: string[], consumerGroups: string[] },
   konnect?:    { controlPlaneId?, controlPlaneName?, serviceIds? },
   gitlab?:     { projectId?, pathWithNamespace? },
-  atlassian?:  { jiraProjectKeys: string[], confluenceSpaceKeys: string[] },
+  // no `atlassian` key -- atlassian is not probed (SIO-1096); the sub-agent searches by domain terms.
 }
 ```
 
