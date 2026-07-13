@@ -48,9 +48,17 @@ export function _setResolveIdentifiersLoggerForTesting(sink: NodeLogSink | null)
 	currentLogger = sink ?? defaultLogger;
 }
 
-// Per-probe wall-clock budget. Kept small: the node runs on the hot path before
-// fan-out, so a slow/unreachable MCP server must not stall the whole investigation.
-const PROBE_TIMEOUT_MS = 4000;
+// Per-probe wall-clock budget. The node runs on the hot path before fan-out, so a
+// slow/unreachable MCP server must not stall the whole investigation -- but 4000ms was
+// too tight: under normal proxy latency the atlassian/elastic probes timed out and the
+// sub-agents lost their canonical-identifier grounding (SIO-1095). Default 8000ms, and
+// make it env-tunable. Read at call time (not module scope) per the no-module-scope-env
+// rule; falls back to the default on an unset/invalid value.
+export const DEFAULT_PROBE_TIMEOUT_MS = 8000;
+export function probeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const parsed = Number(env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
 const ELASTIC_DISCOVERY_INDEX = "logs-*,logs-apm.*";
 
 export function isResolveIdentifiersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -152,7 +160,7 @@ async function safeProbe(
 	fn: () => Promise<Partial<ResolvedIdentifiers>>,
 ): Promise<Partial<ResolvedIdentifiers>> {
 	try {
-		return await withTimeout(fn(), PROBE_TIMEOUT_MS);
+		return await withTimeout(fn(), probeTimeoutMs());
 	} catch (err) {
 		logger.warn(
 			{ dataSourceId, error: err instanceof Error ? err.message : String(err) },
