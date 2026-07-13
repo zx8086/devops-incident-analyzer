@@ -90,8 +90,8 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 				lines.push(
 					"  Query APM errors in index logs-apm.error-* with a term filter on the candidate " +
 						"service.name + match_phrase on error.exception.message. If a query returns 0 hits, " +
-						"WIDEN the @timestamp window (gte now-24h, then now-7d) and retry BEFORE running " +
-						"discovery or concluding the service/error is absent -- a chronic error is easily " +
+						"WIDEN the @timestamp window (gte now-24h, then now-7d, then now-30d) and retry BEFORE " +
+						"running discovery or concluding the service/error is absent -- a chronic error is easily " +
 						"missed by a 1-hour slice.",
 				);
 			}

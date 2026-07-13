@@ -80,9 +80,10 @@ export const LOOP_GUARD_WIDEN_WINDOW_MESSAGE =
 	"of these queries carried a narrow `@timestamp` window. A chronic error (recurring for " +
 	"days/weeks at low frequency) is easily missed by a 1-hour or single-day slice. Do NOT " +
 	"conclude the service is absent and do NOT run a discovery aggregation yet. Instead, " +
-	"re-run the SAME query exactly once with only the time window widened: set the " +
-	"`@timestamp` range `gte` to `now-7d` (and drop or widen `lte`). If that widened query " +
-	"still returns nothing, THEN fall back to discovery or report no matching documents.";
+	"re-run the SAME query with only the time window widened, stepping up the ladder until " +
+	"you get hits: set the `@timestamp` range `gte` to `now-7d`, then `now-30d` (and drop or " +
+	"widen `lte`). Only if the widest window still returns nothing, THEN fall back to " +
+	"discovery or report no matching documents.";
 
 // SIO-1089: the load-bearing fix for trailing-empty amnesia. When a run has ALREADY
 // latched a valid result (non-empty + concerns the focus service) but then wandered
