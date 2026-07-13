@@ -45,7 +45,9 @@ export const InputSchema = z.object({
 	incidentProjects: z
 		.array(z.string())
 		.default([])
-		.describe("Jira project keys to scope the search (e.g. ['INC', 'OPS'])"),
+		.describe(
+			"Jira project keys to scope the search. Server-configured (from ATLASSIAN_INCIDENT_PROJECTS); when empty the search spans ALL visible projects. Not chosen by the caller -- do not assume a fixed set of incident projects.",
+		),
 	siteUrl: z
 		.string()
 		.optional()

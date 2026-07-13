@@ -21,8 +21,10 @@ mock.module("./mcp-bridge.ts", () => ({
 import {
 	_setResolveIdentifiersLoggerForTesting,
 	computeTargetSources,
+	DEFAULT_PROBE_TIMEOUT_MS,
 	isResolveIdentifiersEnabled,
 	pickServiceCandidates,
+	probeTimeoutMs,
 	resolveIdentifiers,
 } from "./resolve-identifiers.ts";
 import type { AgentStateType } from "./state.ts";
@@ -358,5 +360,34 @@ describe("resolveIdentifiers node", () => {
 		const result = await resolveIdentifiers(makeState({ targetDataSources: ["konnect", "elastic"] }));
 		expect(result.resolvedIdentifiers?.konnect).toBeUndefined();
 		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toEqual(["orders"]);
+	});
+});
+
+// SIO-1095: the 4000ms default was too tight and timed out the atlassian/elastic probes under
+// normal proxy latency, dropping their grounding. Default is now 8000ms and env-tunable.
+describe("probeTimeoutMs (SIO-1095)", () => {
+	test("defaults to 8000 when unset", () => {
+		expect(probeTimeoutMs({})).toBe(8000);
+		expect(DEFAULT_PROBE_TIMEOUT_MS).toBe(8000);
+	});
+
+	test("reads RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS when a positive number", () => {
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "12000" })).toBe(12000);
+	});
+
+	test("falls back to the default on invalid/non-positive values", () => {
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "abc" })).toBe(8000);
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "0" })).toBe(8000);
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "-500" })).toBe(8000);
+	});
+
+	test("rejects non-integers and values that overflow setTimeout (CodeRabbit)", () => {
+		// > 2^31-1 overflows setTimeout to 1ms -> near-instant false negatives; must fall back.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "2147483648" })).toBe(8000);
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "99999999999" })).toBe(8000);
+		// Decimals are not valid timer delays either.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "8000.5" })).toBe(8000);
+		// The max valid value is accepted as-is.
+		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "2147483647" })).toBe(2147483647);
 	});
 });

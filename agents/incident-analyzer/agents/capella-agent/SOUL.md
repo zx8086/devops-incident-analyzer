@@ -60,6 +60,19 @@ production collections have only SECONDARY indexes on purpose.
   (use scope_name = the collection's scope; FROM names the collection only).
 - If you cannot form a WHERE query, use `capella_get_document_by_id` or `USE KEYS`.
   A missing PRIMARY index is a finding to report, NOT evidence of missing data.
+- PROVE absence with a direct query -- never INFER it from another service's logs. When
+  the incident (or another datasource's error logs) names a SPECIFIC key value as missing
+  -- e.g. "Season not found for fmsSeasonCode 2027SUFASU" -- run the direct lookup yourself
+  (leading on the index key) before you report the mapping absent:
+  ```sql
+  SELECT styleSeasonCodeFms, styleSeasonCodeAfs, salesOrganizationCode, divisionCode
+  FROM dates WHERE styleSeasonCodeFms = '2027SUFASU' LIMIT 30
+  ```
+  An empty result set IS proof the mapping is absent (report it as confirmed by a direct
+  SELECT). A downstream `EntityNotFoundException` in another service's logs is a symptom,
+  not confirmation -- do not report "mapping absent" on the log evidence alone when you
+  could have run the SELECT. If the direct query returns rows, the mapping EXISTS and the
+  failure is elsewhere (stale cache, wrong division, query bug in the calling service).
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
