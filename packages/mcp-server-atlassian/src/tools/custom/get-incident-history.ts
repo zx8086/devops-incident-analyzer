@@ -12,6 +12,10 @@ const log = createContextLogger("get-incident-history");
 
 export const InputSchema = z.object({
 	service: z.string().describe("Service name to aggregate incident history for"),
+	errorKeywords: z
+		.array(z.string())
+		.default([])
+		.describe("Incident domain terms to text-match so tickets not labelled with the service are still counted."),
 	windowDays: z.number().int().positive().default(30).describe("Number of days to look back"),
 	groupBy: z.enum(["week", "month"]).default("week").describe("Time bucket granularity"),
 	incidentProjects: z.array(z.string()).default([]).describe("Jira project keys to scope the search"),
@@ -43,6 +47,7 @@ export type GetIncidentHistoryOutput = z.infer<typeof OutputSchema>;
 
 export interface GetIncidentHistoryContext {
 	service: string;
+	errorKeywords?: string[];
 	windowDays: number;
 	groupBy: "week" | "month";
 	incidentProjects: string[];
@@ -152,6 +157,7 @@ export async function getIncidentHistory(
 	const jql = buildJql({
 		service: ctx.service,
 		componentLabel: undefined,
+		errorKeywords: ctx.errorKeywords,
 		withinDays: ctx.windowDays,
 		incidentProjects: ctx.incidentProjects,
 	});
@@ -185,6 +191,10 @@ export function registerGetIncidentHistory(
 		"Aggregate Jira incident history for a service into time buckets. Returns per-bucket counts, MTTR, and totals.",
 		{
 			service: z.string().describe("Service name to aggregate incident history for"),
+			errorKeywords: z
+				.array(z.string())
+				.default([])
+				.describe("Incident domain terms to text-match so tickets not labelled with the service are still counted."),
 			windowDays: z.number().int().positive().default(30).describe("Number of days to look back"),
 			groupBy: z.enum(["week", "month"]).default("week").describe("Time bucket granularity"),
 		},
@@ -193,6 +203,7 @@ export function registerGetIncidentHistory(
 				try {
 					const output = await getIncidentHistory(proxy, {
 						service: args.service,
+						errorKeywords: args.errorKeywords ?? [],
 						windowDays: args.windowDays ?? 30,
 						groupBy: args.groupBy ?? "week",
 						incidentProjects,

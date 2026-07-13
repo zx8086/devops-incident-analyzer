@@ -62,8 +62,15 @@ export interface GetRunbookContext {
 }
 
 export function buildCql({ service, errorKeywords, spaceKey }: BuildCqlArgs): string {
-	const textTerms = [service, ...errorKeywords].map((t) => `text ~ "${escapeCqlString(t)}"`);
-	const parts: string[] = [`(${textTerms.join(" OR ")})`];
+	// SIO-1093: match the incident's DOMAIN TERMS (service + error keywords) as free text AND as
+	// title matches. A runbook is frequently titled by the domain concept ("Prana - Support Guide",
+	// "Corrected Delivery Dates service") rather than the service token, so a title ~ clause both
+	// widens recall and lifts scorePage (title hits score higher). errorKeywords must carry the cited
+	// error (e.g. "AFS season code") -- a service-token-only CQL misses these pages entirely.
+	const terms = [service, ...errorKeywords].filter((t) => t.trim().length > 0);
+	const textTerms = terms.map((t) => `text ~ "${escapeCqlString(t)}"`);
+	const titleTerms = terms.map((t) => `title ~ "${escapeCqlString(t)}"`);
+	const parts: string[] = [`(${[...textTerms, ...titleTerms].join(" OR ")})`];
 
 	if (spaceKey) {
 		parts.push(`space = "${escapeCqlString(spaceKey)}"`);

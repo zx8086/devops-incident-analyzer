@@ -20,6 +20,36 @@ describe("findLinkedIncidents.buildJql", () => {
 		const jql = buildJql({ service: "x", componentLabel: undefined, withinDays: 7, incidentProjects: [] });
 		expect(jql).toContain("project is not EMPTY");
 	});
+
+	test("SIO-1093: broadens beyond an exact label to a text/label OR (service is matched as text too)", () => {
+		const jql = buildJql({ service: "order-service", componentLabel: undefined, withinDays: 30, incidentProjects: [] });
+		expect(jql).toContain('labels = "order-service"');
+		expect(jql).toContain('text ~ "order-service"');
+		expect(jql).toContain(" OR ");
+	});
+
+	test("SIO-1093: threads errorKeywords as text matches", () => {
+		const jql = buildJql({
+			service: "order-service",
+			componentLabel: undefined,
+			errorKeywords: ["AFS season code", "THE1"],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		expect(jql).toContain('text ~ "AFS season code"');
+		expect(jql).toContain('text ~ "THE1"');
+	});
+
+	test("SIO-1093: blank errorKeywords are dropped", () => {
+		const jql = buildJql({
+			service: "svc",
+			componentLabel: undefined,
+			errorKeywords: ["", "  "],
+			withinDays: 30,
+			incidentProjects: [],
+		});
+		expect(jql).not.toContain('text ~ ""');
+	});
 });
 
 describe("findLinkedIncidents.shapeIssue", () => {

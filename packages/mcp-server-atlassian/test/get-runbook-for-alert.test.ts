@@ -15,6 +15,18 @@ describe("getRunbookForAlert.buildCql", () => {
 		const cql = buildCql({ service: "svc", errorKeywords: ["err"], spaceKey: "RUNBOOKS" });
 		expect(cql).toContain('space = "RUNBOOKS"');
 	});
+
+	test("SIO-1093: also matches terms in the title (widens recall + lifts scoring)", () => {
+		const cql = buildCql({ service: "checkout-api", errorKeywords: ["AFS season code"], spaceKey: undefined });
+		expect(cql).toContain('title ~ "checkout-api"');
+		expect(cql).toContain('title ~ "AFS season code"');
+	});
+
+	test("SIO-1093: blank terms are dropped", () => {
+		const cql = buildCql({ service: "svc", errorKeywords: ["", " "], spaceKey: undefined });
+		expect(cql).not.toContain('text ~ ""');
+		expect(cql).not.toContain('title ~ ""');
+	});
 });
 
 describe("getRunbookForAlert.scorePage", () => {

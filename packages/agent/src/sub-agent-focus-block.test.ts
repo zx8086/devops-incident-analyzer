@@ -17,32 +17,23 @@ const FOCUS: InvestigationFocus = {
 	establishedAtTurn: 1,
 };
 
-describe("buildFocusBlock current-time anchor (SIO-1079)", () => {
+describe("buildFocusBlock current-time anchor (SIO-1091)", () => {
 	test("always includes the current-time line, even with no focus", () => {
 		const block = buildFocusBlock(undefined, NOW);
 		expect(block).toContain(`Current time: ${NOW}`);
-		// Must steer epoch/window choice.
-		expect(block.toLowerCase()).toContain("epoch");
-		expect(block.toLowerCase()).toContain("retention");
 	});
 
-	test("SIO-1080: asserts the current YEAR authoritatively and forbids adjusting the incident year", () => {
-		const block = buildFocusBlock(undefined, NOW);
-		// The year derived from nowIso (2026) must appear as a standalone assertion.
-		expect(block).toContain("2026");
-		const low = block.toLowerCase();
-		expect(low).toContain("current year");
-		// Must forbid shifting/correcting the incident year.
-		expect(low).toMatch(/never (shift|adjust|correct|reinterpret)/);
-		expect(low).toContain("year");
+	test("SIO-1091: no longer asserts a year or forbids year-shifting (window is relative now)", () => {
+		const block = buildFocusBlock(undefined, NOW).toLowerCase();
+		// The absolute-epoch harness is gone; the block must not carry the old imperatives.
+		expect(block).not.toContain("the current year is");
+		expect(block).not.toContain("epoch");
+		expect(block).not.toMatch(/never (shift|adjust|correct|reinterpret)/);
 	});
 
-	test("SIO-1080: the asserted year tracks nowIso (not hardcoded)", () => {
-		const low2027 = buildFocusBlock(undefined, "2027-01-02T00:00:00.000Z").toLowerCase();
-		// Assert the rendered year-assertion sentence, not the echoed nowIso -- so the test fails
-		// if currentYear regresses to a hardcoded value.
-		expect(low2027).toContain("the current year is 2027");
-		expect(low2027).not.toContain("the current year is 2026");
+	test("current-time line tracks nowIso (not hardcoded)", () => {
+		const block2027 = buildFocusBlock(undefined, "2027-01-02T00:00:00.000Z");
+		expect(block2027).toContain("Current time: 2027-01-02T00:00:00.000Z");
 	});
 
 	test("includes both the time anchor and the focus when focus is present", () => {
