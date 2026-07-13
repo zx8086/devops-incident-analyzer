@@ -303,8 +303,12 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 		expect(getCalls()).toBe(3); // none short-circuited
 	});
 
-	test("short-circuits after discovery has run and the empty budget is exhausted", async () => {
-		const { entries, logger } = makeLog();
+	// SIO-1090: the discovery-aware soft stop (budget of 2) is gone. The only elastic
+	// termination guarantees now are exact-duplicate detection and the hard cap of 5
+	// TOTAL unproductive searches -- so a discovery empty + one more distinct empty
+	// (2 total) must NOT stop the third distinct call.
+	test("does not short-circuit distinct calls before the hard cap, even after discovery", async () => {
+		const { logger } = makeLog();
 		const { tool: fake, getCalls } = buildDiscoverySearchTool();
 		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
 		if (!wrapped) throw new Error("instrumentTools returned empty array");
@@ -316,23 +320,55 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 			args: { size: 0, aggs: { by_service: { terms: { field: "service.name" } } } },
 			type: "tool_call",
 		});
-		// ... one more empty exhausts the budget of 2 ...
+		// ... one more distinct empty (counts as 2, still below the hard cap of 5) ...
 		await wrapped.invoke({
 			id: "c2",
 			name: "elasticsearch_search",
 			args: { index: "logs-*", q: "b" },
 			type: "tool_call",
 		});
-		// ... the third is short-circuited.
-		const third = await wrapped.invoke({
+		// ... the third distinct call still runs.
+		await wrapped.invoke({
 			id: "c3",
 			name: "elasticsearch_search",
 			args: { index: "metrics-*", q: "c" },
 			type: "tool_call",
 		});
 
-		expect(getCalls()).toBe(2);
-		const stopText = third instanceof ToolMessage ? String(third.content) : String(third);
+		expect(getCalls()).toBe(3);
+	});
+
+	test("short-circuits once the hard cap of unproductive searches is exhausted", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: fake, getCalls } = buildDiscoverySearchTool();
+		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		// discovery empty (1) + 4 more distinct empties = 5 total, exhausting MAX_UNPRODUCTIVE_SEARCHES.
+		await wrapped.invoke({
+			id: "c1",
+			name: "elasticsearch_search",
+			args: { size: 0, aggs: { by_service: { terms: { field: "service.name" } } } },
+			type: "tool_call",
+		});
+		for (let i = 0; i < 4; i++) {
+			await wrapped.invoke({
+				id: `c${i + 2}`,
+				name: "elasticsearch_search",
+				args: { index: "logs-*", q: `perm-${i}` },
+				type: "tool_call",
+			});
+		}
+		// The 6th distinct call is short-circuited by the hard cap.
+		const sixth = await wrapped.invoke({
+			id: "c6",
+			name: "elasticsearch_search",
+			args: { index: "metrics-*", q: "final" },
+			type: "tool_call",
+		});
+
+		expect(getCalls()).toBe(5);
+		const stopText = sixth instanceof ToolMessage ? String(sixth.content) : String(sixth);
 		expect(stopText).toContain("Stop searching");
 		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
 	});

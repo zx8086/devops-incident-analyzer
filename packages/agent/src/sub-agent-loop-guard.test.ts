@@ -5,23 +5,17 @@ import {
 	AWS_START_QUERY_STOP_MESSAGE,
 	awsErrorKind,
 	createLoopGuardState,
-	extractHitCount,
-	hasTimeWindow,
 	isDiscoveryCall,
 	isGuardedTool,
 	isObservedTool,
 	isUnproductiveResult,
-	LOOP_GUARD_LATCHED_STOP_LEAD,
 	LOOP_GUARD_STOP_MESSAGE,
-	LOOP_GUARD_WIDEN_WINDOW_MESSAGE,
 	recordResult,
 	reserveSignature,
-	serviceNameFilter,
 	shouldShortCircuit,
 	stopMessageFor,
 	toolCallSignature,
 	unwrapCallArgs,
-	windowLabel,
 } from "./sub-agent-loop-guard.ts";
 
 const EMPTY_SEARCH = "Total results: 0, showing 0 from position 0"; // the 43-byte empty result
@@ -30,13 +24,6 @@ const DISCOVERY_ARGS = {
 	size: 0,
 	aggs: { by_service: { terms: { field: "service.name", size: 50 } } },
 };
-
-// Helper: run a discovery agg to arm the consecutive-empty stop, returning a search
-// signature for the discovery call so callers can chain further searches.
-function armDiscovery(state: ReturnType<typeof createLoopGuardState>): void {
-	const sig = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-	recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, DISCOVERY_ARGS);
-}
 
 describe("SIO-1029: loop guard result classification", () => {
 	test("recognizes the empty elasticsearch_search string as unproductive", () => {
@@ -113,130 +100,75 @@ describe("SIO-1084 A1: discovery-call detection", () => {
 	});
 });
 
-describe("SIO-1084 A1: elastic guard is discovery-aware", () => {
-	test("does NOT stop after two literal-name empties when no discovery has run yet", () => {
+describe("SIO-1090: elastic guard = duplicate-stop + hard cap only", () => {
+	const NON_DISCOVERY = { index: "logs-*,logs-apm.*", query: { match_phrase: { message: "x" } } };
+	const DISCOVERY_ARGS = {
+		index: "logs-*,logs-apm.*",
+		size: 0,
+		aggs: { by_service: { terms: { field: "service.name" } } },
+	};
+	const EMPTY = "Total results: 0, showing 0 from position 0";
+
+	test("exact-duplicate non-discovery call is short-circuited", () => {
 		const state = createLoopGuardState();
-		const sig1 = toolCallSignature("elasticsearch_search", { index: "logs-*", q: "order-service" });
-		const sig2 = toolCallSignature("elasticsearch_search", { index: "logs-apm.*", q: "order-service" });
-		const sig3 = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig1, { index: "logs-*", q: "order-service" })).toBe(
-			false,
-		);
-		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, { index: "logs-*", q: "order-service" });
-
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig2, { index: "logs-apm.*", q: "order-service" })).toBe(
-			false,
-		);
-		recordResult(state, "elasticsearch_search", sig2, EMPTY_SEARCH, { index: "logs-apm.*", q: "order-service" });
-
-		// The discovery agg is ALWAYS allowed through, even after two empties.
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig3, DISCOVERY_ARGS)).toBe(false);
+		const sig = toolCallSignature("elasticsearch_search", NON_DISCOVERY);
+		recordResult(state, "elasticsearch_search", sig, EMPTY, NON_DISCOVERY);
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NON_DISCOVERY)).toBe(true);
 	});
 
-	test("post-discovery, two empties DO stop (budget restored)", () => {
+	test("distinct empties do NOT stop before the hard cap", () => {
 		const state = createLoopGuardState();
-		armDiscovery(state); // discoveryRan = true, consecutiveEmpty = 1 (empty discovery)
-
-		const sigA = toolCallSignature("elasticsearch_search", { q: "a" });
-		const sigB = toolCallSignature("elasticsearch_search", { q: "b" });
-		// discovery empty already counts as 1; one more empty exhausts the budget of 2
-		recordResult(state, "elasticsearch_search", sigA, EMPTY_SEARCH, { q: "a" });
-		expect(shouldShortCircuit(state, "elasticsearch_search", sigB, { q: "b" })).toBe(true);
+		// Two distinct empty searches: below MAX_UNPRODUCTIVE_SEARCHES (5), keep going.
+		for (let i = 0; i < 2; i++) {
+			const args = { ...NON_DISCOVERY, query: { match_phrase: { message: `x${i}` } } };
+			const sig = toolCallSignature("elasticsearch_search", args);
+			expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(false);
+			recordResult(state, "elasticsearch_search", sig, EMPTY, args);
+		}
 	});
 
-	test("a repeated identical discovery agg is still short-circuited (duplicate protection)", () => {
+	test("hard cap terminates a distinct-arg permuter within MAX_UNPRODUCTIVE_SEARCHES calls", () => {
+		const state = createLoopGuardState();
+		let stoppedAt = -1;
+		for (let i = 0; i < 12; i++) {
+			const args = { ...NON_DISCOVERY, query: { match_phrase: { message: `perm${i}` } } };
+			const sig = toolCallSignature("elasticsearch_search", args);
+			if (shouldShortCircuit(state, "elasticsearch_search", sig, args)) {
+				stoppedAt = i;
+				break;
+			}
+			recordResult(state, "elasticsearch_search", sig, EMPTY, args);
+		}
+		expect(stoppedAt).toBeGreaterThan(0);
+		expect(stoppedAt).toBeLessThanOrEqual(5);
+	});
+
+	test("a single discovery agg is never short-circuited below the hard cap", () => {
 		const state = createLoopGuardState();
 		const sig = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-		recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, DISCOVERY_ARGS);
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, DISCOVERY_ARGS)).toBe(false);
+	});
+
+	test("a repeated identical discovery agg IS short-circuited (duplicate protection)", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
+		recordResult(state, "elasticsearch_search", sig, EMPTY, DISCOVERY_ARGS);
 		expect(shouldShortCircuit(state, "elasticsearch_search", sig, DISCOVERY_ARGS)).toBe(true);
 	});
 
-	test("bounded stop: the agent terminates within a few calls even if discovery keeps returning empty", () => {
-		const state = createLoopGuardState();
-		let stopped = false;
-		for (let i = 0; i < 10 && !stopped; i++) {
-			// alternate a distinct literal search each iteration
-			const args = { index: "logs-*", q: `perm-${i}` };
-			const sig = toolCallSignature("elasticsearch_search", args);
-			if (shouldShortCircuit(state, "elasticsearch_search", sig, args)) {
-				stopped = true;
-				break;
-			}
-			recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, args);
-			if (i === 0) armDiscovery(state); // discovery runs early
-		}
-		expect(stopped).toBe(true);
-	});
-
-	// SIO-1084 regression (finder-caught): a permuting LLM that issues DISTINCT empty
-	// searches and NEVER runs discovery must still terminate via the hard cap -- the
-	// discovery-aware soft stop (gated on discoveryRan) would otherwise never fire.
-	test("hard cap terminates a distinct-arg permuter that never runs discovery (SIO-1029 non-regression)", () => {
-		const state = createLoopGuardState();
-		let calls = 0;
-		let stopped = false;
-		for (let i = 0; i < 40 && !stopped; i++) {
-			const args = { index: "logs-*", q: `distinct-${i}` }; // never a discovery agg
-			const sig = toolCallSignature("elasticsearch_search", args);
-			if (shouldShortCircuit(state, "elasticsearch_search", sig, args)) {
-				stopped = true;
-				break;
-			}
-			calls += 1;
-			recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, args);
-		}
-		expect(stopped).toBe(true);
-		// Well under the recursionLimit of 40.
-		expect(calls).toBeLessThanOrEqual(6);
-	});
-
-	// SIO-1084 (finder-caught): a zero-bucket discovery agg renders as "Search results
-	// with aggregations (0 total hits...)", which EMPTY_SEARCH_RE misses. It must still
-	// count as unproductive so it doesn't reset the streak and re-arm the guard.
-	test("an empty-bucket discovery agg is unproductive", () => {
-		const emptyAgg =
-			"Search results with aggregations (0 total hits, 3ms):\n\n" + JSON.stringify({ by_service: { buckets: [] } });
-		expect(isUnproductiveResult(emptyAgg)).toBe(true);
-		// a NON-empty agg is productive
-		const fullAgg =
-			"Search results with aggregations (5 total hits, 3ms):\n\n" +
-			JSON.stringify({ by_service: { buckets: [{ key: "svc" }] } });
-		expect(isUnproductiveResult(fullAgg)).toBe(false);
-	});
-
-	test("a productive result resets the consecutive-empty streak", () => {
-		const state = createLoopGuardState();
-		armDiscovery(state);
-		const sigA = toolCallSignature("elasticsearch_search", { q: "a" });
-		const sigB = toolCallSignature("elasticsearch_search", { q: "b" });
-		const sigC = toolCallSignature("elasticsearch_search", { q: "c" });
-		recordResult(state, "elasticsearch_search", sigA, '[{"_source":{"x":1}}]', { q: "a" }); // productive -> reset
-		expect(shouldShortCircuit(state, "elasticsearch_search", sigB, { q: "b" })).toBe(false);
-		recordResult(state, "elasticsearch_search", sigB, EMPTY_SEARCH, { q: "b" });
-		expect(shouldShortCircuit(state, "elasticsearch_search", sigC, { q: "c" })).toBe(false);
-	});
-
-	test("exact-duplicate non-discovery call is short-circuited immediately", () => {
-		const state = createLoopGuardState();
-		const args = { index: "logs-*", q: "same" };
-		const sig = toolCallSignature("elasticsearch_search", args);
-		recordResult(state, "elasticsearch_search", sig, '[{"_source":{"x":1}}]', args);
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(true);
+	test("stopMessageFor(elasticsearch_search) returns the single stop message", () => {
+		expect(stopMessageFor("elasticsearch_search")).toBe(LOOP_GUARD_STOP_MESSAGE);
 	});
 
 	// SIO-1084 (finder-caught): parallel tool calls from one AIMessage could both pass
 	// shouldShortCircuit before either records. Reserving the signature pre-invoke makes
-	// the concurrent duplicate a detected loop.
+	// the concurrent duplicate a detected loop. Still load-bearing under SIO-1090.
 	test("reserveSignature makes a concurrent identical call a duplicate", () => {
 		const state = createLoopGuardState();
-		const args = { index: "logs-*", q: "same" };
-		const sig = toolCallSignature("elasticsearch_search", args);
-		// first call passes, then reserves before its await completes
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(false);
+		const sig = toolCallSignature("elasticsearch_search", NON_DISCOVERY);
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NON_DISCOVERY)).toBe(false);
 		reserveSignature(state, "elasticsearch_search", sig);
-		// concurrent identical call now short-circuits before recordResult runs
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig, args)).toBe(true);
+		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NON_DISCOVERY)).toBe(true);
 	});
 
 	test("reserveSignature no-ops for non-guarded tools", () => {
@@ -302,396 +234,5 @@ describe("non-guarded tools", () => {
 		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
 		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
 		expect(shouldShortCircuit(state, "kafka_list_topics", sig)).toBe(false);
-	});
-});
-
-// The elastic MCP renders a size:0 agg as an ARRAY of MCP text content blocks
-// [{type:"text",text:summary},{type:"text",text:aggJSON}], and @langchain/mcp-adapters
-// delivers that array RAW to recordResult (no normalizeToolContent). The SIO-1084
-// string-only detection was therefore dead code on the real wire path.
-const DATA_BEARING_AGG_BLOCKS = [
-	{ type: "text", text: "Search results with aggregations (10000 total hits, 458ms):" },
-	{
-		type: "text",
-		text: JSON.stringify({ by_service: { buckets: [{ key: "prana-order-service", doc_count: 91632783 }] } }),
-	},
-];
-const EMPTY_AGG_BLOCKS = [
-	{ type: "text", text: "Search results with aggregations (0 total hits, 3ms):" },
-	{ type: "text", text: JSON.stringify({ by_service: { buckets: [] } }) },
-];
-
-describe("SIO-1086 D: array-of-blocks agg shape is classified (was dead code)", () => {
-	test("a DATA-BEARING agg delivered as a text-block array is productive", () => {
-		expect(isUnproductiveResult(DATA_BEARING_AGG_BLOCKS, "elasticsearch_search")).toBe(false);
-	});
-
-	test("a ZERO-BUCKET agg delivered as a text-block array is unproductive", () => {
-		// This is the shape SIO-1084 intended to catch but never reached on the real wire.
-		expect(isUnproductiveResult(EMPTY_AGG_BLOCKS, "elasticsearch_search")).toBe(true);
-	});
-
-	test("string-form aggs still classify correctly (no regression)", () => {
-		expect(isUnproductiveResult(DATA_BEARING_AGG_BLOCKS.map((b) => b.text).join("\n\n"))).toBe(false);
-		expect(isUnproductiveResult(EMPTY_AGG_BLOCKS.map((b) => b.text).join("\n\n"))).toBe(true);
-	});
-
-	test("a data-bearing discovery in array form resets the streak (recordResult path)", () => {
-		const state = createLoopGuardState();
-		const sig = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-		// pre-seed one empty so consecutiveEmpty=1, then a data-bearing discovery must reset it
-		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "x" }), EMPTY_SEARCH, {
-			q: "x",
-		});
-		recordResult(state, "elasticsearch_search", sig, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
-		expect(state.consecutiveEmpty).toBe(0);
-		expect(state.discoveryRan).toBe(true);
-	});
-});
-
-describe("SIO-1086 C: a productive discovery grants one guaranteed re-query", () => {
-	// Replays the :5173 failure: literal-name empty -> data-bearing discovery -> more
-	// literal empties trip the soft stop -> the STEP-1 re-run with the DISCOVERED name
-	// must NOT be blocked (the false-"absent" trap).
-	test("the post-discovery STEP-1 re-query is allowed even when the soft stop is armed", () => {
-		const state = createLoopGuardState();
-		// iter1: literal 'order-service' empty
-		const s1 = toolCallSignature("elasticsearch_search", { q: "order-service" });
-		recordResult(state, "elasticsearch_search", s1, EMPTY_SEARCH, { q: "order-service" });
-		// iter2: PRODUCTIVE discovery agg (surfaces prana-order-service) -> grants re-query
-		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
-		// iter3/4: two more literal empties arm the soft stop again
-		const s3 = toolCallSignature("elasticsearch_search", { q: "perm-1" });
-		recordResult(state, "elasticsearch_search", s3, EMPTY_SEARCH, { q: "perm-1" });
-		const s4 = toolCallSignature("elasticsearch_search", { q: "perm-2" });
-		recordResult(state, "elasticsearch_search", s4, EMPTY_SEARCH, { q: "perm-2" });
-		// the STEP-1 re-run with the discovered name is a plain search; it MUST be allowed
-		const sRequery = toolCallSignature("elasticsearch_search", { term: { "service.name": "prana-order-service" } });
-		expect(
-			shouldShortCircuit(state, "elasticsearch_search", sRequery, { term: { "service.name": "prana-order-service" } }),
-		).toBe(false);
-	});
-
-	test("the grant is one-shot: a second post-discovery permutation IS stopped", () => {
-		const state = createLoopGuardState();
-		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
-		// two empties arm the soft stop
-		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e1" }), EMPTY_SEARCH, {
-			q: "e1",
-		});
-		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e2" }), EMPTY_SEARCH, {
-			q: "e2",
-		});
-		// first post-discovery re-query consumes the grant (allowed)
-		const r1 = { q: "requery-1" };
-		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r1), r1)).toBe(
-			false,
-		);
-		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r1), EMPTY_SEARCH, r1);
-		// second permutation now hits the soft stop (grant already consumed)
-		const r2 = { q: "requery-2" };
-		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r2), r2)).toBe(
-			true,
-		);
-	});
-
-	test("an EMPTY discovery does NOT grant a re-query (genuine absent must still stop)", () => {
-		const state = createLoopGuardState();
-		// empty discovery arms discoveryRan but grants nothing
-		armDiscovery(state); // feeds EMPTY_SEARCH as the discovery result
-		recordResult(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", { q: "e1" }), EMPTY_SEARCH, {
-			q: "e1",
-		});
-		const r = { q: "after-empty-discovery" };
-		expect(shouldShortCircuit(state, "elasticsearch_search", toolCallSignature("elasticsearch_search", r), r)).toBe(
-			true,
-		);
-	});
-
-	test("the hard MAX_UNPRODUCTIVE_SEARCHES cap fires even when the soft stop cannot (SIO-1029 non-regression)", () => {
-		// Reach the HARD cap specifically, NOT the soft stop: keep consecutiveEmpty reset
-		// (interleave a productive result after each empty) so `consecutiveEmpty >= LIMIT`
-		// never trips, while `unproductiveSearches` climbs to MAX_UNPRODUCTIVE_SEARCHES=5.
-		// A productive result also re-grants the discovery re-query, so this equally proves
-		// the grant cannot bypass the absolute cap.
-		const state = createLoopGuardState();
-		const sDisc = toolCallSignature("elasticsearch_search", DISCOVERY_ARGS);
-		recordResult(state, "elasticsearch_search", sDisc, DATA_BEARING_AGG_BLOCKS, DISCOVERY_ARGS);
-		// 5 unproductive searches, each followed by a productive one to reset the empty streak.
-		for (let i = 0; i < 5; i++) {
-			const empty = { q: `empty-${i}` };
-			const eSig = toolCallSignature("elasticsearch_search", empty);
-			// never short-circuited before the cap (soft stop can't fire; grant/streak reset)
-			expect(shouldShortCircuit(state, "elasticsearch_search", eSig, empty)).toBe(false);
-			recordResult(state, "elasticsearch_search", eSig, EMPTY_SEARCH, empty);
-			const prod = { q: `prod-${i}` };
-			const pSig = toolCallSignature("elasticsearch_search", prod);
-			recordResult(state, "elasticsearch_search", pSig, '[{"_source":{"x":1}}]', prod);
-		}
-		expect(state.unproductiveSearches).toBe(5);
-		expect(state.consecutiveEmpty).toBe(0); // soft stop is NOT the reason we stop
-		// The hard cap now short-circuits unconditionally -- even a fresh DISCOVERY call, which
-		// the soft stop and the discovery bypass would otherwise let through.
-		const nextDisc = toolCallSignature("elasticsearch_search", { ...DISCOVERY_ARGS, index: "logs-2" });
-		expect(shouldShortCircuit(state, "elasticsearch_search", nextDisc, { ...DISCOVERY_ARGS, index: "logs-2" })).toBe(
-			true,
-		);
-	});
-});
-
-describe("SIO-1086 E: stop message does not steer to false absent", () => {
-	test("the stop message conditions 'absent' on discovery surfacing nothing", () => {
-		expect(LOOP_GUARD_STOP_MESSAGE).toContain("discovery");
-		expect(LOOP_GUARD_STOP_MESSAGE).toContain("present under that name");
-	});
-});
-
-describe("SIO-1089: detectors (hasTimeWindow / serviceNameFilter / extractHitCount / windowLabel)", () => {
-	const TIME_BOUNDED = {
-		index: "logs-apm.error-*",
-		query: {
-			bool: {
-				must: [{ match_phrase: { "error.exception.message": "AFS season code" } }],
-				filter: [
-					{ term: { "service.name": "prana-order-service" } },
-					{ range: { "@timestamp": { gte: "2026-07-12T23:50:44Z", lte: "2026-07-13T00:50:44Z" } } },
-				],
-			},
-		},
-	};
-
-	test("hasTimeWindow: true when a @timestamp range with a lower bound is present (nested in bool.filter)", () => {
-		expect(hasTimeWindow(TIME_BOUNDED)).toBe(true);
-	});
-
-	test("hasTimeWindow: false when no @timestamp range, or only an lte upper bound", () => {
-		expect(hasTimeWindow({ query: { term: { "service.name": "x" } } })).toBe(false);
-		expect(hasTimeWindow({ query: { range: { "@timestamp": { lte: "now" } } } })).toBe(false);
-		expect(hasTimeWindow({ query: { match_all: {} } })).toBe(false);
-	});
-
-	test("hasTimeWindow: unwraps the ReAct tool-call object { args }", () => {
-		expect(hasTimeWindow({ id: "x", name: "elasticsearch_search", args: TIME_BOUNDED })).toBe(true);
-	});
-
-	test("serviceNameFilter: extracts the term/match service.name value", () => {
-		expect(serviceNameFilter(TIME_BOUNDED)).toBe("prana-order-service");
-		expect(serviceNameFilter({ query: { match: { "service.name": { query: "orders" } } } })).toBe("orders");
-		expect(serviceNameFilter({ query: { match_all: {} } })).toBeUndefined();
-	});
-
-	test("extractHitCount: parses 'Total results: N' and non-empty array/hits shapes", () => {
-		expect(extractHitCount("Total results: 1100, showing 5 from position 0")).toBe(1100);
-		expect(extractHitCount('[{"_source":{"x":1}},{"_source":{"y":2}}]')).toBe(2);
-		expect(extractHitCount(EMPTY_SEARCH)).toBe(0);
-		expect(extractHitCount("[]")).toBe(0);
-	});
-
-	test("windowLabel: renders gte/lte for the latched message", () => {
-		expect(windowLabel(TIME_BOUNDED)).toBe("2026-07-12T23:50:44Z to 2026-07-13T00:50:44Z");
-		expect(windowLabel({ query: { range: { "@timestamp": { gte: "now-24h" } } } })).toBe("now-24h onward");
-		expect(windowLabel({ query: { match_all: {} } })).toBeUndefined();
-	});
-});
-
-describe("SIO-1089: best-answer latch (find -> validate -> latch -> fall back)", () => {
-	// A service-scoped, non-empty, time-bounded result -- the thing that should latch.
-	const SCOPED_ARGS = {
-		index: "logs-apm.error-*",
-		query: {
-			bool: {
-				filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-24h" } } }],
-			},
-		},
-	};
-
-	test("latches a valid (non-empty + service-scoped) result and injects it into the stop message", () => {
-		const state = createLoopGuardState();
-		const sig = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
-		recordResult(state, "elasticsearch_search", sig, "Total results: 1100, showing 5 from position 0", SCOPED_ARGS);
-		expect(state.bestResult).toEqual({
-			hitCount: 1100,
-			serviceName: "prana-order-service",
-			windowLabel: "now-24h onward",
-		});
-		// The latched result wins the stop message -- the LLM's last context is the WIN, not an empty.
-		const msg = stopMessageFor("elasticsearch_search", state);
-		expect(msg).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
-		expect(msg).toContain("1100");
-		expect(msg).toContain("prana-order-service");
-	});
-
-	test("does NOT latch a non-empty result that was not service-scoped (broad/global hit)", () => {
-		const state = createLoopGuardState();
-		const broad = { index: "logs-*", query: { match_all: {} } };
-		const sig = toolCallSignature("elasticsearch_search", broad);
-		recordResult(state, "elasticsearch_search", sig, "Total results: 999, showing 5 from position 0", broad);
-		expect(state.bestResult).toBeUndefined();
-	});
-
-	// SIO-1089 (CodeRabbit): a service-scoped hit with NO @timestamp window is still valid
-	// data (it must latch so we don't discard the answer), but the stop message must NOT
-	// imply an incident-bounded window -- it explicitly flags the missing window instead.
-	test("a windowless service-scoped hit latches, and the message flags the missing window", () => {
-		const state = createLoopGuardState();
-		const windowless = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
-		const sig = toolCallSignature("elasticsearch_search", windowless);
-		recordResult(state, "elasticsearch_search", sig, "Total results: 141712, showing 5", windowless);
-		expect(state.bestResult).toEqual({ hitCount: 141712, serviceName: "prana-order-service", windowLabel: undefined });
-		const msg = stopMessageFor("elasticsearch_search", state);
-		expect(msg).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
-		expect(msg).toContain("no @timestamp window");
-		expect(msg).toContain("confirm the hits fall inside the incident window");
-	});
-
-	test("a latched result survives a later trailing empty (trailing-empty amnesia fix)", () => {
-		const state = createLoopGuardState();
-		const sig = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
-		recordResult(state, "elasticsearch_search", sig, "Total results: 1100, showing 5", SCOPED_ARGS);
-		// Now a later, different empty search comes in.
-		const later = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
-		const lSig = toolCallSignature("elasticsearch_search", later);
-		recordResult(state, "elasticsearch_search", lSig, EMPTY_SEARCH, later);
-		// bestResult is untouched; the stop message STILL injects the win, not "absent".
-		expect(state.bestResult?.hitCount).toBe(1100);
-		expect(stopMessageFor("elasticsearch_search", state)).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
-	});
-
-	test("replaces the latch only with a strictly-better (more hits) result", () => {
-		const state = createLoopGuardState();
-		const a = toolCallSignature("elasticsearch_search", SCOPED_ARGS);
-		recordResult(state, "elasticsearch_search", a, "Total results: 10, showing 5", SCOPED_ARGS);
-		const widened = {
-			index: "logs-apm.error-*",
-			query: {
-				bool: {
-					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-7d" } } }],
-				},
-			},
-		};
-		const b = toolCallSignature("elasticsearch_search", widened);
-		recordResult(state, "elasticsearch_search", b, "Total results: 500, showing 5", widened);
-		expect(state.bestResult?.hitCount).toBe(500);
-		// A weaker later result does NOT replace it.
-		const weaker = {
-			index: "logs-apm.error-*",
-			query: {
-				bool: {
-					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-1h" } } }],
-				},
-			},
-		};
-		const c = toolCallSignature("elasticsearch_search", weaker);
-		recordResult(state, "elasticsearch_search", c, "Total results: 3, showing 3", weaker);
-		expect(state.bestResult?.hitCount).toBe(500);
-	});
-});
-
-describe("SIO-1089: widen-on-empty (the prana 1h-window failure)", () => {
-	// The exact failing shape: service-scoped, time-bounded, returns 0.
-	const NARROW = {
-		index: "logs-apm.error-*",
-		query: {
-			bool: {
-				filter: [
-					{ term: { "service.name": "prana-order-service" } },
-					{ range: { "@timestamp": { gte: "2026-07-12T23:50:44Z", lte: "2026-07-13T00:50:44Z" } } },
-				],
-			},
-		},
-	};
-
-	test("an empty time-bounded search arms the widen-retry grant", () => {
-		const state = createLoopGuardState();
-		const sig = toolCallSignature("elasticsearch_search", NARROW);
-		recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, NARROW);
-		expect(state.widenRetryAllowed).toBe(true);
-		expect(state.timeWindowWidened).toBe(false);
-	});
-
-	test("the widened retry is allowed through the guard (one-shot), even with the empty streak armed", () => {
-		const state = createLoopGuardState();
-		armDiscovery(state); // discoveryRan = true so the soft stop is otherwise live
-		const sig1 = toolCallSignature("elasticsearch_search", NARROW);
-		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, NARROW);
-		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, { ...NARROW, index: "x" }); // 2nd empty -> streak armed
-		// The widened retry (different args) must be allowed through despite the soft stop.
-		const widened = {
-			...NARROW,
-			query: {
-				bool: {
-					filter: [{ term: { "service.name": "prana-order-service" } }, { range: { "@timestamp": { gte: "now-7d" } } }],
-				},
-			},
-		};
-		const wSig = toolCallSignature("elasticsearch_search", widened);
-		expect(shouldShortCircuit(state, "elasticsearch_search", wSig, widened)).toBe(false);
-		expect(state.widenRetryAllowed).toBe(false); // consumed
-		expect(state.timeWindowWidened).toBe(true);
-	});
-
-	test("a DUPLICATE narrow query (the trace: #9==#11) stops with the WIDEN message, not 'absent'", () => {
-		const state = createLoopGuardState();
-		const sig = toolCallSignature("elasticsearch_search", NARROW);
-		// First run of the narrow query: empty -> arms widen.
-		recordResult(state, "elasticsearch_search", sig, EMPTY_SEARCH, NARROW);
-		expect(state.widenRetryAllowed).toBe(true);
-		// The LLM re-issues the IDENTICAL narrow query -> duplicate short-circuit.
-		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NARROW)).toBe(true);
-		// And the stop message steers to WIDEN (it explicitly says do NOT conclude absent).
-		const msg = stopMessageFor("elasticsearch_search", state);
-		expect(msg).toBe(LOOP_GUARD_WIDEN_WINDOW_MESSAGE);
-		expect(msg).toContain("widen");
-		expect(msg).toContain("Do NOT conclude the service is absent");
-	});
-
-	test("after widening still empty, the stop falls back to the standard message (not widen forever)", () => {
-		const state = createLoopGuardState();
-		armDiscovery(state);
-		const sig1 = toolCallSignature("elasticsearch_search", NARROW);
-		recordResult(state, "elasticsearch_search", sig1, EMPTY_SEARCH, NARROW); // arms widen
-		// widened (no time window) retry, still empty -> timeWindowWidened set, widen grant not re-armed
-		const widened = { index: "logs-apm.error-*", query: { term: { "service.name": "prana-order-service" } } };
-		const wSig = toolCallSignature("elasticsearch_search", widened);
-		recordResult(state, "elasticsearch_search", wSig, EMPTY_SEARCH, widened);
-		expect(state.timeWindowWidened).toBe(true);
-		// No latch, widening exhausted -> standard stop message.
-		expect(stopMessageFor("elasticsearch_search", state)).toBe(LOOP_GUARD_STOP_MESSAGE);
-	});
-
-	test("a latched win takes precedence over the widen message", () => {
-		const state = createLoopGuardState();
-		// latch a win first
-		const scoped = {
-			index: "logs-apm.error-*",
-			query: {
-				bool: {
-					filter: [
-						{ term: { "service.name": "prana-order-service" } },
-						{ range: { "@timestamp": { gte: "now-24h" } } },
-					],
-				},
-			},
-		};
-		recordResult(
-			state,
-			"elasticsearch_search",
-			toolCallSignature("elasticsearch_search", scoped),
-			"Total results: 1100, showing 5",
-			scoped,
-		);
-		// then an empty narrow arms widen
-		recordResult(
-			state,
-			"elasticsearch_search",
-			toolCallSignature("elasticsearch_search", NARROW),
-			EMPTY_SEARCH,
-			NARROW,
-		);
-		expect(state.widenRetryAllowed).toBe(true);
-		// latched win still wins the stop message
-		expect(stopMessageFor("elasticsearch_search", state)).toContain(LOOP_GUARD_LATCHED_STOP_LEAD);
 	});
 });

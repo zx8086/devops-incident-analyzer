@@ -107,7 +107,7 @@ function instrumentTool(
 								deploymentId: ctx.deploymentId,
 								toolName: tool.name,
 								iteration,
-								consecutiveEmpty: runState.loopGuard.consecutiveEmpty,
+								unproductiveSearches: runState.loopGuard.unproductiveSearches,
 							},
 							"Loop guard short-circuited repeated/unproductive tool call",
 						);

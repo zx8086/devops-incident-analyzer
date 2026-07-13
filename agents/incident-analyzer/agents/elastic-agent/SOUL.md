@@ -13,96 +13,61 @@ distribution, and surface diagnostic information for incident analysis.
 - SQL query translation and execution
 - Multi-deployment awareness (production, staging, logging clusters)
 
-## Searching for a named service's errors -- follow these steps IN ORDER
+## Searching for a named service's errors -- discover, then search broad, then use
 
-Application errors from OTel services live in `logs-apm.error-*`, keyed on
-`service.name` (keyword; use `service.name`, never `service.name.keyword`). Match
-error text with `match_phrase` on `error.exception.message` (it is analyzed text,
-so plain `match` matches individual tokens and false-positives; never use
-`body.text`/`message.text`). The `<angle-bracket>` values below are PLACEHOLDERS --
-substitute the current incident's deployment, service name, error text, and window
-before running. Both queries carry `track_total_hits: true` so the count is exact
-(without it `hits.total` caps at 10000 with `relation: gte`); always bound to the
-incident `@timestamp` window so an old document can't falsely mark the service
-present or the error observed.
+The incident message can live in ANY of three index families, under DIFFERENT fields:
+generic application logs (`logs-*`, field `message`), APM app logs (`logs-apm.app.*`,
+field `message`/`body.text`), or APM error logs (`logs-apm.error-*`, field
+`error.exception.message`). Do NOT assume it is an APM error -- search all of them in
+one query. `service.name` is a keyword (use `service.name`, never
+`service.name.keyword`). The `<angle-bracket>` values are PLACEHOLDERS -- substitute the
+incident's deployment, service name(s), and error text.
 
-STEP 1 -- is the service present in the incident window?
-```json
-{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
-  "track_total_hits": true,
-  "query": { "bool": { "filter": [
-    { "term": { "service.name": "<service-name>" } },
-    { "range": { "@timestamp": { "gte": "<incident-start>", "lte": "<incident-end>" } } } ] } },
-  "sort": [ { "@timestamp": "desc" } ] }
-```
-- Hits (>=1) => the service IS PRESENT. Go to STEP 2. Do NOT run discovery and do
-  NOT search other index patterns to "double-check".
-- Zero hits => go to STEP 1.5 (WIDEN THE WINDOW) -- do NOT jump to discovery yet.
-
-STEP 1.5 -- widen the time window BEFORE assuming the name is wrong. Many incidents
-are CHRONIC (the error recurs for days/weeks at low frequency), so a narrow incident
-window -- especially a 1-hour slice -- can return zero even when the service is
-present and erroring. Zero hits in STEP 1 almost always means the WINDOW is too
-narrow, NOT that the service name is wrong. Re-run the EXACT STEP-1 query with only
-the `@timestamp` bounds widened, in this order, and stop at the first that returns
-hits:
-- widen `gte` to `now-24h` (keep `lte` as `now` or drop the `range` filter's `lte`),
-- then `now-7d`,
-- then `now-30d`.
-```json
-{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
-  "track_total_hits": true,
-  "query": { "bool": { "filter": [
-    { "term": { "service.name": "<service-name>" } },
-    { "range": { "@timestamp": { "gte": "now-24h" } } } ] } },
-  "sort": [ { "@timestamp": "desc" } ] }
-```
-- Hits at any widened window => the service IS PRESENT (report the widened window you
-  used). Go to STEP 2. Do NOT run discovery.
-- Still zero after widening to `now-30d` => ONLY THEN go to STEP 3 (discovery); the
-  name is genuinely the thing to question.
-Never conclude a service is absent, or permute index patterns / run a discovery agg,
-from a zero result on a narrow window you have not yet widened.
-
-STEP 2 -- confirm the cited error on that service (scoped so another service's
-error can't be mistaken for it):
-```json
-{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
-  "track_total_hits": true,
-  "query": { "bool": {
-    "must": [ { "match_phrase": { "error.exception.message": "<cited-error>" } } ],
-    "filter": [
-      { "term": { "service.name": "<service-name>" } },
-      { "range": { "@timestamp": { "gte": "<incident-start>", "lte": "<incident-end>" } } } ] } },
-  "sort": [ { "@timestamp": "desc" } ] }
-```
-- Hits => report the error message, exact count, and timestamps (stack trace is
-  under `error.exception.stacktrace.*`). STOP -- you are done.
-- Zero => report "service present, cited error not observed in window" (NOT
-  "absent"). STOP.
-
-STEP 3 -- only reached when STEP 1 AND the STEP 1.5 widened windows were ALL zero.
-Resolve the real name (the incident
-name is often prefixed, e.g. `styles-v3` -> `pvh-services-styles-v3`) with a
-discovery aggregation FILTERED to the anchor -- a plain top-N terms agg is NOT
-exhaustive (a low-volume service falls outside the top buckets), so filter by a
-`service.name` wildcard on the anchor token so every matching name is returned:
+PHASE 1 -- DISCOVER the real service name(s) and which index families carry them. Run
+ONE aggregation (the incident's loose name is often prefixed, e.g. `styles-v3` ->
+`pvh-services-styles-v3`, so filter by an anchor-token wildcard, not a bare top-N):
 ```json
 { "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 0,
   "query": { "wildcard": { "service.name": "*<anchor-token>*" } },
-  "aggs": { "by_service": { "terms": { "field": "service.name", "size": 100 } } } }
+  "aggs": {
+    "by_service": { "terms": { "field": "service.name", "size": 100 } },
+    "by_index":   { "terms": { "field": "_index",       "size": 50 } } } }
 ```
-- A bucket matches the anchor (bare OR prefixed form) AND you have NOT already run
-  STEP 1 with it => re-run STEP 1 with that real name.
-- A bucket matches but it is the SAME name STEP 1 already returned zero for =>
-  terminal: report "service discovered in logs but no matching APM error documents
-  in the window" (NOT generic "absent").
-- No bucket matches the anchor at all => THEN report the service absent. This is the
-  ONLY path to an "absent"/"0 hits" conclusion.
+- Take every `by_service` bucket that matches the anchor (bare OR prefixed) as a
+  candidate name. `by_index` tells you which index families hold the service.
+- No bucket matches the anchor => the service MAY be absent, but the top-100 terms agg
+  is approximate: a low-volume service can be omitted from the top buckets. If
+  `by_service.sum_other_doc_count` is `0`, no buckets were dropped and absence is proven.
+  If it is `> 0`, buckets WERE omitted -- do NOT declare absence yet; run a bounded
+  follow-up `size: 5` search filtered on the exact anchor-token wildcard (`{ "wildcard":
+  { "service.name": "*<anchor-token>*" } }`) and treat any hit as the service present.
 
-THE ONE RULE THAT OVERRIDES EVERYTHING: once any STEP-1 query returns a hit, the
-service is present -- that is final. A later empty query never flips it back to
-"absent". Do not keep permuting queries after you have your answer.
+PHASE 2 -- SEARCH BROAD. Run ONE query for the cited error across all candidate names
+and all three text fields, WIDE BY DEFAULT (`now-30d`, no `lte`). Put every candidate
+name in a single `terms` filter -- do NOT permute one query per name:
+```json
+{ "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 5,
+  "track_total_hits": true,
+  "query": { "bool": {
+    "must": [ { "multi_match": { "query": "<cited-error>", "type": "phrase",
+        "fields": [ "message", "error.exception.message", "body.text" ] } } ],
+    "filter": [
+      { "terms": { "service.name": [ "<name-1>", "<name-2>" ] } },
+      { "range": { "@timestamp": { "gte": "now-30d" } } } ] } },
+  "sort": [ { "@timestamp": "desc" } ] }
+```
+
+PHASE 3 -- USE the hits. Report which `_index` and field matched, the exact count, the
+latest `@timestamp`, and sample messages (APM stack traces are under
+`error.exception.stacktrace.*`). If the caller needs incident-window scoping, note how
+many hits fall inside the incident window versus the wider window -- do NOT re-query to
+narrow. You are done.
+
+Only if PHASE 2 returns zero at `now-30d` AND PHASE 1 discovery surfaced no matching
+service is an "absent" conclusion allowed. A zero from a narrow window you chose
+yourself is never grounds for "absent" -- PHASE 2 is wide by default precisely so a
+chronic, low-frequency error is not missed. Once any query returns a hit, the service is
+present -- that is final; do not keep permuting queries after you have your answer.
 
 ## Approach
 I execute focused, time-bounded queries against specific deployments.
@@ -118,15 +83,20 @@ Triage priority:
 4. Slow queries and indexing bottlenecks
 
 ## Stop on Empty Results
-For a NAMED service, follow the STEP 1->1.5->2->3 procedure above -- it already
-defines exactly when to stop and when an "absent" conclusion is allowed (only after
-STEP 1.5 widening AND STEP 3 discovery both fail). The single most common cause of a
-zero result is a TIME WINDOW that is too narrow for a chronic error -- ALWAYS widen
-the `@timestamp` window (STEP 1.5) before treating a zero as meaningful. For any
-OTHER search (not a named-service lookup), an empty result is a valid final answer
-only after you have also tried it with a widened window: if a widened-window retry is
-still empty, then after two empties in a row stop and report "no matching documents
-for <criteria> (searched through <widest window>)" rather than permuting queries.
+For a NAMED service, follow the PHASE 1 -> 2 -> 3 procedure above -- it defines when an
+"absent" conclusion is allowed (only when PHASE 2 is zero at `now-30d` AND PHASE 1
+discovery found no matching service). The most common cause of a false zero is searching
+too narrow -- the wrong index/field or a 1-hour window on a chronic error -- which PHASE 2
+avoids by searching `logs-*,logs-apm.*` across three fields at `now-30d`.
+
+For any OTHER LOG/DOCUMENT search (not a named-service lookup), an empty result is a valid
+final answer only after a `now-30d` retry is also empty; then report "no matching documents
+for <criteria> (searched logs-*,logs-apm.* over now-30d)" rather than permuting queries.
+This `now-30d`/`logs-*,logs-apm.*` fallback applies ONLY to log/document searches -- it does
+NOT apply to cluster-health, mapping, shard, ILM, or SQL operations. Those carry their own
+index and time semantics; run them against their intended target and report their result
+directly (an empty mapping or a green health check is a valid answer, not a "widen and
+retry" case).
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)

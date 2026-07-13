@@ -102,6 +102,37 @@ describe("SIO-1084 B5: resolved-identifiers injection", () => {
 		expect(block).not.toContain("/ecs/order-service");
 	});
 
+	test("elastic resolved block instructs a broad multi_match, not an error-logs pin", () => {
+		const block = buildFocusBlock(
+			FOCUS,
+			NOW,
+			{
+				resolvedForTurn: 1,
+				resolvedForServices: FOCUS.services,
+				elastic: { serviceNames: ["pvh-services-orders", "orders"] },
+			},
+			"elastic",
+		);
+		expect(block).toContain("pvh-services-orders");
+		expect(block).toContain("logs-*,logs-apm.*");
+		expect(block).toContain("multi_match");
+		expect(block).toContain("message");
+		expect(block).toContain("error.exception.message");
+		expect(block).toContain("body.text");
+		expect(block).toContain("now-30d");
+		// SIO-1090 (CodeRabbit): assert the FULL broad-query contract, not just that the
+		// field/index words appear -- a bare word-presence check can pass on unrelated prose.
+		expect(block).toContain("multi_match` (`type: phrase`)"); // phrase match, not analyzed match
+		expect(block).toContain("track_total_hits: true"); // exact count
+		expect(block).toContain("terms` filter"); // one terms filter over all candidate names
+		expect(block).toContain("do NOT run per-name permutations"); // no query-per-name
+		// The old error-logs-only pin ("Query APM errors in index logs-apm.error-*") must be
+		// gone -- the block may still mention logs-apm.error-* inside the negative instruction
+		// ("Do NOT pin to logs-apm.error-* only"), so assert on the retired imperative phrasing
+		// rather than the bare index-pattern substring.
+		expect(block).not.toContain("Query APM errors in index logs-apm.error-*");
+	});
+
 	test("couchbase block includes the scope->collection map and collection-only FROM instruction", () => {
 		const block = buildFocusBlock(FOCUS, NOW, RESOLVED, "couchbase");
 		expect(block).toContain("orders: [orders, order_lines]");
