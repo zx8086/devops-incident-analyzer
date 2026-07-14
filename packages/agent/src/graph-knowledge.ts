@@ -25,6 +25,7 @@ import { truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
+import { recordKeyDecision } from "./memory-writer.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -89,12 +90,29 @@ export async function recordGraphEntities(state: AgentStateType): Promise<Partia
 	try {
 		const store = await getGraphStore();
 		const services = affectedServiceNames(state);
+		const summary = lastUserQuery(state).slice(0, 280);
 		await upsertEntities(store, { services });
 		await recordIncident(store, {
 			id: state.requestId,
 			severity: state.normalizedIncident.severity,
-			summary: lastUserQuery(state).slice(0, 280),
+			summary,
 			services,
+		});
+		// SIO-1103 (P1 forward-fill): mirror the incident to a durable Couchbase fact so
+		// the graph is rebuildable from the system of record. recordKeyDecision self-gates
+		// on the agent-memory backend (no-op on the file backend), independent of the graph
+		// write above (SIO-970). Annotations are the rebuild's replay source.
+		recordKeyDecision({
+			requestId: state.requestId,
+			decision: `Incident ${state.requestId}: ${summary}`,
+			annotations: {
+				kind: "kg-incident",
+				incident_id: state.requestId,
+				services: services.join(","),
+				severity: state.normalizedIncident.severity ?? "",
+				// SIO-1103 CodeRabbit: mirror summary too so a rebuilt incident keeps it.
+				summary,
+			},
 		});
 		return {};
 	} catch (error) {
@@ -195,6 +213,21 @@ export async function recordRootCauseData(state: AgentStateType): Promise<Partia
 			description: cause.description,
 			confidence: state.confidenceScore,
 			ruleName: cause.ruleName,
+		});
+		// SIO-1103 (P1 forward-fill): mirror the root cause to a durable fact so a rebuild
+		// reconstructs the RootCause + HAS_ROOT_CAUSE edge. Self-gates on the agent-memory
+		// backend; independent of the graph write above (SIO-970).
+		recordKeyDecision({
+			requestId: state.requestId,
+			decision: `Root cause for incident ${state.requestId}: ${cause.ruleName}`,
+			annotations: {
+				kind: "kg-root-cause",
+				incident_id: state.requestId,
+				root_cause_id: id,
+				rule_name: cause.ruleName,
+				description: cause.description,
+				confidence: String(state.confidenceScore),
+			},
 		});
 		return {};
 	} catch (error) {

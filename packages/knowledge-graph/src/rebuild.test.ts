@@ -1,6 +1,6 @@
 // knowledge-graph/src/rebuild.test.ts
 import { describe, expect, test } from "bun:test";
-import { bindingFromAnnotations, parseArgs } from "./rebuild.ts";
+import { bindingFromAnnotations, incidentFromAnnotations, parseArgs, rootCauseFromAnnotations } from "./rebuild.ts";
 import { InMemoryGraphStore } from "./store.ts";
 import { recordServiceBinding } from "./writer.ts";
 
@@ -84,5 +84,56 @@ describe("SIO-1100 rebuild: bindingFromAnnotations", () => {
 			),
 		).toBe(true);
 		expect(replayed.calls.some((c) => c.cypher.includes("OBSERVED_IN") && c.params?.service === "orders")).toBe(true);
+	});
+});
+
+// SIO-1103 (4b): mirror-fact mappers.
+describe("SIO-1103 rebuild: incidentFromAnnotations", () => {
+	test("maps a kg-incident fact, splitting services and preserving summary", () => {
+		expect(
+			incidentFromAnnotations({
+				kind: "kg-incident",
+				incident_id: "inc-1",
+				services: "orders,payments",
+				severity: "high",
+				summary: "orders failing",
+			}),
+		).toEqual({ id: "inc-1", severity: "high", summary: "orders failing", services: ["orders", "payments"] });
+	});
+	test("empty services -> []; missing incident_id -> null", () => {
+		expect(incidentFromAnnotations({ incident_id: "inc-1", services: "" })).toEqual({
+			id: "inc-1",
+			severity: "",
+			summary: "",
+			services: [],
+		});
+		expect(incidentFromAnnotations({ services: "orders" })).toBeNull();
+	});
+});
+
+describe("SIO-1103 rebuild: rootCauseFromAnnotations", () => {
+	test("maps a kg-root-cause fact", () => {
+		expect(
+			rootCauseFromAnnotations({
+				kind: "kg-root-cause",
+				incident_id: "inc-1",
+				root_cause_id: "rc-hash",
+				rule_name: "kafka-significant-lag",
+				description: "lag",
+				confidence: "0.6",
+			}),
+		).toEqual({
+			id: "rc-hash",
+			incidentId: "inc-1",
+			class: "kafka-significant-lag",
+			description: "lag",
+			confidence: 0.6,
+			ruleName: "kafka-significant-lag",
+		});
+	});
+	test("missing required field -> null; unparseable confidence -> 0", () => {
+		expect(rootCauseFromAnnotations({ incident_id: "inc-1", root_cause_id: "x" })).toBeNull(); // no rule_name
+		const rc = rootCauseFromAnnotations({ incident_id: "i", root_cause_id: "x", rule_name: "r" });
+		expect(rc?.confidence).toBe(0);
 	});
 });
