@@ -12,10 +12,15 @@
 
 import {
 	type BindingKind,
+	bindingsForServices,
+	flagBindingForReview,
+	type GraphStore,
 	getGraphStore,
 	hasBinding,
+	invalidateBinding,
 	isKnowledgeGraphEnabled,
 	recordServiceBinding,
+	type ServiceBinding,
 	type ServiceBindingRecord,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
@@ -36,6 +41,14 @@ const DISCOVERED_BY = "resolve-identifiers";
 // resolveIdentifiers ran, so with the graph off it stays inert regardless.
 export function isBindingsWriteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.KG_BINDINGS_WRITE_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
+// SIO-1103: the staleness lifecycle (auto-invalidation of dead agent bindings) is
+// gated separately so it can be disabled without turning off the writer. Default ON;
+// set KG_BINDINGS_STALENESS_ENABLED=false to disable.
+export function isStalenessEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.KG_BINDINGS_STALENESS_ENABLED;
 	return v !== "false" && v !== "0";
 }
 
@@ -206,6 +219,76 @@ export function deriveConfirmedBindings(state: AgentStateType): ServiceBindingRe
 	return records;
 }
 
+// SIO-1103: which datasources reported a `not-found` this turn -- the unambiguous
+// "this coordinate no longer exists" signal (an index/log-group/topic that was named
+// but is gone). We deliberately do NOT treat `no-data` (empty-but-valid scope) as
+// staleness: a chronic error can be quiet, and invalidating on emptiness would churn
+// good bindings. Returns the set of datasource ids.
+function datasourcesReportingNotFound(state: AgentStateType): Set<string> {
+	const out = new Set<string>();
+	for (const r of state.dataSourceResults ?? []) {
+		if ((r.toolErrors ?? []).some((e) => e.category === "not-found")) out.add(r.dataSourceId);
+	}
+	return out;
+}
+
+// SIO-1103: staleness lifecycle. A graph-SEEDED identifier (injected this turn from a
+// prior investigation's binding, per resolvedIdentifiers.graphSeeded) whose datasource
+// reported `not-found` is a dead-binding candidate. Look up the stored binding to read
+// its discoveredBy, then: agent-discovered -> invalidateBinding (retire it); human ->
+// flagBindingForReview (P5: never auto-invalidate a human binding). Best-effort and
+// bounded to the seeded set, so a live-discovery empty never invalidates anything.
+// Returns the number of bindings invalidated (for telemetry).
+export async function applyStaleness(store: GraphStore, state: AgentStateType): Promise<number> {
+	const seeded = state.resolvedIdentifiers?.graphSeeded ?? [];
+	const focus = state.investigationFocus;
+	if (seeded.length === 0 || !focus || focus.services.length !== 1) return 0;
+	const notFound = datasourcesReportingNotFound(state);
+	if (notFound.size === 0) return 0;
+
+	const service = focus.services[0];
+	if (!service) return 0;
+	// Look up the stored bindings so we know each seeded identifier's datasource +
+	// kind + discoveredBy (graphSeeded is just resourceId strings).
+	const stored: ServiceBinding[] = await bindingsForServices(store, [service], [normalize(service)]);
+	const seededSet = new Set(seeded.map((s) => s.toLowerCase()));
+	const resultsById = new Map<string, DataSourceResult>();
+	for (const r of state.dataSourceResults ?? []) resultsById.set(r.dataSourceId, r);
+
+	let invalidated = 0;
+	for (const b of stored) {
+		if (!seededSet.has(b.resourceId.toLowerCase())) continue; // not injected this turn
+		if (!notFound.has(b.datasource)) continue; // its datasource didn't report not-found
+		// SIO-1103 CodeRabbit: a datasource-level not-found must not retire a DIFFERENT
+		// coordinate on the same datasource. The ToolError carries no structured resource,
+		// so isolate the failed coordinate by the signal we DO have: retire this binding
+		// only if its exact resourceId did NOT appear in the datasource's tool outputs
+		// (used-and-present means it's fine even if a sibling coordinate 404'd).
+		if (identifierUsedInToolCalls(b.resourceId, resultsById.get(b.datasource)) === true) continue;
+		if (b.discoveredBy === "human") {
+			await flagBindingForReview(
+				store,
+				service,
+				b.datasource,
+				b.kind,
+				b.resourceId,
+				"seeded coordinate reported not-found",
+			);
+		} else {
+			await invalidateBinding(
+				store,
+				service,
+				b.datasource,
+				b.kind,
+				b.resourceId,
+				"seeded coordinate reported not-found",
+			);
+			invalidated += 1;
+		}
+	}
+	return invalidated;
+}
+
 // recordBindings node: MERGE each confirmed binding into the graph, and (only when
 // the agent-memory backend is on -- SIO-970 independence) write a durable fact for
 // NEW bindings. A re-confirmation bumps lastVerified graph-side only; the hasBinding
@@ -214,8 +297,12 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 	if (!isKnowledgeGraphEnabled() || !isBindingsWriteEnabled()) return {};
 	try {
 		const records = deriveConfirmedBindings(state);
-		if (records.length === 0) return {};
+		// Staleness can retire dead SEEDED bindings even on a turn that confirmed nothing
+		// new, so it must not be short-circuited by an empty records list.
+		const hasStalenessWork = isStalenessEnabled() && (state.resolvedIdentifiers?.graphSeeded?.length ?? 0) > 0;
+		if (records.length === 0 && !hasStalenessWork) return {};
 		const store = await getGraphStore();
+		const contradicted = hasStalenessWork ? await applyStaleness(store, state) : 0;
 		let newCount = 0;
 		let reconfirmed = 0;
 		for (const rec of records) {
@@ -245,12 +332,9 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 				},
 			});
 		}
-		// SIO-1102: per-turn telemetry. `contradicted` (a graph-seeded binding used this
-		// turn that yielded nothing) is a Stage 4 staleness concept -- 0 here for now.
-		logger.info(
-			{ total: records.length, newBindings: newCount, reconfirmed, contradicted: 0 },
-			"agent:record-bindings",
-		);
+		// SIO-1102/1103: per-turn telemetry. `contradicted` = seeded bindings retired this
+		// turn because their datasource reported not-found (staleness).
+		logger.info({ total: records.length, newBindings: newCount, reconfirmed, contradicted }, "agent:record-bindings");
 		return {};
 	} catch (error) {
 		logger.warn(

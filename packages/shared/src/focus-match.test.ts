@@ -1,4 +1,4 @@
-// packages/agent/src/correlation/focus-match.test.ts
+// packages/shared/src/focus-match.test.ts
 import { describe, expect, test } from "bun:test";
 import { matchesFocus, normalize, tokenize } from "./focus-match.ts";
 
@@ -63,6 +63,16 @@ describe("matchesFocus", () => {
 		// everything. "api" is dropped by the length>=4 filter, and the normalized
 		// substring check ("api" in "authentication") is guarded by the same tokenize.
 		expect(matchesFocus("authentication-service-CPU-Utilization", ["api"])).toBe(false);
+	});
+
+	// SIO-1103 (CodeRabbit): the FUZZY substring path must also honour MIN_TOKEN_LENGTH.
+	test("short focus below min length does not fuzzy-substring-match a longer name", () => {
+		// "cat" (norm "cat", len 3) is a substring of "catalog" but must NOT scope it in.
+		expect(matchesFocus("catalog-service", ["cat"])).toBe(false);
+		// but an EXACT normalized match is always honoured, even when short.
+		expect(matchesFocus("cat", ["cat"])).toBe(true);
+		// and a long enough focus still fuzzy-matches as before.
+		expect(matchesFocus("catalog-service", ["catalog"])).toBe(true);
 	});
 
 	test("unrelated service is dropped", () => {
