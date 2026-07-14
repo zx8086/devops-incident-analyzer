@@ -89,20 +89,22 @@ describe("SIO-1100 rebuild: bindingFromAnnotations", () => {
 
 // SIO-1103 (4b): mirror-fact mappers.
 describe("SIO-1103 rebuild: incidentFromAnnotations", () => {
-	test("maps a kg-incident fact, splitting services", () => {
+	test("maps a kg-incident fact, splitting services and preserving summary", () => {
 		expect(
 			incidentFromAnnotations({
 				kind: "kg-incident",
 				incident_id: "inc-1",
 				services: "orders,payments",
 				severity: "high",
+				summary: "orders failing",
 			}),
-		).toEqual({ id: "inc-1", severity: "high", services: ["orders", "payments"] });
+		).toEqual({ id: "inc-1", severity: "high", summary: "orders failing", services: ["orders", "payments"] });
 	});
 	test("empty services -> []; missing incident_id -> null", () => {
 		expect(incidentFromAnnotations({ incident_id: "inc-1", services: "" })).toEqual({
 			id: "inc-1",
 			severity: "",
+			summary: "",
 			services: [],
 		});
 		expect(incidentFromAnnotations({ services: "orders" })).toBeNull();

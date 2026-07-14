@@ -90,6 +90,7 @@ export function incidentFromAnnotations(a: AnnotationMap): IncidentRecord | null
 	return {
 		id: a.incident_id,
 		severity: a.severity ?? "",
+		summary: a.summary ?? "",
 		services: (a.services ?? "").split(",").filter((s) => s.length > 0),
 	};
 }

@@ -110,6 +110,8 @@ export async function recordGraphEntities(state: AgentStateType): Promise<Partia
 				incident_id: state.requestId,
 				services: services.join(","),
 				severity: state.normalizedIncident.severity ?? "",
+				// SIO-1103 CodeRabbit: mirror summary too so a rebuilt incident keeps it.
+				summary,
 			},
 		});
 		return {};
