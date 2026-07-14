@@ -8,8 +8,10 @@ import {
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	EMBEDDING_DIM,
+	flagBindingForReview,
 	hasBinding,
 	InMemoryGraphStore,
+	invalidateBinding,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
 	linkResolution,
@@ -873,5 +875,37 @@ describe("SIO-1100 telemetry bindings", () => {
 		const store = new InMemoryGraphStore();
 		expect(await hasBinding(store, "", "logGroup", "")).toBe(false);
 		expect(store.calls).toHaveLength(0);
+	});
+});
+
+// SIO-1103: staleness writers.
+describe("SIO-1103 staleness (invalidateBinding / flagBindingForReview)", () => {
+	test("invalidateBinding sets tInvalid + appends reason, only for non-human bindings", async () => {
+		const store = new InMemoryGraphStore();
+		await invalidateBinding(store, "orders", "logGroup", "/ecs/orders", "empty on reuse");
+		const call = store.calls[0];
+		expect(call?.cypher).toContain("o.tInvalid = $now");
+		expect(call?.cypher).toContain("o.discoveredBy <> 'human'");
+		expect(call?.cypher).toContain("invalidated: ");
+		expect(call?.params).toMatchObject({
+			service: "orders",
+			kind: "logGroup",
+			resourceId: "/ecs/orders",
+			reason: "empty on reuse",
+		});
+		// no-ops on missing required fields
+		const empty = new InMemoryGraphStore();
+		await invalidateBinding(empty, "", "logGroup", "", "x");
+		expect(empty.calls).toHaveLength(0);
+	});
+
+	test("flagBindingForReview appends a note without invalidating, only for human bindings", async () => {
+		const store = new InMemoryGraphStore();
+		await flagBindingForReview(store, "orders", "logGroup", "/ecs/orders", "looked empty once");
+		const call = store.calls[0];
+		expect(call?.cypher).toContain("o.discoveredBy = 'human'");
+		expect(call?.cypher).toContain("flagged-for-review");
+		// crucially does NOT set tInvalid (edge stays valid)
+		expect(call?.cypher).not.toContain("tInvalid = $now");
 	});
 });

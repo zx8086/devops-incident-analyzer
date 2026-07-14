@@ -1,4 +1,4 @@
-// packages/agent/src/correlation/focus-match.test.ts
+// packages/shared/src/focus-match.test.ts
 import { describe, expect, test } from "bun:test";
 import { matchesFocus, normalize, tokenize } from "./focus-match.ts";
 

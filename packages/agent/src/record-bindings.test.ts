@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import type { DataSourceResult, ResolvedIdentifiers } from "@devops-agent/shared";
 import {
+	applyStaleness,
 	deriveConfirmedBindings,
 	identifierUsedInToolCalls,
 	isBindingsWriteEnabled,
@@ -347,5 +348,96 @@ describe("deriveConfirmedBindings identifier-level tightening (SIO-1102)", () =>
 			}),
 		);
 		expect(recs.map((r) => r.resourceId)).toEqual(["orders-api"]);
+	});
+});
+
+// SIO-1103: staleness lifecycle.
+describe("applyStaleness (SIO-1103)", () => {
+	function state(over: { graphSeeded?: string[]; results?: DataSourceResult[]; services?: string[] }): AgentStateType {
+		return {
+			requestId: "req-1",
+			investigationFocus: {
+				services: over.services ?? ["orders"],
+				datasources: ["aws"],
+				summary: "x",
+				establishedAtTurn: 1,
+			},
+			resolvedIdentifiers: { resolvedForTurn: 1, resolvedForServices: ["orders"], graphSeeded: over.graphSeeded ?? [] },
+			dataSourceResults: over.results ?? [],
+		} as unknown as AgentStateType;
+	}
+
+	// A store that returns one binding for bindingsForServices (matched on OBSERVED_IN)
+	// and records the invalidate/flag writes.
+	function storeWithBinding(discoveredBy: string): InMemoryGraphStore {
+		const store = new InMemoryGraphStore();
+		store.stub("OBSERVED_IN", [
+			{
+				service: "orders",
+				datasource: "aws",
+				kind: "logGroup",
+				resourceId: "/ecs/orders",
+				locator: "",
+				confidence: discoveredBy === "human" ? 1 : 0.7,
+				discoveredBy,
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+		]);
+		return store;
+	}
+
+	const notFoundAws: DataSourceResult[] = [
+		{
+			dataSourceId: "aws",
+			data: {},
+			status: "success",
+			toolErrors: [{ toolName: "q", category: "not-found", message: "gone", retryable: false }],
+		} as DataSourceResult,
+	];
+
+	test("invalidates an agent-discovered seeded binding whose datasource reported not-found", async () => {
+		const store = storeWithBinding("resolve-identifiers");
+		const n = await applyStaleness(store, state({ graphSeeded: ["/ecs/orders"], results: notFoundAws }));
+		expect(n).toBe(1);
+		expect(store.calls.some((c) => c.cypher.includes("o.tInvalid = $now") && c.cypher.includes("<> 'human'"))).toBe(
+			true,
+		);
+	});
+
+	test("flags (does NOT invalidate) a human-confirmed seeded binding", async () => {
+		const store = storeWithBinding("human");
+		const n = await applyStaleness(store, state({ graphSeeded: ["/ecs/orders"], results: notFoundAws }));
+		expect(n).toBe(0);
+		expect(store.calls.some((c) => c.cypher.includes("flagged-for-review"))).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("o.tInvalid = $now"))).toBe(false);
+	});
+
+	test("no-op when nothing was graph-seeded", async () => {
+		const store = storeWithBinding("resolve-identifiers");
+		expect(await applyStaleness(store, state({ graphSeeded: [], results: notFoundAws }))).toBe(0);
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("no-op when no datasource reported not-found (empty is not stale)", async () => {
+		const store = storeWithBinding("resolve-identifiers");
+		const noData: DataSourceResult[] = [
+			{
+				dataSourceId: "aws",
+				data: {},
+				status: "success",
+				toolErrors: [{ toolName: "q", category: "no-data", message: "empty", retryable: false }],
+			} as DataSourceResult,
+		];
+		expect(await applyStaleness(store, state({ graphSeeded: ["/ecs/orders"], results: noData }))).toBe(0);
+	});
+
+	test("no-op for a multi-service focus (no per-service attribution yet)", async () => {
+		const store = storeWithBinding("resolve-identifiers");
+		expect(
+			await applyStaleness(
+				store,
+				state({ graphSeeded: ["/ecs/orders"], results: notFoundAws, services: ["orders", "payments"] }),
+			),
+		).toBe(0);
 	});
 });

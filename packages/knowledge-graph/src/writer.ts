@@ -272,6 +272,47 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 	}
 }
 
+// SIO-1103: staleness lifecycle. invalidateBinding retires an agent-discovered binding
+// that was used but produced nothing (invalidate-not-delete, P3): set tInvalid and
+// append the reason to evidence, so bindingsForServices (WHERE tInvalid='') stops
+// surfacing it while the history is preserved for as-of queries. Only ever called for
+// discoveredBy != "human" (P5: human-confirmed bindings are never auto-invalidated --
+// use flagBindingForReview instead). Matches the same (service, kind, resourceId) shape
+// as hasBinding. No-op if there is no currently-valid matching edge.
+export async function invalidateBinding(
+	store: GraphStore,
+	service: string,
+	kind: string,
+	resourceId: string,
+	reason: string,
+): Promise<void> {
+	if (!service || !resourceId) return;
+	const now = new Date().toISOString();
+	await store.run(
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy <> 'human' SET o.tInvalid = $now, o.evidence = o.evidence + ' | invalidated: ' + $reason",
+		{ service, kind, resourceId, now, reason },
+	);
+}
+
+// SIO-1103: flag a HUMAN-confirmed binding for review instead of invalidating it (P5:
+// a single failed lookup must not auto-retire knowledge a human vouched for). Appends
+// a review note to evidence; the edge stays valid. The caller decides which path to
+// take based on discoveredBy.
+export async function flagBindingForReview(
+	store: GraphStore,
+	service: string,
+	kind: string,
+	resourceId: string,
+	reason: string,
+): Promise<void> {
+	if (!service || !resourceId) return;
+	const now = new Date().toISOString();
+	await store.run(
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy = 'human' SET o.evidence = o.evidence + ' | flagged-for-review ' + $now + ': ' + $reason",
+		{ service, kind, resourceId, now, reason },
+	);
+}
+
 // SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the
 // recordIacOutcome node later promotes it to applied/rejected/failed.
 export type ChangeOutcome = "proposed" | "applied" | "rejected" | "failed";
