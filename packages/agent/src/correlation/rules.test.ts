@@ -173,10 +173,14 @@ describe("shared-infra-blast-radius", () => {
 	function stateWith(
 		blast: Array<{ service: string; neighbour: string; via: string; sharedResource: string }>,
 		withError = true,
+		focusServices?: string[],
 	) {
 		return {
 			dataSourceResults: withError ? [elasticError] : [],
 			graphBlastRadius: blast,
+			...(focusServices
+				? { investigationFocus: { services: focusServices, datasources: [], summary: "", establishedAtTurn: 1 } }
+				: {}),
 		} as never;
 	}
 
@@ -205,5 +209,35 @@ describe("shared-infra-blast-radius", () => {
 
 	test("does NOT fire with no blast radius", () => {
 		expect(rule.trigger(stateWith([]))).toBeNull();
+	});
+
+	// SIO-1103 CodeRabbit: a neighbour already in the incident is not re-dispatched.
+	test("excludes neighbours that are already incident-focus services", () => {
+		// refunds is a graph neighbour AND already a focus service -> dropped; audit is new.
+		const match = rule.trigger(
+			stateWith(
+				[
+					{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" },
+					{ service: "orders", neighbour: "audit", via: "telemetry-source", sharedResource: "aws:logGroup:/x" },
+				],
+				true,
+				["orders", "refunds"],
+			),
+		);
+		expect(match).not.toBeNull();
+		const services = match?.context.services as string[];
+		expect(services).toContain("audit");
+		expect(services).not.toContain("refunds");
+	});
+
+	test("does NOT fire when every neighbour is already an incident-focus service", () => {
+		expect(
+			rule.trigger(
+				stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }], true, [
+					"orders",
+					"refunds",
+				]),
+			),
+		).toBeNull();
 	});
 });

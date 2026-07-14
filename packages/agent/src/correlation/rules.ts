@@ -776,7 +776,13 @@ correlationRules.push({
 		const hasElasticError =
 			(elastic.apmServices ?? []).some((a) => (a.errorRate ?? 0) > 0) || (elastic.logClusters ?? []).length > 0;
 		if (!hasElasticError) return null;
-		const neighbours = Array.from(new Set(shared.map((h) => h.neighbour)));
+		// SIO-1103 CodeRabbit: exclude services already IN the incident. The dispatch-time
+		// idempotency gate only suppresses a repeat once elastic covers a service, so in a
+		// multi-service incident a neighbour that is already a focus service would otherwise
+		// be re-dispatched redundantly. Only NEW (not-yet-investigated) neighbours are worth
+		// the re-fan.
+		const focus = new Set((state.investigationFocus?.services ?? []).map((s) => s.toLowerCase()));
+		const neighbours = Array.from(new Set(shared.map((h) => h.neighbour))).filter((n) => !focus.has(n.toLowerCase()));
 		if (neighbours.length === 0) return null;
 		return {
 			context: {
