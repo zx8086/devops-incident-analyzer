@@ -138,6 +138,12 @@ export function deriveConfirmedBindings(state: AgentStateType): ServiceBindingRe
 		records.push({
 			service,
 			serviceNormalized,
+			// The raw focus token. recordServiceBinding writes an Alias/RESOLVES_TO edge
+			// only when this differs from the canonical service; today the incident
+			// keys Service on the focus token so they match (no alias), but threading it
+			// keeps the alias-hop reader path reachable once a resolver surfaces a raw
+			// name distinct from the canonical service (Stage 2+).
+			aliasRaw: service,
 			datasource: raw.datasource,
 			kind: raw.kind,
 			resourceId: raw.resourceId,

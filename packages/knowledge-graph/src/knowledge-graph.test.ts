@@ -423,6 +423,22 @@ describe("reader", () => {
 		expect(store.calls).toEqual([]);
 	});
 
+	// SIO-1100: graphEnrich writes this turn's embedding before the lookup, so the
+	// current incident must be excluded or it returns itself at distance ~0.
+	test("similarIncidents excludes excludeId and re-caps to limit", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "self", summary: "s0", severity: "high", distance: 0 },
+			{ id: "hist-1", summary: "s1", severity: "high", distance: 0.2 },
+			{ id: "hist-2", summary: "s2", severity: "low", distance: 0.4 },
+			{ id: "hist-3", summary: "s3", severity: "low", distance: 0.6 },
+		]);
+		const result = await similarIncidents(store, [0.1, 0.2], 3, "self");
+		expect(result.map((r) => r.id)).toEqual(["hist-1", "hist-2", "hist-3"]);
+		// over-fetches by one when excluding
+		expect(store.calls[0]?.params?.limit).toBe(4);
+	});
+
 	test("buildGraphContext renders deps + similar incidents, empty when nothing", () => {
 		expect(buildGraphContext([], [])).toBe("");
 		const ctx = buildGraphContext(
@@ -758,6 +774,28 @@ describe("SIO-1100 telemetry bindings", () => {
 			discoveredBy: "resolve-identifiers",
 		});
 		expect(noAlias.calls.some((c) => c.cypher.includes("RESOLVES_TO"))).toBe(false);
+	});
+
+	test("recordServiceBinding invalidates prior RESOLVES_TO edges to a different service", async () => {
+		const store = new InMemoryGraphStore();
+		await recordServiceBinding(store, {
+			service: "orders",
+			serviceNormalized: "order",
+			aliasRaw: "prices-api-v2",
+			datasource: "konnect",
+			kind: "konnectService",
+			resourceId: "svc-123",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+		});
+		// The invalidation MATCH sets tInvalid on other-service RESOLVES_TO edges from
+		// this alias BEFORE the new MERGE, and it precedes the MERGE.
+		const inval = store.calls.find((c) => c.cypher.includes("RESOLVES_TO") && c.cypher.includes("s.name <> $service"));
+		expect(inval?.cypher).toContain("SET r.tInvalid = $now");
+		expect(inval?.params?.service).toBe("orders");
+		const invalIdx = store.calls.findIndex((c) => c.cypher.includes("s.name <> $service"));
+		const mergeIdx = store.calls.findIndex((c) => c.cypher.includes("MERGE (a)-[r:RESOLVES_TO]"));
+		expect(invalIdx).toBeLessThan(mergeIdx);
 	});
 
 	test("recordServiceBinding no-ops on missing required fields", async () => {

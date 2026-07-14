@@ -125,7 +125,9 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 				// write no incident ever gets one and similarIncidents can never return a
 				// hit. Reuses the vector we just computed -- zero extra Bedrock calls.
 				await setIncidentEmbedding(store, state.requestId, embedding);
-				const nearest = await similarIncidents(store, embedding);
+				// Exclude this turn's own incident: we just wrote its embedding, so an
+				// unfiltered lookup would return it at distance ~0 (SIO-1100).
+				const nearest = await similarIncidents(store, embedding, 3, state.requestId);
 				// SIO-1026: annotate each similar incident with its recorded root cause
 				// so the aggregator can reuse prior analysis ("we've seen this before").
 				similar = await Promise.all(

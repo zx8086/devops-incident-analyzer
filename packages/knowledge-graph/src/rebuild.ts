@@ -35,8 +35,18 @@ interface RebuildOptions {
 	dryRun: boolean;
 }
 
-function parseArgs(argv: string[]): RebuildOptions {
-	const out = argv.includes("--out") ? argv[argv.indexOf("--out") + 1] : undefined;
+export function parseArgs(argv: string[]): RebuildOptions {
+	let out: string | undefined;
+	if (argv.includes("--out")) {
+		const value = argv[argv.indexOf("--out") + 1];
+		// A valueless `--out` (last arg) or one immediately followed by another flag
+		// would otherwise fall through to graphPath() -- the LIVE graph. Reject it so
+		// the operator can't accidentally rebuild over the running store's directory.
+		if (!value || value.startsWith("--")) {
+			throw new Error("--out requires a directory path (e.g. --out .data/kg-rebuild)");
+		}
+		out = value;
+	}
 	return { out, dryRun: argv.includes("--dry-run") };
 }
 

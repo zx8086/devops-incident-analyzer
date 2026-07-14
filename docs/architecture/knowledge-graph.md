@@ -80,15 +80,16 @@ A fifth tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_C
 
 Both pipelines register their graph nodes **always** but edge them only when the flag is set (the SIO-640 edge-gate idiom), so the node functions are type-safe and unit-testable while remaining unreachable when disabled. Every node **soft-fails** — a cold or absent graph degrades to empty context and never throws.
 
-### incident-analyzer — 3 nodes (`packages/agent/src/graph-knowledge.ts`)
+### incident-analyzer — 4 nodes (`packages/agent/src/graph-knowledge.ts`, `record-bindings.ts`)
 
 | Node | Trigger | Reads / Writes |
 |------|---------|----------------|
 | `recordEntities` (`recordGraphEntities`) | after `entityExtractor` | **WRITE**: `upsertEntities` (affected `Service`s) + `recordIncident` (the turn's `Incident` with severity + summary, linked `AFFECTED_BY`). |
-| `graphEnrich` | after `recordEntities` | **READ**: `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (Bedrock Titan embedding of the user query -> vector-nearest prior incidents), each annotated with its recorded `rootCauseForIncident` (SIO-1026: "we've seen this before -- prior root cause X"). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
+| `graphEnrich` | after `recordEntities` | **READ + WRITE**: persists this turn's Bedrock Titan embedding onto the `Incident` (`setIncidentEmbedding`, SIO-1100 — makes `similarIncidents` usable at all), then reads `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (vector-nearest prior incidents, EXCLUDING this turn's own incident), each annotated with its recorded `rootCauseForIncident` (SIO-1026: "we've seen this before -- prior root cause X"). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
 | `recordRootCause` (`recordRootCauseData`, SIO-1026) | after `aggregateMitigation` (LATE, so the final `confidenceScore` is known) | **WRITE**: re-runs the correlation engine (a pure function of state) and, when a rule FIRED and was covered (`reason: "already covered by prior agent findings"`), `recordRootCause` — the turn's `RootCause` (class = satisfied rule name, PK = stable hash so recurrences MERGE) linked `HAS_ROOT_CAUSE` from the `Incident`. Records nothing when no cross-domain correlation held (never fabricates a cause). |
+| `recordBindings` (`recordConfirmedBindings`, SIO-1100) | after `recordRootCause` | **WRITE**: the W8 telemetry-binding writer. Derives the confirmed bindings (`resolveIdentifiers` identifiers ∩ datasources that succeeded without a degrading error) and MERGEs `Service`-`OBSERVED_IN`->`TelemetrySource` edges + a durable `kg-binding` fact. `KG_BINDINGS_WRITE_ENABLED` defaults on; needs `KNOWLEDGE_GRAPH_ENABLED`; additive + soft-failing (never changes the answer). |
 
-Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> followUp`.
+Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> recordBindings -> followUp`.
 
 ### elastic-iac — 4 graph nodes + 1 memory-enrich node (`packages/agent/src/iac/graph-knowledge.ts`)
 

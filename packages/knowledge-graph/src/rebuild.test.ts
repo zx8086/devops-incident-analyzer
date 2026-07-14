@@ -1,8 +1,20 @@
 // knowledge-graph/src/rebuild.test.ts
 import { describe, expect, test } from "bun:test";
-import { bindingFromAnnotations } from "./rebuild.ts";
+import { bindingFromAnnotations, parseArgs } from "./rebuild.ts";
 import { InMemoryGraphStore } from "./store.ts";
 import { recordServiceBinding } from "./writer.ts";
+
+describe("SIO-1100 rebuild: parseArgs", () => {
+	test("parses --out <dir> and --dry-run", () => {
+		expect(parseArgs(["--out", ".data/scratch", "--dry-run"])).toEqual({ out: ".data/scratch", dryRun: true });
+		expect(parseArgs([])).toEqual({ out: undefined, dryRun: false });
+	});
+
+	test("rejects a valueless or flag-shaped --out (would fall back to the live graph)", () => {
+		expect(() => parseArgs(["--out"])).toThrow(/--out requires a directory path/);
+		expect(() => parseArgs(["--out", "--dry-run"])).toThrow(/--out requires a directory path/);
+	});
+});
 
 const FULL = {
 	kind: "kg-binding",

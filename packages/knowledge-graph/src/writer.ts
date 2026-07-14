@@ -216,6 +216,14 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 			name: b.aliasRaw,
 			normalized: b.serviceNormalized,
 		});
+		// An alias resolves to exactly one service at a time. Invalidate any prior
+		// still-valid RESOLVES_TO edge from this alias to a DIFFERENT service before
+		// merging the new one -- otherwise bindingsForServices' alias hop would follow
+		// both and surface the wrong service's bindings.
+		await store.run(
+			"MATCH (a:Alias {name: $name})-[r:RESOLVES_TO]->(s:Service) WHERE s.name <> $service AND r.tInvalid = '' SET r.tInvalid = $now",
+			{ name: b.aliasRaw, service: b.service, now },
+		);
 		await store.run(
 			"MATCH (a:Alias {name: $name}), (s:Service {name: $service}) MERGE (a)-[r:RESOLVES_TO]->(s) SET r.confidence = $confidence, r.discoveredBy = $discoveredBy, r.createdAt = coalesce(r.createdAt, $now), r.tValid = coalesce(r.tValid, $now), r.tInvalid = ''",
 			{
