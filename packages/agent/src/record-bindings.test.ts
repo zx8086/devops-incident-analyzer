@@ -1,8 +1,13 @@
 // agent/src/record-bindings.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
-import type { ResolvedIdentifiers } from "@devops-agent/shared";
-import { deriveConfirmedBindings, isBindingsWriteEnabled, recordConfirmedBindings } from "./record-bindings.ts";
+import type { DataSourceResult, ResolvedIdentifiers } from "@devops-agent/shared";
+import {
+	deriveConfirmedBindings,
+	identifierUsedInToolCalls,
+	isBindingsWriteEnabled,
+	recordConfirmedBindings,
+} from "./record-bindings.ts";
 import type { AgentStateType } from "./state.ts";
 
 // A single-service focus with a fresh (stamp-matching) resolution and one confirmed
@@ -179,5 +184,168 @@ describe("recordConfirmedBindings node", () => {
 		_setGraphStoreForTesting(store);
 		const out = await recordConfirmedBindings(baseState());
 		expect(out.partialFailures).toEqual([{ node: "recordBindings", reason: "graph-write-failed" }]);
+	});
+});
+
+// SIO-1102: identifier-level confirmation.
+describe("identifierUsedInToolCalls (SIO-1102)", () => {
+	function result(over: Partial<DataSourceResult>): DataSourceResult {
+		return { dataSourceId: "elastic", data: {}, status: "success", toolErrors: [], ...over } as DataSourceResult;
+	}
+
+	test("true when the identifier appears in a tool output (string or object rawJson)", () => {
+		expect(
+			identifierUsedInToolCalls(
+				"orders-api",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders-api"] } }] }),
+			),
+		).toBe(true);
+		expect(
+			identifierUsedInToolCalls(
+				"/ecs/orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: "log group /ecs/orders" }] }),
+			),
+		).toBe(true);
+		// case-insensitive
+		expect(
+			identifierUsedInToolCalls(
+				"ORDERS-API",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { x: "orders-api" } }] }),
+			),
+		).toBe(true);
+	});
+
+	test("false when the identifier is absent from all tool outputs", () => {
+		expect(
+			identifierUsedInToolCalls(
+				"orders-ghost",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders-api"] } }] }),
+			),
+		).toBe(false);
+	});
+
+	// SIO-1102 (CodeRabbit): boundary-aware, not raw substring. A short id must not be
+	// confirmed by a longer overlapping one in the same output.
+	test("does NOT confirm a short identifier that is only a substring of a longer one", () => {
+		// "orders" appears only inside "orders-api" / "reorders-worker" -> not used.
+		expect(
+			identifierUsedInToolCalls(
+				"orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders-api", "reorders-worker"] } }] }),
+			),
+		).toBe(false);
+		// but the exact whole identifier IS confirmed
+		expect(
+			identifierUsedInToolCalls(
+				"orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders", "orders-api"] } }] }),
+			),
+		).toBe(true);
+		// a log-group id is bounded by JSON quotes, its internal / and - don't break it
+		expect(
+			identifierUsedInToolCalls(
+				"/ecs/orders-prd",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { logGroup: "/ecs/orders-prd" } }] }),
+			),
+		).toBe(true);
+		// but /ecs/orders must not match /ecs/orders-prd (longer)
+		expect(
+			identifierUsedInToolCalls(
+				"/ecs/orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { logGroup: "/ecs/orders-prd" } }] }),
+			),
+		).toBe(false);
+	});
+
+	test("null when there are no tool outputs to judge against (caller falls back)", () => {
+		expect(identifierUsedInToolCalls("orders-api", result({ toolOutputs: [] }))).toBeNull();
+		expect(identifierUsedInToolCalls("orders-api", result({ toolOutputs: undefined }))).toBeNull();
+		expect(identifierUsedInToolCalls("orders-api", undefined)).toBeNull();
+	});
+
+	test("empty identifier is never used", () => {
+		expect(identifierUsedInToolCalls("", result({ toolOutputs: [{ toolName: "t", rawJson: "anything" }] }))).toBe(
+			false,
+		);
+	});
+});
+
+describe("deriveConfirmedBindings identifier-level tightening (SIO-1102)", () => {
+	function state(over: {
+		resolved: AgentStateType["resolvedIdentifiers"];
+		results: DataSourceResult[];
+	}): AgentStateType {
+		return {
+			requestId: "req-1",
+			investigationFocus: { services: ["orders"], datasources: ["elastic"], summary: "x", establishedAtTurn: 1 },
+			resolvedIdentifiers: over.resolved,
+			dataSourceResults: over.results,
+		} as unknown as AgentStateType;
+	}
+
+	test("drops a resolved identifier that never appears in a tool output", () => {
+		const recs = deriveConfirmedBindings(
+			state({
+				resolved: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: { serviceNames: ["orders-api", "orders-ghost"] },
+				},
+				results: [
+					{
+						dataSourceId: "elastic",
+						data: {},
+						status: "success",
+						toolErrors: [],
+						toolOutputs: [{ toolName: "s", rawJson: { hits: ["orders-api"] } }],
+					} as DataSourceResult,
+				],
+			}),
+		);
+		expect(recs.map((r) => r.resourceId)).toEqual(["orders-api"]);
+	});
+
+	test("keeps identifiers used in THIS datasource's tool calls, not another's", () => {
+		const recs = deriveConfirmedBindings(
+			state({
+				resolved: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: { serviceNames: ["orders-api"] },
+					aws: { logGroups: ["/ecs/orders"] },
+				},
+				results: [
+					// elastic output mentions the aws log group but NOT its own service name ->
+					// elastic's orders-api is dropped; aws's /ecs/orders is confirmed by aws's output
+					{
+						dataSourceId: "elastic",
+						data: {},
+						status: "success",
+						toolErrors: [],
+						toolOutputs: [{ toolName: "s", rawJson: { note: "/ecs/orders" } }],
+					} as DataSourceResult,
+					{
+						dataSourceId: "aws",
+						data: {},
+						status: "success",
+						toolErrors: [],
+						toolOutputs: [{ toolName: "q", rawJson: { group: "/ecs/orders" } }],
+					} as DataSourceResult,
+				],
+			}),
+		);
+		expect(recs.map((r) => `${r.datasource}:${r.resourceId}`).sort()).toEqual(["aws:/ecs/orders"]);
+	});
+
+	test("falls back to datasource-level when a confirmed datasource has no tool outputs", () => {
+		const recs = deriveConfirmedBindings(
+			state({
+				resolved: { resolvedForTurn: 1, resolvedForServices: ["orders"], elastic: { serviceNames: ["orders-api"] } },
+				results: [
+					{ dataSourceId: "elastic", data: {}, status: "success", toolErrors: [], toolOutputs: [] } as DataSourceResult,
+				],
+			}),
+		);
+		expect(recs.map((r) => r.resourceId)).toEqual(["orders-api"]);
 	});
 });

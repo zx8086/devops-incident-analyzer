@@ -59,6 +59,48 @@ function datasourceConfirmed(result: DataSourceResult | undefined): boolean {
 	return (result.toolErrors ?? []).every((e) => !isDegradingCategory(e.category));
 }
 
+// SIO-1102: was this specific identifier actually USED by the datasource this turn?
+// toolOutputs capture each tool call's parsed output (`rawJson`, not input args -- the
+// state shape carries no args), so a resolved coordinate that the fan-out genuinely
+// queried is echoed in (or returned by) at least one tool output. This is the
+// identifier-level tightening of Stage 1's datasource-level "had findings" heuristic:
+// an identifier the probe resolved but the sub-agent never touched is NOT confirmed.
+// Returns `null` (not false) when there are no tool outputs to judge against, so the
+// caller can fall back to the datasource-level signal rather than dropping everything.
+//
+// The match is IDENTIFIER-BOUNDARY-aware, not a raw substring (SIO-1102 CodeRabbit): a
+// short id like `orders` must NOT be confirmed by `orders-api` or `reorders-worker`.
+// Identifiers can themselves contain `-`, `_`, `.`, `/` (e.g. `/ecs/orders-prd`), so
+// the boundary chars that DELIMIT one identifier from another are exactly those NOT in
+// that set plus alphanumerics -- i.e. JSON/whitespace punctuation. We require the match
+// to be preceded and followed by such a delimiter (or the string edge).
+const ID_CHAR = /[a-z0-9._/-]/;
+
+function boundaryMatch(haystack: string, needle: string): boolean {
+	let from = 0;
+	for (;;) {
+		const at = haystack.indexOf(needle, from);
+		if (at === -1) return false;
+		const before = at === 0 ? "" : (haystack[at - 1] ?? "");
+		const afterIdx = at + needle.length;
+		const after = afterIdx >= haystack.length ? "" : (haystack[afterIdx] ?? "");
+		if (!ID_CHAR.test(before) && !ID_CHAR.test(after)) return true;
+		from = at + 1;
+	}
+}
+
+export function identifierUsedInToolCalls(identifier: string, result: DataSourceResult | undefined): boolean | null {
+	if (!identifier) return false;
+	const outputs = result?.toolOutputs ?? [];
+	if (outputs.length === 0) return null;
+	const needle = identifier.toLowerCase();
+	for (const o of outputs) {
+		const hay = (typeof o.rawJson === "string" ? o.rawJson : JSON.stringify(o.rawJson ?? "")).toLowerCase();
+		if (boundaryMatch(hay, needle)) return true;
+	}
+	return false;
+}
+
 // The per-datasource identifier -> binding-kind/resource mapping. Couchbase is
 // skipped in Stage 1 (its scopes/indexInfo describe org structure, not a per-service
 // binding); atlassian has no field (SIO-1096 removed the probe).
@@ -133,8 +175,15 @@ export function deriveConfirmedBindings(state: AgentStateType): ServiceBindingRe
 
 	const records: ServiceBindingRecord[] = [];
 	for (const raw of rawBindingsFor(resolved)) {
-		if (!datasourceConfirmed(resultsById.get(raw.datasource))) continue;
 		if (!raw.resourceId) continue;
+		const result = resultsById.get(raw.datasource);
+		if (!datasourceConfirmed(result)) continue;
+		// SIO-1102: identifier-level tightening. The datasource succeeded; now require
+		// that THIS identifier was actually used (appears in a tool output). null =
+		// no tool outputs to judge against -> fall back to the datasource-level signal
+		// (which datasourceConfirmed already satisfied) rather than dropping it.
+		const used = identifierUsedInToolCalls(raw.resourceId, result);
+		if (used === false) continue;
 		records.push({
 			service,
 			serviceNormalized,
@@ -168,10 +217,14 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 		if (records.length === 0) return {};
 		const store = await getGraphStore();
 		let newCount = 0;
+		let reconfirmed = 0;
 		for (const rec of records) {
 			const existed = await hasBinding(store, rec.service, rec.kind, rec.resourceId);
 			await recordServiceBinding(store, rec);
-			if (existed) continue;
+			if (existed) {
+				reconfirmed += 1;
+				continue;
+			}
 			newCount += 1;
 			// Durable fact (system of record). recordKeyDecision self-gates on the
 			// agent-memory backend, so a file-backend deployment writes graph-only.
@@ -192,7 +245,12 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 				},
 			});
 		}
-		logger.debug({ total: records.length, newBindings: newCount }, "recorded confirmed telemetry bindings");
+		// SIO-1102: per-turn telemetry. `contradicted` (a graph-seeded binding used this
+		// turn that yielded nothing) is a Stage 4 staleness concept -- 0 here for now.
+		logger.info(
+			{ total: records.length, newBindings: newCount, reconfirmed, contradicted: 0 },
+			"agent:record-bindings",
+		);
 		return {};
 	} catch (error) {
 		logger.warn(
