@@ -882,26 +882,29 @@ describe("SIO-1100 telemetry bindings", () => {
 describe("SIO-1103 staleness (invalidateBinding / flagBindingForReview)", () => {
 	test("invalidateBinding sets tInvalid + appends reason, only for non-human bindings", async () => {
 		const store = new InMemoryGraphStore();
-		await invalidateBinding(store, "orders", "logGroup", "/ecs/orders", "empty on reuse");
+		await invalidateBinding(store, "orders", "aws", "logGroup", "/ecs/orders", "empty on reuse");
 		const call = store.calls[0];
 		expect(call?.cypher).toContain("o.tInvalid = $now");
 		expect(call?.cypher).toContain("o.discoveredBy <> 'human'");
 		expect(call?.cypher).toContain("invalidated: ");
+		// full (datasource, kind, resourceId) identity is matched (cross-source isolation)
+		expect(call?.cypher).toContain("datasource: $datasource");
 		expect(call?.params).toMatchObject({
 			service: "orders",
+			datasource: "aws",
 			kind: "logGroup",
 			resourceId: "/ecs/orders",
 			reason: "empty on reuse",
 		});
 		// no-ops on missing required fields
 		const empty = new InMemoryGraphStore();
-		await invalidateBinding(empty, "", "logGroup", "", "x");
+		await invalidateBinding(empty, "", "aws", "logGroup", "", "x");
 		expect(empty.calls).toHaveLength(0);
 	});
 
 	test("flagBindingForReview appends a note without invalidating, only for human bindings", async () => {
 		const store = new InMemoryGraphStore();
-		await flagBindingForReview(store, "orders", "logGroup", "/ecs/orders", "looked empty once");
+		await flagBindingForReview(store, "orders", "aws", "logGroup", "/ecs/orders", "looked empty once");
 		const call = store.calls[0];
 		expect(call?.cypher).toContain("o.discoveredBy = 'human'");
 		expect(call?.cypher).toContain("flagged-for-review");

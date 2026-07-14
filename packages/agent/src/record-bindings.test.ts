@@ -440,4 +440,48 @@ describe("applyStaleness (SIO-1103)", () => {
 			),
 		).toBe(0);
 	});
+
+	// SIO-1103 (CodeRabbit): a datasource-level not-found must not retire a DIFFERENT
+	// coordinate on the same datasource that was actually used.
+	test("only the unused seeded coordinate is invalidated, not a sibling that was used", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("OBSERVED_IN", [
+			{
+				service: "orders",
+				datasource: "aws",
+				kind: "logGroup",
+				resourceId: "/ecs/a",
+				locator: "",
+				confidence: 0.7,
+				discoveredBy: "resolve-identifiers",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+			{
+				service: "orders",
+				datasource: "aws",
+				kind: "logGroup",
+				resourceId: "/ecs/b",
+				locator: "",
+				confidence: 0.7,
+				discoveredBy: "resolve-identifiers",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+		]);
+		// aws reported not-found; /ecs/b appears in a tool output (used), /ecs/a does not.
+		const results: DataSourceResult[] = [
+			{
+				dataSourceId: "aws",
+				data: {},
+				status: "success",
+				toolErrors: [{ toolName: "q", category: "not-found", message: "gone", retryable: false }],
+				toolOutputs: [{ toolName: "q", rawJson: { logGroup: "/ecs/b" } }],
+			} as DataSourceResult,
+		];
+		const n = await applyStaleness(store, state({ graphSeeded: ["/ecs/a", "/ecs/b"], results }));
+		// only /ecs/a is invalidated
+		expect(n).toBe(1);
+		const invalidations = store.calls.filter((c) => c.cypher.includes("o.tInvalid = $now"));
+		expect(invalidations).toHaveLength(1);
+		expect(invalidations[0]?.params?.resourceId).toBe("/ecs/a");
+	});
 });

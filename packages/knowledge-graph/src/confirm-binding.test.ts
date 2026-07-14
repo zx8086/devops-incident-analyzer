@@ -49,4 +49,12 @@ describe("SIO-1103 confirm-binding parseArgs", () => {
 			/--service requires a value/,
 		);
 	});
+
+	// SIO-1103 (CodeRabbit): a typo'd flag must not be silently dropped (which would let
+	// datasource fall back to the wrong default and record the wrong binding).
+	test("rejects an unknown flag (typo) instead of silently ignoring it", () => {
+		expect(() =>
+			parseArgs(["--service", "orders", "--kind", "logGroup", "--resourceId", "/ecs/x", "--datasouce", "elastic"]),
+		).toThrow(/unknown flag --datasouce/);
+	});
 });

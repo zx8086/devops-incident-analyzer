@@ -60,6 +60,10 @@ export function bindingFromAnnotations(a: AnnotationMap): ServiceBindingRecord |
 	return {
 		service: a.service,
 		serviceNormalized: a.service_normalized ?? a.service,
+		// SIO-1103: replay the alias so the RESOLVES_TO edge is reconstructed. Empty ->
+		// undefined so recordServiceBinding's aliasRaw !== service guard behaves as if
+		// no alias was recorded.
+		aliasRaw: a.alias_raw && a.alias_raw.length > 0 ? a.alias_raw : undefined,
 		datasource: a.datasource,
 		kind: kind.data,
 		resourceId: a.resource_id,

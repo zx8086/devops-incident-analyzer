@@ -277,20 +277,22 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 // append the reason to evidence, so bindingsForServices (WHERE tInvalid='') stops
 // surfacing it while the history is preserved for as-of queries. Only ever called for
 // discoveredBy != "human" (P5: human-confirmed bindings are never auto-invalidated --
-// use flagBindingForReview instead). Matches the same (service, kind, resourceId) shape
-// as hasBinding. No-op if there is no currently-valid matching edge.
+// use flagBindingForReview instead). Matches on the FULL (datasource, kind, resourceId)
+// identity so identical (kind, resourceId) values from separate sources stay isolated
+// (SIO-1103 CodeRabbit). No-op if there is no currently-valid matching edge.
 export async function invalidateBinding(
 	store: GraphStore,
 	service: string,
+	datasource: string,
 	kind: string,
 	resourceId: string,
 	reason: string,
 ): Promise<void> {
-	if (!service || !resourceId) return;
+	if (!service || !resourceId || !datasource) return;
 	const now = new Date().toISOString();
 	await store.run(
-		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy <> 'human' SET o.tInvalid = $now, o.evidence = o.evidence + ' | invalidated: ' + $reason",
-		{ service, kind, resourceId, now, reason },
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {datasource: $datasource, kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy <> 'human' SET o.tInvalid = $now, o.evidence = o.evidence + ' | invalidated: ' + $reason",
+		{ service, datasource, kind, resourceId, now, reason },
 	);
 }
 
@@ -301,15 +303,16 @@ export async function invalidateBinding(
 export async function flagBindingForReview(
 	store: GraphStore,
 	service: string,
+	datasource: string,
 	kind: string,
 	resourceId: string,
 	reason: string,
 ): Promise<void> {
-	if (!service || !resourceId) return;
+	if (!service || !resourceId || !datasource) return;
 	const now = new Date().toISOString();
 	await store.run(
-		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy = 'human' SET o.evidence = o.evidence + ' | flagged-for-review ' + $now + ': ' + $reason",
-		{ service, kind, resourceId, now, reason },
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {datasource: $datasource, kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' AND o.discoveredBy = 'human' SET o.evidence = o.evidence + ' | flagged-for-review ' + $now + ': ' + $reason",
+		{ service, datasource, kind, resourceId, now, reason },
 	);
 }
 

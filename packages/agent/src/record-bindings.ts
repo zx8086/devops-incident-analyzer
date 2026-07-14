@@ -252,14 +252,37 @@ export async function applyStaleness(store: GraphStore, state: AgentStateType): 
 	// kind + discoveredBy (graphSeeded is just resourceId strings).
 	const stored: ServiceBinding[] = await bindingsForServices(store, [service], [normalize(service)]);
 	const seededSet = new Set(seeded.map((s) => s.toLowerCase()));
+	const resultsById = new Map<string, DataSourceResult>();
+	for (const r of state.dataSourceResults ?? []) resultsById.set(r.dataSourceId, r);
+
 	let invalidated = 0;
 	for (const b of stored) {
 		if (!seededSet.has(b.resourceId.toLowerCase())) continue; // not injected this turn
 		if (!notFound.has(b.datasource)) continue; // its datasource didn't report not-found
+		// SIO-1103 CodeRabbit: a datasource-level not-found must not retire a DIFFERENT
+		// coordinate on the same datasource. The ToolError carries no structured resource,
+		// so isolate the failed coordinate by the signal we DO have: retire this binding
+		// only if its exact resourceId did NOT appear in the datasource's tool outputs
+		// (used-and-present means it's fine even if a sibling coordinate 404'd).
+		if (identifierUsedInToolCalls(b.resourceId, resultsById.get(b.datasource)) === true) continue;
 		if (b.discoveredBy === "human") {
-			await flagBindingForReview(store, service, b.kind, b.resourceId, "seeded coordinate reported not-found");
+			await flagBindingForReview(
+				store,
+				service,
+				b.datasource,
+				b.kind,
+				b.resourceId,
+				"seeded coordinate reported not-found",
+			);
 		} else {
-			await invalidateBinding(store, service, b.kind, b.resourceId, "seeded coordinate reported not-found");
+			await invalidateBinding(
+				store,
+				service,
+				b.datasource,
+				b.kind,
+				b.resourceId,
+				"seeded coordinate reported not-found",
+			);
 			invalidated += 1;
 		}
 	}

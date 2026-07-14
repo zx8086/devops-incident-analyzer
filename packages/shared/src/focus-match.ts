@@ -59,7 +59,20 @@ export function matchesFocus(haystack: string, focusServices: string[]): boolean
 	const hTokens = tokenize(haystack);
 	for (const svc of focusServices) {
 		const sNorm = normalize(svc);
-		if (sNorm.length > 0 && (hNorm.includes(sNorm) || sNorm.includes(hNorm))) return true;
+		if (sNorm.length === 0) continue;
+		// Exact normalized equality always matches (a short but exact name is unambiguous).
+		if (sNorm === hNorm) return true;
+		// SIO-1103 CodeRabbit: the FUZZY substring path (one normalized value contained in
+		// the other) requires BOTH to meet MIN_TOKEN_LENGTH -- otherwise a short focus like
+		// "cat" scopes in "catalog-service" (sNorm "cat" ⊂ hNorm "catalog"). This mirrors the
+		// MIN_TOKEN_LENGTH filter tokenize() already applies to the token-overlap path.
+		if (
+			sNorm.length >= MIN_TOKEN_LENGTH &&
+			hNorm.length >= MIN_TOKEN_LENGTH &&
+			(hNorm.includes(sNorm) || sNorm.includes(hNorm))
+		) {
+			return true;
+		}
 		const sTokens = tokenize(svc);
 		for (const t of sTokens) {
 			if (hTokens.has(t)) return true;

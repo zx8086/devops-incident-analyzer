@@ -36,12 +36,29 @@ interface ConfirmArgs {
 	aliasRaw?: string;
 }
 
+const KNOWN_FLAGS = new Set(["service", "kind", "resourceId", "datasource", "locator", "alias"]);
+
 function flag(argv: string[], name: string): string | undefined {
 	const i = argv.indexOf(`--${name}`);
 	if (i === -1) return undefined;
 	const value = argv[i + 1];
 	if (!value || value.startsWith("--")) throw new Error(`--${name} requires a value`);
 	return value;
+}
+
+// SIO-1103 CodeRabbit: reject unknown flags so a typo (e.g. --datasouce elastic) can't
+// be silently dropped and record the wrong binding. Only the flag NAMES are checked;
+// their values (which follow) are consumed by flag() above.
+function rejectUnknownFlags(argv: string[]): void {
+	for (let i = 0; i < argv.length; i++) {
+		const tok = argv[i] ?? "";
+		if (!tok.startsWith("--")) continue;
+		const name = tok.slice(2);
+		if (!KNOWN_FLAGS.has(name)) {
+			throw new Error(`unknown flag ${tok}; expected one of: ${[...KNOWN_FLAGS].map((f) => `--${f}`).join(", ")}`);
+		}
+		i++; // skip this flag's value
+	}
 }
 
 // The datasource a kind belongs to, so the operator need not pass --datasource for the
@@ -61,6 +78,7 @@ const KIND_DATASOURCE: Record<string, string> = {
 };
 
 function parseArgs(argv: string[]): ConfirmArgs {
+	rejectUnknownFlags(argv);
 	const service = flag(argv, "service");
 	const kind = flag(argv, "kind");
 	const resourceId = flag(argv, "resourceId");
@@ -105,6 +123,9 @@ async function writeDurableFact(a: ConfirmArgs, serviceNormalized: string): Prom
 				datasource: a.datasource,
 				discovered_by: "human",
 				confidence: "1",
+				// SIO-1103 CodeRabbit: persist the alias so a rebuild reconstructs the
+				// RESOLVES_TO edge (otherwise the alias link is lost on replay).
+				alias_raw: a.aliasRaw ?? "",
 			},
 		},
 	);
