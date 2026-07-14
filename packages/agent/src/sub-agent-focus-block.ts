@@ -58,10 +58,12 @@ function buildResolvedBlock(
 	if (lines.length === 0) return "";
 
 	return (
-		"\n\n---\n\nRESOLVED IDENTIFIERS (candidates to verify, probed this turn):\n" +
+		"\n\n---\n\nRESOLVED IDENTIFIERS (candidates to verify):\n" +
 		`${lines.join("\n")}\n\n` +
-		"Use these exact names in tool calls. They are candidates from a fast enumeration probe -- " +
-		"if one looks wrong, verify with a listing/schema tool before assuming."
+		"Use these exact names in tool calls. Most are candidates from a fast enumeration probe this " +
+		"turn; any line marked 'from PRIOR incidents' is a known coordinate the graph learned earlier " +
+		"(not re-probed this turn). Either way -- if one looks wrong or returns nothing, verify with a " +
+		"listing/schema tool and fall back to discovery before assuming."
 	);
 }
 
@@ -182,7 +184,39 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 		// team/org-named, not service-named, so it resolved nothing). The atlassian sub-agent
 		// searches all projects by incident domain terms per its SOUL.
 	}
+
+	// SIO-1101 (R7): call out which of the rendered identifiers came from the knowledge
+	// graph (prior investigations) rather than this turn's probe. They are STARTING scope,
+	// not exclusive scope -- verify before relying, and expand via discovery if empty.
+	const graphOnly = graphSeededForDatasource(resolved, dataSourceId);
+	if (graphOnly.length > 0) {
+		lines.push(
+			`- Known coordinates from PRIOR incidents (NOT probed this turn -- verify with a listing/schema tool before relying, and fall back to discovery if empty): ${graphOnly.join(", ")}`,
+		);
+	}
 	return lines;
+}
+
+// SIO-1101: the subset of resolved.graphSeeded that belongs to this datasource's block.
+// graphSeeded is a flat cross-datasource list; we intersect it with the identifiers
+// actually rendered for `dataSourceId` so each sub-agent only sees its own.
+function graphSeededForDatasource(resolved: ResolvedIdentifiers, dataSourceId: string): string[] {
+	const seeded = resolved.graphSeeded;
+	if (!seeded || seeded.length === 0) return [];
+	const seededSet = new Set(seeded.map((s) => s.toLowerCase()));
+	const owned: string[] = [];
+	switch (dataSourceId) {
+		case "elastic":
+			owned.push(...(resolved.elastic?.serviceNames ?? []));
+			break;
+		case "aws":
+			owned.push(...(resolved.aws?.logGroups ?? []), ...(resolved.aws?.ecsServices ?? []));
+			break;
+		case "kafka":
+			owned.push(...(resolved.kafka?.topics ?? []), ...(resolved.kafka?.consumerGroups ?? []));
+			break;
+	}
+	return owned.filter((v) => seededSet.has(v.toLowerCase()));
 }
 
 // SIO-1084: case-insensitive SET equality. Compares the deduped lowercased sets in
