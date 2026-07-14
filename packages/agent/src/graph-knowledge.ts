@@ -16,6 +16,7 @@ import {
 	recordRootCause,
 	rootCauseForIncident,
 	type SimilarIncidentWithCause,
+	setIncidentEmbedding,
 	similarIncidents,
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
@@ -118,6 +119,12 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 		if (query) {
 			try {
 				const embedding = await getEmbedder()(query);
+				// SIO-1100: persist the embedding onto this turn's Incident so FUTURE
+				// investigations can vector-recall it. recordEntities creates the Incident
+				// node without an embedding (this package owns no LLM SDK); without this
+				// write no incident ever gets one and similarIncidents can never return a
+				// hit. Reuses the vector we just computed -- zero extra Bedrock calls.
+				await setIncidentEmbedding(store, state.requestId, embedding);
 				const nearest = await similarIncidents(store, embedding);
 				// SIO-1026: annotate each similar incident with its recorded root cause
 				// so the aggregator can reuse prior analysis ("we've seen this before").

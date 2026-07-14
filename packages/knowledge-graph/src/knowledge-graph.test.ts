@@ -2,11 +2,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	ALTER_MIGRATIONS,
+	bindingsForServices,
 	buildGraphContext,
 	buildIacGraphContext,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	EMBEDDING_DIM,
+	hasBinding,
 	InMemoryGraphStore,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
@@ -22,6 +24,7 @@ import {
 	recordIncident,
 	recordPipeline,
 	recordRootCause,
+	recordServiceBinding,
 	repairChangeMrUrl,
 	rootCauseForIncident,
 	seedDeployments,
@@ -29,6 +32,7 @@ import {
 	seedStackInstances,
 	seedStacks,
 	setChangeOutcome,
+	setIncidentEmbedding,
 	similarIncidents,
 	stacksUsingModule,
 	upsertEntities,
@@ -143,21 +147,26 @@ describe("writer (parameterized, injection-safe)", () => {
 		});
 	});
 
-	test("recordIncident sets embedding only when provided", async () => {
+	test("recordIncident writes the embedding via the drop/set/recreate path when provided", async () => {
 		const store = new InMemoryGraphStore();
 		await recordIncident(store, { id: "inc1", severity: "high", services: ["svc-a"], embedding: [0.1, 0.2] });
-		const merge = store.calls.find((c) => c.cypher.includes("MERGE (i:Incident"));
-		expect(merge?.cypher).toContain("i.embedding = $embedding");
-		expect(merge?.params?.embedding).toEqual([0.1, 0.2]);
+		// SIO-1100: identity MERGE no longer carries the embedding (it backs the HNSW
+		// index, which rejects an inline SET); it is written by setIncidentEmbedding.
+		const identity = store.calls.find((c) => c.cypher.includes("MERGE (i:Incident") && c.cypher.includes("severity"));
+		expect(identity?.cypher).not.toContain("embedding");
+		const emb = store.calls.find((c) => c.cypher.includes("SET i.embedding"));
+		expect(emb?.params?.embedding).toEqual([0.1, 0.2]);
+		expect(store.calls.some((c) => c.cypher.includes("DROP_VECTOR_INDEX"))).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("CREATE_VECTOR_INDEX"))).toBe(true);
 		// AFFECTED_BY edge created
 		expect(store.calls.some((c) => c.cypher.includes("AFFECTED_BY"))).toBe(true);
 	});
 
-	test("recordIncident omits embedding clause when absent", async () => {
+	test("recordIncident writes no embedding path when absent", async () => {
 		const store = new InMemoryGraphStore();
 		await recordIncident(store, { id: "inc2" });
-		const merge = store.calls.find((c) => c.cypher.includes("MERGE (i:Incident"));
-		expect(merge?.cypher).not.toContain("embedding");
+		expect(store.calls.some((c) => c.cypher.includes("embedding"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("VECTOR_INDEX"))).toBe(false);
 	});
 
 	// SIO-1026: RootCause writer. The shared node holds only identity; per-incident
@@ -670,5 +679,161 @@ describe("InMemoryGraphStore", () => {
 		expect(store.initialized).toBe(true);
 		await store.close();
 		expect(store.initialized).toBe(false);
+	});
+});
+
+// SIO-1100: telemetry-binding substrate.
+describe("SIO-1100 telemetry bindings", () => {
+	test("MIGRATIONS include TelemetrySource/Alias nodes + OBSERVED_IN/RESOLVES_TO/DISCOVERED_DURING rels", () => {
+		for (const label of ["TelemetrySource", "Alias"]) {
+			expect(MIGRATIONS.some((m) => m.includes(`NODE TABLE IF NOT EXISTS ${label}(`))).toBe(true);
+		}
+		const observed = MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS OBSERVED_IN("));
+		expect(observed).toContain("FROM Service TO TelemetrySource");
+		// bi-temporal + provenance columns on the edge
+		for (const col of ["confidence", "discoveredBy", "evidence", "lastVerified", "tValid", "tInvalid"]) {
+			expect(observed).toContain(col);
+		}
+		expect(MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS RESOLVES_TO("))).toContain(
+			"FROM Alias TO Service",
+		);
+		expect(MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS DISCOVERED_DURING("))).toContain(
+			"FROM TelemetrySource TO Incident",
+		);
+	});
+
+	test("recordServiceBinding MERGEs Service + TelemetrySource + OBSERVED_IN with bound params", async () => {
+		const store = new InMemoryGraphStore();
+		await recordServiceBinding(store, {
+			service: "orders",
+			serviceNormalized: "order",
+			datasource: "aws",
+			kind: "logGroup",
+			resourceId: "/ecs/orders-prd",
+			locator: "prod",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+			incidentId: "inc-1",
+		});
+		// composed TelemetrySource id
+		const source = store.calls.find((c) => c.cypher.includes("MERGE (t:TelemetrySource"));
+		expect(source?.params?.id).toBe("aws:logGroup:/ecs/orders-prd");
+		// OBSERVED_IN edge sets lastVerified + clears tInvalid, params bound
+		const edge = store.calls.find((c) => c.cypher.includes("OBSERVED_IN"));
+		expect(edge?.cypher).toContain("o.tInvalid = ''");
+		expect(edge?.params?.service).toBe("orders");
+		expect(edge?.params?.confidence).toBe(0.7);
+		// provenance edge to the incident
+		expect(store.calls.some((c) => c.cypher.includes("DISCOVERED_DURING") && c.params?.iid === "inc-1")).toBe(true);
+		// no interpolation: the resourceId never appears raw in a cypher string
+		expect(store.calls.every((c) => !c.cypher.includes("/ecs/orders-prd"))).toBe(true);
+	});
+
+	test("recordServiceBinding writes an Alias RESOLVES_TO edge only when aliasRaw differs", async () => {
+		const withAlias = new InMemoryGraphStore();
+		await recordServiceBinding(withAlias, {
+			service: "orders",
+			serviceNormalized: "order",
+			aliasRaw: "prices-api-v2",
+			datasource: "konnect",
+			kind: "konnectService",
+			resourceId: "svc-123",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+		});
+		expect(withAlias.calls.some((c) => c.cypher.includes("MERGE (a:Alias") && c.params?.name === "prices-api-v2")).toBe(
+			true,
+		);
+		expect(withAlias.calls.some((c) => c.cypher.includes("RESOLVES_TO"))).toBe(true);
+
+		const noAlias = new InMemoryGraphStore();
+		await recordServiceBinding(noAlias, {
+			service: "orders",
+			serviceNormalized: "order",
+			aliasRaw: "orders",
+			datasource: "elastic",
+			kind: "serviceName",
+			resourceId: "orders",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+		});
+		expect(noAlias.calls.some((c) => c.cypher.includes("RESOLVES_TO"))).toBe(false);
+	});
+
+	test("recordServiceBinding no-ops on missing required fields", async () => {
+		const store = new InMemoryGraphStore();
+		await recordServiceBinding(store, {
+			service: "",
+			serviceNormalized: "",
+			datasource: "aws",
+			kind: "logGroup",
+			resourceId: "",
+			confidence: 0.7,
+			discoveredBy: "human",
+		});
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("setIncidentEmbedding drops the index, sets only the embedding, recreates the index", async () => {
+		const store = new InMemoryGraphStore();
+		await setIncidentEmbedding(store, "inc-1", [0.1, 0.2]);
+		// Kuzu forbids SET on an indexed column: drop -> set -> recreate.
+		expect(store.calls.some((c) => c.cypher.includes("DROP_VECTOR_INDEX"))).toBe(true);
+		const merge = store.calls.find((c) => c.cypher.includes("SET i.embedding"));
+		expect(merge?.cypher).toContain("MERGE (i:Incident {id: $id}) SET i.embedding = $embedding");
+		expect(merge?.cypher).not.toContain("severity");
+		expect(merge?.params?.embedding).toEqual([0.1, 0.2]);
+		expect(store.calls.some((c) => c.cypher.includes("CREATE_VECTOR_INDEX"))).toBe(true);
+		// drop precedes set precedes create
+		const idxDrop = store.calls.findIndex((c) => c.cypher.includes("DROP_VECTOR_INDEX"));
+		const idxSet = store.calls.findIndex((c) => c.cypher.includes("SET i.embedding"));
+		const idxCreate = store.calls.findIndex((c) => c.cypher.includes("CREATE_VECTOR_INDEX"));
+		expect(idxDrop).toBeLessThan(idxSet);
+		expect(idxSet).toBeLessThan(idxCreate);
+
+		const empty = new InMemoryGraphStore();
+		await setIncidentEmbedding(empty, "inc-1", []);
+		expect(empty.calls).toHaveLength(0);
+	});
+
+	test("bindingsForServices returns [] for empty services and shapes rows otherwise", async () => {
+		const empty = new InMemoryGraphStore();
+		expect(await bindingsForServices(empty, [], [])).toEqual([]);
+
+		const store = new InMemoryGraphStore();
+		store.stub("OBSERVED_IN", [
+			{
+				service: "orders",
+				datasource: "aws",
+				kind: "logGroup",
+				resourceId: "/ecs/orders",
+				locator: "prod",
+				confidence: 0.7,
+				discoveredBy: "resolve-identifiers",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+		]);
+		const rows = await bindingsForServices(store, ["orders"], ["order"]);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ service: "orders", datasource: "aws", kind: "logGroup", confidence: 0.7 });
+		// query filters currently-valid edges and orders by recency
+		const q = store.calls[0]?.cypher ?? "";
+		expect(q).toContain("o.tInvalid = ''");
+		expect(q).toContain("ORDER BY o.lastVerified DESC");
+	});
+
+	test("hasBinding returns true only when a valid edge count is positive", async () => {
+		const present = new InMemoryGraphStore();
+		present.stub("count(o)", [{ n: 1 }]);
+		expect(await hasBinding(present, "orders", "logGroup", "/ecs/orders")).toBe(true);
+
+		const absent = new InMemoryGraphStore();
+		absent.stub("count(o)", [{ n: 0 }]);
+		expect(await hasBinding(absent, "orders", "logGroup", "/ecs/orders")).toBe(false);
+
+		// missing args short-circuit without a query
+		const store = new InMemoryGraphStore();
+		expect(await hasBinding(store, "", "logGroup", "")).toBe(false);
+		expect(store.calls).toHaveLength(0);
 	});
 });

@@ -1,10 +1,12 @@
 // knowledge-graph/src/index.ts
 
 export {
+	bindingsForServices,
 	buildGraphContext,
 	buildIacGraphContext,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
+	hasBinding,
 	type IacChange,
 	type IacGraphExtra,
 	type PriorRootCause,
@@ -15,6 +17,7 @@ export {
 	proposedChangesWithMr,
 	type RootCause,
 	rootCauseForIncident,
+	type ServiceBinding,
 	type ServiceDependency,
 	type SimilarIncident,
 	type SimilarIncidentWithCause,
@@ -26,6 +29,10 @@ export {
 } from "./reader.ts";
 export {
 	ALTER_MIGRATIONS,
+	type AliasNode,
+	AliasNodeSchema,
+	type BindingKind,
+	BindingKindSchema,
 	type ConfigChangeNode,
 	ConfigChangeNodeSchema,
 	type DeploymentNode,
@@ -53,7 +60,12 @@ export {
 	StackInstanceNodeSchema,
 	type StackNode,
 	StackNodeSchema,
+	type TelemetrySourceNode,
+	TelemetrySourceNodeSchema,
+	VECTOR_INDEX_NAME,
+	VECTOR_INDEX_PROPERTY,
 	VECTOR_INDEX_SETUP,
+	VECTOR_INDEX_TABLE,
 	type WorkflowNode,
 	WorkflowNodeSchema,
 } from "./schema.ts";
@@ -85,11 +97,14 @@ export {
 	recordIncident,
 	recordPipeline,
 	recordRootCause,
+	recordServiceBinding,
 	repairChangeMrUrl,
+	type ServiceBindingRecord,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
 	seedStacks,
 	setChangeOutcome,
+	setIncidentEmbedding,
 	upsertEntities,
 } from "./writer.ts";

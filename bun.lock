@@ -105,6 +105,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@devops-agent/observability": "workspace:*",
+        "@devops-agent/shared": "workspace:*",
         "lbug": "^0.14.3",
         "zod": "catalog:",
       },

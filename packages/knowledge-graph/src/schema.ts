@@ -50,6 +50,13 @@ export const NODE_LABELS = [
 	// (== the turn's ConfigChange id when it opens an MR, so a prompt links to its
 	// change for free). RAW text, no truncation, no redaction.
 	"Prompt",
+	// SIO-1100: telemetry-binding substrate. A TelemetrySource is one concrete
+	// observability coordinate (a log group, index, APM service name, topic...) that
+	// a service was observed to use. An Alias is a raw source-specific name that
+	// resolves to a canonical Service. These back the W8 investigation-learnings
+	// writer and (Stage 2) the R7 pre-fan-out scoping read.
+	"TelemetrySource",
+	"Alias",
 ] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
@@ -83,6 +90,13 @@ export const REL_TYPES = [
 	"RAN",
 	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
 	"PROMPTED_IN",
+	// SIO-1100: telemetry-binding edges. OBSERVED_IN is the bi-temporal service ->
+	// telemetry-source binding (confidence/provenance/validity on the edge);
+	// RESOLVES_TO maps a raw Alias to its canonical Service; DISCOVERED_DURING is
+	// provenance to the Incident that taught us a binding.
+	"OBSERVED_IN",
+	"RESOLVES_TO",
+	"DISCOVERED_DURING",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
 
@@ -144,6 +158,39 @@ export const PromptNodeSchema = z
 		createdAt: z.string().optional(),
 	})
 	.strict();
+// SIO-1100: the closed set of telemetry-binding kinds. Each maps a per-datasource
+// canonical identifier (the resolveIdentifiers output) to a coordinate kind. Enforced
+// at the writer boundary so a typo can never mint a new kind in the graph.
+export const BindingKindSchema = z.enum([
+	"serviceName", // elastic APM service.name
+	"logGroup", // aws CloudWatch log group
+	"ecsService", // aws ECS service
+	"scope", // couchbase scope (not written in Stage 1; reserved)
+	"topic", // kafka topic
+	"consumerGroup", // kafka consumer group
+	"konnectControlPlane",
+	"konnectService",
+	"gitlabProject",
+	"jiraProject", // reserved (atlassian probe removed SIO-1096; no producer today)
+	"confluenceSpace", // reserved
+]);
+export type BindingKind = z.infer<typeof BindingKindSchema>;
+// SIO-1100: a telemetry coordinate. id = "<datasource>:<kind>:<resourceId>" (the
+// caller composes it) so the same coordinate observed for two services MERGEs to one
+// node. locator carries addressing context (elastic deployment, aws estate) or "".
+export const TelemetrySourceNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		datasource: z.string().min(1),
+		kind: BindingKindSchema,
+		resourceId: z.string().min(1),
+		locator: z.string().optional(),
+	})
+	.strict();
+// SIO-1100: a raw source-specific name and its normalized form (the caller owns
+// normalization -- same precedent as caller-owned embeddings -- so this package stays
+// free of the agent's focus-match module).
+export const AliasNodeSchema = z.object({ name: z.string().min(1), normalized: z.string().min(1) }).strict();
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
@@ -157,6 +204,8 @@ export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 export type SessionNode = z.infer<typeof SessionNodeSchema>;
 export type PipelineNode = z.infer<typeof PipelineNodeSchema>;
 export type PromptNode = z.infer<typeof PromptNodeSchema>;
+export type TelemetrySourceNode = z.infer<typeof TelemetrySourceNodeSchema>;
+export type AliasNode = z.infer<typeof AliasNodeSchema>;
 
 // Schema DDL. Kuzu/Ladybug node & rel tables, idempotent (IF NOT EXISTS). The
 // embedding column on Incident backs the native vector index (see VECTOR_INDEX).
@@ -214,6 +263,15 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS RAN(FROM MergeRequest TO Pipeline)",
 	// SIO-1038: a turn's Prompt -> the Session (thread) it was asked in.
 	"CREATE REL TABLE IF NOT EXISTS PROMPTED_IN(FROM Prompt TO Session)",
+	// SIO-1100: telemetry-binding substrate (new tables only; existing tables + the
+	// bare-name Service PK are untouched). OBSERVED_IN and RESOLVES_TO are the ONLY
+	// bi-temporal edges in the graph: tInvalid="" means currently valid; staleness
+	// (Stage 4) sets tInvalid rather than deleting, so as-of queries stay possible.
+	"CREATE NODE TABLE IF NOT EXISTS TelemetrySource(id STRING, datasource STRING, kind STRING, resourceId STRING, locator STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Alias(name STRING, normalized STRING, PRIMARY KEY(name))",
+	"CREATE REL TABLE IF NOT EXISTS OBSERVED_IN(FROM Service TO TelemetrySource, confidence DOUBLE, discoveredBy STRING, evidence STRING, lastVerified STRING, tValid STRING, tInvalid STRING)",
+	"CREATE REL TABLE IF NOT EXISTS RESOLVES_TO(FROM Alias TO Service, confidence DOUBLE, discoveredBy STRING, createdAt STRING, tValid STRING, tInvalid STRING)",
+	"CREATE REL TABLE IF NOT EXISTS DISCOVERED_DURING(FROM TelemetrySource TO Incident)",
 ];
 
 // SIO-965: best-effort additive column migrations for graphs created before the
@@ -230,8 +288,14 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 // Native vector index over Incident.embedding. Requires Ladybug's vector
 // extension; creation is best-effort (the store logs and continues if the
 // extension is unavailable, so the graph still works without similarity search).
+// SIO-1100: the index identity is shared with the writer -- Kuzu forbids SET on a
+// column that backs a live HNSW index, so setIncidentEmbedding must DROP this exact
+// index, write, and recreate it (see writer.ts).
+export const VECTOR_INDEX_TABLE = "Incident";
+export const VECTOR_INDEX_NAME = "incident_embedding_idx";
+export const VECTOR_INDEX_PROPERTY = "embedding";
 export const VECTOR_INDEX_SETUP: readonly string[] = [
 	"INSTALL vector",
 	"LOAD vector",
-	"CALL CREATE_VECTOR_INDEX('Incident', 'incident_embedding_idx', 'embedding')",
+	`CALL CREATE_VECTOR_INDEX('${VECTOR_INDEX_TABLE}', '${VECTOR_INDEX_NAME}', '${VECTOR_INDEX_PROPERTY}')`,
 ];

@@ -12,25 +12,30 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	bindingsForServices,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
+	hasBinding,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	proposedChangesWithMr,
 	stacksUsingModule,
 	topology,
 } from "./reader.ts";
+import { EMBEDDING_DIM } from "./schema.ts";
 import { LadybugStore } from "./store.ts";
 import {
 	linkStackModule,
 	recordIacChange,
 	recordIncident,
 	recordPipeline,
+	recordServiceBinding,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
 	seedStacks,
 	setChangeOutcome,
+	setIncidentEmbedding,
 	upsertEntities,
 } from "./writer.ts";
 
@@ -73,6 +78,59 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			{ id: "inc-1" },
 		);
 		expect(incidents).toEqual([{ id: "inc-1", severity: "high" }]);
+
+		// SIO-1100: telemetry-binding round-trip against the real binder (validates the
+		// new DDL applied in init() + the OBSERVED_IN/RESOLVES_TO reader queries, which
+		// the in-memory fake cannot). Reuses this store to respect the handle-count cap.
+		// Incident.embedding is a fixed DOUBLE[1024] column (Titan v2), so the vector
+		// must be exactly EMBEDDING_DIM long -- a shorter list is rejected by the binder.
+		await setIncidentEmbedding(
+			store,
+			"inc-1",
+			Array.from({ length: EMBEDDING_DIM }, () => 0.01),
+		);
+		await recordServiceBinding(store, {
+			service: "svc-a",
+			serviceNormalized: "svc-a",
+			aliasRaw: "svc-a-prd", // exercises the Alias + RESOLVES_TO path
+			datasource: "aws",
+			kind: "logGroup",
+			resourceId: "/ecs/svc-a-prd",
+			locator: "prod",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+			incidentId: "inc-1",
+		});
+
+		// direct-name lookup
+		const direct = await bindingsForServices(store, ["svc-a"], ["svc-a"]);
+		expect(direct).toHaveLength(1);
+		expect(direct[0]).toMatchObject({ service: "svc-a", datasource: "aws", kind: "logGroup", confidence: 0.7 });
+		// alias-hop lookup: the Alias node (svc-a-prd) stores the SERVICE's normalized
+		// form (svc-a) and RESOLVES_TO svc-a, so a lookup that knows only that
+		// normalized form (not the direct service name) still reaches the binding.
+		const viaAlias = await bindingsForServices(store, ["nope"], ["svc-a"]);
+		expect(viaAlias.some((b) => b.resourceId === "/ecs/svc-a-prd")).toBe(true);
+
+		// hasBinding gate
+		expect(await hasBinding(store, "svc-a", "logGroup", "/ecs/svc-a-prd")).toBe(true);
+		expect(await hasBinding(store, "svc-a", "logGroup", "/does/not/exist")).toBe(false);
+
+		// re-record bumps lastVerified + keeps a single edge (MERGE idempotency)
+		await recordServiceBinding(store, {
+			service: "svc-a",
+			serviceNormalized: "svc-a",
+			datasource: "aws",
+			kind: "logGroup",
+			resourceId: "/ecs/svc-a-prd",
+			locator: "prod",
+			confidence: 0.9,
+			discoveredBy: "resolve-identifiers",
+		});
+		const edgeCount = await store.run<{ n: number }>(
+			"MATCH (:Service {name: 'svc-a'})-[o:OBSERVED_IN]->(:TelemetrySource {id: 'aws:logGroup:/ecs/svc-a-prd'}) RETURN count(o) AS n",
+		);
+		expect(Number(edgeCount[0]?.n)).toBe(1);
 
 		await store.close();
 	});

@@ -4,6 +4,7 @@
 // parameterized MERGE -- values are bound ($params), never interpolated into the
 // Cypher string, so a service name like "); DROP" cannot alter the query.
 
+import { type BindingKind, VECTOR_INDEX_NAME, VECTOR_INDEX_PROPERTY, VECTOR_INDEX_TABLE } from "./schema.ts";
 import type { GraphStore } from "./store.ts";
 
 export interface EntityGraph {
@@ -77,18 +78,20 @@ export interface IncidentRecord {
 }
 
 export async function recordIncident(store: GraphStore, incident: IncidentRecord): Promise<void> {
-	const setClauses = ["i.severity = $severity", "i.summary = $summary", "i.createdAt = $createdAt"];
-	const params: Record<string, unknown> = {
-		id: incident.id,
-		severity: incident.severity ?? "",
-		summary: incident.summary ?? "",
-		createdAt: incident.createdAt ?? new Date().toISOString(),
-	};
+	await store.run(
+		"MERGE (i:Incident {id: $id}) SET i.severity = $severity, i.summary = $summary, i.createdAt = $createdAt",
+		{
+			id: incident.id,
+			severity: incident.severity ?? "",
+			summary: incident.summary ?? "",
+			createdAt: incident.createdAt ?? new Date().toISOString(),
+		},
+	);
+	// SIO-1100: the embedding cannot be SET inline -- it backs the HNSW index, which
+	// rejects a plain SET. Route it through the drop/set/recreate path.
 	if (incident.embedding && incident.embedding.length > 0) {
-		setClauses.push("i.embedding = $embedding");
-		params.embedding = incident.embedding;
+		await setIncidentEmbedding(store, incident.id, incident.embedding);
 	}
-	await store.run(`MERGE (i:Incident {id: $id}) SET ${setClauses.join(", ")}`, params);
 
 	for (const service of incident.services ?? []) {
 		if (!service) continue;
@@ -140,6 +143,125 @@ export async function recordRootCause(store: GraphStore, rootCause: RootCauseRec
 			createdAt: rootCause.createdAt ?? new Date().toISOString(),
 		},
 	);
+}
+
+// SIO-1100: set ONLY the embedding on an existing (or new) Incident. Distinct from
+// recordIncident, which SETs severity/summary/createdAt -- calling that with just an
+// embedding would blank those. Used by graphEnrich to persist the vector it already
+// computed for similarity search, so future incidents are actually recallable.
+//
+// The Kuzu/Ladybug engine FORBIDS a bare `SET i.embedding` while the HNSW vector
+// index backs that column ("Cannot set property ... used in one or more indexes")
+// -- an integration test caught this against the real engine, and it is why the
+// original recordIncident embedding path never actually worked once the index
+// existed. The supported update path is DROP_VECTOR_INDEX -> SET -> recreate. The
+// drop/recreate is best-effort (soft-fail, same idiom as the store's index setup):
+// if the vector extension is unavailable the SET simply proceeds against an
+// un-indexed column. Safe under the single-writer lock (writes are serialized); a
+// concurrent similarIncidents read during the brief indexless window already
+// soft-fails to [] (reader.ts), so it degrades rather than errors.
+export async function setIncidentEmbedding(store: GraphStore, incidentId: string, embedding: number[]): Promise<void> {
+	if (!incidentId || !embedding || embedding.length === 0) return;
+	// Drop the index if present so the column becomes writable. Tolerate "no such
+	// index" / missing-extension: the SET below still needs to run.
+	try {
+		await store.run(`CALL DROP_VECTOR_INDEX('${VECTOR_INDEX_TABLE}', '${VECTOR_INDEX_NAME}')`);
+	} catch {
+		// index absent or extension unavailable -- proceed to the write regardless.
+	}
+	await store.run("MERGE (i:Incident {id: $id}) SET i.embedding = $embedding", { id: incidentId, embedding });
+	// Rebuild the index so similarity search sees the new vector. Best-effort: a
+	// graph without the vector extension keeps working, just without similarity.
+	try {
+		await store.run(
+			`CALL CREATE_VECTOR_INDEX('${VECTOR_INDEX_TABLE}', '${VECTOR_INDEX_NAME}', '${VECTOR_INDEX_PROPERTY}')`,
+		);
+	} catch {
+		// extension unavailable -- the embedding is stored; similarity stays disabled.
+	}
+}
+
+// SIO-1100: W8 investigation-learnings writer. One confirmed telemetry binding =
+// a Service observed to use a TelemetrySource (a log group, index, APM name, topic).
+// discoveredBy distinguishes agent-inferred (confidence 0.7) from human-confirmed
+// (1.0, Stage 4); tInvalid="" marks the edge currently valid. Re-observing a binding
+// bumps lastVerified and clears any prior tInvalid (a fresh sighting revalidates it).
+// serviceNormalized is caller-owned (this package does not import the agent's
+// focus-match module) so the rebuild replay can reconstruct RESOLVES_TO verbatim.
+export interface ServiceBindingRecord {
+	service: string;
+	serviceNormalized: string;
+	// A raw source-specific name distinct from the canonical service, if any.
+	aliasRaw?: string;
+	datasource: string;
+	kind: BindingKind;
+	resourceId: string;
+	locator?: string;
+	confidence: number;
+	discoveredBy: string;
+	evidence?: string;
+	// The investigation that taught us this binding (provenance edge to the Incident).
+	incidentId?: string;
+	createdAt?: string;
+}
+
+export async function recordServiceBinding(store: GraphStore, b: ServiceBindingRecord): Promise<void> {
+	if (!b.service || !b.resourceId || !b.datasource) return;
+	const now = b.createdAt ?? new Date().toISOString();
+	await store.run("MERGE (s:Service {name: $name})", { name: b.service });
+
+	// Alias -> Service only when the raw name differs from the canonical service.
+	if (b.aliasRaw && b.aliasRaw !== b.service) {
+		await store.run("MERGE (a:Alias {name: $name}) SET a.normalized = $normalized", {
+			name: b.aliasRaw,
+			normalized: b.serviceNormalized,
+		});
+		await store.run(
+			"MATCH (a:Alias {name: $name}), (s:Service {name: $service}) MERGE (a)-[r:RESOLVES_TO]->(s) SET r.confidence = $confidence, r.discoveredBy = $discoveredBy, r.createdAt = coalesce(r.createdAt, $now), r.tValid = coalesce(r.tValid, $now), r.tInvalid = ''",
+			{
+				name: b.aliasRaw,
+				service: b.service,
+				confidence: b.confidence,
+				discoveredBy: b.discoveredBy,
+				now,
+			},
+		);
+	}
+
+	const sourceId = `${b.datasource}:${b.kind}:${b.resourceId}`;
+	await store.run(
+		"MERGE (t:TelemetrySource {id: $id}) SET t.datasource = $datasource, t.kind = $kind, t.resourceId = $resourceId, t.locator = $locator",
+		{
+			id: sourceId,
+			datasource: b.datasource,
+			kind: b.kind,
+			resourceId: b.resourceId,
+			locator: b.locator ?? "",
+		},
+	);
+	// Re-MERGE keeps the first tValid (coalesce) but always bumps lastVerified and
+	// clears tInvalid: re-observing a binding revalidates it.
+	await store.run(
+		"MATCH (s:Service {name: $service}), (t:TelemetrySource {id: $id}) MERGE (s)-[o:OBSERVED_IN]->(t) SET o.confidence = $confidence, o.discoveredBy = $discoveredBy, o.evidence = $evidence, o.lastVerified = $now, o.tValid = coalesce(o.tValid, $now), o.tInvalid = ''",
+		{
+			service: b.service,
+			id: sourceId,
+			confidence: b.confidence,
+			discoveredBy: b.discoveredBy,
+			evidence: b.evidence ?? "",
+			now,
+		},
+	);
+
+	if (b.incidentId) {
+		// MERGE the Incident node first: recordEntities normally created it earlier in
+		// the same turn, but the writer must not assume node-creation ordering.
+		await store.run("MERGE (i:Incident {id: $id})", { id: b.incidentId });
+		await store.run(
+			"MATCH (t:TelemetrySource {id: $sid}), (i:Incident {id: $iid}) MERGE (t)-[:DISCOVERED_DURING]->(i)",
+			{ sid: sourceId, iid: b.incidentId },
+		);
+	}
 }
 
 // SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the

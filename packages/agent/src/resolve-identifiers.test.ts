@@ -74,10 +74,12 @@ afterAll(() => {
 });
 
 describe("gating and helpers", () => {
-	test("isResolveIdentifiersEnabled reads the env flag", () => {
+	test("isResolveIdentifiersEnabled is default ON: false only for 'false'/'0'", () => {
+		expect(isResolveIdentifiersEnabled({})).toBe(true);
 		expect(isResolveIdentifiersEnabled({ RESOLVE_IDENTIFIERS_ENABLED: "true" })).toBe(true);
 		expect(isResolveIdentifiersEnabled({ RESOLVE_IDENTIFIERS_ENABLED: "1" })).toBe(true);
-		expect(isResolveIdentifiersEnabled({})).toBe(false);
+		expect(isResolveIdentifiersEnabled({ RESOLVE_IDENTIFIERS_ENABLED: "false" })).toBe(false);
+		expect(isResolveIdentifiersEnabled({ RESOLVE_IDENTIFIERS_ENABLED: "0" })).toBe(false);
 	});
 
 	test("computeTargetSources prefers UI selection, else entity-extracted", () => {
