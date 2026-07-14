@@ -744,3 +744,54 @@ correlationRules.push({
 	retry: { attempts: 1, timeoutMs: 30_000 },
 	skipCoverageCheck: true,
 });
+
+// SIO-1103: shared-infrastructure blast radius (LOCAL runtime graph). When an incident
+// service shows a runtime error AND the knowledge graph knows OTHER services that share
+// a runtime dependency with it (a Kafka topic it produces to, or a telemetry coordinate
+// it is observed in -- populated into state.graphBlastRadius by graphEnrich), re-fan to
+// elastic-agent to check whether those neighbours are ALSO erroring: a shared-infra
+// root cause the per-service fan-out would miss. The neighbours ride in context.services
+// so the second turn inspects their runtime errors regardless of which datasource owns
+// the shared resource. Regular dispatch (NOT skipCoverageCheck): once the neighbours'
+// findings are present the idempotency check suppresses a repeat re-fan.
+//
+// Delineation: this is the LOCAL runtime shared-infra radius (Kafka topics, telemetry
+// coordinates the KG has recorded). GitLab Orbit's blast radius (SIO-1076, the
+// orbit-deploy-* rules above) is the CROSS-PROJECT CODE/SDLC radius (a shared library a
+// deploy changed). Complementary, not duplicate: Orbit answers "what code imports this",
+// this answers "what runtime infra do we share".
+correlationRules.push({
+	name: "shared-infra-blast-radius",
+	description:
+		"An incident service shows a runtime error and the knowledge graph knows other services sharing a runtime dependency (Kafka topic / telemetry coordinate); re-fan to elastic-agent to check whether those neighbours are also erroring (a shared-infra root cause).",
+	trigger: (state) => {
+		// Only the shared-RESOURCE hits have a clear owning agent; a bare depends-on hop
+		// is a weaker signal we do not re-fan on alone.
+		const shared = (state.graphBlastRadius ?? []).filter(
+			(h) => h.via === "kafka-topic" || h.via === "telemetry-source",
+		);
+		if (shared.length === 0) return null;
+		// Require a real runtime error on the incident (don't blast-radius a clean turn).
+		const elastic = getElasticFindings(state);
+		const hasElasticError =
+			(elastic.apmServices ?? []).some((a) => (a.errorRate ?? 0) > 0) || (elastic.logClusters ?? []).length > 0;
+		if (!hasElasticError) return null;
+		// SIO-1103 CodeRabbit: exclude services already IN the incident. The dispatch-time
+		// idempotency gate only suppresses a repeat once elastic covers a service, so in a
+		// multi-service incident a neighbour that is already a focus service would otherwise
+		// be re-dispatched redundantly. Only NEW (not-yet-investigated) neighbours are worth
+		// the re-fan.
+		const focus = new Set((state.investigationFocus?.services ?? []).map((s) => s.toLowerCase()));
+		const neighbours = Array.from(new Set(shared.map((h) => h.neighbour))).filter((n) => !focus.has(n.toLowerCase()));
+		if (neighbours.length === 0) return null;
+		return {
+			context: {
+				signal: "shared-infra-blast-radius",
+				services: neighbours,
+				sharedResources: Array.from(new Set(shared.map((h) => `${h.via}:${h.sharedResource}`))),
+			},
+		};
+	},
+	requiredAgent: "elastic-agent",
+	retry: { attempts: 1, timeoutMs: 30_000 },
+});

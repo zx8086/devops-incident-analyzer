@@ -1,7 +1,9 @@
 // knowledge-graph/src/index.ts
 
 export {
+	type BlastRadiusHit,
 	bindingsForServices,
+	blastRadiusForServices,
 	buildGraphContext,
 	buildIacGraphContext,
 	changeHistoryForStackInstance,

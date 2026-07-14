@@ -70,6 +70,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 			isFollowUp: false,
 			finalAnswer: "",
 			graphContext: "",
+			graphBlastRadius: [],
 			dataSourceContext: undefined,
 			requestId: "test-grounding",
 			attachmentMeta: [],

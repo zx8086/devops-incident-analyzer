@@ -101,6 +101,23 @@ describe("graphEnrich", () => {
 		expect(result.graphContext).toContain("prior root cause: consumer lag > 10K");
 	});
 
+	// SIO-1103: graphEnrich populates graphBlastRadius for the sync correlation rule.
+	test("populates graphBlastRadius from shared-infra neighbours", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		// blastRadiusForServices runs DEPENDS_ON (undirected) + PRODUCES_TO + OBSERVED_IN.
+		store.stub("PRODUCES_TO", [{ n: "refunds", t: "events" }]);
+		_setGraphStoreForTesting(store);
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag"));
+		expect(result.graphBlastRadius).toContainEqual({
+			service: "svc-a",
+			neighbour: "refunds",
+			via: "kafka-topic",
+			sharedResource: "events",
+		});
+	});
+
 	test("soft-fails to dependencies-only when the embedder throws", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();

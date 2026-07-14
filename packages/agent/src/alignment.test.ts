@@ -217,6 +217,7 @@ function makeRetryState(overrides: Partial<AgentStateType> = {}): AgentStateType
 		isFollowUp: false,
 		finalAnswer: "",
 		graphContext: "",
+		graphBlastRadius: [],
 		dataSourceContext: undefined,
 		requestId: "test",
 		attachmentMeta: [],

@@ -8,6 +8,7 @@
 
 import { createHash } from "node:crypto";
 import {
+	blastRadiusForServices,
 	buildGraphContext,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
@@ -131,6 +132,18 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 		const store = await getGraphStore();
 		const services = affectedServiceNames(state);
 		const deps = await priorRelationshipsForServices(store, services);
+		// SIO-1103: the runtime shared-infra blast radius, read here (async) into state so
+		// the SYNCHRONOUS shared-infra-blast-radius correlation rule can consume it. Its own
+		// try/catch keeps a blast-radius failure from dropping the rest of the enrichment.
+		let graphBlastRadius: Awaited<ReturnType<typeof blastRadiusForServices>> = [];
+		try {
+			graphBlastRadius = await blastRadiusForServices(store, services);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich blast-radius read failed; continuing",
+			);
+		}
 
 		let similar: SimilarIncidentWithCause[] = [];
 		const query = lastUserQuery(state);
@@ -163,7 +176,7 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			}
 		}
 
-		return { graphContext: buildGraphContext(deps, similar) };
+		return { graphContext: buildGraphContext(deps, similar), graphBlastRadius };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

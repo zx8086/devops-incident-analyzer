@@ -157,3 +157,87 @@ describe("kafka-broker-timeout-needs-aws-metrics", () => {
 		expect(rule.trigger(state)).not.toBeNull();
 	});
 });
+
+// SIO-1103: shared-infra blast-radius rule.
+describe("shared-infra-blast-radius", () => {
+	const rule = findRule("shared-infra-blast-radius");
+
+	// elastic error present so the "real incident" guard passes.
+	const elasticError = {
+		dataSourceId: "elastic",
+		status: "success" as const,
+		data: "",
+		elasticFindings: { apmServices: [{ serviceName: "orders", errorRate: 0.2 }] },
+	};
+
+	function stateWith(
+		blast: Array<{ service: string; neighbour: string; via: string; sharedResource: string }>,
+		withError = true,
+		focusServices?: string[],
+	) {
+		return {
+			dataSourceResults: withError ? [elasticError] : [],
+			graphBlastRadius: blast,
+			...(focusServices
+				? { investigationFocus: { services: focusServices, datasources: [], summary: "", establishedAtTurn: 1 } }
+				: {}),
+		} as never;
+	}
+
+	test("fires when a shared kafka-topic/telemetry neighbour exists AND the incident is erroring", () => {
+		const match = rule.trigger(
+			stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }]),
+		);
+		expect(match).not.toBeNull();
+		expect(match?.context.services as string[]).toContain("refunds");
+		expect(rule.requiredAgent).toBe("elastic-agent");
+	});
+
+	test("does NOT fire without a runtime error (don't blast-radius a clean turn)", () => {
+		expect(
+			rule.trigger(
+				stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }], false),
+			),
+		).toBeNull();
+	});
+
+	test("does NOT fire on a bare depends-on hop (weaker signal, no clear owning agent)", () => {
+		expect(
+			rule.trigger(stateWith([{ service: "orders", neighbour: "payments", via: "depends-on", sharedResource: "" }])),
+		).toBeNull();
+	});
+
+	test("does NOT fire with no blast radius", () => {
+		expect(rule.trigger(stateWith([]))).toBeNull();
+	});
+
+	// SIO-1103 CodeRabbit: a neighbour already in the incident is not re-dispatched.
+	test("excludes neighbours that are already incident-focus services", () => {
+		// refunds is a graph neighbour AND already a focus service -> dropped; audit is new.
+		const match = rule.trigger(
+			stateWith(
+				[
+					{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" },
+					{ service: "orders", neighbour: "audit", via: "telemetry-source", sharedResource: "aws:logGroup:/x" },
+				],
+				true,
+				["orders", "refunds"],
+			),
+		);
+		expect(match).not.toBeNull();
+		const services = match?.context.services as string[];
+		expect(services).toContain("audit");
+		expect(services).not.toContain("refunds");
+	});
+
+	test("does NOT fire when every neighbour is already an incident-focus service", () => {
+		expect(
+			rule.trigger(
+				stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }], true, [
+					"orders",
+					"refunds",
+				]),
+			),
+		).toBeNull();
+	});
+});

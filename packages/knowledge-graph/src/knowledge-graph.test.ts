@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ALTER_MIGRATIONS,
 	bindingsForServices,
+	blastRadiusForServices,
 	buildGraphContext,
 	buildIacGraphContext,
 	changeHistoryForStackInstance,
@@ -910,5 +911,44 @@ describe("SIO-1103 staleness (invalidateBinding / flagBindingForReview)", () => 
 		expect(call?.cypher).toContain("flagged-for-review");
 		// crucially does NOT set tInvalid (edge stays valid)
 		expect(call?.cypher).not.toContain("tInvalid = $now");
+	});
+});
+
+// SIO-1103: shared-infra blast radius reader.
+describe("SIO-1103 blastRadiusForServices", () => {
+	test("[] for empty services", async () => {
+		expect(await blastRadiusForServices(new InMemoryGraphStore(), [])).toEqual([]);
+	});
+
+	test("collects depends-on + shared-topic + shared-telemetry neighbours, excluding self", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("DEPENDS_ON", [{ n: "payments" }]);
+		store.stub("PRODUCES_TO", [{ n: "refunds", t: "events" }]);
+		store.stub("OBSERVED_IN", [{ n: "audit", id: "aws:logGroup:/ecs/shared" }]);
+		const hits = await blastRadiusForServices(store, ["orders"]);
+		expect(hits).toContainEqual({ service: "orders", neighbour: "payments", via: "depends-on", sharedResource: "" });
+		expect(hits).toContainEqual({
+			service: "orders",
+			neighbour: "refunds",
+			via: "kafka-topic",
+			sharedResource: "events",
+		});
+		expect(hits).toContainEqual({
+			service: "orders",
+			neighbour: "audit",
+			via: "telemetry-source",
+			sharedResource: "aws:logGroup:/ecs/shared",
+		});
+		// the telemetry query filters currently-valid edges
+		expect(store.calls.some((c) => c.cypher.includes("o1.tInvalid = '' AND o2.tInvalid = ''"))).toBe(true);
+	});
+
+	test("de-dupes and never returns the focus service itself", async () => {
+		const store = new InMemoryGraphStore();
+		// a self-edge and a duplicate neighbour
+		store.stub("DEPENDS_ON", [{ n: "orders" }, { n: "payments" }, { n: "payments" }]);
+		const hits = await blastRadiusForServices(store, ["orders"]);
+		expect(hits.some((h) => h.neighbour === "orders")).toBe(false);
+		expect(hits.filter((h) => h.neighbour === "payments")).toHaveLength(1);
 	});
 });
