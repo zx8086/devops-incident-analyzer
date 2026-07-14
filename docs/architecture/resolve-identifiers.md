@@ -162,6 +162,34 @@ work and frees a hot-path probe slot.
 
 ---
 
+## Graph-seeded candidates — R7 (SIO-1101)
+
+Before the probes run, `fetchGraphSeeds()` reads the focus service's **known** telemetry
+coordinates from the knowledge graph — the bindings that prior investigations confirmed via the
+SIO-1100 W8 writer (`bindingsForServices`, filtered to `KG_BINDINGS_READ_DATASOURCES`, under a fixed
+1s budget, soft-failing to `[]`). This is the "R7 bindings bootstrap": investigation N+1 for a
+service starts pre-scoped instead of re-discovering from scratch.
+
+Seeds are folded into the same `ResolvedIdentifiers` per-datasource blocks **after** the probes
+(`applyGraphSeeds`), so:
+
+- **Probe results win.** A coordinate the probe independently re-found this turn is probe-confirmed,
+  not a seed.
+- **Additive, capped, labelled.** Only identifiers the probe did *not* find are added (≤ 5 per
+  datasource), and their flat list is recorded in `resolvedIdentifiers.graphSeeded`. The focus block
+  renders those on a distinct line — *"Known coordinates from PRIOR incidents (NOT probed this turn
+  — verify … and fall back to discovery if empty)"* — so a sub-agent treats them as **starting
+  scope, not exclusive scope**.
+- **Probes are never skipped.** R7 only *adds* candidates; it never gates or replaces a probe. A
+  stale binding therefore cannot suppress live discovery — the failure mode SIO-1084/1086 exist to
+  prevent. Cold start (no graph bindings yet) is identical to pre-R7 behavior.
+
+Gated by `KG_BINDINGS_READ_ENABLED` (default on) + `KNOWLEDGE_GRAPH_ENABLED`. Stage 2 seeds the
+array-shaped blocks (elastic `serviceNames`, aws `logGroups`/`ecsServices`, kafka
+`topics`/`consumerGroups`); scalar konnect/gitlab ids are a later stage.
+
+---
+
 ## Output shape
 
 `ResolvedIdentifiers` (`packages/shared/src/agent-state.ts`, `ResolvedIdentifiersSchema`):
@@ -178,6 +206,9 @@ work and frees a hot-path probe slot.
   konnect?:    { controlPlaneId?, controlPlaneName?, serviceIds? },
   gitlab?:     { projectId?, pathWithNamespace? },
   // no `atlassian` key -- atlassian is not probed (SIO-1096); the sub-agent searches by domain terms.
+  graphSeeded?: string[],           // SIO-1101: which identifiers above came from the graph (R7),
+                                    // not this turn's probe -- the per-datasource blocks already
+                                    // contain them; this just marks them for the focus block.
 }
 ```
 
@@ -200,8 +231,10 @@ WHERE on: …]` tags. The agent is told these are *candidates to verify*, not go
 
 | Env var | Default | Effect |
 |---|---|---|
-| `RESOLVE_IDENTIFIERS_ENABLED` | unset (off) | `true`/`1` enables the node; otherwise it is a pure no-op |
+| `RESOLVE_IDENTIFIERS_ENABLED` | on (SIO-1100) | `false`/`0` makes the node a pure no-op; otherwise it runs. Was default-off when it shipped (SIO-1084); flipped to default-on in SIO-1100. |
 | `RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS` (SIO-1095) | `8000` | Per-probe wall-clock budget; positive integer in `[1, 2147483647]`, else the default. Before SIO-1095 the budget was a hardcoded 4000ms with no override. |
+| `KG_BINDINGS_READ_ENABLED` (SIO-1101) | on | `false`/`0` disables graph-seeding. Also needs `KNOWLEDGE_GRAPH_ENABLED`. |
+| `KG_BINDINGS_READ_DATASOURCES` (SIO-1101) | `elastic,aws` | Comma list of datasources that accept graph seeds (`all` = every datasource). |
 
 ---
 

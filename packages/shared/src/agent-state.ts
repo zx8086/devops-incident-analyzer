@@ -504,6 +504,13 @@ export const ResolvedIdentifiersSchema = z.object({
 	// SIO-1096: no `atlassian` field -- the atlassian resolveIdentifiers probe was removed. Jira
 	// projects are team/org-named, not service-named, so a service->project name-match resolved
 	// nothing; the atlassian sub-agent searches all projects by incident domain terms instead.
+	// SIO-1101 (R7): identifiers that came from the knowledge graph (prior investigations' W8
+	// bindings) and were NOT independently re-found by a probe this turn. A flat list across
+	// datasources; the per-datasource blocks above already CONTAIN these values (they are merged
+	// in), and this field just marks WHICH are graph-only so the focus block can render them as
+	// "known coordinates, not probed this turn -- verify before relying" rather than as this
+	// turn's probe output. Absent/empty when nothing was graph-seeded.
+	graphSeeded: z.array(z.string()).optional(),
 });
 export type ResolvedIdentifiers = z.infer<typeof ResolvedIdentifiersSchema>;
 

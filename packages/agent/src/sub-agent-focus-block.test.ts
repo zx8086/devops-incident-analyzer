@@ -172,3 +172,42 @@ describe("SIO-1084 B5: resolved-identifiers injection", () => {
 		expect(block).not.toContain("RESOLVED IDENTIFIERS");
 	});
 });
+
+// SIO-1101 (R7): graph-seeded identifiers are labelled "from PRIOR incidents".
+describe("R7 graph-seeded rendering (SIO-1101)", () => {
+	// The distinctive graph-seed DATA line (vs the footer, which always mentions the phrase).
+	const SEED_LINE = "Known coordinates from PRIOR incidents";
+
+	test("marks graph-only identifiers as not-probed-this-turn, only for their datasource", () => {
+		const resolved: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: FOCUS.services,
+			// orders-api was probe-confirmed; orders-worker is graph-only
+			elastic: { serviceNames: ["orders-api", "orders-worker"] },
+			aws: { logGroups: ["/ecs/orders-graph"] },
+			graphSeeded: ["orders-worker", "/ecs/orders-graph"],
+		};
+		const elastic = buildFocusBlock(FOCUS, NOW, resolved, "elastic");
+		const elasticSeedLine = elastic.split("\n").find((l) => l.includes(SEED_LINE)) ?? "";
+		expect(elasticSeedLine).toContain("orders-worker");
+		// the probe-confirmed name is NOT in the prior-incidents line
+		expect(elasticSeedLine).not.toContain("orders-api");
+
+		const aws = buildFocusBlock(FOCUS, NOW, resolved, "aws");
+		const awsSeedLine = aws.split("\n").find((l) => l.includes(SEED_LINE)) ?? "";
+		expect(awsSeedLine).toContain("/ecs/orders-graph");
+		// elastic's graph seed does not leak into the aws block
+		expect(awsSeedLine).not.toContain("orders-worker");
+	});
+
+	test("no prior-incidents data line when nothing was graph-seeded", () => {
+		const resolved: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: FOCUS.services,
+			elastic: { serviceNames: ["orders-api"] },
+		};
+		const block = buildFocusBlock(FOCUS, NOW, resolved, "elastic");
+		expect(block).toContain("RESOLVED IDENTIFIERS");
+		expect(block).not.toContain(SEED_LINE);
+	});
+});

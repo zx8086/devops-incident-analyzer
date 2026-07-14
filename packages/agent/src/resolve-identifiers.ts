@@ -8,14 +8,27 @@
 //
 // No LLM calls. Probes run in parallel with per-probe timeouts and are all non-fatal:
 // any failure omits that datasource's block and the graph proceeds exactly as before.
-// Gated OFF by default via RESOLVE_IDENTIFIERS_ENABLED so enabling it is a deliberate
-// rollout step; when disabled the node early-returns {} (identical to today).
+// Default ON via RESOLVE_IDENTIFIERS_ENABLED (set =false to disable); when disabled the
+// node early-returns {} (identical to today).
+//
+// SIO-1100/1101 (R7): before probing, seed each datasource with the service's KNOWN
+// coordinates from the knowledge graph (what prior investigations confirmed via the W8
+// writer). Seeds are ADDITIVE and clearly labelled "not probed this turn" in the focus
+// block -- probes still run unchanged and are never skipped, so a stale seed can never
+// suppress live discovery. Gated by KG_BINDINGS_READ_ENABLED (default ON) and scoped by
+// KG_BINDINGS_READ_DATASOURCES (default elastic,aws).
 
+import {
+	bindingsForServices,
+	getGraphStore,
+	isKnowledgeGraphEnabled,
+	type ServiceBinding,
+} from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { DATA_SOURCE_IDS, type ResolvedIdentifiers } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { matchesFocus, tokenize } from "./correlation/focus-match.ts";
+import { matchesFocus, normalize, tokenize } from "./correlation/focus-match.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
 	type CouchbaseIndexMap,
@@ -69,6 +82,50 @@ const ELASTIC_DISCOVERY_INDEX = "logs-*,logs-apm.*";
 export function isResolveIdentifiersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.RESOLVE_IDENTIFIERS_ENABLED;
 	return v !== "false" && v !== "0";
+}
+
+// SIO-1101 (R7): graph-seed reads default ON. Set KG_BINDINGS_READ_ENABLED=false to
+// disable. Also needs KNOWLEDGE_GRAPH_ENABLED (the store must exist to read from).
+export function isBindingsReadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.KG_BINDINGS_READ_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
+// Which datasources accept graph seeds this turn. Default elastic,aws (the first
+// cutover); widen via KG_BINDINGS_READ_DATASOURCES=elastic,aws,kafka,... without a
+// code change. "all" opts every datasource in.
+const DEFAULT_READ_DATASOURCES = "elastic,aws";
+export function bindingsReadDatasources(env: NodeJS.ProcessEnv = process.env): Set<string> {
+	const raw = env.KG_BINDINGS_READ_DATASOURCES?.trim();
+	const value = raw && raw.length > 0 ? raw : DEFAULT_READ_DATASOURCES;
+	return new Set(
+		value
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter((s) => s.length > 0),
+	);
+}
+
+// Fixed, small budget for the graph read (a local embedded-store query, not a network
+// probe -- so NOT the 8s network-probe default). Soft-fails to [] on timeout/error.
+const GRAPH_SEED_TIMEOUT_MS = 1000;
+
+// Fetch the known telemetry bindings for the focus services, scoped to the allowed
+// datasources. Soft-fail: any error/timeout returns [] so the probes still run.
+export async function fetchGraphSeeds(services: string[], allowed: Set<string>): Promise<ServiceBinding[]> {
+	if (!isKnowledgeGraphEnabled() || !isBindingsReadEnabled()) return [];
+	const names = services.filter((s) => s.length > 0);
+	if (names.length === 0) return [];
+	try {
+		const store = await getGraphStore();
+		const normalized = dedupe(names.map((n) => normalize(n)));
+		const rows = await withTimeout(bindingsForServices(store, names, normalized), GRAPH_SEED_TIMEOUT_MS);
+		const wantAll = allowed.has("all");
+		return rows.filter((r) => wantAll || allowed.has(r.datasource));
+	} catch (err) {
+		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "graph-seed read failed; probing only");
+		return [];
+	}
 }
 
 // Mirror the supervisor's target-source resolution (supervisor.ts:41-66) so we
@@ -125,6 +182,13 @@ export async function resolveIdentifiers(
 	// probe budget first, so the timed agg pays only query cost. Best-effort: the sub-agent
 	// fan-out needs this exact session moments later anyway, so warming it early is free.
 	if (inScope.has("elastic")) await warmElasticDeployments(state);
+	// SIO-1101 (R7): fetch known coordinates from the graph BEFORE probing. Restrict to
+	// in-scope AND flag-allowed datasources so we never seed something the fan-out won't
+	// query this turn. Soft-fails to [] -- probes are unaffected.
+	const allowedReads = bindingsReadDatasources();
+	const seedScope = new Set([...inScope].filter((d) => allowedReads.has("all") || allowedReads.has(d)));
+	const graphSeeds = await fetchGraphSeeds(focus.services, seedScope);
+
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
 	if (inScope.has("elastic")) probes.push(safeProbe("elastic", () => probeElastic(state, focus.services)));
 	if (inScope.has("couchbase")) probes.push(safeProbe("couchbase", () => probeCouchbase()));
@@ -136,9 +200,11 @@ export async function resolveIdentifiers(
 	// service, so a service->project name-match resolves nothing -- and the answer never needs a
 	// project key: the atlassian sub-agent searches all projects by incident domain terms (its SOUL).
 
-	if (probes.length === 0) return { resolvedIdentifiers: undefined };
+	// No probes AND no seeds: nothing to resolve. (Seeds alone can still produce a
+	// result -- a cold service the fan-out won't probe but the graph already knows.)
+	if (probes.length === 0 && graphSeeds.length === 0) return { resolvedIdentifiers: undefined };
 
-	const settled = await Promise.allSettled(probes);
+	const settled = probes.length > 0 ? await Promise.allSettled(probes) : [];
 	const merged: ResolvedIdentifiers = {
 		resolvedForTurn: state.messages.length,
 		resolvedForServices: focus.services,
@@ -150,16 +216,90 @@ export async function resolveIdentifiers(
 			any = true;
 		}
 	}
+
+	// SIO-1101 (R7): fold graph seeds into the per-datasource blocks AFTER the probes,
+	// so probe-confirmed identifiers win. graphSeeded lists only identifiers that came
+	// from the graph and were NOT independently re-found by a probe this turn.
+	const graphSeeded = applyGraphSeeds(merged, graphSeeds);
+	if (graphSeeded.length > 0) {
+		merged.graphSeeded = graphSeeded;
+		any = true;
+	}
+
 	if (!any) return { resolvedIdentifiers: undefined };
 
 	logger.info(
 		{
-			resolved: Object.keys(merged).filter((k) => k !== "resolvedForTurn" && k !== "resolvedForServices"),
+			resolved: Object.keys(merged).filter(
+				(k) => k !== "resolvedForTurn" && k !== "resolvedForServices" && k !== "graphSeeded",
+			),
+			graphSeededCount: graphSeeded.length,
 			focusServices: focus.services,
 		},
 		"resolveIdentifiers produced candidates",
 	);
 	return { resolvedIdentifiers: merged };
+}
+
+// Max graph-only identifiers to add per datasource: keeps the checkpointer payload
+// bounded and the focus block short (a stale binding should never dominate).
+const MAX_GRAPH_SEEDS_PER_DATASOURCE = 5;
+
+// SIO-1101 (R7): fold ServiceBinding[] into the ResolvedIdentifiers per-datasource
+// blocks. Only adds identifiers NOT already present (probe results win), caps per
+// datasource, and returns the flat list of identifiers that were graph-only this turn
+// (used by the focus block to label them "not probed this turn"). Stage 2 handles the
+// array-shaped blocks (elastic/aws/kafka); scalar konnect/gitlab ids are left to a
+// later stage.
+export function applyGraphSeeds(merged: ResolvedIdentifiers, seeds: ServiceBinding[]): string[] {
+	const graphSeeded: string[] = [];
+	const perDatasourceCount = new Map<string, number>();
+
+	const addTo = (list: string[], value: string, datasource: string): void => {
+		if (!value) return;
+		const used = perDatasourceCount.get(datasource) ?? 0;
+		if (used >= MAX_GRAPH_SEEDS_PER_DATASOURCE) return;
+		// Probe result already has it (case-insensitive) -> probe-confirmed, not a seed.
+		if (list.some((v) => v.toLowerCase() === value.toLowerCase())) return;
+		list.push(value);
+		perDatasourceCount.set(datasource, used + 1);
+		graphSeeded.push(value);
+	};
+
+	for (const s of seeds) {
+		switch (s.kind) {
+			case "serviceName": {
+				merged.elastic ??= { serviceNames: [] };
+				addTo(merged.elastic.serviceNames, s.resourceId, "elastic");
+				break;
+			}
+			case "logGroup": {
+				merged.aws ??= { logGroups: [] };
+				addTo(merged.aws.logGroups, s.resourceId, "aws");
+				break;
+			}
+			case "ecsService": {
+				merged.aws ??= { logGroups: [] };
+				merged.aws.ecsServices ??= [];
+				addTo(merged.aws.ecsServices, s.resourceId, "aws");
+				break;
+			}
+			case "topic": {
+				merged.kafka ??= { topics: [], consumerGroups: [] };
+				addTo(merged.kafka.topics, s.resourceId, "kafka");
+				break;
+			}
+			case "consumerGroup": {
+				merged.kafka ??= { topics: [], consumerGroups: [] };
+				addTo(merged.kafka.consumerGroups, s.resourceId, "kafka");
+				break;
+			}
+			// konnect/gitlab scalars: deferred (Stage 2 seeds the array-shaped blocks).
+			default:
+				break;
+		}
+	}
+	return graphSeeded;
 }
 
 async function safeProbe(

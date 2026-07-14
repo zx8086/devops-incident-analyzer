@@ -18,10 +18,16 @@ mock.module("./mcp-bridge.ts", () => ({
 	getToolsForDataSource: (dataSourceId: string) => toolRegistry[dataSourceId] ?? [],
 }));
 
+import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
+import type { ResolvedIdentifiers } from "@devops-agent/shared";
 import {
 	_setResolveIdentifiersLoggerForTesting,
+	applyGraphSeeds,
+	bindingsReadDatasources,
 	computeTargetSources,
 	DEFAULT_PROBE_TIMEOUT_MS,
+	fetchGraphSeeds,
+	isBindingsReadEnabled,
 	isResolveIdentifiersEnabled,
 	pickServiceCandidates,
 	probeTimeoutMs,
@@ -386,5 +392,118 @@ describe("probeTimeoutMs (SIO-1095)", () => {
 		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "8000.5" })).toBe(8000);
 		// The max valid value is accepted as-is.
 		expect(probeTimeoutMs({ RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS: "2147483647" })).toBe(2147483647);
+	});
+});
+
+// SIO-1101 (R7): graph-seeded identifiers.
+describe("R7 graph seeds (SIO-1101)", () => {
+	const ORIG_READ = process.env.KG_BINDINGS_READ_ENABLED;
+	const ORIG_DS = process.env.KG_BINDINGS_READ_DATASOURCES;
+	const ORIG_KG = process.env.KNOWLEDGE_GRAPH_ENABLED;
+
+	afterEach(() => {
+		_setGraphStoreForTesting(null);
+		for (const [k, v] of [
+			["KG_BINDINGS_READ_ENABLED", ORIG_READ],
+			["KG_BINDINGS_READ_DATASOURCES", ORIG_DS],
+			["KNOWLEDGE_GRAPH_ENABLED", ORIG_KG],
+		] as const) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
+	});
+
+	function binding(over: Partial<import("@devops-agent/knowledge-graph").ServiceBinding>) {
+		return {
+			service: "orders",
+			datasource: "elastic",
+			kind: "serviceName",
+			resourceId: "orders-api",
+			locator: "",
+			confidence: 0.7,
+			discoveredBy: "resolve-identifiers",
+			lastVerified: "2026-07-14T00:00:00Z",
+			...over,
+		} as import("@devops-agent/knowledge-graph").ServiceBinding;
+	}
+
+	test("isBindingsReadEnabled is default ON: false only for 'false'/'0'", () => {
+		expect(isBindingsReadEnabled({} as NodeJS.ProcessEnv)).toBe(true);
+		expect(isBindingsReadEnabled({ KG_BINDINGS_READ_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
+		expect(isBindingsReadEnabled({ KG_BINDINGS_READ_ENABLED: "0" } as NodeJS.ProcessEnv)).toBe(false);
+	});
+
+	test("bindingsReadDatasources defaults to elastic,aws and parses a custom list", () => {
+		expect([...bindingsReadDatasources({} as NodeJS.ProcessEnv)].sort()).toEqual(["aws", "elastic"]);
+		expect(
+			[...bindingsReadDatasources({ KG_BINDINGS_READ_DATASOURCES: "kafka, gitlab " } as NodeJS.ProcessEnv)].sort(),
+		).toEqual(["gitlab", "kafka"]);
+	});
+
+	test("applyGraphSeeds adds graph-only identifiers, keeps probe-confirmed ones, caps per datasource", () => {
+		const merged: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: ["orders"],
+			// probe already found orders-api -> it must NOT be counted as graph-seeded
+			elastic: { serviceNames: ["orders-api"] },
+		};
+		const seeds = [
+			binding({ kind: "serviceName", resourceId: "orders-api" }), // dup of probe
+			binding({ kind: "serviceName", resourceId: "orders-worker" }), // new
+			binding({ datasource: "aws", kind: "logGroup", resourceId: "/ecs/orders" }),
+			...Array.from({ length: 7 }, (_, i) =>
+				binding({ datasource: "aws", kind: "logGroup", resourceId: `/ecs/extra-${i}` }),
+			),
+		];
+		const graphSeeded = applyGraphSeeds(merged, seeds);
+		// probe-confirmed orders-api stays in the block but is NOT graph-seeded
+		expect(merged.elastic?.serviceNames).toContain("orders-api");
+		expect(graphSeeded).toContain("orders-worker");
+		expect(graphSeeded).not.toContain("orders-api");
+		// aws capped at 5 graph-only additions
+		expect((merged.aws?.logGroups ?? []).length).toBeLessThanOrEqual(5);
+		expect(graphSeeded.filter((v) => v.startsWith("/ecs/")).length).toBe(5);
+	});
+
+	test("fetchGraphSeeds returns [] when KG disabled or read flag off", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		process.env.KG_BINDINGS_READ_ENABLED = "true";
+		expect(await fetchGraphSeeds(["orders"], new Set(["elastic"]))).toEqual([]);
+
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.KG_BINDINGS_READ_ENABLED = "false";
+		expect(await fetchGraphSeeds(["orders"], new Set(["elastic"]))).toEqual([]);
+	});
+
+	test("fetchGraphSeeds reads the store and filters to allowed datasources", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.KG_BINDINGS_READ_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("OBSERVED_IN", [
+			{
+				service: "orders",
+				datasource: "elastic",
+				kind: "serviceName",
+				resourceId: "orders-api",
+				locator: "",
+				confidence: 0.7,
+				discoveredBy: "x",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+			{
+				service: "orders",
+				datasource: "kafka",
+				kind: "topic",
+				resourceId: "orders.events",
+				locator: "",
+				confidence: 0.7,
+				discoveredBy: "x",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const seeds = await fetchGraphSeeds(["orders"], new Set(["elastic"]));
+		// kafka binding filtered out (not in the allowed set)
+		expect(seeds.map((s) => s.datasource)).toEqual(["elastic"]);
 	});
 });
