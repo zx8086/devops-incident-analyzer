@@ -51,7 +51,15 @@ async function lbugLoadable(): Promise<boolean> {
 	}
 }
 
-const available = await lbugLoadable();
+// SIO-1100: skip the real-engine suite in CI. lbug loads there (so lbugLoadable()
+// is true), but (a) the vector extension can't download without network, so the
+// similarity round-trips can't be validated, and (b) lbug's native finalizer
+// segfaults Bun at process teardown (SIO-954) -- a non-deterministic crash that
+// fails the whole Test job. This is a LOCAL-DEV real-engine check; CI coverage for
+// the same writers/readers comes from the deterministic InMemoryGraphStore unit
+// tests. Run it locally (unset CI) to exercise the actual binder.
+const inCi = process.env.CI === "true" || process.env.CI === "1";
+const available = !inCi && (await lbugLoadable());
 const dir = available ? mkdtempSync(join(tmpdir(), "lbug-it-")) : "";
 afterAll(() => {
 	if (dir) rmSync(dir, { recursive: true, force: true });
