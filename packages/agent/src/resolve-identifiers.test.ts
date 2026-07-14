@@ -506,4 +506,27 @@ describe("R7 graph seeds (SIO-1101)", () => {
 		// kafka binding filtered out (not in the allowed set)
 		expect(seeds.map((s) => s.datasource)).toEqual(["elastic"]);
 	});
+
+	test("fetchGraphSeeds skips the store entirely for an empty allowlist (CodeRabbit)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		process.env.KG_BINDINGS_READ_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("OBSERVED_IN", [
+			{
+				service: "orders",
+				datasource: "elastic",
+				kind: "serviceName",
+				resourceId: "orders-api",
+				locator: "",
+				confidence: 0.7,
+				discoveredBy: "x",
+				lastVerified: "2026-07-14T00:00:00Z",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const seeds = await fetchGraphSeeds(["orders"], new Set());
+		expect(seeds).toEqual([]);
+		// no wasted store I/O when nothing this turn can accept a seed
+		expect(store.calls).toEqual([]);
+	});
 });

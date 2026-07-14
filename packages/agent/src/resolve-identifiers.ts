@@ -114,12 +114,23 @@ const GRAPH_SEED_TIMEOUT_MS = 1000;
 // datasources. Soft-fail: any error/timeout returns [] so the probes still run.
 export async function fetchGraphSeeds(services: string[], allowed: Set<string>): Promise<ServiceBinding[]> {
 	if (!isKnowledgeGraphEnabled() || !isBindingsReadEnabled()) return [];
+	// Nothing this turn's in-scope datasources can accept a seed for -> skip the store
+	// I/O entirely (a kafka-only turn against the default elastic,aws allowlist, etc.).
+	if (allowed.size === 0) return [];
 	const names = services.filter((s) => s.length > 0);
 	if (names.length === 0) return [];
 	try {
-		const store = await getGraphStore();
 		const normalized = dedupe(names.map((n) => normalize(n)));
-		const rows = await withTimeout(bindingsForServices(store, names, normalized), GRAPH_SEED_TIMEOUT_MS);
+		// The 1s budget must cover getGraphStore() too: its first call runs store.init()
+		// (applies the DDL) on a cold process, which is otherwise unbounded -- so the
+		// "fixed 1s budget / cold start identical to pre-R7" guarantee wouldn't hold.
+		const rows = await withTimeout(
+			(async () => {
+				const store = await getGraphStore();
+				return bindingsForServices(store, names, normalized);
+			})(),
+			GRAPH_SEED_TIMEOUT_MS,
+		);
 		const wantAll = allowed.has("all");
 		return rows.filter((r) => wantAll || allowed.has(r.datasource));
 	} catch (err) {
