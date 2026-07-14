@@ -64,9 +64,11 @@ export function probeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
 }
 const ELASTIC_DISCOVERY_INDEX = "logs-*,logs-apm.*";
 
+// Default ON (same idiom as KNOWLEDGE_GRAPH_ENABLED / the KG MCP server): set
+// RESOLVE_IDENTIFIERS_ENABLED=false (or 0) to turn it off.
 export function isResolveIdentifiersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.RESOLVE_IDENTIFIERS_ENABLED;
-	return v === "true" || v === "1";
+	return v !== "false" && v !== "0";
 }
 
 // Mirror the supervisor's target-source resolution (supervisor.ts:41-66) so we

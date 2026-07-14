@@ -37,10 +37,21 @@ GraphStore (interface)        init() | run<T>(cypher, params) | close()
 
 - **Incident-side (SIO-850):** `Service`, `Deployment`, `KafkaTopic`, `ConsumerGroup`, `ApiRoute`, `Bucket`, `AwsAccount`, `AwsResource`, `Incident` (carries a 1024-dim Bedrock Titan embedding for similarity search), `Finding`, `Runbook`, `WikiPage`, `RootCause` (SIO-1026: a derived cause keyed by a stable class hash, linked from an `Incident` via `HAS_ROOT_CAUSE`).
 - **IaC-side (SIO-954/965):** `ElasticDeployment` (a cluster, distinct from a microservice `Service`), `ConfigChange` (one maker turn's proposed edit), `MergeRequest`, plus the three-layer repo model `Module` -> `Stack` -> `StackInstance` (the sparse `(deployment, stack)` state cell a change targets), `Workflow`, `Session`, `Pipeline`, `Prompt` (SIO-1038: a turn's verbatim user prompt, stored RAW/untruncated; PK = `requestId`, so it links to that turn's `ConfigChange` for free).
+- **Telemetry bindings (SIO-1100):** `TelemetrySource` (one observability coordinate — a log group, index, APM service name, topic — keyed `<datasource>:<kind>:<resourceId>`) and `Alias` (a raw source-specific name + its normalized canonical form).
 
-**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`, `PROMPTED_IN` (SIO-1038: `Prompt` -> `Session`).
+**Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); telemetry-binding edges (SIO-1100) `OBSERVED_IN` (`Service` -> `TelemetrySource`, bi-temporal: `confidence`, `discoveredBy`, `evidence`, `lastVerified`, `tValid`, `tInvalid`), `RESOLVES_TO` (`Alias` -> `Service`, bi-temporal), `DISCOVERED_DURING` (`TelemetrySource` -> `Incident`, provenance); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`, `PROMPTED_IN` (SIO-1038: `Prompt` -> `Session`).
 
-`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
+`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, `bindingsForServices`, `hasBinding`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordServiceBinding`, `setIncidentEmbedding`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
+
+### Service bindings — W8 write, R7 read (SIO-1100)
+
+The bindings layer turns the graph from an enrichment side-channel into a learning substrate: what log groups, indexes, APM names and topics a service actually uses.
+
+- **W8 writer (`recordBindings` node, this stage):** at the end of a turn, the confirmed bindings are derived deterministically — the intersection of `resolveIdentifiers`' per-datasource canonical identifiers (SIO-1084) and the datasources that produced findings **without a degrading error** (SIO-1087 `isDegradingCategory`; a routine `no-data`/`not-found` still confirms the scope, an auth/server failure does not). Each is MERGEd as a `Service`-`OBSERVED_IN`->`TelemetrySource` edge at `confidence 0.7` (`discoveredBy: "resolve-identifiers"`), plus a durable Couchbase `kg-binding` fact (system of record) when `LIVE_MEMORY_BACKEND=agent-memory`. Runs whenever `KNOWLEDGE_GRAPH_ENABLED` is set (`KG_BINDINGS_WRITE_ENABLED` defaults **on**; set it to `false` to disable). The writes are additive and soft-failing, so they never change the investigation's answer — only what the graph learns for next time. Re-observing a binding bumps `lastVerified` and clears `tInvalid`; the `hasBinding` gate keeps append-only facts from doubling.
+- **R7 read (Stage 2, not yet wired):** a pre-fan-out read of `bindingsForServices` seeds each sub-agent with the service's known coordinates so investigation N+1 is pre-scoped.
+- **`setIncidentEmbedding`** persists the per-turn Titan vector onto the `Incident` node so `similarIncidents` can actually recall it. Because the HNSW vector index locks the `embedding` column against a plain `SET`, it runs `DROP_VECTOR_INDEX` -> `SET` -> `CREATE_VECTOR_INDEX` (best-effort; degrades to an un-indexed write if the vector extension is absent).
+- **Blast-radius vs GitLab Orbit:** the local KG owns runtime **shared-infrastructure** blast radius (services sharing a `Bucket`/`AwsResource`/`KafkaTopic`); GitLab Orbit (SIO-1076) owns cross-project **code/SDLC** blast radius. Complementary, not duplicate.
+- **Rebuild:** `knowledge-graph:rebuild` replays `kg-binding` facts from Couchbase Agent Memory back into a fresh graph (the "graph is a rebuildable projection" story). Incident embeddings, `AFFECTED_BY` and `HAS_ROOT_CAUSE` are graph-only until Stage 4 mirror facts — the CLI prints exactly what it could not rebuild.
 
 ## The in-process MCP server (port 9087, SIO-967)
 
@@ -69,15 +80,16 @@ A fifth tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_C
 
 Both pipelines register their graph nodes **always** but edge them only when the flag is set (the SIO-640 edge-gate idiom), so the node functions are type-safe and unit-testable while remaining unreachable when disabled. Every node **soft-fails** — a cold or absent graph degrades to empty context and never throws.
 
-### incident-analyzer — 3 nodes (`packages/agent/src/graph-knowledge.ts`)
+### incident-analyzer — 4 nodes (`packages/agent/src/graph-knowledge.ts`, `record-bindings.ts`)
 
 | Node | Trigger | Reads / Writes |
 |------|---------|----------------|
 | `recordEntities` (`recordGraphEntities`) | after `entityExtractor` | **WRITE**: `upsertEntities` (affected `Service`s) + `recordIncident` (the turn's `Incident` with severity + summary, linked `AFFECTED_BY`). |
-| `graphEnrich` | after `recordEntities` | **READ**: `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (Bedrock Titan embedding of the user query -> vector-nearest prior incidents), each annotated with its recorded `rootCauseForIncident` (SIO-1026: "we've seen this before -- prior root cause X"). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
+| `graphEnrich` | after `recordEntities` | **READ + WRITE**: persists this turn's Bedrock Titan embedding onto the `Incident` (`setIncidentEmbedding`, SIO-1100 — makes `similarIncidents` usable at all), then reads `priorRelationshipsForServices` (service dependencies) + `similarIncidents` (vector-nearest prior incidents, EXCLUDING this turn's own incident), each annotated with its recorded `rootCauseForIncident` (SIO-1026: "we've seen this before -- prior root cause X"). Produces `state.graphContext`, consumed by the aggregator prompt. Embedding failure is non-fatal (keeps the dependency context). |
 | `recordRootCause` (`recordRootCauseData`, SIO-1026) | after `aggregateMitigation` (LATE, so the final `confidenceScore` is known) | **WRITE**: re-runs the correlation engine (a pure function of state) and, when a rule FIRED and was covered (`reason: "already covered by prior agent findings"`), `recordRootCause` — the turn's `RootCause` (class = satisfied rule name, PK = stable hash so recurrences MERGE) linked `HAS_ROOT_CAUSE` from the `Incident`. Records nothing when no cross-domain correlation held (never fabricates a cause). |
+| `recordBindings` (`recordConfirmedBindings`, SIO-1100) | after `recordRootCause` | **WRITE**: the W8 telemetry-binding writer. Derives the confirmed bindings (`resolveIdentifiers` identifiers ∩ datasources that succeeded without a degrading error) and MERGEs `Service`-`OBSERVED_IN`->`TelemetrySource` edges + a durable `kg-binding` fact. `KG_BINDINGS_WRITE_ENABLED` defaults on; needs `KNOWLEDGE_GRAPH_ENABLED`; additive + soft-failing (never changes the answer). |
 
-Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> followUp`.
+Edge sequence when enabled: `entityExtractor -> recordEntities -> graphEnrich -> awsEstateRouter`, and `aggregateMitigation -> recordRootCause -> recordBindings -> followUp`.
 
 ### elastic-iac — 4 graph nodes + 1 memory-enrich node (`packages/agent/src/iac/graph-knowledge.ts`)
 
@@ -95,14 +107,14 @@ Edge sequence when enabled: `readClusterState -> graphEnrichIac -> memoryEnrichI
 
 The graph nodes are why the registered node counts exceed the base graphs:
 
-- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **23** — 20 base nodes + the 3 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`).
+- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **25** — 21 base nodes + the 4 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, and SIO-1100 `recordBindings`).
 - **elastic-iac:** `grep -c addNode packages/agent/src/iac/graph.ts` = **30** — base proposer/sub-flow nodes + `recordIacPrompt` (SIO-1038, always-edged pre-fan-out capture) + `graphEnrichIac`, `recordIacEntities`, `recordIacOutcome` (KG) + `memoryEnrichIac` (Agent Memory) + `amendChange`.
 
 ## Agent asymmetry
 
 | Aspect | incident-analyzer | elastic-iac |
 |--------|-------------------|-------------|
-| Write nodes | `recordEntities` (services + incidents) + `recordRootCause` (SIO-1026) | `recordIacEntities` + `recordIacOutcome` (changes + pipelines) |
+| Write nodes | `recordEntities` (services + incidents) + `recordRootCause` (SIO-1026) + `recordBindings` (SIO-1100 W8 telemetry bindings; on by default) | `recordIacEntities` + `recordIacOutcome` (changes + pipelines) |
 | Read/enrich node | `graphEnrich` (deps + vector-similar incidents + their prior root causes) | `graphEnrichIac` (change history + blast radius) |
 | LLM-callable `kg_*` tools | none (graph used only via internal nodes) | yes — curated `kg_*` + `kg_run_cypher` via the in-process MCP server |
 | `warm_knowledge_graph` hook | yes (bootstrap opens + `init`s the store) | no |

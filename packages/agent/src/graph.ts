@@ -24,6 +24,7 @@ import { aggregateMitigation } from "./mitigation.ts";
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 import { normalizeIncident } from "./normalizer.ts";
 import { getAgent } from "./prompt-context.ts";
+import { recordConfirmedBindings } from "./record-bindings.ts";
 import { resolveIdentifiers } from "./resolve-identifiers.ts";
 import { respond } from "./responder.ts";
 import { createSelectRunbooksNode } from "./runbook-selector.ts";
@@ -128,6 +129,10 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("graphEnrich", traceNode("graphEnrich", graphEnrich))
 		// SIO-1026: late root-cause write; registered always, edged only when enabled.
 		.addNode("recordRootCause", traceNode("recordRootCause", recordRootCauseData))
+		// SIO-1100: W8 telemetry-binding writer; registered always, edged only when
+		// the knowledge graph is enabled. Self-skips (returns {}) unless
+		// KG_BINDINGS_WRITE_ENABLED is also set, so it is inert in shadow mode.
+		.addNode("recordBindings", traceNode("recordBindings", recordConfirmedBindings))
 
 		// Entry
 		.addEdge("__start__", "classify")
@@ -197,10 +202,12 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("proposeInvestigate", "aggregateMitigation")
 		.addEdge("proposeMonitor", "aggregateMitigation")
 		.addEdge("proposeEscalate", "aggregateMitigation")
-		// SIO-1026: when the knowledge graph is enabled, aggregateMitigation ->
-		// recordRootCause -> followUp; otherwise the direct edge to followUp is kept.
+		// SIO-1026/SIO-1100: when the knowledge graph is enabled, aggregateMitigation ->
+		// recordRootCause -> recordBindings -> followUp; otherwise the direct edge to
+		// followUp is kept. recordBindings self-skips unless KG_BINDINGS_WRITE_ENABLED.
 		.addEdge("aggregateMitigation", knowledgeGraphEnabled ? "recordRootCause" : "followUp")
-		.addEdge("recordRootCause", "followUp");
+		.addEdge("recordRootCause", "recordBindings")
+		.addEdge("recordBindings", "followUp");
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
 	return graph.compile({ checkpointer });
