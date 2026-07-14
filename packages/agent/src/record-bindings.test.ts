@@ -224,6 +224,39 @@ describe("identifierUsedInToolCalls (SIO-1102)", () => {
 		).toBe(false);
 	});
 
+	// SIO-1102 (CodeRabbit): boundary-aware, not raw substring. A short id must not be
+	// confirmed by a longer overlapping one in the same output.
+	test("does NOT confirm a short identifier that is only a substring of a longer one", () => {
+		// "orders" appears only inside "orders-api" / "reorders-worker" -> not used.
+		expect(
+			identifierUsedInToolCalls(
+				"orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders-api", "reorders-worker"] } }] }),
+			),
+		).toBe(false);
+		// but the exact whole identifier IS confirmed
+		expect(
+			identifierUsedInToolCalls(
+				"orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { hits: ["orders", "orders-api"] } }] }),
+			),
+		).toBe(true);
+		// a log-group id is bounded by JSON quotes, its internal / and - don't break it
+		expect(
+			identifierUsedInToolCalls(
+				"/ecs/orders-prd",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { logGroup: "/ecs/orders-prd" } }] }),
+			),
+		).toBe(true);
+		// but /ecs/orders must not match /ecs/orders-prd (longer)
+		expect(
+			identifierUsedInToolCalls(
+				"/ecs/orders",
+				result({ toolOutputs: [{ toolName: "t", rawJson: { logGroup: "/ecs/orders-prd" } }] }),
+			),
+		).toBe(false);
+	});
+
 	test("null when there are no tool outputs to judge against (caller falls back)", () => {
 		expect(identifierUsedInToolCalls("orders-api", result({ toolOutputs: [] }))).toBeNull();
 		expect(identifierUsedInToolCalls("orders-api", result({ toolOutputs: undefined }))).toBeNull();
