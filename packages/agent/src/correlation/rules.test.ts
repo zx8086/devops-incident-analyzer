@@ -157,3 +157,53 @@ describe("kafka-broker-timeout-needs-aws-metrics", () => {
 		expect(rule.trigger(state)).not.toBeNull();
 	});
 });
+
+// SIO-1103: shared-infra blast-radius rule.
+describe("shared-infra-blast-radius", () => {
+	const rule = findRule("shared-infra-blast-radius");
+
+	// elastic error present so the "real incident" guard passes.
+	const elasticError = {
+		dataSourceId: "elastic",
+		status: "success" as const,
+		data: "",
+		elasticFindings: { apmServices: [{ serviceName: "orders", errorRate: 0.2 }] },
+	};
+
+	function stateWith(
+		blast: Array<{ service: string; neighbour: string; via: string; sharedResource: string }>,
+		withError = true,
+	) {
+		return {
+			dataSourceResults: withError ? [elasticError] : [],
+			graphBlastRadius: blast,
+		} as never;
+	}
+
+	test("fires when a shared kafka-topic/telemetry neighbour exists AND the incident is erroring", () => {
+		const match = rule.trigger(
+			stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }]),
+		);
+		expect(match).not.toBeNull();
+		expect(match?.context.services as string[]).toContain("refunds");
+		expect(rule.requiredAgent).toBe("elastic-agent");
+	});
+
+	test("does NOT fire without a runtime error (don't blast-radius a clean turn)", () => {
+		expect(
+			rule.trigger(
+				stateWith([{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }], false),
+			),
+		).toBeNull();
+	});
+
+	test("does NOT fire on a bare depends-on hop (weaker signal, no clear owning agent)", () => {
+		expect(
+			rule.trigger(stateWith([{ service: "orders", neighbour: "payments", via: "depends-on", sharedResource: "" }])),
+		).toBeNull();
+	});
+
+	test("does NOT fire with no blast radius", () => {
+		expect(rule.trigger(stateWith([]))).toBeNull();
+	});
+});

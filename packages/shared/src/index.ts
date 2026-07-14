@@ -52,6 +52,8 @@ export {
 	GitLabFindingsSchema,
 	type GitLabMergedRequest,
 	GitLabMergedRequestSchema,
+	type GraphBlastRadiusHit,
+	GraphBlastRadiusHitSchema,
 	type InvestigationFocus,
 	InvestigationFocusSchema,
 	isDegradingCategory,

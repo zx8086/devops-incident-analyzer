@@ -200,6 +200,7 @@ describe("detectTopicShift interrupt round-trip (SIO-751)", () => {
 			skippedDataSources: [],
 			finalAnswer: "",
 			graphContext: "",
+			graphBlastRadius: [],
 			previousEntities: { dataSources: [] },
 			requestId: "test",
 			attachmentMeta: [],

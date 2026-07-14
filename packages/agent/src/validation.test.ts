@@ -41,6 +41,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		isFollowUp: false,
 		finalAnswer: "",
 		graphContext: "",
+		graphBlastRadius: [],
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],

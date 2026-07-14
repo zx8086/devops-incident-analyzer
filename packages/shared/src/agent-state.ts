@@ -514,6 +514,18 @@ export const ResolvedIdentifiersSchema = z.object({
 });
 export type ResolvedIdentifiers = z.infer<typeof ResolvedIdentifiersSchema>;
 
+// SIO-1103: one runtime shared-infrastructure blast-radius hit -- another service that
+// could be affected via a shared runtime dependency of an incident service. Populated by
+// graphEnrich from the KG (blastRadiusForServices) so the SYNCHRONOUS correlation rule
+// trigger can read it from state. Distinct from GitLab Orbit's cross-project code radius.
+export const GraphBlastRadiusHitSchema = z.object({
+	service: z.string(), // the incident service the hit is anchored to
+	neighbour: z.string(), // the potentially-affected other service
+	via: z.enum(["depends-on", "kafka-topic", "telemetry-source"]),
+	sharedResource: z.string(), // the shared thing (topic/telemetry id); "" for depends-on
+});
+export type GraphBlastRadiusHit = z.infer<typeof GraphBlastRadiusHitSchema>;
+
 // SIO-631: Mitigation steps produced by the propose-mitigation node
 export const MitigationStepsSchema = z.object({
 	investigate: z.array(z.string()),

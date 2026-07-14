@@ -6,6 +6,7 @@ import type {
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
+	GraphBlastRadiusHit,
 	InvestigationFocus,
 	MitigationSteps,
 	NormalizedIncident,
@@ -178,6 +179,14 @@ export const AgentState = Annotation.Root({
 	graphContext: Annotation<string>({
 		reducer: (_, next) => next,
 		default: () => "",
+	}),
+
+	// SIO-1103: runtime shared-infra blast radius, populated by graphEnrich from the KG
+	// so the SYNCHRONOUS correlation rule trigger can read it. Replace reducer (recomputed
+	// per turn); default [] so a rule that reads it before graphEnrich runs sees nothing.
+	graphBlastRadius: Annotation<GraphBlastRadiusHit[]>({
+		reducer: (_, next) => next,
+		default: () => [],
 	}),
 
 	dataSourceContext: Annotation<DataSourceContext | undefined>({
