@@ -13,6 +13,7 @@ import {
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	priorRelationshipsForServices,
+	priorRootCauses,
 	recordIncident,
 	recordRootCause,
 	rootCauseForIncident,
@@ -161,10 +162,26 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 				const nearest = await similarIncidents(store, embedding, 3, state.requestId);
 				// SIO-1026: annotate each similar incident with its recorded root cause
 				// so the aggregator can reuse prior analysis ("we've seen this before").
+				// SIO-1104 (5b): when a cause exists, join RootCause -> its incidents ->
+				// RESOLVED_BY -> Runbook (priorRootCauses) so the aggregator also sees
+				// "what resolved it". Own try/catch: a runbook-join failure must not
+				// drop the similar-incident annotation that already works today.
 				similar = await Promise.all(
 					nearest.map(async (inc) => {
 						const rc = await rootCauseForIncident(store, inc.id);
-						return { ...inc, rootCause: rc ? { class: rc.class, description: rc.description } : null };
+						if (!rc) return { ...inc, rootCause: null };
+						let resolvedBy: string[] | undefined;
+						try {
+							const prior = rc.class ? await priorRootCauses(store, rc.class) : [];
+							const runbooks = [...new Set(prior.flatMap((p) => p.runbooks))].slice(0, 3);
+							if (runbooks.length > 0) resolvedBy = runbooks;
+						} catch (error) {
+							logger.warn(
+								{ error: error instanceof Error ? error.message : String(error), causeClass: rc.class },
+								"graphEnrich prior-root-cause runbook join failed; continuing without runbooks",
+							);
+						}
+						return { ...inc, rootCause: { class: rc.class, description: rc.description }, resolvedBy };
 					}),
 				);
 			} catch (error) {
