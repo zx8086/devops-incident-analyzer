@@ -344,13 +344,14 @@ describe("parseGitlabProjects (lift numeric id)", () => {
 
 // SIO-1104 (5a): topology-sweep parsers.
 describe("parseApmCompositeAggPage (SIO-1115)", () => {
-	const page = (pairs: Array<{ svc: string; dest?: string }>, afterKey?: Record<string, unknown>): string =>
+	// dest === null models a missing_bucket result (service with no exit-span destination).
+	const page = (pairs: Array<{ svc: string; dest?: string | null }>, afterKey?: Record<string, unknown>): string =>
 		[
 			"Search results with aggregations (120000 total hits, 55ms):",
 			JSON.stringify({
 				svc_dest: {
 					...(afterKey ? { after_key: afterKey } : {}),
-					buckets: pairs.map((p) => ({ key: { svc: p.svc, dest: p.dest ?? "" }, doc_count: 1 })),
+					buckets: pairs.map((p) => ({ key: { svc: p.svc, dest: p.dest ?? null }, doc_count: 1 })),
 				},
 			}),
 		].join("\n\n");
@@ -360,7 +361,7 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			[
 				{ svc: "order-service", dest: "payment-service:443" },
 				{ svc: "order-service", dest: "postgresql" },
-				{ svc: "payment-service" }, // no outbound dest but still a valid target
+				{ svc: "payment-service", dest: null }, // missing_bucket: no outbound dest but still a valid target
 			],
 			{ svc: "payment-service", dest: "postgresql" },
 		);
@@ -371,20 +372,24 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			],
 			services: ["order-service", "payment-service"],
 			afterKey: { svc: "payment-service", dest: "postgresql" },
+			foundAgg: true,
 		});
 	});
 
-	test("a bucket with svc but empty dest contributes only the svc", () => {
-		const raw = page([{ svc: "lonely-service" }]);
-		const parsed = parseApmCompositeAggPage(raw);
+	// SIO-1115: missing_bucket returns key.dest = null; the svc is still recorded (P6
+	// self-join target), no pair is emitted.
+	test("a missing_bucket (null dest) contributes only the svc", () => {
+		const parsed = parseApmCompositeAggPage(page([{ svc: "lonely-service", dest: null }]));
 		expect(parsed.pairs).toEqual([]);
 		expect(parsed.services).toEqual(["lonely-service"]);
+		expect(parsed.foundAgg).toBe(true);
 	});
 
 	test("absent after_key -> afterKey undefined (final page)", () => {
 		const parsed = parseApmCompositeAggPage(page([{ svc: "a", dest: "b" }]));
 		expect(parsed.afterKey).toBeUndefined();
 		expect(parsed.pairs).toEqual([{ service: "a", destination: "b" }]);
+		expect(parsed.foundAgg).toBe(true);
 	});
 
 	test("survives an aggregations wrapper at any depth", () => {
@@ -395,15 +400,31 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			pairs: [{ service: "a", destination: "b" }],
 			services: ["a"],
 			afterKey: undefined,
+			foundAgg: true,
 		});
 	});
 
-	test("returns empty on shape drift or no JSON", () => {
-		expect(parseApmCompositeAggPage("no json here")).toEqual({ pairs: [], services: [], afterKey: undefined });
+	// SIO-1115: a legitimately-empty agg (svc_dest present, no buckets) is foundAgg:true so
+	// the collector treats it as a valid empty page (exhausted); shape drift is foundAgg:false
+	// so the collector FAILS the page instead of reading it as authoritatively empty.
+	test("distinguishes an empty agg (foundAgg) from shape drift (not foundAgg)", () => {
+		expect(parseApmCompositeAggPage(page([]))).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: true,
+		});
+		expect(parseApmCompositeAggPage("no json here")).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: false,
+		});
 		expect(parseApmCompositeAggPage(JSON.stringify({ other: 1 }))).toEqual({
 			pairs: [],
 			services: [],
 			afterKey: undefined,
+			foundAgg: false,
 		});
 	});
 });

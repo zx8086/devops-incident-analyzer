@@ -200,7 +200,12 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 					size: APM_AGG_PAGE_SIZE,
 					sources: [
 						{ svc: { terms: { field: "service.name" } } },
-						{ dest: { terms: { field: "span.destination.service.resource" } } },
+						// SIO-1115: missing_bucket so a service with NO exit-span destination still
+						// emits a bucket (key.dest = null). Composite terms sources DROP such docs by
+						// default; without this a destination-less service vanishes from `services` and
+						// stops being a valid P6 self-join target (the old terms agg kept every by_service
+						// bucket). The parser maps a null dest to "no pair, svc still recorded".
+						{ dest: { terms: { field: "span.destination.service.resource", missing_bucket: true } } },
 					],
 					...(afterKey ? { after: afterKey } : {}),
 				},
@@ -222,6 +227,10 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 			// legitimate zero-hit search still returns the aggregations JSON).
 			if (!text.includes("{")) throw new Error("unparseable search response");
 			const pageResult = parseApmCompositeAggPage(text);
+			// Shape drift (JSON parsed but no svc_dest agg) must FAIL the page, not read as a
+			// legitimately-empty page: an authoritative empty set would retire valid edges
+			// after K sweeps. Throwing rejects this deployment -> complete=false, no sweep.
+			if (!pageResult.foundAgg) throw new Error("unparseable apm composite agg response");
 			// Terminate on an empty page: composite can still carry an after_key past the
 			// end, so page emptiness -- not after_key absence -- is the exhaustion signal.
 			if (pageResult.pairs.length === 0 && pageResult.services.length === 0) break;

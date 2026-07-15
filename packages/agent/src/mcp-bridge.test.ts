@@ -1,3 +1,4 @@
+// packages/agent/src/mcp-bridge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,

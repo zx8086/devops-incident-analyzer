@@ -45,15 +45,15 @@ function restoreEnv(): void {
 
 // SIO-1115: composite-agg page. flatten service->destinations into flat {svc,dest}
 // buckets. `afterKey` present => not the last page (the collector keeps paging); a
-// service with no destinations still emits one bucket (dest="") so it lands in
-// `services` for the P6 self-join. Omit afterKey for a terminal (final) page.
+// service with no destinations still emits one bucket with dest=null (the missing_bucket
+// result) so it lands in `services` for the P6 self-join. Omit afterKey for a terminal page.
 function apmCompositePage(
 	pairs: Array<{ service: string; destinations: string[] }>,
 	afterKey?: Record<string, unknown>,
 ): string {
-	const buckets: Array<{ key: { svc: string; dest: string }; doc_count: number }> = [];
+	const buckets: Array<{ key: { svc: string; dest: string | null }; doc_count: number }> = [];
 	for (const p of pairs) {
-		if (p.destinations.length === 0) buckets.push({ key: { svc: p.service, dest: "" }, doc_count: 1 });
+		if (p.destinations.length === 0) buckets.push({ key: { svc: p.service, dest: null }, doc_count: 1 });
 		for (const d of p.destinations) buckets.push({ key: { svc: p.service, dest: d }, doc_count: 1 });
 	}
 	return `Search results with aggregations (100 total hits, 5ms):\n\n${JSON.stringify({
@@ -400,6 +400,26 @@ describe("runTopologySweep", () => {
 		];
 		const summary = await runTopologySweep();
 		expect(summary.sources.elastic).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	test("APM shape drift (valid JSON, no svc_dest agg) fails the source; no sweep (SIO-1115)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				// a well-formed JSON envelope that is NOT an APM composite agg (drift / tool error).
+				// Must NOT be read as a legitimately-empty page (that would retire valid edges).
+				invoke: async () =>
+					`Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ error: "boom" })}`,
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 0, sweepSkipped: true });
 		expect(
 			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
 		).toBe(false);

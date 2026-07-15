@@ -349,16 +349,23 @@ export function parseApmCompositeAggPage(normalized: string): {
 	// return an after_key even on the final page, so the collector must terminate on an
 	// EMPTY page, not on afterKey === undefined.
 	afterKey: Record<string, unknown> | undefined;
+	// SIO-1115: true only when the svc_dest composite agg (with a buckets array) was
+	// actually present. false = shape drift / a tool error envelope that JSON-parsed but
+	// is NOT an APM agg response -- the collector must FAIL that page, never read it as a
+	// legitimately-empty page (an authoritative empty set would retire valid edges after K
+	// sweeps). Mirrors parseJsonOrThrow's "malformed must fail, not read as empty" rule.
+	foundAgg: boolean;
 } {
 	const parsed = firstJson(normalized);
-	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], afterKey: undefined };
+	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], afterKey: undefined, foundAgg: false };
 	const comp = findProp(parsed as Record<string, unknown>, "svc_dest");
-	if (!comp || typeof comp !== "object") return { pairs: [], services: [], afterKey: undefined };
+	if (!comp || typeof comp !== "object") return { pairs: [], services: [], afterKey: undefined, foundAgg: false };
 	const compObj = comp as Record<string, unknown>;
 	const rawAfter = compObj.after_key;
 	const afterKey = rawAfter && typeof rawAfter === "object" ? (rawAfter as Record<string, unknown>) : undefined;
 	const buckets = compObj.buckets;
-	if (!Array.isArray(buckets)) return { pairs: [], services: [], afterKey };
+	// svc_dest present but no buckets array = a malformed agg node, not a valid empty page.
+	if (!Array.isArray(buckets)) return { pairs: [], services: [], afterKey, foundAgg: false };
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const services: string[] = [];
 	for (const b of buckets) {
@@ -369,9 +376,11 @@ export function parseApmCompositeAggPage(normalized: string): {
 		const dest = (key as Record<string, unknown>).dest;
 		if (typeof svc !== "string" || svc.length === 0) continue;
 		services.push(svc);
+		// dest is null for a missing_bucket (service with no exit-span destination): svc is
+		// still recorded above, but there is no edge pair to add.
 		if (typeof dest === "string" && dest.length > 0) pairs.push({ service: svc, destination: dest });
 	}
-	return { pairs, services: dedupe(services), afterKey };
+	return { pairs, services: dedupe(services), afterKey, foundAgg: true };
 }
 
 export interface KonnectRoute {
