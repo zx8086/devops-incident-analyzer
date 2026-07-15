@@ -6,7 +6,7 @@
 // ("Invalid regular expression: unrecognized character after (?") that wrap.ts surfaces as a raw
 // -32603. compileFilterOrThrow validates the pattern up front and re-throws a TYPED
 // InvalidFilterError so the list ops can translate a bad filter into the SIO-1087 structured
-// no-data envelope (a routine discovery outcome) instead of a tool malfunction.
+// not-found envelope (a routine discovery outcome) instead of a tool malfunction.
 
 export class InvalidFilterError extends Error {
 	constructor(
