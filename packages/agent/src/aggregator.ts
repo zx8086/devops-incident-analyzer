@@ -314,9 +314,11 @@ export function extractGapsBulletCount(answer: string): number {
 //
 // Note "not available" (a tool/capability is missing -- "ksql not available in tool environment")
 // is degrading, while "not applicable" (the datasource does not apply to this service) is routine;
-// the regex distinguishes them by the exact word.
+// the regex distinguishes them by the exact word. Explicit authorization blocks ("blocked by IAM
+// policy", "authentication was blocked") are degrading too -- an auth block prevents observation
+// just as "access denied" / "not permitted" already do.
 const DEGRADED_GAP_RE =
-	/\b(fail(?:ed|ure|ures|s)?|errored?|errors?|exception|timed? ?out|timeout|unreachable|inaccessible|connection (?:refused|reset|error)|parse fail|not available|unavailable|access denied|accessdenied|forbidden|unauthorized|not authorized|not permitted|permission denied|could ?n[o']t (?:be )?(?:re-?run|run|confirmed|refuted|verified|completed?|retrieved|reached|parsed|loaded)|cannot be (?:confirmed|refuted|verified|reached))\b/i;
+	/\b(fail(?:ed|ure|ures|s)?|errored?|errors?|exception|timed? ?out|timeout|unreachable|inaccessible|connection (?:refused|reset|error)|parse fail|not available|unavailable|access denied|accessdenied|forbidden|unauthorized|not authorized|not permitted|permission denied|blocked by (?:auth(?:entication)?|iam|permission)|(?:auth(?:entication)?|iam|permission)\s+(?:policy\s+)?(?:was\s+)?block(?:ed|ing)|could ?n[o']t (?:be )?(?:re-?run|run|confirmed|refuted|verified|completed?|retrieved|reached|parsed|loaded)|cannot be (?:confirmed|refuted|verified|reached))\b/i;
 
 export function isDegradingGapBullet(line: string): boolean {
 	return DEGRADED_GAP_RE.test(line);

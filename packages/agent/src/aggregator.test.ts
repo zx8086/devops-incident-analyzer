@@ -471,6 +471,10 @@ describe("isDegradingGapBullet (SIO-1106)", () => {
 		"- CloudWatch Logs query timed out after 30s and could not complete.",
 		"- The Kafka broker metadata endpoint was unreachable (connection refused).",
 		"- logs:StartQuery returned access denied for the collector log group.",
+		// CodeRabbit (PR #373): explicit authorization blocks are degrading too.
+		"- CloudWatch Logs query was blocked by IAM policy.",
+		"- The request was blocked by authentication.",
+		"- Access to the log group was blocked by permission boundary.",
 	];
 	for (const line of ROUTINE) {
 		test(`routine, does NOT count: ${line.slice(2, 50)}`, () => {
