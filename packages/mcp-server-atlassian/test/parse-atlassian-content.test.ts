@@ -186,6 +186,23 @@ describe("parseAtlassianTextContent", () => {
 		).toThrow(AtlassianUpstreamError);
 	});
 
+	test("throws AtlassianUpstreamError on an isError result whose body is VALID JSON (not returned as data)", () => {
+		const log = makeLog();
+		// The upstream flagged an error but the body parses to an object. Without the pre-parse
+		// short-circuit this would be returned as T and the caller would treat a failure as data.
+		const result = {
+			isError: true,
+			content: [{ type: "text", text: JSON.stringify({ error: "validation failed", code: -32602 }) }],
+		};
+		expect(() =>
+			parseAtlassianTextContent(result, {
+				upstreamTool: "searchJiraIssuesUsingJql",
+				context: { jql: "x" },
+				log,
+			}),
+		).toThrow(AtlassianUpstreamError);
+	});
+
 	test("throws AtlassianUpstreamError on an isError result with no content blocks", () => {
 		const log = makeLog();
 		expect(() =>
