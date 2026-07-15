@@ -47,4 +47,22 @@ describe("getDocumentById error surfacing (SIO-1117)", () => {
 		const parsed = JSON.parse((result.content[0] as { text: string }).text);
 		expect(parsed).toEqual(doc);
 	});
+
+	// SIO-1116: an unrecognized (non-SDK) error still returns a structured envelope rather than
+	// throwing, so the delegation never leaks a raw throw. Kind falls back to "unknown".
+	test("an unrecognized error still returns a structured envelope (kind 'unknown')", async () => {
+		const bucket = makeBucket(async () => {
+			throw new Error("some unexpected failure");
+		});
+
+		const result = await getDocument(
+			{ scope_name: "_default", collection_name: "_default", document_id: "doc-x" },
+			bucket,
+		);
+
+		expect(result.isError).toBe(true);
+		const parsed = JSON.parse((result.content[0] as { text: string }).text);
+		expect(parsed._error.kind).toBe("unknown");
+		expect(parsed._error.message).toContain("some unexpected failure");
+	});
 });

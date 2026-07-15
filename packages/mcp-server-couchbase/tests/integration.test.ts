@@ -169,13 +169,15 @@ describe("Integration Tests", () => {
 			).rejects.toThrow();
 
 			// 2. Verify document doesn't exist -- SIO-1117: a missing document now returns a
-			// structured { _error } envelope with isError:true instead of throwing uncaught.
+			// structured { _error } envelope with isError:true instead of throwing uncaught, so
+			// it is a non-degrading finding the agent won't mislabel as an "unknown" malfunction.
 			const missingResult = await getHandler({
 				scope_name: "_default",
 				collection_name: "_default",
 				document_id: TEST_DOC_ID,
 			});
 			expect(missingResult.isError).toBe(true);
+			expect(JSON.parse(missingResult.content[0].text)._error).toBeDefined();
 
 			// 3. Create valid document
 			const testDoc = { test: "recovery" };
