@@ -31,9 +31,17 @@ export interface ProxyToolInfo {
 	inputSchema: Tool["inputSchema"];
 }
 
+// SIO-1111: callTool mirrors the SDK's positional (req, resultSchema?, options?)
+// signature exactly (like the gitlab proxy) -- the sdkClient cast below relies on
+// position, so options must never land in the resultSchema slot. listTools
+// likewise mirrors (params?, options?) so discovery honors the per-call timeout.
 export interface McpClientLike {
-	listTools: () => Promise<{ tools: Tool[] }>;
-	callTool: (req: { name: string; arguments?: Record<string, unknown> }) => Promise<{ content: unknown[] }>;
+	listTools: (params?: unknown, options?: { timeout?: number }) => Promise<{ tools: Tool[] }>;
+	callTool: (
+		req: { name: string; arguments?: Record<string, unknown> },
+		schema?: unknown,
+		options?: { timeout?: number },
+	) => Promise<{ content: unknown[] }>;
 }
 
 export interface AtlassianMcpProxyOptions {
@@ -41,9 +49,20 @@ export interface AtlassianMcpProxyOptions {
 	callbackPort: number;
 	siteName: string | undefined;
 	timeout?: number;
+	readinessFreshnessWindowMs?: number;
+	// Test clock injection (mirrors readiness.ts); defaults to Date.now.
+	now?: () => number;
 	client?: McpClientLike;
 	reauth?: () => Promise<void>;
 }
+
+// SIO-1111: readiness reports healthy without a live upstream probe when any
+// upstream call succeeded within this window (see probeReadiness).
+const DEFAULT_READINESS_FRESHNESS_WINDOW_MS = 90_000;
+// SIO-1111: per-call bound on upstream Rovo requests (the SDK clock starts when
+// the request is sent, i.e. after queue wait). Resurrects the previously dead
+// atlassian.timeout config; without it the SDK's 60s default applied.
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 30_000;
 
 interface AtlassianResource {
 	id: string;
@@ -73,9 +92,14 @@ export class AtlassianMcpProxy {
 	// contend. This is the structural equivalent of the pooled clients that
 	// couchbase/elastic use with their static credentials.
 	private upstreamQueue: Promise<unknown> = Promise.resolve();
+	// SIO-1111: epoch-ms of the last SUCCESSFUL upstream call (any kind). Consumed
+	// by probeReadiness as passive proof the transport + OAuth chain are healthy.
+	private lastUpstreamSuccessAt = 0;
+	private readonly now: () => number;
 
 	constructor(options: AtlassianMcpProxyOptions) {
 		this.options = options;
+		this.now = options.now ?? Date.now;
 		// DI: use injected client if provided (for tests)
 		if (options.client) {
 			this.injectedClient = options.client;
@@ -89,10 +113,20 @@ export class AtlassianMcpProxy {
 	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
 		const run = this.upstreamQueue.then(fn, fn);
 		this.upstreamQueue = run.then(
-			() => undefined,
+			() => {
+				// SIO-1111: any fulfilled upstream call proves the chain is healthy;
+				// rejections deliberately never stamp, so a dead transport/auth chain
+				// goes stale within one freshness window and surfaces via /ready.
+				this.lastUpstreamSuccessAt = this.now();
+			},
 			() => undefined,
 		);
 		return run;
+	}
+
+	// SIO-1111: per-call timeout for every upstream request (see the constant above).
+	private upstreamRequestOptions(): { timeout: number } {
+		return { timeout: this.options.timeout ?? DEFAULT_UPSTREAM_TIMEOUT_MS };
 	}
 
 	private get client(): McpClientLike {
@@ -163,13 +197,38 @@ export class AtlassianMcpProxy {
 		log.info({ intervalMs }, "OAuth proactive refresh started");
 	}
 
+	// SIO-1111: readiness gate for the /ready cloudId component. Under fan-out the
+	// serialized upstreamQueue can hold a probe behind long tool calls, blowing the
+	// 5s component budget and flagging a false "upstream degraded" (observed after
+	// SIO-1097 landed the queue). When cloudId is resolved and upstream traffic
+	// succeeded within the freshness window, report healthy without enqueueing;
+	// only a stale window pays for a live resolveCloudId (against an idle queue).
+	async probeReadiness(): Promise<void> {
+		const windowMs = this.options.readinessFreshnessWindowMs ?? DEFAULT_READINESS_FRESHNESS_WINDOW_MS;
+		if (this.cloudId !== null && this.now() - this.lastUpstreamSuccessAt <= windowMs) return;
+		try {
+			await this.resolveCloudId();
+		} catch (error) {
+			// A live probe can fail AFTER the transport call fulfilled (malformed
+			// body, configured site missing) -- the enqueue stamp would then mark
+			// the window fresh and the next probes would flap back to healthy.
+			// Zero the stamp so every subsequent probe stays live until one succeeds.
+			this.lastUpstreamSuccessAt = 0;
+			throw error;
+		}
+	}
+
 	async resolveCloudId(): Promise<void> {
 		// Rovo's Zod schema requires an object for arguments even when the tool takes no params.
 		// Omitting it yields a -32602 "expected object, received undefined" from the server.
 		// SIO-1097: serialize on the shared transport (see upstreamQueue) so the 30s
 		// health-poll resolveCloudId never contends with in-flight tool calls.
 		const response = await this.enqueue(() =>
-			this.client.callTool({ name: "getAccessibleAtlassianResources", arguments: {} }),
+			this.client.callTool(
+				{ name: "getAccessibleAtlassianResources", arguments: {} },
+				undefined,
+				this.upstreamRequestOptions(),
+			),
 		);
 
 		const textContent = response.content.find(
@@ -223,7 +282,9 @@ export class AtlassianMcpProxy {
 		// concurrent sub-agent tool calls never race the SDK's per-request OAuth
 		// refresh on the single shared transport.
 		try {
-			return await this.enqueue(() => this.client.callTool({ name: toolName, arguments: argsWithCloud }));
+			return await this.enqueue(() =>
+				this.client.callTool({ name: toolName, arguments: argsWithCloud }, undefined, this.upstreamRequestOptions()),
+			);
 		} catch (error) {
 			if (error instanceof UnauthorizedError) {
 				log.info({ tool: toolName }, "UnauthorizedError on tool call, attempting reauth");
@@ -241,7 +302,13 @@ export class AtlassianMcpProxy {
 
 				// One-shot retry
 				try {
-					return await this.enqueue(() => this.client.callTool({ name: toolName, arguments: argsWithCloud }));
+					return await this.enqueue(() =>
+						this.client.callTool(
+							{ name: toolName, arguments: argsWithCloud },
+							undefined,
+							this.upstreamRequestOptions(),
+						),
+					);
 				} catch (retryError) {
 					if (retryError instanceof UnauthorizedError) {
 						log.warn({ tool: toolName }, "Still unauthorized after reauth, returning auth required error");
@@ -269,7 +336,7 @@ export class AtlassianMcpProxy {
 	async listTools(): Promise<ProxyToolInfo[]> {
 		// SIO-1097: serialize on the shared transport too (see upstreamQueue) so
 		// tool discovery can't overlap in-flight tool calls / the health poll.
-		const response = await this.enqueue(() => this.client.listTools());
+		const response = await this.enqueue(() => this.client.listTools(undefined, this.upstreamRequestOptions()));
 		const tools: ProxyToolInfo[] = response.tools.map((tool) => ({
 			name: tool.name,
 			description: tool.description ?? `${tool.name} tool`,
@@ -292,6 +359,9 @@ export class AtlassianMcpProxy {
 			this.transport = null;
 		}
 		this.connected = false;
+		// SIO-1111: a reconnect must not serve pre-disconnect readiness state.
+		this.cloudId = null;
+		this.lastUpstreamSuccessAt = 0;
 		log.info("Disconnected from Atlassian MCP server");
 	}
 

@@ -22,7 +22,14 @@ export const ConfigSchema = z.object({
 			readOnly: z.boolean().describe("Filter write tools at registration time"),
 			oauthCallbackPort: z.number().int().min(1024).max(65535).describe("Port for OAuth redirect callback server"),
 			incidentProjects: z.array(z.string()).describe("Jira project keys treated as incident projects for custom tools"),
-			timeout: z.number().min(1000).max(60000).describe("Tool call timeout in milliseconds"),
+			timeout: z.number().min(1000).max(60000).describe("Per-call timeout in ms for upstream Rovo requests"),
+			readinessFreshnessWindowMs: z
+				.number()
+				.min(5000)
+				.max(600000)
+				.describe(
+					"Readiness reports healthy without a live upstream probe if any upstream call succeeded within this window",
+				),
 		})
 		.describe("Atlassian Rovo MCP configuration"),
 

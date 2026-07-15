@@ -5,6 +5,7 @@ import {
 	buildGraph,
 	buildIacGraph,
 	createMcpClient,
+	GRAPH_DEADLINE_KEY,
 	getAgent,
 	getAgentByName,
 	type IacStateType,
@@ -143,7 +144,9 @@ function getGraphRecursionLimit(agentName = "incident-analyzer"): number {
 // SIO-697: GRAPH_TIMEOUT_MS env override takes precedence over manifest; default
 // raised to 12 min so a 5-source dispatch with one alignment retry has runway
 // to finish instead of aborting the in-flight retry sub-agent.
-const DEFAULT_GRAPH_TIMEOUT_S = 720;
+// SIO-1110: raised to 15 min so pre-fan-out (~30s) + 360s fan-out + 360s retry +
+// the 120s aggregation reserve (~870s) fit inside the budget.
+const DEFAULT_GRAPH_TIMEOUT_S = 900;
 function getGraphTimeoutMs(agentName = "incident-analyzer"): number {
 	const envRaw = process.env.GRAPH_TIMEOUT_MS;
 	if (envRaw != null && envRaw !== "") {
@@ -336,16 +339,21 @@ export async function invokeAgent(
 	// elastic-iac maker graph: a distinct state shape (IacState) and its own graph.
 	if (agentName === "elastic-iac") {
 		const iacGraph = await getIacGraph();
+		// SIO-1110: readable twin of the AbortSignal below (a signal exposes no
+		// deadline); alignment/sub-agent nodes budget retries against it. One
+		// clock read so timestamp and signal stay in lockstep.
+		const iacTimeoutMs = getGraphTimeoutMs(agentName);
 		return iacGraph.streamEvents(
 			{ messages: langchainMessages, requestId, isFollowUp: options.isFollowUp ?? false },
 			{
 				configurable: {
 					thread_id: options.threadId,
 					...(options.runId && { run_id: options.runId }),
+					[GRAPH_DEADLINE_KEY]: Date.now() + iacTimeoutMs,
 				},
 				version: "v2",
 				recursionLimit: getGraphRecursionLimit(agentName),
-				signal: AbortSignal.timeout(getGraphTimeoutMs(agentName)),
+				signal: AbortSignal.timeout(iacTimeoutMs),
 				...(options.runName && { runName: options.runName }),
 				...(options.tags && { tags: options.tags }),
 				metadata: {
@@ -357,6 +365,7 @@ export async function invokeAgent(
 	}
 
 	const graph = await getGraph();
+	const graphTimeoutMs = getGraphTimeoutMs();
 	return graph.streamEvents(
 		{
 			messages: langchainMessages,
@@ -372,10 +381,11 @@ export async function invokeAgent(
 			configurable: {
 				thread_id: options.threadId,
 				...(options.runId && { run_id: options.runId }),
+				[GRAPH_DEADLINE_KEY]: Date.now() + graphTimeoutMs,
 			},
 			version: "v2",
 			recursionLimit: getGraphRecursionLimit(),
-			signal: AbortSignal.timeout(getGraphTimeoutMs()),
+			signal: AbortSignal.timeout(graphTimeoutMs),
 			...(options.runName && { runName: options.runName }),
 			...(options.tags && { tags: options.tags }),
 			metadata: {
@@ -402,11 +412,13 @@ export async function resumeAgent(options: {
 	const agentName = options.agentName ?? "incident-analyzer";
 	// SIO-751: lazy import. See top-of-file comment.
 	const { Command } = await import("@langchain/langgraph");
+	// SIO-1110: a resume arms a fresh signal, so it gets a matching fresh deadline.
+	const resumeTimeoutMs = getGraphTimeoutMs(agentName);
 	const config = {
-		configurable: { thread_id: options.threadId },
+		configurable: { thread_id: options.threadId, [GRAPH_DEADLINE_KEY]: Date.now() + resumeTimeoutMs },
 		version: "v2" as const,
 		recursionLimit: getGraphRecursionLimit(agentName),
-		signal: AbortSignal.timeout(getGraphTimeoutMs(agentName)),
+		signal: AbortSignal.timeout(resumeTimeoutMs),
 		...(options.runName && { runName: options.runName }),
 		...(options.tags && { tags: options.tags }),
 		metadata: {

@@ -314,7 +314,16 @@ export interface ReducerState {
 	lastConfidence: number | undefined;
 	// SIO-930: per-turn outcome from the IaC done event ("rejected"/"declined"/etc.); drives the
 	// completion chip color/label. "completed" for the incident agent (which omits the field).
-	lastOutcome: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
+	// SIO-1110: "error" is set client-side by the error event (no endpoint emits done after error).
+	lastOutcome:
+		| "completed"
+		| "rejected"
+		| "declined"
+		| "no-op"
+		| "blocked"
+		| "unsupported"
+		| "pipeline-failed"
+		| "error";
 	lastDataSourceContext: DataSourceContext | undefined;
 	pendingActions: PendingAction[];
 	actionResults: ActionResult[];
@@ -443,7 +452,14 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					!state.fleetUpgradeResult && { iacPipelineLog: [...state.iacPipelineProgress] }),
 			};
 		case "error":
-			return { ...state, currentContent: `${state.currentContent}\n\n[Error: ${event.message}]` };
+			// SIO-1110: an errored run must not keep the initial "completed" outcome
+			// (the chip rendered green over a dead run). error is terminal: no SSE
+			// endpoint emits a done event after an error event.
+			return {
+				...state,
+				currentContent: `${state.currentContent}\n\n[Error: ${event.message}]`,
+				lastOutcome: "error",
+			};
 		case "low_confidence":
 			return state;
 		case "run_id":

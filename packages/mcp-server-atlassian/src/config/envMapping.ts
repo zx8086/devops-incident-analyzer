@@ -32,6 +32,11 @@ export const envMapping: readonly EnvMappingEntry[] = [
 		default: configDefaults.atlassian.incidentProjects,
 	},
 	{ configPath: "atlassian.timeout", envVar: "ATLASSIAN_TIMEOUT", default: configDefaults.atlassian.timeout },
+	{
+		configPath: "atlassian.readinessFreshnessWindowMs",
+		envVar: "ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS",
+		default: configDefaults.atlassian.readinessFreshnessWindowMs,
+	},
 
 	{ configPath: "tracing.enabled", envVar: "LANGSMITH_TRACING", default: configDefaults.tracing.enabled },
 	{ configPath: "tracing.apiKey", envVar: "LANGSMITH_API_KEY", default: "" },

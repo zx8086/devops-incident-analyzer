@@ -59,7 +59,7 @@ let {
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, DataSourceStatus>;
 	dataSourceFindings?: Map<string, DataSourceFindings>;
-	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
+	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error";
 } = $props();
 
 let expanded = $state(false);
@@ -87,8 +87,11 @@ const dataSources = $derived.by(() => {
 });
 const findings = $derived(dataSourceFindings ? [...dataSourceFindings.entries()] : []);
 
+// SIO-1110: an error outcome counts as content -- a client-side fetch failure
+// produces no nodes/metadata, and the Failed chip must still render.
 const hasContent = $derived(
-	responseTime !== undefined ||
+	outcome === "error" ||
+		responseTime !== undefined ||
 		toolsUsed.length > 0 ||
 		completedNodes.size > 0 ||
 		dataSources.length > 0 ||
@@ -152,6 +155,17 @@ const outcomeView = $derived.by(() => {
 		case "pipeline-failed":
 			return {
 				label: "Pipeline failed",
+				icon: "error" as const,
+				text: "text-red-700",
+				bgFrom: "#fef2f2",
+				bgTo: "#fee2e2",
+				border: "#fecaca",
+			};
+		case "error":
+			// SIO-1110: a turn whose stream ended in an error event (e.g. graph
+			// timeout abort) must not render the green "Completed" chip.
+			return {
+				label: "Failed",
 				icon: "error" as const,
 				text: "text-red-700",
 				bgFrom: "#fef2f2",

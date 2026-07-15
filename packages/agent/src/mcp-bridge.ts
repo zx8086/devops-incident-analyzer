@@ -122,7 +122,20 @@ function connectTimeoutFor(serverName: string): number {
 const DRIFT_POLL_BUDGET_DEFAULT_MS = 90_000;
 const ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS = 30_000;
 
+// SIO-1111: atlassian-mcp serializes every upstream Rovo call on one OAuth
+// transport (SIO-1097 upstreamQueue). Under 6-way sub-agent fan-out the last
+// queued call waits ~(depth-1) x call latency, which routinely exceeded the 60s
+// adapter default (observed -32001 failures). 120s covers queue depth 4 at the
+// 30s per-call upstream cap (ATLASSIAN_TIMEOUT) while staying at 1/3 of the
+// 360s sub-agent budget.
+const ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS = 120_000;
+
 function toolTimeoutFor(serverName: string): number | undefined {
+	if (serverName === "atlassian-mcp") {
+		const override = Number(process.env.ATLASSIAN_TOOL_TIMEOUT_MS);
+		if (Number.isFinite(override) && override > 0) return override;
+		return ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS;
+	}
 	if (serverName !== "elastic-iac-mcp") return undefined; // others use the adapter default
 	const override = Number(process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS);
 	if (Number.isFinite(override) && override > 0) return override;

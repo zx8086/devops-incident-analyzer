@@ -47,6 +47,13 @@ export class ConfigurationManager {
 				),
 				incidentProjects: parseIncidentProjects(incidentProjectsRaw),
 				timeout: parseInt(getEnvVarWithDefault("ATLASSIAN_TIMEOUT", configDefaults.atlassian.timeout), 10),
+				readinessFreshnessWindowMs: parseInt(
+					getEnvVarWithDefault(
+						"ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS",
+						configDefaults.atlassian.readinessFreshnessWindowMs,
+					),
+					10,
+				),
 			},
 			tracing: {
 				enabled: getEnvVarWithDefault("LANGSMITH_TRACING", configDefaults.tracing.enabled) === "true",

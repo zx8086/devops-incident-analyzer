@@ -6,6 +6,8 @@ import { EventEmitter } from "node:events";
 // of test-file ordering (agent.test.ts mocks a different subset before us).
 mock.module("@devops-agent/agent", () => ({
 	AttachmentError: class AttachmentError extends Error {},
+	// SIO-1110: $lib/server/agent.ts imports GRAPH_DEADLINE_KEY at module scope.
+	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	buildGraph: () => Promise.resolve({}),
 	buildIacGraph: () => Promise.resolve({}),
 	createMcpClient: () => Promise.resolve(),

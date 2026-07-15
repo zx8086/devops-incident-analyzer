@@ -14,6 +14,7 @@ import {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -782,13 +783,21 @@ async function runSubAgent(
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
 
 		const recursionLimit = getSubAgentRecursionLimit(dataSourceId);
-		log.info({ deploymentId, recursionLimit }, "Invoking sub-agent");
+		// SIO-1110: cap the timer at the remaining graph budget minus the aggregation
+		// reserve so a late dispatch (alignment retry) can never starve aggregation.
+		// First attempts start with ample remaining budget, so the cap never binds there.
+		const baseTimeoutMs = getSubAgentTimeoutMs();
+		const timeoutMs = capSubAgentTimeoutMs(baseTimeoutMs, getGraphDeadlineAt(config));
+		log.info(
+			{ deploymentId, recursionLimit, ...(timeoutMs < baseTimeoutMs && { cappedTimeoutMs: timeoutMs }) },
+			"Invoking sub-agent",
+		);
 		// SIO-1029: stream so a recursion-limit blow-up salvages partial findings
 		// (see invokeSubAgentWithSalvage) instead of returning a hard error with
 		// no data. Behaviour on normal completion is unchanged (final { messages }).
 		const response = await invokeSubAgentWithSalvage((opts) => agent.stream({ messages }, opts), {
 			...config,
-			signal: AbortSignal.timeout(getSubAgentTimeoutMs()),
+			signal: AbortSignal.timeout(timeoutMs),
 			runName: deploymentId ? `${agentName}[${deploymentId}]` : agentName,
 			metadata: {
 				...config?.metadata,

@@ -15,9 +15,10 @@ model:
 
 runtime:
   max_turns: 50
-  # SIO-697: 12 min graph budget. Covers 5-source dispatch + one alignment retry
-  # comfortably; abort here is the safety net, not the expected end state.
-  timeout: 720
+  # SIO-697: graph budget; abort here is the safety net, not the expected end state.
+  # SIO-1110: raised to 15 min so pre-fan-out (~30s) + 360s fan-out + 360s alignment
+  # retry + the 120s aggregation reserve fit inside the budget.
+  timeout: 900
 
 skills:
   - normalize-incident

@@ -41,7 +41,8 @@ export interface ChatMessage {
 	runId?: string;
 	confidence?: number;
 	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
-	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
+	// SIO-1110: "error" marks a turn whose stream ended in an error event.
+	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error";
 	// SIO-991: the GitOps MR pipeline-log snapshot for THIS turn (the "Pipeline log (N steps)"
 	// panel). Captured per-message like completedNodes so it survives subsequent turns -- the
 	// global iacPipelineLog is cleared on the next sendMessage, which used to wipe the panel.
@@ -85,7 +86,7 @@ function createAgentStore() {
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
 	let lastOutcome = $state<
-		"completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed"
+		"completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error"
 	>("completed");
 	let lastDataSourceContext = $state<DataSourceContext | undefined>(undefined);
 	let pendingAttachments = $state<AttachmentBlock[]>([]);
@@ -231,6 +232,8 @@ function createAgentStore() {
 			const isAbort = error instanceof DOMException && error.name === "AbortError";
 			if (!isAbort) {
 				currentContent += `\n\n[Error: ${error instanceof Error ? error.message : String(error)}]`;
+				// SIO-1110: fetch/parse failures never reach the reducer's error case.
+				lastOutcome = "error";
 			}
 		} finally {
 			abortController = null;
@@ -568,6 +571,8 @@ function createAgentStore() {
 			fleetUpgradeChoice = fleetUpgradeChoice ?? pendingFleetUpgradeChoice;
 			syntheticsPushChoice = syntheticsPushChoice ?? pendingSyntheticsPushChoice;
 			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
+			// SIO-1110: resume-leg failures never reach the reducer's error case.
+			lastOutcome = "error";
 		} finally {
 			if (currentContent) {
 				// SIO-934: persist the full trace + outcome metadata (was: content + completedNodes
@@ -643,6 +648,8 @@ function createAgentStore() {
 			}
 		} catch (error) {
 			currentContent += `\n\n[Error resuming after topic-shift decision: ${error instanceof Error ? error.message : String(error)}]`;
+			// SIO-1110: resume-leg failures never reach the reducer's error case.
+			lastOutcome = "error";
 		} finally {
 			if (currentContent) {
 				// SIO-934: shared finalizer (was an inline literal duplicating sendMessage's).

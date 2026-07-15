@@ -554,11 +554,13 @@ Non-retryable errors (auth, session) skip retry entirely. The alignment hints ar
 
 ** retry narrowing.** Earlier alignment retries re-ran every Elastic deployment, including ones that succeeded on the first pass — doubling wall-clock cost for a single missing deployment. The `align` node now writes `retryDeployments` (state field) containing only the failed deployment IDs; `queryDataSource` reads it on the retry path (`isRetry && retryDeployments.length > 0`) and fans out only over that subset. On the same change, the Elastic deployment dispatcher switched from sequential `for-await` to `Promise.all`; `withElasticDeployment` uses `AsyncLocalStorage` so each parallel branch sees its own deployment context.
 
-** wall-clock budgets.** Both budgets are env-tunable so an operator can extend them on slow links without code changes:
-- `GRAPH_TIMEOUT_MS` overrides the gitagent manifest `runtime.timeout` (default raised from 600 s to 720 s) — the graph-level abort signal.
+**Wall-clock budgets.** All budgets are env-tunable so an operator can extend them on slow links without code changes:
+- `GRAPH_TIMEOUT_MS` overrides the gitagent manifest `runtime.timeout` (default raised to 900 s in SIO-1110, was 720 s) — the graph-level abort signal.
 - `SUB_AGENT_TIMEOUT_MS` overrides the per-sub-agent `AbortSignal.timeout` (default 360 000 ms, was hardcoded 300 000) — caps any single sub-agent ReAct loop.
 
-See [Environment Variables > Agent Configuration](../configuration/environment-variables.md#agent-configuration) for both knobs.
+**Budget-aware retries (SIO-1110).** The graph call sites thread a readable deadline (`graphDeadlineAt`, epoch ms) through `config.configurable` alongside the abort signal. `checkAlignment`/`routeAfterAlignment` skip retry dispatch when the remaining budget is below `GRAPH_BUDGET_RESERVE_MS` (default 120 000, the aggregation runway) plus `GRAPH_BUDGET_MIN_RETRY_MS` (default 60 000, the smallest useful retry window), proceeding with partial results instead. `queryDataSource` also caps each dispatch's timer at `min(SUB_AGENT_TIMEOUT_MS, remaining − reserve)` so a late retry can never starve aggregation — the failure mode that motivated the change was a 360 s elastic timeout plus a 303 s retry leaving aggregation ~26 s before the global abort.
+
+See [Environment Variables > Agent Configuration](../configuration/environment-variables.md#agent-configuration) for all four knobs.
 
 ### Validation Retry Loop
 
