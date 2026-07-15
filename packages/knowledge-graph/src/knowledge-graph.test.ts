@@ -471,6 +471,43 @@ describe("reader", () => {
 		expect(ctx).toContain("prior root cause: consumer lag > 10K");
 	});
 
+	// SIO-1104 (5b): "what resolved it" runbooks, capped at 3 rendered.
+	test("buildGraphContext appends resolving runbooks capped at 3", () => {
+		const ctx = buildGraphContext(
+			[],
+			[
+				{
+					id: "inc1",
+					summary: "kafka lag outage",
+					severity: "high",
+					distance: 0.1,
+					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
+					resolvedBy: ["rb-1.md", "rb-2.md", "rb-3.md", "rb-4.md"],
+				},
+			],
+		);
+		expect(ctx).toContain("resolved by rb-1.md, rb-2.md, rb-3.md");
+		expect(ctx).not.toContain("rb-4.md");
+	});
+
+	test("buildGraphContext renders no runbook clause for an empty resolvedBy", () => {
+		const ctx = buildGraphContext(
+			[],
+			[
+				{
+					id: "inc1",
+					summary: "kafka lag outage",
+					severity: "high",
+					distance: 0.1,
+					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
+					resolvedBy: [],
+				},
+			],
+		);
+		expect(ctx).toContain("prior root cause: consumer lag > 10K");
+		expect(ctx).not.toContain("resolved by");
+	});
+
 	// SIO-954: IaC change-history reader.
 	test("priorChangesForDeployment maps rows, [] for an empty deployment", async () => {
 		const store = new InMemoryGraphStore();
