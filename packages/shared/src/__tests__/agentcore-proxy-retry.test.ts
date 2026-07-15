@@ -416,7 +416,7 @@ describe("JSON-RPC -320xx retry", () => {
 			return jsonRpcOk(upstreamHits);
 		}) as typeof fetch;
 
-		// Stub Math.random with evenly spaced draws: with truly random jitter, five
+		// SIO-1108: stub Math.random with evenly spaced draws: with truly random jitter, five
 		// independent draws over the [0.8, 1.2] factor range land within 20ms of each
 		// other ~0.3% of the time (observed as a CI flake). The stub keeps the property
 		// under test -- each parallel call draws its OWN jitter -- while making the
