@@ -15,17 +15,17 @@ import { listConsumerGroups, listTopics } from "../../src/tools/read/operations.
 
 // A real KafkaService over a fake Admin so the actual regex-validation path runs.
 function buildService(topicNames: string[], groupIds: string[]): KafkaService {
-	const fakeAdmin = {
+	const fakeAdmin: Partial<Admin> = {
 		listTopics: mock(async () => topicNames),
 		listGroups: mock(
 			async () =>
 				new Map(groupIds.map((id) => [id, { id, state: "STABLE", groupType: "consumer", protocolType: "consumer" }])),
 		),
-	} as unknown as Admin;
-	const manager = {
-		withAdmin: async <T>(fn: (admin: Admin) => Promise<T>): Promise<T> => fn(fakeAdmin),
-	} as unknown as KafkaClientManager;
-	return new KafkaService(manager);
+	};
+	const manager: Partial<KafkaClientManager> = {
+		withAdmin: async <T>(fn: (admin: Admin) => Promise<T>): Promise<T> => fn(fakeAdmin as unknown as Admin),
+	};
+	return new KafkaService(manager as unknown as KafkaClientManager);
 }
 
 function assertNonDegradingNoDataEnvelope(result: unknown) {
