@@ -75,8 +75,9 @@ export function parseCouchbaseScopeTree(normalized: string): Record<string, stri
 }
 
 // COUCHBASE (SIO-1107): capella_get_buckets returns bare JSON
-// { default_bucket: string, buckets: [{ name, ... }] } (older builds may emit a
-// plain string array). Defensive: returns { buckets: [] } on any shape drift.
+// { default_bucket: string, buckets: [{ name, ... }] }. Also accepted: a plain
+// string array for `buckets`, or a bare top-level string array (no default
+// bucket derivable). Defensive: returns { buckets: [] } on any other shape.
 export interface CouchbaseBuckets {
 	defaultBucket?: string;
 	buckets: string[];
@@ -84,7 +85,10 @@ export interface CouchbaseBuckets {
 
 export function parseCouchbaseBuckets(normalized: string): CouchbaseBuckets {
 	const parsed = firstJson(normalized);
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { buckets: [] };
+	if (Array.isArray(parsed)) {
+		return { buckets: dedupe(parsed.filter((b): b is string => typeof b === "string")) };
+	}
+	if (!parsed || typeof parsed !== "object") return { buckets: [] };
 	const obj = parsed as Record<string, unknown>;
 	const names: string[] = [];
 	if (Array.isArray(obj.buckets)) {

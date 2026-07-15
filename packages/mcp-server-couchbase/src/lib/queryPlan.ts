@@ -66,18 +66,20 @@ export function evaluateQueryPlan(plan: unknown): PlanFinding[] {
 	}
 
 	const indexScans = operators.filter((op) => /^IndexScan/i.test(op["#operator"]));
-	let anyCovering = false;
+	// Track NON-covering scans: one covering scan must not hide the warning for a
+	// sibling non-covering scan in the same plan (CodeRabbit, PR #378).
+	let anyNonCovering = false;
 	for (const scan of indexScans) {
 		const index = operatorText(scan, "index") ?? "unknown index";
 		const keyspace = operatorText(scan, "keyspace") ?? "unknown keyspace";
 		const covers = Array.isArray(scan.covers) && scan.covers.length > 0;
-		if (covers) anyCovering = true;
+		if (!covers) anyNonCovering = true;
 		findings.push({
 			severity: "info",
 			message: `Index scan uses \`${index}\` on \`${keyspace}\`${covers ? " (covering: the index serves the projection without a fetch)" : ""}.`,
 		});
 	}
-	if (indexScans.length > 0 && hasFetch && !anyCovering) {
+	if (indexScans.length > 0 && hasFetch && anyNonCovering) {
 		findings.push({
 			severity: "warning",
 			message:

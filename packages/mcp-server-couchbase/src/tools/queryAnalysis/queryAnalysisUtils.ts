@@ -67,13 +67,16 @@ function formatAnalysisResponse(
 }
 
 function formatAnalysisError(error: unknown): ToolResponse {
-	logger.error(`Error executing analysis query: ${error instanceof Error ? error.message : String(error)}`);
+	// Full error (incl. stack) stays server-side; the client gets only the message.
+	// Stack traces leak paths and waste sub-agent context (CodeRabbit, PR #378).
+	logger.error({ error }, "Error executing analysis query");
+	const message = error instanceof Error ? error.message : String(error);
 
 	return {
 		content: [
 			{
 				type: "text",
-				text: `## Error Executing Query\n\n${error instanceof Error ? error.stack || error.message : typeof error === "object" ? JSON.stringify(error, null, 2) : String(error)}`,
+				text: `## Error Executing Query\n\n${message}`,
 			},
 		],
 		isError: true,

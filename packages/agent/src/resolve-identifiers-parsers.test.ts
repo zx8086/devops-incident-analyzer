@@ -223,10 +223,17 @@ describe("parseCouchbaseBuckets (SIO-1107)", () => {
 		expect(parseCouchbaseBuckets(JSON.stringify({ buckets: ["a", "a"] })).buckets).toEqual(["a"]);
 	});
 
+	test("accepts a bare top-level string array (no default bucket derivable)", () => {
+		expect(parseCouchbaseBuckets(JSON.stringify(["default", "prices", "default"]))).toEqual({
+			buckets: ["default", "prices"],
+		});
+		// non-string entries are dropped, not misread
+		expect(parseCouchbaseBuckets(JSON.stringify(["a", 1, null]))).toEqual({ buckets: ["a"] });
+	});
+
 	test("returns empty buckets on drift", () => {
 		expect(parseCouchbaseBuckets("")).toEqual({ buckets: [] });
 		expect(parseCouchbaseBuckets("no json here")).toEqual({ buckets: [] });
-		expect(parseCouchbaseBuckets(JSON.stringify(["default"]))).toEqual({ buckets: [] });
 		expect(parseCouchbaseBuckets(JSON.stringify({ buckets: [{ notName: 1 }] }))).toEqual({
 			defaultBucket: undefined,
 			buckets: [],

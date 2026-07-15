@@ -64,6 +64,19 @@ describe("evaluateQueryPlan", () => {
 		expect(findings.some((f) => /does NOT cover/.test(f.message))).toBe(false);
 	});
 
+	test("one covering scan does not hide a sibling non-covering scan (CodeRabbit)", () => {
+		const mixed = {
+			"#operator": "Sequence",
+			"~children": [
+				{ "#operator": "IndexScan3", index: "idx_cov", keyspace: "dates", covers: ["cover ((`d`.`a`))"] },
+				{ "#operator": "IndexScan3", index: "idx_plain", keyspace: "orders" },
+				{ "#operator": "Fetch", keyspace: "orders" },
+			],
+		};
+		const findings = evaluateQueryPlan(mixed);
+		expect(findings.some((f) => f.severity === "warning" && /does NOT cover/.test(f.message))).toBe(true);
+	});
+
 	test("intersect scan produces a composite-index hint", () => {
 		const plan = {
 			"#operator": "IntersectScan",

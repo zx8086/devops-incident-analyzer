@@ -122,7 +122,10 @@ export default (server: McpServer, bucket: Bucket) => {
 				const targetCollection = collection_name || extractedCollection || "_default";
 
 				// SIO-1107: live ADVISOR + EXPLAIN first; regex heuristics only as fallback.
-				const live = await runLiveOptimizationAnalysis(query, targetScope, bucket, bucket_name || undefined);
+				// Route through the DERIVED bucket (explicit arg > extracted-from-query >
+				// default) so a fully-qualified non-default-bucket query analyzes the right
+				// bucket instead of silently using the configured handle (CodeRabbit, PR #378).
+				const live = await runLiveOptimizationAnalysis(query, targetScope, bucket, targetBucket);
 				if (live !== null) {
 					return { content: [{ type: "text" as const, text: live }] };
 				}
