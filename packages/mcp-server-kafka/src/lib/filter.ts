@@ -18,28 +18,38 @@ export class InvalidFilterError extends Error {
 	}
 }
 
-// SIO-1105: a filter longer than the longest possible Kafka name (249 chars) can never match
-// more than a length cap would anyway, and long patterns are the raw material for ReDoS. Cap a bit
-// above 249 so legitimate anchored patterns aren't clipped.
+// SIO-1105: a filter longer than the longest possible Kafka name (249 chars) can never match more
+// than a length cap would anyway, and long patterns are the raw material for ReDoS. Cap a bit above
+// 249 so legitimate anchored patterns aren't clipped.
 const MAX_FILTER_LENGTH = 256;
 
-// SIO-1105: catastrophic-backtracking (ReDoS) guard. A compile-VALID pattern like `^(a+)+$` runs in
-// exponential time against a non-matching name -- ~400ms at 30 chars, effectively unbounded toward
-// the 249-char name cap, and it runs once PER topic/group in the filter loop, so one bad filter can
-// wedge the event loop. new RegExp() accepts it, so the SyntaxError catch does not cover it. This
-// matches the canonical nested-quantifier shape: a quantifier (+ * or {n,}) applied to a group whose
-// body itself ends in a quantifier -- (X+)+, (X*)*, ([ab]+)+ etc. A single quantifier per group
-// (^orders-.*, service-[0-9]+, (prod|staging)-x) is safe and must still compile.
+// SIO-1105: catastrophic-backtracking (ReDoS) guard. A compile-VALID pattern can run in exponential
+// time against a non-matching name -- e.g. `^(a+)+$` is ~400ms at 30 chars and effectively unbounded
+// toward the 249-char name cap -- and it runs once PER topic/group in the filter loop, so one bad
+// filter can wedge the event loop. new RegExp() accepts it, so the SyntaxError catch does not cover
+// it. Two shapes are matched:
+//   1. NESTED_QUANTIFIER  -- a quantifier (+ * or {n,}) on a group whose body is itself quantified:
+//      (X+)+, (X*)*, ([ab]+)+.
+//   2. QUANTIFIED_ALTERNATION -- a quantified group containing `|` (overlapping-alternation ReDoS):
+//      (a|aa)+, (a|a?)+, (a|b|ab)*. This has no INNER quantifier so shape 1 misses it.
+// A single quantifier per group and UNquantified alternation are safe and must still compile:
+// ^orders-.*, service-[0-9]+, (prod|staging)-payments, ^T_(dlq|retry)_[a-z]+$.
+// NOTE: this is a BEST-EFFORT, deliberately conservative heuristic, not a complete ReDoS oracle --
+// regex-based detection cannot catch every pathological shape. It covers the shapes an LLM caller
+// realistically emits; the MAX_FILTER_LENGTH cap plus the fact that these are trusted-agent [READ]
+// tools (not a public endpoint) bound the residual risk. A complete fix would need a linear-time
+// engine (re2), which is out of scope here (adds a native dependency).
 const NESTED_QUANTIFIER = /\([^()]*[+*]\)[+*]|\([^()]*[+*]\)\{\d+,\d*\}|\([^()]*\{\d+,\d*\}[^()]*\)[+*]/;
+const QUANTIFIED_ALTERNATION = /\([^()]*\|[^()]*\)(?:[+*]|\{\d+,\}|\{\d{3,},?\d*\})/;
 
 export function compileFilterOrThrow(filter: string): RegExp {
 	if (filter.length > MAX_FILTER_LENGTH) {
 		throw new InvalidFilterError(filter, `filter is too long (${filter.length} > ${MAX_FILTER_LENGTH} chars)`);
 	}
-	if (NESTED_QUANTIFIER.test(filter)) {
+	if (NESTED_QUANTIFIER.test(filter) || QUANTIFIED_ALTERNATION.test(filter)) {
 		throw new InvalidFilterError(
 			filter,
-			"pattern has nested quantifiers that risk catastrophic backtracking (ReDoS); simplify it or use 'prefix'",
+			"pattern risks catastrophic backtracking (ReDoS): a quantified nested/alternation group; simplify it or use 'prefix'",
 		);
 	}
 	try {

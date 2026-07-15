@@ -45,6 +45,23 @@ describe("compileFilterOrThrow (SIO-1105)", () => {
 		expect(() => compileFilterOrThrow("([ab]+)+")).toThrow(InvalidFilterError);
 	});
 
+	// SIO-1105: a quantified ALTERNATION group with overlapping branches (e.g. `(a|aa)+`) is also
+	// exponential but has no inner quantifier, so the nested-quantifier check alone misses it
+	// (CodeRabbit follow-up). Reject a quantified group that contains `|`.
+	test("rejects quantified-alternation ReDoS shapes", () => {
+		expect(() => compileFilterOrThrow("^(a|aa)+$")).toThrow(InvalidFilterError);
+		expect(() => compileFilterOrThrow("^(a|a?)+$")).toThrow(InvalidFilterError);
+		expect(() => compileFilterOrThrow("(a|b|ab)*")).toThrow(InvalidFilterError);
+	});
+
+	test("does NOT reject UNquantified alternation groups (common, safe)", () => {
+		// (prod|staging)-payments etc. -- alternation is fine unless the GROUP is quantified.
+		expect(compileFilterOrThrow("(prod|staging)-payments")).toBeInstanceOf(RegExp);
+		expect(compileFilterOrThrow("^T_(dlq|retry)_[a-z]+$")).toBeInstanceOf(RegExp);
+		expect(compileFilterOrThrow("(a|b){2}")).toBeInstanceOf(RegExp);
+		expect(compileFilterOrThrow("payments|orders")).toBeInstanceOf(RegExp);
+	});
+
 	test("ReDoS rejection carries a reason mentioning the risk", () => {
 		try {
 			compileFilterOrThrow("^(a+)+$");
