@@ -110,30 +110,33 @@ describe("Edge Cases and Error Scenarios", () => {
 		test("should handle malformed JSON responses", async () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 
-			// Test with malformed JSON
+			// Test with malformed JSON -- SIO-1118: now returns a structured { _error } envelope
+			// with isError:true (kind/category "unknown") instead of throwing uncaught.
 			const malformedJson = "{invalid: json}";
 
-			await expect(
-				upsertHandler({
-					scope_name: "_default",
-					collection_name: "_default",
-					document_id: TEST_DOC_ID,
-					document_content: malformedJson,
-				}),
-			).rejects.toThrow();
+			const result = await upsertHandler({
+				scope_name: "_default",
+				collection_name: "_default",
+				document_id: TEST_DOC_ID,
+				document_content: malformedJson,
+			});
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content[0].text)._error.category).toBe("unknown");
 		});
 
 		test("should handle empty document content", async () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 
-			await expect(
-				upsertHandler({
-					scope_name: "_default",
-					collection_name: "_default",
-					document_id: TEST_DOC_ID,
-					document_content: "",
-				}),
-			).rejects.toThrow();
+			// SIO-1118: empty content fails JSON.parse and now returns a structured { _error }
+			// envelope with isError:true (kind/category "unknown") instead of throwing uncaught.
+			const result = await upsertHandler({
+				scope_name: "_default",
+				collection_name: "_default",
+				document_id: TEST_DOC_ID,
+				document_content: "",
+			});
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content[0].text)._error.category).toBe("unknown");
 		});
 	});
 
