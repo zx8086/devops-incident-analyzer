@@ -1,5 +1,4 @@
 // tests/getDocumentById.test.ts
-//
 // SIO-1116: capella_get_document_by_id was the only couchbase tool without a try/catch. A missing
 // document threw DocumentNotFoundError uncaught, which the agent's regex classifier tagged
 // "unknown" (a DEGRADING category that caps confidence) instead of the routine "not-found" it is.
