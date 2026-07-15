@@ -6,6 +6,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { IdentityCard, McpRole, ReadinessSnapshot } from "@devops-agent/shared";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { context, propagation } from "@opentelemetry/api";
+import { z } from "zod";
 import { wrapAwsToolsWithEstate } from "./aws-tool-estate-wrapper.ts";
 import { wrapElasticToolsWithDeployment } from "./elastic-tool-deployment-wrapper.ts";
 
@@ -130,16 +131,31 @@ const ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS = 30_000;
 // 360s sub-agent budget.
 const ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS = 120_000;
 
-function toolTimeoutFor(serverName: string): number | undefined {
+// SIO-1112: positive-integer millisecond schema for the per-server timeout overrides.
+// Coerce + floor mirrors graph-budget.ts: a sub-millisecond value like "0.5" passes a
+// plain > 0 check and then floors to 0, silently disabling the timeout, so require >= 1
+// before flooring. Absent/empty/invalid -> undefined (caller falls back to its default).
+const positiveTimeoutMsSchema = z.coerce
+	.number()
+	.min(1)
+	.transform((n) => Math.floor(n));
+
+function parseTimeoutOverride(raw: string | undefined): number | undefined {
+	if (raw == null || raw === "") return undefined;
+	const parsed = positiveTimeoutMsSchema.safeParse(raw);
+	return parsed.success ? parsed.data : undefined;
+}
+
+// SIO-1112: env is injectable (default process.env) so tests pass isolated objects
+// instead of mutating global env -- matches getSubAgentTimeoutMs / graph-budget.ts.
+function toolTimeoutFor(serverName: string, env: NodeJS.ProcessEnv = process.env): number | undefined {
 	if (serverName === "atlassian-mcp") {
-		const override = Number(process.env.ATLASSIAN_TOOL_TIMEOUT_MS);
-		if (Number.isFinite(override) && override > 0) return override;
-		return ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS;
+		return parseTimeoutOverride(env.ATLASSIAN_TOOL_TIMEOUT_MS) ?? ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS;
 	}
 	if (serverName !== "elastic-iac-mcp") return undefined; // others use the adapter default
-	const override = Number(process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS);
-	if (Number.isFinite(override) && override > 0) return override;
-	const pollBudget = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS) || DRIFT_POLL_BUDGET_DEFAULT_MS;
+	const override = parseTimeoutOverride(env.ELASTIC_IAC_TOOL_TIMEOUT_MS);
+	if (override !== undefined) return override;
+	const pollBudget = parseTimeoutOverride(env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS) ?? DRIFT_POLL_BUDGET_DEFAULT_MS;
 	return pollBudget + ELASTIC_IAC_TOOL_TIMEOUT_MARGIN_MS;
 }
 

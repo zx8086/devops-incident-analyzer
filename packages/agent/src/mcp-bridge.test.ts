@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
 	serializeMcpConnectError,
@@ -106,70 +106,62 @@ describe("connectTimeoutFor (SIO-774)", () => {
 });
 
 describe("toolTimeoutFor (SIO-893)", () => {
-	// Own BOTH env vars in beforeEach -- Bun auto-loads repo .env, so a value could
-	// leak in locally; delete them so the default-path assertions hold (the .env-leak
-	// class of failure, reference_bun_env_leaks_into_config_tests).
-	let savedOverride: string | undefined;
-	let savedBudget: string | undefined;
-	let savedAtlassian: string | undefined;
-	beforeEach(() => {
-		savedOverride = process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
-		savedBudget = process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
-		savedAtlassian = process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
-		delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
-		delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
-		delete process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
-	});
-	afterEach(() => {
-		if (savedOverride === undefined) delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
-		else process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = savedOverride;
-		if (savedBudget === undefined) delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
-		else process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = savedBudget;
-		if (savedAtlassian === undefined) delete process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
-		else process.env.ATLASSIAN_TOOL_TIMEOUT_MS = savedAtlassian;
-	});
+	// SIO-1112: env is injectable, so each test passes an isolated object with only the
+	// keys it needs. No process.env mutation -> no save/restore hooks, and Bun's auto-loaded
+	// repo .env can't leak in (retires the reference_bun_env_leaks_into_config_tests flake).
 
 	test("servers without a per-server timeout get no override (adapter default)", () => {
-		expect(toolTimeoutFor("kafka-mcp")).toBeUndefined();
-		expect(toolTimeoutFor("elastic-mcp")).toBeUndefined();
-		expect(toolTimeoutFor("gitlab-mcp")).toBeUndefined();
+		expect(toolTimeoutFor("kafka-mcp", {})).toBeUndefined();
+		expect(toolTimeoutFor("elastic-mcp", {})).toBeUndefined();
+		expect(toolTimeoutFor("gitlab-mcp", {})).toBeUndefined();
 	});
 
 	// SIO-1111: atlassian-mcp serializes upstream calls (SIO-1097); the queued
 	// tail exceeded the 60s adapter default under fan-out, so it gets 120s.
 	test("atlassian-mcp defaults to 120s", () => {
-		expect(toolTimeoutFor("atlassian-mcp")).toBe(120_000);
+		expect(toolTimeoutFor("atlassian-mcp", {})).toBe(120_000);
 	});
 
 	test("explicit ATLASSIAN_TOOL_TIMEOUT_MS wins over the default", () => {
-		process.env.ATLASSIAN_TOOL_TIMEOUT_MS = "45000";
-		expect(toolTimeoutFor("atlassian-mcp")).toBe(45_000);
+		expect(toolTimeoutFor("atlassian-mcp", { ATLASSIAN_TOOL_TIMEOUT_MS: "45000" })).toBe(45_000);
 	});
 
 	test("a non-positive atlassian override is ignored (falls back to 120s)", () => {
-		process.env.ATLASSIAN_TOOL_TIMEOUT_MS = "0";
-		expect(toolTimeoutFor("atlassian-mcp")).toBe(120_000);
+		expect(toolTimeoutFor("atlassian-mcp", { ATLASSIAN_TOOL_TIMEOUT_MS: "0" })).toBe(120_000);
+	});
+
+	// SIO-1112: a sub-millisecond override floors to 0 and would silently disable the
+	// timeout, so the schema requires >= 1 and falls back to the default instead.
+	test("a sub-millisecond atlassian override is ignored (falls back to 120s)", () => {
+		expect(toolTimeoutFor("atlassian-mcp", { ATLASSIAN_TOOL_TIMEOUT_MS: "0.5" })).toBe(120_000);
 	});
 
 	test("elastic-iac defaults to poll budget + margin", () => {
 		// SIO-989: the drift poll budget default dropped 300s -> 90s, so the derived tool timeout is 120s.
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000 + 30_000);
+		expect(toolTimeoutFor("elastic-iac-mcp", {})).toBe(90_000 + 30_000);
 	});
 
 	test("elastic-iac tracks the configured poll budget + margin", () => {
-		process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = "120000";
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(120_000 + 30_000);
+		expect(toolTimeoutFor("elastic-iac-mcp", { ELASTIC_IAC_DRIFT_POLL_BUDGET_MS: "120000" })).toBe(120_000 + 30_000);
 	});
 
 	test("explicit ELASTIC_IAC_TOOL_TIMEOUT_MS wins over the budget-derived value", () => {
-		process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = "90000";
-		process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = "300000";
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000);
+		expect(
+			toolTimeoutFor("elastic-iac-mcp", {
+				ELASTIC_IAC_TOOL_TIMEOUT_MS: "90000",
+				ELASTIC_IAC_DRIFT_POLL_BUDGET_MS: "300000",
+			}),
+		).toBe(90_000);
 	});
 
 	test("a non-positive override is ignored (falls back to budget + margin)", () => {
-		process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = "0";
-		// SIO-989: budget default is 90s (beforeEach deletes ELASTIC_IAC_DRIFT_POLL_BUDGET_MS).
-		expect(toolTimeoutFor("elastic-iac-mcp")).toBe(90_000 + 30_000);
+		expect(toolTimeoutFor("elastic-iac-mcp", { ELASTIC_IAC_TOOL_TIMEOUT_MS: "0" })).toBe(90_000 + 30_000);
+	});
+
+	// SIO-1112: the drift-budget path moved from `Number(x) || DEFAULT` (which leaked a
+	// negative through to a negative timeout) to the positive-integer schema, so a
+	// negative budget now correctly falls back to the default.
+	test("a negative drift poll budget is ignored (falls back to budget + margin)", () => {
+		expect(toolTimeoutFor("elastic-iac-mcp", { ELASTIC_IAC_DRIFT_POLL_BUDGET_MS: "-5" })).toBe(90_000 + 30_000);
 	});
 });
