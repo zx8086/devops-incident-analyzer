@@ -411,6 +411,26 @@ aws iam create-policy-version \
   --set-as-default
 ```
 
+> **SIO-1120: the role now carries a SECOND managed policy — `DevOpsAgentReadOnlyTroubleshooting`** (source: `scripts/agentcore/policies/devops-agent-readonly-troubleshooting-policy.json`). The base `DevOpsAgentReadOnlyPolicy` grants core reads including the `RegionalAndNetworkTopology` Sid (`ec2:DescribeRouteTables`, `DescribeVpcEndpoints`, `DescribeSubnets`, etc.). The troubleshooting policy adds the deep network-path + change-diagnosis reads (`DescribeNatGateways`, `DescribeNetworkAcls`, `DescribeFlowLogs`, `DescribeTransitGateways*`, `DescribeVpcPeeringConnections`, `DescribeSecurityGroupRules`, route53, `kafka:DescribeClusterV2`/`GetBootstrapBrokers`/`ListNodes`, `sts:DecodeAuthorizationMessage`, `secretsmanager:DescribeSecret`, VPC flow-log content). Attach BOTH to every `DevOpsAgentReadOnly` role so network-path investigations (route-table → NAT / VPC-endpoint tracing) work. The 40-action `NetworkPathConnectivityRead` statement stays under the 6144-char managed-policy limit as its own policy; keeping it separate also lets an estate opt out of deep network reads by not attaching it.
+
+```bash
+# Create + attach the troubleshooting policy (first time)
+aws iam create-policy \
+  --policy-name DevOpsAgentReadOnlyTroubleshooting \
+  --policy-document file://scripts/agentcore/policies/devops-agent-readonly-troubleshooting-policy.json
+
+aws iam attach-role-policy \
+  --role-name DevOpsAgentReadOnly \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyTroubleshooting
+
+# On a later update (a managed policy holds at most 5 versions; delete the oldest
+# non-default version first if you have hit the cap, or just use the wrapper below):
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyTroubleshooting \
+  --policy-document file://scripts/agentcore/policies/devops-agent-readonly-troubleshooting-policy.json \
+  --set-as-default
+```
+
 Or use the idempotent wrapper (recommended), which handles create-or-update for both the trust and managed permissions policies and trims old versions under the 5-version cap:
 
 ```bash
@@ -448,16 +468,29 @@ Re-apply checklist (the policy now carries `SecurityAndAuditRead`):
 - [ ] `728412486223` (eu-b2bonboarding-prd) — `SecurityAndAuditRead` applied
 - [ ] `399987695868` (eu-shared-services-prd — self-loop) — `SecurityAndAuditRead` applied
 
-**Image rebuild is also required for SIO-841 and SIO-855** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` (SIO-841) and `aws_ecs_describe_task_definition` (SIO-855) tools only exist in a freshly built image. Re-export the tarball and load it into the AgentCore runtime via the console:
+**Image rebuild is also required for SIO-841, SIO-855, and SIO-1120** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` (SIO-841), `aws_ecs_describe_task_definition` (SIO-855), and the six network-path tools `aws_ec2_describe_route_tables` / `_nat_gateways` / `_network_acls` / `_flow_logs` / `_transit_gateways` / `_vpc_peering_connections` (SIO-1120) only exist in a freshly built image. Attaching the SIO-1120 troubleshooting policy WITHOUT rebuilding the image leaves the runtime granted the IAM actions but lacking the tools that call them. Re-export the tarball and load it into the AgentCore runtime:
 
 ```bash
 ./scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball
-# then: load the resulting .tar.gz into the AgentCore runtime (console)
 ```
+
+This produces `aws-mcp-agentcore.tar.gz` at the repo root (arm64, smoke-tested). To get it into the runtime:
+
+1. **Load and push the image to the production ECR repo** (the script prints these exact commands at the end of its output):
+   ```bash
+   docker load -i aws-mcp-agentcore.tar.gz
+   docker tag aws-mcp-agentcore:latest <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/aws-mcp-agentcore:latest
+   aws ecr get-login-password --region <REGION> | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
+   docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/aws-mcp-agentcore:latest
+   docker inspect <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/aws-mcp-agentcore:latest --format '{{.Architecture}}'  # must print arm64
+   ```
+2. **Point the `aws_mcp_server` AgentCore runtime at the new image** — via the Bedrock AgentCore console (Runtime -> Edit -> Container image URI -> the pushed `:latest` URI) or `aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <id> --agent-runtime-artifact "containerConfiguration={containerUri=<ECR_URI>:latest}" --region <REGION>` (same shape as `scripts/agentcore/deploy.sh` Step 4, but pointed at the existing runtime ID instead of creating a new one). `AWS_ESTATES` and `AWS_REGION` are untouched by this — only the image reference changes.
+3. **Verify**, same as an `AWS_ESTATES` update (Part 4): wait for the runtime status to return to `READY`, then call `aws_list_estates` — every estate should still show `ok: true`. Additionally confirm the new tool surface exists: call one of the new SIO-841/855 tools AND at least one SIO-1120 network-path tool (e.g. `aws_ec2_describe_route_tables`) and confirm each is recognized rather than erroring as unknown.
 
 IAM apply (the checklist above) is account-side and does **not** need an image; the image rebuild is needed because the tool surface grew. Both must be done for the new tools to work end-to-end.
 
-- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 + SIO-855 tool code)
+- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 + SIO-855 + SIO-1120 tool code)
+- [ ] Post-rollout: a SIO-1120 network-path tool (e.g. `aws_ec2_describe_route_tables`) is recognized by the runtime, not erroring as unknown
 
 ### 2.6 SIO-855 re-apply (ECS task-definition tool)
 

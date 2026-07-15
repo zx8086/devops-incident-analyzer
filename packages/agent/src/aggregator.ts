@@ -5,6 +5,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { summarizeFirstAttempts } from "./alignment.ts";
+import { extractIamActions } from "./aws-policy-actions.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
@@ -368,14 +369,38 @@ const PERMISSION_DENIAL_RE =
 const IAM_PRESCRIPTION_RE =
 	/\b(devopsagentreadonly|iam runbook|(?:add|update|grant|include|attach)[^.\n]{0,60}\b(?:policy|permission|iam)\b|(?:policy|permission)[^.\n]{0,40}\bto include\b)/i;
 
+// SIO-1120: collect the IAM actions actually observed as denied this turn. The agent-side
+// ToolError has no structured `action` field (only category/kind/message), so the denied action
+// is recovered from the message text of every `category:"auth"` error -- which carries either the
+// MCP advice ('...include "ec2:DescribeX"') or the raw AWS message ('not authorized to perform:
+// ec2:DescribeX'). Both contain the `service:Action` token that extractIamActions pulls out.
+function collectObservedDeniedActions(results: DataSourceResult[]): Set<string> {
+	const denied = new Set<string>();
+	for (const r of results) {
+		for (const e of r.toolErrors ?? []) {
+			if (e.category !== "auth") continue;
+			for (const action of extractIamActions(e.message)) denied.add(action);
+		}
+	}
+	return denied;
+}
+
 // SIO-1054: scan both "## Gaps" and "## Recommendations" for ungrounded permission-denial
 // bullets. A section runs from its heading until the next heading of the same-or-shallower
-// level (so ### Investigate/Monitor/Escalate sub-headings inside Recommendations stay in
-// scope). A permission-denial bullet found in either section, with NO observed auth tool
-// error, is fabricated.
+// level (so ### Investigate/Monitor/Escalate sub-headings inside Recommendations stay in scope).
+//
+// SIO-1120: grounding is now PER-ACTION, not all-or-nothing. The old guard short-circuited the
+// WHOLE report the moment ANY auth error existed anywhere in the run -- so on the 2026-07-15
+// localcore incident, one real auth error let a fabricated "ec2:DescribeRouteTables not permitted"
+// bullet (a GRANTED action, never actually denied) sail through un-rewritten. Now a bullet is:
+//   - GROUNDED (kept) only if it names an action that was actually observed as denied this turn;
+//   - UNGROUNDED (flagged) if it names an action that is granted by the committed policy, OR names
+//     an action that was NOT observed-denied;
+//   - a bullet naming NO specific action falls back to the run-level rule (grounded iff any auth
+//     error was observed) -- we can't per-action-check a claim with no action to check.
 export function detectUngroundedBlockers(answer: string, results: DataSourceResult[]): { ungrounded: string[] } {
 	const authErrorObserved = results.some((r) => (r.toolErrors ?? []).some((e) => e.category === "auth"));
-	if (authErrorObserved) return { ungrounded: [] };
+	const observedDenied = collectObservedDeniedActions(results);
 
 	const lines = answer.split("\n");
 	const ungrounded: string[] = [];
@@ -394,13 +419,28 @@ export function detectUngroundedBlockers(answer: string, results: DataSourceResu
 			}
 			continue;
 		}
-		if (
+		const isBlockerBullet =
 			sectionLevel !== null &&
 			TOP_LEVEL_BULLET_RE.test(line) &&
-			(PERMISSION_DENIAL_RE.test(line) || IAM_PRESCRIPTION_RE.test(line))
-		) {
-			ungrounded.push(line);
+			(PERMISSION_DENIAL_RE.test(line) || IAM_PRESCRIPTION_RE.test(line));
+		if (!isBlockerBullet) continue;
+
+		const namedActions = extractIamActions(line);
+		if (namedActions.length === 0) {
+			// No specific action named: fall back to the run-level rule -- grounded iff any auth
+			// error was observed at all (a bare "IAM gap persists" with a real denial is plausible).
+			if (!authErrorObserved) ungrounded.push(line);
+			continue;
 		}
+		// The bullet names one or more actions. It is grounded only if EVERY named action was
+		// actually observed as denied this turn. An action that was NOT observed-denied is
+		// fabricated regardless of whether the policy grants it: if it's granted-but-not-observed
+		// (the localcore ec2:DescribeRouteTables case) the claim is false; if it's neither granted
+		// nor observed, we still have no evidence to call it "not permitted". A granted action CAN
+		// be legitimately reported denied -- but only when observedDenied proves the deployed role
+		// actually rejected it (e.g. an estate lagging the committed policy). Observation wins.
+		const everyActionGrounded = namedActions.every((a) => observedDenied.has(a));
+		if (!everyActionGrounded) ungrounded.push(line);
 	}
 	return { ungrounded };
 }

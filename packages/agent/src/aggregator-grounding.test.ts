@@ -28,14 +28,109 @@ describe("detectUngroundedBlockers", () => {
 		expect(ungrounded[0]).toContain("logs:DescribeLogGroups");
 	});
 
-	test("does NOT flag when a real auth toolError exists", () => {
+	// SIO-1120: grounding is per-action. The REPORT_TAIL bullet names logs:DescribeLogGroups AND
+	// logs:StartQuery, so BOTH must be observed-denied for it to be grounded. A realistic AWS
+	// iam-permission-missing message carries the action token, which the detector extracts.
+	test("does NOT flag when auth errors name BOTH actions the bullet claims", () => {
 		const results = [
 			result({
 				dataSourceId: "aws",
-				toolErrors: [{ toolName: "aws_logs_start_query", category: "auth", message: "AccessDenied", retryable: false }],
+				toolErrors: [
+					{
+						toolName: "aws_logs_describe_log_groups",
+						category: "auth",
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:DescribeLogGroups".',
+						retryable: false,
+					},
+					{
+						toolName: "aws_logs_start_query",
+						category: "auth",
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:StartQuery".',
+						retryable: false,
+					},
+				],
 			}),
 		];
 		const { ungrounded } = detectUngroundedBlockers(REPORT_TAIL, results);
+		expect(ungrounded).toHaveLength(0);
+	});
+
+	// SIO-1120: THE core regression. An auth error for one action (logs:StartQuery) must NOT
+	// ground a bullet that ALSO names a different action (logs:DescribeLogGroups) that was never
+	// denied. Before the per-action fix, any single auth error suppressed the whole report.
+	test("STILL flags when the bullet names an action that was NOT among the observed denials", () => {
+		const results = [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [
+					{
+						toolName: "aws_logs_start_query",
+						category: "auth",
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:StartQuery".',
+						retryable: false,
+					},
+				],
+			}),
+		];
+		const { ungrounded } = detectUngroundedBlockers(REPORT_TAIL, results);
+		// logs:DescribeLogGroups was never denied -> the bullet is still fabricated.
+		expect(ungrounded).toHaveLength(1);
+		expect(ungrounded[0]).toContain("logs:DescribeLogGroups");
+	});
+
+	// SIO-1120: the exact localcore bug. A REAL auth error for an unrelated action does not ground
+	// a fabricated "ec2:DescribeRouteTables not permitted" bullet -- DescribeRouteTables is granted
+	// by the base policy and was never observed as denied.
+	test("flags a granted-action 'not permitted' bullet even when an unrelated auth error exists", () => {
+		const answer = [
+			"## Gaps",
+			"",
+			"- Route table configuration could not be confirmed: `ec2:DescribeRouteTables` and `ec2:DescribeVpcEndpoints` are currently not permitted for `DevOpsAgentReadOnly`.",
+			"",
+			"Confidence: 0.81",
+		].join("\n");
+		const results = [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [
+					{
+						toolName: "aws_logs_start_query",
+						category: "auth",
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:StartQuery".',
+						retryable: false,
+					},
+				],
+			}),
+		];
+		const { ungrounded } = detectUngroundedBlockers(answer, results);
+		expect(ungrounded).toHaveLength(1);
+		expect(ungrounded[0]).toContain("ec2:DescribeRouteTables");
+	});
+
+	// SIO-1120: a granted action CAN be legitimately reported denied when the deployed role in an
+	// estate actually rejected it (observation wins over the committed grant list).
+	test("does NOT flag a granted action when it WAS actually observed as denied", () => {
+		const answer = [
+			"## Gaps",
+			"",
+			"- `ec2:DescribeVpcEndpoints` is not permitted for `DevOpsAgentReadOnly` in this estate; VPC endpoint status is unconfirmed.",
+			"",
+			"Confidence: 0.7",
+		].join("\n");
+		const results = [
+			result({
+				dataSourceId: "aws",
+				toolErrors: [
+					{
+						toolName: "aws_ec2_describe_vpc_endpoints",
+						category: "auth",
+						message: "User is not authorized to perform: ec2:DescribeVpcEndpoints",
+						retryable: false,
+					},
+				],
+			}),
+		];
+		const { ungrounded } = detectUngroundedBlockers(answer, results);
 		expect(ungrounded).toHaveLength(0);
 	});
 
@@ -84,14 +179,20 @@ describe("detectUngroundedBlockers", () => {
 		expect(ungrounded[0]).toContain("IAM gap persists");
 	});
 
-	test("does NOT flag an 'IAM gap persists' bullet when a real auth toolError exists", () => {
+	test("does NOT flag an 'IAM gap persists' bullet when a real auth toolError names that action", () => {
 		const answer =
 			"## Gaps\n\n- `logs:DescribeLogGroups` IAM gap persists in both estates; log group names were obtained from task definitions.\n\nConfidence: 0.71";
 		const results = [
 			result({
 				dataSourceId: "aws",
 				toolErrors: [
-					{ toolName: "aws_logs_describe_log_groups", category: "auth", message: "AccessDenied", retryable: false },
+					{
+						toolName: "aws_logs_describe_log_groups",
+						category: "auth",
+						// SIO-1120: message must name the action for per-action grounding.
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:DescribeLogGroups".',
+						retryable: false,
+					},
 				],
 			}),
 		];
@@ -121,7 +222,7 @@ describe("detectUngroundedBlockers SIO-1054 Recommendations section", () => {
 		expect(ungrounded[0]).toContain("logs:DescribeLogGroups");
 	});
 
-	test("does NOT flag the Recommendations IAM bullet when a real auth toolError exists", () => {
+	test("does NOT flag the Recommendations IAM bullet when a real auth toolError names that action", () => {
 		const answer = [
 			"## Recommendations",
 			"",
@@ -132,7 +233,15 @@ describe("detectUngroundedBlockers SIO-1054 Recommendations section", () => {
 		const results = [
 			result({
 				dataSourceId: "aws",
-				toolErrors: [{ toolName: "aws_logs_start_query", category: "auth", message: "AccessDenied", retryable: false }],
+				toolErrors: [
+					{
+						toolName: "aws_logs_describe_log_groups",
+						category: "auth",
+						// SIO-1120: message must name logs:DescribeLogGroups (the action the bullet prescribes).
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:DescribeLogGroups".',
+						retryable: false,
+					},
+				],
 			}),
 		];
 		const { ungrounded } = detectUngroundedBlockers(answer, results);
@@ -176,11 +285,18 @@ describe("detectUngroundedBlockers SIO-1054 Recommendations section", () => {
 		].join("\n");
 		const { ungrounded } = detectUngroundedBlockers(answer, [result({ dataSourceId: "aws", toolErrors: [] })]);
 		expect(ungrounded).toHaveLength(1);
-		// And it is suppressed when a real auth error was observed.
+		// And it is suppressed when a real auth error NAMING logs:DescribeLogGroups was observed.
 		const grounded = detectUngroundedBlockers(answer, [
 			result({
 				dataSourceId: "aws",
-				toolErrors: [{ toolName: "aws_logs_start_query", category: "auth", message: "AccessDenied", retryable: false }],
+				toolErrors: [
+					{
+						toolName: "aws_logs_describe_log_groups",
+						category: "auth",
+						message: 'Update DevOpsAgentReadOnlyPolicy to include "logs:DescribeLogGroups".',
+						retryable: false,
+					},
+				],
 			}),
 		]);
 		expect(grounded.ungrounded).toHaveLength(0);

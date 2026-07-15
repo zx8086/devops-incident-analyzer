@@ -15,10 +15,16 @@ import { getDiscoveredResourceCountsSchema } from "../tools/config/get-discovere
 import { listDiscoveredResourcesSchema } from "../tools/config/list-discovered-resources.ts";
 import { describeTableSchema } from "../tools/dynamodb/describe-table.ts";
 import { listTablesSchema } from "../tools/dynamodb/list-tables.ts";
+import { describeFlowLogsSchema } from "../tools/ec2/describe-flow-logs.ts";
 import { describeInstancesSchema } from "../tools/ec2/describe-instances.ts";
+import { describeNatGatewaysSchema } from "../tools/ec2/describe-nat-gateways.ts";
+import { describeNetworkAclsSchema } from "../tools/ec2/describe-network-acls.ts";
 import { describeNetworkInterfacesSchema } from "../tools/ec2/describe-network-interfaces.ts";
+import { describeRouteTablesSchema } from "../tools/ec2/describe-route-tables.ts";
 import { describeSecurityGroupsSchema } from "../tools/ec2/describe-security-groups.ts";
+import { describeTransitGatewaysSchema } from "../tools/ec2/describe-transit-gateways.ts";
 import { describeVpcEndpointsSchema } from "../tools/ec2/describe-vpc-endpoints.ts";
+import { describeVpcPeeringConnectionsSchema } from "../tools/ec2/describe-vpc-peering-connections.ts";
 import { describeVpcsSchema } from "../tools/ec2/describe-vpcs.ts";
 import { describeServicesSchema } from "../tools/ecs/describe-services.ts";
 import { describeTaskDefinitionSchema } from "../tools/ecs/describe-task-definition.ts";
@@ -118,6 +124,40 @@ describe("ec2 tool param schemas", () => {
 	});
 	test("describeNetworkInterfaces rejects a malformed filter (missing Values)", () => {
 		expect(describeNetworkInterfacesSchema.safeParse({ filters: [{ Name: "vpc-id" }] }).success).toBe(false);
+	});
+	// SIO-1120: network-path drill-down tools
+	test("describeRouteTables accepts a subnet-association filter", () => {
+		expect(
+			describeRouteTablesSchema.safeParse({
+				filters: [{ Name: "association.subnet-id", Values: ["subnet-123"] }],
+			}).success,
+		).toBe(true);
+	});
+	test("describeRouteTables rejects non-array routeTableIds", () => {
+		expect(describeRouteTablesSchema.safeParse({ routeTableIds: "rtb-1" }).success).toBe(false);
+	});
+	test("describeNatGateways accepts a vpc-id filter", () => {
+		expect(describeNatGatewaysSchema.safeParse({ filters: [{ Name: "vpc-id", Values: ["vpc-1"] }] }).success).toBe(
+			true,
+		);
+	});
+	test("describeNetworkAcls accepts network ACL ids", () => {
+		expect(describeNetworkAclsSchema.safeParse({ networkAclIds: ["acl-1"] }).success).toBe(true);
+	});
+	test("describeFlowLogs accepts a resource-id filter", () => {
+		expect(describeFlowLogsSchema.safeParse({ filters: [{ Name: "resource-id", Values: ["vpc-1"] }] }).success).toBe(
+			true,
+		);
+	});
+	test("describeTransitGateways accepts a state filter", () => {
+		expect(
+			describeTransitGatewaysSchema.safeParse({ filters: [{ Name: "state", Values: ["available"] }] }).success,
+		).toBe(true);
+	});
+	test("describeVpcPeeringConnections accepts a status-code filter", () => {
+		expect(
+			describeVpcPeeringConnectionsSchema.safeParse({ filters: [{ Name: "status-code", Values: ["active"] }] }).success,
+		).toBe(true);
 	});
 	test("describeInstances accepts valid input", () => {
 		expect(describeInstancesSchema.safeParse({ instanceIds: ["i-abc"] }).success).toBe(true);
