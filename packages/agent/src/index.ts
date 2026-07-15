@@ -17,6 +17,12 @@ export { evaluateGuards } from "./iac/guards.ts";
 export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";
 export { type ReconcileOptions, type ReconcileSummary, reconcileAll, reconcileEnabled } from "./iac/reconcile.ts";
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
+export {
+	runTopologySweep,
+	type TopologySourceSummary,
+	type TopologySweepSummary,
+	topologyCronEnabled,
+} from "./kg-topology.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
 export {
 	type BootstrapContext,
