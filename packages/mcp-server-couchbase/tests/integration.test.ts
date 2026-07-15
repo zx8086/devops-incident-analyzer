@@ -168,9 +168,9 @@ describe("Integration Tests", () => {
 				}),
 			).rejects.toThrow();
 
-			// 2. Verify document doesn't exist -- SIO-1116: get now returns a structured not-found
-			// envelope (isError) rather than throwing, so a missing document is a non-degrading
-			// finding the agent won't mislabel as an "unknown" malfunction.
+			// 2. Verify document doesn't exist -- SIO-1117: a missing document now returns a
+			// structured { _error } envelope with isError:true instead of throwing uncaught, so
+			// it is a non-degrading finding the agent won't mislabel as an "unknown" malfunction.
 			const missingResult = await getHandler({
 				scope_name: "_default",
 				collection_name: "_default",

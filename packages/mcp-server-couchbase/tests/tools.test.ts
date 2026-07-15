@@ -120,18 +120,21 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
-			// SIO-1116: capella_get_document_by_id no longer THROWS on a get() failure -- it now
-			// returns a structured { _error } envelope with isError so a missing document is a
-			// non-degrading finding instead of an uncaught throw the agent mislabels. Exercise the
-			// real missing-document path with VALID params + an unseeded id (not an empty-args
-			// call, which would bypass the schema and only prove the undefined-params branch).
+			// SIO-1117 emits a structured { _error } envelope (isError:true) instead of throwing.
+			// SIO-1116: exercise the REAL missing-document path with VALID params + an unseeded id
+			// (not an empty-args call, which bypasses the schema and only proves the undefined-params
+			// branch). The mock throws a plain Error for an unseeded id -> kind "unknown". Assert the
+			// delegated envelope survives intact so a delegation that dropped/mutated _error fails.
 			const getResult = await getHandler({
 				scope_name: "_default",
 				collection_name: "_default",
 				document_id: "no_such_document_id",
 			});
 			expect(getResult.isError).toBe(true);
-			expect(JSON.parse(getResult.content[0].text)._error).toBeDefined();
+			const getError = JSON.parse(getResult.content[0].text)._error;
+			expect(getError.kind).toBe("unknown");
+			expect(getError.category).toBe("unknown");
+			expect(getError.message).toContain("Failed to get document by id");
 			// Test upsert document
 			await expect(upsertHandler({})).rejects.toThrow();
 			// Test delete document
