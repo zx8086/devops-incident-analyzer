@@ -30,6 +30,7 @@ import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { startIacReconcileCron } from "./iac-reconcile-cron.ts";
+import { startKgTopologyCron } from "./kg-topology-cron.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -49,6 +50,11 @@ installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
 // real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
 // agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
 startIacReconcileCron();
+// SIO-1104 (5a): start the in-process scheduled topology sweep (elastic APM / Konnect /
+// Kafka / AWS ECS -> KG edges with tValid/tInvalid + K-miss invalidation). Shares this
+// process's MCP bridge + the single lbug store handle. Default OFF
+// (KG_TOPOLOGY_CRON_ENABLED) -- it does live MCP I/O on a schedule.
+startKgTopologyCron();
 
 // SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
 // -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.

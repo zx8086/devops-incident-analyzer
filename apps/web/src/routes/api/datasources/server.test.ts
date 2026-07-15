@@ -35,6 +35,9 @@ mock.module("@devops-agent/agent", () => ({
 	executeAction: () => Promise.resolve(),
 	getAvailableActionTools: () => [] as unknown[],
 	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	// SIO-1104 (5a): kg-topology-cron.ts imports these transitively via agent.ts.
+	runTopologySweep: () => Promise.resolve({ sources: {} }),
+	topologyCronEnabled: () => false,
 	selectedBackend: () => "file" as const,
 }));
 // SIO-780: sibling tests register additional exports on $lib/server/agent; mirror

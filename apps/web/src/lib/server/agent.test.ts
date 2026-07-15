@@ -118,6 +118,10 @@ mock.module("@devops-agent/agent", () => ({
 	// process-global mock cache entry. reconcileEnabled() false keeps the cron unregistered under test.
 	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
 	reconcileEnabled: mock(() => false),
+	// SIO-1104 (5a): kg-topology-cron.ts is imported transitively via agent.ts the same way --
+	// the stub must export its imports too. topologyCronEnabled() false keeps the cron unregistered.
+	runTopologySweep: mock(() => Promise.resolve({ sources: {} })),
+	topologyCronEnabled: mock(() => false),
 	selectedBackend: mock(() => "file" as const),
 }));
 
