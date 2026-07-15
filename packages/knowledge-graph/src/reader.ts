@@ -5,6 +5,7 @@
 // an LLM SDK; the caller (the agent's graphEnrich node) owns embedding
 // generation via its existing @langchain/aws stack.
 
+import { TOPOLOGY_DISCOVERED_BY, TOPOLOGY_KINDS, type TopologyEdgeKind } from "./schema.ts";
 import type { GraphStore } from "./store.ts";
 
 export interface ServiceDependency {
@@ -37,15 +38,19 @@ export async function priorRelationshipsForServices(
 //   - kafka-topic: another service PRODUCES_TO the same KafkaTopic (SIO-1100 topics)
 //   - telemetry-source: another service OBSERVED_IN the same TelemetrySource (currently
 //     valid only), i.e. they share a log group / index / APM coordinate
-// (Bucket/AwsResource fan-in awaits the Stage 5 topology writer, which adds the
-// Service->resource edges the guide's RUNS_ON assumed.) This is the LOCAL, runtime
-// radius -- distinct from GitLab Orbit's cross-project CODE/SDLC blast radius (SIO-1076).
-// The incident service itself is never returned. Capped.
+//   - aws-resource: another service RUNS_ON the same AwsResource (SIO-1104 5a --
+//     populated by the scheduled topology sweep's ECS enumeration). Bucket fan-in
+//     stays deferred: nothing produces Service->Bucket edges yet.
+// This is the LOCAL, runtime radius -- distinct from GitLab Orbit's cross-project
+// CODE/SDLC blast radius (SIO-1076).
+// The incident service itself is never returned (lbug does NOT enforce relationship
+// uniqueness in two-hop patterns, so the anchor comes back as its own neighbour --
+// the `add` guard below is load-bearing, not defensive). Capped.
 export interface BlastRadiusHit {
 	service: string; // the focus service the hit is anchored to
 	neighbour: string; // the potentially-affected other service
-	via: "depends-on" | "kafka-topic" | "telemetry-source";
-	sharedResource: string; // the shared thing (topic name / telemetry id); "" for depends-on
+	via: "depends-on" | "kafka-topic" | "telemetry-source" | "aws-resource";
+	sharedResource: string; // the shared thing (topic / telemetry id / arn); "" for depends-on
 }
 
 // SIO-1104 (5c): bi-temporal validity filter for the bi-temporal edge alias `edge`.
@@ -96,9 +101,40 @@ export async function blastRadiusForServices(
 			asOf ? { name: service, asOf } : { name: service },
 		);
 		for (const r of tele) add(service, String(r.n), "telemetry-source", String(r.id));
+		// Services running on the same AwsResource (SIO-1104 5a topology sweep).
+		const aws = await store.run<{ n: string; id: string }>(
+			`MATCH (a:Service {name: $name})-[r1:RUNS_ON]->(x:AwsResource)<-[r2:RUNS_ON]-(b:Service) WHERE ${validityClause("r1", asOf)} AND ${validityClause("r2", asOf)} RETURN b.name AS n, x.arn AS id`,
+			asOf ? { name: service, asOf } : { name: service },
+		);
+		for (const r of aws) add(service, String(r.n), "aws-resource", String(r.id));
 		if (out.length >= limit) break;
 	}
 	return out.slice(0, limit);
+}
+
+// SIO-1104 (5a): the currently-valid sweep-owned edges of one topology kind -- the
+// read side of sweepStaleTopology's TS set-difference, and exported for tests/CLI.
+export interface ValidTopologyEdge {
+	from: string;
+	to: string;
+	consecutiveMisses: number;
+}
+
+export async function validTopologyEdges(store: GraphStore, kind: TopologyEdgeKind): Promise<ValidTopologyEdge[]> {
+	const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[kind];
+	const rows = await store.run<{ from: string; to: string; misses: number }>(
+		`MATCH (a:${fromLabel})-[r:${rel}]->(b:${toLabel}) WHERE r.discoveredBy = $discoveredBy AND r.tInvalid = '' RETURN a.${fromKey} AS from, b.${toKey} AS to, r.consecutiveMisses AS misses`,
+		{ discoveredBy: TOPOLOGY_DISCOVERED_BY },
+	);
+	return rows.map((r) => ({ from: String(r.from), to: String(r.to), consecutiveMisses: Number(r.misses ?? 0) }));
+}
+
+// SIO-1104 (5a): every known canonical Service name. The AWS topology collector
+// matches ECS service short names against these (P6: only write RUNS_ON for services
+// the graph already knows -- never invent Service nodes from raw ECS names).
+export async function serviceNames(store: GraphStore): Promise<string[]> {
+	const rows = await store.run<{ name: string }>("MATCH (s:Service) RETURN s.name AS name");
+	return rows.map((r) => String(r.name)).filter((n) => n.length > 0);
 }
 
 // SIO-1100: a currently-valid telemetry binding for a service. Powers the R7

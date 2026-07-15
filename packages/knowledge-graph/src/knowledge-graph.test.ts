@@ -28,17 +28,21 @@ import {
 	recordPipeline,
 	recordRootCause,
 	recordServiceBinding,
+	recordTopologyEdges,
 	repairChangeMrUrl,
 	rootCauseForIncident,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
 	seedStacks,
+	serviceNames,
 	setChangeOutcome,
 	setIncidentEmbedding,
 	similarIncidents,
 	stacksUsingModule,
+	sweepStaleTopology,
 	upsertEntities,
+	validTopologyEdges,
 } from "./index.ts";
 import { DEPLOYMENT_INVENTORY, parseModuleSources } from "./seed-iac.ts";
 
@@ -91,6 +95,31 @@ describe("schema", () => {
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ConfigChange ADD outcome"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD ecId"))).toBe(true);
 		expect(ALTER_MIGRATIONS.some((m) => m.includes("ElasticDeployment ADD region"))).toBe(true);
+	});
+
+	// SIO-1104 (5a): topology lifecycle columns -- fresh graphs via CREATE, existing
+	// graphs via the tolerant rel-table ALTERs (verified on lbug 0.14.3).
+	test("MIGRATIONS include RUNS_ON and lifecycle columns on the topology rel tables", () => {
+		const runsOn = MIGRATIONS.find((m) => m.includes("REL TABLE IF NOT EXISTS RUNS_ON("));
+		expect(runsOn).toBeDefined();
+		expect(runsOn).toContain("FROM Service TO AwsResource");
+		for (const rel of ["DEPENDS_ON", "PRODUCES_TO", "CONSUMES_FROM", "ROUTES_TO", "RUNS_ON"]) {
+			const ddl = MIGRATIONS.find((m) => m.includes(`REL TABLE IF NOT EXISTS ${rel}(`));
+			expect(ddl).toContain("discoveredBy STRING");
+			expect(ddl).toContain("tValid STRING");
+			expect(ddl).toContain("tInvalid STRING");
+			expect(ddl).toContain("consecutiveMisses INT64");
+		}
+	});
+
+	test("ALTER_MIGRATIONS backfill lifecycle columns on the pre-Stage-5 rel tables", () => {
+		for (const rel of ["DEPENDS_ON", "PRODUCES_TO", "CONSUMES_FROM", "ROUTES_TO"]) {
+			for (const col of ["discoveredBy", "tValid", "tInvalid", "consecutiveMisses"]) {
+				expect(ALTER_MIGRATIONS.some((m) => m.includes(`${rel} ADD ${col}`))).toBe(true);
+			}
+		}
+		// RUNS_ON is born with its columns; no ALTER needed.
+		expect(ALTER_MIGRATIONS.some((m) => m.includes("RUNS_ON"))).toBe(false);
 	});
 });
 
@@ -1029,5 +1058,112 @@ describe("SIO-1103 blastRadiusForServices", () => {
 		const deps = store.calls.find((c) => c.cypher.includes("DEPENDS_ON"));
 		expect(deps?.cypher).not.toContain("$asOf");
 		expect(deps?.params).toEqual({ name: "orders" });
+	});
+
+	// SIO-1104 (5a): shared-AwsResource fan-in via the topology sweep's RUNS_ON edges.
+	test("collects aws-resource neighbours via currently-valid RUNS_ON edges", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("RUNS_ON", [{ n: "billing", id: "arn:aws:ecs:eu-west-1:1:service/prod/shared" }]);
+		const hits = await blastRadiusForServices(store, ["orders"]);
+		expect(hits).toContainEqual({
+			service: "orders",
+			neighbour: "billing",
+			via: "aws-resource",
+			sharedResource: "arn:aws:ecs:eu-west-1:1:service/prod/shared",
+		});
+		const aws = store.calls.find((c) => c.cypher.includes("RUNS_ON"));
+		expect(aws?.cypher).toContain("r1.tInvalid = '' AND r2.tInvalid = ''");
+	});
+});
+
+// SIO-1104 (5a): topology writers + readers.
+describe("SIO-1104 topology writer", () => {
+	test("recordTopologyEdges maps kinds to labels/keys and stamps lifecycle columns", async () => {
+		const store = new InMemoryGraphStore();
+		await recordTopologyEdges(store, [
+			{ kind: "runs-on", from: "orders", to: "arn:aws:ecs:eu-west-1:1:service/prod/orders" },
+			{ kind: "routes-to", from: "/api/orders", to: "orders" },
+		]);
+		// runs-on endpoints: Service.name -> AwsResource.arn
+		expect(store.calls.some((c) => c.cypher === "MERGE (a:Service {name: $from})" && c.params?.from === "orders")).toBe(
+			true,
+		);
+		expect(
+			store.calls.some(
+				(c) =>
+					c.cypher === "MERGE (b:AwsResource {arn: $to})" &&
+					c.params?.to === "arn:aws:ecs:eu-west-1:1:service/prod/orders",
+			),
+		).toBe(true);
+		const runsOn = store.calls.find((c) => c.cypher.includes("MERGE (a)-[r:RUNS_ON]->(b)"));
+		expect(runsOn?.cypher).toContain("SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0");
+		expect(runsOn?.params?.discoveredBy).toBe("topology-job");
+		// keep-first tValid backfill is a separate conditional statement
+		const backfill = store.calls.find(
+			(c) => c.cypher.includes("[r:RUNS_ON]") && c.cypher.includes("coalesce(r.tValid, '') = ''"),
+		);
+		expect(backfill?.cypher).toContain("SET r.tValid = $now");
+		expect(backfill?.params?.now).toBeDefined();
+		// routes-to endpoints: ApiRoute.path -> Service.name
+		expect(
+			store.calls.some((c) => c.cypher === "MERGE (a:ApiRoute {path: $from})" && c.params?.from === "/api/orders"),
+		).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:ROUTES_TO]->(b)"))).toBe(true);
+	});
+
+	test("recordTopologyEdges skips empty endpoints and unknown kinds", async () => {
+		const store = new InMemoryGraphStore();
+		await recordTopologyEdges(store, [
+			{ kind: "runs-on", from: "", to: "arn:x" },
+			{ kind: "runs-on", from: "orders", to: "" },
+			{ kind: "produces-to" as never, from: "orders", to: "events" },
+		]);
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("validTopologyEdges reads only sweep-owned currently-valid edges", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("AS misses", [{ from: "orders", to: "arn:x", misses: 2 }]);
+		const edges = await validTopologyEdges(store, "runs-on");
+		expect(edges).toEqual([{ from: "orders", to: "arn:x", consecutiveMisses: 2 }]);
+		const q = store.calls[0];
+		expect(q?.cypher).toContain("(a:Service)-[r:RUNS_ON]->(b:AwsResource)");
+		expect(q?.cypher).toContain("r.discoveredBy = $discoveredBy AND r.tInvalid = ''");
+		expect(q?.params).toEqual({ discoveredBy: "topology-job" });
+	});
+
+	test("sweepStaleTopology bumps misses below K and invalidates at K", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("AS misses", [
+			{ from: "gone", to: "arn:gone", misses: 2 },
+			{ from: "flaky", to: "arn:flaky", misses: 0 },
+			{ from: "alive", to: "arn:alive", misses: 1 },
+		]);
+		const result = await sweepStaleTopology(store, "runs-on", [{ from: "alive", to: "arn:alive" }], {
+			maxMisses: 3,
+			now: "2026-07-15T00:00:00.000Z",
+		});
+		expect(result).toEqual({ checked: 3, missed: 2, invalidated: 1 });
+		// gone: 2 + 1 = 3 >= K -> invalidated
+		const invalidate = store.calls.find((c) => c.cypher.includes("r.tInvalid = $now"));
+		expect(invalidate?.params).toMatchObject({
+			from: "gone",
+			to: "arn:gone",
+			misses: 3,
+			now: "2026-07-15T00:00:00.000Z",
+		});
+		expect(invalidate?.cypher).toContain("r.discoveredBy = $discoveredBy AND r.tInvalid = ''");
+		// flaky: 0 + 1 = 1 < K -> increment only
+		const bump = store.calls.find((c) => c.params?.from === "flaky" && c.cypher.includes("SET r.consecutiveMisses"));
+		expect(bump?.cypher).not.toContain("r.tInvalid = $now");
+		expect(bump?.params?.misses).toBe(1);
+		// alive was re-observed this sweep -> untouched
+		expect(store.calls.some((c) => c.params?.from === "alive" && c.cypher.includes("SET"))).toBe(false);
+	});
+
+	test("serviceNames returns canonical names, dropping empties", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "orders" }, { name: "" }]);
+		expect(await serviceNames(store)).toEqual(["orders"]);
 	});
 });
