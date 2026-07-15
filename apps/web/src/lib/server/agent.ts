@@ -23,6 +23,7 @@ import {
 	runTeardown,
 	type SkillLearnerTurn,
 	setSessionOutcome,
+	stopHealthPolling,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import { startKnowledgeGraphServer } from "@devops-agent/mcp-server-knowledge-graph";
@@ -236,6 +237,22 @@ export function ensureMcpConnected(): Promise<void> {
 		mcpReady = createMcpClient(getMcpConfig());
 	}
 	return mcpReady;
+}
+
+// SIO-1113: Vite HMR disposes this module graph on reload; the bridge's health-poll
+// interval and the memoized connection promise must not outlive it. Orphaned poll
+// loops fail their reconnects against the closed Vite module runner ("Vite module
+// runner has been closed") and re-detect the same server replacement forever. Stop
+// the poll (a globalThis singleton, so this clears the one live timer) and drop the
+// memoized promise so the next turn reconnects cleanly. import.meta.hot is untyped
+// here (no vite/client in the server tsconfig types), so narrow it inline rather than
+// widening the type surface; undefined in prod builds, where this is a no-op anyway.
+{
+	const hot = (import.meta as { hot?: { dispose(cb: () => void): void } }).hot;
+	hot?.dispose(() => {
+		stopHealthPolling();
+		mcpReady = null;
+	});
 }
 
 // SIO-482: active SSE connection count for the /health endpoint. The stream

@@ -1,7 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
+	_getHealthPollTimerForTest as getHealthPollTimer,
 	serializeMcpConnectError,
+	_startHealthPollingForTest as startHealthPolling,
+	stopHealthPolling,
 	_toolTimeoutForTest as toolTimeoutFor,
 	_withTimeoutForTest as withTimeout,
 } from "./mcp-bridge.ts";
@@ -168,5 +171,31 @@ describe("toolTimeoutFor (SIO-893)", () => {
 	// negative budget now correctly falls back to the default.
 	test("a negative drift poll budget is ignored (falls back to budget + margin)", () => {
 		expect(toolTimeoutFor("elastic-iac-mcp", { ELASTIC_IAC_DRIFT_POLL_BUDGET_MS: "-5" })).toBe(90_000 + 30_000);
+	});
+});
+
+// SIO-1113: the health-poll timer is a globalThis singleton so Vite HMR reloads
+// cannot stack intervals. These tests own the singleton (stop before + after each) so
+// no live interval leaks between tests.
+describe("health polling singleton (SIO-1113)", () => {
+	beforeEach(() => stopHealthPolling());
+	afterEach(() => stopHealthPolling());
+
+	test("startHealthPolling twice arms exactly one timer", () => {
+		expect(getHealthPollTimer()).toBeNull();
+		startHealthPolling();
+		const first = getHealthPollTimer();
+		expect(first).not.toBeNull();
+		startHealthPolling(); // an HMR-reloaded module instance calling start again
+		expect(getHealthPollTimer()).toBe(first); // same timer, not a second one
+	});
+
+	test("stopHealthPolling clears the singleton and is idempotent", () => {
+		startHealthPolling();
+		expect(getHealthPollTimer()).not.toBeNull();
+		stopHealthPolling();
+		expect(getHealthPollTimer()).toBeNull();
+		stopHealthPolling(); // safe to call with no timer
+		expect(getHealthPollTimer()).toBeNull();
 	});
 });
