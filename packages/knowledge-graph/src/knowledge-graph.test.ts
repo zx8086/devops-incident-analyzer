@@ -900,6 +900,32 @@ describe("SIO-1100 telemetry bindings", () => {
 		expect(q).toContain("ORDER BY o.lastVerified DESC");
 	});
 
+	// SIO-1104 (5c): as-of time-travel reads.
+	test("bindingsForServices default query is byte-identical when asOf is omitted", async () => {
+		const store = new InMemoryGraphStore();
+		await bindingsForServices(store, ["orders"], ["order"]);
+		// direct query (call 0) + alias query (call 1): legacy currently-valid form, no $asOf
+		expect(store.calls[0]?.cypher).toContain("o.tInvalid = ''");
+		expect(store.calls[0]?.cypher).not.toContain("$asOf");
+		expect(store.calls[0]?.params).toEqual({ names: ["orders"], limit: 40 });
+		expect(store.calls[1]?.cypher).toContain("o.tInvalid = '' AND rr.tInvalid = ''");
+		expect(store.calls[1]?.cypher).not.toContain("$asOf");
+	});
+
+	test("bindingsForServices with asOf filters both hops bi-temporally", async () => {
+		const store = new InMemoryGraphStore();
+		const asOf = "2026-07-10T00:00:00.000Z";
+		await bindingsForServices(store, ["orders"], ["order"], 40, asOf);
+		// direct query (call 0): OBSERVED_IN as-of window
+		const direct = store.calls[0];
+		expect(direct?.cypher).toContain("o.tValid <= $asOf AND (o.tInvalid = '' OR o.tInvalid > $asOf)");
+		expect(direct?.params).toMatchObject({ names: ["orders"], asOf });
+		// alias query (call 1): the RESOLVES_TO hop gets the same window
+		const alias = store.calls[1];
+		expect(alias?.cypher).toContain("rr.tValid <= $asOf AND (rr.tInvalid = '' OR rr.tInvalid > $asOf)");
+		expect(alias?.params).toMatchObject({ normalized: ["order"], asOf });
+	});
+
 	test("hasBinding returns true only when a valid edge count is positive", async () => {
 		const present = new InMemoryGraphStore();
 		present.stub("count(o)", [{ n: 1 }]);
@@ -987,5 +1013,20 @@ describe("SIO-1103 blastRadiusForServices", () => {
 		const hits = await blastRadiusForServices(store, ["orders"]);
 		expect(hits.some((h) => h.neighbour === "orders")).toBe(false);
 		expect(hits.filter((h) => h.neighbour === "payments")).toHaveLength(1);
+	});
+
+	// SIO-1104 (5c): the telemetry-source hop honors asOf; default stays byte-identical.
+	test("asOf switches the telemetry query to the bi-temporal window", async () => {
+		const store = new InMemoryGraphStore();
+		const asOf = "2026-07-10T00:00:00.000Z";
+		await blastRadiusForServices(store, ["orders"], 25, asOf);
+		const tele = store.calls.find((c) => c.cypher.includes("OBSERVED_IN"));
+		expect(tele?.cypher).toContain("o1.tValid <= $asOf AND (o1.tInvalid = '' OR o1.tInvalid > $asOf)");
+		expect(tele?.cypher).toContain("o2.tValid <= $asOf AND (o2.tInvalid = '' OR o2.tInvalid > $asOf)");
+		expect(tele?.params).toMatchObject({ name: "orders", asOf });
+		// depends-on / produces-to hops carry no temporal filter and no asOf param
+		const deps = store.calls.find((c) => c.cypher.includes("DEPENDS_ON"));
+		expect(deps?.cypher).not.toContain("$asOf");
+		expect(deps?.params).toEqual({ name: "orders" });
 	});
 });
