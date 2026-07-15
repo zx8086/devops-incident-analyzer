@@ -154,3 +154,237 @@ describe("AtlassianMcpProxy.callTool", () => {
 		expect(result.content[0].text).toContain("ATLASSIAN_AUTH_REQUIRED");
 	});
 });
+
+// SIO-1111: readiness must answer from passive freshness instead of enqueueing a
+// live upstream probe behind fan-out tool calls on the SIO-1097 serialized queue.
+describe("AtlassianMcpProxy.probeReadiness (SIO-1111)", () => {
+	function makeCountingClient(state: { upstreamCalls: number; resourceId: string }): McpClientLike {
+		return makeClient({
+			callTool: async (req: { name: string }) => {
+				state.upstreamCalls++;
+				if (req.name === "getAccessibleAtlassianResources") {
+					return { content: [{ type: "text", text: JSON.stringify([{ id: state.resourceId, name: "s" }]) }] };
+				}
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		});
+	}
+
+	test("fresh window: returns without an upstream call", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeCountingClient(state),
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId();
+		expect(state.upstreamCalls).toBe(1);
+
+		t = 89_000; // still inside the default 90s window
+		await proxy.probeReadiness();
+		expect(state.upstreamCalls).toBe(1);
+	});
+
+	test("stale window: performs a live resolve and refreshes cloudId", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeCountingClient(state),
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId();
+
+		t = 91_000;
+		state.resourceId = "c-migrated";
+		await proxy.probeReadiness();
+		expect(state.upstreamCalls).toBe(2);
+		expect(proxy.getCloudId()).toBe("c-migrated");
+	});
+
+	test("honors a custom readinessFreshnessWindowMs", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeCountingClient(state),
+			siteName: undefined,
+			readinessFreshnessWindowMs: 10_000,
+			now: () => t,
+		});
+		await proxy.resolveCloudId();
+
+		t = 10_001;
+		await proxy.probeReadiness();
+		expect(state.upstreamCalls).toBe(2);
+	});
+
+	test("busy queue: probe resolves immediately while a slow tool call is in flight (the incident)", async () => {
+		let t = 0;
+		let releaseSlowCall: (() => void) | undefined;
+		const slowGate = new Promise<void>((resolve) => {
+			releaseSlowCall = resolve;
+		});
+		const client = makeClient({
+			callTool: async (req: { name: string }) => {
+				if (req.name === "getAccessibleAtlassianResources") {
+					return { content: [{ type: "text", text: JSON.stringify([{ id: "c-1", name: "s" }]) }] };
+				}
+				await slowGate;
+				return { content: [{ type: "text", text: "slow-ok" }] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client,
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId();
+
+		const slowCall = proxy.callTool("searchJiraIssuesUsingJql", {});
+		t = 30_000; // fresh (stamp at 0, window 90s)
+		const probeOutcome = await Promise.race([
+			proxy.probeReadiness().then(() => "probe-resolved"),
+			new Promise<string>((resolve) => setTimeout(() => resolve("probe-stuck"), 50)),
+		]);
+		expect(probeOutcome).toBe("probe-resolved");
+
+		releaseSlowCall?.();
+		await slowCall;
+	});
+
+	test("a successful tool call extends freshness", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeCountingClient(state),
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId(); // stamp at t=0
+
+		t = 60_000;
+		await proxy.callTool("searchJiraIssuesUsingJql", {}); // stamp at t=60_000
+		expect(state.upstreamCalls).toBe(2);
+
+		t = 140_000; // >90s after boot, <90s after the tool call
+		await proxy.probeReadiness();
+		expect(state.upstreamCalls).toBe(2);
+	});
+
+	test("failed calls do not extend freshness; a failing live probe rejects (renders unreachable)", async () => {
+		let t = 0;
+		let failUpstream = false;
+		const client = makeClient({
+			callTool: async (req: { name: string }) => {
+				if (failUpstream) throw new Error("ECONNRESET talking to Rovo");
+				if (req.name === "getAccessibleAtlassianResources") {
+					return { content: [{ type: "text", text: JSON.stringify([{ id: "c-1", name: "s" }]) }] };
+				}
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client,
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId(); // stamp at t=0
+
+		failUpstream = true;
+		t = 60_000;
+		await expect(proxy.callTool("searchJiraIssuesUsingJql", {})).rejects.toThrow("ECONNRESET");
+
+		t = 95_000; // stamp still 0 -> stale -> live probe, which also fails
+		await expect(proxy.probeReadiness()).rejects.toThrow("ECONNRESET");
+	});
+});
+
+// SIO-1111: the previously dead atlassian.timeout config must bound every
+// upstream Rovo call via the SDK's RequestOptions (positional third argument).
+describe("AtlassianMcpProxy upstream timeout wiring (SIO-1111)", () => {
+	function makeOptionsCapturingClient(captured: Array<{ name: string; timeout?: number }>): McpClientLike {
+		return makeClient({
+			callTool: async (req: { name: string }, _schema?: unknown, options?: { timeout?: number }) => {
+				captured.push({ name: req.name, timeout: options?.timeout });
+				if (req.name === "getAccessibleAtlassianResources") {
+					return { content: [{ type: "text", text: JSON.stringify([{ id: "c-1", name: "s" }]) }] };
+				}
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		});
+	}
+
+	test("passes the configured timeout on resolveCloudId and callTool", async () => {
+		const captured: Array<{ name: string; timeout?: number }> = [];
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeOptionsCapturingClient(captured),
+			siteName: undefined,
+			timeout: 12_345,
+		});
+		await proxy.resolveCloudId();
+		await proxy.callTool("searchJiraIssuesUsingJql", {});
+		expect(captured).toEqual([
+			{ name: "getAccessibleAtlassianResources", timeout: 12_345 },
+			{ name: "searchJiraIssuesUsingJql", timeout: 12_345 },
+		]);
+	});
+
+	test("defaults to 30s when no timeout is configured", async () => {
+		const captured: Array<{ name: string; timeout?: number }> = [];
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeOptionsCapturingClient(captured),
+			siteName: undefined,
+		});
+		await proxy.resolveCloudId();
+		expect(captured[0]?.timeout).toBe(30_000);
+	});
+});
+
+describe("AtlassianMcpProxy.disconnect invalidates readiness state (SIO-1111)", () => {
+	test("cloudId and freshness reset; next probe performs a live resolve", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const client = makeClient({
+			callTool: async (req: { name: string }) => {
+				state.upstreamCalls++;
+				if (req.name === "getAccessibleAtlassianResources") {
+					return { content: [{ type: "text", text: JSON.stringify([{ id: state.resourceId, name: "s" }]) }] };
+				}
+				return { content: [] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client,
+			siteName: undefined,
+			now: () => t,
+		});
+		await proxy.resolveCloudId();
+		expect(state.upstreamCalls).toBe(1);
+
+		await proxy.disconnect();
+		expect(() => proxy.getCloudId()).toThrow(/not resolved/i);
+
+		t = 1_000; // still inside the window relative to the old stamp, but stamp was reset
+		await proxy.probeReadiness();
+		expect(state.upstreamCalls).toBe(2);
+	});
+});

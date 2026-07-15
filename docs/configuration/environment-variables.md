@@ -405,7 +405,8 @@ OAuth 2.0 configuration for the Atlassian MCP server, which proxies Jira and Con
 | `ATLASSIAN_OAUTH_CALLBACK_PORT` | No | `9185` | Port for the OAuth 2.0 redirect handler |
 | `ATLASSIAN_READ_ONLY` | No | `true` | Disable all write operations (issue create, comment, transition) |
 | `ATLASSIAN_INCIDENT_PROJECTS` | No | -- | Comma-separated project keys to allowlist for incident queries |
-| `ATLASSIAN_TIMEOUT` | No | `30000` | API request timeout in milliseconds |
+| `ATLASSIAN_TIMEOUT` | No | `30000` | SIO-1111: per-call timeout in ms for each upstream Rovo request (was declared but unused before; the SDK's 60s default applied). The clock starts when the request is sent, after any SIO-1097 queue wait. |
+| `ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS` | No | `90000` | SIO-1111: `/ready` reports healthy without a live upstream probe if any upstream call succeeded within this window. Prevents the health poll's cloudId probe from queueing behind fan-out tool calls on the serialized transport (false "upstream degraded"). |
 
 The OAuth flow opens a local callback on `ATLASSIAN_OAUTH_CALLBACK_PORT` to receive the auth code, then exchanges it with Atlassian for an access token. `ATLASSIAN_READ_ONLY=true` is the default and is enforced by the incident analyzer's compliance layer.
 
@@ -425,6 +426,8 @@ Settings for the LangGraph supervisor agent, including model selection and state
 | `SUB_AGENT_TIMEOUT_MS` | No | `360000` | Per-sub-agent `AbortSignal.timeout` in ms. Replaces the previously hardcoded 300 000. Caps any single sub-agent ReAct loop. Tightening this is useful when you want the alignment retry to start sooner; loosening it helps deep-discovery agents that legitimately need more than 6 minutes. |
 | `GRAPH_BUDGET_RESERVE_MS` | No | `120000` | SIO-1110: wall-clock reserve kept for aggregation + downstream nodes. Alignment skips retries and late sub-agent timers are capped so this much of the graph budget survives the fan-out phase. |
 | `GRAPH_BUDGET_MIN_RETRY_MS` | No | `60000` | SIO-1110: smallest remaining window (beyond the reserve) for which an alignment retry is still dispatched. Below `reserve + minRetry` remaining, alignment proceeds with partial results instead of retrying. |
+| `ATLASSIAN_TOOL_TIMEOUT_MS` | No | `120000` | SIO-1111: bridge-side tool-call timeout for atlassian-mcp. Covers upstream serialization queue wait under sub-agent fan-out (the 60s adapter default produced -32001 failures). |
+| `ELASTIC_IAC_TOOL_TIMEOUT_MS` | No | `120000` | SIO-893: bridge-side tool-call timeout for elastic-iac-mcp. Defaults to `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` (90 000) + 30 000 margin so the drift-check tool's internal CI poll is the binding constraint, not the transport. |
 
 The agent uses two model tiers. The primary model handles complex reasoning tasks (supervision, aggregation, validation). The fast model handles classification and entity extraction where latency matters more than depth. Both models are accessed through AWS Bedrock.
 
@@ -517,3 +520,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-05-16 | collapsed the agent's Atlassian connection URL to `ATLASSIAN_MCP_URL` (was `ATLASSIAN_MCP_URL_LOCAL`) to match every other datasource's convention. The upstream Rovo endpoint the local proxy forwards to is now `ATLASSIAN_UPSTREAM_MCP_URL`. |
 | 2026-05-28 | docs drift sweep: added new "AWS MCP — Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for SIO-822–826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |
 | 2026-07-15 | SIO-1110: `GRAPH_TIMEOUT_MS` default raised to 900 000 (15 min); added budget-aware retry knobs `GRAPH_BUDGET_RESERVE_MS` (default 120 000) and `GRAPH_BUDGET_MIN_RETRY_MS` (default 60 000) — alignment skips retries and caps late sub-agent timers so aggregation always keeps its reserve. |
+| 2026-07-15 | SIO-1111: added `ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS` (default 90 000, passive readiness for the /ready cloudId component) and bridge-side `ATLASSIAN_TOOL_TIMEOUT_MS` (default 120 000); `ATLASSIAN_TIMEOUT` now actually bounds each upstream Rovo call (was dead config); documented the previously undocumented `ELASTIC_IAC_TOOL_TIMEOUT_MS`. |

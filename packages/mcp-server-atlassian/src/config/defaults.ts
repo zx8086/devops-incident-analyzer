@@ -13,6 +13,7 @@ export const configDefaults = {
 		oauthCallbackPort: "9185",
 		incidentProjects: "",
 		timeout: "30000",
+		readinessFreshnessWindowMs: "90000",
 	},
 	tracing: {
 		enabled: "false",

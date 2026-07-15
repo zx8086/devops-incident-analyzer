@@ -111,23 +111,44 @@ describe("toolTimeoutFor (SIO-893)", () => {
 	// class of failure, reference_bun_env_leaks_into_config_tests).
 	let savedOverride: string | undefined;
 	let savedBudget: string | undefined;
+	let savedAtlassian: string | undefined;
 	beforeEach(() => {
 		savedOverride = process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
 		savedBudget = process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
+		savedAtlassian = process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
 		delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
 		delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
+		delete process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
 	});
 	afterEach(() => {
 		if (savedOverride === undefined) delete process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS;
 		else process.env.ELASTIC_IAC_TOOL_TIMEOUT_MS = savedOverride;
 		if (savedBudget === undefined) delete process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS;
 		else process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS = savedBudget;
+		if (savedAtlassian === undefined) delete process.env.ATLASSIAN_TOOL_TIMEOUT_MS;
+		else process.env.ATLASSIAN_TOOL_TIMEOUT_MS = savedAtlassian;
 	});
 
-	test("non-elastic-iac servers get no override (adapter default)", () => {
+	test("servers without a per-server timeout get no override (adapter default)", () => {
 		expect(toolTimeoutFor("kafka-mcp")).toBeUndefined();
 		expect(toolTimeoutFor("elastic-mcp")).toBeUndefined();
 		expect(toolTimeoutFor("gitlab-mcp")).toBeUndefined();
+	});
+
+	// SIO-1111: atlassian-mcp serializes upstream calls (SIO-1097); the queued
+	// tail exceeded the 60s adapter default under fan-out, so it gets 120s.
+	test("atlassian-mcp defaults to 120s", () => {
+		expect(toolTimeoutFor("atlassian-mcp")).toBe(120_000);
+	});
+
+	test("explicit ATLASSIAN_TOOL_TIMEOUT_MS wins over the default", () => {
+		process.env.ATLASSIAN_TOOL_TIMEOUT_MS = "45000";
+		expect(toolTimeoutFor("atlassian-mcp")).toBe(45_000);
+	});
+
+	test("a non-positive atlassian override is ignored (falls back to 120s)", () => {
+		process.env.ATLASSIAN_TOOL_TIMEOUT_MS = "0";
+		expect(toolTimeoutFor("atlassian-mcp")).toBe(120_000);
 	});
 
 	test("elastic-iac defaults to poll budget + margin", () => {

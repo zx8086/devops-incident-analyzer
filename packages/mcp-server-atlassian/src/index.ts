@@ -57,6 +57,7 @@ if (import.meta.main) {
 				callbackPort: config.atlassian.oauthCallbackPort,
 				siteName: config.atlassian.siteName,
 				timeout: config.atlassian.timeout,
+				readinessFreshnessWindowMs: config.atlassian.readinessFreshnessWindowMs,
 			});
 
 			await proxy.connect();
@@ -76,8 +77,13 @@ if (import.meta.main) {
 		createTransport: (serverFactory, ds, identityCard) => {
 			const atlassianProbe = createReadinessProbe({
 				components: {
+					// SIO-1111: probeReadiness answers from passive freshness (any recent
+					// successful upstream call) instead of enqueueing a live resolveCloudId
+					// behind fan-out tool traffic on the SIO-1097 serialized transport --
+					// that queue wait blew the 5s component budget and flagged a false
+					// "upstream degraded". Stale windows still pay for a live probe.
 					cloudId: async () => {
-						await ds.proxy.resolveCloudId();
+						await ds.proxy.probeReadiness();
 					},
 				},
 			});
