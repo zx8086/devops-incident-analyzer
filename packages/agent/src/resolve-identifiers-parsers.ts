@@ -333,49 +333,45 @@ function findProp(node: Record<string, unknown>, name: string): unknown {
 	return undefined;
 }
 
-// ELASTIC APM: the topology sweep's service_destination agg -- by_service (terms on
-// service.name) x by_dest (terms on span.destination.service.resource). Takes the
-// normalizeToolContent'd string (the search tool prefixes a text block). `services`
-// carries EVERY by_service bucket key (a service with no outbound pairs is still a
-// valid destination target for the P6 self-join).
-export function parseApmServiceDestinationAgg(normalized: string): {
+// ELASTIC APM (SIO-1115): one PAGE of the topology sweep's service_destination
+// COMPOSITE agg over [service.name, span.destination.service.resource]. Replaces the
+// old fixed-size nested terms agg (which silently truncated at 500x100 and only
+// flagged it via sum_other_doc_count -> chronic sweepSkipped). Composite buckets are
+// flat: each `key` is { svc, dest }. `after_key` drives pagination; the collector
+// loops until an empty page. Takes the normalizeToolContent'd string (the search tool
+// prefixes a text block). `services` carries EVERY distinct svc on this page (a
+// service with no outbound pairs is still a valid destination target for the P6
+// self-join, so the collector accumulates services across pages).
+export function parseApmCompositeAggPage(normalized: string): {
 	pairs: Array<{ service: string; destination: string }>;
 	services: string[];
-	// True when a terms agg dropped buckets (sum_other_doc_count > 0) -- the
-	// collection is INCOMPLETE and must not drive the staleness sweep (a dropped
-	// service would otherwise accrue false misses).
-	truncated: boolean;
+	// The composite after_key to continue from, or undefined when absent. NOTE: ES can
+	// return an after_key even on the final page, so the collector must terminate on an
+	// EMPTY page, not on afterKey === undefined.
+	afterKey: Record<string, unknown> | undefined;
 } {
 	const parsed = firstJson(normalized);
-	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], truncated: false };
-	const byService = findProp(parsed as Record<string, unknown>, "by_service");
-	if (!byService || typeof byService !== "object") return { pairs: [], services: [], truncated: false };
-	const buckets = (byService as Record<string, unknown>).buckets;
-	if (!Array.isArray(buckets)) return { pairs: [], services: [], truncated: false };
-	const otherCount = (node: Record<string, unknown>): number => {
-		const n = node.sum_other_doc_count;
-		return typeof n === "number" ? n : 0;
-	};
-	let truncated = otherCount(byService as Record<string, unknown>) > 0;
+	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], afterKey: undefined };
+	const comp = findProp(parsed as Record<string, unknown>, "svc_dest");
+	if (!comp || typeof comp !== "object") return { pairs: [], services: [], afterKey: undefined };
+	const compObj = comp as Record<string, unknown>;
+	const rawAfter = compObj.after_key;
+	const afterKey = rawAfter && typeof rawAfter === "object" ? (rawAfter as Record<string, unknown>) : undefined;
+	const buckets = compObj.buckets;
+	if (!Array.isArray(buckets)) return { pairs: [], services: [], afterKey };
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const services: string[] = [];
 	for (const b of buckets) {
 		if (!b || typeof b !== "object") continue;
-		const rec = b as Record<string, unknown>;
-		const service = typeof rec.key === "string" ? rec.key : undefined;
-		if (!service) continue;
-		services.push(service);
-		const byDest = rec.by_dest;
-		if (!byDest || typeof byDest !== "object") continue;
-		if (otherCount(byDest as Record<string, unknown>) > 0) truncated = true;
-		const destBuckets = (byDest as Record<string, unknown>).buckets;
-		if (!Array.isArray(destBuckets)) continue;
-		for (const d of destBuckets) {
-			const key = d && typeof d === "object" ? (d as Record<string, unknown>).key : undefined;
-			if (typeof key === "string" && key.length > 0) pairs.push({ service, destination: key });
-		}
+		const key = (b as Record<string, unknown>).key;
+		if (!key || typeof key !== "object") continue;
+		const svc = (key as Record<string, unknown>).svc;
+		const dest = (key as Record<string, unknown>).dest;
+		if (typeof svc !== "string" || svc.length === 0) continue;
+		services.push(svc);
+		if (typeof dest === "string" && dest.length > 0) pairs.push({ service: svc, destination: dest });
 	}
-	return { pairs, services: dedupe(services), truncated };
+	return { pairs, services: dedupe(services), afterKey };
 }
 
 export interface KonnectRoute {

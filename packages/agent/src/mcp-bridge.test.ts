@@ -114,9 +114,22 @@ describe("toolTimeoutFor (SIO-893)", () => {
 	// repo .env can't leak in (retires the reference_bun_env_leaks_into_config_tests flake).
 
 	test("servers without a per-server timeout get no override (adapter default)", () => {
-		expect(toolTimeoutFor("kafka-mcp", {})).toBeUndefined();
 		expect(toolTimeoutFor("elastic-mcp", {})).toBeUndefined();
 		expect(toolTimeoutFor("gitlab-mcp", {})).toBeUndefined();
+	});
+
+	// SIO-1115: kafka-mcp gets a deterministic 30s per-call timeout (tracks the
+	// server-side admin-RPC budget) instead of the 60s adapter default.
+	test("kafka-mcp defaults to 30s", () => {
+		expect(toolTimeoutFor("kafka-mcp", {})).toBe(30_000);
+	});
+
+	test("explicit KAFKA_TOOL_TIMEOUT_MS wins over the default", () => {
+		expect(toolTimeoutFor("kafka-mcp", { KAFKA_TOOL_TIMEOUT_MS: "45000" })).toBe(45_000);
+	});
+
+	test("a non-positive kafka override is ignored (falls back to 30s)", () => {
+		expect(toolTimeoutFor("kafka-mcp", { KAFKA_TOOL_TIMEOUT_MS: "0" })).toBe(30_000);
 	});
 
 	// SIO-1111: atlassian-mcp serializes upstream calls (SIO-1097); the queued

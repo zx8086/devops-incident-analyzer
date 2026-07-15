@@ -28,7 +28,7 @@ import { normalize } from "@devops-agent/shared";
 import { availableAwsEstates } from "./aws-estate-router.ts";
 import { getConnectedServers, getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
-	parseApmServiceDestinationAgg,
+	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServices,
 	parseKafkaConsumerGroups,
@@ -68,13 +68,39 @@ export function configuredElasticDeployments(env: NodeJS.ProcessEnv = process.en
 // Per-source wall clock. Deliberately generous (this is a background sweep, not the
 // 8s pre-fan-out probe budget); the mcp-bridge timeout caveat applies -- a timed-out
 // in-flight request is not cancelled, it just stops being awaited.
-const SOURCE_TIMEOUT_MS = 60_000;
+// SIO-1115: env-tunable, read lazily (no module-scope Bun.env -- web imports under Vite SSR).
+const SOURCE_TIMEOUT_DEFAULT_MS = 60_000;
+export function sourceTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const parsed = Number(env.KG_TOPOLOGY_SOURCE_TIMEOUT_MS);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : SOURCE_TIMEOUT_DEFAULT_MS;
+}
 const APM_WINDOW_GTE = "now-24h";
 const APM_INDEX = "metrics-apm.service_destination.1m*";
 const APM_INDEX_FALLBACK = "metrics-apm*";
+// SIO-1115: composite-agg buckets per page (service x destination pairs).
+const APM_AGG_PAGE_SIZE = 1000;
+// SIO-1115: shared page cap for the APM composite agg AND the ECS list pagination.
+// Hitting it marks the source incomplete (sweep skipped, safe) rather than reading
+// partial data as authoritative. 10 pages x 1000 pairs is ample for real estates.
+const KG_TOPOLOGY_MAX_PAGES_DEFAULT = 10;
+export function maxCollectorPages(env: NodeJS.ProcessEnv = process.env): number {
+	const parsed = Number(env.KG_TOPOLOGY_MAX_PAGES);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : KG_TOPOLOGY_MAX_PAGES_DEFAULT;
+}
 // One kafka_describe_consumer_group per group -- cap the N+1 fan-out. A capped list
 // is an INCOMPLETE collection (must not sweep).
 const KAFKA_GROUP_CAP = 100;
+// SIO-1115: bounded-concurrency describe pool + per-describe timeout so one stuck
+// group cannot eat the whole source budget (the old sequential loop raced only the
+// 60s SOURCE_TIMEOUT and left detached describes logging -32001 after sweep-complete).
+const KAFKA_DESCRIBE_CONCURRENCY = 4;
+const KAFKA_DESCRIBE_TIMEOUT_DEFAULT_MS = 15_000;
+// Env-tunable primarily for testability (a small value + a slow stub proves isolation
+// without a wall-clock-dependent sleep).
+export function kafkaDescribeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const parsed = Number(env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : KAFKA_DESCRIBE_TIMEOUT_DEFAULT_MS;
+}
 
 function msg(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -105,20 +131,25 @@ function kongCapped(json: unknown): boolean {
 	return meta !== null && typeof meta === "object" && (meta as Record<string, unknown>).capped === true;
 }
 
-// AWS list responses carry nextToken when paginated -- a one-shot read is then
-// an incomplete collection.
-function hasNextToken(json: unknown): boolean {
-	return json !== null && typeof json === "object" && typeof (json as Record<string, unknown>).nextToken === "string";
+// AWS list responses carry nextToken when more pages remain. SIO-1115: returns the
+// token to page with, or undefined when the listing is exhausted (the collector loops
+// on it rather than treating a one-shot read as incomplete).
+function nextTokenOf(json: unknown): string | undefined {
+	if (json === null || typeof json !== "object") return undefined;
+	const t = (json as Record<string, unknown>).nextToken;
+	return typeof t === "string" && t.length > 0 ? t : undefined;
 }
 
 function toolFor(dataSourceId: string, name: string) {
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+// SIO-1115: optional label so per-describe timeouts are distinguishable in logs from
+// the whole-source timeout. Same non-cancelling Promise.race caveat as before.
+function withTimeout<T>(p: Promise<T>, ms: number, label = "topology collector"): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<T>((_resolve, reject) => {
-		timer = setTimeout(() => reject(new Error(`topology collector timed out after ${ms}ms`)), ms);
+		timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
 		timer.unref?.();
 	});
 	return Promise.race([p, timeout]).finally(() => {
@@ -156,45 +187,71 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return { kind, edges: [], complete: false, callers: [] };
 	const deployments = configuredElasticDeployments();
-	const argsFor = (index: string) => ({
+	const maxPages = maxCollectorPages();
+	// SIO-1115: composite agg over [service.name, span.destination.service.resource].
+	// after present -> continue the previous page; absent -> first page.
+	const argsFor = (index: string, afterKey?: Record<string, unknown>) => ({
 		index,
 		size: 0,
 		query: { bool: { filter: [{ range: { "@timestamp": { gte: APM_WINDOW_GTE } } }] } },
 		aggs: {
-			by_service: {
-				terms: { field: "service.name", size: 500 },
-				aggs: { by_dest: { terms: { field: "span.destination.service.resource", size: 100 } } },
+			svc_dest: {
+				composite: {
+					size: APM_AGG_PAGE_SIZE,
+					sources: [
+						{ svc: { terms: { field: "service.name" } } },
+						{ dest: { terms: { field: "span.destination.service.resource" } } },
+					],
+					...(afterKey ? { after: afterKey } : {}),
+				},
 			},
 		},
 	});
-	const collectDeployment = async (deploymentId: string | undefined) => {
-		const invoke = async (index: string) => {
-			const run = () => tool.invoke(argsFor(index));
+	// Page one index to exhaustion (or the page cap). `capped` true means the cap bound
+	// before after_key ran out -> the collection is INCOMPLETE (must not sweep).
+	const scanIndex = async (deploymentId: string | undefined, index: string) => {
+		const pairs: Array<{ service: string; destination: string }> = [];
+		const serviceSet = new Set<string>();
+		let afterKey: Record<string, unknown> | undefined;
+		let capped = false;
+		for (let page = 0; page < maxPages; page++) {
+			const run = () => tool.invoke(argsFor(index, afterKey));
 			const raw = deploymentId ? await withElasticDeployment(deploymentId, run) : await run();
 			const text = normalizeToolContent(raw);
 			// No JSON at all = a tool error/drift envelope, not an empty agg (a
 			// legitimate zero-hit search still returns the aggregations JSON).
 			if (!text.includes("{")) throw new Error("unparseable search response");
-			return parseApmServiceDestinationAgg(text);
-		};
-		const result = await invoke(APM_INDEX);
-		// Zero buckets can mean the 1m-rollup pattern is absent on this deployment --
-		// retry once against the broader metrics-apm* pattern before concluding empty.
-		return result.services.length > 0 ? result : invoke(APM_INDEX_FALLBACK);
+			const pageResult = parseApmCompositeAggPage(text);
+			// Terminate on an empty page: composite can still carry an after_key past the
+			// end, so page emptiness -- not after_key absence -- is the exhaustion signal.
+			if (pageResult.pairs.length === 0 && pageResult.services.length === 0) break;
+			pairs.push(...pageResult.pairs);
+			for (const s of pageResult.services) serviceSet.add(s);
+			afterKey = pageResult.afterKey;
+			if (!afterKey) break; // genuinely exhausted
+			if (page === maxPages - 1) capped = true; // cap bound with pages still remaining
+		}
+		return { pairs, services: [...serviceSet], capped };
+	};
+	const collectDeployment = async (deploymentId: string | undefined) => {
+		const primary = await scanIndex(deploymentId, APM_INDEX);
+		// Zero services can mean the 1m-rollup pattern is absent on this deployment --
+		// retry the whole scan against the broader metrics-apm* pattern before concluding empty.
+		return primary.services.length > 0 ? primary : scanIndex(deploymentId, APM_INDEX_FALLBACK);
 	};
 	const settled = await Promise.allSettled(deployments.map(collectDeployment));
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const callerSet = new Set<string>();
-	let truncated = false;
+	let capped = false;
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") {
 			pairs.push(...r.value.pairs);
 			for (const s of r.value.services) callerSet.add(s);
-			if (r.value.truncated) {
-				// A terms agg dropped buckets (sum_other_doc_count > 0): edges are still
-				// written but the collection must not sweep (false misses otherwise).
-				logger.warn({ deployment: deployments[i] }, "apm service_destination agg truncated; sweep skipped");
-				truncated = true;
+			if (r.value.capped) {
+				// The composite loop hit the page cap: edges are still written but the
+				// collection must not sweep (unseen pairs would accrue false misses).
+				logger.warn({ deployment: deployments[i] }, "apm composite agg hit page cap; sweep skipped");
+				capped = true;
 			}
 		} else logger.warn({ deployment: deployments[i], error: msg(r.reason) }, "apm service_destination query failed");
 	});
@@ -209,7 +266,7 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 	return {
 		kind,
 		edges: dedupeEdges(edges),
-		complete: !truncated && settled.every((r) => r.status === "fulfilled"),
+		complete: !capped && settled.every((r) => r.status === "fulfilled"),
 		callers,
 	};
 }
@@ -287,18 +344,36 @@ export async function collectKafkaConsumption(): Promise<CollectorResult> {
 		groups = all.slice(0, KAFKA_GROUP_CAP);
 		complete = false;
 	}
+	// SIO-1115: describe groups via a small worker pool with a per-describe timeout.
+	// The old sequential loop had no per-call timeout, so a stuck AgentCore describe
+	// rode the whole-source race and kept running detached (logging -32001 after
+	// sweep-complete). The per-describe timeout (< source budget) bounds one stuck
+	// group; edges.push from concurrent workers is safe (single-threaded event loop).
+	const describeTimeout = kafkaDescribeTimeoutMs();
 	const edges: TopologyEdgeRecord[] = [];
-	for (const groupId of groups) {
+	const describeOne = async (groupId: string): Promise<boolean> => {
 		try {
-			const topics = parseKafkaGroupTopics(
-				parseJsonOrThrow(normalizeToolContent(await describeTool.invoke({ groupId })), "kafka group describe"),
-			);
+			const raw = await withTimeout(describeTool.invoke({ groupId }), describeTimeout, `kafka describe ${groupId}`);
+			const topics = parseKafkaGroupTopics(parseJsonOrThrow(normalizeToolContent(raw), "kafka group describe"));
 			for (const topic of topics) edges.push({ kind, from: groupId, to: topic });
+			return true;
 		} catch (error) {
 			logger.warn({ groupId, error: msg(error) }, "kafka consumer-group describe failed");
-			complete = false;
+			return false;
 		}
-	}
+	};
+	let cursor = 0;
+	const worker = async (): Promise<boolean> => {
+		let ok = true;
+		while (cursor < groups.length) {
+			const groupId = groups[cursor++];
+			if (groupId !== undefined && !(await describeOne(groupId))) ok = false;
+		}
+		return ok;
+	};
+	const poolSize = Math.min(KAFKA_DESCRIBE_CONCURRENCY, groups.length);
+	const results = await Promise.all(Array.from({ length: poolSize }, () => worker()));
+	if (results.some((ok) => !ok)) complete = false;
 	return { kind, edges: dedupeEdges(edges), complete };
 }
 
@@ -318,21 +393,37 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 		return { kind, edges: [], complete: false };
 	}
 	const byNormalized = new Map(knownServiceNames.map((name) => [normalize(name), name]));
+	const maxPages = maxCollectorPages();
 	let skipped = 0;
-	let paginated = false;
+	let capped = false;
+	// SIO-1115: page a list tool until nextToken is absent or the cap binds; hitting
+	// the cap sets `capped` (outer) so the collection is INCOMPLETE (must not sweep).
+	const pageAll = async (invokePage: (token?: string) => Promise<unknown>, what: string): Promise<unknown[]> => {
+		const pages: unknown[] = [];
+		let token: string | undefined;
+		for (let p = 0; p < maxPages; p++) {
+			const json = parseJsonOrThrow(normalizeToolContent(await invokePage(token)), what);
+			pages.push(json);
+			token = nextTokenOf(json);
+			if (!token) return pages;
+			if (p === maxPages - 1) capped = true;
+		}
+		return pages;
+	};
 	const collectEstate = async (estate: string): Promise<TopologyEdgeRecord[]> =>
 		withAwsEstate(estate, async () => {
-			const clustersJson = parseJsonOrThrow(normalizeToolContent(await clustersTool.invoke({})), "ecs cluster list");
-			if (hasNextToken(clustersJson)) paginated = true;
-			const clusters = parseAwsEcsClusterArns(clustersJson);
+			const clusterPages = await pageAll(
+				(token) => clustersTool.invoke(token ? { nextToken: token } : {}),
+				"ecs cluster list",
+			);
+			const clusters = clusterPages.flatMap((j) => parseAwsEcsClusterArns(j));
 			const out: TopologyEdgeRecord[] = [];
 			for (const cluster of clusters) {
-				const servicesJson = parseJsonOrThrow(
-					normalizeToolContent(await servicesTool.invoke({ cluster })),
+				const servicePages = await pageAll(
+					(token) => servicesTool.invoke(token ? { cluster, nextToken: token } : { cluster }),
 					"ecs service list",
 				);
-				if (hasNextToken(servicesJson)) paginated = true;
-				const services = parseAwsEcsServices(servicesJson);
+				const services = servicePages.flatMap((j) => parseAwsEcsServices(j));
 				for (const svc of services) {
 					const canonical = byNormalized.get(normalize(svc.name));
 					if (!canonical) {
@@ -351,12 +442,12 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 		else logger.warn({ estate: estates[i], error: msg(r.reason) }, "aws ecs enumeration failed for estate");
 	});
 	if (skipped > 0) logger.debug({ skipped }, "ecs services without a matching known Service were skipped (P6)");
-	if (paginated) {
-		// A one-shot list left a nextToken behind: unseen clusters/services would
-		// accrue false misses, so the collection must not sweep.
-		logger.warn("ecs listing returned nextToken (one-shot read incomplete); sweep skipped");
+	if (capped) {
+		// Pagination hit the page cap: unseen clusters/services would accrue false
+		// misses, so the collection must not sweep.
+		logger.warn("ecs listing hit page cap (more pages remain); sweep skipped");
 	}
-	return { kind, edges: dedupeEdges(edges), complete: !paginated && settled.every((r) => r.status === "fulfilled") };
+	return { kind, edges: dedupeEdges(edges), complete: !capped && settled.every((r) => r.status === "fulfilled") };
 }
 
 export interface TopologySourceSummary {
@@ -395,7 +486,7 @@ export async function runTopologySweep(opts: { source?: string } = {}): Promise<
 			return;
 		}
 		try {
-			const result = await withTimeout(collect(), SOURCE_TIMEOUT_MS);
+			const result = await withTimeout(collect(), sourceTimeoutMs(), `topology collector ${source}`);
 			await recordTopologyEdges(store, result.edges);
 			let invalidated = 0;
 			if (result.complete) {

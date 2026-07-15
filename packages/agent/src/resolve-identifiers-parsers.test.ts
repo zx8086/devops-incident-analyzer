@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-	parseApmServiceDestinationAgg,
+	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServiceArns,
 	parseAwsEcsServices,
@@ -343,71 +343,67 @@ describe("parseGitlabProjects (lift numeric id)", () => {
 });
 
 // SIO-1104 (5a): topology-sweep parsers.
-describe("parseApmServiceDestinationAgg", () => {
-	const payload = [
-		"Search results with aggregations (120000 total hits, 55ms):",
-		JSON.stringify({
-			by_service: {
-				buckets: [
-					{
-						key: "order-service",
-						doc_count: 900,
-						by_dest: {
-							buckets: [
-								{ key: "payment-service:443", doc_count: 500 },
-								{ key: "postgresql", doc_count: 400 },
-							],
-						},
-					},
-					{ key: "payment-service", doc_count: 100, by_dest: { buckets: [] } },
-				],
-			},
-		}),
-	].join("\n\n");
+describe("parseApmCompositeAggPage (SIO-1115)", () => {
+	const page = (pairs: Array<{ svc: string; dest?: string }>, afterKey?: Record<string, unknown>): string =>
+		[
+			"Search results with aggregations (120000 total hits, 55ms):",
+			JSON.stringify({
+				svc_dest: {
+					...(afterKey ? { after_key: afterKey } : {}),
+					buckets: pairs.map((p) => ({ key: { svc: p.svc, dest: p.dest ?? "" }, doc_count: 1 })),
+				},
+			}),
+		].join("\n\n");
 
-	test("extracts caller x destination pairs AND every service bucket key", () => {
-		expect(parseApmServiceDestinationAgg(payload)).toEqual({
+	test("extracts svc x dest pairs AND every distinct svc, returns after_key", () => {
+		const raw = page(
+			[
+				{ svc: "order-service", dest: "payment-service:443" },
+				{ svc: "order-service", dest: "postgresql" },
+				{ svc: "payment-service" }, // no outbound dest but still a valid target
+			],
+			{ svc: "payment-service", dest: "postgresql" },
+		);
+		expect(parseApmCompositeAggPage(raw)).toEqual({
 			pairs: [
 				{ service: "order-service", destination: "payment-service:443" },
 				{ service: "order-service", destination: "postgresql" },
 			],
-			// payment-service has no outbound pairs but is still a valid destination target
 			services: ["order-service", "payment-service"],
-			truncated: false,
+			afterKey: { svc: "payment-service", dest: "postgresql" },
 		});
+	});
+
+	test("a bucket with svc but empty dest contributes only the svc", () => {
+		const raw = page([{ svc: "lonely-service" }]);
+		const parsed = parseApmCompositeAggPage(raw);
+		expect(parsed.pairs).toEqual([]);
+		expect(parsed.services).toEqual(["lonely-service"]);
+	});
+
+	test("absent after_key -> afterKey undefined (final page)", () => {
+		const parsed = parseApmCompositeAggPage(page([{ svc: "a", dest: "b" }]));
+		expect(parsed.afterKey).toBeUndefined();
+		expect(parsed.pairs).toEqual([{ service: "a", destination: "b" }]);
 	});
 
 	test("survives an aggregations wrapper at any depth", () => {
 		const wrapped = `prefix text:\n\n${JSON.stringify({
-			aggregations: { by_service: { buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] } },
+			aggregations: { svc_dest: { buckets: [{ key: { svc: "a", dest: "b" } }] } },
 		})}`;
-		expect(parseApmServiceDestinationAgg(wrapped)).toEqual({
+		expect(parseApmCompositeAggPage(wrapped)).toEqual({
 			pairs: [{ service: "a", destination: "b" }],
 			services: ["a"],
-			truncated: false,
+			afterKey: undefined,
 		});
-	});
-
-	test("flags a truncated terms agg (sum_other_doc_count > 0) at either level", () => {
-		const outer = JSON.stringify({
-			by_service: { sum_other_doc_count: 12, buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] },
-		});
-		expect(parseApmServiceDestinationAgg(outer).truncated).toBe(true);
-		const inner = JSON.stringify({
-			by_service: {
-				sum_other_doc_count: 0,
-				buckets: [{ key: "a", by_dest: { sum_other_doc_count: 3, buckets: [{ key: "b" }] } }],
-			},
-		});
-		expect(parseApmServiceDestinationAgg(inner).truncated).toBe(true);
 	});
 
 	test("returns empty on shape drift or no JSON", () => {
-		expect(parseApmServiceDestinationAgg("no json here")).toEqual({ pairs: [], services: [], truncated: false });
-		expect(parseApmServiceDestinationAgg(JSON.stringify({ other: 1 }))).toEqual({
+		expect(parseApmCompositeAggPage("no json here")).toEqual({ pairs: [], services: [], afterKey: undefined });
+		expect(parseApmCompositeAggPage(JSON.stringify({ other: 1 }))).toEqual({
 			pairs: [],
 			services: [],
-			truncated: false,
+			afterKey: undefined,
 		});
 	});
 });
