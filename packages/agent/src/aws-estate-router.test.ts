@@ -3,6 +3,10 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { HumanMessage } from "@langchain/core/messages";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+// SIO-1114: the real wrapper (not the mocked bridge) so the regression test drives
+// the actual estate-scope guard exemption for aws_list_estates.
+import { wrapAwsToolsWithEstate } from "./aws-tool-estate-wrapper.ts";
 
 // Spy on the LLM so we can assert it is NOT called when the UI provides a selection.
 // createLlm wraps ChatBedrockConverse from @langchain/aws; mocking it here keeps the
@@ -32,23 +36,27 @@ let serverEstateIds: string[] = ["prod", "staging", "dev"];
 let listEstatesInvokeCalls = 0;
 let listEstatesThrows = false;
 let listEstatesPresent = true;
+// SIO-1114: when true, the stub aws_list_estates is passed through the REAL
+// wrapAwsToolsWithEstate (as production does) so the regression test exercises the
+// actual estate-scope guard/exemption instead of a bare unwrapped tool.
+let wrapListEstates = false;
 
 mock.module("./mcp-bridge.ts", () => ({
 	getToolsForDataSource: (dataSourceId: string) => {
 		if (dataSourceId !== "aws" || !listEstatesPresent) return [];
-		return [
-			{
-				name: "aws_list_estates",
-				async invoke() {
-					listEstatesInvokeCalls += 1;
-					if (listEstatesThrows) throw new Error("server unreachable");
-					return JSON.stringify({
-						estates: serverEstateIds.map((id) => ({ id, region: "eu-west-1" })),
-						health: {},
-					});
-				},
+		const stub: Partial<StructuredToolInterface> = {
+			name: "aws_list_estates",
+			async invoke() {
+				listEstatesInvokeCalls += 1;
+				if (listEstatesThrows) throw new Error("server unreachable");
+				return JSON.stringify({
+					estates: serverEstateIds.map((id) => ({ id, region: "eu-west-1" })),
+					health: {},
+				});
 			},
-		];
+		};
+		if (!wrapListEstates) return [stub as unknown as StructuredToolInterface];
+		return wrapAwsToolsWithEstate([stub as unknown as StructuredToolInterface]);
 	},
 }));
 
@@ -134,6 +142,7 @@ describe("awsEstateRouter estate drift detection (SIO-854)", () => {
 		listEstatesInvokeCalls = 0;
 		listEstatesThrows = false;
 		listEstatesPresent = true;
+		wrapListEstates = false; // SIO-1114: default to the unwrapped stub
 		capturedWarns.length = 0;
 		process.env.AWS_ESTATES = JSON.stringify({
 			prod: { assumedRoleArn: "arn:aws:iam::1:role/r", externalId: "e" },
@@ -206,5 +215,21 @@ describe("awsEstateRouter estate drift detection (SIO-854)", () => {
 		listEstatesPresent = false;
 		const result = await awsEstateRouter(makeState({ uiAwsEstates: ["dev"] }));
 		expect(result.awsTargetEstates).toEqual(["dev"]);
+	});
+
+	// SIO-1114 regression: production wraps aws_list_estates with the real
+	// wrapAwsToolsWithEstate. Before the exemption, invoking it with no withAwsEstate
+	// scope threw ("outside withAwsEstate scope"), the router swallowed it, and drift
+	// reconciliation silently no-op'd. With the exemption it runs, so the drift WARN
+	// fires on divergence. This FAILS before the fix (no warn, falls back), passes after.
+	test("reconciliation runs through the REAL wrapper with no scope active (SIO-1114)", async () => {
+		wrapListEstates = true;
+		serverEstateIds = ["prod", "staging"]; // server missing "dev" -> drift
+		const result = await awsEstateRouter(makeState({ uiAwsEstates: [] }));
+		expect(listEstatesInvokeCalls).toBe(1); // the wrapped tool actually ran
+		expect(result.awsTargetEstates).toEqual(["prod", "staging"]); // dev reconciled out
+		const warn = capturedWarns.find((w) => w.msg === driftMsg);
+		expect(warn).toBeDefined();
+		expect(warn?.meta?.onlyInAgent).toEqual(["dev"]);
 	});
 });

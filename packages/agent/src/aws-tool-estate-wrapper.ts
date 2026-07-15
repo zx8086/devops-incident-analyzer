@@ -4,11 +4,19 @@ import { tool as createTool, type StructuredToolInterface } from "@langchain/cor
 import { currentAwsEstate } from "./mcp-bridge.ts";
 import { stripToolSchemaField } from "./strip-tool-schema-field.ts";
 
+// SIO-1114: introspection tools that operate ON the estate registry itself take no
+// estate and MUST be callable outside withAwsEstate. SIO-854 reconciliation calls
+// aws_list_estates before any per-estate fan-out (it is what discovers the estates),
+// and the design forbids a default estate to wrap it in. Exempt tools are returned
+// untouched: no schema strip (they have no `estate` field) and no scope guard.
+const ESTATE_INDEPENDENT_AWS_TOOLS = new Set(["aws_list_estates"]);
+
 // SIO-828: AWS routes by tool *args*, so we strip `estate` from each tool schema
 // (hide it from the LLM) and inject it from ALS at call time. See SIO-832 for why
 // the schema strip must duck-type JSON Schema as well as Zod.
 export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): StructuredToolInterface[] {
 	return awsTools.map((original) => {
+		if (ESTATE_INDEPENDENT_AWS_TOOLS.has(original.name)) return original; // SIO-1114
 		const strippedSchema = stripToolSchemaField(original.schema, "estate");
 
 		return createTool(
