@@ -310,6 +310,34 @@ describe("AtlassianMcpProxy.probeReadiness (SIO-1111)", () => {
 		t = 95_000; // stamp still 0 -> stale -> live probe, which also fails
 		await expect(proxy.probeReadiness()).rejects.toThrow("ECONNRESET");
 	});
+
+	// SIO-1111 review: a live probe can fail AFTER the transport call fulfilled
+	// (parse/site validation) -- the enqueue stamp fires on fulfillment, so without
+	// the reset a failed probe would flap back to healthy for a whole window.
+	test("a failed live probe does not flap back to healthy on the next probe", async () => {
+		let t = 0;
+		let siteMissing = false;
+		const state = { upstreamCalls: 0 };
+		const client = makeClient({
+			callTool: async () => {
+				state.upstreamCalls++;
+				// Transport always fulfills; after the flip the configured site is gone.
+				const resources = siteMissing ? [{ id: "c-other", name: "other-site" }] : [{ id: "c-1", name: "tommy" }];
+				return { content: [{ type: "text", text: JSON.stringify(resources) }] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({ mcpEndpoint: "x", callbackPort: 0, client, siteName: "tommy", now: () => t });
+		await proxy.resolveCloudId(); // stamp at t=0
+		expect(state.upstreamCalls).toBe(1);
+
+		siteMissing = true;
+		t = 91_000; // stale -> live probe: transport fulfills (stamps 91k) but validation fails
+		await expect(proxy.probeReadiness()).rejects.toThrow(/not found/i);
+
+		t = 92_000; // within 90s of the fulfilled-but-invalid call -- must NOT read healthy
+		await expect(proxy.probeReadiness()).rejects.toThrow(/not found/i);
+		expect(state.upstreamCalls).toBe(3);
+	});
 });
 
 // SIO-1111: the previously dead atlassian.timeout config must bound every
@@ -354,6 +382,26 @@ describe("AtlassianMcpProxy upstream timeout wiring (SIO-1111)", () => {
 		});
 		await proxy.resolveCloudId();
 		expect(captured[0]?.timeout).toBe(30_000);
+	});
+
+	// SIO-1111 review: startup discovery must honor the per-call timeout too.
+	test("passes the configured timeout on listTools", async () => {
+		let capturedTimeout: number | undefined;
+		const client = makeClient({
+			listTools: async (_params?: unknown, options?: { timeout?: number }) => {
+				capturedTimeout = options?.timeout;
+				return { tools: [] };
+			},
+		});
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client,
+			siteName: undefined,
+			timeout: 12_345,
+		});
+		await proxy.listTools();
+		expect(capturedTimeout).toBe(12_345);
 	});
 });
 

@@ -33,9 +33,10 @@ export interface ProxyToolInfo {
 
 // SIO-1111: callTool mirrors the SDK's positional (req, resultSchema?, options?)
 // signature exactly (like the gitlab proxy) -- the sdkClient cast below relies on
-// position, so options must never land in the resultSchema slot.
+// position, so options must never land in the resultSchema slot. listTools
+// likewise mirrors (params?, options?) so discovery honors the per-call timeout.
 export interface McpClientLike {
-	listTools: () => Promise<{ tools: Tool[] }>;
+	listTools: (params?: unknown, options?: { timeout?: number }) => Promise<{ tools: Tool[] }>;
 	callTool: (
 		req: { name: string; arguments?: Record<string, unknown> },
 		schema?: unknown,
@@ -205,7 +206,16 @@ export class AtlassianMcpProxy {
 	async probeReadiness(): Promise<void> {
 		const windowMs = this.options.readinessFreshnessWindowMs ?? DEFAULT_READINESS_FRESHNESS_WINDOW_MS;
 		if (this.cloudId !== null && this.now() - this.lastUpstreamSuccessAt <= windowMs) return;
-		await this.resolveCloudId();
+		try {
+			await this.resolveCloudId();
+		} catch (error) {
+			// A live probe can fail AFTER the transport call fulfilled (malformed
+			// body, configured site missing) -- the enqueue stamp would then mark
+			// the window fresh and the next probes would flap back to healthy.
+			// Zero the stamp so every subsequent probe stays live until one succeeds.
+			this.lastUpstreamSuccessAt = 0;
+			throw error;
+		}
 	}
 
 	async resolveCloudId(): Promise<void> {
@@ -326,7 +336,7 @@ export class AtlassianMcpProxy {
 	async listTools(): Promise<ProxyToolInfo[]> {
 		// SIO-1097: serialize on the shared transport too (see upstreamQueue) so
 		// tool discovery can't overlap in-flight tool calls / the health poll.
-		const response = await this.enqueue(() => this.client.listTools());
+		const response = await this.enqueue(() => this.client.listTools(undefined, this.upstreamRequestOptions()));
 		const tools: ProxyToolInfo[] = response.tools.map((tool) => ({
 			name: tool.name,
 			description: tool.description ?? `${tool.name} tool`,
