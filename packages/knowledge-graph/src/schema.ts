@@ -97,8 +97,41 @@ export const REL_TYPES = [
 	"OBSERVED_IN",
 	"RESOLVES_TO",
 	"DISCOVERED_DURING",
+	// SIO-1104 (5a): runtime placement discovered by the scheduled topology sweep
+	// (AWS ECS enumeration). Bi-temporal like OBSERVED_IN; consecutiveMisses drives
+	// the K-miss invalidation (invalidate-not-delete).
+	"RUNS_ON",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
+
+// SIO-1104 (5a): the topology-sweep edge model. One kind per (rel table, endpoint
+// pair) the sweep manages; labels/keys are internal constants (safe to interpolate
+// into Cypher -- values are always bound). PRODUCES_TO is deliberately ABSENT: no
+// available tool is a system of record for producers (consumer-group describes cover
+// consumption only), and guessed topology is worse than none (P6).
+export const TopologyEdgeKindSchema = z.enum(["depends-on", "routes-to", "consumes-from", "runs-on"]);
+export type TopologyEdgeKind = z.infer<typeof TopologyEdgeKindSchema>;
+
+// discoveredBy stamp that marks an edge as lifecycle-owned by the topology sweep.
+// Only edges carrying it are miss-counted/invalidated; agent-written edges the sweep
+// never re-observes keep discoveredBy='' and are never touched.
+export const TOPOLOGY_DISCOVERED_BY = "topology-job";
+
+export const TOPOLOGY_KINDS: Record<
+	TopologyEdgeKind,
+	{ rel: RelType; fromLabel: NodeLabel; fromKey: string; toLabel: NodeLabel; toKey: string }
+> = {
+	"depends-on": { rel: "DEPENDS_ON", fromLabel: "Service", fromKey: "name", toLabel: "Service", toKey: "name" },
+	"routes-to": { rel: "ROUTES_TO", fromLabel: "ApiRoute", fromKey: "path", toLabel: "Service", toKey: "name" },
+	"consumes-from": {
+		rel: "CONSUMES_FROM",
+		fromLabel: "ConsumerGroup",
+		fromKey: "name",
+		toLabel: "KafkaTopic",
+		toKey: "name",
+	},
+	"runs-on": { rel: "RUNS_ON", fromLabel: "Service", fromKey: "name", toLabel: "AwsResource", toKey: "arn" },
+};
 
 // Validated shapes for the writer boundary (parameters, never interpolated).
 export const ServiceNodeSchema = z.object({ name: z.string().min(1) }).strict();
@@ -226,10 +259,15 @@ export const MIGRATIONS: readonly string[] = [
 	// incidents (PK = class hash) so it holds only cause identity; per-incident
 	// confidence/createdAt live on the HAS_ROOT_CAUSE edge below.
 	"CREATE NODE TABLE IF NOT EXISTS RootCause(id STRING, class STRING, description STRING, PRIMARY KEY(id))",
-	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service)",
-	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic)",
-	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic)",
-	"CREATE REL TABLE IF NOT EXISTS ROUTES_TO(FROM ApiRoute TO Service)",
+	// SIO-1104 (5a): the four original topology rel tables gain lifecycle columns
+	// (discoveredBy/tValid/tInvalid/consecutiveMisses) so the scheduled topology
+	// sweep can refresh + K-miss-invalidate them. FRESH graphs get the columns here;
+	// EXISTING graphs get them via the tolerant rel-table ALTER_MIGRATIONS below
+	// (rel ALTER verified on lbug 0.14.3 -- old rows read the DEFAULT back, not NULL).
+	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
+	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
+	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
+	"CREATE REL TABLE IF NOT EXISTS ROUTES_TO(FROM ApiRoute TO Service, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
 	"CREATE REL TABLE IF NOT EXISTS AFFECTED_BY(FROM Service TO Incident)",
 	"CREATE REL TABLE IF NOT EXISTS CORRELATES_WITH(FROM Finding TO Finding, ruleName STRING, confidence DOUBLE)",
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
@@ -272,6 +310,9 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE REL TABLE IF NOT EXISTS OBSERVED_IN(FROM Service TO TelemetrySource, confidence DOUBLE, discoveredBy STRING, evidence STRING, lastVerified STRING, tValid STRING, tInvalid STRING)",
 	"CREATE REL TABLE IF NOT EXISTS RESOLVES_TO(FROM Alias TO Service, confidence DOUBLE, discoveredBy STRING, createdAt STRING, tValid STRING, tInvalid STRING)",
 	"CREATE REL TABLE IF NOT EXISTS DISCOVERED_DURING(FROM TelemetrySource TO Incident)",
+	// SIO-1104 (5a): runtime placement from the topology sweep's AWS ECS enumeration.
+	// Bi-temporal + K-miss counter, born with lifecycle columns (no ALTER needed).
+	"CREATE REL TABLE IF NOT EXISTS RUNS_ON(FROM Service TO AwsResource, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
 ];
 
 // SIO-965: best-effort additive column migrations for graphs created before the
@@ -283,6 +324,26 @@ export const ALTER_MIGRATIONS: readonly string[] = [
 	"ALTER TABLE ConfigChange ADD outcome STRING DEFAULT 'proposed'",
 	"ALTER TABLE ElasticDeployment ADD ecId STRING DEFAULT ''",
 	"ALTER TABLE ElasticDeployment ADD region STRING DEFAULT ''",
+	// SIO-1104 (5a): lifecycle columns for the topology-managed rel tables on graphs
+	// created before Stage 5. Rel-table ALTER ... ADD ... DEFAULT verified on lbug
+	// 0.14.3 (old rows read the DEFAULT back). Kept in CREATE + ALTER (the SIO-965
+	// ConfigChange.outcome idiom) so fresh and migrated graphs are identical.
+	"ALTER TABLE DEPENDS_ON ADD discoveredBy STRING DEFAULT ''",
+	"ALTER TABLE DEPENDS_ON ADD tValid STRING DEFAULT ''",
+	"ALTER TABLE DEPENDS_ON ADD tInvalid STRING DEFAULT ''",
+	"ALTER TABLE DEPENDS_ON ADD consecutiveMisses INT64 DEFAULT 0",
+	"ALTER TABLE PRODUCES_TO ADD discoveredBy STRING DEFAULT ''",
+	"ALTER TABLE PRODUCES_TO ADD tValid STRING DEFAULT ''",
+	"ALTER TABLE PRODUCES_TO ADD tInvalid STRING DEFAULT ''",
+	"ALTER TABLE PRODUCES_TO ADD consecutiveMisses INT64 DEFAULT 0",
+	"ALTER TABLE CONSUMES_FROM ADD discoveredBy STRING DEFAULT ''",
+	"ALTER TABLE CONSUMES_FROM ADD tValid STRING DEFAULT ''",
+	"ALTER TABLE CONSUMES_FROM ADD tInvalid STRING DEFAULT ''",
+	"ALTER TABLE CONSUMES_FROM ADD consecutiveMisses INT64 DEFAULT 0",
+	"ALTER TABLE ROUTES_TO ADD discoveredBy STRING DEFAULT ''",
+	"ALTER TABLE ROUTES_TO ADD tValid STRING DEFAULT ''",
+	"ALTER TABLE ROUTES_TO ADD tInvalid STRING DEFAULT ''",
+	"ALTER TABLE ROUTES_TO ADD consecutiveMisses INT64 DEFAULT 0",
 ];
 
 // Native vector index over Incident.embedding. Requires Ladybug's vector
