@@ -373,6 +373,7 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			services: ["order-service", "payment-service"],
 			afterKey: { svc: "payment-service", dest: "postgresql" },
 			foundAgg: true,
+			emptyAggs: false,
 		});
 	});
 
@@ -401,6 +402,7 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			services: ["a"],
 			afterKey: undefined,
 			foundAgg: true,
+			emptyAggs: false,
 		});
 	});
 
@@ -413,18 +415,49 @@ describe("parseApmCompositeAggPage (SIO-1115)", () => {
 			services: [],
 			afterKey: undefined,
 			foundAgg: true,
+			emptyAggs: false,
 		});
 		expect(parseApmCompositeAggPage("no json here")).toEqual({
 			pairs: [],
 			services: [],
 			afterKey: undefined,
 			foundAgg: false,
+			emptyAggs: false,
 		});
 		expect(parseApmCompositeAggPage(JSON.stringify({ other: 1 }))).toEqual({
 			pairs: [],
 			services: [],
 			afterKey: undefined,
 			foundAgg: false,
+			emptyAggs: false,
+		});
+	});
+
+	// SIO-1121: ES omits the aggregations block on a zero-hit wildcard search (missing index /
+	// no APM data), rendered as a bare `{}`. That is emptyAggs:true (foundAgg still false) so
+	// the collector treats it as a legitimately-empty FIRST page, NOT as drift. A non-empty
+	// non-agg object ({error:...}) stays emptyAggs:false -> the collector still throws.
+	test("a bare {} (ES omitted the agg block) is emptyAggs:true, not drift", () => {
+		expect(parseApmCompositeAggPage("Search results with aggregations (0 total hits, 0ms):\n\n{}")).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: false,
+			emptyAggs: true,
+		});
+	});
+
+	test("a non-empty non-agg object (error envelope) is emptyAggs:false (drift)", () => {
+		expect(
+			parseApmCompositeAggPage(
+				`Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ error: "boom" })}`,
+			),
+		).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: false,
+			emptyAggs: false,
 		});
 	});
 });
