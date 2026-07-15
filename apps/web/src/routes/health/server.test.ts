@@ -30,6 +30,7 @@ mock.module("@devops-agent/agent", () => ({
 	buildGraph: () => Promise.resolve({}),
 	buildIacGraph: () => Promise.resolve({}),
 	createMcpClient: () => Promise.resolve(),
+	stopHealthPolling: () => undefined,
 	flushLangSmithCallbacks: () => Promise.resolve(),
 	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	getAgentByName: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
