@@ -58,6 +58,16 @@ const ListEstatesResponseSchema = z.object({
 	estates: z.array(z.object({ id: z.string() })),
 });
 
+// SIO-1104 (5a): every configured-and-reconciled estate, for callers with no
+// per-turn state (the scheduled topology sweep). Same reconcile-once semantics as
+// awsEstateRouter; soft-falls back to the configured list when the server's
+// aws_list_estates is unavailable. [] when AWS_ESTATES is missing/invalid.
+export async function availableAwsEstates(): Promise<string[]> {
+	const configured = loadConfiguredEstates();
+	if (configured.length === 0) return [];
+	return reconcileEstatesWithServer(configured);
+}
+
 // Call aws_list_estates once and reconcile against the agent's configured estates.
 // WARNs on divergence (estates present on only one side) and returns `configured`
 // filtered to the server's set. Non-fatal: if the tool is absent or errors, the
