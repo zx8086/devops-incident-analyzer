@@ -521,8 +521,10 @@ export type ResolvedIdentifiers = z.infer<typeof ResolvedIdentifiersSchema>;
 export const GraphBlastRadiusHitSchema = z.object({
 	service: z.string(), // the incident service the hit is anchored to
 	neighbour: z.string(), // the potentially-affected other service
-	via: z.enum(["depends-on", "kafka-topic", "telemetry-source"]),
-	sharedResource: z.string(), // the shared thing (topic/telemetry id); "" for depends-on
+	// SIO-1104 (5a): aws-resource = another service RUNS_ON the same AwsResource
+	// (populated by the scheduled topology sweep's ECS enumeration).
+	via: z.enum(["depends-on", "kafka-topic", "telemetry-source", "aws-resource"]),
+	sharedResource: z.string(), // the shared thing (topic/telemetry id/arn); "" for depends-on
 });
 export type GraphBlastRadiusHit = z.infer<typeof GraphBlastRadiusHitSchema>;
 
