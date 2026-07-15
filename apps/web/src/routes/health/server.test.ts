@@ -14,12 +14,13 @@ let mockRuntime = {
 	checkpointerType: "memory" as "memory" | "sqlite",
 };
 
-// SIO-1045: mock.module is process-global + last-wins in bun. Both blocks below must
-// be a superset of every named import any sibling web test file (or the real modules
-// those tests transitively load, e.g. agent.test.ts's real ./agent.ts) touches from
-// these two specifiers, or a sibling test fails to link when this file's mock wins
-// the process-global cache race. See agent.test.ts / stream/server.test.ts for the
-// canonical full-union blocks.
+// SIO-1045: mock.module is process-global + last-wins in bun. The package test script
+// runs `bun test --isolate` so each file gets a fresh module registry and these mocks
+// can no longer leak into sibling files (on Linux the "$lib/server/agent" noops below
+// used to shadow agent.test.ts's real ./agent.ts import, and a missing export here
+// broke iac-reconcile-cron.test.ts linking). If you run a multi-file `bun test`
+// directly WITHOUT --isolate, both blocks below must stay a superset of every named
+// import any sibling web test file touches from these two specifiers.
 mock.module("@devops-agent/agent", () => ({
 	getServerStates: () => mockServerStates,
 	getConnectedServers: () => mockConnected,
@@ -45,6 +46,7 @@ mock.module("@devops-agent/agent", () => ({
 	runTeardown: () => Promise.resolve([]),
 	setSessionOutcome: () => undefined,
 	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	reconcileEnabled: () => false,
 	selectedBackend: () => "file" as const,
 	promoteToMemory: () => Promise.resolve(),
 	executeAction: () => Promise.resolve(),

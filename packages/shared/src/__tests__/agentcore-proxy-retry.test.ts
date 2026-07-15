@@ -416,14 +416,30 @@ describe("JSON-RPC -320xx retry", () => {
 			return jsonRpcOk(upstreamHits);
 		}) as typeof fetch;
 
-		const promises = Array.from({ length: N }, (_, i) => callTool("kafka_get_cluster_info", 100 + i));
-		const responses = await Promise.all(promises);
+		// SIO-1108: stub Math.random with evenly spaced draws: with truly random jitter, five
+		// independent draws over the [0.8, 1.2] factor range land within 20ms of each
+		// other ~0.3% of the time (observed as a CI flake). The stub keeps the property
+		// under test -- each parallel call draws its OWN jitter -- while making the
+		// backoff spread deterministic (factors 0.82..1.18 on the 300ms base = 108ms).
+		const jitterDraws = [0.05, 0.275, 0.5, 0.725, 0.95];
+		let drawIndex = 0;
+		const origRandom = Math.random;
+		Math.random = () => jitterDraws[drawIndex++ % jitterDraws.length] ?? 0.5;
+		try {
+			const promises = Array.from({ length: N }, (_, i) => callTool("kafka_get_cluster_info", 100 + i));
+			const responses = await Promise.all(promises);
 
-		for (const r of responses) expect(r.status).toBe(200);
-		const retryStamps = fetchTimestamps.slice(N).sort((a, b) => a - b);
-		expect(retryStamps.length).toBe(N);
-		const spread = (retryStamps[N - 1] ?? 0) - (retryStamps[0] ?? 0);
-		expect(spread).toBeGreaterThan(20);
+			for (const r of responses) expect(r.status).toBe(200);
+			// Each of the N parallel calls computed its own jittered backoff (>= in
+			// case any unrelated code also samples Math.random during the window).
+			expect(drawIndex).toBeGreaterThanOrEqual(N);
+			const retryStamps = fetchTimestamps.slice(N).sort((a, b) => a - b);
+			expect(retryStamps.length).toBe(N);
+			const spread = (retryStamps[N - 1] ?? 0) - (retryStamps[0] ?? 0);
+			expect(spread).toBeGreaterThan(20);
+		} finally {
+			Math.random = origRandom;
+		}
 	});
 
 	test("TCP-error retry coexists with JSON-RPC retry", async () => {
