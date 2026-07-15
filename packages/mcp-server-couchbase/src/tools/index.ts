@@ -5,6 +5,9 @@ import type { Bucket } from "couchbase";
 import createDocumentation from "./createDocumentation";
 import deleteDocumentation from "./deleteDocumentation";
 import deleteDocumentById from "./deleteDocumentById";
+import explainSqlPlusPlusQuery from "./explainSqlPlusPlusQuery";
+import getBuckets from "./getBuckets";
+import getClusterHealth from "./getClusterHealth";
 import getDocumentById from "./getDocumentById";
 import getSchemaForCollection from "./getSchemaForCollection";
 import getScopesAndCollections from "./getScopesAndCollections";
@@ -42,9 +45,12 @@ const _registerPlaybookTools = (server: McpServer, bucket: Bucket) => {
 
 export const toolRegistry: Record<string, ToolFunction> = {
 	// Core database tools
+	capella_get_buckets: getBuckets,
+	capella_get_cluster_health: getClusterHealth,
 	capella_get_scopes_and_collections: getScopesAndCollections,
 	capella_get_schema_for_collection: getSchemaForCollection,
 	capella_run_sql_plus_plus_query: runSqlPlusPlusQuery,
+	capella_explain_sql_plus_plus_query: explainSqlPlusPlusQuery,
 	capella_get_document_by_id: getDocumentById,
 	capella_upsert_document_by_id: upsertDocumentById,
 	capella_delete_document_by_id: deleteDocumentById,
@@ -66,6 +72,9 @@ export const toolRegistry: Record<string, ToolFunction> = {
 	capella_get_largest_result_size_queries: queryAnalysisTools.getLargestResultSizeQueries,
 	capella_get_largest_result_count_queries: queryAnalysisTools.getLargestResultCountQueries,
 	capella_get_primary_index_queries: queryAnalysisTools.getPrimaryIndexQueries,
+	capella_get_non_covering_index_queries: queryAnalysisTools.getNonCoveringIndexQueries,
+	capella_get_low_selectivity_queries: queryAnalysisTools.getLowSelectivityQueries,
+	capella_get_index_advisor_recommendations: queryAnalysisTools.getIndexAdvisor,
 	capella_get_system_indexes: queryAnalysisTools.getSystemIndexes,
 	capella_get_completed_requests: queryAnalysisTools.getCompletedRequests,
 	capella_get_indexes_to_drop: queryAnalysisTools.getIndexesToDrop,

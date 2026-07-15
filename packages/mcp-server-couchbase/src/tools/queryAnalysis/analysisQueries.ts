@@ -227,3 +227,50 @@ SELECT t.*
 FROM system:indexes t /* WHERE_CLAUSES */
 ORDER BY /* ORDER_BY */;
 `;
+
+// SIO-1107: index scan followed by a fetch phase = the index did NOT cover the
+// projection, so every matching entry paid a document fetch. Ported from the
+// official Couchbase MCP server's get_queries_not_using_covering_index.
+export const n1qlNonCoveringIndexQueries: string = `
+SELECT statement,
+    COUNT(1) AS executions,
+    AVG(phaseCounts.indexScan) AS avgIndexScanCount,
+    AVG(phaseCounts['fetch']) AS avgFetchCount,
+    DURATION_TO_STR(AVG(STR_TO_DURATION(serviceTime))) AS avgServiceTime,
+    MAX(requestTime) AS lastExecutionTime
+FROM system:completed_requests
+WHERE phaseCounts.indexScan IS NOT MISSING
+    AND phaseCounts['fetch'] IS NOT MISSING
+    AND UPPER(statement) NOT LIKE 'INFER %'
+    AND UPPER(statement) NOT LIKE 'CREATE INDEX%'
+    AND UPPER(statement) NOT LIKE '% SYSTEM:%'
+GROUP BY statement
+ORDER BY avgFetchCount DESC;
+`;
+
+// SIO-1107: queries whose index scans read far more entries than they return --
+// a poorly selective index or predicate. Ported from the official Couchbase MCP
+// server's get_queries_not_selective.
+export const n1qlLowSelectivityQueries: string = `
+SELECT statement,
+    COUNT(1) AS executions,
+    AVG(phaseCounts.indexScan) AS avgIndexScanCount,
+    AVG(resultCount) AS avgResultCount,
+    AVG(phaseCounts.indexScan - resultCount) AS avgScanResultGap,
+    ROUND(AVG(resultCount) / AVG(phaseCounts.indexScan) * 100, 2) AS selectivityPct
+FROM system:completed_requests
+WHERE phaseCounts.indexScan IS NOT MISSING
+    AND phaseCounts.indexScan > resultCount
+    AND UPPER(statement) NOT LIKE 'INFER %'
+    AND UPPER(statement) NOT LIKE 'CREATE INDEX%'
+    AND UPPER(statement) NOT LIKE '% SYSTEM:%'
+GROUP BY statement
+ORDER BY avgScanResultGap DESC;
+`;
+
+// SIO-1107: the server-computed Index Advisor. The analyzed statement binds as a
+// named parameter (never spliced), and ADVISOR only evaluates -- it never creates
+// indexes, so it is safe under readOnlyQueryMode.
+export const n1qlIndexAdvisor: string = `
+SELECT ADVISOR($advise_statement) AS advisor_result;
+`;

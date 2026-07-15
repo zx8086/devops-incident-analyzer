@@ -489,6 +489,14 @@ export const ResolvedIdentifiersSchema = z.object({
 					z.record(z.string(), z.object({ hasPrimary: z.boolean(), secondaryKeyFields: z.array(z.string()) })),
 				)
 				.optional(),
+			// SIO-1107: bucket-aware discovery (all optional -- old checkpointed payloads parse
+			// unchanged; absent when the server lacks capella_get_buckets). `scopes`/`indexInfo`
+			// above always describe the DEFAULT bucket; `otherBucketScopes` maps probed
+			// non-default buckets -> scope -> collections (no index info -- the focus block
+			// tells the agent to discover indexes per bucket before querying).
+			defaultBucket: z.string().optional(),
+			buckets: z.array(z.string()).optional(),
+			otherBucketScopes: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
 		})
 		.optional(),
 	aws: z.object({ logGroups: z.array(z.string()), ecsServices: z.array(z.string()).optional() }).optional(),

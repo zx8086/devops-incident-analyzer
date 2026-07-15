@@ -1,8 +1,87 @@
 /* src/tools/queryAnalysis/queryAnalysisUtils.ts */
 
-import type { Bucket } from "couchbase";
+import type { Bucket, QueryMetaData } from "couchbase";
 import type { ToolResponse } from "../../types";
 import { logger } from "../../utils/logger";
+
+// SIO-1107: shared human-markdown renderer for both the cluster-context and
+// scope-context executors. Extracted verbatim from executeAnalysisQuery so the
+// response contract (title counts, Query Execution Details, SIO-664 Limit
+// Application) stays byte-identical for existing tools.
+function formatAnalysisResponse(
+	rows: unknown[],
+	meta: QueryMetaData | undefined,
+	title?: string,
+	requestedLimit?: number,
+): ToolResponse {
+	// Format the title with count information
+	const titleWithCount = title
+		? `${title} (${rows.length} result${rows.length !== 1 ? "s" : ""})`
+		: `Query Results (${rows.length} result${rows.length !== 1 ? "s" : ""})`;
+
+	// Format results for display
+	let responseText = `# ${titleWithCount}\n\n`;
+
+	if (rows.length === 0) {
+		responseText += "No results found for this query.";
+	} else {
+		responseText += `\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\``;
+	}
+
+	// Include query execution details if available
+	if (meta) {
+		responseText += "\n\n## Query Execution Details\n\n";
+		responseText += `- **Status**: ${meta.status || "Completed"}\n`;
+		if (meta.metrics) {
+			responseText += `- **Elapsed Time**: ${meta.metrics?.elapsedTime || "N/A"}\n`;
+			responseText += `- **Execution Time**: ${meta.metrics?.executionTime || "N/A"}\n`;
+			responseText += `- **Result Count**: ${meta.metrics?.resultCount || rows.length}\n`;
+			responseText += `- **Result Size**: ${meta.metrics?.resultSize || "N/A"} bytes\n`;
+			responseText += `- **Mutation Count**: ${meta.metrics?.mutationCount ?? "N/A"}\n`;
+		}
+	}
+
+	// SIO-664: honest applied-limit metadata. Without this, callers trusted the
+	// requested limit even when the SQL++ predicate or upstream returned fewer rows.
+	// Only emit when the LIMIT was actually applied -- the call sites guard with
+	// `if (limit && limit > 0)` before splicing into SQL, so mirror that condition here.
+	if (requestedLimit !== undefined && requestedLimit > 0) {
+		const actualCount = rows.length;
+		const effectiveLimit = Math.min(requestedLimit, actualCount);
+		const capped = actualCount >= requestedLimit;
+		responseText += "\n\n## Limit Application\n\n";
+		responseText += `- **Requested Limit**: ${requestedLimit}\n`;
+		responseText += `- **Actual Count**: ${actualCount}\n`;
+		responseText += `- **Effective Limit**: ${effectiveLimit}\n`;
+		responseText += `- **Capped**: ${capped}\n`;
+	}
+
+	return {
+		content: [
+			{
+				type: "text",
+				text: responseText,
+			},
+		],
+	};
+}
+
+function formatAnalysisError(error: unknown): ToolResponse {
+	// Full error (incl. stack) stays server-side; the client gets only the message.
+	// Stack traces leak paths and waste sub-agent context (CodeRabbit, PR #378).
+	logger.error({ error }, "Error executing analysis query");
+	const message = error instanceof Error ? error.message : String(error);
+
+	return {
+		content: [
+			{
+				type: "text",
+				text: `## Error Executing Query\n\n${message}`,
+			},
+		],
+		isError: true,
+	};
+}
 
 /**
  * Execute a query and return formatted results
@@ -38,69 +117,41 @@ export async function executeAnalysisQuery(
 		const cluster = bucket.cluster;
 		const result = hasParameters ? await cluster.query(queryString, { parameters }) : await cluster.query(queryString);
 		const rows = await result.rows;
-
-		// Format the title with count information
-		const titleWithCount = title
-			? `${title} (${rows.length} result${rows.length !== 1 ? "s" : ""})`
-			: `Query Results (${rows.length} result${rows.length !== 1 ? "s" : ""})`;
-
-		// Format results for display
-		let responseText = `# ${titleWithCount}\n\n`;
-
-		if (rows.length === 0) {
-			responseText += "No results found for this query.";
-		} else {
-			responseText += `\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\``;
-		}
-
-		// Include query execution details if available
-		if (result.meta) {
-			responseText += "\n\n## Query Execution Details\n\n";
-			responseText += `- **Status**: ${result.meta.status || "Completed"}\n`;
-			if (result.meta.metrics) {
-				responseText += `- **Elapsed Time**: ${result.meta.metrics?.elapsedTime || "N/A"}\n`;
-				responseText += `- **Execution Time**: ${result.meta.metrics?.executionTime || "N/A"}\n`;
-				responseText += `- **Result Count**: ${result.meta.metrics?.resultCount || rows.length}\n`;
-				responseText += `- **Result Size**: ${result.meta.metrics?.resultSize || "N/A"} bytes\n`;
-				responseText += `- **Mutation Count**: ${result.meta.metrics?.mutationCount ?? "N/A"}\n`;
-			}
-		}
-
-		// SIO-664: honest applied-limit metadata. Without this, callers trusted the
-		// requested limit even when the SQL++ predicate or upstream returned fewer rows.
-		// Only emit when the LIMIT was actually applied -- the call sites guard with
-		// `if (limit && limit > 0)` before splicing into SQL, so mirror that condition here.
-		if (requestedLimit !== undefined && requestedLimit > 0) {
-			const actualCount = rows.length;
-			const effectiveLimit = Math.min(requestedLimit, actualCount);
-			const capped = actualCount >= requestedLimit;
-			responseText += "\n\n## Limit Application\n\n";
-			responseText += `- **Requested Limit**: ${requestedLimit}\n`;
-			responseText += `- **Actual Count**: ${actualCount}\n`;
-			responseText += `- **Effective Limit**: ${effectiveLimit}\n`;
-			responseText += `- **Capped**: ${capped}\n`;
-		}
-
-		return {
-			content: [
-				{
-					type: "text",
-					text: responseText,
-				},
-			],
-		};
+		return formatAnalysisResponse(rows, result.meta, title, requestedLimit);
 	} catch (error) {
-		logger.error(`Error executing analysis query: ${error instanceof Error ? error.message : String(error)}`);
+		return formatAnalysisError(error);
+	}
+}
 
-		return {
-			content: [
-				{
-					type: "text",
-					text: `## Error Executing Query\n\n${error instanceof Error ? error.stack || error.message : typeof error === "object" ? JSON.stringify(error, null, 2) : String(error)}`,
-				},
-			],
-			isError: true,
-		};
+/**
+ * SIO-1107: scope-context sibling of executeAnalysisQuery. Statements like
+ * `SELECT ADVISOR(...)` over bare collection names must plan inside a scope
+ * (`bucket.scope(name).query`), which cluster-context execution cannot do.
+ * Identical formatting and error contract to executeAnalysisQuery.
+ */
+export async function executeScopedAnalysisQuery(
+	bucket: Bucket,
+	scopeName: string,
+	queryString: string,
+	title?: string,
+	requestedLimit?: number,
+	parameters?: Record<string, unknown>,
+): Promise<ToolResponse> {
+	try {
+		logger.info(`Executing scoped analysis query: ${title || "Unnamed query"} (scope: ${scopeName})`);
+
+		const hasParameters = parameters !== undefined && Object.keys(parameters).length > 0;
+		if (hasParameters) {
+			// Log keys only -- values may be user-controlled.
+			logger.debug({ paramKeys: Object.keys(parameters as Record<string, unknown>) }, "Query bound parameters");
+		}
+
+		const scope = bucket.scope(scopeName);
+		const result = hasParameters ? await scope.query(queryString, { parameters }) : await scope.query(queryString);
+		const rows = await result.rows;
+		return formatAnalysisResponse(rows, result.meta, title, requestedLimit);
+	} catch (error) {
+		return formatAnalysisError(error);
 	}
 }
 

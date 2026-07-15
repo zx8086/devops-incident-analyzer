@@ -211,3 +211,49 @@ describe("R7 graph-seeded rendering (SIO-1101)", () => {
 		expect(block).not.toContain(SEED_LINE);
 	});
 });
+
+// SIO-1107: bucket-aware couchbase rendering.
+describe("SIO-1107 bucket-aware couchbase rendering", () => {
+	const RESOLVED_BUCKETS: ResolvedIdentifiers = {
+		resolvedForTurn: 1,
+		resolvedForServices: ["order-service"],
+		couchbase: {
+			scopes: { orders: ["order_lines"] },
+			defaultBucket: "default",
+			buckets: ["default", "prices", "archive"],
+			otherBucketScopes: { prices: { pricing: ["price_points"] } },
+		},
+	};
+
+	test("renders default bucket, other bucket names, and per-bucket trees with the no-index-tags caveat", () => {
+		const block = buildFocusBlock(FOCUS, NOW, RESOLVED_BUCKETS, "couchbase");
+		expect(block).toContain("Default bucket (the tree above): default. Other buckets visible: prices, archive");
+		expect(block).toContain("prices.pricing: [price_points]");
+		expect(block).toContain("NO index tags");
+		expect(block).toContain("bucket_name");
+	});
+
+	test("bucket list without probed trees still renders the default-bucket line", () => {
+		const resolved: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: ["order-service"],
+			couchbase: { scopes: { orders: ["order_lines"] }, defaultBucket: "default", buckets: ["default"] },
+		};
+		const block = buildFocusBlock(FOCUS, NOW, resolved, "couchbase");
+		expect(block).toContain("Default bucket (the tree above): default");
+		expect(block).not.toContain("Other buckets visible");
+		expect(block).not.toContain("Other buckets' scopes");
+	});
+
+	test("absent bucket fields render exactly as before (regression guard)", () => {
+		const legacy: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: ["order-service"],
+			couchbase: { scopes: { orders: ["order_lines"] } },
+		};
+		const block = buildFocusBlock(FOCUS, NOW, legacy, "couchbase");
+		expect(block).toContain("orders: [order_lines]");
+		expect(block).not.toContain("Default bucket");
+		expect(block).not.toContain("Other buckets");
+	});
+});

@@ -5,12 +5,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { assertIdentifier, COUCHBASE_IDENTIFIER_RE } from "../src/lib/identifiers";
+import { sqlppParser } from "../src/lib/sqlppParser";
+import { buildExplainStatement } from "../src/tools/explainSqlPlusPlusQuery";
 import { buildQuery as buildCompletedRequests } from "../src/tools/queryAnalysis/getCompletedRequests";
 import { buildQuery as buildDetailedIndexes } from "../src/tools/queryAnalysis/getDetailedIndexes";
 import { buildQuery as buildDetailedPreparedStatements } from "../src/tools/queryAnalysis/getDetailedPreparedStatements";
 import { buildQuery as buildDocumentTypeExamples } from "../src/tools/queryAnalysis/getDocumentTypeExamples";
+import { buildQuery as buildIndexAdvisor, extractAdvisorSections } from "../src/tools/queryAnalysis/getIndexAdvisor";
 import { buildQuery as buildIndexesToDrop } from "../src/tools/queryAnalysis/getIndexesToDrop";
+import { buildQuery as buildLowSelectivity } from "../src/tools/queryAnalysis/getLowSelectivityQueries";
 import { buildQuery as buildMostExpensiveQueries } from "../src/tools/queryAnalysis/getMostExpensiveQueries";
+import { buildQuery as buildNonCovering } from "../src/tools/queryAnalysis/getNonCoveringIndexQueries";
 import { buildQuery as buildSystemIndexes } from "../src/tools/queryAnalysis/getSystemIndexes";
 import { buildQuery as buildSystemNodes } from "../src/tools/queryAnalysis/getSystemNodes";
 import { buildQuery as buildSystemVitals } from "../src/tools/queryAnalysis/getSystemVitals";
@@ -424,5 +429,145 @@ describe("getMostExpensiveQueries.buildQuery", () => {
 	test("parameters bag is always empty (no user literals to bind)", () => {
 		expect(buildMostExpensiveQueries({}).parameters).toEqual({});
 		expect(buildMostExpensiveQueries({ period: "week", limit: 10 }).parameters).toEqual({});
+	});
+});
+
+// SIO-1107: covering-index / selectivity detectors + advisor + EXPLAIN helpers.
+
+describe("getNonCoveringIndexQueries.buildQuery (SIO-1107)", () => {
+	test("default query filters on indexScan AND fetch phases, no LIMIT, empty parameters", () => {
+		const { query, parameters } = buildNonCovering({});
+		expect(query).toContain("phaseCounts.indexScan IS NOT MISSING");
+		expect(query).toContain("phaseCounts['fetch'] IS NOT MISSING");
+		expect(query).not.toMatch(/LIMIT/);
+		expect(parameters).toEqual({});
+	});
+
+	test("limit splices LIMIT N at the end", () => {
+		const { query } = buildNonCovering({ limit: 5 });
+		expect(query).toMatch(/LIMIT 5;$/);
+	});
+
+	test("zero/negative limit is ignored", () => {
+		expect(buildNonCovering({ limit: 0 }).query).not.toMatch(/LIMIT/);
+		expect(buildNonCovering({ limit: -3 }).query).not.toMatch(/LIMIT/);
+	});
+});
+
+describe("getLowSelectivityQueries.buildQuery (SIO-1107)", () => {
+	test("default query compares indexScan to resultCount, no LIMIT, empty parameters", () => {
+		const { query, parameters } = buildLowSelectivity({});
+		expect(query).toContain("phaseCounts.indexScan > resultCount");
+		expect(query).toContain("avgScanResultGap");
+		expect(query).not.toMatch(/LIMIT/);
+		expect(parameters).toEqual({});
+	});
+
+	test("limit splices LIMIT N at the end", () => {
+		const { query } = buildLowSelectivity({ limit: 7 });
+		expect(query).toMatch(/LIMIT 7;$/);
+	});
+});
+
+describe("getIndexAdvisor.buildQuery (SIO-1107)", () => {
+	test("analyzed statement binds as $advise_statement, never spliced", () => {
+		const { query, parameters } = buildIndexAdvisor({ query: INJECTION_LITERAL });
+		expect(query).toContain("ADVISOR($advise_statement)");
+		expect(query).not.toContain(INJECTION_LITERAL);
+		expect(parameters.advise_statement).toBe(INJECTION_LITERAL);
+	});
+});
+
+describe("extractAdvisorSections (SIO-1107)", () => {
+	test("classifies index_statement entries by current/recommended/covering ancestors", () => {
+		const rows = [
+			{
+				advisor_result: {
+					adviseinfo: {
+						current_used_indexes: [{ index_statement: "CREATE PRIMARY INDEX ON dates" }],
+						recommended_indexes: {
+							indexes: [{ index_statement: "CREATE INDEX idx_fms ON dates(styleSeasonCodeFms)" }],
+							covering_indexes: [{ index_statement: "CREATE INDEX idx_cov ON dates(a, b)" }],
+						},
+					},
+				},
+			},
+		];
+		const sections = extractAdvisorSections(rows);
+		expect(sections.current).toEqual(["CREATE PRIMARY INDEX ON dates"]);
+		expect(sections.recommended).toEqual(["CREATE INDEX idx_fms ON dates(styleSeasonCodeFms)"]);
+		expect(sections.covering).toEqual(["CREATE INDEX idx_cov ON dates(a, b)"]);
+	});
+
+	test("garbage / empty input yields empty sections without throwing", () => {
+		expect(extractAdvisorSections(null)).toEqual({ current: [], recommended: [], covering: [] });
+		expect(extractAdvisorSections([{ unrelated: 1 }])).toEqual({ current: [], recommended: [], covering: [] });
+		expect(extractAdvisorSections("string")).toEqual({ current: [], recommended: [], covering: [] });
+	});
+
+	test("dedupes repeated statements", () => {
+		const rows = [{ recommended_indexes: { indexes: [{ index_statement: "X" }, { index_statement: "X" }] } }];
+		expect(extractAdvisorSections(rows).recommended).toEqual(["X"]);
+	});
+
+	// Validated against the LIVE Capella ADVISOR shape: current_used_indexes entries
+	// carry the DDL under `index` (not `index_statement`); a bare `index` NAME (e.g.
+	// an IndexScan operator echo) must NOT be classified as a statement.
+	test("live shape: current_used_indexes entries carry DDL under `index`", () => {
+		const rows = [
+			{
+				advisor_result: {
+					current_used_indexes: [{ index: "CREATE INDEX idx_sales ON `default`:`default`.`seasons`.`dates`(a)" }],
+					recommended_indexes: { indexes: [{ index_statement: "CREATE INDEX idx_reco ON dates(b)" }] },
+				},
+			},
+		];
+		const sections = extractAdvisorSections(rows);
+		expect(sections.current).toEqual(["CREATE INDEX idx_sales ON `default`:`default`.`seasons`.`dates`(a)"]);
+		expect(sections.recommended).toEqual(["CREATE INDEX idx_reco ON dates(b)"]);
+	});
+
+	test("a non-DDL `index` field (index name) is not classified", () => {
+		const sections = extractAdvisorSections([{ current_used_indexes: [{ index: "idx_name_only" }] }]);
+		expect(sections).toEqual({ current: [], recommended: [], covering: [] });
+	});
+});
+
+describe("buildExplainStatement (SIO-1107)", () => {
+	test("prepends EXPLAIN to a plain statement", () => {
+		expect(buildExplainStatement("SELECT 1")).toBe("EXPLAIN SELECT 1");
+	});
+
+	test("idempotent when EXPLAIN is already present (any case)", () => {
+		expect(buildExplainStatement("explain SELECT 1")).toBe("EXPLAIN SELECT 1");
+		expect(buildExplainStatement("EXPLAIN  SELECT 1")).toBe("EXPLAIN SELECT 1");
+	});
+
+	test("strips a trailing semicolon before wrapping", () => {
+		expect(buildExplainStatement("SELECT 1; ")).toBe("EXPLAIN SELECT 1");
+	});
+});
+
+// SIO-1107: lock in the first-token gate assumption -- EXPLAIN / SELECT ADVISOR /
+// INFER must pass readOnlyQueryMode; mutations must still be caught.
+describe("sqlppParser read-only gate regression (SIO-1107)", () => {
+	test.each([
+		"EXPLAIN SELECT * FROM c",
+		"SELECT ADVISOR('SELECT 1') AS r",
+		"INFER `c`",
+	])("%p passes modifiesData and modifiesStructure", (q) => {
+		const parsed = sqlppParser.parse(q);
+		expect(sqlppParser.modifiesData(parsed)).toBe(false);
+		expect(sqlppParser.modifiesStructure(parsed)).toBe(false);
+	});
+
+	test.each(["DELETE FROM c", "UPSERT INTO c VALUES ('k', {})"])("%p is caught as data modification", (q) => {
+		const parsed = sqlppParser.parse(q);
+		expect(sqlppParser.modifiesData(parsed)).toBe(true);
+	});
+
+	test("CREATE INDEX is caught as structure modification", () => {
+		const parsed = sqlppParser.parse("CREATE INDEX idx ON c(a)");
+		expect(sqlppParser.modifiesStructure(parsed)).toBe(true);
 	});
 });
