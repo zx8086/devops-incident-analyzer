@@ -120,8 +120,12 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
-			// Test get document
-			await expect(getHandler({})).rejects.toThrow();
+			// SIO-1116: capella_get_document_by_id no longer THROWS on a get() failure -- it now
+			// returns a structured { _error } envelope with isError so a missing document is a
+			// non-degrading not-found finding instead of an uncaught throw the agent mislabels.
+			const getResult = await getHandler({});
+			expect(getResult.isError).toBe(true);
+			expect(JSON.parse(getResult.content[0].text)._error).toBeDefined();
 			// Test upsert document
 			await expect(upsertHandler({})).rejects.toThrow();
 			// Test delete document

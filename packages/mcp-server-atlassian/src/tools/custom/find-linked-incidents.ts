@@ -188,6 +188,12 @@ export async function findLinkedIncidents(
 	const result = await proxy.callTool("searchJiraIssuesUsingJql", {
 		jql,
 		maxResults: ctx.limit,
+		// SIO-1116: the Rovo upstream now REQUIRES searchResultMode (values "issues" | "count"
+		// | "all", listed in its `required` array despite a documented default of "issues").
+		// Omitting it made the upstream reject with -32602, which parseAtlassianTextContent
+		// could not JSON-parse -> null -> a silent count:0. "issues" returns the issues array
+		// this tool reads; "count" would return no issues and break it.
+		searchResultMode: "issues",
 	});
 
 	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {

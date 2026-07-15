@@ -166,6 +166,9 @@ export async function getIncidentHistory(
 	const result = await proxy.callTool("searchJiraIssuesUsingJql", {
 		jql,
 		maxResults: 100,
+		// SIO-1116: upstream now requires searchResultMode (see find-linked-incidents.ts).
+		// "issues" returns the issues array aggregate() consumes.
+		searchResultMode: "issues",
 	});
 
 	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {

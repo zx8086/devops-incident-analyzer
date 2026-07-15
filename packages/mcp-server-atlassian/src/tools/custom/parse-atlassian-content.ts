@@ -25,6 +25,22 @@ export class AtlassianAuthRequiredError extends Error {
 	}
 }
 
+// SIO-1116: the upstream signalled a failure (result.isError) whose text block is not JSON --
+// e.g. a `-32602 Input validation error` from an upstream schema change. Previously the parser
+// returned null here, which every caller treats as an empty result, so a broken tool call
+// silently read as "no data" for a whole run. Throwing surfaces it: each tool's registration
+// try/catch converts it into a real { isError: true } tool result the LLM can see and react to.
+export class AtlassianUpstreamError extends Error {
+	readonly code = "ATLASSIAN_UPSTREAM_ERROR";
+	constructor(
+		readonly upstreamTool: string,
+		message: string,
+	) {
+		super(message);
+		this.name = "AtlassianUpstreamError";
+	}
+}
+
 interface ParseLogger {
 	warn: (meta: Record<string, unknown>, msg: string) => void;
 }
@@ -57,6 +73,10 @@ export function parseAtlassianTextContent<T>(result: McpToolResult, opts: ParseO
 			{ ...opts.context, upstreamTool: opts.upstreamTool, isError: result.isError },
 			"Atlassian response had no text content blocks",
 		);
+		// SIO-1116: an isError result with no text blocks is a failure, not an empty match set.
+		if (result.isError) {
+			throw new AtlassianUpstreamError(opts.upstreamTool, `Upstream ${opts.upstreamTool} error: no content blocks`);
+		}
 		return null;
 	}
 
@@ -84,5 +104,13 @@ export function parseAtlassianTextContent<T>(result: McpToolResult, opts: ParseO
 		{ ...opts.context, upstreamTool: opts.upstreamTool, blockCount: blocks.length, samples },
 		`Failed to parse ${opts.upstreamTool} response`,
 	);
+
+	// SIO-1116: when the upstream flagged the result as an error (isError), an unparseable body
+	// is a genuine upstream failure (validation error, -32602, etc.) -- NOT an empty result set.
+	// Throw so the caller surfaces it instead of silently returning empty matches. A successful
+	// (isError falsy) response we simply can't parse still degrades gracefully to null.
+	if (result.isError) {
+		throw new AtlassianUpstreamError(opts.upstreamTool, `Upstream ${opts.upstreamTool} error: ${samples.join(" | ")}`);
+	}
 	return null;
 }

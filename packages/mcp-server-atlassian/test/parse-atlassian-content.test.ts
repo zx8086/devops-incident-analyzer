@@ -2,7 +2,11 @@
 // SIO-704: pin the failure modes of the shared Atlassian-content parser.
 
 import { describe, expect, test } from "bun:test";
-import { AtlassianAuthRequiredError, parseAtlassianTextContent } from "../src/tools/custom/parse-atlassian-content.js";
+import {
+	AtlassianAuthRequiredError,
+	AtlassianUpstreamError,
+	parseAtlassianTextContent,
+} from "../src/tools/custom/parse-atlassian-content.js";
 
 interface Captured {
 	meta: Record<string, unknown>;
@@ -157,5 +161,50 @@ describe("parseAtlassianTextContent", () => {
 			log,
 		});
 		expect(parsed).toBeNull();
+	});
+
+	// SIO-1116: an isError result whose body is not JSON (e.g. a -32602 validation error) must
+	// NOT degrade to a benign null -- that silently masked the searchResultMode schema break for
+	// a whole run. It now throws AtlassianUpstreamError so the caller surfaces a real tool error.
+	test("throws AtlassianUpstreamError on an isError result with an unparseable body", () => {
+		const log = makeLog();
+		const result = {
+			isError: true,
+			content: [
+				{
+					type: "text",
+					text: 'MCP error -32602: Input validation error: [{ "path": ["searchResultMode"], "message": "Invalid input" }]',
+				},
+			],
+		};
+		expect(() =>
+			parseAtlassianTextContent(result, {
+				upstreamTool: "searchJiraIssuesUsingJql",
+				context: { jql: "x" },
+				log,
+			}),
+		).toThrow(AtlassianUpstreamError);
+	});
+
+	test("throws AtlassianUpstreamError on an isError result with no content blocks", () => {
+		const log = makeLog();
+		expect(() =>
+			parseAtlassianTextContent(
+				{ isError: true, content: [] },
+				{ upstreamTool: "searchJiraIssuesUsingJql", context: {}, log },
+			),
+		).toThrow(AtlassianUpstreamError);
+	});
+
+	test("a non-error unparseable body still degrades gracefully to null (no throw)", () => {
+		const log = makeLog();
+		const result = {
+			content: [{ type: "text", text: "<html>Server Error</html>" }],
+		};
+		// isError is falsy -> we cannot prove this is an upstream failure, so keep the old
+		// benign-null behavior rather than throwing on every odd-but-successful shape.
+		expect(
+			parseAtlassianTextContent(result, { upstreamTool: "searchJiraIssuesUsingJql", context: {}, log }),
+		).toBeNull();
 	});
 });

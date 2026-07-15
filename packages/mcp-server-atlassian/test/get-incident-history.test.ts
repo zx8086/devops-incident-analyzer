@@ -86,6 +86,34 @@ describe("getIncidentHistory SIO-704 regressions", () => {
 	});
 });
 
+// SIO-1116: forward the now-required searchResultMode, and surface a -32602 upstream rejection
+// instead of aggregating an empty (silent count:0) history.
+describe("getIncidentHistory SIO-1116", () => {
+	test("forwards searchResultMode: 'issues'", async () => {
+		let capturedArgs: Record<string, unknown> | undefined;
+		const fakeProxy = {
+			callTool: async (_name: string, args: Record<string, unknown>) => {
+				capturedArgs = args;
+				return { content: [{ type: "text", text: JSON.stringify({ issues: [] }) }] };
+			},
+		} as unknown as AtlassianMcpProxy;
+		await getIncidentHistory(fakeProxy, { service: "svc", windowDays: 30, groupBy: "week", incidentProjects: ["INC"] });
+		expect(capturedArgs?.searchResultMode).toBe("issues");
+	});
+
+	test("throws instead of returning an empty history when upstream rejects with -32602", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				isError: true,
+				content: [{ type: "text", text: "MCP error -32602: Input validation error: searchResultMode required" }],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		await expect(
+			getIncidentHistory(fakeProxy, { service: "svc", windowDays: 30, groupBy: "week", incidentProjects: ["INC"] }),
+		).rejects.toThrow(/searchJiraIssuesUsingJql/);
+	});
+});
+
 describe("getIncidentHistory (end-to-end)", () => {
 	test("end-to-end via mock proxy", async () => {
 		const fakeProxy = {

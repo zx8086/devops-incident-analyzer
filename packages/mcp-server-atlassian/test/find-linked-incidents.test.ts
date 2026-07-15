@@ -164,6 +164,41 @@ describe("findLinkedIncidents SIO-704 regressions", () => {
 	});
 });
 
+// SIO-1116: the upstream searchJiraIssuesUsingJql now REQUIRES searchResultMode; omitting it
+// returned a -32602 whose non-JSON body parsed to null -> a silent count:0. Pin both the
+// forwarded arg and the no-longer-silent failure.
+describe("findLinkedIncidents SIO-1116 (searchResultMode + loud upstream errors)", () => {
+	test("forwards searchResultMode: 'issues' to the upstream", async () => {
+		let capturedArgs: Record<string, unknown> | undefined;
+		const fakeProxy = {
+			callTool: async (_name: string, args: Record<string, unknown>) => {
+				capturedArgs = args;
+				return { content: [{ type: "text", text: JSON.stringify({ issues: [] }) }] };
+			},
+		} as unknown as AtlassianMcpProxy;
+		await findLinkedIncidents(fakeProxy, { service: "svc", withinDays: 30, limit: 5, incidentProjects: ["INC"] });
+		expect(capturedArgs?.searchResultMode).toBe("issues");
+		expect(capturedArgs?.maxResults).toBe(5);
+	});
+
+	test("throws instead of silently returning count:0 when upstream rejects with a -32602 body", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: 'MCP error -32602: Input validation error: [{ "path": ["searchResultMode"], "message": "Invalid input" }]',
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		await expect(
+			findLinkedIncidents(fakeProxy, { service: "svc", withinDays: 30, limit: 10, incidentProjects: ["INC"] }),
+		).rejects.toThrow(/searchJiraIssuesUsingJql/);
+	});
+});
+
 describe("findLinkedIncidents (end-to-end with mock proxy)", () => {
 	test("returns shaped issues via proxy.callTool", async () => {
 		const fakeProxy = {

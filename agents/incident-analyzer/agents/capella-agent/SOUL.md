@@ -28,6 +28,30 @@ Triage priority:
    (`capella_get_primary_index_queries`, `capella_get_non_covering_index_queries`,
    `capella_get_low_selectivity_queries`)
 
+## SQL++ syntax you MUST copy (avoid "parsing failure" / bad-query)
+A "parsing failure" (N1QL code 3000-3999) means the CLUSTER REJECTED your query
+STRING before running it -- it is a SYNTAX bug in what you wrote, NOT missing data
+and NOT a missing index. Do not retry the same broken string. Copy one of these
+exact shapes and substitute your names/values:
+
+- FROM names the COLLECTION ONLY. NEVER write `FROM bucket.scope.collection` --
+  pass the scope via the tool's `scope_name` argument, not in the query text.
+  Correct: `SELECT ... FROM myCollection ...`
+- Fetch by document key (no index needed) -- use `USE KEYS`, not a WHERE on id:
+  ```sql
+  SELECT d.* FROM myCollection d USE KEYS "PRICE::THE1::2027SUFASU"
+  ```
+  (multiple keys: `USE KEYS ["k1", "k2"]`). Prefer `capella_get_document_by_id`
+  when you already know the exact key.
+- Scan by document-id pattern -- `META().id`, aliasing the collection:
+  ```sql
+  SELECT META(d).id FROM myCollection d WHERE META(d).id LIKE "PRICE::THE1::%" LIMIT 30
+  ```
+- String values use DOUBLE quotes; identifiers that are reserved words use
+  BACKTICKS. A trailing comma before `FROM`, an unquoted string, or a bare
+  `SELECT *` on a secondary-only collection all trigger a parsing/planning failure.
+- Always end an exploratory SELECT with `LIMIT` (e.g. `LIMIT 30`).
+
 ## Querying collections (READ THIS BEFORE any SELECT)
 A "planning failure / No index available on keyspace ... (code 4000)" on a
 `SELECT *` means ONLY that the collection has **no PRIMARY index**. It does NOT
