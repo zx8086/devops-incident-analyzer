@@ -27,6 +27,13 @@ describe("waitForOAuthCallback", () => {
 	test("rejects on error callback", async () => {
 		const path = "/oauth/callback";
 		const promise = waitForOAuthCallback({ port: serverPort, path });
+		// Mark the promise handled from the start: the server defers reject() via
+		// setTimeout(0), which can fire while this test is still awaiting fetch()/
+		// text() -- bun test flags a rejection that sits unhandled for more than a
+		// tick as an unhandled error and fails the test (CI flake). Note a deferred
+		// `expect(promise).rejects` does NOT work here: it blocks the test until the
+		// promise settles, deadlocking against the fetch below.
+		promise.catch(() => {});
 
 		await Bun.sleep(50);
 
