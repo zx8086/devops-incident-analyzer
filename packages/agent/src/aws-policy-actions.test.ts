@@ -1,4 +1,4 @@
-// agent/src/aws-policy-actions.test.ts
+// packages/agent/src/aws-policy-actions.test.ts
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { _grantedActionsForTest, extractIamActions, isGrantedAction } from "./aws-policy-actions.ts";

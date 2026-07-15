@@ -1,4 +1,4 @@
-// agent/src/aws-policy-actions.ts
+// packages/agent/src/aws-policy-actions.ts
 // SIO-1120: the set of AWS IAM actions the DevOpsAgentReadOnly role is granted, derived from the
 // two committed policy documents under scripts/agentcore/policies/:
 //   - devops-agent-readonly-policy.json               (base read)
@@ -16,7 +16,7 @@
 // All actions are stored lowercased for case-insensitive matching against LLM-emitted text.
 const GRANTED_ACTIONS: ReadonlySet<string> = new Set(
 	[
-		// --- Base policy: devops-agent-readonly-policy.json ---
+		// Base policy (devops-agent-readonly-policy.json): core read surface.
 		"sts:getcalleridentity",
 		"ec2:describeregions",
 		"ec2:describeavailabilityzones",
@@ -116,7 +116,7 @@ const GRANTED_ACTIONS: ReadonlySet<string> = new Set(
 		"guardduty:getdetector",
 		"guardduty:listfindings",
 		"guardduty:getfindings",
-		// --- Troubleshooting policy: devops-agent-readonly-troubleshooting-policy.json ---
+		// Troubleshooting policy (devops-agent-readonly-troubleshooting-policy.json): network-path + change diagnosis.
 		"ec2:describevpcendpointservices",
 		"ec2:describevpcendpointconnections",
 		"ec2:describevpcendpointserviceconfigurations",

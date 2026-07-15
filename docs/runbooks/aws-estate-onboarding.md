@@ -423,7 +423,8 @@ aws iam attach-role-policy \
   --role-name DevOpsAgentReadOnly \
   --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyTroubleshooting
 
-# On a later update:
+# On a later update (a managed policy holds at most 5 versions; delete the oldest
+# non-default version first if you have hit the cap, or just use the wrapper below):
 aws iam create-policy-version \
   --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/DevOpsAgentReadOnlyTroubleshooting \
   --policy-document file://scripts/agentcore/policies/devops-agent-readonly-troubleshooting-policy.json \
@@ -467,7 +468,7 @@ Re-apply checklist (the policy now carries `SecurityAndAuditRead`):
 - [ ] `728412486223` (eu-b2bonboarding-prd) — `SecurityAndAuditRead` applied
 - [ ] `399987695868` (eu-shared-services-prd — self-loop) — `SecurityAndAuditRead` applied
 
-**Image rebuild is also required for SIO-841 and SIO-855** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` (SIO-841) and `aws_ecs_describe_task_definition` (SIO-855) tools only exist in a freshly built image. Re-export the tarball and load it into the AgentCore runtime:
+**Image rebuild is also required for SIO-841, SIO-855, and SIO-1120** (unlike estate-only changes, which need no image). The MCP **tool code** changed — the new `aws_cloudtrail_*` / `aws_securityhub_*` / `aws_guardduty_*` (SIO-841), `aws_ecs_describe_task_definition` (SIO-855), and the six network-path tools `aws_ec2_describe_route_tables` / `_nat_gateways` / `_network_acls` / `_flow_logs` / `_transit_gateways` / `_vpc_peering_connections` (SIO-1120) only exist in a freshly built image. Attaching the SIO-1120 troubleshooting policy WITHOUT rebuilding the image leaves the runtime granted the IAM actions but lacking the tools that call them. Re-export the tarball and load it into the AgentCore runtime:
 
 ```bash
 ./scripts/agentcore/push-to-production-ecr.sh --package mcp-server-aws --export-tarball
@@ -484,11 +485,12 @@ This produces `aws-mcp-agentcore.tar.gz` at the repo root (arm64, smoke-tested).
    docker inspect <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/aws-mcp-agentcore:latest --format '{{.Architecture}}'  # must print arm64
    ```
 2. **Point the `aws_mcp_server` AgentCore runtime at the new image** — via the Bedrock AgentCore console (Runtime -> Edit -> Container image URI -> the pushed `:latest` URI) or `aws bedrock-agentcore-control update-agent-runtime --agent-runtime-id <id> --agent-runtime-artifact "containerConfiguration={containerUri=<ECR_URI>:latest}" --region <REGION>` (same shape as `scripts/agentcore/deploy.sh` Step 4, but pointed at the existing runtime ID instead of creating a new one). `AWS_ESTATES` and `AWS_REGION` are untouched by this — only the image reference changes.
-3. **Verify**, same as an `AWS_ESTATES` update (Part 4): wait for the runtime status to return to `READY`, then call `aws_list_estates` — every estate should still show `ok: true`. Additionally confirm the new tool surface exists (e.g. call one of the new SIO-841/855 tools and confirm it's recognized rather than erroring as unknown).
+3. **Verify**, same as an `AWS_ESTATES` update (Part 4): wait for the runtime status to return to `READY`, then call `aws_list_estates` — every estate should still show `ok: true`. Additionally confirm the new tool surface exists: call one of the new SIO-841/855 tools AND at least one SIO-1120 network-path tool (e.g. `aws_ec2_describe_route_tables`) and confirm each is recognized rather than erroring as unknown.
 
 IAM apply (the checklist above) is account-side and does **not** need an image; the image rebuild is needed because the tool surface grew. Both must be done for the new tools to work end-to-end.
 
-- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 + SIO-855 tool code)
+- [ ] AWS MCP image rebuilt + loaded into the AgentCore runtime (SIO-841 + SIO-855 + SIO-1120 tool code)
+- [ ] Post-rollout: a SIO-1120 network-path tool (e.g. `aws_ec2_describe_route_tables`) is recognized by the runtime, not erroring as unknown
 
 ### 2.6 SIO-855 re-apply (ECS task-definition tool)
 
