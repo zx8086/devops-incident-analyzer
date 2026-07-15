@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	parseAwsEcsServiceArns,
 	parseAwsLogGroups,
+	parseCouchbaseBuckets,
 	parseCouchbaseScopeTree,
 	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
@@ -169,6 +170,67 @@ describe("parseCouchbaseSystemIndexes (SIO-1088: primary vs secondary + key fiel
 	test("returns {} on empty / malformed input", () => {
 		expect(parseCouchbaseSystemIndexes("")).toEqual({});
 		expect(parseCouchbaseSystemIndexes("no json here")).toEqual({});
+	});
+
+	// SIO-1107: system:indexes rows are cluster-wide; the optional bucketName arg
+	// scopes the map to the default bucket.
+	test("bucketName filter drops rows from other buckets, keeps rows without bucket_id", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([
+				{ bucket_id: "default", scope_id: "s", keyspace_id: "c", state: "online", is_primary: true },
+				{ bucket_id: "prices", scope_id: "s", keyspace_id: "c2", state: "online", is_primary: true },
+				{ scope_id: "s", keyspace_id: "c3", state: "online", is_primary: true },
+			]),
+			"default",
+		);
+		expect(out.s?.c?.hasPrimary).toBe(true);
+		expect(out.s?.c2).toBeUndefined();
+		expect(out.s?.c3?.hasPrimary).toBe(true);
+	});
+
+	test("omitted bucketName keeps every bucket's rows (pre-SIO-1107 behavior)", () => {
+		const out = parseCouchbaseSystemIndexes(
+			md([
+				{ bucket_id: "default", scope_id: "s", keyspace_id: "c", state: "online", is_primary: true },
+				{ bucket_id: "prices", scope_id: "s", keyspace_id: "c2", state: "online", is_primary: true },
+			]),
+		);
+		expect(out.s?.c?.hasPrimary).toBe(true);
+		expect(out.s?.c2?.hasPrimary).toBe(true);
+	});
+});
+
+describe("parseCouchbaseBuckets (SIO-1107)", () => {
+	test("parses default_bucket and object-shaped bucket names", () => {
+		const raw = JSON.stringify({
+			default_bucket: "default",
+			buckets: [
+				{ name: "default", bucketType: "membase" },
+				{ name: "second-bucket", bucketType: "membase" },
+			],
+		});
+		expect(parseCouchbaseBuckets(raw)).toEqual({ defaultBucket: "default", buckets: ["default", "second-bucket"] });
+	});
+
+	test("accepts a plain string-array buckets variant", () => {
+		expect(parseCouchbaseBuckets(JSON.stringify({ buckets: ["a", "b"] }))).toEqual({
+			defaultBucket: undefined,
+			buckets: ["a", "b"],
+		});
+	});
+
+	test("dedupes repeated names", () => {
+		expect(parseCouchbaseBuckets(JSON.stringify({ buckets: ["a", "a"] })).buckets).toEqual(["a"]);
+	});
+
+	test("returns empty buckets on drift", () => {
+		expect(parseCouchbaseBuckets("")).toEqual({ buckets: [] });
+		expect(parseCouchbaseBuckets("no json here")).toEqual({ buckets: [] });
+		expect(parseCouchbaseBuckets(JSON.stringify(["default"]))).toEqual({ buckets: [] });
+		expect(parseCouchbaseBuckets(JSON.stringify({ buckets: [{ notName: 1 }] }))).toEqual({
+			defaultBucket: undefined,
+			buckets: [],
+		});
 	});
 });
 

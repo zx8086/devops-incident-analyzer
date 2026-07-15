@@ -47,7 +47,7 @@ tool_mapping:
     system_vitals:
       - capella_get_system_vitals
       - capella_get_system_nodes
-      - capella_health_check
+      - capella_get_cluster_health
       - capella_ping
     fatal_requests:
       - capella_get_fatal_requests
@@ -62,22 +62,29 @@ tool_mapping:
       - capella_get_most_expensive_queries
       - capella_get_longest_running_queries
       - capella_get_primary_index_queries
+      - capella_get_non_covering_index_queries
+      - capella_get_low_selectivity_queries
     index_analysis:
       - capella_get_system_indexes
       - capella_get_indexes_to_drop
       - capella_get_detailed_indexes
+      - capella_get_index_advisor_recommendations
+      - capella_get_non_covering_index_queries
+      - capella_get_low_selectivity_queries
     node_status:
       - capella_get_system_nodes
       - capella_get_system_vitals
-      - capella_get_diagnostics
+      - capella_get_cluster_health
     document_ops:
       - capella_get_document_by_id
+      - capella_get_buckets
       - capella_get_scopes_and_collections
       - capella_get_schema_for_collection
       - capella_get_document_type_examples
       - capella_analyze_document_structure
     query_execution:
       - capella_run_sql_plus_plus_query
+      - capella_explain_sql_plus_plus_query
       - capella_get_prepared_statements
       - capella_get_detailed_prepared_statements
       - capella_suggest_query_optimizations
@@ -85,8 +92,8 @@ tool_mapping:
     system_vitals: when checking cluster-wide CPU, memory, disk, and replication health (the primary cluster-state path)
     fatal_requests: when investigating queries that hit fatal errors (timeouts, OOM, malformed responses) -- not slow queries, true failures
     slow_queries: when investigating queries above the slow-query threshold by elapsed time (latency outliers, not failures)
-    expensive_queries: when investigating queries with high resource cost (memory, CPU, scan size) -- can be fast OR slow
-    index_analysis: when reading GSI/secondary index definitions, advisor recommendations, or index stats
+    expensive_queries: when investigating queries with high resource cost (memory, CPU, scan size, non-covering fetches) -- can be fast OR slow
+    index_analysis: when reading GSI/secondary index definitions or stats, running the server-computed Index Advisor on a query, or sweeping for non-covering / low-selectivity query patterns
     node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
-    document_ops: when reading specific documents by key from a known bucket/scope/collection (read-only K/V access)
-    query_execution: when running an N1QL SELECT query (read-only; the compliance layer rejects mutations)
+    document_ops: when listing buckets/scopes/collections or reading specific documents by key (read-only K/V access)
+    query_execution: when running an N1QL SELECT query or EXPLAIN plan (read-only; the compliance layer rejects mutations)

@@ -33,6 +33,7 @@ import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./m
 import {
 	type CouchbaseIndexMap,
 	parseAwsLogGroups,
+	parseCouchbaseBuckets,
 	parseCouchbaseScopeTree,
 	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
@@ -416,6 +417,11 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 	return serviceNames.length > 0 ? { elastic: { serviceNames } } : {};
 }
 
+// SIO-1107: bound the bucket-aware second hop -- how many non-default buckets get a
+// per-bucket scopes/collections probe, and how many bucket names land in state.
+const MAX_PROBED_BUCKETS = 3;
+const MAX_BUCKET_NAMES = 10;
+
 async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	const scopesTool = toolFor("couchbase", "capella_get_scopes_and_collections");
 	if (!scopesTool) return {};
@@ -423,14 +429,31 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	// never blocks the scope map). The index probe tells us which collections are actually
 	// queryable, so the focus block can steer the agent away from SELECT *-ing index-less
 	// collections (the seasons.* planning-failure storm).
+	// SIO-1107: bucket enumeration joins the same parallel round. The tool is absent on older
+	// servers -- then every new field stays undefined and the result is identical to before.
 	const indexesTool = toolFor("couchbase", "capella_get_system_indexes");
-	const [scopesRes, indexesRes] = await Promise.allSettled([
+	const bucketsTool = toolFor("couchbase", "capella_get_buckets");
+	const [scopesRes, indexesRes, bucketsRes] = await Promise.allSettled([
 		scopesTool.invoke({}),
 		indexesTool ? indexesTool.invoke({}) : Promise.reject(new Error("capella_get_system_indexes unavailable")),
+		bucketsTool ? bucketsTool.invoke({}) : Promise.reject(new Error("capella_get_buckets unavailable")),
 	]);
 	if (scopesRes.status !== "fulfilled") return {};
 	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
 	if (Object.keys(scopes).length === 0) return {};
+
+	let defaultBucket: string | undefined;
+	let bucketNames: string[] | undefined;
+	if (bucketsRes.status === "fulfilled") {
+		const parsedBuckets = parseCouchbaseBuckets(normalizeToolContent(bucketsRes.value));
+		if (parsedBuckets.buckets.length > 0) {
+			defaultBucket = parsedBuckets.defaultBucket;
+			bucketNames = parsedBuckets.buckets.slice(0, MAX_BUCKET_NAMES);
+		}
+	} else {
+		logger.info({ error: msg(bucketsRes.reason) }, "couchbase bucket probe unavailable; resolving default bucket only");
+	}
+
 	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
 	// SIO-1088: capture per-collection primary/secondary index info so the focus block can steer the
 	// agent to the RIGHT query shape (SELECT * only where a primary index exists; WHERE-on-key-field
@@ -439,7 +462,9 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	let indexInfo: CouchbaseIndexMap | undefined;
 	if (indexesRes.status === "fulfilled") {
 		const rawIndexes = normalizeToolContent(indexesRes.value);
-		indexInfo = parseCouchbaseSystemIndexes(rawIndexes);
+		// SIO-1107: system:indexes is cluster-wide; scope the map to the default bucket when known
+		// so another bucket's indexes never tag the default bucket's collections.
+		indexInfo = parseCouchbaseSystemIndexes(rawIndexes, defaultBucket);
 		// SIO-1088 (CodeRabbit): distinguish a GENUINE "no online indexes" response from PARSE DRIFT
 		// (the upstream shape changed and the parser silently extracted nothing). Both collapse to an
 		// empty map otherwise, which would mislabel every collection [NO USABLE INDEX]. If the raw
@@ -458,7 +483,36 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 			"couchbase index probe failed; collections rendered without index tags",
 		);
 	}
-	return { couchbase: indexInfo ? { scopes, indexInfo } : { scopes } };
+
+	// SIO-1107: bounded second hop -- enumerate scopes/collections of up to MAX_PROBED_BUCKETS
+	// non-default buckets in parallel. Per-bucket failures are non-fatal; the whole hop shares
+	// the node's existing probe budget (these are fast collection-manager reads).
+	let otherBucketScopes: Record<string, Record<string, string[]>> | undefined;
+	if (defaultBucket && bucketNames) {
+		const others = bucketNames.filter((b) => b !== defaultBucket).slice(0, MAX_PROBED_BUCKETS);
+		if (others.length > 0) {
+			const settled = await Promise.allSettled(others.map((b) => scopesTool.invoke({ bucket_name: b })));
+			settled.forEach((res, i) => {
+				const name = others[i];
+				if (!name) return;
+				if (res.status !== "fulfilled") {
+					logger.warn({ bucket: name, error: msg(res.reason) }, "couchbase per-bucket scope probe failed");
+					return;
+				}
+				const tree = parseCouchbaseScopeTree(normalizeToolContent(res.value));
+				if (Object.keys(tree).length === 0) return;
+				otherBucketScopes = otherBucketScopes ?? {};
+				otherBucketScopes[name] = tree;
+			});
+		}
+	}
+
+	const couchbase: NonNullable<ResolvedIdentifiers["couchbase"]> = { scopes };
+	if (indexInfo) couchbase.indexInfo = indexInfo;
+	if (defaultBucket) couchbase.defaultBucket = defaultBucket;
+	if (bucketNames) couchbase.buckets = bucketNames;
+	if (otherBucketScopes) couchbase.otherBucketScopes = otherBucketScopes;
+	return { couchbase };
 }
 
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

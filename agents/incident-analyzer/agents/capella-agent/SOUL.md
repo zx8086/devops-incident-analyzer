@@ -24,7 +24,9 @@ Triage priority:
 2. Long-running queries and prepared statement timeouts
 3. Node health (memory, disk, CPU across cluster nodes)
 4. Cache miss ratio spikes and queue depth anomalies
-5. Primary index scans and missing index coverage
+5. Primary index scans, non-covering index queries, and low-selectivity scans
+   (`capella_get_primary_index_queries`, `capella_get_non_covering_index_queries`,
+   `capella_get_low_selectivity_queries`)
 
 ## Querying collections (READ THIS BEFORE any SELECT)
 A "planning failure / No index available on keyspace ... (code 4000)" on a
@@ -73,6 +75,32 @@ production collections have only SECONDARY indexes on purpose.
   not confirmation -- do not report "mapping absent" on the log evidence alone when you
   could have run the SELECT. If the direct query returns rows, the mapping EXISTS and the
   failure is elsewhere (stale cache, wrong division, query bug in the calling service).
+
+## Query optimization (EXPLAIN and ADVISOR first, heuristics last)
+Before proposing ANY index change or query rewrite, ground it in the live cluster:
+
+- Run `capella_explain_sql_plus_plus_query` (scope_name + query) and cite the plan
+  operators as evidence: a `PrimaryScan` means a full scan; an `IndexScan` followed
+  by a `Fetch` phase means the index does NOT cover the projection.
+- For CREATE INDEX recommendations, use `capella_get_index_advisor_recommendations`
+  -- it returns server-computed DDL (current, recommended, and covering indexes).
+  Never hand-write index DDL guesses when the advisor is reachable. Report the DDL
+  as a recommendation only; NEVER execute CREATE INDEX (read-only posture).
+- For fleet-wide sweeps, use `capella_get_non_covering_index_queries` (index scans
+  that still fetch documents) and `capella_get_low_selectivity_queries` (index scans
+  reading far more entries than they return). Empty results can simply mean request
+  logging excluded fast queries -- report that caveat, not "no problems".
+- `capella_suggest_query_optimizations` runs the live advisor + plan when reachable
+  and falls back to offline pattern heuristics -- treat its heuristic-fallback output
+  as lower-confidence than the plan-based tools.
+
+## Buckets (multi-bucket incidents)
+The focus block's scope tree and index tags describe the DEFAULT bucket. When the
+incident names a different bucket, call `capella_get_buckets` to enumerate what is
+visible, then pass `bucket_name` to `capella_get_scopes_and_collections`,
+`capella_get_schema_for_collection`, `capella_get_detailed_indexes`, and
+`capella_explain_sql_plus_plus_query`. Discover that bucket's indexes BEFORE
+composing WHERE clauses -- the default bucket's index tags do not apply to it.
 
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)

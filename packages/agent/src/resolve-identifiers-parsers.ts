@@ -74,6 +74,33 @@ export function parseCouchbaseScopeTree(normalized: string): Record<string, stri
 	return scopes;
 }
 
+// COUCHBASE (SIO-1107): capella_get_buckets returns bare JSON
+// { default_bucket: string, buckets: [{ name, ... }] } (older builds may emit a
+// plain string array). Defensive: returns { buckets: [] } on any shape drift.
+export interface CouchbaseBuckets {
+	defaultBucket?: string;
+	buckets: string[];
+}
+
+export function parseCouchbaseBuckets(normalized: string): CouchbaseBuckets {
+	const parsed = firstJson(normalized);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { buckets: [] };
+	const obj = parsed as Record<string, unknown>;
+	const names: string[] = [];
+	if (Array.isArray(obj.buckets)) {
+		for (const b of obj.buckets) {
+			if (typeof b === "string") {
+				names.push(b);
+			} else if (b && typeof b === "object") {
+				const name = (b as Record<string, unknown>).name;
+				if (typeof name === "string") names.push(name);
+			}
+		}
+	}
+	const defaultBucket = typeof obj.default_bucket === "string" ? obj.default_bucket : undefined;
+	return { defaultBucket, buckets: dedupe(names) };
+}
+
 // COUCHBASE (SIO-1087): capella_get_system_indexes returns the executeAnalysisQuery markdown --
 // a fenced ```json block wrapping an array of system:indexes rows. Each row has keyspace_id
 // (collection), scope_id, bucket_id, name, is_primary (true only for a primary index),
@@ -116,7 +143,7 @@ function extractKeyFields(indexKey: unknown): string[] {
 	return fields;
 }
 
-export function parseCouchbaseSystemIndexes(normalized: string): CouchbaseIndexMap {
+export function parseCouchbaseSystemIndexes(normalized: string, bucketName?: string): CouchbaseIndexMap {
 	// executeAnalysisQuery wraps rows in a ```json fenced block after a "# Title" heading and
 	// followed by "## Query Execution Details" -- firstJson's slice-to-end would include the
 	// closing fence and trailing prose and fail to parse. Extract the fenced block first.
@@ -136,6 +163,11 @@ export function parseCouchbaseSystemIndexes(normalized: string): CouchbaseIndexM
 	for (const row of rows) {
 		if (!row || typeof row !== "object") continue;
 		const r = row as Record<string, unknown>;
+		// SIO-1107: system:indexes rows are CLUSTER-wide. When the caller knows the default
+		// bucket, drop rows declaring a DIFFERENT bucket_id so another bucket's indexes never
+		// tag the default bucket's collections. Rows without a string bucket_id are kept
+		// (legacy shape); an omitted bucketName keeps the pre-SIO-1107 behavior exactly.
+		if (bucketName !== undefined && typeof r.bucket_id === "string" && r.bucket_id !== bucketName) continue;
 		const scope = typeof r.scope_id === "string" ? r.scope_id : undefined;
 		const collection = typeof r.keyspace_id === "string" ? r.keyspace_id : undefined;
 		const state = typeof r.state === "string" ? r.state : undefined;

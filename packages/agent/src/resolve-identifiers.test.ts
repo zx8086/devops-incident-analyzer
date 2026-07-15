@@ -530,3 +530,115 @@ describe("R7 graph seeds (SIO-1101)", () => {
 		expect(store.calls).toEqual([]);
 	});
 });
+
+// SIO-1107: bucket-aware couchbase probe.
+describe("SIO-1107 bucket-aware couchbase probe", () => {
+	const DEFAULT_TREE = "📁 Scope: new_model\n  └─ 📄 Collection: seasonal_assignment\n";
+	const OTHER_TREE = "Bucket: prices\n\n📁 Scope: pricing\n  └─ 📄 Collection: price_points\n";
+	const bucketsPayload = (names: string[]) =>
+		JSON.stringify({ default_bucket: "default", buckets: names.map((name) => ({ name })) });
+
+	function indexesMd(rows: unknown[]): string {
+		return `# System Indexes (${rows.length} results)\n\n\`\`\`json\n${JSON.stringify(rows)}\n\`\`\``;
+	}
+
+	test("populates defaultBucket/buckets/otherBucketScopes and passes bucket_name on the second hop", async () => {
+		const scopeArgs: unknown[] = [];
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async (args) => {
+					scopeArgs.push(args);
+					const a = args as Record<string, unknown> | undefined;
+					return a?.bucket_name === "prices" ? OTHER_TREE : DEFAULT_TREE;
+				},
+			},
+			{ name: "capella_get_buckets", invoke: async () => bucketsPayload(["default", "prices"]) },
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		const cb = result.resolvedIdentifiers?.couchbase;
+		expect(cb?.scopes).toEqual({ new_model: ["seasonal_assignment"] });
+		expect(cb?.defaultBucket).toBe("default");
+		expect(cb?.buckets).toEqual(["default", "prices"]);
+		expect(cb?.otherBucketScopes).toEqual({ prices: { pricing: ["price_points"] } });
+		expect(scopeArgs).toContainEqual({ bucket_name: "prices" });
+	});
+
+	test("buckets tool absent -> couchbase block deep-equals the pre-SIO-1107 shape", async () => {
+		toolRegistry.couchbase = [{ name: "capella_get_scopes_and_collections", invoke: async () => DEFAULT_TREE }];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		expect(result.resolvedIdentifiers?.couchbase).toEqual({ scopes: { new_model: ["seasonal_assignment"] } });
+	});
+
+	test("caps the second hop at 3 non-default buckets", async () => {
+		const probed: string[] = [];
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async (args) => {
+					const a = args as Record<string, unknown> | undefined;
+					if (typeof a?.bucket_name === "string") {
+						probed.push(a.bucket_name);
+						return "Scope: s\n  Collection: c\n";
+					}
+					return DEFAULT_TREE;
+				},
+			},
+			{
+				name: "capella_get_buckets",
+				invoke: async () => bucketsPayload(["default", "b1", "b2", "b3", "b4", "b5"]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		expect(probed).toHaveLength(3);
+		expect(Object.keys(result.resolvedIdentifiers?.couchbase?.otherBucketScopes ?? {})).toEqual(["b1", "b2", "b3"]);
+	});
+
+	test("a failing per-bucket probe drops that bucket only", async () => {
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async (args) => {
+					const a = args as Record<string, unknown> | undefined;
+					if (a?.bucket_name === "bad") throw new Error("bucket unreachable");
+					if (a?.bucket_name === "ok") return "Scope: s_ok\n  Collection: c_ok\n";
+					return DEFAULT_TREE;
+				},
+			},
+			{ name: "capella_get_buckets", invoke: async () => bucketsPayload(["default", "ok", "bad"]) },
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		expect(result.resolvedIdentifiers?.couchbase?.otherBucketScopes).toEqual({ ok: { s_ok: ["c_ok"] } });
+	});
+
+	test("indexInfo is scoped to the default bucket via bucket_id", async () => {
+		toolRegistry.couchbase = [
+			{ name: "capella_get_scopes_and_collections", invoke: async () => DEFAULT_TREE },
+			{ name: "capella_get_buckets", invoke: async () => bucketsPayload(["default", "prices"]) },
+			{
+				name: "capella_get_system_indexes",
+				invoke: async () =>
+					indexesMd([
+						{
+							bucket_id: "default",
+							scope_id: "new_model",
+							keyspace_id: "seasonal_assignment",
+							state: "online",
+							is_primary: true,
+						},
+						{
+							bucket_id: "prices",
+							scope_id: "pricing",
+							keyspace_id: "price_points",
+							state: "online",
+							is_primary: true,
+						},
+					]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		const indexInfo = result.resolvedIdentifiers?.couchbase?.indexInfo;
+		expect(indexInfo?.new_model?.seasonal_assignment?.hasPrimary).toBe(true);
+		expect(indexInfo?.pricing).toBeUndefined();
+	});
+});

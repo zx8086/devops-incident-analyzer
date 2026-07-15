@@ -147,6 +147,27 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 						"    A [NO USABLE INDEX] collection may still have data -- NO WHERE query can be planned without any index (a WHERE will also fail with 'no index available'). Use capella_get_document_by_id or USE KEYS instead. Never conclude it is empty from a SELECT * or WHERE failure.",
 					);
 				}
+				// SIO-1107: bucket-aware rendering. The tree + index tags above always describe the
+				// DEFAULT bucket; list the other visible buckets (and their probed scope trees) so the
+				// agent can pass bucket_name to the scope/schema/index tools when the incident points
+				// at a non-default bucket.
+				const cb = resolved.couchbase;
+				if (cb.defaultBucket && cb.buckets?.length) {
+					const otherNames = cb.buckets.filter((b) => b !== cb.defaultBucket);
+					lines.push(
+						`- Default bucket (the tree above): ${cb.defaultBucket}${otherNames.length > 0 ? `. Other buckets visible: ${otherNames.join(", ")}` : ""}`,
+					);
+				}
+				if (cb.otherBucketScopes && Object.keys(cb.otherBucketScopes).length > 0) {
+					lines.push(
+						"- Other buckets' scopes -> collections (NO index tags here -- before querying one, run capella_get_detailed_indexes / capella_get_schema_for_collection with its bucket_name):",
+					);
+					for (const [bucketName, scopeTree] of Object.entries(cb.otherBucketScopes)) {
+						for (const [scope, collections] of Object.entries(scopeTree)) {
+							lines.push(`    ${bucketName}.${scope}: [${collections.join(", ")}]`);
+						}
+					}
+				}
 			}
 			break;
 		case "aws":

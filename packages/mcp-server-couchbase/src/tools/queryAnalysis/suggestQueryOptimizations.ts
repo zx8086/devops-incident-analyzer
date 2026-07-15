@@ -3,7 +3,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { config } from "../../config";
+import { evaluateQueryPlan, formatPlanFindings } from "../../lib/queryPlan";
+import { resolveBucket } from "../../lib/resolveBucket";
+import { sqlppParser } from "../../lib/sqlppParser";
 import { logger } from "../../utils/logger";
+import { buildExplainStatement } from "../explainSqlPlusPlusQuery";
+import { buildQuery as buildAdvisorQuery, extractAdvisorSections } from "./getIndexAdvisor";
 
 // SIO-1058: Couchbase GSI has NO `INCLUDE (col-list)` covering clause (that is SQL Server syntax;
 // only INCLUDE MISSING on the leading key exists). A covering index appends the projected fields
@@ -20,10 +26,84 @@ export function buildCoveringIndexDdl(
 	return `CREATE INDEX idx_covering ON \`${bucket}\`.\`${scope}\`.\`${collection}\`(${allKeys});`;
 }
 
+// SIO-1107: live analysis via the server-computed Index Advisor + EXPLAIN plan.
+// Returns null when the cluster path yields nothing (both legs failed), so the
+// caller can fall back to the offline regex heuristics. Exported for unit testing.
+export async function runLiveOptimizationAnalysis(
+	query: string,
+	scopeName: string,
+	bucket: Bucket,
+	bucketName?: string,
+): Promise<string | null> {
+	const resolved = resolveBucket(bucket, bucketName);
+	const scope = resolved.scope(scopeName);
+	const { query: advisorStmt, parameters } = buildAdvisorQuery({ query });
+
+	// ADVISOR only evaluates the statement (never executes it), so it is always
+	// safe. The EXPLAIN leg is skipped for mutations under readOnlyQueryMode to
+	// keep the posture uniform with capella_explain_sql_plus_plus_query.
+	const inner = query.trim().replace(/^EXPLAIN\s+/i, "");
+	const parsed = sqlppParser.parse(inner);
+	const skipExplain =
+		config.server.readOnlyQueryMode && (sqlppParser.modifiesData(parsed) || sqlppParser.modifiesStructure(parsed));
+
+	const [advisorRes, explainRes] = await Promise.allSettled([
+		scope.query(advisorStmt, { parameters }).then((r) => r.rows),
+		skipExplain
+			? Promise.reject(new Error("EXPLAIN skipped for a mutation statement in read-only mode"))
+			: scope.query(buildExplainStatement(query)).then((r) => r.rows),
+	]);
+
+	if (advisorRes.status !== "fulfilled" && explainRes.status !== "fulfilled") {
+		logger.warn(
+			{ advisorError: String(advisorRes.reason), explainError: String(explainRes.reason) },
+			"Live optimization analysis unavailable; falling back to heuristics",
+		);
+		return null;
+	}
+
+	let text = "# Query Optimization Suggestions (live cluster analysis)\n\n";
+	text += `## Original Query\n\n\`\`\`sql\n${query}\n\`\`\`\n\n`;
+
+	if (advisorRes.status === "fulfilled") {
+		const sections = extractAdvisorSections(advisorRes.value);
+		text += "## Index Advisor (server-computed)\n\n";
+		text += `- Current indexes used: ${sections.current.length}\n`;
+		text += `- Recommended indexes: ${sections.recommended.length}\n`;
+		text += `- Recommended covering indexes: ${sections.covering.length}\n\n`;
+		const renderList = (title: string, statements: string[]) => {
+			if (statements.length === 0) return "";
+			return `### ${title}\n\n${statements.map((s) => `\`\`\`sql\n${s}\n\`\`\``).join("\n\n")}\n\n`;
+		};
+		text += renderList("Current Indexes Used", sections.current);
+		text += renderList("Recommended Indexes", sections.recommended);
+		text += renderList("Recommended Covering Indexes", sections.covering);
+		if (sections.recommended.length + sections.covering.length === 0) {
+			text += "The advisor returned no index recommendations -- existing indexes already serve this query.\n\n";
+		}
+	} else {
+		text += `## Index Advisor (server-computed)\n\nUnavailable: ${String(advisorRes.reason)}\n\n`;
+	}
+
+	if (explainRes.status === "fulfilled") {
+		const first = explainRes.value[0];
+		const plan =
+			first !== null && typeof first === "object" && "plan" in (first as Record<string, unknown>)
+				? (first as Record<string, unknown>).plan
+				: first;
+		text += `## Execution Plan Analysis\n\n${formatPlanFindings(evaluateQueryPlan(plan))}\n\n`;
+		text += "Run capella_explain_sql_plus_plus_query for the full plan JSON.\n";
+	} else {
+		text += `## Execution Plan Analysis\n\nUnavailable: ${String(explainRes.reason)}\n`;
+	}
+
+	return text;
+}
+
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
 		"capella_suggest_query_optimizations",
-		"Analyze a query and suggest optimizations and indexes",
+		"Analyze a query and suggest optimizations and indexes. Uses the live Index Advisor and EXPLAIN plan when the cluster is reachable; falls back to offline heuristic analysis otherwise.",
 		{
 			query: z.string().describe("The N1QL query to analyze"),
 			bucket_name: z.string().optional().describe("Bucket name (defaults to bucket in query)"),
@@ -34,9 +114,6 @@ export default (server: McpServer, bucket: Bucket) => {
 			logger.info({ query, bucket_name, scope_name, collection_name }, "Analyzing query for optimizations");
 
 			try {
-				// Analyze the query
-				const analysis = analyzeQuery(query);
-
 				// Extract bucket, scope, collection if not provided
 				const { extractedBucket, extractedScope, extractedCollection } = extractQueryComponents(query);
 
@@ -44,12 +121,21 @@ export default (server: McpServer, bucket: Bucket) => {
 				const targetScope = scope_name || extractedScope || "_default";
 				const targetCollection = collection_name || extractedCollection || "_default";
 
-				// Format suggestions
+				// SIO-1107: live ADVISOR + EXPLAIN first; regex heuristics only as fallback.
+				const live = await runLiveOptimizationAnalysis(query, targetScope, bucket, bucket_name || undefined);
+				if (live !== null) {
+					return { content: [{ type: "text" as const, text: live }] };
+				}
+
+				const analysis = analyzeQuery(query);
+				const banner =
+					"> Heuristic fallback (cluster unavailable): the live Index Advisor and EXPLAIN could not be reached, so the following is offline pattern analysis. Re-run when the cluster is reachable, or use capella_get_index_advisor_recommendations directly.\n\n";
 				return {
 					content: [
 						{
-							type: "text",
-							text: formatOptimizationSuggestions(query, analysis, targetBucket, targetScope, targetCollection),
+							type: "text" as const,
+							text:
+								banner + formatOptimizationSuggestions(query, analysis, targetBucket, targetScope, targetCollection),
 						},
 					],
 				};
@@ -59,7 +145,7 @@ export default (server: McpServer, bucket: Bucket) => {
 				return {
 					content: [
 						{
-							type: "text",
+							type: "text" as const,
 							text: `## Error Analyzing Query\n\n${error instanceof Error ? error.message : String(error)}`,
 						},
 					],
@@ -439,11 +525,9 @@ function formatOptimizationSuggestions(
 
 	// Add EXPLAIN suggestion
 	output += `## Next Steps\n\n`;
-	output += `To further analyze this query, run EXPLAIN to see the query execution plan:\n\n`;
-	output += `\`\`\`sql\n`;
-	output += `EXPLAIN ${query}\n`;
-	output += `\`\`\`\n\n`;
-	output += `This will show how the query is executed and whether it utilizes indexes effectively.\n`;
+	output += `To further analyze this query against the live cluster:\n\n`;
+	output += `- Run capella_explain_sql_plus_plus_query to see the real execution plan and whether indexes cover the projection.\n`;
+	output += `- Run capella_get_index_advisor_recommendations for server-computed index DDL.\n`;
 
 	return output;
 }
