@@ -393,8 +393,9 @@ export function getToolsForDataSource(dataSourceId: string): StructuredToolInter
 	const raw = toolsByServer.get(serverName) ?? [];
 
 	// SIO-828: hide the `estate` arg from the LLM and inject it from ALS at call time.
-	// The aws_list_estates introspection tool has no `estate` arg; the wrapper's
-	// schema-strip is idempotent for it (delete on missing key is a no-op).
+	// SIO-1114: the aws_list_estates introspection tool has no `estate` arg AND is
+	// exempted from the runtime withAwsEstate guard inside the wrapper -- SIO-854
+	// reconciliation calls it before any per-estate fan-out (no scope active).
 	if (dataSourceId === "aws") {
 		return wrapAwsToolsWithEstate(raw);
 	}
