@@ -31,6 +31,7 @@ import {
 	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServices,
+	parseElasticServiceAgg,
 	parseKafkaConsumerGroups,
 	parseKafkaGroupTopics,
 	parseKonnectControlPlanes,
@@ -79,6 +80,10 @@ const APM_INDEX = "metrics-apm.service_destination.1m*";
 const APM_INDEX_FALLBACK = "metrics-apm*";
 // SIO-1115: composite-agg buckets per page (service x destination pairs).
 const APM_AGG_PAGE_SIZE = 1000;
+// SIO-1121: upper bound on a deployment's distinct service.name set (the phase-1 pre-fetch
+// that seeds the destination filter). Real deployments have 5-40; 1000 is a generous cap
+// that keeps the terms agg single-shot without pagination.
+const APM_SERVICE_NAME_LIMIT = 1000;
 // SIO-1115: shared page cap for the APM composite agg AND the ECS list pagination.
 // Hitting it marks the source incomplete (sweep skipped, safe) rather than reading
 // partial data as authoritative. 10 pages x 1000 pairs is ample for real estates.
@@ -144,6 +149,26 @@ function toolFor(dataSourceId: string, name: string) {
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
 
+// SIO-1121: the phase-1 service.name terms agg truncated if sum_other_doc_count > 0 (there
+// are more distinct services than APM_SERVICE_NAME_LIMIT buckets returned). A truncated
+// caller set is incomplete -- the collection must not sweep. Parses the normalized search
+// text; defensively returns false on any shape drift (the drift is caught elsewhere).
+function serviceNamesTruncated(text: string): boolean {
+	const start = text.indexOf("{");
+	if (start === -1) return false;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text.slice(start));
+	} catch {
+		return false;
+	}
+	if (!parsed || typeof parsed !== "object") return false;
+	const agg = (parsed as Record<string, unknown>).svc_names;
+	if (!agg || typeof agg !== "object") return false;
+	const other = (agg as Record<string, unknown>).sum_other_doc_count;
+	return typeof other === "number" && other > 0;
+}
+
 // SIO-1115: optional label so per-describe timeouts are distinguishable in logs from
 // the whole-source timeout. Same non-cancelling Promise.race caveat as before.
 function withTimeout<T>(p: Promise<T>, ms: number, label = "topology collector"): Promise<T> {
@@ -188,23 +213,75 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 	if (!tool) return { kind, edges: [], complete: false, callers: [] };
 	const deployments = configuredElasticDeployments();
 	const maxPages = maxCollectorPages();
-	// SIO-1115: composite agg over [service.name, span.destination.service.resource].
-	// after present -> continue the previous page; absent -> first page.
-	const argsFor = (index: string, afterKey?: Record<string, unknown>) => ({
+	// SIO-1121: run a deployment's search under its header scope. Rejects a raw error
+	// envelope with no JSON; distinguishes a bare `{}` (ES omits the agg block on a
+	// zero-hit wildcard search: missing index / no APM data) from a JSON drift envelope.
+	const runSearch = async (
+		deploymentId: string | undefined,
+		args: Record<string, unknown>,
+	): Promise<{ text: string; emptyAggs: boolean }> => {
+		const run = () => tool.invoke(args);
+		const raw = deploymentId ? await withElasticDeployment(deploymentId, run) : await run();
+		const text = normalizeToolContent(raw);
+		if (!text.includes("{")) throw new Error("unparseable search response");
+		// Trim the extracted payload so a whitespace variant ("{}\n", trailing spaces from
+		// a future MCP render change) still classifies as the bare-{} empty case.
+		const payload = text.slice(text.indexOf("{")).trim();
+		return { text, emptyAggs: payload === "{}" };
+	};
+	// SIO-1121: phase 1 -- the deployment's distinct service.name set (small: 5-40). This
+	// is the authoritative caller list AND the P6 self-join target set for the destination
+	// filter below. Returns { names: [] } for a legitimately-empty `{}` (no APM data); throws
+	// on drift. `capped` is true when the terms agg TRUNCATED (sum_other_doc_count > 0): the
+	// caller set is then incomplete, so -- like the composite page cap -- the deployment must
+	// not sweep (a dropped caller would make its edges look absent and retire live ones).
+	const fetchServiceNames = async (
+		deploymentId: string | undefined,
+		index: string,
+	): Promise<{ names: string[]; capped: boolean }> => {
+		const args = {
+			index,
+			size: 0,
+			query: { bool: { filter: [{ range: { "@timestamp": { gte: APM_WINDOW_GTE } } }] } },
+			aggs: { svc_names: { terms: { field: "service.name", size: APM_SERVICE_NAME_LIMIT } } },
+		};
+		const { text, emptyAggs } = await runSearch(deploymentId, args);
+		if (emptyAggs) return { names: [], capped: false }; // zero-hit / missing index -> no APM data
+		const names = parseElasticServiceAgg(text);
+		// JSON parsed, not the bare `{}`, but carried no terms buckets = drift / error envelope.
+		// Fail the deployment rather than read it as authoritatively empty (would retire edges).
+		if (names.length === 0) throw new Error("unparseable apm service_names response");
+		return { names, capped: serviceNamesTruncated(text) };
+	};
+	// SIO-1121: phase 2 -- composite agg over [service.name, span.destination.service.resource]
+	// but with the P6 self-join pushed INTO the query: only docs whose destination is (or is a
+	// port-suffixed form of) one of `serviceNames` are aggregated. Without this the agg buckets
+	// EVERY external destination (a large cluster has 30k+ CDN/analytics endpoints -> the page
+	// cap binds every sweep while producing ~0 internal edges). `include` is unsupported on a
+	// composite terms source, so the filter is a bool.should on the destination field.
+	const argsFor = (index: string, serviceNames: string[], afterKey?: Record<string, unknown>) => ({
 		index,
 		size: 0,
-		query: { bool: { filter: [{ range: { "@timestamp": { gte: APM_WINDOW_GTE } } }] } },
+		query: {
+			bool: {
+				filter: [{ range: { "@timestamp": { gte: APM_WINDOW_GTE } } }],
+				// A destination is either the bare service name or "<name>:<port>" (the P6 match
+				// strips the port). Match both forms; minimum_should_match keeps it a filter.
+				should: serviceNames.flatMap((name) => [
+					{ term: { "span.destination.service.resource": name } },
+					{ prefix: { "span.destination.service.resource": `${name}:` } },
+				]),
+				minimum_should_match: 1,
+			},
+		},
 		aggs: {
 			svc_dest: {
 				composite: {
 					size: APM_AGG_PAGE_SIZE,
 					sources: [
 						{ svc: { terms: { field: "service.name" } } },
-						// SIO-1115: missing_bucket so a service with NO exit-span destination still
-						// emits a bucket (key.dest = null). Composite terms sources DROP such docs by
-						// default; without this a destination-less service vanishes from `services` and
-						// stops being a valid P6 self-join target (the old terms agg kept every by_service
-						// bucket). The parser maps a null dest to "no pair, svc still recorded".
+						// missing_bucket keeps the composite shape stable (svc with no matching
+						// dest still emits a null-dest bucket); the parser maps null -> no pair.
 						{ dest: { terms: { field: "span.destination.service.resource", missing_bucket: true } } },
 					],
 					...(afterKey ? { after: afterKey } : {}),
@@ -212,41 +289,49 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 			},
 		},
 	});
-	// Page one index to exhaustion (or the page cap). `capped` true means the cap bound
-	// before after_key ran out -> the collection is INCOMPLETE (must not sweep).
-	const scanIndex = async (deploymentId: string | undefined, index: string) => {
+	// Page the filtered composite to exhaustion (or the page cap). `capped` true means the
+	// cap bound before after_key ran out -> the collection is INCOMPLETE (must not sweep).
+	const scanEdges = async (deploymentId: string | undefined, index: string, serviceNames: string[]) => {
 		const pairs: Array<{ service: string; destination: string }> = [];
-		const serviceSet = new Set<string>();
 		let afterKey: Record<string, unknown> | undefined;
 		let capped = false;
 		for (let page = 0; page < maxPages; page++) {
-			const run = () => tool.invoke(argsFor(index, afterKey));
-			const raw = deploymentId ? await withElasticDeployment(deploymentId, run) : await run();
-			const text = normalizeToolContent(raw);
-			// No JSON at all = a tool error/drift envelope, not an empty agg (a
-			// legitimate zero-hit search still returns the aggregations JSON).
-			if (!text.includes("{")) throw new Error("unparseable search response");
+			const { text, emptyAggs } = await runSearch(deploymentId, argsFor(index, serviceNames, afterKey));
 			const pageResult = parseApmCompositeAggPage(text);
-			// Shape drift (JSON parsed but no svc_dest agg) must FAIL the page, not read as a
-			// legitimately-empty page: an authoritative empty set would retire valid edges
-			// after K sweeps. Throwing rejects this deployment -> complete=false, no sweep.
-			if (!pageResult.foundAgg) throw new Error("unparseable apm composite agg response");
+			if (!pageResult.foundAgg) {
+				// A bare `{}` on the FIRST page = ES omitted the agg block on a zero-hit search
+				// (missing index / no matching destination): legitimately empty, terminate cleanly.
+				// A `{}` mid-pagination (after a real page + after_key) is a scan that broke
+				// mid-flight -- the index can't vanish between pages -- so it is drift; and a
+				// non-empty non-agg object ({error:...}) is always drift. Both throw.
+				if (emptyAggs && page === 0) break;
+				throw new Error("unparseable apm composite agg response");
+			}
 			// Terminate on an empty page: composite can still carry an after_key past the
 			// end, so page emptiness -- not after_key absence -- is the exhaustion signal.
 			if (pageResult.pairs.length === 0 && pageResult.services.length === 0) break;
 			pairs.push(...pageResult.pairs);
-			for (const s of pageResult.services) serviceSet.add(s);
 			afterKey = pageResult.afterKey;
 			if (!afterKey) break; // genuinely exhausted
 			if (page === maxPages - 1) capped = true; // cap bound with pages still remaining
 		}
-		return { pairs, services: [...serviceSet], capped };
+		return { pairs, capped };
 	};
 	const collectDeployment = async (deploymentId: string | undefined) => {
-		const primary = await scanIndex(deploymentId, APM_INDEX);
-		// Zero services can mean the 1m-rollup pattern is absent on this deployment --
-		// retry the whole scan against the broader metrics-apm* pattern before concluding empty.
-		return primary.services.length > 0 ? primary : scanIndex(deploymentId, APM_INDEX_FALLBACK);
+		// Phase 1 on the 1m-rollup pattern; if it has no services, the pattern may be absent
+		// on this deployment -- retry against the broader metrics-apm* before concluding empty.
+		let index = APM_INDEX;
+		let names = await fetchServiceNames(deploymentId, index);
+		if (names.names.length === 0) {
+			index = APM_INDEX_FALLBACK;
+			names = await fetchServiceNames(deploymentId, index);
+		}
+		// No services anywhere = APM-less cluster: empty, no edges, but a valid observation
+		// (not a failure). `services` still carries the (empty) caller set.
+		if (names.names.length === 0) return { pairs: [], services: [], capped: false };
+		const { pairs, capped } = await scanEdges(deploymentId, index, names.names);
+		// A truncated caller set OR a page-capped composite both make the collection incomplete.
+		return { pairs, services: names.names, capped: capped || names.capped };
 	};
 	const settled = await Promise.allSettled(deployments.map(collectDeployment));
 	const pairs: Array<{ service: string; destination: string }> = [];
@@ -275,7 +360,11 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 	return {
 		kind,
 		edges: dedupeEdges(edges),
-		complete: !capped && settled.every((r) => r.status === "fulfilled"),
+		// SIO-1121: require at least one observed caller. After the empty-cluster fix an
+		// APM-less deployment fulfills-empty instead of rejecting; if EVERY deployment is
+		// APM-less, complete would otherwise be true with zero callers and the staleness
+		// sweep would retire real DEPENDS_ON edges. Mirrors the AWS estates.length===0 guard.
+		complete: callers.length > 0 && !capped && settled.every((r) => r.status === "fulfilled"),
 		callers,
 	};
 }
@@ -343,9 +432,19 @@ export async function collectKafkaConsumption(): Promise<CollectorResult> {
 	if (!groupsTool || !describeTool) return { kind, edges: [], complete: false };
 	// NEVER pass `filter` -- the server compiles it as a raw RegExp and a non-regex
 	// token throws MCP -32603. Enumerate unfiltered.
-	const all = parseKafkaConsumerGroups(
-		parseJsonOrThrow(normalizeToolContent(await groupsTool.invoke({})), "kafka consumer-group list"),
-	);
+	// SIO-1121: wrap the list call in its own try/catch so a list failure (e.g. AgentCore
+	// broker -32603 "Listing groups failed") logs a kafka-specific message instead of the
+	// generic `topology collector failed`, making the list case as diagnosable as a describe
+	// failure. Behavior is unchanged: it still rethrows -> the source fails, no sweep.
+	let all: string[];
+	try {
+		all = parseKafkaConsumerGroups(
+			parseJsonOrThrow(normalizeToolContent(await groupsTool.invoke({})), "kafka consumer-group list"),
+		);
+	} catch (error) {
+		logger.warn({ error: msg(error) }, "kafka consumer-group list failed");
+		throw error;
+	}
 	let complete = true;
 	let groups = all;
 	if (all.length > KAFKA_GROUP_CAP) {

@@ -355,17 +355,28 @@ export function parseApmCompositeAggPage(normalized: string): {
 	// legitimately-empty page (an authoritative empty set would retire valid edges after K
 	// sweeps). Mirrors parseJsonOrThrow's "malformed must fail, not read as empty" rule.
 	foundAgg: boolean;
+	// SIO-1121: true ONLY when the whole payload is a bare `{}` (zero-key object). ES omits
+	// the aggregations block on a zero-hit wildcard search (missing index / no APM data on
+	// the cluster), and the MCP renders it as `{}`. That is a legitimately-empty result, not
+	// drift -- the collector treats it as an empty FIRST page (terminate cleanly) rather than
+	// failing the deployment. Distinct from foundAgg:false-with-content (a real error/drift
+	// envelope like {error:...}), which stays emptyAggs:false so the collector still throws.
+	emptyAggs: boolean;
 } {
 	const parsed = firstJson(normalized);
-	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], afterKey: undefined, foundAgg: false };
+	if (!parsed || typeof parsed !== "object")
+		return { pairs: [], services: [], afterKey: undefined, foundAgg: false, emptyAggs: false };
+	// A bare {} = ES omitted the agg block (zero-hit / missing index) -> legitimately empty.
+	const emptyAggs = !Array.isArray(parsed) && Object.keys(parsed as Record<string, unknown>).length === 0;
 	const comp = findProp(parsed as Record<string, unknown>, "svc_dest");
-	if (!comp || typeof comp !== "object") return { pairs: [], services: [], afterKey: undefined, foundAgg: false };
+	if (!comp || typeof comp !== "object")
+		return { pairs: [], services: [], afterKey: undefined, foundAgg: false, emptyAggs };
 	const compObj = comp as Record<string, unknown>;
 	const rawAfter = compObj.after_key;
 	const afterKey = rawAfter && typeof rawAfter === "object" ? (rawAfter as Record<string, unknown>) : undefined;
 	const buckets = compObj.buckets;
 	// svc_dest present but no buckets array = a malformed agg node, not a valid empty page.
-	if (!Array.isArray(buckets)) return { pairs: [], services: [], afterKey, foundAgg: false };
+	if (!Array.isArray(buckets)) return { pairs: [], services: [], afterKey, foundAgg: false, emptyAggs };
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const services: string[] = [];
 	for (const b of buckets) {
@@ -380,7 +391,7 @@ export function parseApmCompositeAggPage(normalized: string): {
 		// still recorded above, but there is no edge pair to add.
 		if (typeof dest === "string" && dest.length > 0) pairs.push({ service: svc, destination: dest });
 	}
-	return { pairs, services: dedupe(services), afterKey, foundAgg: true };
+	return { pairs, services: dedupe(services), afterKey, foundAgg: true, emptyAggs: false };
 }
 
 export interface KonnectRoute {

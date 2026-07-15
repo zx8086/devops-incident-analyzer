@@ -66,6 +66,32 @@ function apmEmptyPage(): string {
 	return `Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ svc_dest: { buckets: [] } })}`;
 }
 
+// SIO-1121: phase-1 pre-fetch response -- the deployment's distinct service.name set as a
+// plain terms agg (svc_names). Seeds the destination filter for the phase-2 composite.
+// sumOther > 0 models a TRUNCATED terms agg (more services than the returned buckets).
+function apmServiceNamesPage(names: string[], sumOther = 0): string {
+	return `Search results with aggregations (100 total hits, 3ms):\n\n${JSON.stringify({
+		svc_names: {
+			doc_count_error_upper_bound: 0,
+			sum_other_doc_count: sumOther,
+			buckets: names.map((n) => ({ key: n, doc_count: 1 })),
+		},
+	})}`;
+}
+
+// SIO-1121: ES omits the aggregations block on a zero-hit wildcard search (missing index /
+// no APM data on the cluster); the MCP renders it as a bare `{}`.
+function apmEmptyObject(): string {
+	return "Search results with aggregations (0 total hits, 0ms):\n\n{}";
+}
+
+// SIO-1121: the elastic tool is invoked for BOTH phases. Branch on the agg the request
+// carries: svc_names -> phase 1 (pre-fetch), svc_dest -> phase 2 (filtered composite).
+function isServiceNamesRequest(args: unknown): boolean {
+	const aggs = (args as { aggs?: Record<string, unknown> } | undefined)?.aggs;
+	return !!aggs && "svc_names" in aggs;
+}
+
 beforeEach(() => {
 	process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 	process.env.KG_TOPOLOGY_CRON_ENABLED = "true";
@@ -122,14 +148,19 @@ describe("flags", () => {
 
 describe("collectElasticDependencies", () => {
 	test("keeps only destinations that map to another observed service (P6), port-stripped", async () => {
+		// SIO-1121: phase 1 returns the observed service set (also the caller list); phase 2's
+		// composite returns pairs. The P6 self-join still de-ports and drops non-service dests
+		// client-side (postgresql / unknown-thing would not survive even the query filter).
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
-				invoke: async () =>
-					apmCompositePage([
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					return apmCompositePage([
 						{ service: "order-service", destinations: ["payment-service:443", "postgresql", "unknown-thing"] },
 						{ service: "payment-service", destinations: ["order-service"] },
-					]),
+					]);
+				},
 			},
 		];
 		const result = await collectElasticDependencies();
@@ -174,11 +205,13 @@ describe("runTopologySweep", () => {
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
-				invoke: async () =>
-					apmCompositePage([
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					return apmCompositePage([
 						{ service: "order-service", destinations: ["payment-service"] },
 						{ service: "payment-service", destinations: [] },
-					]),
+					]);
+				},
 			},
 		];
 		// konnect: routes listing is CAPPED -> edges written, sweep skipped
@@ -350,14 +383,16 @@ describe("runTopologySweep", () => {
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
 		connectedServers = ["elastic-mcp"];
-		let page = 0;
+		// SIO-1121: phase 1 returns the service set (seeds the dest filter); phase 2 pages
+		// the filtered composite. composite page 1 has a pair + after_key -> page 2 empty -> stop.
+		let compositePage = 0;
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
-				invoke: async () => {
-					page++;
-					// page 1: a pair + an after_key -> keep paging. page 2: empty -> stop.
-					if (page === 1) {
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					compositePage++;
+					if (compositePage === 1) {
 						return apmCompositePage(
 							[
 								{ service: "order-service", destinations: ["payment-service"] },
@@ -371,7 +406,7 @@ describe("runTopologySweep", () => {
 			},
 		];
 		const summary = await runTopologySweep();
-		expect(page).toBe(2); // paged until the empty page
+		expect(compositePage).toBe(2); // paged until the empty page
 		expect(summary.sources.elastic).toMatchObject({ edges: 1 });
 		expect(summary.sources.elastic?.sweepSkipped).toBeUndefined();
 		expect(
@@ -387,15 +422,18 @@ describe("runTopologySweep", () => {
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
-				// always a full page with an after_key -> cap binds at 1 page
-				invoke: async () =>
-					apmCompositePage(
+				// phase 1 seeds the filter; phase 2 always returns a full page with an
+				// after_key -> the cap binds at 1 page.
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					return apmCompositePage(
 						[
 							{ service: "order-service", destinations: ["payment-service"] },
 							{ service: "payment-service", destinations: [] },
 						],
 						{ svc: "payment-service", dest: "" },
-					),
+					);
+				},
 			},
 		];
 		const summary = await runTopologySweep();
@@ -412,8 +450,11 @@ describe("runTopologySweep", () => {
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
-				// a well-formed JSON envelope that is NOT an APM composite agg (drift / tool error).
-				// Must NOT be read as a legitimately-empty page (that would retire valid edges).
+				// A well-formed JSON envelope that is NOT `{}` and carries no terms/composite agg
+				// (drift / tool error). SIO-1121: the phase-1 pre-fetch catches it (non-empty object,
+				// no svc_names buckets) and throws. Must NOT be read as a legitimately-empty page
+				// (that would retire valid edges). Regression guard for the emptyAggs discrimination:
+				// only a bare `{}` is empty; every other foundAgg:false case still fails the source.
 				invoke: async () =>
 					`Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ error: "boom" })}`,
 			},
@@ -423,6 +464,178 @@ describe("runTopologySweep", () => {
 		expect(
 			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
 		).toBe(false);
+	});
+
+	// SIO-1121 (C): an APM-less cluster returns a bare `{}` (ES omits the agg block) on BOTH
+	// the primary and the fallback index. The phase-1 pre-fetch treats it as legitimately
+	// empty -> the deployment fulfills with zero services/edges, NO "query failed" WARN, no
+	// throw. With a single (APM-less) deployment, the callers.length>0 guard keeps the source
+	// sweepSkipped (an all-empty elastic result must not retire real DEPENDS_ON edges).
+	test("an APM-less cluster (bare {} on primary+fallback) is empty, not a failure; no sweep (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		// The collector logs "query failed" via pino, not console -- a failure would surface as
+		// an `error` field on the source summary. Assert on the summary: empty, not failed.
+		toolRegistry.elastic = [{ name: "elasticsearch_search", invoke: async () => apmEmptyObject() }];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 0, sweepSkipped: true });
+		expect(summary.sources.elastic?.error).toBeUndefined(); // NOT a failure -> no error field
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	// SIO-1121 (D): the 1m-rollup pattern is absent (bare {}), but metrics-apm* has data. The
+	// pre-fetch retries on the fallback index and the filtered composite then yields edges.
+	test("APM primary is empty ({}) but the fallback index has data -> edges (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let namesCall = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) {
+						namesCall++;
+						// call 1 = primary index (empty {}), call 2 = fallback index (has services)
+						return namesCall === 1 ? apmEmptyObject() : apmServiceNamesPage(["order-service", "payment-service"]);
+					}
+					return apmCompositePage([{ service: "order-service", destinations: ["payment-service"] }]);
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(namesCall).toBe(2); // primary empty -> fallback pre-fetch
+		expect(summary.sources.elastic).toMatchObject({ edges: 1 });
+		expect(summary.sources.elastic?.sweepSkipped).toBeUndefined();
+	});
+
+	// SIO-1121 (G): a bare `{}` on a MIDDLE page (after a real page + after_key) is a scan that
+	// broke mid-flight -- the index can't vanish between pages -- so it is drift, NOT an empty
+	// terminal page. The page-0 gate makes it throw and fail the source.
+	test("a bare {} mid-pagination is drift (page>0) -> fails the source; no sweep (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let compositePage = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					compositePage++;
+					// page 1: real pair + after_key -> keep paging. page 2: bare {} mid-scan -> drift.
+					if (compositePage === 1) {
+						return apmCompositePage([{ service: "order-service", destinations: ["payment-service"] }], {
+							svc: "order-service",
+							dest: "payment-service",
+						});
+					}
+					return apmEmptyObject();
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		// The per-deployment rejection is handled inside collectElasticDependencies (logged as
+		// "apm service_destination query failed") and makes the source incomplete -> sweepSkipped
+		// with no edges and no staleness sweep, matching the shape-drift guard above. (The error
+		// is not surfaced on the summary because Promise.allSettled absorbs the per-deployment
+		// rejection; the collector does not rethrow.)
+		expect(summary.sources.elastic).toMatchObject({ edges: 0, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	// SIO-1121: the phase-1 service.name terms agg TRUNCATED (sum_other_doc_count > 0) means
+	// the caller set is incomplete -- like the composite page cap, edges are written but the
+	// staleness sweep is skipped (a dropped caller would make its edges look absent).
+	test("a truncated service.name terms agg (sum_other_doc_count>0) skips the sweep (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					// sum_other_doc_count > 0 -> more services than returned buckets -> truncated.
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"], 999);
+					return apmCompositePage([{ service: "order-service", destinations: ["payment-service"] }]);
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	// SIO-1121 (B): the phase-2 composite query carries the destination bool.should filter
+	// derived from the phase-1 service names (term=<name> + prefix=<name>:), so ES only
+	// aggregates internal destinations. Asserts the filter is present and shaped correctly.
+	test("the composite query filters destinations by the pre-fetched service names (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let compositeArgs: Record<string, unknown> | undefined;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"]);
+					compositeArgs = args as Record<string, unknown>;
+					return apmEmptyPage();
+				},
+			},
+		];
+		await runTopologySweep();
+		const should = (
+			compositeArgs?.query as { bool?: { should?: unknown[]; minimum_should_match?: number } } | undefined
+		)?.bool;
+		expect(should?.minimum_should_match).toBe(1);
+		expect(should?.should).toContainEqual({ term: { "span.destination.service.resource": "order-service" } });
+		expect(should?.should).toContainEqual({ prefix: { "span.destination.service.resource": "order-service:" } });
+		expect(should?.should).toContainEqual({ term: { "span.destination.service.resource": "payment-service" } });
+		expect(should?.should).toContainEqual({ prefix: { "span.destination.service.resource": "payment-service:" } });
+	});
+
+	// SIO-1121 (C-kafka): a list failure is caught at the LIST step (its own try/catch, which
+	// logs the kafka-specific "kafka consumer-group list failed" before rethrowing), NOT down
+	// in the describe fan-out. Proven behaviorally: describe is never reached, the source fails
+	// with the list error, and no CONSUMES_FROM sweep runs. (The kafka-specific log line itself
+	// is not asserted -- this repo does not spy on pino anywhere, and getLogger returns a fresh
+	// child so the module's captured logger is unreachable; "describe never called" is the
+	// observable proxy that the failure was handled at the list step, not the describe loop.)
+	test("a kafka consumer-group list failure fails at the list step; describe never runs (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["kafka-mcp"];
+		let describeCalls = 0;
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () => {
+					throw new Error("MCP error -32603: Listing groups failed.");
+				},
+			},
+			{
+				name: "kafka_describe_consumer_group",
+				invoke: async () => {
+					describeCalls++;
+					return JSON.stringify({ offsets: [] });
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(describeCalls).toBe(0); // failure handled at the list step, never fanned out to describe
+		expect(summary.sources.kafka).toMatchObject({ edges: 0, sweepSkipped: true });
+		expect(summary.sources.kafka?.error).toContain("Listing groups failed");
+		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
+			false,
+		);
 	});
 
 	test("a source whose MCP server is not connected is skipped without touching the graph", async () => {
