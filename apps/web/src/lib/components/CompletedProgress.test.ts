@@ -79,6 +79,7 @@ describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
 		const { body } = render(CompletedProgress, { props: { outcome: "error" } });
 		expect(body).toContain("Failed");
 		expect(body).toContain("text-red-700");
+		expect(body).not.toContain("Completed");
 	});
 
 	test("completed chip shows the response time when present", () => {
