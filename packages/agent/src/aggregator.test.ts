@@ -42,7 +42,9 @@ import {
 	_setAggregatorLoggerForTesting,
 	aggregate,
 	aggregateResultBudget,
+	countDegradingGapBullets,
 	extractGapsBulletCount,
+	isDegradingGapBullet,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -443,9 +445,90 @@ describe("extractGapsBulletCount", () => {
 	});
 });
 
+// SIO-1106: the gaps cap must count only DEGRADING gap bullets (tool/query failure, auth block,
+// un-runnable/unconfirmable), not routine "looked, found nothing / not applicable / not queried"
+// bullets. This is the text-layer analogue of isDegradingCategory (SIO-1087).
+describe("isDegradingGapBullet (SIO-1106)", () => {
+	// Routine: a datasource looked and found nothing, is not applicable, or was deliberately not
+	// queried. These are normal discovery outcomes and must NOT count toward the cap.
+	const ROUTINE = [
+		"- Kafka: no consumer-group lag data was retrieved (service is not a Kafka consumer).",
+		"- Konnect: no Kong route matches prana-order-service; API-gateway telemetry not applicable.",
+		"- GitLab: no recent merge requests found touching the seasons pipeline in the last 7 days.",
+		"- Atlassian: no linked Jira incident ticket was found for this service.",
+		"- AWS: CloudWatch metrics for the ingestion Lambda were not retrieved (out of estate scope).",
+		"- Elastic: synthetic-monitor results for the order flow were not queried this turn.",
+		"- couchbase seasons.dates returned 0 rows for the requested FMS key.",
+	];
+	// Degraded: a tool/query broke, timed out, was blocked, or a result could not be run/confirmed.
+	// These are the styles-v3 class the cap exists for and MUST count.
+	const DEGRADED = [
+		"- live APM cardinality could not be re-run",
+		"- 37.9x 7-day ratio from March cannot be confirmed or refuted",
+		"- ksql_get_server_info not available in tool environment",
+		"- Atlassian parse failures",
+		"- Three Elasticsearch SQL queries failed during investigation (syntax and index errors).",
+		"- CloudWatch Logs query timed out after 30s and could not complete.",
+		"- The Kafka broker metadata endpoint was unreachable (connection refused).",
+		"- logs:StartQuery returned access denied for the collector log group.",
+	];
+	for (const line of ROUTINE) {
+		test(`routine, does NOT count: ${line.slice(2, 50)}`, () => {
+			expect(isDegradingGapBullet(line)).toBe(false);
+		});
+	}
+	for (const line of DEGRADED) {
+		test(`degraded, DOES count: ${line.slice(2, 50)}`, () => {
+			expect(isDegradingGapBullet(line)).toBe(true);
+		});
+	}
+
+	test("'not available' (tool missing) degrades but 'not applicable' (N/A) does not", () => {
+		expect(isDegradingGapBullet("- ksql_get_server_info not available")).toBe(true);
+		expect(isDegradingGapBullet("- API-gateway telemetry not applicable")).toBe(false);
+	});
+});
+
+describe("countDegradingGapBullets (SIO-1106)", () => {
+	test("counts 0 degrading in a Gaps section of only routine no-data bullets", () => {
+		const report = `## Gaps
+- Kafka: no consumer-group lag data was retrieved (service is not a Kafka consumer).
+- Konnect: no Kong route matches; API-gateway telemetry not applicable.
+- GitLab: no recent merge requests found in the last 7 days.
+- Atlassian: no linked Jira incident ticket was found.
+
+Confidence: 0.72`;
+		expect(extractGapsBulletCount(report)).toBe(4); // total unchanged
+		expect(countDegradingGapBullets(report)).toBe(0); // none degrade
+	});
+
+	test("counts all degrading bullets (styles-v3 shape)", () => {
+		const report = `## Gaps
+- live APM cardinality could not be re-run
+- ksql_get_server_info not available
+- Atlassian parse failures
+
+Confidence: 0.71`;
+		expect(countDegradingGapBullets(report)).toBe(3);
+	});
+
+	test("counts only the degrading subset in a mixed section", () => {
+		const report = `## Gaps
+- Kafka: no consumer-group lag data was retrieved (not a Kafka consumer).
+- CloudWatch Logs query timed out and could not complete.
+- Konnect: no Kong route matches; not applicable.
+- Elasticsearch SQL query failed with an index error.
+
+Confidence: 0.7`;
+		expect(extractGapsBulletCount(report)).toBe(4);
+		expect(countDegradingGapBullets(report)).toBe(2);
+	});
+});
+
 // SIO-709 AC #2: Gaps-section parser must trigger the same 0.59 cap when the
 // LLM lists >= 2 gap bullets, regardless of tool-error rate. The styles-v3
 // transcript had 5 gap bullets and was the original failure mode.
+// SIO-1106: the cap now triggers on DEGRADING gap bullets only; routine no-data gaps do not cap.
 describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", () => {
 	beforeEach(() => {
 		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
@@ -481,6 +564,54 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 Gaps-section confidence cap", (
 		const result = await aggregate(makeState({}));
 		expect(result.confidenceScore).toBe(0.9);
 		expect(result.confidenceCap).toBeUndefined();
+	});
+
+	// SIO-1106: a strong report (0.72) that honestly enumerates one ROUTINE gap per datasource
+	// across a 6-source fan-out must clear the 0.6 HITL gate -- routine "found nothing / not
+	// applicable / not queried" bullets are normal discovery outcomes, not coverage failures.
+	// Before SIO-1106 this capped to 0.59 (6 total bullets >= 2). After, degrading count is 0.
+	test("does NOT cap a strong report whose Gaps are all routine no-data items (SIO-1106)", async () => {
+		mockLlmContent = `# Incident Report: prana-order-service AFS errors
+
+## Summary
+Root cause: seasons.dates secondary index query returns empty for the current FMS window.
+
+## Findings
+- elastic: 91 APM error docs for "AFS not found for FMS".
+- couchbase: seasons.dates secondary GSI returned 0 rows for the requested FMS key.
+
+## Gaps
+- Kafka: no consumer-group lag data was retrieved (service is not a Kafka consumer).
+- Konnect: no Kong route matches prana-order-service; API-gateway telemetry not applicable.
+- GitLab: no recent merge requests found touching the seasons pipeline in the last 7 days.
+- Atlassian: no linked Jira incident ticket was found for this service.
+- AWS: CloudWatch metrics for the ingestion Lambda were not retrieved (out of estate scope).
+- Elastic: synthetic-monitor results were not queried this turn.
+
+Confidence: 0.72`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.72);
+		expect(result.confidenceCap).toBeUndefined();
+		expect(result.finalAnswer).toContain("Confidence: 0.72");
+	});
+
+	// SIO-1106: the SAME report still caps if the Gaps section contains >= 2 DEGRADING bullets
+	// (tool/query failures), proving the tuning narrows the trigger rather than disabling it.
+	test("STILL caps when Gaps contain >= 2 degrading (failure) items (SIO-1106)", async () => {
+		mockLlmContent = `# Incident Report
+
+## Findings
+- elastic: strong evidence.
+
+## Gaps
+- CloudWatch Logs query timed out after 30s and could not complete.
+- Three Elasticsearch SQL queries failed with index errors.
+- Konnect: no Kong route matches; not applicable.
+
+Confidence: 0.85`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
 	});
 });
 
