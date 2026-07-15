@@ -122,8 +122,15 @@ describe("Couchbase MCP Server Tool Tests", () => {
 
 			// Test get document -- SIO-1117: the get handler now catches SDK errors and returns
 			// a structured { _error } envelope with isError:true instead of throwing uncaught.
+			// Assert the delegated envelope survives intact (not just isError) so a delegation
+			// that dropped or mutated _error would fail. Empty params make the mock throw a plain
+			// Error, which classifies to kind "unknown" -> category "unknown".
 			const getResult = await getHandler({});
 			expect(getResult.isError).toBe(true);
+			const getError = JSON.parse(getResult.content[0].text)._error;
+			expect(getError.kind).toBe("unknown");
+			expect(getError.category).toBe("unknown");
+			expect(getError.message).toContain("Failed to get document by id");
 			// Test upsert document
 			await expect(upsertHandler({})).rejects.toThrow();
 			// Test delete document
