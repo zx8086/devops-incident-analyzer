@@ -131,23 +131,44 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			expect(getError.kind).toBe("unknown");
 			expect(getError.category).toBe("unknown");
 			expect(getError.message).toContain("Failed to get document by id");
-			// Test upsert document
-			await expect(upsertHandler({})).rejects.toThrow();
-			// Test delete document
-			await expect(deleteHandler({})).rejects.toThrow();
+
+			// Test upsert document -- SIO-1118: the upsert handler now catches SDK/parse errors and
+			// returns a structured { _error } envelope with isError:true instead of throwing uncaught.
+			// Empty params make JSON.parse(undefined) throw, which classifies to kind/category "unknown".
+			const upsertResult = await upsertHandler({});
+			expect(upsertResult.isError).toBe(true);
+			const upsertError = JSON.parse(upsertResult.content[0].text)._error;
+			expect(upsertError.kind).toBe("unknown");
+			expect(upsertError.category).toBe("unknown");
+			expect(upsertError.message).toContain("Failed to upsert document by id");
+
+			// Test delete document -- SIO-1118: the delete handler now catches SDK errors and returns
+			// a structured { _error } envelope with isError:true instead of throwing uncaught. Empty
+			// params make the mock throw a plain Error, which classifies to kind/category "unknown".
+			const deleteResult = await deleteHandler({});
+			expect(deleteResult.isError).toBe(true);
+			const deleteError = JSON.parse(deleteResult.content[0].text)._error;
+			expect(deleteError.kind).toBe("unknown");
+			expect(deleteError.category).toBe("unknown");
+			expect(deleteError.message).toContain("Failed to delete document by id");
 		});
 
 		test("should handle invalid document content", async () => {
 			const handler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 
-			await expect(
-				handler({
-					scope_name: "_default",
-					collection_name: "_default",
-					document_id: "test_doc",
-					document_content: "invalid json",
-				}),
-			).rejects.toThrow();
+			// SIO-1118: invalid JSON now returns a structured { _error } envelope with isError:true
+			// (kind/category "unknown") instead of throwing uncaught.
+			const result = await handler({
+				scope_name: "_default",
+				collection_name: "_default",
+				document_id: "test_doc",
+				document_content: "invalid json",
+			});
+			expect(result.isError).toBe(true);
+			const error = JSON.parse(result.content[0].text)._error;
+			expect(error.kind).toBe("unknown");
+			expect(error.category).toBe("unknown");
+			expect(error.message).toContain("Failed to upsert document by id");
 		});
 	});
 

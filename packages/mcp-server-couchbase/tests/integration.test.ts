@@ -158,15 +158,15 @@ describe("Integration Tests", () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 			const getHandler = mockServer.registeredTools.capella_get_document_by_id.handler;
 
-			// 1. Try to create document with invalid JSON
-			await expect(
-				upsertHandler({
-					scope_name: "_default",
-					collection_name: "_default",
-					document_id: TEST_DOC_ID,
-					document_content: "invalid json",
-				}),
-			).rejects.toThrow();
+			// 1. Try to create document with invalid JSON -- SIO-1118: the upsert handler now returns
+			// a structured { _error } envelope with isError:true instead of throwing uncaught.
+			const invalidResult = await upsertHandler({
+				scope_name: "_default",
+				collection_name: "_default",
+				document_id: TEST_DOC_ID,
+				document_content: "invalid json",
+			});
+			expect(invalidResult.isError).toBe(true);
 
 			// 2. Verify document doesn't exist -- SIO-1117: a missing document now returns a
 			// structured { _error } envelope with isError:true instead of throwing uncaught.
