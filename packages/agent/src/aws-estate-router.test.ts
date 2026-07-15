@@ -44,8 +44,8 @@ let wrapListEstates = false;
 mock.module("./mcp-bridge.ts", () => ({
 	getToolsForDataSource: (dataSourceId: string) => {
 		if (dataSourceId !== "aws" || !listEstatesPresent) return [];
-		const stub = {
-			name: "aws_list_estates" as const,
+		const stub: Partial<StructuredToolInterface> = {
+			name: "aws_list_estates",
 			async invoke() {
 				listEstatesInvokeCalls += 1;
 				if (listEstatesThrows) throw new Error("server unreachable");
@@ -55,7 +55,7 @@ mock.module("./mcp-bridge.ts", () => ({
 				});
 			},
 		};
-		if (!wrapListEstates) return [stub];
+		if (!wrapListEstates) return [stub as unknown as StructuredToolInterface];
 		return wrapAwsToolsWithEstate([stub as unknown as StructuredToolInterface]);
 	},
 }));
