@@ -21,6 +21,8 @@ mock.module("@devops-agent/agent", () => ({
 	// import set (installSkillLearner is CALLED at load time) + iac-reconcile-cron.ts's
 	// transitive reconcileAll/selectedBackend, or agent.test.ts fails to link when this
 	// file's mock wins the process-global last-wins cache.
+	// SIO-1110: $lib/server/agent.ts imports GRAPH_DEADLINE_KEY at module scope.
+	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	buildGraph: mock(() => Promise.resolve({})),
 	createMcpClient: mock(() => Promise.resolve()),
 	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),

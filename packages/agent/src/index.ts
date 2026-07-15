@@ -11,6 +11,14 @@ export { checkConfidence } from "./confidence-gate.ts";
 export { extractEntities } from "./entity-extractor.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
 export { buildGraph } from "./graph.ts";
+export {
+	capSubAgentTimeoutMs,
+	GRAPH_DEADLINE_KEY,
+	getGraphBudgetMinRetryMs,
+	getGraphBudgetReserveMs,
+	getGraphDeadlineAt,
+	hasRetryBudget,
+} from "./graph-budget.ts";
 export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEntities } from "./graph-knowledge.ts";
 export { buildIacGraph } from "./iac/graph.ts";
 export { evaluateGuards } from "./iac/guards.ts";

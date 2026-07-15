@@ -95,6 +95,8 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-476: state-pruning helpers consumed by pruneThreadState.
 	needsPruning: (msgs: unknown[]) => msgs.length > 2,
 	pruneState: () => ({ removeIds: ["old1"] }),
+	// SIO-1110: agent.ts threads the graph deadline into configurable under this key.
+	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	// SIO-780: datasources route test runs later and imports these from the same
 	// @devops-agent/agent module; include them here so the cached namespace has
 	// the symbols when the cross-test mock pollution kicks in.

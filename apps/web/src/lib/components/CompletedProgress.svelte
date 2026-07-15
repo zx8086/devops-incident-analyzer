@@ -59,7 +59,7 @@ let {
 	completedNodes?: Map<string, { duration: number }>;
 	dataSourceResults?: Map<string, DataSourceStatus>;
 	dataSourceFindings?: Map<string, DataSourceFindings>;
-	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed";
+	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error";
 } = $props();
 
 let expanded = $state(false);
@@ -152,6 +152,17 @@ const outcomeView = $derived.by(() => {
 		case "pipeline-failed":
 			return {
 				label: "Pipeline failed",
+				icon: "error" as const,
+				text: "text-red-700",
+				bgFrom: "#fef2f2",
+				bgTo: "#fee2e2",
+				border: "#fecaca",
+			};
+		case "error":
+			// SIO-1110: a turn whose stream ended in an error event (e.g. graph
+			// timeout abort) must not render the green "Completed" chip.
+			return {
+				label: "Failed",
 				icon: "error" as const,
 				text: "text-red-700",
 				bgFrom: "#fef2f2",

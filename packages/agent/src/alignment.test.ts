@@ -2,7 +2,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
-import { _setAlignmentLoggerForTesting, routeAfterAlignment, summarizeFirstAttempts } from "./alignment.ts";
+import {
+	_setAlignmentLoggerForTesting,
+	checkAlignment,
+	routeAfterAlignment,
+	summarizeFirstAttempts,
+} from "./alignment.ts";
+import { GRAPH_DEADLINE_KEY } from "./graph-budget.ts";
 import type { AgentStateType } from "./state.ts";
 
 describe("summarizeFirstAttempts", () => {
@@ -344,5 +350,52 @@ describe("routeAfterAlignment retryDeployments selection", () => {
 		const payload = sends[0]?.args as { currentDataSource: string; retryDeployments: string[] };
 		expect(payload.currentDataSource).toBe("kafka");
 		expect(payload.retryDeployments).toEqual([]);
+	});
+});
+
+// SIO-1110: alignment must not dispatch a retry the graph budget can't afford.
+// Deadlines below are relative to Date.now() taken inside each test, so the
+// verdicts are deterministic regardless of when the suite runs.
+describe("alignment budget gate (SIO-1110)", () => {
+	afterEach(() => {
+		_setAlignmentLoggerForTesting(null);
+	});
+
+	test("routeAfterAlignment proceeds to aggregate when remaining budget is insufficient", () => {
+		// 30s remaining < reserve (120s) + min retry (60s)
+		const config = { configurable: { [GRAPH_DEADLINE_KEY]: Date.now() + 30_000 } };
+		expect(routeAfterAlignment(makeRetryState(), config)).toBe("aggregate");
+	});
+
+	test("routeAfterAlignment dispatches retries when budget is ample", () => {
+		const config = { configurable: { [GRAPH_DEADLINE_KEY]: Date.now() + 3_600_000 } };
+		const decision = routeAfterAlignment(makeRetryState(), config);
+		expect(Array.isArray(decision)).toBe(true);
+	});
+
+	test("routeAfterAlignment keeps legacy behavior without a threaded deadline", () => {
+		expect(Array.isArray(routeAfterAlignment(makeRetryState()))).toBe(true);
+		expect(Array.isArray(routeAfterAlignment(makeRetryState(), { configurable: {} }))).toBe(true);
+	});
+
+	test("checkAlignment skips the counter increment and surfaces hints when budget is insufficient", () => {
+		const captured: CapturedLog[] = [];
+		_setAlignmentLoggerForTesting(makeCaptureLogger(captured));
+
+		const config = { configurable: { [GRAPH_DEADLINE_KEY]: Date.now() + 30_000 } };
+		const update = checkAlignment(makeRetryState(), config);
+
+		expect(update.alignmentRetries).toBeUndefined();
+		expect(update.alignmentHints).toEqual(["elastic: ECONNRESET while talking to elasticsearch"]);
+		const skipWarn = captured.find((c) => c.level === "warn" && c.msg.includes("insufficient graph budget"));
+		expect(skipWarn).toBeDefined();
+		expect(typeof skipWarn?.meta?.remainingMs).toBe("number");
+		expect(skipWarn?.meta?.retryTargets).toEqual(["elastic"]);
+	});
+
+	test("checkAlignment increments the counter when budget is ample", () => {
+		const config = { configurable: { [GRAPH_DEADLINE_KEY]: Date.now() + 3_600_000 } };
+		const update = checkAlignment(makeRetryState(), config);
+		expect(update.alignmentRetries).toBe(2);
 	});
 });

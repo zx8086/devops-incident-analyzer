@@ -1,7 +1,10 @@
 // agent/src/alignment.ts
+
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult, ToolErrorCategory } from "@devops-agent/shared";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { Send } from "@langchain/langgraph";
+import { getGraphDeadlineAt, hasRetryBudget } from "./graph-budget.ts";
 import type { AgentStateType } from "./state.ts";
 import { classifyToolError } from "./sub-agent.ts";
 
@@ -134,7 +137,7 @@ function getRetryTargets(state: AgentStateType): { retryTargets: string[]; nonRe
 }
 
 // Node function: runs alignment check and updates state metadata
-export function checkAlignment(state: AgentStateType): Partial<AgentStateType> {
+export function checkAlignment(state: AgentStateType, config?: RunnableConfig): Partial<AgentStateType> {
 	const results = state.dataSourceResults;
 	const targetSources = state.targetDataSources;
 
@@ -178,6 +181,26 @@ export function checkAlignment(state: AgentStateType): Partial<AgentStateType> {
 		);
 	}
 
+	// SIO-1110: a retry the graph can't afford would hand aggregation a doomed
+	// runway (observed: 360s elastic timeout + 303s retry left ~26s of the global
+	// budget and the abort killed aggregation). Proceed with errored results --
+	// aggregate + the SIO-1013 grounded gaps/confidence cap handle degraded coverage.
+	const deadlineAt = getGraphDeadlineAt(config);
+	if (retryTargets.length > 0 && !hasRetryBudget(deadlineAt)) {
+		const hints = [
+			...missing.map((id) => `${id}: no response received`),
+			...errors.map((r) => `${r.dataSourceId}: ${r.error}`),
+		];
+		logger.warn(
+			{
+				retryTargets,
+				remainingMs: deadlineAt !== undefined ? deadlineAt - Date.now() : undefined,
+			},
+			"Skipping alignment retry -- insufficient graph budget, proceeding with partial results",
+		);
+		return { alignmentHints: hints };
+	}
+
 	// Increment retry counter so routeAfterAlignment sees the updated value
 	if (retryTargets.length > 0) {
 		return { alignmentRetries: state.alignmentRetries + 1 };
@@ -188,7 +211,7 @@ export function checkAlignment(state: AgentStateType): Partial<AgentStateType> {
 
 // Conditional edge function: decides routing after alignment
 // Returns Send[] for fan-out retries or "aggregate" to proceed
-export function routeAfterAlignment(state: AgentStateType): Send[] | "aggregate" {
+export function routeAfterAlignment(state: AgentStateType, config?: RunnableConfig): Send[] | "aggregate" {
 	const results = state.dataSourceResults;
 	const targetSources = state.targetDataSources;
 
@@ -210,6 +233,14 @@ export function routeAfterAlignment(state: AgentStateType): Send[] | "aggregate"
 
 	// Max retries exhausted -- proceed with partial results
 	if (state.alignmentRetries >= MAX_ALIGNMENT_RETRIES) {
+		return "aggregate";
+	}
+
+	// SIO-1110: same budget gate as checkAlignment (each side re-evaluates with a
+	// fresh clock; time only shrinks, so the worst disagreement is one wasted
+	// counter increment in the node -- benign).
+	if (!hasRetryBudget(getGraphDeadlineAt(config))) {
+		logger.warn("Insufficient graph budget for retry, proceeding to aggregation");
 		return "aggregate";
 	}
 

@@ -25,6 +25,8 @@ mock.module("@devops-agent/agent", () => ({
 	getServerStates: () => mockServerStates,
 	getConnectedServers: () => mockConnected,
 	AttachmentError: class AttachmentError extends Error {},
+	// SIO-1110: $lib/server/agent.ts imports GRAPH_DEADLINE_KEY at module scope.
+	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	buildGraph: () => Promise.resolve({}),
 	buildIacGraph: () => Promise.resolve({}),
 	createMcpClient: () => Promise.resolve(),

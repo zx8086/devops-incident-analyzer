@@ -116,6 +116,17 @@ describe("applyStreamEvent", () => {
 		expect(next.currentContent).toContain("boom");
 	});
 
+	// SIO-1110: an errored stream must not keep the initial "completed" outcome
+	// (the chip rendered green over a dead run).
+	test("error event sets lastOutcome to error", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "error",
+			message: "The operation was aborted due to timeout",
+		});
+		expect(next.lastOutcome).toBe("error");
+		expect(next.currentContent).toContain("[Error: The operation was aborted due to timeout]");
+	});
+
 	test("records pending_actions", () => {
 		const next = applyStreamEvent(initialReducerState(), {
 			type: "pending_actions",

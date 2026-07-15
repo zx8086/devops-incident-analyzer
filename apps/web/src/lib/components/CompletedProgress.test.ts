@@ -65,6 +65,13 @@ describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
 		expect(body).toContain("Pipeline failed");
 	});
 
+	// SIO-1110: an errored stream renders a red "Failed" chip, never green "Completed".
+	test("error -> red 'Failed', not 'Completed'", () => {
+		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "error" } });
+		expect(body).toContain("Failed");
+		expect(body).not.toContain("Completed");
+	});
+
 	test("completed chip shows the response time when present", () => {
 		const { body } = render(CompletedProgress, {
 			props: { completedNodes: nodes, responseTime: 13166, outcome: "completed" },
