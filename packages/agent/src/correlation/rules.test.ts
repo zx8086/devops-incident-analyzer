@@ -240,4 +240,15 @@ describe("shared-infra-blast-radius", () => {
 			),
 		).toBeNull();
 	});
+
+	// SIO-1104 (5a): shared-AwsResource hits from the topology sweep's RUNS_ON edges.
+	test("fires on a shared aws-resource neighbour with the same semantics", () => {
+		const arn = "arn:aws:ecs:eu-west-1:1:service/prod/shared";
+		const match = rule.trigger(
+			stateWith([{ service: "orders", neighbour: "billing", via: "aws-resource", sharedResource: arn }]),
+		);
+		expect(match).not.toBeNull();
+		expect(match?.context.services as string[]).toContain("billing");
+		expect(match?.context.sharedResources as string[]).toContain(`aws-resource:${arn}`);
+	});
 });

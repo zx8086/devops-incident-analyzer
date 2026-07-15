@@ -763,12 +763,14 @@ correlationRules.push({
 correlationRules.push({
 	name: "shared-infra-blast-radius",
 	description:
-		"An incident service shows a runtime error and the knowledge graph knows other services sharing a runtime dependency (Kafka topic / telemetry coordinate); re-fan to elastic-agent to check whether those neighbours are also erroring (a shared-infra root cause).",
+		"An incident service shows a runtime error and the knowledge graph knows other services sharing a runtime dependency (Kafka topic / telemetry coordinate / AWS resource); re-fan to elastic-agent to check whether those neighbours are also erroring (a shared-infra root cause).",
 	trigger: (state) => {
 		// Only the shared-RESOURCE hits have a clear owning agent; a bare depends-on hop
-		// is a weaker signal we do not re-fan on alone.
+		// is a weaker signal we do not re-fan on alone. aws-resource (SIO-1104 5a: two
+		// services RUNS_ON the same ECS resource, from the topology sweep) carries the
+		// same shared-runtime-infra semantics as the other two.
 		const shared = (state.graphBlastRadius ?? []).filter(
-			(h) => h.via === "kafka-topic" || h.via === "telemetry-source",
+			(h) => h.via === "kafka-topic" || h.via === "telemetry-source" || h.via === "aws-resource",
 		);
 		if (shared.length === 0) return null;
 		// Require a real runtime error on the incident (don't blast-radius a clean turn).
