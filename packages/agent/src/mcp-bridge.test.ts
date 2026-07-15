@@ -136,6 +136,11 @@ describe("toolTimeoutFor (SIO-893)", () => {
 		expect(toolTimeoutFor("atlassian-mcp", { ATLASSIAN_TOOL_TIMEOUT_MS: "0.5" })).toBe(120_000);
 	});
 
+	// SIO-1112: a valid fractional override (>= 1) is accepted and floored to integer ms.
+	test("a positive fractional atlassian override is floored to milliseconds", () => {
+		expect(toolTimeoutFor("atlassian-mcp", { ATLASSIAN_TOOL_TIMEOUT_MS: "45000.9" })).toBe(45_000);
+	});
+
 	test("elastic-iac defaults to poll budget + margin", () => {
 		// SIO-989: the drift poll budget default dropped 300s -> 90s, so the derived tool timeout is 120s.
 		expect(toolTimeoutFor("elastic-iac-mcp", {})).toBe(90_000 + 30_000);
