@@ -283,6 +283,134 @@ export function parseGitlabProjects(json: unknown): GitlabProject[] {
 // removed with the atlassian resolveIdentifiers probe -- Jira projects are named by team/org, not
 // service, so name-matching resolved nothing. The atlassian sub-agent searches by domain terms.
 
+// SIO-1104 (5a): topology-sweep parsers.
+
+// Recursive search for a named property anywhere in the parsed response -- the
+// aggregations block's nesting depth varies with the search-tool envelope.
+function findProp(node: Record<string, unknown>, name: string): unknown {
+	if (name in node) return node[name];
+	for (const value of Object.values(node)) {
+		if (!value || typeof value !== "object") continue;
+		const found = findProp(value as Record<string, unknown>, name);
+		if (found !== undefined) return found;
+	}
+	return undefined;
+}
+
+// ELASTIC APM: the topology sweep's service_destination agg -- by_service (terms on
+// service.name) x by_dest (terms on span.destination.service.resource). Takes the
+// normalizeToolContent'd string (the search tool prefixes a text block). `services`
+// carries EVERY by_service bucket key (a service with no outbound pairs is still a
+// valid destination target for the P6 self-join).
+export function parseApmServiceDestinationAgg(normalized: string): {
+	pairs: Array<{ service: string; destination: string }>;
+	services: string[];
+	// True when a terms agg dropped buckets (sum_other_doc_count > 0) -- the
+	// collection is INCOMPLETE and must not drive the staleness sweep (a dropped
+	// service would otherwise accrue false misses).
+	truncated: boolean;
+} {
+	const parsed = firstJson(normalized);
+	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], truncated: false };
+	const byService = findProp(parsed as Record<string, unknown>, "by_service");
+	if (!byService || typeof byService !== "object") return { pairs: [], services: [], truncated: false };
+	const buckets = (byService as Record<string, unknown>).buckets;
+	if (!Array.isArray(buckets)) return { pairs: [], services: [], truncated: false };
+	const otherCount = (node: Record<string, unknown>): number => {
+		const n = node.sum_other_doc_count;
+		return typeof n === "number" ? n : 0;
+	};
+	let truncated = otherCount(byService as Record<string, unknown>) > 0;
+	const pairs: Array<{ service: string; destination: string }> = [];
+	const services: string[] = [];
+	for (const b of buckets) {
+		if (!b || typeof b !== "object") continue;
+		const rec = b as Record<string, unknown>;
+		const service = typeof rec.key === "string" ? rec.key : undefined;
+		if (!service) continue;
+		services.push(service);
+		const byDest = rec.by_dest;
+		if (!byDest || typeof byDest !== "object") continue;
+		if (otherCount(byDest as Record<string, unknown>) > 0) truncated = true;
+		const destBuckets = (byDest as Record<string, unknown>).buckets;
+		if (!Array.isArray(destBuckets)) continue;
+		for (const d of destBuckets) {
+			const key = d && typeof d === "object" ? (d as Record<string, unknown>).key : undefined;
+			if (typeof key === "string" && key.length > 0) pairs.push({ service, destination: key });
+		}
+	}
+	return { pairs, services: dedupe(services), truncated };
+}
+
+export interface KonnectRoute {
+	routeId: string;
+	paths: string[];
+	serviceId?: string;
+}
+
+// KONNECT: konnect_list_routes returns { metadata: { capped, ... }, routes:
+// [{ routeId, paths, serviceId, ... }] }. capped signals Kong's 100-row page cap
+// hit -- the caller must treat the collection as incomplete.
+export function parseKonnectRoutes(json: unknown): { routes: KonnectRoute[]; capped: boolean } {
+	if (!json || typeof json !== "object") return { routes: [], capped: false };
+	const obj = json as Record<string, unknown>;
+	const meta = obj.metadata;
+	const capped = meta && typeof meta === "object" ? (meta as Record<string, unknown>).capped === true : false;
+	const rows = obj.routes;
+	if (!Array.isArray(rows)) return { routes: [], capped };
+	const routes: KonnectRoute[] = [];
+	for (const r of rows) {
+		if (!r || typeof r !== "object") continue;
+		const rec = r as Record<string, unknown>;
+		if (typeof rec.routeId !== "string") continue;
+		const paths = Array.isArray(rec.paths) ? rec.paths.filter((p): p is string => typeof p === "string") : [];
+		routes.push({
+			routeId: rec.routeId,
+			paths,
+			serviceId: typeof rec.serviceId === "string" ? rec.serviceId : undefined,
+		});
+	}
+	return { routes, capped };
+}
+
+// KAFKA: kafka_describe_consumer_group returns { groupId, state, members,
+// offsets: [{ topic, partitions }] }. The committed-offset topics are the group's
+// consumption set.
+export function parseKafkaGroupTopics(json: unknown): string[] {
+	if (!json || typeof json !== "object") return [];
+	const offsets = (json as Record<string, unknown>).offsets;
+	if (!Array.isArray(offsets)) return [];
+	const topics = offsets
+		.map((o) => (o && typeof o === "object" ? (o as Record<string, unknown>).topic : undefined))
+		.filter((t): t is string => typeof t === "string" && t.length > 0);
+	return dedupe(topics);
+}
+
+// AWS ECS: aws_ecs_list_clusters returns { clusterArns: [arn, ...] }.
+export function parseAwsEcsClusterArns(json: unknown): string[] {
+	if (!json || typeof json !== "object") return [];
+	const arns = (json as Record<string, unknown>).clusterArns;
+	if (!Array.isArray(arns)) return [];
+	return dedupe(arns.filter((a): a is string => typeof a === "string"));
+}
+
+// AWS ECS: aws_ecs_list_services returns { serviceArns: [arn, ...] }. The topology
+// sweep needs BOTH the full ARN (the AwsResource identity) and the short name (the
+// P6 Service-name match), unlike parseAwsEcsServiceArns above which keeps names only.
+export function parseAwsEcsServices(json: unknown): Array<{ arn: string; name: string }> {
+	if (!json || typeof json !== "object") return [];
+	const arns = (json as Record<string, unknown>).serviceArns;
+	if (!Array.isArray(arns)) return [];
+	const seen = new Set<string>();
+	const out: Array<{ arn: string; name: string }> = [];
+	for (const a of arns) {
+		if (typeof a !== "string" || a.length === 0 || seen.has(a)) continue;
+		seen.add(a);
+		out.push({ arn: a, name: a.split("/").pop() ?? a });
+	}
+	return out;
+}
+
 function dedupe(items: string[]): string[] {
 	return [...new Set(items)];
 }

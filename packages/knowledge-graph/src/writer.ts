@@ -4,7 +4,18 @@
 // parameterized MERGE -- values are bound ($params), never interpolated into the
 // Cypher string, so a service name like "); DROP" cannot alter the query.
 
-import { type BindingKind, VECTOR_INDEX_NAME, VECTOR_INDEX_PROPERTY, VECTOR_INDEX_TABLE } from "./schema.ts";
+import { validTopologyEdges } from "./reader.ts";
+import {
+	type BindingKind,
+	TOPOLOGY_DISCOVERED_BY,
+	TOPOLOGY_KINDS,
+	type TopologyEdgeKind,
+	type TopologyEdgeRecord,
+	TopologyEdgeRecordSchema,
+	VECTOR_INDEX_NAME,
+	VECTOR_INDEX_PROPERTY,
+	VECTOR_INDEX_TABLE,
+} from "./schema.ts";
 import type { GraphStore } from "./store.ts";
 
 export interface EntityGraph {
@@ -564,4 +575,88 @@ export async function linkResolution(store: GraphStore, incidentId: string, runb
 			filename,
 		});
 	}
+}
+
+// SIO-1104 (5a): topology-sweep writers. Pure and network-free -- the cron collector
+// (packages/agent/src/kg-topology.ts) owns all MCP I/O and feeds parsed edge lists.
+// Labels/keys come from the internal TOPOLOGY_KINDS map (never caller input); values
+// are always bound.
+export type { TopologyEdgeRecord } from "./schema.ts";
+
+export async function recordTopologyEdges(store: GraphStore, edges: TopologyEdgeRecord[]): Promise<void> {
+	for (const raw of edges) {
+		// Collector output is parsed EXTERNAL data -- validate the whole record at
+		// the writer boundary (kind, non-empty endpoints), not just the kind.
+		const parsed = TopologyEdgeRecordSchema.safeParse(raw);
+		if (!parsed.success) continue;
+		const edge = parsed.data;
+		const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[edge.kind];
+		const now = edge.createdAt ?? new Date().toISOString();
+		await store.run(`MERGE (a:${fromLabel} {${fromKey}: $from})`, { from: edge.from });
+		await store.run(`MERGE (b:${toLabel} {${toKey}: $to})`, { to: edge.to });
+		// Re-observe revalidates: clear tInvalid, reset the miss counter, and claim
+		// lifecycle ownership (discoveredBy) -- an agent-written edge the sweep
+		// re-observes deliberately becomes sweep-managed from then on.
+		// KNOWN LIMITATION (single-interval bi-temporality, the SIO-1100 substrate
+		// design shared with OBSERVED_IN): revival keeps the FIRST tValid and clears
+		// tInvalid, so an as-of read inside the invalidated gap reports the edge as
+		// valid. Interval versioning is a deliberate non-goal of Stage 5.
+		await store.run(
+			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
+			{ from: edge.from, to: edge.to, discoveredBy: TOPOLOGY_DISCOVERED_BY },
+		);
+		// Keep-first tValid. Pre-Stage-5 rows hold '' (the ALTER column DEFAULT), not
+		// NULL, so the coalesce-in-SET idiom from recordServiceBinding cannot apply --
+		// backfill via a conditional WHERE instead (verified on lbug 0.14.3).
+		await store.run(
+			`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE coalesce(r.tValid, '') = '' SET r.tValid = $now`,
+			{ from: edge.from, to: edge.to, now },
+		);
+	}
+}
+
+export interface TopologySweepResult {
+	checked: number;
+	missed: number;
+	invalidated: number;
+}
+
+// K-consecutive-miss staleness for sweep-owned edges of one kind. The set-difference
+// is computed in TS (read valid edges, diff against the fresh collection) and each
+// missing edge gets one simple parameterized statement -- the lbug binder is fragile
+// with multi-clause restructures. Only discoveredBy='topology-job' edges are ever
+// touched; a re-observed edge was already reset to 0 by recordTopologyEdges. The
+// caller MUST NOT sweep on a partial collection (a failed estate/deployment would
+// accrue false misses) -- that gate lives in the collector's `complete` flag.
+export async function sweepStaleTopology(
+	store: GraphStore,
+	kind: TopologyEdgeKind,
+	fresh: Array<{ from: string; to: string }>,
+	opts?: { maxMisses?: number; now?: string },
+): Promise<TopologySweepResult> {
+	const maxMisses = opts?.maxMisses ?? 3;
+	const now = opts?.now ?? new Date().toISOString();
+	const valid = await validTopologyEdges(store, kind);
+	const freshSet = new Set(fresh.map((e) => `${e.from}\u0000${e.to}`));
+	const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[kind];
+	let missed = 0;
+	let invalidated = 0;
+	for (const edge of valid) {
+		if (freshSet.has(`${edge.from}\u0000${edge.to}`)) continue;
+		missed++;
+		const misses = edge.consecutiveMisses + 1;
+		if (misses >= maxMisses) {
+			invalidated++;
+			await store.run(
+				`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE r.discoveredBy = $discoveredBy AND r.tInvalid = '' SET r.consecutiveMisses = $misses, r.tInvalid = $now`,
+				{ from: edge.from, to: edge.to, discoveredBy: TOPOLOGY_DISCOVERED_BY, misses, now },
+			);
+		} else {
+			await store.run(
+				`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE r.discoveredBy = $discoveredBy AND r.tInvalid = '' SET r.consecutiveMisses = $misses`,
+				{ from: edge.from, to: edge.to, discoveredBy: TOPOLOGY_DISCOVERED_BY, misses },
+			);
+		}
+	}
+	return { checked: valid.length, missed, invalidated };
 }

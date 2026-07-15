@@ -2,15 +2,20 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+	parseApmServiceDestinationAgg,
+	parseAwsEcsClusterArns,
 	parseAwsEcsServiceArns,
+	parseAwsEcsServices,
 	parseAwsLogGroups,
 	parseCouchbaseScopeTree,
 	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
 	parseGitlabProjects,
 	parseKafkaConsumerGroups,
+	parseKafkaGroupTopics,
 	parseKafkaTopics,
 	parseKonnectControlPlanes,
+	parseKonnectRoutes,
 	parseKonnectServices,
 } from "./resolve-identifiers-parsers.ts";
 
@@ -265,5 +270,141 @@ describe("parseGitlabProjects (lift numeric id)", () => {
 	test("skips rows without an id; returns [] for non-array", () => {
 		expect(parseGitlabProjects([{ name: "x" }])).toEqual([]);
 		expect(parseGitlabProjects({})).toEqual([]);
+	});
+});
+
+// SIO-1104 (5a): topology-sweep parsers.
+describe("parseApmServiceDestinationAgg", () => {
+	const payload = [
+		"Search results with aggregations (120000 total hits, 55ms):",
+		JSON.stringify({
+			by_service: {
+				buckets: [
+					{
+						key: "order-service",
+						doc_count: 900,
+						by_dest: {
+							buckets: [
+								{ key: "payment-service:443", doc_count: 500 },
+								{ key: "postgresql", doc_count: 400 },
+							],
+						},
+					},
+					{ key: "payment-service", doc_count: 100, by_dest: { buckets: [] } },
+				],
+			},
+		}),
+	].join("\n\n");
+
+	test("extracts caller x destination pairs AND every service bucket key", () => {
+		expect(parseApmServiceDestinationAgg(payload)).toEqual({
+			pairs: [
+				{ service: "order-service", destination: "payment-service:443" },
+				{ service: "order-service", destination: "postgresql" },
+			],
+			// payment-service has no outbound pairs but is still a valid destination target
+			services: ["order-service", "payment-service"],
+			truncated: false,
+		});
+	});
+
+	test("survives an aggregations wrapper at any depth", () => {
+		const wrapped = `prefix text:\n\n${JSON.stringify({
+			aggregations: { by_service: { buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] } },
+		})}`;
+		expect(parseApmServiceDestinationAgg(wrapped)).toEqual({
+			pairs: [{ service: "a", destination: "b" }],
+			services: ["a"],
+			truncated: false,
+		});
+	});
+
+	test("flags a truncated terms agg (sum_other_doc_count > 0) at either level", () => {
+		const outer = JSON.stringify({
+			by_service: { sum_other_doc_count: 12, buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] },
+		});
+		expect(parseApmServiceDestinationAgg(outer).truncated).toBe(true);
+		const inner = JSON.stringify({
+			by_service: {
+				sum_other_doc_count: 0,
+				buckets: [{ key: "a", by_dest: { sum_other_doc_count: 3, buckets: [{ key: "b" }] } }],
+			},
+		});
+		expect(parseApmServiceDestinationAgg(inner).truncated).toBe(true);
+	});
+
+	test("returns empty on shape drift or no JSON", () => {
+		expect(parseApmServiceDestinationAgg("no json here")).toEqual({ pairs: [], services: [], truncated: false });
+		expect(parseApmServiceDestinationAgg(JSON.stringify({ other: 1 }))).toEqual({
+			pairs: [],
+			services: [],
+			truncated: false,
+		});
+	});
+});
+
+describe("parseKonnectRoutes", () => {
+	test("maps routes with paths + serviceId and lifts the capped flag", () => {
+		const json = {
+			metadata: { capped: true },
+			routes: [
+				{ routeId: "r1", paths: ["/api/orders", "/api/orders/v2"], serviceId: "s1" },
+				{ routeId: "r2", paths: ["/health"] },
+				{ routeId: 3, paths: ["/bad-id"] },
+			],
+		};
+		expect(parseKonnectRoutes(json)).toEqual({
+			routes: [
+				{ routeId: "r1", paths: ["/api/orders", "/api/orders/v2"], serviceId: "s1" },
+				{ routeId: "r2", paths: ["/health"], serviceId: undefined },
+			],
+			capped: true,
+		});
+	});
+
+	test("returns empty uncapped on drift", () => {
+		expect(parseKonnectRoutes(null)).toEqual({ routes: [], capped: false });
+		expect(parseKonnectRoutes({ routes: "nope" })).toEqual({ routes: [], capped: false });
+	});
+});
+
+describe("parseKafkaGroupTopics", () => {
+	test("dedupes committed-offset topics", () => {
+		const json = {
+			groupId: "orders-cg",
+			state: "STABLE",
+			offsets: [
+				{ topic: "order-events", partitions: [{ partition: 0, committedOffset: "10" }] },
+				{ topic: "order-events", partitions: [{ partition: 1, committedOffset: "12" }] },
+				{ topic: "audit-log", partitions: [] },
+			],
+		};
+		expect(parseKafkaGroupTopics(json)).toEqual(["order-events", "audit-log"]);
+	});
+
+	test("returns [] on drift", () => {
+		expect(parseKafkaGroupTopics({ offsets: "x" })).toEqual([]);
+		expect(parseKafkaGroupTopics(null)).toEqual([]);
+	});
+});
+
+describe("parseAwsEcsClusterArns / parseAwsEcsServices", () => {
+	test("lifts cluster arns and service arn+name pairs", () => {
+		expect(parseAwsEcsClusterArns({ clusterArns: ["arn:aws:ecs:eu-west-1:1:cluster/prod"] })).toEqual([
+			"arn:aws:ecs:eu-west-1:1:cluster/prod",
+		]);
+		expect(
+			parseAwsEcsServices({
+				serviceArns: [
+					"arn:aws:ecs:eu-west-1:1:service/prod/order-service",
+					"arn:aws:ecs:eu-west-1:1:service/prod/order-service",
+				],
+			}),
+		).toEqual([{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/order-service", name: "order-service" }]);
+	});
+
+	test("returns [] on drift", () => {
+		expect(parseAwsEcsClusterArns({})).toEqual([]);
+		expect(parseAwsEcsServices({ serviceArns: [42] })).toEqual([]);
 	});
 });

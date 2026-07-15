@@ -42,6 +42,9 @@ mock.module("@devops-agent/agent", () => ({
 	runTeardown: () => Promise.resolve([]),
 	setSessionOutcome: () => undefined,
 	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
+	// SIO-1104 (5a): kg-topology-cron.ts imports these transitively via agent.ts.
+	runTopologySweep: () => Promise.resolve({ sources: {} }),
+	topologyCronEnabled: () => false,
 	selectedBackend: () => "file" as const,
 	promoteToMemory: () => Promise.resolve(),
 	executeAction: () => Promise.resolve(),

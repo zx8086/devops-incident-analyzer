@@ -79,7 +79,7 @@ describe("graphEnrich", () => {
 	test("produces graphContext from dependencies + similar incidents (with prior root cause) when enabled", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
-		store.stub("-[:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
+		store.stub("-[r:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
 		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
 		// SIO-1026: the similar incident has a recorded root cause.
 		store.stub("[r:HAS_ROOT_CAUSE]", [
@@ -234,7 +234,7 @@ describe("graphEnrich", () => {
 	test("soft-fails to dependencies-only when the embedder throws", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
-		store.stub("-[:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
+		store.stub("-[r:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
 		_setGraphStoreForTesting(store);
 		_setEmbedderForTesting(async () => {
 			throw new Error("bedrock down");
