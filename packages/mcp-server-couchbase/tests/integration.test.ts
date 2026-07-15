@@ -168,14 +168,14 @@ describe("Integration Tests", () => {
 				}),
 			).rejects.toThrow();
 
-			// 2. Verify document doesn't exist
-			await expect(
-				getHandler({
-					scope_name: "_default",
-					collection_name: "_default",
-					document_id: TEST_DOC_ID,
-				}),
-			).rejects.toThrow();
+			// 2. Verify document doesn't exist -- SIO-1117: a missing document now returns a
+			// structured { _error } envelope with isError:true instead of throwing uncaught.
+			const missingResult = await getHandler({
+				scope_name: "_default",
+				collection_name: "_default",
+				document_id: TEST_DOC_ID,
+			});
+			expect(missingResult.isError).toBe(true);
 
 			// 3. Create valid document
 			const testDoc = { test: "recovery" };

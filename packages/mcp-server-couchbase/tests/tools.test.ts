@@ -120,8 +120,10 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			const upsertHandler = mockServer.registeredTools.capella_upsert_document_by_id.handler;
 			const deleteHandler = mockServer.registeredTools.capella_delete_document_by_id.handler;
 
-			// Test get document
-			await expect(getHandler({})).rejects.toThrow();
+			// Test get document -- SIO-1117: the get handler now catches SDK errors and returns
+			// a structured { _error } envelope with isError:true instead of throwing uncaught.
+			const getResult = await getHandler({});
+			expect(getResult.isError).toBe(true);
 			// Test upsert document
 			await expect(upsertHandler({})).rejects.toThrow();
 			// Test delete document
