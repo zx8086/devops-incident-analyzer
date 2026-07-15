@@ -1,10 +1,4 @@
 // tests/deleteDocumentById.test.ts
-//
-// SIO-1118: regression test -- a missing document on delete must surface as a
-// structured not-found envelope (kind "not-found" -> category "not-found",
-// non-degrading), not an uncaught DocumentNotFoundError that the agent
-// categorizes "unknown" (degrading) and uses to cap confidence. Mirrors the
-// SIO-1117 getDocumentById.test.ts pattern.
 
 import { describe, expect, test } from "bun:test";
 import { type Bucket, DocumentNotFoundError } from "couchbase";
@@ -18,6 +12,10 @@ function makeBucket(removeImpl: (id: string) => Promise<unknown>): Bucket {
 	} as unknown as Bucket;
 }
 
+// SIO-1118: a missing document on delete must surface as a structured not-found
+// envelope (kind "not-found" -> category "not-found", non-degrading), not an
+// uncaught DocumentNotFoundError that the agent categorizes "unknown" (degrading)
+// and uses to cap confidence. Mirrors the SIO-1117 getDocumentById.test.ts pattern.
 describe("deleteDocumentById error surfacing (SIO-1118)", () => {
 	test("emits a not-found envelope when the document does not exist", async () => {
 		const bucket = makeBucket(() => {
