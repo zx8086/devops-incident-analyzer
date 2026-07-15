@@ -910,6 +910,7 @@ describe("SIO-1100 telemetry bindings", () => {
 		expect(store.calls[0]?.params).toEqual({ names: ["orders"], limit: 40 });
 		expect(store.calls[1]?.cypher).toContain("o.tInvalid = '' AND rr.tInvalid = ''");
 		expect(store.calls[1]?.cypher).not.toContain("$asOf");
+		expect(store.calls[1]?.params).toEqual({ normalized: ["order"], limit: 40 });
 	});
 
 	test("bindingsForServices with asOf filters both hops bi-temporally", async () => {
