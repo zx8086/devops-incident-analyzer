@@ -302,6 +302,49 @@ export function extractGapsBulletCount(answer: string): number {
 	return count;
 }
 
+// SIO-1106: a gap bullet DEGRADES confidence only when it reports a MALFUNCTION -- a tool/query
+// that failed, erred, timed out, was blocked by auth, was unreachable, or a result that "could
+// not be run/confirmed/completed". A plain routine absence ("no X found", "not applicable",
+// "not queried this turn") is a normal discovery outcome, not a coverage failure, and must NOT
+// count. This is the text-layer analogue of isDegradingCategory (SIO-1087), which already excludes
+// the no-data/not-found categories from the degraded-SUBAGENT cap. Before this, extractGapsBulletCount
+// counted every bullet identically, so a strong report that honestly enumerated one routine gap per
+// datasource across a 6-7 source fan-out always tripped the >=2 cap and was pinned to 0.59 -- below
+// the 0.6 HITL gate -- regardless of root-cause evidence strength (SIO-1106).
+//
+// Note "not available" (a tool/capability is missing -- "ksql not available in tool environment")
+// is degrading, while "not applicable" (the datasource does not apply to this service) is routine;
+// the regex distinguishes them by the exact word. Explicit authorization blocks ("blocked by IAM
+// policy", "authentication was blocked") are degrading too -- an auth block prevents observation
+// just as "access denied" / "not permitted" already do.
+const DEGRADED_GAP_RE =
+	/\b(fail(?:ed|ure|ures|s)?|errored?|errors?|exception|timed? ?out|timeout|unreachable|inaccessible|connection (?:refused|reset|error)|parse fail|not available|unavailable|access denied|accessdenied|forbidden|unauthorized|not authorized|not permitted|permission denied|blocked by (?:auth(?:entication)?|iam|permission)|(?:auth(?:entication)?|iam|permission)\s+(?:policy\s+)?(?:was\s+)?block(?:ed|ing)|could ?n[o']t (?:be )?(?:re-?run|run|confirmed|refuted|verified|completed?|retrieved|reached|parsed|loaded)|cannot be (?:confirmed|refuted|verified|reached))\b/i;
+
+export function isDegradingGapBullet(line: string): boolean {
+	return DEGRADED_GAP_RE.test(line);
+}
+
+// Count only the DEGRADING gap bullets under a "Gaps" heading (see DEGRADED_GAP_RE). Structure
+// mirrors extractGapsBulletCount exactly (same heading/bullet parsing, same sub-bullet exclusion);
+// only degrading bullets are tallied. extractGapsBulletCount is kept unchanged for the observability
+// log line so operators still see the total-vs-degrading split.
+export function countDegradingGapBullets(answer: string): number {
+	const lines = answer.split("\n");
+	let inGapsSection = false;
+	let count = 0;
+	for (const line of lines) {
+		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
+		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
+			inGapsSection = true;
+			continue;
+		}
+		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line) && isDegradingGapBullet(line)) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
 // SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
 // observed auth tool error. A real logs:DescribeLogGroups AccessDenied flows
 // MCP _error.kind=iam-permission-missing -> tool output text -> sub-agent.ts regex
@@ -766,9 +809,15 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		.filter((d): d is NonNullable<typeof d> => d !== null);
 
 	// SIO-709 AC #2: Gaps section with >= 2 bullets triggers the same 0.59 cap.
+	// SIO-1106: the trigger now counts only DEGRADING gap bullets (tool/query failures, auth
+	// blocks, un-runnable/unconfirmable results) -- not routine "looked, found nothing / not
+	// applicable / not queried" bullets. A strong report enumerating one routine gap per datasource
+	// across a 6-7 source fan-out previously always tripped >=2 and was pinned to 0.59 below the
+	// HITL gate regardless of evidence strength. gapsBulletCount (total) is retained for the log.
 	const GAPS_BULLET_THRESHOLD = 2;
 	const gapsBulletCount = extractGapsBulletCount(answer);
-	const gapsCapTriggered = gapsBulletCount >= GAPS_BULLET_THRESHOLD;
+	const degradingGapsBulletCount = countDegradingGapBullets(answer);
+	const gapsCapTriggered = degradingGapsBulletCount >= GAPS_BULLET_THRESHOLD;
 
 	// SIO-1013: a Gaps bullet claiming a permission/IAM denial with NO observed auth tool
 	// error is fabricated. Cap confidence below the HITL gate so a hallucinated blocker
@@ -828,12 +877,13 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		logger.warn(
 			{
 				gapsBulletCount,
+				degradingGapsBulletCount,
 				threshold: GAPS_BULLET_THRESHOLD,
 				cap: TOOL_ERROR_CONFIDENCE_CAP,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
-			"Aggregator Gaps section listed missing-data items; capping confidence",
+			"Aggregator Gaps section listed degrading (tool/query failure) items; capping confidence",
 		);
 	}
 
