@@ -1,6 +1,7 @@
 // src/services/topic-pagination.ts
 
 import { sliceArray } from "@devops-agent/shared";
+import { compileFilterOrThrow } from "../lib/filter.ts";
 
 export interface SliceTopicsOptions {
 	filter?: string;
@@ -27,7 +28,9 @@ export function sliceTopics(raw: string[], options: SliceTopicsOptions): PagedTo
 	let matching = sorted;
 	if (prefix) matching = matching.filter((t) => t.startsWith(prefix));
 	if (filter) {
-		const regex = new RegExp(filter);
+		// SIO-1105: validate the caller's regex; an invalid pattern throws a typed
+		// InvalidFilterError the list ops turn into a structured not-found envelope.
+		const regex = compileFilterOrThrow(filter);
 		matching = matching.filter((t) => regex.test(t));
 	}
 

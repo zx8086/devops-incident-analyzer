@@ -10,6 +10,7 @@ import {
 	MultipleErrors,
 } from "@platformatic/kafka";
 import type { DlqTopic } from "../config/schemas.ts";
+import { compileFilterOrThrow } from "../lib/filter.ts";
 import { logger } from "../utils/logger.ts";
 import type { KafkaClientManager } from "./client-manager.ts";
 import { sliceTopics } from "./topic-pagination.ts";
@@ -296,7 +297,8 @@ export class KafkaService {
 
 			let filtered = topics;
 			if (filter) {
-				const regex = new RegExp(filter);
+				// SIO-1105: validate the caller's regex before applying it (see lib/filter.ts).
+				const regex = compileFilterOrThrow(filter);
 				filtered = topics.filter((t) => regex.test(t));
 			}
 
@@ -519,7 +521,8 @@ export class KafkaService {
 			let groups = Array.from(groupsMap.values());
 
 			if (filter) {
-				const regex = new RegExp(filter);
+				// SIO-1105: validate the caller's regex before applying it (see lib/filter.ts).
+				const regex = compileFilterOrThrow(filter);
 				groups = groups.filter((g) => regex.test(g.id));
 			}
 
