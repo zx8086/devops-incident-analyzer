@@ -87,8 +87,11 @@ const dataSources = $derived.by(() => {
 });
 const findings = $derived(dataSourceFindings ? [...dataSourceFindings.entries()] : []);
 
+// SIO-1110: an error outcome counts as content -- a client-side fetch failure
+// produces no nodes/metadata, and the Failed chip must still render.
 const hasContent = $derived(
-	responseTime !== undefined ||
+	outcome === "error" ||
+		responseTime !== undefined ||
 		toolsUsed.length > 0 ||
 		completedNodes.size > 0 ||
 		dataSources.length > 0 ||

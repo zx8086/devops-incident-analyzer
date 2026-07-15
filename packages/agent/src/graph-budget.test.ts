@@ -23,7 +23,8 @@ describe("getGraphBudgetReserveMs", () => {
 	});
 
 	test("falls back to default on invalid env values", () => {
-		for (const raw of ["abc", "0", "-5", ""]) {
+		// "0.5" would floor to 0 and silently disable the reserve -- must reject.
+		for (const raw of ["abc", "0", "-5", "0.5", ""]) {
 			expect(getGraphBudgetReserveMs({ GRAPH_BUDGET_RESERVE_MS: raw })).toBe(120_000);
 		}
 	});
@@ -43,7 +44,7 @@ describe("getGraphBudgetMinRetryMs", () => {
 	});
 
 	test("falls back to default on invalid env values", () => {
-		for (const raw of ["abc", "0", "-5", ""]) {
+		for (const raw of ["abc", "0", "-5", "0.5", ""]) {
 			expect(getGraphBudgetMinRetryMs({ GRAPH_BUDGET_MIN_RETRY_MS: raw })).toBe(60_000);
 		}
 	});

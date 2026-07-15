@@ -17,11 +17,13 @@ const GRAPH_BUDGET_RESERVE_MS_DEFAULT = 120_000;
 // runtime rarely recovers a source that just burned its full timeout.
 const GRAPH_BUDGET_MIN_RETRY_MS_DEFAULT = 60_000;
 
+// Both parsers require >= 1: a sub-millisecond value like "0.5" would pass a
+// plain > 0 check and then floor to 0, silently disabling the threshold.
 export function getGraphBudgetReserveMs(env: NodeJS.ProcessEnv = process.env): number {
 	const raw = env.GRAPH_BUDGET_RESERVE_MS;
 	if (raw == null || raw === "") return GRAPH_BUDGET_RESERVE_MS_DEFAULT;
 	const parsed = Number(raw);
-	if (!Number.isFinite(parsed) || parsed <= 0) return GRAPH_BUDGET_RESERVE_MS_DEFAULT;
+	if (!Number.isFinite(parsed) || parsed < 1) return GRAPH_BUDGET_RESERVE_MS_DEFAULT;
 	return Math.floor(parsed);
 }
 
@@ -29,7 +31,7 @@ export function getGraphBudgetMinRetryMs(env: NodeJS.ProcessEnv = process.env): 
 	const raw = env.GRAPH_BUDGET_MIN_RETRY_MS;
 	if (raw == null || raw === "") return GRAPH_BUDGET_MIN_RETRY_MS_DEFAULT;
 	const parsed = Number(raw);
-	if (!Number.isFinite(parsed) || parsed <= 0) return GRAPH_BUDGET_MIN_RETRY_MS_DEFAULT;
+	if (!Number.isFinite(parsed) || parsed < 1) return GRAPH_BUDGET_MIN_RETRY_MS_DEFAULT;
 	return Math.floor(parsed);
 }
 

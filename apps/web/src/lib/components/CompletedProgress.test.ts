@@ -69,7 +69,16 @@ describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
 	test("error -> red 'Failed', not 'Completed'", () => {
 		const { body } = render(CompletedProgress, { props: { completedNodes: nodes, outcome: "error" } });
 		expect(body).toContain("Failed");
+		expect(body).toContain("text-red-700");
 		expect(body).not.toContain("Completed");
+	});
+
+	// SIO-1110 review: a client-side fetch failure carries no nodes/metadata at
+	// all; the error outcome alone must defeat the hasContent gate.
+	test("error with no trace content still renders the Failed chip", () => {
+		const { body } = render(CompletedProgress, { props: { outcome: "error" } });
+		expect(body).toContain("Failed");
+		expect(body).toContain("text-red-700");
 	});
 
 	test("completed chip shows the response time when present", () => {
