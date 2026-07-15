@@ -68,9 +68,14 @@ function apmEmptyPage(): string {
 
 // SIO-1121: phase-1 pre-fetch response -- the deployment's distinct service.name set as a
 // plain terms agg (svc_names). Seeds the destination filter for the phase-2 composite.
-function apmServiceNamesPage(names: string[]): string {
+// sumOther > 0 models a TRUNCATED terms agg (more services than the returned buckets).
+function apmServiceNamesPage(names: string[], sumOther = 0): string {
 	return `Search results with aggregations (100 total hits, 3ms):\n\n${JSON.stringify({
-		svc_names: { buckets: names.map((n) => ({ key: n, doc_count: 1 })) },
+		svc_names: {
+			doc_count_error_upper_bound: 0,
+			sum_other_doc_count: sumOther,
+			buckets: names.map((n) => ({ key: n, doc_count: 1 })),
+		},
 	})}`;
 }
 
@@ -544,6 +549,30 @@ describe("runTopologySweep", () => {
 		).toBe(false);
 	});
 
+	// SIO-1121: the phase-1 service.name terms agg TRUNCATED (sum_other_doc_count > 0) means
+	// the caller set is incomplete -- like the composite page cap, edges are written but the
+	// staleness sweep is skipped (a dropped caller would make its edges look absent).
+	test("a truncated service.name terms agg (sum_other_doc_count>0) skips the sweep (SIO-1121)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					// sum_other_doc_count > 0 -> more services than returned buckets -> truncated.
+					if (isServiceNamesRequest(args)) return apmServiceNamesPage(["order-service", "payment-service"], 999);
+					return apmCompositePage([{ service: "order-service", destinations: ["payment-service"] }]);
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
 	// SIO-1121 (B): the phase-2 composite query carries the destination bool.should filter
 	// derived from the phase-1 service names (term=<name> + prefix=<name>:), so ES only
 	// aggregates internal destinations. Asserts the filter is present and shaped correctly.
@@ -573,12 +602,18 @@ describe("runTopologySweep", () => {
 		expect(should?.should).toContainEqual({ prefix: { "span.destination.service.resource": "payment-service:" } });
 	});
 
-	// SIO-1121 (C-kafka): a list failure logs a kafka-specific message (not the generic
-	// "topology collector failed") and still fails the source with no CONSUMES_FROM sweep.
-	test("a kafka consumer-group list failure fails the source with a kafka-specific log (SIO-1121)", async () => {
+	// SIO-1121 (C-kafka): a list failure is caught at the LIST step (its own try/catch, which
+	// logs the kafka-specific "kafka consumer-group list failed" before rethrowing), NOT down
+	// in the describe fan-out. Proven behaviorally: describe is never reached, the source fails
+	// with the list error, and no CONSUMES_FROM sweep runs. (The kafka-specific log line itself
+	// is not asserted -- this repo does not spy on pino anywhere, and getLogger returns a fresh
+	// child so the module's captured logger is unreachable; "describe never called" is the
+	// observable proxy that the failure was handled at the list step, not the describe loop.)
+	test("a kafka consumer-group list failure fails at the list step; describe never runs (SIO-1121)", async () => {
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
 		connectedServers = ["kafka-mcp"];
+		let describeCalls = 0;
 		toolRegistry.kafka = [
 			{
 				name: "kafka_list_consumer_groups",
@@ -586,9 +621,16 @@ describe("runTopologySweep", () => {
 					throw new Error("MCP error -32603: Listing groups failed.");
 				},
 			},
-			{ name: "kafka_describe_consumer_group", invoke: async () => JSON.stringify({ offsets: [] }) },
+			{
+				name: "kafka_describe_consumer_group",
+				invoke: async () => {
+					describeCalls++;
+					return JSON.stringify({ offsets: [] });
+				},
+			},
 		];
 		const summary = await runTopologySweep();
+		expect(describeCalls).toBe(0); // failure handled at the list step, never fanned out to describe
 		expect(summary.sources.kafka).toMatchObject({ edges: 0, sweepSkipped: true });
 		expect(summary.sources.kafka?.error).toContain("Listing groups failed");
 		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(

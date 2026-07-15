@@ -149,6 +149,26 @@ function toolFor(dataSourceId: string, name: string) {
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
 
+// SIO-1121: the phase-1 service.name terms agg truncated if sum_other_doc_count > 0 (there
+// are more distinct services than APM_SERVICE_NAME_LIMIT buckets returned). A truncated
+// caller set is incomplete -- the collection must not sweep. Parses the normalized search
+// text; defensively returns false on any shape drift (the drift is caught elsewhere).
+function serviceNamesTruncated(text: string): boolean {
+	const start = text.indexOf("{");
+	if (start === -1) return false;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text.slice(start));
+	} catch {
+		return false;
+	}
+	if (!parsed || typeof parsed !== "object") return false;
+	const agg = (parsed as Record<string, unknown>).svc_names;
+	if (!agg || typeof agg !== "object") return false;
+	const other = (agg as Record<string, unknown>).sum_other_doc_count;
+	return typeof other === "number" && other > 0;
+}
+
 // SIO-1115: optional label so per-describe timeouts are distinguishable in logs from
 // the whole-source timeout. Same non-cancelling Promise.race caveat as before.
 function withTimeout<T>(p: Promise<T>, ms: number, label = "topology collector"): Promise<T> {
@@ -204,13 +224,21 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 		const raw = deploymentId ? await withElasticDeployment(deploymentId, run) : await run();
 		const text = normalizeToolContent(raw);
 		if (!text.includes("{")) throw new Error("unparseable search response");
-		const trimmed = text.slice(text.indexOf("{"));
-		return { text, emptyAggs: trimmed === "{}" };
+		// Trim the extracted payload so a whitespace variant ("{}\n", trailing spaces from
+		// a future MCP render change) still classifies as the bare-{} empty case.
+		const payload = text.slice(text.indexOf("{")).trim();
+		return { text, emptyAggs: payload === "{}" };
 	};
 	// SIO-1121: phase 1 -- the deployment's distinct service.name set (small: 5-40). This
 	// is the authoritative caller list AND the P6 self-join target set for the destination
-	// filter below. Returns [] for a legitimately-empty `{}` (no APM data); throws on drift.
-	const fetchServiceNames = async (deploymentId: string | undefined, index: string): Promise<string[]> => {
+	// filter below. Returns { names: [] } for a legitimately-empty `{}` (no APM data); throws
+	// on drift. `capped` is true when the terms agg TRUNCATED (sum_other_doc_count > 0): the
+	// caller set is then incomplete, so -- like the composite page cap -- the deployment must
+	// not sweep (a dropped caller would make its edges look absent and retire live ones).
+	const fetchServiceNames = async (
+		deploymentId: string | undefined,
+		index: string,
+	): Promise<{ names: string[]; capped: boolean }> => {
 		const args = {
 			index,
 			size: 0,
@@ -218,12 +246,12 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 			aggs: { svc_names: { terms: { field: "service.name", size: APM_SERVICE_NAME_LIMIT } } },
 		};
 		const { text, emptyAggs } = await runSearch(deploymentId, args);
-		if (emptyAggs) return []; // zero-hit / missing index -> no APM data, legitimately empty
+		if (emptyAggs) return { names: [], capped: false }; // zero-hit / missing index -> no APM data
 		const names = parseElasticServiceAgg(text);
 		// JSON parsed, not the bare `{}`, but carried no terms buckets = drift / error envelope.
 		// Fail the deployment rather than read it as authoritatively empty (would retire edges).
 		if (names.length === 0) throw new Error("unparseable apm service_names response");
-		return names;
+		return { names, capped: serviceNamesTruncated(text) };
 	};
 	// SIO-1121: phase 2 -- composite agg over [service.name, span.destination.service.resource]
 	// but with the P6 self-join pushed INTO the query: only docs whose destination is (or is a
@@ -293,16 +321,17 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 		// Phase 1 on the 1m-rollup pattern; if it has no services, the pattern may be absent
 		// on this deployment -- retry against the broader metrics-apm* before concluding empty.
 		let index = APM_INDEX;
-		let serviceNames = await fetchServiceNames(deploymentId, index);
-		if (serviceNames.length === 0) {
+		let names = await fetchServiceNames(deploymentId, index);
+		if (names.names.length === 0) {
 			index = APM_INDEX_FALLBACK;
-			serviceNames = await fetchServiceNames(deploymentId, index);
+			names = await fetchServiceNames(deploymentId, index);
 		}
 		// No services anywhere = APM-less cluster: empty, no edges, but a valid observation
 		// (not a failure). `services` still carries the (empty) caller set.
-		if (serviceNames.length === 0) return { pairs: [], services: [], capped: false };
-		const { pairs, capped } = await scanEdges(deploymentId, index, serviceNames);
-		return { pairs, services: serviceNames, capped };
+		if (names.names.length === 0) return { pairs: [], services: [], capped: false };
+		const { pairs, capped } = await scanEdges(deploymentId, index, names.names);
+		// A truncated caller set OR a page-capped composite both make the collection incomplete.
+		return { pairs, services: names.names, capped: capped || names.capped };
 	};
 	const settled = await Promise.allSettled(deployments.map(collectDeployment));
 	const pairs: Array<{ service: string; destination: string }> = [];
