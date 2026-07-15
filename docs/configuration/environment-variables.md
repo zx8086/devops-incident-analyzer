@@ -295,7 +295,7 @@ Tool count grows with the gating and which Confluent components are enabled. Bar
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KAFKA_TOOL_TIMEOUT_MS` | No | `30000` | Per-tool admin RPC timeout in ms, mapped to the `@platformatic/kafka` library option `timeout` (the library's own default is 5 000 ms, which trips on first-call MSK warmup). Provider-supplied timeouts still win — for example, the MSK provider's 60 s override is preserved on top of this value. The pre- config option `requestTimeout` was a no-op (the underlying schema is `additionalProperties: false`); it has been renamed to `timeout` to match the library and is now correctly threaded through. |
+| `KAFKA_TOOL_TIMEOUT_MS` | No | `30000` | **Dual role.** (1) Server-side: per-tool admin RPC timeout in ms, mapped to the `@platformatic/kafka` library option `timeout` (the library's own default is 5 000 ms, which trips on first-call MSK warmup). Provider-supplied timeouts still win — for example, the MSK provider's 60 s override is preserved on top of this value. The pre- config option `requestTimeout` was a no-op (the underlying schema is `additionalProperties: false`); it has been renamed to `timeout` to match the library and is now correctly threaded through. (2) SIO-1115 bridge-side: the agent's `defaultToolTimeout` for `kafka-mcp` (was the 60 s adapter default). Intentionally the same knob so the client's per-call abort tracks the server's own admin-RPC budget. Note the two align only at the *default*: a provider override that raises the server-side timeout (e.g. the MSK provider's 60 s) is not mirrored on the bridge side, so set `KAFKA_TOOL_TIMEOUT_MS` explicitly if you need the client abort to match a raised server budget. |
 
 ### Confluent Connect
 
@@ -466,6 +466,19 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `KG_MCP_ALLOW_CYPHER` | No | on | Register the read-only-guarded `kg_run_cypher` tool; set `false` to disable |
 | `EMBEDDINGS_MODEL` | No | `amazon.titan-embed-text-v2:0` | Bedrock embedder for `Incident` similarity in `graphEnrich` |
 
+#### Scheduled topology sweep (SIO-1104 / SIO-1115)
+
+The in-process topology cron collects live topology edges (elastic APM `DEPENDS_ON`, Konnect `ROUTES_TO`, Kafka `CONSUMES_FROM`, AWS ECS `RUNS_ON`) and runs the K-consecutive-miss staleness invalidation. Requires `KNOWLEDGE_GRAPH_ENABLED`.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `KG_TOPOLOGY_CRON_ENABLED` | No | off | SIO-1104: enable the scheduled topology sweep (`true`/`1`). No-op unless `KNOWLEDGE_GRAPH_ENABLED` is also set (the sweep does live MCP I/O on a schedule) |
+| `KG_TOPOLOGY_CRON_SCHEDULE` | No | hourly (`0 * * * *`) | SIO-1104: cron expression for the sweep. Under the Node dev server, only `*`, `*/N`, and fixed-minute-hourly forms are honored (else defaults to hourly) |
+| `KG_TOPOLOGY_MISS_THRESHOLD` | No | `3` | SIO-1104: K — a topology edge missing from K consecutive complete sweeps is invalidated (`tInvalid` set). Edge staleness SLO = interval x K |
+| `KG_TOPOLOGY_SOURCE_TIMEOUT_MS` | No | `60000` | SIO-1115: per-source wall-clock budget for one collector (the losing side of the race is not cancelled — the adapter SDK takes no AbortSignal — it just stops being awaited) |
+| `KG_TOPOLOGY_MAX_PAGES` | No | `10` | SIO-1115: page cap shared by the APM composite aggregation and the ECS `nextToken` pagination. Hitting the cap marks the source incomplete (sweep skipped this round — safe) and warns, rather than reading partial data as authoritative |
+| `KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS` | No | `15000` | SIO-1115: per-`kafka_describe_consumer_group` timeout inside the bounded-concurrency describe pool, well under the source budget so one stuck group cannot eat the wall clock |
+
 ---
 
 ## MCP Server URLs
@@ -521,3 +534,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-05-28 | docs drift sweep: added new "AWS MCP — Multi-Estate" section documenting `AWS_ESTATES` (JSON map of `assumedRoleArn` + `externalId` per estate), `AWS_DEFAULT_ESTATE`, `AWS_MCP_URL`, `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_REGION`, `AWS_AGENTCORE_PROXY_PORT`, `AWS_AGENTCORE_AWS_PROFILE`, `EXECUTION_ROLE_ARN`; added `AWS_LANGSMITH_PROJECT` to the LangSmith table; documented migration from legacy `AWS_ASSUMED_ROLE_ARN` / `AWS_EXTERNAL_ID` singletons. No new env vars required for SIO-822–826 (the new 9 Elastic cloud/billing tools are gated by the existing `EC_API_KEY`). |
 | 2026-07-15 | SIO-1110: `GRAPH_TIMEOUT_MS` default raised to 900 000 (15 min); added budget-aware retry knobs `GRAPH_BUDGET_RESERVE_MS` (default 120 000) and `GRAPH_BUDGET_MIN_RETRY_MS` (default 60 000) — alignment skips retries and caps late sub-agent timers so aggregation always keeps its reserve. |
 | 2026-07-15 | SIO-1111: added `ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS` (default 90 000, passive readiness for the /ready cloudId component) and bridge-side `ATLASSIAN_TOOL_TIMEOUT_MS` (default 120 000); `ATLASSIAN_TIMEOUT` now actually bounds each upstream Rovo call (was dead config); documented the previously undocumented `ELASTIC_IAC_TOOL_TIMEOUT_MS`. |
+| 2026-07-15 | SIO-1115: added `KG_TOPOLOGY_SOURCE_TIMEOUT_MS` (default 60 000), `KG_TOPOLOGY_MAX_PAGES` (default 10, shared APM composite-agg + ECS pagination cap), and `KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS` (default 15 000); extended `KAFKA_TOOL_TIMEOUT_MS` to also drive the bridge-side `defaultToolTimeout` for `kafka-mcp`; documented the previously undocumented topology-cron knobs `KG_TOPOLOGY_CRON_ENABLED` / `KG_TOPOLOGY_CRON_SCHEDULE` / `KG_TOPOLOGY_MISS_THRESHOLD`. |

@@ -31,6 +31,9 @@ const ORIG_ENV = {
 	KG_TOPOLOGY_CRON_ENABLED: process.env.KG_TOPOLOGY_CRON_ENABLED,
 	AWS_ESTATES: process.env.AWS_ESTATES,
 	ELASTIC_DEPLOYMENTS: process.env.ELASTIC_DEPLOYMENTS,
+	// SIO-1115: page cap + kafka describe timeout, set by individual tests.
+	KG_TOPOLOGY_MAX_PAGES: process.env.KG_TOPOLOGY_MAX_PAGES,
+	KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS: process.env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS,
 };
 
 function restoreEnv(): void {
@@ -40,15 +43,27 @@ function restoreEnv(): void {
 	}
 }
 
-function apmPayload(pairs: Array<{ service: string; destinations: string[] }>): string {
+// SIO-1115: composite-agg page. flatten service->destinations into flat {svc,dest}
+// buckets. `afterKey` present => not the last page (the collector keeps paging); a
+// service with no destinations still emits one bucket with dest=null (the missing_bucket
+// result) so it lands in `services` for the P6 self-join. Omit afterKey for a terminal page.
+function apmCompositePage(
+	pairs: Array<{ service: string; destinations: string[] }>,
+	afterKey?: Record<string, unknown>,
+): string {
+	const buckets: Array<{ key: { svc: string; dest: string | null }; doc_count: number }> = [];
+	for (const p of pairs) {
+		if (p.destinations.length === 0) buckets.push({ key: { svc: p.service, dest: null }, doc_count: 1 });
+		for (const d of p.destinations) buckets.push({ key: { svc: p.service, dest: d }, doc_count: 1 });
+	}
 	return `Search results with aggregations (100 total hits, 5ms):\n\n${JSON.stringify({
-		by_service: {
-			buckets: pairs.map((p) => ({
-				key: p.service,
-				by_dest: { buckets: p.destinations.map((d) => ({ key: d, doc_count: 1 })) },
-			})),
-		},
+		svc_dest: { ...(afterKey ? { after_key: afterKey } : {}), buckets },
 	})}`;
+}
+
+// An empty composite page terminates the collector's pagination loop.
+function apmEmptyPage(): string {
+	return `Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ svc_dest: { buckets: [] } })}`;
 }
 
 beforeEach(() => {
@@ -56,6 +71,8 @@ beforeEach(() => {
 	process.env.KG_TOPOLOGY_CRON_ENABLED = "true";
 	delete process.env.AWS_ESTATES;
 	delete process.env.ELASTIC_DEPLOYMENTS;
+	delete process.env.KG_TOPOLOGY_MAX_PAGES;
+	delete process.env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS;
 	toolRegistry = {};
 	connectedServers = [];
 	_setGraphStoreForTesting(null);
@@ -109,7 +126,7 @@ describe("collectElasticDependencies", () => {
 			{
 				name: "elasticsearch_search",
 				invoke: async () =>
-					apmPayload([
+					apmCompositePage([
 						{ service: "order-service", destinations: ["payment-service:443", "postgresql", "unknown-thing"] },
 						{ service: "payment-service", destinations: ["order-service"] },
 					]),
@@ -158,7 +175,7 @@ describe("runTopologySweep", () => {
 			{
 				name: "elasticsearch_search",
 				invoke: async () =>
-					apmPayload([
+					apmCompositePage([
 						{ service: "order-service", destinations: ["payment-service"] },
 						{ service: "payment-service", destinations: [] },
 					]),
@@ -267,7 +284,44 @@ describe("runTopologySweep", () => {
 		);
 	});
 
-	test("an ECS nextToken (paginated one-shot read) writes edges but skips the sweep", async () => {
+	test("ECS paginates the service list across nextToken pages, then sweeps (SIO-1115)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["aws-mcp"];
+		process.env.AWS_ESTATES = JSON.stringify({ prod: {} });
+		let servicesCall = 0;
+		toolRegistry.aws = [
+			{
+				name: "aws_ecs_list_clusters",
+				invoke: async () => JSON.stringify({ clusterArns: ["arn:aws:ecs:eu-west-1:1:cluster/prod"] }),
+			},
+			{
+				name: "aws_ecs_list_services",
+				invoke: async (args) => {
+					servicesCall++;
+					// page 1 carries a token; page 2 (called with { nextToken }) is the last.
+					const hasToken = (args as { nextToken?: string }).nextToken;
+					if (!hasToken) {
+						return JSON.stringify({
+							serviceArns: ["arn:aws:ecs:eu-west-1:1:service/prod/order-service"],
+							nextToken: "page-2",
+						});
+					}
+					return JSON.stringify({ serviceArns: ["arn:aws:ecs:eu-west-1:1:service/prod/payment-service"] });
+				},
+			},
+		];
+		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "order-service" }, { name: "payment-service" }]);
+		const summary = await runTopologySweep();
+		expect(servicesCall).toBe(2); // both pages fetched
+		// both pages' services became edges, and the collection is complete -> sweep ran
+		expect(summary.sources.aws).toMatchObject({ edges: 2 });
+		expect(summary.sources.aws?.sweepSkipped).toBeUndefined();
+		expect(store.calls.some((c) => c.cypher.includes("[r:RUNS_ON]") && c.cypher.includes("AS misses"))).toBe(true);
+	});
+
+	test("ECS pagination hitting the page cap writes edges but skips the sweep (SIO-1115)", async () => {
+		process.env.KG_TOPOLOGY_MAX_PAGES = "1"; // owned in ORIG_ENV save/restore
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
 		connectedServers = ["aws-mcp"];
@@ -282,38 +336,90 @@ describe("runTopologySweep", () => {
 				invoke: async () =>
 					JSON.stringify({
 						serviceArns: ["arn:aws:ecs:eu-west-1:1:service/prod/order-service"],
-						nextToken: "more-pages",
+						nextToken: "never-ends", // always more pages -> cap binds at 1
 					}),
 			},
 		];
-		// seed the P6 matcher via the graph read
 		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "order-service" }]);
 		const summary = await runTopologySweep();
 		expect(summary.sources.aws).toMatchObject({ edges: 1, sweepSkipped: true });
 		expect(store.calls.some((c) => c.cypher.includes("[r:RUNS_ON]") && c.cypher.includes("AS misses"))).toBe(false);
 	});
 
-	test("a truncated APM terms agg (sum_other_doc_count) writes edges but skips the sweep", async () => {
+	test("APM composite agg pages to exhaustion, then sweeps (SIO-1115)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let page = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async () => {
+					page++;
+					// page 1: a pair + an after_key -> keep paging. page 2: empty -> stop.
+					if (page === 1) {
+						return apmCompositePage(
+							[
+								{ service: "order-service", destinations: ["payment-service"] },
+								{ service: "payment-service", destinations: [] },
+							],
+							{ svc: "payment-service", dest: "" },
+						);
+					}
+					return apmEmptyPage();
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(page).toBe(2); // paged until the empty page
+		expect(summary.sources.elastic).toMatchObject({ edges: 1 });
+		expect(summary.sources.elastic?.sweepSkipped).toBeUndefined();
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(true);
+	});
+
+	test("APM composite agg hitting the page cap writes edges but skips the sweep (SIO-1115)", async () => {
+		process.env.KG_TOPOLOGY_MAX_PAGES = "1"; // owned in ORIG_ENV save/restore
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
 		connectedServers = ["elastic-mcp"];
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
+				// always a full page with an after_key -> cap binds at 1 page
 				invoke: async () =>
-					`Search results with aggregations (100 total hits, 5ms):\n\n${JSON.stringify({
-						by_service: {
-							sum_other_doc_count: 40,
-							buckets: [
-								{ key: "order-service", by_dest: { buckets: [{ key: "payment-service" }] } },
-								{ key: "payment-service", by_dest: { buckets: [] } },
-							],
-						},
-					})}`,
+					apmCompositePage(
+						[
+							{ service: "order-service", destinations: ["payment-service"] },
+							{ service: "payment-service", destinations: [] },
+						],
+						{ svc: "payment-service", dest: "" },
+					),
 			},
 		];
 		const summary = await runTopologySweep();
 		expect(summary.sources.elastic).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	test("APM shape drift (valid JSON, no svc_dest agg) fails the source; no sweep (SIO-1115)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				// a well-formed JSON envelope that is NOT an APM composite agg (drift / tool error).
+				// Must NOT be read as a legitimately-empty page (that would retire valid edges).
+				invoke: async () =>
+					`Search results with aggregations (0 total hits, 1ms):\n\n${JSON.stringify({ error: "boom" })}`,
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 0, sweepSkipped: true });
 		expect(
 			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
 		).toBe(false);
@@ -334,6 +440,74 @@ describe("runTopologySweep", () => {
 		expect(summary.sources.kafka).toMatchObject({ edges: 0, invalidated: 0 });
 		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
 			true,
+		);
+	});
+
+	test("kafka describes all groups via the pool, then sweeps (SIO-1115)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["kafka-mcp"];
+		const describedGroups: string[] = [];
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: "cg-a", state: "STABLE" },
+						{ id: "cg-b", state: "STABLE" },
+						{ id: "cg-c", state: "STABLE" },
+					]),
+			},
+			{
+				name: "kafka_describe_consumer_group",
+				invoke: async (args) => {
+					const groupId = (args as { groupId: string }).groupId;
+					describedGroups.push(groupId);
+					return JSON.stringify({ offsets: [{ topic: `topic-${groupId}` }] });
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(describedGroups.sort()).toEqual(["cg-a", "cg-b", "cg-c"]); // all described
+		expect(summary.sources.kafka).toMatchObject({ edges: 3 });
+		expect(summary.sources.kafka?.sweepSkipped).toBeUndefined();
+		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
+			true,
+		);
+	});
+
+	test("a slow kafka describe times out per-describe; other groups still describe (SIO-1115)", async () => {
+		// Small per-describe timeout so the slow stub trips it without a real 15s wait.
+		process.env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS = "20";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["kafka-mcp"];
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: "cg-slow", state: "STABLE" },
+						{ id: "cg-fast", state: "STABLE" },
+					]),
+			},
+			{
+				name: "kafka_describe_consumer_group",
+				invoke: async (args) => {
+					const groupId = (args as { groupId: string }).groupId;
+					if (groupId === "cg-slow") {
+						await new Promise((r) => setTimeout(r, 100)); // exceeds the 20ms per-describe timeout
+					}
+					return JSON.stringify({ offsets: [{ topic: `topic-${groupId}` }] });
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		// the fast group's edge is present; the source is incomplete (one describe timed out) -> skip
+		expect(summary.sources.kafka).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(store.calls.some((c) => c.cypher.includes("MERGE") && c.params?.from === "cg-fast")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
+			false,
 		);
 	});
 });

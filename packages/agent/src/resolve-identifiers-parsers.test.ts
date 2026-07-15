@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-	parseApmServiceDestinationAgg,
+	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServiceArns,
 	parseAwsEcsServices,
@@ -343,71 +343,88 @@ describe("parseGitlabProjects (lift numeric id)", () => {
 });
 
 // SIO-1104 (5a): topology-sweep parsers.
-describe("parseApmServiceDestinationAgg", () => {
-	const payload = [
-		"Search results with aggregations (120000 total hits, 55ms):",
-		JSON.stringify({
-			by_service: {
-				buckets: [
-					{
-						key: "order-service",
-						doc_count: 900,
-						by_dest: {
-							buckets: [
-								{ key: "payment-service:443", doc_count: 500 },
-								{ key: "postgresql", doc_count: 400 },
-							],
-						},
-					},
-					{ key: "payment-service", doc_count: 100, by_dest: { buckets: [] } },
-				],
-			},
-		}),
-	].join("\n\n");
+describe("parseApmCompositeAggPage (SIO-1115)", () => {
+	// dest === null models a missing_bucket result (service with no exit-span destination).
+	const page = (pairs: Array<{ svc: string; dest?: string | null }>, afterKey?: Record<string, unknown>): string =>
+		[
+			"Search results with aggregations (120000 total hits, 55ms):",
+			JSON.stringify({
+				svc_dest: {
+					...(afterKey ? { after_key: afterKey } : {}),
+					buckets: pairs.map((p) => ({ key: { svc: p.svc, dest: p.dest ?? null }, doc_count: 1 })),
+				},
+			}),
+		].join("\n\n");
 
-	test("extracts caller x destination pairs AND every service bucket key", () => {
-		expect(parseApmServiceDestinationAgg(payload)).toEqual({
+	test("extracts svc x dest pairs AND every distinct svc, returns after_key", () => {
+		const raw = page(
+			[
+				{ svc: "order-service", dest: "payment-service:443" },
+				{ svc: "order-service", dest: "postgresql" },
+				{ svc: "payment-service", dest: null }, // missing_bucket: no outbound dest but still a valid target
+			],
+			{ svc: "payment-service", dest: "postgresql" },
+		);
+		expect(parseApmCompositeAggPage(raw)).toEqual({
 			pairs: [
 				{ service: "order-service", destination: "payment-service:443" },
 				{ service: "order-service", destination: "postgresql" },
 			],
-			// payment-service has no outbound pairs but is still a valid destination target
 			services: ["order-service", "payment-service"],
-			truncated: false,
+			afterKey: { svc: "payment-service", dest: "postgresql" },
+			foundAgg: true,
 		});
+	});
+
+	// SIO-1115: missing_bucket returns key.dest = null; the svc is still recorded (P6
+	// self-join target), no pair is emitted.
+	test("a missing_bucket (null dest) contributes only the svc", () => {
+		const parsed = parseApmCompositeAggPage(page([{ svc: "lonely-service", dest: null }]));
+		expect(parsed.pairs).toEqual([]);
+		expect(parsed.services).toEqual(["lonely-service"]);
+		expect(parsed.foundAgg).toBe(true);
+	});
+
+	test("absent after_key -> afterKey undefined (final page)", () => {
+		const parsed = parseApmCompositeAggPage(page([{ svc: "a", dest: "b" }]));
+		expect(parsed.afterKey).toBeUndefined();
+		expect(parsed.pairs).toEqual([{ service: "a", destination: "b" }]);
+		expect(parsed.foundAgg).toBe(true);
 	});
 
 	test("survives an aggregations wrapper at any depth", () => {
 		const wrapped = `prefix text:\n\n${JSON.stringify({
-			aggregations: { by_service: { buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] } },
+			aggregations: { svc_dest: { buckets: [{ key: { svc: "a", dest: "b" } }] } },
 		})}`;
-		expect(parseApmServiceDestinationAgg(wrapped)).toEqual({
+		expect(parseApmCompositeAggPage(wrapped)).toEqual({
 			pairs: [{ service: "a", destination: "b" }],
 			services: ["a"],
-			truncated: false,
+			afterKey: undefined,
+			foundAgg: true,
 		});
 	});
 
-	test("flags a truncated terms agg (sum_other_doc_count > 0) at either level", () => {
-		const outer = JSON.stringify({
-			by_service: { sum_other_doc_count: 12, buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] },
-		});
-		expect(parseApmServiceDestinationAgg(outer).truncated).toBe(true);
-		const inner = JSON.stringify({
-			by_service: {
-				sum_other_doc_count: 0,
-				buckets: [{ key: "a", by_dest: { sum_other_doc_count: 3, buckets: [{ key: "b" }] } }],
-			},
-		});
-		expect(parseApmServiceDestinationAgg(inner).truncated).toBe(true);
-	});
-
-	test("returns empty on shape drift or no JSON", () => {
-		expect(parseApmServiceDestinationAgg("no json here")).toEqual({ pairs: [], services: [], truncated: false });
-		expect(parseApmServiceDestinationAgg(JSON.stringify({ other: 1 }))).toEqual({
+	// SIO-1115: a legitimately-empty agg (svc_dest present, no buckets) is foundAgg:true so
+	// the collector treats it as a valid empty page (exhausted); shape drift is foundAgg:false
+	// so the collector FAILS the page instead of reading it as authoritatively empty.
+	test("distinguishes an empty agg (foundAgg) from shape drift (not foundAgg)", () => {
+		expect(parseApmCompositeAggPage(page([]))).toEqual({
 			pairs: [],
 			services: [],
-			truncated: false,
+			afterKey: undefined,
+			foundAgg: true,
+		});
+		expect(parseApmCompositeAggPage("no json here")).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: false,
+		});
+		expect(parseApmCompositeAggPage(JSON.stringify({ other: 1 }))).toEqual({
+			pairs: [],
+			services: [],
+			afterKey: undefined,
+			foundAgg: false,
 		});
 	});
 });

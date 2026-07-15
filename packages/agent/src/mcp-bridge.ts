@@ -160,11 +160,22 @@ function parseTimeoutOverride(raw: string | undefined): number | undefined {
 	return parsed.success ? parsed.data : undefined;
 }
 
+// SIO-1115: kafka-mcp is AgentCore-backed (35s connect budget) and its admin RPCs
+// (consumer-group describe) can be slow under load. Give it a deterministic per-call
+// tool timeout instead of the 60s adapter default. KAFKA_TOOL_TIMEOUT_MS is shared
+// with the kafka MCP server's own admin-RPC deadline (also 30s) ON PURPOSE: the
+// client's defaultToolTimeout should track the server's RPC budget so they expire
+// together (one .env feeds both processes).
+const KAFKA_TOOL_TIMEOUT_DEFAULT_MS = 30_000;
+
 // SIO-1112: env is injectable (default process.env) so tests pass isolated objects
 // instead of mutating global env -- matches getSubAgentTimeoutMs / graph-budget.ts.
 function toolTimeoutFor(serverName: string, env: NodeJS.ProcessEnv = process.env): number | undefined {
 	if (serverName === "atlassian-mcp") {
 		return parseTimeoutOverride(env.ATLASSIAN_TOOL_TIMEOUT_MS) ?? ATLASSIAN_TOOL_TIMEOUT_DEFAULT_MS;
+	}
+	if (serverName === "kafka-mcp") {
+		return parseTimeoutOverride(env.KAFKA_TOOL_TIMEOUT_MS) ?? KAFKA_TOOL_TIMEOUT_DEFAULT_MS;
 	}
 	if (serverName !== "elastic-iac-mcp") return undefined; // others use the adapter default
 	const override = parseTimeoutOverride(env.ELASTIC_IAC_TOOL_TIMEOUT_MS);
