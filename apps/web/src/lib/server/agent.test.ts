@@ -70,6 +70,7 @@ mock.module("@devops-agent/agent", () => ({
 		}),
 	),
 	createMcpClient: mock(() => Promise.resolve()),
+	stopHealthPolling: mock(() => undefined),
 	getAgent: () => mockAgentDef,
 	getAgentByName: () => mockAgentDef,
 	// SIO-930: agent.ts imports iacTurnOutcome (used by getIacTurnOutcome). The mock must export it

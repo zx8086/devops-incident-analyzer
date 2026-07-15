@@ -91,9 +91,23 @@ let toolsByServer: Map<string, StructuredToolInterface[]> = new Map();
 
 // SIO-608: Health polling state
 let serverUrls: Map<string, string> = new Map();
-let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
 const HEALTH_POLL_INTERVAL_MS = 30_000;
+
+// SIO-1113: the poll timer is a PROCESS-wide singleton keyed on globalThis, not a
+// module-scope var. Under Vite HMR each reload creates a fresh module instance with
+// its own `let healthPollTimer = null`, so a module-scope guard would let every reload
+// stack another interval; the orphaned loops then fail reconnects against the closed
+// module runner and re-detect the same replacement forever. A globalThis key survives
+// across module graphs so start/stop always see the one live timer.
+const HEALTH_POLL_KEY = Symbol.for("devops-agent.mcp-bridge.healthPollTimer");
+type HealthPollTimer = ReturnType<typeof setInterval>;
+function getHealthPollTimer(): HealthPollTimer | null {
+	return ((globalThis as Record<symbol, unknown>)[HEALTH_POLL_KEY] as HealthPollTimer | undefined) ?? null;
+}
+function setHealthPollTimer(timer: HealthPollTimer | null): void {
+	(globalThis as Record<symbol, unknown>)[HEALTH_POLL_KEY] = timer ?? undefined;
+}
 
 // SIO-774: AgentCore-backed servers cold-start through a SigV4 proxy whose
 // JSON-RPC retry ladder runs to ~30s (see agentcore-proxy.ts JSONRPC_RETRY_DEADLINE_MS).
@@ -700,19 +714,22 @@ async function pollServerHealth(): Promise<void> {
 }
 
 function startHealthPolling(): void {
-	if (healthPollTimer) return;
-	healthPollTimer = setInterval(() => {
+	if (getHealthPollTimer()) return; // SIO-1113: HMR reload must not stack poll loops
+	const timer = setInterval(() => {
 		pollServerHealth().catch((error) => {
 			logger.error({ error: error instanceof Error ? error.message : String(error) }, "Health poll cycle failed");
 		});
 	}, HEALTH_POLL_INTERVAL_MS);
+	timer.unref?.(); // never keep the process alive solely for the poll loop
+	setHealthPollTimer(timer);
 	logger.info({ intervalMs: HEALTH_POLL_INTERVAL_MS }, "MCP health polling started");
 }
 
 export function stopHealthPolling(): void {
-	if (healthPollTimer) {
-		clearInterval(healthPollTimer);
-		healthPollTimer = null;
+	const timer = getHealthPollTimer();
+	if (timer) {
+		clearInterval(timer);
+		setHealthPollTimer(null);
 		logger.info("MCP health polling stopped");
 	}
 }
@@ -726,6 +743,11 @@ export {
 	withTimeout as _withTimeoutForTest,
 };
 export const _pollServerHealthForTest = pollServerHealth;
+// SIO-1113: expose the health-poll singleton for the HMR-stacking regression test.
+export const _startHealthPollingForTest = startHealthPolling;
+export function _getHealthPollTimerForTest(): HealthPollTimer | null {
+	return getHealthPollTimer();
+}
 export function _setServerUrlsForTest(entries: Array<[string, string]>): void {
 	serverUrls = new Map(entries);
 }

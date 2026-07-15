@@ -23,6 +23,7 @@ mock.module("@devops-agent/agent", () => ({
 	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	buildGraph: mock(() => Promise.resolve({})),
 	createMcpClient: mock(() => Promise.resolve()),
+	stopHealthPolling: mock(() => undefined),
 	getAgent: () => ({ manifest: {}, tools: [], subAgents: new Map(), knowledge: [] }),
 	iacTurnOutcome: mock(() => "completed" as const),
 	processAttachments: mock(() => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] })),
