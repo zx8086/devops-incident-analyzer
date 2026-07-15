@@ -38,22 +38,30 @@ The role is `DevOpsAgentReadOnly` in account `352896877281` (the AgentCore deplo
 If the failure is `assume-role-denied`, the policy edit below will NOT help — see [Trust-policy issues](#trust-policy-issues) instead.
 
 ### 3. Locate the policy definition
-The canonical source is `scripts/agentcore/policies/devops-agent-readonly-policy.json`. It's a 12-statement read-only policy split by service group:
 
-- IAM (read-only, ListRoles/ListPolicies/etc.)
-- EC2 (Describe*, GetConsoleOutput, GetConsoleScreenshot)
-- ECS (Describe*, List*)
-- Lambda (Get*, List*)
-- CloudFormation (Describe*, List*, Get*)
-- CloudWatch (Describe*, Get*, List*)
-- Logs (split: list-shaped + read-shaped — see [[reference_aws_iam_gotchas]] for why `logs:Describe*` cannot be prefix-restricted)
-- DynamoDB (Describe*, List*)
-- ElastiCache (Describe*)
-- RDS (Describe*)
-- S3 (list buckets + get-bucket-* metadata; not GetObject)
-- Health, Config, Resource Groups Tagging (Describe*, Get*)
+The `DevOpsAgentReadOnly` role is backed by **two** policy documents, both under `scripts/agentcore/policies/`. Before concluding an action is ungranted, check BOTH — a network-path or MSK describe action lives in the troubleshooting policy, not the base one.
 
-EventBridge, SNS, SQS, Step Functions, X-Ray are covered by the resourcegroupstaggingapi + service-specific Get/List actions in the catch-all `ReadOnlyAccess`-style statements at the end.
+**Base policy — `devops-agent-readonly-policy.json`** (core read, split by service group):
+
+- EC2 regional + network topology (Describe VPCs, **Subnets, RouteTables**, SecurityGroups, NetworkInterfaces, **VpcEndpoints**, Addresses) + ELB describe
+- EC2/compute (DescribeInstances, LaunchTemplates, Images), Autoscaling, ECS (Describe*, List*), EKS, Lambda (Get*, List*)
+- Data stores: RDS, DynamoDB, ElastiCache, S3 (list buckets + get-bucket-* metadata; not GetObject)
+- Messaging: SNS, SQS, EventBridge, Step Functions
+- CloudWatch (Describe*, Get*, List*), Logs (split: list-shaped unscoped + read-shaped name-scoped — see [[reference_aws_iam_gotchas]] for why `logs:Describe*` cannot be prefix-restricted), X-Ray
+- Health, Config, CloudFormation, Resource Groups Tagging
+- Security/audit: CloudTrail, Security Hub, GuardDuty
+
+**Troubleshooting policy — `devops-agent-readonly-troubleshooting-policy.json`** (deep network-path + change diagnosis; attached where deployed):
+
+- Network path: NatGateways, NetworkAcls, VpcPeeringConnections, SecurityGroupRules, FlowLogs, TransitGateways(+Attachments/RouteTables/SearchRoutes), NetworkInsights, VPN/DirectConnect, InternetGateways, PrefixLists, network-firewall, plus the VpcEndpoint* family
+- DNS: route53 + route53resolver list/get
+- MSK: `kafka:DescribeClusterV2`, `GetBootstrapBrokers`, `ListNodes`, `DescribeConfiguration`, `ListClustersV2` (note: consumed by the **kafka** MCP, not the aws MCP)
+- Change/access diagnosis: `sts:DecodeAuthorizationMessage`, KMS describe, Config resource-config history, `cloudtrail:LookupEvents`
+- Deployment/scaling/image/quota: autoscaling activities, ECS task-def listing, ECR describe, CloudFormation drift/change-sets, service quotas
+- Service context: `lambda:GetFunction`/`GetPolicy`, Step Functions execution history, RDS/ElastiCache events, `ssm:DescribeParameters`, `secretsmanager:ListSecrets`/`DescribeSecret`
+- VPC flow-log **content** read (log-group `/vpc/flow-logs/*`)
+
+So `ec2:DescribeRouteTables` and `ec2:DescribeVpcEndpoints` are BOTH granted (base policy); `ec2:DescribeNatGateways`, `DescribeFlowLogs`, `DescribeNetworkAcls`, etc. are granted by the troubleshooting policy. Never report these as "not permitted" without an actual observed `iam-permission-missing` error.
 
 ### 4. Add the missing action to the right statement
 Find the statement whose `Sid` matches the failing service (e.g., `EcsReadOnly` for an `ecs:*` action). Add the new action to the `Action` array, preserving alphabetical order within the array.

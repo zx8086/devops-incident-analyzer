@@ -61,6 +61,23 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 		expect(replayed).toEqual(controlNames);
 	});
 
+	// SIO-1120: the six network-path EC2 tools must be registered and exposed via tools/list, or
+	// the aws-agent literally cannot inspect route tables / NAT gateways -- the capability gap that
+	// made the localcore incident give up on the network-path investigation.
+	test("exposes the six SIO-1120 network-path EC2 tools via tools/list", async () => {
+		const names = await toolNames(buildFactory()());
+		for (const tool of [
+			"aws_ec2_describe_route_tables",
+			"aws_ec2_describe_nat_gateways",
+			"aws_ec2_describe_network_acls",
+			"aws_ec2_describe_flow_logs",
+			"aws_ec2_describe_transit_gateways",
+			"aws_ec2_describe_vpc_peering_connections",
+		]) {
+			expect(names).toContain(tool);
+		}
+	});
+
 	test("registerAll runs exactly once across two factory() calls", () => {
 		// registerAllTools has no observable counter of its own, so we build a parallel factory
 		// here with a counting closure around the SAME package-composition registerAll

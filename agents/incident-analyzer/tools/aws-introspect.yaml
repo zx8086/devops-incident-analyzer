@@ -79,6 +79,12 @@ tool_mapping:
       - aws_ec2_describe_vpcs
       - aws_ec2_describe_vpc_endpoints
       - aws_ec2_describe_network_interfaces
+      - aws_ec2_describe_route_tables
+      - aws_ec2_describe_nat_gateways
+      - aws_ec2_describe_network_acls
+      - aws_ec2_describe_flow_logs
+      - aws_ec2_describe_transit_gateways
+      - aws_ec2_describe_vpc_peering_connections
     rds_state:
       - aws_rds_describe_db_instances
       - aws_rds_describe_db_clusters
@@ -139,7 +145,11 @@ tool_mapping:
     ec2_state: >-
       when investigating EC2 instance health, instance state/type, security-group rules, or VPC
       layout behind a degraded service. Also resolves VPC endpoints (vpce-...) to backing ENIs and
-      ENIs to private IPs -- to confirm whether a PrivateLink/endpoint target IP is still registered
+      ENIs to private IPs -- to confirm whether a PrivateLink/endpoint target IP is still registered.
+      Also the NETWORK-PATH toolset for connectivity incidents: route tables (does a private subnet
+      egress via a NAT gateway, transit gateway, or VPC/gateway endpoint?), NAT gateways (egress path
+      state), network ACLs (subnet-level deny an SG check misses), flow logs (is packet logging even
+      enabled), transit gateways, and VPC peering connections
     rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
     lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
     logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results
@@ -167,6 +177,18 @@ tool_mapping:
       - fargate
       - task definition
       - stopped task
+    ec2_state:
+      - route table
+      - nat gateway
+      - flow logs
+      - vpc endpoint
+      - privatelink
+      - transit gateway
+      - vpc peering
+      - network acl
+      - network path
+      - egress
+      - connectivity
     health_events:
       - aws health
       - phd

@@ -14,8 +14,14 @@ import {
 } from "@aws-sdk/client-config-service";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import {
+	DescribeFlowLogsCommand,
+	DescribeNatGatewaysCommand,
+	DescribeNetworkAclsCommand,
 	DescribeNetworkInterfacesCommand,
+	DescribeRouteTablesCommand,
+	DescribeTransitGatewaysCommand,
 	DescribeVpcEndpointsCommand,
+	DescribeVpcPeeringConnectionsCommand,
 	DescribeVpcsCommand,
 	EC2Client,
 } from "@aws-sdk/client-ec2";
@@ -54,8 +60,14 @@ import { describeAlarms } from "../tools/cloudwatch/describe-alarms.ts";
 import { describeConfigRules } from "../tools/config/describe-config-rules.ts";
 import { getDiscoveredResourceCounts } from "../tools/config/get-discovered-resource-counts.ts";
 import { listTables } from "../tools/dynamodb/list-tables.ts";
+import { describeFlowLogs } from "../tools/ec2/describe-flow-logs.ts";
+import { describeNatGateways } from "../tools/ec2/describe-nat-gateways.ts";
+import { describeNetworkAcls } from "../tools/ec2/describe-network-acls.ts";
 import { describeNetworkInterfaces } from "../tools/ec2/describe-network-interfaces.ts";
+import { describeRouteTables } from "../tools/ec2/describe-route-tables.ts";
+import { describeTransitGateways } from "../tools/ec2/describe-transit-gateways.ts";
 import { describeVpcEndpoints } from "../tools/ec2/describe-vpc-endpoints.ts";
+import { describeVpcPeeringConnections } from "../tools/ec2/describe-vpc-peering-connections.ts";
 import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
 import { describeTaskDefinition } from "../tools/ecs/describe-task-definition.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
@@ -131,6 +143,104 @@ describe("ec2 integration", () => {
 		})) as { NetworkInterfaces: { PrivateIpAddress: string }[] };
 		expect(result.NetworkInterfaces).toHaveLength(1);
 		expect(result.NetworkInterfaces[0]?.PrivateIpAddress).toBe("10.34.50.147");
+	});
+
+	// SIO-1120: route table -> egress-target resolution (the network-path question)
+	test("describeRouteTables returns RouteTables[] with Routes[] naming a NAT-gateway target", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeRouteTablesCommand).resolves({
+			RouteTables: [
+				{
+					RouteTableId: "rtb-04ba5aa09692e4f04",
+					Routes: [
+						{ DestinationCidrBlock: "10.0.0.0/16", GatewayId: "local" },
+						{ DestinationCidrBlock: "0.0.0.0/0", NatGatewayId: "nat-00fa91902057e694c" },
+					],
+					Associations: [{ SubnetId: "subnet-09242b1fe63d0b7b2" }],
+				},
+			],
+		});
+
+		const handler = describeRouteTables(config);
+		const result = (await handler({
+			estate: E,
+			filters: [{ Name: "association.subnet-id", Values: ["subnet-09242b1fe63d0b7b2"] }],
+		})) as { RouteTables: { Routes: { DestinationCidrBlock: string; NatGatewayId?: string }[] }[] };
+		expect(result.RouteTables).toHaveLength(1);
+		const defaultRoute = result.RouteTables[0]?.Routes.find((r) => r.DestinationCidrBlock === "0.0.0.0/0");
+		expect(defaultRoute?.NatGatewayId).toBe("nat-00fa91902057e694c");
+	});
+
+	test("describeNatGateways returns NatGateways[] with State", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock
+			.on(DescribeNatGatewaysCommand)
+			.resolves({ NatGateways: [{ NatGatewayId: "nat-00fa91902057e694c", State: "available" }] });
+
+		const handler = describeNatGateways(config);
+		const result = (await handler({ estate: E, filters: [{ Name: "vpc-id", Values: ["vpc-1"] }] })) as {
+			NatGateways: { State: string }[];
+		};
+		expect(result.NatGateways).toHaveLength(1);
+		expect(result.NatGateways[0]?.State).toBe("available");
+	});
+
+	test("describeNetworkAcls returns NetworkAcls[] with deny Entries", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeNetworkAclsCommand).resolves({
+			NetworkAcls: [{ NetworkAclId: "acl-1", Entries: [{ RuleNumber: 100, Egress: true, RuleAction: "deny" }] }],
+		});
+
+		const handler = describeNetworkAcls(config);
+		const result = (await handler({ estate: E, networkAclIds: ["acl-1"] })) as {
+			NetworkAcls: { Entries: { RuleAction: string }[] }[];
+		};
+		expect(result.NetworkAcls).toHaveLength(1);
+		expect(result.NetworkAcls[0]?.Entries[0]?.RuleAction).toBe("deny");
+	});
+
+	test("describeFlowLogs returns FlowLogs[] with status (uses singular Filter param)", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock
+			.on(DescribeFlowLogsCommand)
+			.resolves({ FlowLogs: [{ FlowLogId: "fl-1", ResourceId: "vpc-1", FlowLogStatus: "ACTIVE" }] });
+
+		const handler = describeFlowLogs(config);
+		const result = (await handler({ estate: E, filters: [{ Name: "resource-id", Values: ["vpc-1"] }] })) as {
+			FlowLogs: { FlowLogStatus: string }[];
+		};
+		expect(result.FlowLogs).toHaveLength(1);
+		expect(result.FlowLogs[0]?.FlowLogStatus).toBe("ACTIVE");
+		// The singular `Filter` param must be populated (not `Filters`), or the SDK ignores it.
+		expect(ec2Mock.commandCalls(DescribeFlowLogsCommand)[0]?.args[0]?.input).toMatchObject({
+			Filter: [{ Name: "resource-id", Values: ["vpc-1"] }],
+		});
+	});
+
+	test("describeTransitGateways returns TransitGateways[]", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock
+			.on(DescribeTransitGatewaysCommand)
+			.resolves({ TransitGateways: [{ TransitGatewayId: "tgw-1", State: "available" }] });
+
+		const handler = describeTransitGateways(config);
+		const result = (await handler({ estate: E })) as { TransitGateways: { State: string }[] };
+		expect(result.TransitGateways).toHaveLength(1);
+		expect(result.TransitGateways[0]?.State).toBe("available");
+	});
+
+	test("describeVpcPeeringConnections returns VpcPeeringConnections[] with Status", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeVpcPeeringConnectionsCommand).resolves({
+			VpcPeeringConnections: [{ VpcPeeringConnectionId: "pcx-1", Status: { Code: "active" } }],
+		});
+
+		const handler = describeVpcPeeringConnections(config);
+		const result = (await handler({ estate: E, filters: [{ Name: "status-code", Values: ["active"] }] })) as {
+			VpcPeeringConnections: { Status: { Code: string } }[];
+		};
+		expect(result.VpcPeeringConnections).toHaveLength(1);
+		expect(result.VpcPeeringConnections[0]?.Status.Code).toBe("active");
 	});
 });
 
