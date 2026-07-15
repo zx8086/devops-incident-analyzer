@@ -48,7 +48,7 @@ const hasRunbooks = availableRunbooks.length > 0;
 
 describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", () => {
 	test("aggregate caps confidence and rewrites text on an ungrounded IAM gap", async () => {
-		const state = {
+		const state: Partial<AgentStateType> = {
 			messages: [],
 			queryComplexity: "complex",
 			targetDataSources: ["aws"],
@@ -92,9 +92,9 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 			investigationFocus: undefined,
 			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
-		} as unknown as AgentStateType;
+		};
 
-		const out = await aggregate(state);
+		const out = await aggregate(state as unknown as AgentStateType);
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.confidenceCap).toBe(0.59);
 		expect(out.finalAnswer).not.toContain("not permitted for");
@@ -106,7 +106,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 	// logs:DescribeLogGroups "not permitted" bullets. Before the per-action fix, the single
 	// unrelated auth error suppressed the whole guard and both fabricated bullets shipped.
 	test("caps + rewrites fabricated granted-action bullets even when an unrelated auth error exists", async () => {
-		const state = {
+		const state: Partial<AgentStateType> = {
 			messages: [],
 			queryComplexity: "complex",
 			targetDataSources: ["aws"],
@@ -158,9 +158,9 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 			investigationFocus: undefined,
 			resolvedIdentifiers: undefined,
 			pendingTopicShiftPrompt: undefined,
-		} as unknown as AgentStateType;
+		};
 
-		const out = await aggregate(state);
+		const out = await aggregate(state as unknown as AgentStateType);
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.confidenceCap).toBe(0.59);
 		// Both fabricated "not permitted" bullets must be rewritten away.
