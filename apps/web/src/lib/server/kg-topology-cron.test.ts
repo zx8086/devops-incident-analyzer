@@ -29,6 +29,16 @@ describe("scheduleToIntervalMs (kg-topology)", () => {
 		expect(scheduleToIntervalMs("not-a-cron")).toBe(60 * 60_000);
 	});
 
+	test("wrong field count is rejected even with a valid-looking minute field", () => {
+		let warned: string | undefined;
+		expect(
+			scheduleToIntervalMs("* invalid", (s) => {
+				warned = s;
+			}),
+		).toBe(60 * 60_000);
+		expect(warned).toBe("* invalid");
+	});
+
 	test("zero step is rejected -> fallback", () => {
 		let warned: string | undefined;
 		expect(

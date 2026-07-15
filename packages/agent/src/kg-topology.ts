@@ -88,6 +88,29 @@ function safeJson(text: string): unknown {
 	}
 }
 
+// [CodeRabbit SIO-1104] A malformed/unparseable tool response must FAIL the
+// sub-call (-> complete=false), never read as "legitimately empty": repeated
+// drift would otherwise feed an authoritative empty set into the sweep and
+// invalidate valid edges after K rounds.
+function parseJsonOrThrow(text: string, what: string): unknown {
+	const parsed = safeJson(text);
+	if (parsed === null) throw new Error(`unparseable ${what} response`);
+	return parsed;
+}
+
+// Kong list envelopes carry metadata.capped when the 100-row page cap hit.
+function kongCapped(json: unknown): boolean {
+	if (!json || typeof json !== "object") return false;
+	const meta = (json as Record<string, unknown>).metadata;
+	return meta !== null && typeof meta === "object" && (meta as Record<string, unknown>).capped === true;
+}
+
+// AWS list responses carry nextToken when paginated -- a one-shot read is then
+// an incomplete collection.
+function hasNextToken(json: unknown): boolean {
+	return json !== null && typeof json === "object" && typeof (json as Record<string, unknown>).nextToken === "string";
+}
+
 function toolFor(dataSourceId: string, name: string) {
 	return getToolsForDataSource(dataSourceId).find((t) => t.name === name);
 }
@@ -115,7 +138,7 @@ function dedupeEdges(edges: TopologyEdgeRecord[]): TopologyEdgeRecord[] {
 	const seen = new Set<string>();
 	const out: TopologyEdgeRecord[] = [];
 	for (const e of edges) {
-		const key = `${e.from} ${e.to}`;
+		const key = `${e.from}\u0000${e.to}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		out.push(e);
@@ -148,7 +171,11 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 		const invoke = async (index: string) => {
 			const run = () => tool.invoke(argsFor(index));
 			const raw = deploymentId ? await withElasticDeployment(deploymentId, run) : await run();
-			return parseApmServiceDestinationAgg(normalizeToolContent(raw));
+			const text = normalizeToolContent(raw);
+			// No JSON at all = a tool error/drift envelope, not an empty agg (a
+			// legitimate zero-hit search still returns the aggregations JSON).
+			if (!text.includes("{")) throw new Error("unparseable search response");
+			return parseApmServiceDestinationAgg(text);
 		};
 		const result = await invoke(APM_INDEX);
 		// Zero buckets can mean the 1m-rollup pattern is absent on this deployment --
@@ -158,10 +185,17 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 	const settled = await Promise.allSettled(deployments.map(collectDeployment));
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const callerSet = new Set<string>();
+	let truncated = false;
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") {
 			pairs.push(...r.value.pairs);
 			for (const s of r.value.services) callerSet.add(s);
+			if (r.value.truncated) {
+				// A terms agg dropped buckets (sum_other_doc_count > 0): edges are still
+				// written but the collection must not sweep (false misses otherwise).
+				logger.warn({ deployment: deployments[i] }, "apm service_destination agg truncated; sweep skipped");
+				truncated = true;
+			}
 		} else logger.warn({ deployment: deployments[i], error: msg(r.reason) }, "apm service_destination query failed");
 	});
 	const callers = [...callerSet];
@@ -172,7 +206,12 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 		if (!canonical || canonical === p.service) continue;
 		edges.push({ kind, from: p.service, to: canonical });
 	}
-	return { kind, edges: dedupeEdges(edges), complete: settled.every((r) => r.status === "fulfilled"), callers };
+	return {
+		kind,
+		edges: dedupeEdges(edges),
+		complete: !truncated && settled.every((r) => r.status === "fulfilled"),
+		callers,
+	};
 }
 
 // Konnect control planes -> services + routes -> ROUTES_TO. Kong is the system of
@@ -183,17 +222,30 @@ export async function collectKonnectRoutes(): Promise<CollectorResult> {
 	const svcTool = toolFor("konnect", "konnect_list_services");
 	const routeTool = toolFor("konnect", "konnect_list_routes");
 	if (!cpTool || !svcTool || !routeTool) return { kind, edges: [], complete: false };
-	const cps = parseKonnectControlPlanes(safeJson(normalizeToolContent(await cpTool.invoke({ pageSize: 100 }))));
+	const cps = parseKonnectControlPlanes(
+		parseJsonOrThrow(normalizeToolContent(await cpTool.invoke({ pageSize: 100 })), "konnect control-plane list"),
+	);
 	let complete = true;
 	const edges: TopologyEdgeRecord[] = [];
 	for (const cp of cps) {
 		try {
-			const services = parseKonnectServices(
-				safeJson(normalizeToolContent(await svcTool.invoke({ controlPlaneId: cp.controlPlaneId, pageSize: 100 }))),
+			const servicesJson = parseJsonOrThrow(
+				normalizeToolContent(await svcTool.invoke({ controlPlaneId: cp.controlPlaneId, pageSize: 100 })),
+				"konnect service list",
 			);
+			const services = parseKonnectServices(servicesJson);
+			if (kongCapped(servicesJson)) {
+				// A truncated service list drops serviceId->name joins, silently losing
+				// route edges -- the collection must not sweep.
+				logger.warn({ controlPlane: cp.name }, "konnect service list truncated at page cap; sweep skipped");
+				complete = false;
+			}
 			const nameByServiceId = new Map(services.filter((s) => s.name).map((s) => [s.serviceId, s.name as string]));
 			const { routes, capped } = parseKonnectRoutes(
-				safeJson(normalizeToolContent(await routeTool.invoke({ controlPlaneId: cp.controlPlaneId, pageSize: 100 }))),
+				parseJsonOrThrow(
+					normalizeToolContent(await routeTool.invoke({ controlPlaneId: cp.controlPlaneId, pageSize: 100 })),
+					"konnect route list",
+				),
 			);
 			if (capped) {
 				// First page only (Kong caps pageSize at 100) -- edges beyond it would
@@ -225,7 +277,9 @@ export async function collectKafkaConsumption(): Promise<CollectorResult> {
 	if (!groupsTool || !describeTool) return { kind, edges: [], complete: false };
 	// NEVER pass `filter` -- the server compiles it as a raw RegExp and a non-regex
 	// token throws MCP -32603. Enumerate unfiltered.
-	const all = parseKafkaConsumerGroups(safeJson(normalizeToolContent(await groupsTool.invoke({}))));
+	const all = parseKafkaConsumerGroups(
+		parseJsonOrThrow(normalizeToolContent(await groupsTool.invoke({})), "kafka consumer-group list"),
+	);
 	let complete = true;
 	let groups = all;
 	if (all.length > KAFKA_GROUP_CAP) {
@@ -236,7 +290,9 @@ export async function collectKafkaConsumption(): Promise<CollectorResult> {
 	const edges: TopologyEdgeRecord[] = [];
 	for (const groupId of groups) {
 		try {
-			const topics = parseKafkaGroupTopics(safeJson(normalizeToolContent(await describeTool.invoke({ groupId }))));
+			const topics = parseKafkaGroupTopics(
+				parseJsonOrThrow(normalizeToolContent(await describeTool.invoke({ groupId })), "kafka group describe"),
+			);
 			for (const topic of topics) edges.push({ kind, from: groupId, to: topic });
 		} catch (error) {
 			logger.warn({ groupId, error: msg(error) }, "kafka consumer-group describe failed");
@@ -263,12 +319,20 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 	}
 	const byNormalized = new Map(knownServiceNames.map((name) => [normalize(name), name]));
 	let skipped = 0;
+	let paginated = false;
 	const collectEstate = async (estate: string): Promise<TopologyEdgeRecord[]> =>
 		withAwsEstate(estate, async () => {
-			const clusters = parseAwsEcsClusterArns(safeJson(normalizeToolContent(await clustersTool.invoke({}))));
+			const clustersJson = parseJsonOrThrow(normalizeToolContent(await clustersTool.invoke({})), "ecs cluster list");
+			if (hasNextToken(clustersJson)) paginated = true;
+			const clusters = parseAwsEcsClusterArns(clustersJson);
 			const out: TopologyEdgeRecord[] = [];
 			for (const cluster of clusters) {
-				const services = parseAwsEcsServices(safeJson(normalizeToolContent(await servicesTool.invoke({ cluster }))));
+				const servicesJson = parseJsonOrThrow(
+					normalizeToolContent(await servicesTool.invoke({ cluster })),
+					"ecs service list",
+				);
+				if (hasNextToken(servicesJson)) paginated = true;
+				const services = parseAwsEcsServices(servicesJson);
 				for (const svc of services) {
 					const canonical = byNormalized.get(normalize(svc.name));
 					if (!canonical) {
@@ -287,7 +351,12 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 		else logger.warn({ estate: estates[i], error: msg(r.reason) }, "aws ecs enumeration failed for estate");
 	});
 	if (skipped > 0) logger.debug({ skipped }, "ecs services without a matching known Service were skipped (P6)");
-	return { kind, edges: dedupeEdges(edges), complete: settled.every((r) => r.status === "fulfilled") };
+	if (paginated) {
+		// A one-shot list left a nextToken behind: unseen clusters/services would
+		// accrue false misses, so the collection must not sweep.
+		logger.warn("ecs listing returned nextToken (one-shot read incomplete); sweep skipped");
+	}
+	return { kind, edges: dedupeEdges(edges), complete: !paginated && settled.every((r) => r.status === "fulfilled") };
 }
 
 export interface TopologySourceSummary {

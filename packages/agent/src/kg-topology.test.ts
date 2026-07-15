@@ -247,6 +247,78 @@ describe("runTopologySweep", () => {
 		).toBe(true);
 	});
 
+	// [CodeRabbit] malformed responses and paginated/truncated listings must never
+	// count as a complete collection (they'd feed an authoritative empty/partial
+	// set into the sweep and invalidate valid edges).
+	test("a malformed kafka list response fails the source instead of reading as empty", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["kafka-mcp"];
+		toolRegistry.kafka = [
+			{ name: "kafka_list_consumer_groups", invoke: async () => "Error: broker unreachable (no JSON here)" },
+			{ name: "kafka_describe_consumer_group", invoke: async () => JSON.stringify({ offsets: [] }) },
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.kafka?.error).toContain("unparseable");
+		expect(summary.sources.kafka).toMatchObject({ edges: 0, sweepSkipped: true });
+		// no sweep read happened for CONSUMES_FROM
+		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
+			false,
+		);
+	});
+
+	test("an ECS nextToken (paginated one-shot read) writes edges but skips the sweep", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["aws-mcp"];
+		process.env.AWS_ESTATES = JSON.stringify({ prod: {} });
+		toolRegistry.aws = [
+			{
+				name: "aws_ecs_list_clusters",
+				invoke: async () => JSON.stringify({ clusterArns: ["arn:aws:ecs:eu-west-1:1:cluster/prod"] }),
+			},
+			{
+				name: "aws_ecs_list_services",
+				invoke: async () =>
+					JSON.stringify({
+						serviceArns: ["arn:aws:ecs:eu-west-1:1:service/prod/order-service"],
+						nextToken: "more-pages",
+					}),
+			},
+		];
+		// seed the P6 matcher via the graph read
+		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "order-service" }]);
+		const summary = await runTopologySweep();
+		expect(summary.sources.aws).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(store.calls.some((c) => c.cypher.includes("[r:RUNS_ON]") && c.cypher.includes("AS misses"))).toBe(false);
+	});
+
+	test("a truncated APM terms agg (sum_other_doc_count) writes edges but skips the sweep", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async () =>
+					`Search results with aggregations (100 total hits, 5ms):\n\n${JSON.stringify({
+						by_service: {
+							sum_other_doc_count: 40,
+							buckets: [
+								{ key: "order-service", by_dest: { buckets: [{ key: "payment-service" }] } },
+								{ key: "payment-service", by_dest: { buckets: [] } },
+							],
+						},
+					})}`,
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(summary.sources.elastic).toMatchObject({ edges: 1, sweepSkipped: true });
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
 	test("a source whose MCP server is not connected is skipped without touching the graph", async () => {
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);

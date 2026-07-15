@@ -117,6 +117,18 @@ export type TopologyEdgeKind = z.infer<typeof TopologyEdgeKindSchema>;
 // never re-observes keep discoveredBy='' and are never touched.
 export const TOPOLOGY_DISCOVERED_BY = "topology-job";
 
+// Writer-boundary shape for one observed topology edge (collector output is parsed
+// external data -- validate the WHOLE record, not just the kind).
+export const TopologyEdgeRecordSchema = z
+	.object({
+		kind: TopologyEdgeKindSchema,
+		from: z.string().min(1), // Service.name | ApiRoute.path | ConsumerGroup.name
+		to: z.string().min(1), // Service.name | KafkaTopic.name | AwsResource.arn
+		createdAt: z.string().optional(),
+	})
+	.strict();
+export type TopologyEdgeRecord = z.infer<typeof TopologyEdgeRecordSchema>;
+
 export const TOPOLOGY_KINDS: Record<
 	TopologyEdgeKind,
 	{ rel: RelType; fromLabel: NodeLabel; fromKey: string; toLabel: NodeLabel; toKey: string }

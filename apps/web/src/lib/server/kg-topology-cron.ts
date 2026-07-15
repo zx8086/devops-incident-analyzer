@@ -29,6 +29,12 @@ let sweeping = false; // setInterval has no no-overlap guarantee; emulate Bun.cr
 // Anything else falls back to hourly with a warn.
 export function scheduleToIntervalMs(schedule: string, onUnsupported?: (schedule: string) => void): number {
 	const fields = schedule.trim().split(/\s+/);
+	// A cron expression has exactly 5 fields; anything else (e.g. "* invalid")
+	// must not silently ride a fast path off its minute field alone.
+	if (fields.length !== 5) {
+		onUnsupported?.(schedule);
+		return DEFAULT_INTERVAL_MS;
+	}
 	const minuteField = fields[0];
 	const hourField = fields[1];
 	if (minuteField === "*") return 60_000;
@@ -52,12 +58,10 @@ export function startKgTopologyCron(): void {
 	}
 	const schedule = process.env.KG_TOPOLOGY_CRON_SCHEDULE || DEFAULT_SCHEDULE;
 
-	// A thrown sweep must not crash the web process. Both Bun.cron and setInterval error
-	// semantics match setTimeout, so a rejected handler emits unhandledRejection --
-	// register a listener so the job keeps running.
-	process.on("unhandledRejection", (err) => {
-		log.error({ error: err instanceof Error ? err.message : String(err) }, "kg-topology cron handler rejected");
-	});
+	// No unhandledRejection listener here (unlike the iac-reconcile clone):
+	// runSweep fully wraps its body in try/catch/finally, so it never rejects, and
+	// a process-global listener would only mislabel unrelated failures as
+	// topology-cron errors (and could stack across HMR reloads).
 
 	// Shared by both timer paths; the `sweeping` re-entrancy guard gives the Node
 	// setInterval path the same no-overlap behaviour Bun.cron provides natively.

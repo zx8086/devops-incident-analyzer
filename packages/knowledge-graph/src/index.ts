@@ -71,6 +71,7 @@ export {
 	TOPOLOGY_KINDS,
 	type TopologyEdgeKind,
 	TopologyEdgeKindSchema,
+	TopologyEdgeRecordSchema,
 	VECTOR_INDEX_NAME,
 	VECTOR_INDEX_PROPERTY,
 	VECTOR_INDEX_SETUP,

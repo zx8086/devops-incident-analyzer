@@ -304,6 +304,7 @@ describe("parseApmServiceDestinationAgg", () => {
 			],
 			// payment-service has no outbound pairs but is still a valid destination target
 			services: ["order-service", "payment-service"],
+			truncated: false,
 		});
 	});
 
@@ -314,12 +315,31 @@ describe("parseApmServiceDestinationAgg", () => {
 		expect(parseApmServiceDestinationAgg(wrapped)).toEqual({
 			pairs: [{ service: "a", destination: "b" }],
 			services: ["a"],
+			truncated: false,
 		});
 	});
 
+	test("flags a truncated terms agg (sum_other_doc_count > 0) at either level", () => {
+		const outer = JSON.stringify({
+			by_service: { sum_other_doc_count: 12, buckets: [{ key: "a", by_dest: { buckets: [{ key: "b" }] } }] },
+		});
+		expect(parseApmServiceDestinationAgg(outer).truncated).toBe(true);
+		const inner = JSON.stringify({
+			by_service: {
+				sum_other_doc_count: 0,
+				buckets: [{ key: "a", by_dest: { sum_other_doc_count: 3, buckets: [{ key: "b" }] } }],
+			},
+		});
+		expect(parseApmServiceDestinationAgg(inner).truncated).toBe(true);
+	});
+
 	test("returns empty on shape drift or no JSON", () => {
-		expect(parseApmServiceDestinationAgg("no json here")).toEqual({ pairs: [], services: [] });
-		expect(parseApmServiceDestinationAgg(JSON.stringify({ other: 1 }))).toEqual({ pairs: [], services: [] });
+		expect(parseApmServiceDestinationAgg("no json here")).toEqual({ pairs: [], services: [], truncated: false });
+		expect(parseApmServiceDestinationAgg(JSON.stringify({ other: 1 }))).toEqual({
+			pairs: [],
+			services: [],
+			truncated: false,
+		});
 	});
 });
 

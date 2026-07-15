@@ -14,6 +14,9 @@ export interface ServiceDependency {
 }
 
 // Direct DEPENDS_ON neighbours (both directions) for the given services.
+// SIO-1104 (5a): DEPENDS_ON is lifecycle-managed by the topology sweep now, so only
+// currently-valid edges feed the enrichment (pre-ALTER rows hold '' -- the column
+// DEFAULT -- and match; a swept-away dependency stops rendering).
 export async function priorRelationshipsForServices(
 	store: GraphStore,
 	services: string[],
@@ -22,7 +25,7 @@ export async function priorRelationshipsForServices(
 	for (const service of services) {
 		if (!service) continue;
 		const rows = await store.run<{ from: string; to: string }>(
-			"MATCH (a:Service {name: $name})-[:DEPENDS_ON]->(b:Service) RETURN a.name AS from, b.name AS to",
+			"MATCH (a:Service {name: $name})-[r:DEPENDS_ON]->(b:Service) WHERE r.tInvalid = '' RETURN a.name AS from, b.name AS to",
 			{ name: service },
 		);
 		for (const row of rows) out.push({ from: String(row.from), to: String(row.to) });
@@ -83,10 +86,12 @@ export async function blastRadiusForServices(
 	};
 
 	for (const service of names) {
-		// DEPENDS_ON, both directions.
+		// DEPENDS_ON, both directions -- valid now (or at asOf). SIO-1104 (5a): the
+		// topology sweep can invalidate these, so stale dependencies stop producing
+		// blast-radius hits (pre-ALTER rows hold '' and match the default form).
 		const deps = await store.run<{ n: string }>(
-			"MATCH (a:Service {name: $name})-[:DEPENDS_ON]-(b:Service) RETURN b.name AS n",
-			{ name: service },
+			`MATCH (a:Service {name: $name})-[r:DEPENDS_ON]-(b:Service) WHERE ${validityClause("r", asOf)} RETURN b.name AS n`,
+			asOf ? { name: service, asOf } : { name: service },
 		);
 		for (const r of deps) add(service, String(r.n), "depends-on", "");
 		// Services sharing a KafkaTopic (producer side).

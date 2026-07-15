@@ -305,13 +305,22 @@ function findProp(node: Record<string, unknown>, name: string): unknown {
 export function parseApmServiceDestinationAgg(normalized: string): {
 	pairs: Array<{ service: string; destination: string }>;
 	services: string[];
+	// True when a terms agg dropped buckets (sum_other_doc_count > 0) -- the
+	// collection is INCOMPLETE and must not drive the staleness sweep (a dropped
+	// service would otherwise accrue false misses).
+	truncated: boolean;
 } {
 	const parsed = firstJson(normalized);
-	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [] };
+	if (!parsed || typeof parsed !== "object") return { pairs: [], services: [], truncated: false };
 	const byService = findProp(parsed as Record<string, unknown>, "by_service");
-	if (!byService || typeof byService !== "object") return { pairs: [], services: [] };
+	if (!byService || typeof byService !== "object") return { pairs: [], services: [], truncated: false };
 	const buckets = (byService as Record<string, unknown>).buckets;
-	if (!Array.isArray(buckets)) return { pairs: [], services: [] };
+	if (!Array.isArray(buckets)) return { pairs: [], services: [], truncated: false };
+	const otherCount = (node: Record<string, unknown>): number => {
+		const n = node.sum_other_doc_count;
+		return typeof n === "number" ? n : 0;
+	};
+	let truncated = otherCount(byService as Record<string, unknown>) > 0;
 	const pairs: Array<{ service: string; destination: string }> = [];
 	const services: string[] = [];
 	for (const b of buckets) {
@@ -322,6 +331,7 @@ export function parseApmServiceDestinationAgg(normalized: string): {
 		services.push(service);
 		const byDest = rec.by_dest;
 		if (!byDest || typeof byDest !== "object") continue;
+		if (otherCount(byDest as Record<string, unknown>) > 0) truncated = true;
 		const destBuckets = (byDest as Record<string, unknown>).buckets;
 		if (!Array.isArray(destBuckets)) continue;
 		for (const d of destBuckets) {
@@ -329,7 +339,7 @@ export function parseApmServiceDestinationAgg(normalized: string): {
 			if (typeof key === "string" && key.length > 0) pairs.push({ service, destination: key });
 		}
 	}
-	return { pairs, services: dedupe(services) };
+	return { pairs, services: dedupe(services), truncated };
 }
 
 export interface KonnectRoute {

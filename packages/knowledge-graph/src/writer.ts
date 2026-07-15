@@ -10,7 +10,8 @@ import {
 	TOPOLOGY_DISCOVERED_BY,
 	TOPOLOGY_KINDS,
 	type TopologyEdgeKind,
-	TopologyEdgeKindSchema,
+	type TopologyEdgeRecord,
+	TopologyEdgeRecordSchema,
 	VECTOR_INDEX_NAME,
 	VECTOR_INDEX_PROPERTY,
 	VECTOR_INDEX_TABLE,
@@ -580,24 +581,26 @@ export async function linkResolution(store: GraphStore, incidentId: string, runb
 // (packages/agent/src/kg-topology.ts) owns all MCP I/O and feeds parsed edge lists.
 // Labels/keys come from the internal TOPOLOGY_KINDS map (never caller input); values
 // are always bound.
-export interface TopologyEdgeRecord {
-	kind: TopologyEdgeKind;
-	from: string; // Service.name | ApiRoute.path | ConsumerGroup.name
-	to: string; // Service.name | KafkaTopic.name | AwsResource.arn
-	createdAt?: string;
-}
+export type { TopologyEdgeRecord } from "./schema.ts";
 
 export async function recordTopologyEdges(store: GraphStore, edges: TopologyEdgeRecord[]): Promise<void> {
-	for (const edge of edges) {
-		const kind = TopologyEdgeKindSchema.safeParse(edge.kind);
-		if (!kind.success || !edge.from || !edge.to) continue;
-		const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[kind.data];
+	for (const raw of edges) {
+		// Collector output is parsed EXTERNAL data -- validate the whole record at
+		// the writer boundary (kind, non-empty endpoints), not just the kind.
+		const parsed = TopologyEdgeRecordSchema.safeParse(raw);
+		if (!parsed.success) continue;
+		const edge = parsed.data;
+		const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[edge.kind];
 		const now = edge.createdAt ?? new Date().toISOString();
 		await store.run(`MERGE (a:${fromLabel} {${fromKey}: $from})`, { from: edge.from });
 		await store.run(`MERGE (b:${toLabel} {${toKey}: $to})`, { to: edge.to });
 		// Re-observe revalidates: clear tInvalid, reset the miss counter, and claim
 		// lifecycle ownership (discoveredBy) -- an agent-written edge the sweep
 		// re-observes deliberately becomes sweep-managed from then on.
+		// KNOWN LIMITATION (single-interval bi-temporality, the SIO-1100 substrate
+		// design shared with OBSERVED_IN): revival keeps the FIRST tValid and clears
+		// tInvalid, so an as-of read inside the invalidated gap reports the edge as
+		// valid. Interval versioning is a deliberate non-goal of Stage 5.
 		await store.run(
 			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
 			{ from: edge.from, to: edge.to, discoveredBy: TOPOLOGY_DISCOVERED_BY },
@@ -634,12 +637,12 @@ export async function sweepStaleTopology(
 	const maxMisses = opts?.maxMisses ?? 3;
 	const now = opts?.now ?? new Date().toISOString();
 	const valid = await validTopologyEdges(store, kind);
-	const freshSet = new Set(fresh.map((e) => `${e.from} ${e.to}`));
+	const freshSet = new Set(fresh.map((e) => `${e.from}\u0000${e.to}`));
 	const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[kind];
 	let missed = 0;
 	let invalidated = 0;
 	for (const edge of valid) {
-		if (freshSet.has(`${edge.from} ${edge.to}`)) continue;
+		if (freshSet.has(`${edge.from}\u0000${edge.to}`)) continue;
 		missed++;
 		const misses = edge.consecutiveMisses + 1;
 		if (misses >= maxMisses) {

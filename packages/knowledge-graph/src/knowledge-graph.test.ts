@@ -1054,10 +1054,26 @@ describe("SIO-1103 blastRadiusForServices", () => {
 		expect(tele?.cypher).toContain("o1.tValid <= $asOf AND (o1.tInvalid = '' OR o1.tInvalid > $asOf)");
 		expect(tele?.cypher).toContain("o2.tValid <= $asOf AND (o2.tInvalid = '' OR o2.tInvalid > $asOf)");
 		expect(tele?.params).toMatchObject({ name: "orders", asOf });
-		// depends-on / produces-to hops carry no temporal filter and no asOf param
+		// SIO-1104 (5a): the depends-on hop is lifecycle-managed too, so it gets the
+		// same window; produces-to (not sweep-managed) stays unfiltered.
 		const deps = store.calls.find((c) => c.cypher.includes("DEPENDS_ON"));
+		expect(deps?.cypher).toContain("r.tValid <= $asOf AND (r.tInvalid = '' OR r.tInvalid > $asOf)");
+		expect(deps?.params).toEqual({ name: "orders", asOf });
+		const topics = store.calls.find((c) => c.cypher.includes("PRODUCES_TO"));
+		expect(topics?.cypher).not.toContain("$asOf");
+	});
+
+	// SIO-1104 (5a): default blast-radius + prior-relationships reads exclude
+	// invalidated DEPENDS_ON edges (the sweep can retire them now).
+	test("depends-on reads filter to currently-valid edges by default", async () => {
+		const store = new InMemoryGraphStore();
+		await blastRadiusForServices(store, ["orders"]);
+		const deps = store.calls.find((c) => c.cypher.includes("DEPENDS_ON"));
+		expect(deps?.cypher).toContain("r.tInvalid = ''");
 		expect(deps?.cypher).not.toContain("$asOf");
-		expect(deps?.params).toEqual({ name: "orders" });
+		const prior = new InMemoryGraphStore();
+		await priorRelationshipsForServices(prior, ["orders"]);
+		expect(prior.calls[0]?.cypher).toContain("r.tInvalid = ''");
 	});
 
 	// SIO-1104 (5a): shared-AwsResource fan-in via the topology sweep's RUNS_ON edges.
