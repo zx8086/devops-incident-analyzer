@@ -276,10 +276,15 @@ export const MIGRATIONS: readonly string[] = [
 	// sweep can refresh + K-miss-invalidate them. FRESH graphs get the columns here;
 	// EXISTING graphs get them via the tolerant rel-table ALTER_MIGRATIONS below
 	// (rel ALTER verified on lbug 0.14.3 -- old rows read the DEFAULT back, not NULL).
-	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
-	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
-	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
-	"CREATE REL TABLE IF NOT EXISTS ROUTES_TO(FROM ApiRoute TO Service, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
+	// SIO-1136: the CREATE DDLs MUST carry the same DEFAULTs as those ALTERs. On a
+	// fresh store the columns exist from CREATE, so every lifecycle ALTER throws
+	// "property already exists" and is swallowed -- without DEFAULTs here, a bare
+	// MERGE (upsertEntities' DEPENDS_ON) writes NULL lifecycle values, which the
+	// readers' tInvalid = '' currently-valid filter silently misses.
+	"CREATE REL TABLE IF NOT EXISTS DEPENDS_ON(FROM Service TO Service, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS PRODUCES_TO(FROM Service TO KafkaTopic, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS CONSUMES_FROM(FROM ConsumerGroup TO KafkaTopic, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS ROUTES_TO(FROM ApiRoute TO Service, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
 	"CREATE REL TABLE IF NOT EXISTS AFFECTED_BY(FROM Service TO Incident)",
 	"CREATE REL TABLE IF NOT EXISTS CORRELATES_WITH(FROM Finding TO Finding, ruleName STRING, confidence DOUBLE)",
 	"CREATE REL TABLE IF NOT EXISTS RESOLVED_BY(FROM Incident TO Runbook)",
@@ -319,12 +324,12 @@ export const MIGRATIONS: readonly string[] = [
 	// (Stage 4) sets tInvalid rather than deleting, so as-of queries stay possible.
 	"CREATE NODE TABLE IF NOT EXISTS TelemetrySource(id STRING, datasource STRING, kind STRING, resourceId STRING, locator STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Alias(name STRING, normalized STRING, PRIMARY KEY(name))",
-	"CREATE REL TABLE IF NOT EXISTS OBSERVED_IN(FROM Service TO TelemetrySource, confidence DOUBLE, discoveredBy STRING, evidence STRING, lastVerified STRING, tValid STRING, tInvalid STRING)",
-	"CREATE REL TABLE IF NOT EXISTS RESOLVES_TO(FROM Alias TO Service, confidence DOUBLE, discoveredBy STRING, createdAt STRING, tValid STRING, tInvalid STRING)",
+	"CREATE REL TABLE IF NOT EXISTS OBSERVED_IN(FROM Service TO TelemetrySource, confidence DOUBLE, discoveredBy STRING DEFAULT '', evidence STRING, lastVerified STRING, tValid STRING DEFAULT '', tInvalid STRING DEFAULT '')",
+	"CREATE REL TABLE IF NOT EXISTS RESOLVES_TO(FROM Alias TO Service, confidence DOUBLE, discoveredBy STRING DEFAULT '', createdAt STRING, tValid STRING DEFAULT '', tInvalid STRING DEFAULT '')",
 	"CREATE REL TABLE IF NOT EXISTS DISCOVERED_DURING(FROM TelemetrySource TO Incident)",
 	// SIO-1104 (5a): runtime placement from the topology sweep's AWS ECS enumeration.
 	// Bi-temporal + K-miss counter, born with lifecycle columns (no ALTER needed).
-	"CREATE REL TABLE IF NOT EXISTS RUNS_ON(FROM Service TO AwsResource, discoveredBy STRING, tValid STRING, tInvalid STRING, consecutiveMisses INT64)",
+	"CREATE REL TABLE IF NOT EXISTS RUNS_ON(FROM Service TO AwsResource, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
 ];
 
 // SIO-965: best-effort additive column migrations for graphs created before the
