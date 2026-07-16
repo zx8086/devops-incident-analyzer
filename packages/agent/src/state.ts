@@ -344,7 +344,9 @@ export const AgentState = Annotation.Root({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),
-	hilMatch: Annotation<{ incidentId: string; created: boolean } | undefined>({
+	// SIO-1130: auto=true marks a match resolved without the interrupt (single
+	// ticket-mention pin or zero candidates); the review gate surfaces it.
+	hilMatch: Annotation<{ incidentId: string; created: boolean; auto?: boolean } | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),

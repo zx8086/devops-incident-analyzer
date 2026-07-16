@@ -84,6 +84,22 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       Learnings from {prompt.ticketKey}
     </h3>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
+
+    <!-- SIO-1130: the linkage is shown here even when the match gate auto-confirmed
+         (single ticket-mention pin) or auto-created, so the human always sees which
+         investigation the learnings attach to before applying. -->
+    {#if prompt.matchCreated}
+      <p class="mt-1 text-xs text-gray-600">
+        <span class="font-semibold">Matched investigation:</span> none found -- a new incident record will be
+        created from the ticket on apply.
+      </p>
+    {:else if prompt.matchedIncidentSummary}
+      <p class="mt-1 text-xs text-gray-600">
+        <span class="font-semibold">Matched investigation{prompt.autoMatched ? " (auto, via ticket reference)" : ""}:</span>
+        {prompt.matchedIncidentSummary}
+      </p>
+    {/if}
+
     {#if prompt.alreadyLearned}
       <p class="mt-1 text-xs text-yellow-900 bg-yellow-50 border border-yellow-400/50 rounded px-2 py-1">
         This ticket was learned from before. Re-applying updates the knowledge graph (idempotent) but skips

@@ -39,6 +39,12 @@ export interface HilLearningReviewPrompt {
 	ticketKey: string;
 	proposal: LearningProposal;
 	alreadyLearned: boolean;
+	// SIO-1130: which investigation the ticket was linked to. autoMatched=true
+	// when the match gate auto-confirmed (single ticket-mention pin) or
+	// auto-created (matchCreated=true, zero candidates) without interrupting.
+	matchedIncidentSummary?: string;
+	autoMatched?: boolean;
+	matchCreated?: boolean;
 	message: string;
 }
 
@@ -530,6 +536,10 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					ticketKey: event.ticketKey,
 					proposal: event.proposal,
 					alreadyLearned: event.alreadyLearned,
+					// SIO-1130: matched-investigation context (auto-confirmed pins).
+					matchedIncidentSummary: event.matchedIncidentSummary,
+					autoMatched: event.autoMatched,
+					matchCreated: event.matchCreated,
 					message: event.message,
 				},
 				hilLearningMatch: null,

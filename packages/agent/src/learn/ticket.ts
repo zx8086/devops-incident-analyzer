@@ -235,20 +235,36 @@ export interface HilMatchDecision {
 // learnMatchGate node: interrupt #1. Compute (learnMatchIncident) and interrupt
 // are split across nodes because LangGraph re-executes an interrupted node from
 // its top on resume -- the gate holds only the interrupt + state mapping.
+//
+// SIO-1130: the gate only interrupts when the match is genuinely AMBIGUOUS.
+// Exactly one ticket-mention pin is a deterministic linkage (the stored incident
+// summary literally contains the ticket key) -- asking is ceremony, so it
+// auto-confirms. Zero candidates auto-proceeds to a new incident record. Fuzzy
+// vector-only matches (or 2+ pins) still ask: an embedding match can be
+// confidently wrong, and a bad link hangs the root-cause correction on the
+// wrong incident. Oversight is preserved by the review gate, which shows the
+// matched investigation before anything is written.
 export function learnMatchGate(state: AgentStateType): Partial<AgentStateType> {
 	const key = state.hilLearnTicketKey;
 	const ticket = state.hilTicket;
 	if (!key || !ticket) return {};
+
+	const pins = state.hilMatchCandidates.filter((c) => c.via === "ticket-mention");
+	if (pins.length === 1 && pins[0]) {
+		logger.info({ key, incidentId: pins[0].id }, "HIL match auto-confirmed via ticket-mention pin");
+		return { hilMatch: { incidentId: pins[0].id, created: false, auto: true } };
+	}
+	if (state.hilMatchCandidates.length === 0) {
+		logger.info({ key }, "HIL match: no candidates; creating a new incident record");
+		return { hilMatch: { incidentId: `jira:${key}`, created: true, auto: true } };
+	}
 
 	const choice = interrupt({
 		type: "hil_learning_match",
 		ticketKey: key,
 		ticketSummary: ticket.summary,
 		candidates: state.hilMatchCandidates,
-		message:
-			state.hilMatchCandidates.length > 0
-				? `Which prior investigation does ${key} correspond to?`
-				: `No stored investigation matches ${key}; a new incident record will be created from the ticket.`,
+		message: `Which prior investigation does ${key} correspond to?`,
 	}) as HilMatchDecision;
 
 	const picked = choice?.incidentId ?? null;
