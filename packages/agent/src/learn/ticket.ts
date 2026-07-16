@@ -49,11 +49,22 @@ export function flattenAtlassianText(value: unknown): string {
 	// (paragraph/doc) append their own trailing newline below.
 	if (Array.isArray(value)) return value.map(flattenAtlassianText).filter(Boolean).join("");
 	if (typeof value === "object") {
-		const node = value as { text?: unknown; content?: unknown; type?: unknown };
+		const node = value as { text?: unknown; content?: unknown; type?: unknown; attrs?: { level?: unknown } };
 		const parts: string[] = [];
 		if (typeof node.text === "string") parts.push(node.text);
 		if (Array.isArray(node.content)) parts.push(flattenAtlassianText(node.content));
 		if (parts.length > 0) {
+			// SIO-1132 (PR #397 review): render ADF heading nodes as markdown
+			// headings so document structure survives flattening -- downstream
+			// section detection (extractExecutiveSummary's termination on the NEXT
+			// heading) must work identically for string and ADF payloads.
+			if (node.type === "heading") {
+				const level =
+					typeof node.attrs?.level === "number" && node.attrs.level >= 1 && node.attrs.level <= 6
+						? node.attrs.level
+						: 2;
+				return `\n${"#".repeat(level)} ${parts.join("")}\n`;
+			}
 			// Paragraph-level nodes read better with a line break between blocks.
 			return node.type === "paragraph" || node.type === "doc" ? `${parts.join("")}\n` : parts.join("");
 		}

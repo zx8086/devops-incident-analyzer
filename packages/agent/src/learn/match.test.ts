@@ -161,6 +161,29 @@ describe("SIO-1132 extractExecutiveSummary", () => {
 		expect(extractExecutiveSummary("## Executive Summary\n## Next Section\nbody")).toBeNull();
 	});
 
+	test("PR #397 review: terminates at a next heading that came from ADF flattening", () => {
+		// flattenAtlassianText renders ADF heading nodes as markdown headings, so a
+		// fully-ADF report still terminates section capture correctly.
+		const adfFlattened = [
+			"## Executive Summary",
+			"The service is failing its bootstrap handshake.",
+			"## Findings",
+			"| table | of | findings |",
+		].join("\n");
+		const out = extractExecutiveSummary(adfFlattened);
+		expect(out).toBe("The service is failing its bootstrap handshake.");
+	});
+
+	test("PR #397 review: the 2000-char cap never splits a surrogate pair", () => {
+		// Fill so the cap lands exactly on the middle of an emoji pair.
+		const body = `${"x".repeat(1_999)}\u{1F600}rest`;
+		const out = extractExecutiveSummary(`## Executive Summary\n${body}`);
+		expect(out).not.toBeNull();
+		const last = (out ?? "").charCodeAt((out ?? "").length - 1);
+		// No lone high surrogate at the boundary.
+		expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+	});
+
 	test("buildMatchEmbedText embeds summary + exec summary when present, full text otherwise", () => {
 		const withSection = buildMatchEmbedText("Ticket title", REPORT);
 		expect(withSection).toContain("Ticket title");

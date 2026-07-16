@@ -52,7 +52,8 @@ export function extractExecutiveSummary(description: string): string | null {
 		length += line.length + 1;
 		if (length >= EXEC_SUMMARY_MAX_CHARS) break;
 	}
-	const text = captured.join("\n").trim().slice(0, EXEC_SUMMARY_MAX_CHARS);
+	// Surrogate-safe cap (PR #397 review): a bare slice can split a non-BMP char.
+	const text = truncateForEmbedding(captured.join("\n").trim(), EXEC_SUMMARY_MAX_CHARS);
 	return text.length > 0 ? text : null;
 }
 
