@@ -166,7 +166,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			try {
 				await transport.closeAll();
 			} catch (error) {
-				logger.error("Error closing transport", {
+				logger.warn("Error closing transport", {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -175,7 +175,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 				try {
 					await options.cleanupDatasource(datasource);
 				} catch (error) {
-					logger.error("Error cleaning up datasource", {
+					logger.warn("Error cleaning up datasource", {
 						error: error instanceof Error ? error.message : String(error),
 					});
 				}
@@ -184,7 +184,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			try {
 				await shutdownTelemetry(otelSdk);
 			} catch (error) {
-				logger.error("Error shutting down telemetry", {
+				logger.warn("Error shutting down telemetry", {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}

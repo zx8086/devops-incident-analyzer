@@ -451,7 +451,7 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 			bucketNames = parsedBuckets.buckets.slice(0, MAX_BUCKET_NAMES);
 		}
 	} else {
-		logger.info({ error: msg(bucketsRes.reason) }, "couchbase bucket probe unavailable; resolving default bucket only");
+		logger.warn({ error: msg(bucketsRes.reason) }, "couchbase bucket probe unavailable; resolving default bucket only");
 	}
 
 	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.

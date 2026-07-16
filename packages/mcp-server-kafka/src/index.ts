@@ -65,7 +65,7 @@ async function probeOptionalServices(opts: ToolRegistrationOptions, config: AppC
 			logger.info({ component: name, url }, `${name} reachable`);
 		} else {
 			const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-			logger.error(
+			logger.warn(
 				{ component: name, url, error: reason },
 				`${name} unreachable - tools registered but calls will fail`,
 			);

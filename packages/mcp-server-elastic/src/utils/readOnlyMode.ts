@@ -141,7 +141,7 @@ export class ReadOnlyModeManager {
 
 		if (this.strictMode) {
 			const error = `READ-ONLY MODE: ${operationTypeStr} operation '${toolName}' is blocked. Set READ_ONLY_MODE=false to enable write operations.`;
-			logger.warn(
+			logger.error(
 				{
 					toolName,
 					operationType: operationTypeStr,
