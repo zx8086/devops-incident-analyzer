@@ -72,6 +72,28 @@ describe("SIO-1126 flattenAtlassianText", () => {
 	});
 });
 
+describe("SIO-1132 flattenAtlassianText headings (PR #397 review)", () => {
+	test("ADF heading nodes render as markdown headings with their level", () => {
+		const adf = {
+			type: "doc",
+			content: [
+				{ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Executive Summary" }] },
+				{ type: "paragraph", content: [{ type: "text", text: "The summary body." }] },
+				{ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Findings" }] },
+				{ type: "paragraph", content: [{ type: "text", text: "table..." }] },
+			],
+		};
+		const out = flattenAtlassianText(adf);
+		expect(out).toContain("## Executive Summary");
+		expect(out).toContain("## Findings");
+	});
+
+	test("a heading without a valid level defaults to ##", () => {
+		const adf = { type: "heading", content: [{ type: "text", text: "Loose Heading" }] };
+		expect(flattenAtlassianText(adf)).toContain("## Loose Heading");
+	});
+});
+
 describe("SIO-1126 capTicketForPrompt", () => {
 	test("caps each comment body and drops oldest comments when over the total budget", () => {
 		const big = "x".repeat(5_000);
