@@ -1,0 +1,86 @@
+{
+	"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/project/search?maxResults=50&startAt=0&action=create",
+	"nextPage": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/project/search?maxResults=50&startAt=50&action=create",
+	"maxResults": 50,
+	"startAt": 0,
+	"total": 70,
+	"isLast": false,
+	"values": [
+		{
+			"expand": "description,lead,issueTypes,url,projectKeys,permissions,insight",
+			"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/project/10062",
+			"id": "10062",
+			"key": "DEVOPS",
+			"issueTypes": [
+				{
+					"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issuetype/10008",
+					"id": "10008",
+					"description": "A task that needs to be done",
+					"iconUrl": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/2/universal_avatar/view/type/issuetype/avatar/10318?size=medium",
+					"name": "Task",
+					"subtask": false,
+					"avatarId": 10318,
+					"hierarchyLevel": 0
+				},
+				{
+					"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issuetype/10009",
+					"id": "10009",
+					"description": "The sub-task of the issue",
+					"iconUrl": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/2/universal_avatar/view/type/issuetype/avatar/10316?size=medium",
+					"name": "Sub-task",
+					"subtask": true,
+					"avatarId": 10316,
+					"hierarchyLevel": -1
+				}
+			],
+			"name": "DevOpsProject",
+			"avatarUrls": {
+				"48x48": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423",
+				"24x24": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=small",
+				"16x16": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=xsmall",
+				"32x32": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=medium"
+			},
+			"projectCategory": {
+				"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/projectCategory/10002",
+				"id": "10002",
+				"name": "Migrated from server",
+				"description": "Migrated from Server jira-eu.pvh.com"
+			},
+			"projectTypeKey": "software",
+			"simplified": false,
+			"style": "classic",
+			"isPrivate": false,
+			"properties": {}
+		},
+		{
+			"expand": "description,lead,issueTypes,url,projectKeys,permissions,insight",
+			"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/project/10115",
+			"id": "10115",
+			"key": "LRDTP",
+			"issueTypes": [
+				{
+					"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issuetype/10008",
+					"id": "10008",
+					"description": "A task that needs to be done",
+					"iconUrl": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/2/universal_avatar/view/type/issuetype/avatar/10318?size=medium",
+					"name": "Task",
+					"subtask": false,
+					"avatarId": 10318,
+					"hierarchyLevel": 0
+				}
+			],
+			"name": "LRD+ Test Project",
+			"avatarUrls": {
+				"48x48": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423",
+				"24x24": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=small",
+				"16x16": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=xsmall",
+				"32x32": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/universal_avatar/view/type/project/avatar/10423?size=medium"
+			},
+			"projectTypeKey": "software",
+			"simplified": false,
+			"style": "classic",
+			"isPrivate": false,
+			"properties": {}
+		}
+	]
+}

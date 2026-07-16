@@ -126,6 +126,9 @@ mock.module("@devops-agent/agent", () => ({
 	runTopologySweep: mock(() => Promise.resolve({ sources: {} })),
 	topologyCronEnabled: mock(() => false),
 	selectedBackend: mock(() => "file" as const),
+	// SIO-1124: the /api/tickets routes import these from this same specifier.
+	getTicketProvider: mock(() => undefined),
+	listAvailableTicketProviders: mock(() => [] as unknown[]),
 }));
 
 mock.module("@devops-agent/gitagent-bridge", () => ({

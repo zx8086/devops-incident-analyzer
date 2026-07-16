@@ -248,6 +248,7 @@ function handleSuggestionClick(suggestion: string) {
             actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
             onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
             onActionDismiss={(id) => agentStore.dismissAction(id)}
+            ticketProviders={agentStore.availableTicketProviders}
           />
         {/if}
       {/each}
@@ -313,6 +314,7 @@ function handleSuggestionClick(suggestion: string) {
               actionResults={agentStore.actionResults}
               onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
+              ticketProviders={agentStore.availableTicketProviders}
             />
           {/if}
         {/if}
@@ -342,6 +344,7 @@ function handleSuggestionClick(suggestion: string) {
               actionResults={agentStore.actionResults}
               onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
+              ticketProviders={agentStore.availableTicketProviders}
             />
           {/if}
         {/if}

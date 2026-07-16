@@ -1,7 +1,15 @@
 // apps/web/src/lib/stores/agent.svelte.ts
 
-import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
+import {
+	type ActionResult,
+	type DataSourceContext,
+	type PendingAction,
+	type StreamEvent,
+	type TicketProviderInfo,
+	TicketProviderInfoSchema,
+} from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+import { z } from "zod";
 import {
 	applyStreamEvent,
 	type DataSourceFindings,
@@ -59,6 +67,9 @@ export interface FollowUpContext {
 // SIO-608: Frontend polling interval for health status
 const HEALTH_POLL_INTERVAL_MS = 15_000;
 
+// SIO-1124: response boundary for GET /api/tickets/providers.
+const TicketProvidersResponseSchema = z.object({ providers: z.array(TicketProviderInfoSchema) });
+
 // SIO-780: probe state literal-union (mirrors mcp-bridge ProbeState)
 type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
 
@@ -80,6 +91,8 @@ function createAgentStore() {
 	// SIO-836: Available is populated from GET /api/aws/estates on mount; selected defaults to all.
 	let availableAwsEstates = $state<{ id: string; region: string }[]>([]);
 	let selectedAwsEstates = $state<string[]>([]);
+	// SIO-1124: populated from GET /api/tickets/providers on mount; empty hides the Create-ticket button.
+	let availableTicketProviders = $state<TicketProviderInfo[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -414,6 +427,16 @@ function createAgentStore() {
 		} catch {
 			availableAwsEstates = [];
 			selectedAwsEstates = [];
+		}
+		// SIO-1124: Best-effort ticket-provider fetch. A failure or malformed
+		// payload just hides the Create-ticket button.
+		try {
+			const res = await fetch("/api/tickets/providers");
+			if (!res.ok) throw new Error(`providers fetch failed (${res.status})`);
+			const parsed = TicketProvidersResponseSchema.safeParse(await res.json());
+			availableTicketProviders = parsed.success ? parsed.data.providers : [];
+		} catch {
+			availableTicketProviders = [];
 		}
 		startHealthPolling();
 	}
@@ -777,6 +800,9 @@ function createAgentStore() {
 		},
 		get availableAwsEstates() {
 			return availableAwsEstates;
+		},
+		get availableTicketProviders() {
+			return availableTicketProviders;
 		},
 		get selectedAwsEstates() {
 			return selectedAwsEstates;

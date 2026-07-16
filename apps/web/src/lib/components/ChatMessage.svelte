@@ -1,12 +1,13 @@
 <script lang="ts">
 // apps/web/src/lib/components/ChatMessage.svelte
-import type { ActionResult, PendingAction } from "@devops-agent/shared";
+import type { ActionResult, PendingAction, TicketProviderInfo } from "@devops-agent/shared";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
 import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
 import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
+import CreateTicketCard from "./CreateTicketCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
 import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
@@ -26,6 +27,7 @@ let {
 	actionResults = [],
 	onActionApprove,
 	onActionDismiss,
+	ticketProviders = [],
 }: {
 	message: ChatMessage;
 	index: number;
@@ -37,7 +39,10 @@ let {
 	actionResults?: ActionResult[];
 	onActionApprove?: (action: PendingAction) => void;
 	onActionDismiss?: (actionId: string) => void;
+	ticketProviders?: TicketProviderInfo[];
 } = $props();
+
+let showTicketCard = $state(false);
 </script>
 
 {#if message.role === "user"}
@@ -115,7 +120,16 @@ let {
         {/if}
 
         {#if !isStreaming && onFeedback}
-          <FeedbackBar content={message.content} feedback={message.feedback} onFeedback={(score) => onFeedback?.(index, score)} />
+          <FeedbackBar
+            content={message.content}
+            feedback={message.feedback}
+            onFeedback={(score) => onFeedback?.(index, score)}
+            onCreateTicket={ticketProviders.length > 0 ? () => (showTicketCard = !showTicketCard) : undefined}
+          />
+        {/if}
+
+        {#if !isStreaming && showTicketCard && ticketProviders.length > 0}
+          <CreateTicketCard content={message.content} providers={ticketProviders} onClose={() => (showTicketCard = false)} />
         {/if}
 
         {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}

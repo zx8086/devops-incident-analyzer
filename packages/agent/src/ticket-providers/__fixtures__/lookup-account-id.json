@@ -1,0 +1,28 @@
+{
+	"data": {
+		"users": {
+			"users": [
+				{
+					"accountId": "70121:00000000-aaaa-bbbb-cccc-000000000001",
+					"accountType": "atlassian",
+					"html": "<strong>Sample Admin</strong> - sample.admin@example.com",
+					"displayName": "Sample Admin"
+				},
+				{
+					"accountId": "557058:00000000-1111-2222-3333-444444444444",
+					"accountType": "atlassian",
+					"html": "Sample User - ",
+					"displayName": "Sample User"
+				}
+			],
+			"total": 18,
+			"header": "Showing 2 of 18 matching users"
+		},
+		"groups": {
+			"header": "Showing 0 of 0 matching groups",
+			"total": 0,
+			"groups": []
+		}
+	},
+	"statusCode": 200
+}
