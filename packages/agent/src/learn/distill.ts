@@ -149,17 +149,20 @@ function normalizeForEvidence(text: string): string {
 	);
 }
 
-// A quote may elide with "..." -- require each substantial fragment to occur.
+// A quote may elide with "..." -- EVERY non-empty fragment must occur (a short
+// fabricated tail must not ride along on a grounded head -- CodeRabbit, PR #396);
+// the length threshold only requires that at least one fragment is substantial
+// enough to be meaningful grounding.
 const MIN_FRAGMENT_CHARS = 12;
 function quoteGrounded(quote: string, haystack: string): boolean {
 	const normalized = normalizeForEvidence(quote);
 	if (normalized.length === 0) return false;
+	if (!/\.{3,}/.test(normalized)) return haystack.includes(normalized);
 	const fragments = normalized
 		.split(/\.{3,}/)
 		.map((f) => f.trim())
-		.filter((f) => f.length >= MIN_FRAGMENT_CHARS);
-	if (fragments.length === 0) return haystack.includes(normalized);
-	return fragments.every((f) => haystack.includes(f));
+		.filter(Boolean);
+	return fragments.some((f) => f.length >= MIN_FRAGMENT_CHARS) && fragments.every((f) => haystack.includes(f));
 }
 
 export function verifyProposalEvidence(

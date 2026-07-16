@@ -218,6 +218,27 @@ describe("SIO-1126/SIO-1131 verifyProposalEvidence", () => {
 		expect(droppedIds).toEqual(["fact-1"]);
 	});
 
+	test("PR #396 review: a SHORT hallucinated fragment cannot ride along on a grounded head", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		// "fabricated!" is under the 12-char substantial threshold; it must still
+		// be checked (and fail) rather than being filtered out before grounding.
+		fact.evidence = ["Resolver associations are per-VPC ... fabricated!"];
+		const { droppedIds } = verifyProposalEvidence(parsed, promptText());
+		expect(droppedIds).toEqual(["fact-1"]);
+	});
+
+	test("PR #396 review: an elided quote made only of tiny shards is not grounding", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		// Every fragment occurs in the haystack, but none is substantial.
+		fact.evidence = ["the ... and ... over the"];
+		const { droppedIds } = verifyProposalEvidence(parsed, promptText());
+		expect(droppedIds).toEqual(["fact-1"]);
+	});
+
 	test("SIO-1131: quotes from the context block ground too (same prompt text)", () => {
 		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
 		const fact = parsed.memoryFacts[0];
