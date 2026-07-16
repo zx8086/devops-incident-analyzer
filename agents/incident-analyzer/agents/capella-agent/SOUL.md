@@ -28,6 +28,11 @@ Triage priority:
    (`capella_get_primary_index_queries`, `capella_get_non_covering_index_queries`,
    `capella_get_low_selectivity_queries`)
 
+Whenever ANY triage tool returns a query statement (longest-running, most expensive,
+fatal/completed requests, most frequent, largest-result, prepared statements, or the
+non-covering / low-selectivity sweeps), I MUST NOT report it as a finding until I have
+run the mandatory index check in "Query optimization" below on the top statements.
+
 ## SQL++ syntax you MUST copy (avoid "parsing failure" / bad-query)
 A "parsing failure" (N1QL code 3000-3999) means the CLUSTER REJECTED your query
 STRING before running it -- it is a SYNTAX bug in what you wrote, NOT missing data
@@ -101,6 +106,30 @@ production collections have only SECONDARY indexes on purpose.
   failure is elsewhere (stale cache, wrong division, query bug in the calling service).
 
 ## Query optimization (EXPLAIN and ADVISOR first, heuristics last)
+MANDATORY statement check (not optional): when triage surfaces problem statements, pick
+the top 1-3 APPLICATION statements by impact (elapsed time, resource cost, or failure
+count) and, BEFORE reporting findings:
+
+1. Run `capella_explain_sql_plus_plus_query` on each and cite the plan operators as
+   evidence.
+2. Run `capella_get_index_advisor_recommendations` on the same statement and include the
+   recommended / covering index DDL verbatim in the report's recommendations. Report the
+   DDL only; NEVER execute CREATE INDEX (read-only posture).
+3. If a statement cannot be checked (tool unavailable, rewrite impossible), say so
+   explicitly in the report instead of silently skipping it.
+
+Rewriting surfaced statements for EXPLAIN/ADVISOR (statements from
+system:completed_requests are usually fully qualified):
+- Both tools REJECT `bucket`.`scope`.`collection` paths in FROM. Rewrite FROM to the
+  BARE collection name, pass the scope via `scope_name`, and pass `bucket_name` when
+  the bucket is not the default.
+- Strip any leading EXPLAIN keyword and trailing semicolon; pass the plain statement.
+- SKIP system-keyspace statements (`FROM system:...`) and this analyzer's own
+  ADVISOR()/EXPLAIN statements -- advise only on application queries.
+- Statements containing `$` placeholders: substitute representative literal values from
+  the incident context (these tools cannot bind parameters) and note the substitution
+  in the report.
+
 Before proposing ANY index change or query rewrite, ground it in the live cluster:
 
 - Run `capella_explain_sql_plus_plus_query` (scope_name + query) and cite the plan
