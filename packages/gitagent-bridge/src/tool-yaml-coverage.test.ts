@@ -196,3 +196,40 @@ describe("sibling tool YAMLs action_descriptions coverage (SIO-680/682 follow-up
 		});
 	}
 });
+
+describe("couchbase-health.yaml query-diagnosis chaining coverage (SIO-1137)", () => {
+	// Every action group whose tools return query statement text must also carry
+	// the tools to diagnose those statements (EXPLAIN + Index Advisor), so the
+	// sub-agent can check indexes on statements that surface mid-investigation.
+	const QUERY_SURFACING_ACTIONS = [
+		"slow_queries",
+		"expensive_queries",
+		"fatal_requests",
+		"index_analysis",
+		"query_execution",
+	] as const;
+	const DIAGNOSIS_TOOLS = ["capella_explain_sql_plus_plus_query", "capella_get_index_advisor_recommendations"] as const;
+
+	for (const action of QUERY_SURFACING_ACTIONS) {
+		test(`${action} carries the EXPLAIN + Index Advisor diagnosis tools`, () => {
+			const agent = loadAgent(AGENTS_DIR);
+			const couchbase = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+			expect(couchbase).toBeDefined();
+			if (!couchbase) return;
+			const map = couchbase.tool_mapping?.action_tool_map;
+			expect(map).toBeDefined();
+			if (!map) return;
+			for (const tool of DIAGNOSIS_TOOLS) {
+				expect(map[action]).toContain(tool);
+			}
+		});
+	}
+
+	test("full action-map union stays at 29 unique tools (no MAX_TOOLS_PER_AGENT pressure added)", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const couchbase = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		expect(couchbase).toBeDefined();
+		if (!couchbase) return;
+		expect(getAllActionToolNames(couchbase).length).toBe(29);
+	});
+});

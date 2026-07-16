@@ -2,7 +2,7 @@ name: couchbase-cluster-health
 description: >
   Query Couchbase Capella cluster health, performance metrics, and
   N1QL query analysis for database-related incident diagnosis.
-version: 1.0.0
+version: 1.1.0
 input_schema:
   type: object
   properties:
@@ -52,18 +52,24 @@ tool_mapping:
     fatal_requests:
       - capella_get_fatal_requests
       - capella_get_completed_requests
+      - capella_explain_sql_plus_plus_query
+      - capella_get_index_advisor_recommendations
     slow_queries:
       - capella_get_longest_running_queries
       - capella_get_most_expensive_queries
       - capella_get_most_frequent_queries
       - capella_get_largest_result_size_queries
       - capella_get_largest_result_count_queries
+      - capella_explain_sql_plus_plus_query
+      - capella_get_index_advisor_recommendations
     expensive_queries:
       - capella_get_most_expensive_queries
       - capella_get_longest_running_queries
       - capella_get_primary_index_queries
       - capella_get_non_covering_index_queries
       - capella_get_low_selectivity_queries
+      - capella_explain_sql_plus_plus_query
+      - capella_get_index_advisor_recommendations
     index_analysis:
       - capella_get_system_indexes
       - capella_get_indexes_to_drop
@@ -71,6 +77,7 @@ tool_mapping:
       - capella_get_index_advisor_recommendations
       - capella_get_non_covering_index_queries
       - capella_get_low_selectivity_queries
+      - capella_explain_sql_plus_plus_query
     node_status:
       - capella_get_system_nodes
       - capella_get_system_vitals
@@ -88,11 +95,18 @@ tool_mapping:
       - capella_get_prepared_statements
       - capella_get_detailed_prepared_statements
       - capella_suggest_query_optimizations
+      - capella_get_index_advisor_recommendations
   action_descriptions:
     system_vitals: when checking cluster-wide CPU, memory, disk, and replication health (the primary cluster-state path)
-    fatal_requests: when investigating queries that hit fatal errors (timeouts, OOM, malformed responses) -- not slow queries, true failures
-    slow_queries: when investigating queries above the slow-query threshold by elapsed time (latency outliers, not failures)
-    expensive_queries: when investigating queries with high resource cost (memory, CPU, scan size, non-covering fetches) -- can be fast OR slow
+    fatal_requests: >-
+      when investigating queries that hit fatal errors (timeouts, OOM, malformed responses) -- true failures,
+      not slow queries; also carries EXPLAIN + Index Advisor to diagnose the failing statements
+    slow_queries: >-
+      when investigating queries above the slow-query threshold by elapsed time (latency outliers, not
+      failures); also carries EXPLAIN + Index Advisor to check surfaced statements for index problems
+    expensive_queries: >-
+      when investigating queries with high resource cost (memory, CPU, scan size, non-covering fetches) --
+      can be fast OR slow; also carries EXPLAIN + Index Advisor to check surfaced statements for index problems
     index_analysis: when reading GSI/secondary index definitions or stats, running the server-computed Index Advisor on a query, or sweeping for non-covering / low-selectivity query patterns
     node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
     document_ops: when listing buckets/scopes/collections or reading specific documents by key (read-only K/V access)

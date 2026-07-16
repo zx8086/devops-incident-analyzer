@@ -1,7 +1,14 @@
 // agent/src/sub-agent-action-augmentation.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { matchActionsByKeywords, type ToolDefinition, ToolDefinitionSchema } from "@devops-agent/gitagent-bridge";
+import { join } from "node:path";
+import {
+	getAllActionToolNames,
+	loadAgent,
+	matchActionsByKeywords,
+	type ToolDefinition,
+	ToolDefinitionSchema,
+} from "@devops-agent/gitagent-bridge";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
 	inferClusterHealthActions,
@@ -219,5 +226,49 @@ describe("SIO-742: inferClusterHealthActions auto-include for cluster-health que
 
 	test("returns empty for empty query", () => {
 		expect(inferClusterHealthActions("", "kafka")).toEqual([]);
+	});
+});
+
+// SIO-1137: a generic incident ("kong 504/503 on /orders") makes the extractor pick
+// vitals/fatal/slow/expensive but NOT query_execution or index_analysis. The EXPLAIN +
+// Index Advisor diagnosis tools must still land in the belt so statements that surface
+// mid-investigation can be plan-checked and advised. Loads the REAL couchbase YAML so
+// action-map drift cannot silently break the bundling.
+describe("SIO-1137: couchbase query-diagnosis tools survive generic-incident action selection", () => {
+	const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+	// Non-action-map capella tools that exist at runtime; padding pushes the total
+	// past MAX_TOOLS_PER_AGENT (25) so the filter path engages, mirroring the live
+	// couchbase MCP server (39 tools).
+	const CAPELLA_EXTRA_TOOLS = [
+		"capella_echo",
+		"capella_get_playbook",
+		"capella_list_playbooks",
+		"capella_list_documentation",
+		"capella_read_documentation",
+		"capella_create_documentation",
+		"capella_delete_documentation",
+		"capella_sync_documentation_with_database",
+		"capella_upsert_document_by_id",
+		"capella_delete_document_by_id",
+	];
+
+	test("vitals+fatal+slow+expensive selection includes EXPLAIN and Index Advisor within the cap", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const couchbaseDef = agent.tools.find((t) => t.name === "couchbase-cluster-health");
+		expect(couchbaseDef).toBeDefined();
+		if (!couchbaseDef) return;
+		const allTools = fakeTools([...getAllActionToolNames(couchbaseDef), ...CAPELLA_EXTRA_TOOLS]);
+		expect(allTools.length).toBeGreaterThan(25);
+
+		const actions = ["system_vitals", "fatal_requests", "slow_queries", "expensive_queries"];
+		const { tools, filtered } = selectToolsByAction(allTools, "couchbase", { couchbase: actions }, couchbaseDef);
+
+		expect(filtered).toBe(true);
+		const names = tools.map((t) => t.name);
+		expect(names).toContain("capella_explain_sql_plus_plus_query");
+		expect(names).toContain("capella_get_index_advisor_recommendations");
+		// SIO-1084 resolution tools must still be force-included alongside.
+		expect(names).toContain("capella_get_scopes_and_collections");
+		expect(tools.length).toBeLessThanOrEqual(25);
 	});
 });
