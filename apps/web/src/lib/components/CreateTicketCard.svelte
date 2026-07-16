@@ -1,15 +1,26 @@
 <script lang="ts">
 // apps/web/src/lib/components/CreateTicketCard.svelte
-import type {
-	CreatedTicket,
-	TicketAssignee,
-	TicketEpic,
-	TicketIssueType,
-	TicketProject,
-	TicketProviderInfo,
+import {
+	type CreatedTicket,
+	CreatedTicketSchema,
+	type TicketAssignee,
+	TicketAssigneeSchema,
+	type TicketEpic,
+	TicketEpicSchema,
+	type TicketIssueType,
+	TicketIssueTypeSchema,
+	type TicketProject,
+	TicketProjectSchema,
+	type TicketProviderInfo,
 } from "@devops-agent/shared";
+import { z } from "zod";
 import { prefillDescription, prefillSummary } from "$lib/ticket-prefill";
 import Icon from "./Icon.svelte";
+
+const ProjectsResponseSchema = z.object({ projects: z.array(TicketProjectSchema) });
+const IssueTypesResponseSchema = z.object({ issueTypes: z.array(TicketIssueTypeSchema) });
+const EpicsResponseSchema = z.object({ epics: z.array(TicketEpicSchema) });
+const AssigneesResponseSchema = z.object({ assignees: z.array(TicketAssigneeSchema) });
 
 let {
 	content,
@@ -56,31 +67,48 @@ let errorMessage = $state<string | null>(null);
 
 let projectDebounce: ReturnType<typeof setTimeout> | undefined;
 let assigneeDebounce: ReturnType<typeof setTimeout> | undefined;
+// Sequence tokens: responses can resolve out of order; only the latest request
+// for each field may write state.
+let projectsSeq = 0;
+let assigneesSeq = 0;
 
 const canSubmit = $derived(
 	!submitting && !!provider && selectedProjectKey !== "" && selectedIssueType !== "" && summary.trim() !== "",
 );
 
-async function fetchJson<T>(path: string): Promise<T> {
+function errorFrom(data: unknown, status: number): string {
+	if (data && typeof data === "object" && "error" in data) {
+		const message = (data as { error?: unknown }).error;
+		if (typeof message === "string") return message;
+	}
+	return `Request failed (${status})`;
+}
+
+async function fetchJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
 	const res = await fetch(path);
-	const data = await res.json();
-	if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : `Request failed (${res.status})`);
-	return data as T;
+	const data: unknown = await res.json();
+	if (!res.ok) throw new Error(errorFrom(data, res.status));
+	const parsed = schema.safeParse(data);
+	if (!parsed.success) throw new Error("Unexpected response shape from the ticket API");
+	return parsed.data;
 }
 
 async function loadProjects(query: string) {
 	if (!provider) return;
+	const seq = ++projectsSeq;
 	projectsLoading = true;
 	projectsError = null;
 	try {
 		const search = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : "";
-		const data = await fetchJson<{ projects: TicketProject[] }>(`/api/tickets/${provider.id}/projects${search}`);
-		projects = data.projects ?? [];
+		const data = await fetchJson(`/api/tickets/${provider.id}/projects${search}`, ProjectsResponseSchema);
+		if (seq !== projectsSeq) return;
+		projects = data.projects;
 	} catch (err) {
+		if (seq !== projectsSeq) return;
 		projects = [];
 		projectsError = err instanceof Error ? err.message : "Failed to load projects";
 	} finally {
-		projectsLoading = false;
+		if (seq === projectsSeq) projectsLoading = false;
 	}
 }
 
@@ -88,18 +116,21 @@ async function loadIssueTypes(projectKey: string) {
 	if (!provider) return;
 	issueTypesLoading = true;
 	try {
-		const data = await fetchJson<{ issueTypes: TicketIssueType[] }>(
+		const data = await fetchJson(
 			`/api/tickets/${provider.id}/issue-types?projectKey=${encodeURIComponent(projectKey)}`,
+			IssueTypesResponseSchema,
 		);
-		issueTypes = data.issueTypes ?? [];
+		if (selectedProjectKey !== projectKey) return;
+		issueTypes = data.issueTypes;
 		const task = issueTypes.find((t) => t.name === "Task");
 		selectedIssueType = task?.name ?? issueTypes[0]?.name ?? "";
 	} catch (err) {
+		if (selectedProjectKey !== projectKey) return;
 		issueTypes = [];
 		selectedIssueType = "";
 		errorMessage = err instanceof Error ? err.message : "Failed to load issue types";
 	} finally {
-		issueTypesLoading = false;
+		if (selectedProjectKey === projectKey) issueTypesLoading = false;
 	}
 }
 
@@ -107,30 +138,37 @@ async function loadEpics(projectKey: string) {
 	if (!provider) return;
 	epicsLoading = true;
 	try {
-		const data = await fetchJson<{ epics: TicketEpic[] }>(
+		const data = await fetchJson(
 			`/api/tickets/${provider.id}/epics?projectKey=${encodeURIComponent(projectKey)}`,
+			EpicsResponseSchema,
 		);
-		epics = data.epics ?? [];
+		if (selectedProjectKey !== projectKey) return;
+		epics = data.epics;
 	} catch {
 		// Best-effort: a failed epic load leaves the picker on "No epic".
+		if (selectedProjectKey !== projectKey) return;
 		epics = [];
 	} finally {
-		epicsLoading = false;
+		if (selectedProjectKey === projectKey) epicsLoading = false;
 	}
 }
 
 async function loadAssignees(query: string) {
 	if (!provider) return;
+	const seq = ++assigneesSeq;
 	assigneesLoading = true;
 	try {
-		const data = await fetchJson<{ assignees: TicketAssignee[] }>(
+		const data = await fetchJson(
 			`/api/tickets/${provider.id}/assignees?query=${encodeURIComponent(query)}`,
+			AssigneesResponseSchema,
 		);
-		assigneeResults = data.assignees ?? [];
+		if (seq !== assigneesSeq) return;
+		assigneeResults = data.assignees;
 	} catch {
+		if (seq !== assigneesSeq) return;
 		assigneeResults = [];
 	} finally {
-		assigneesLoading = false;
+		if (seq === assigneesSeq) assigneesLoading = false;
 	}
 }
 
@@ -154,6 +192,8 @@ function onAssigneeQueryInput() {
 	clearTimeout(assigneeDebounce);
 	const query = assigneeQuery.trim();
 	if (query.length < 2) {
+		// Invalidate any in-flight search so a late response can't repopulate.
+		assigneesSeq++;
 		assigneeResults = [];
 		return;
 	}
@@ -177,9 +217,11 @@ async function submit() {
 				epicKey: selectedEpicKey || null,
 			}),
 		});
-		const data = await res.json();
-		if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : `Request failed (${res.status})`);
-		createdTicket = data as CreatedTicket;
+		const data: unknown = await res.json();
+		if (!res.ok) throw new Error(errorFrom(data, res.status));
+		const parsed = CreatedTicketSchema.safeParse(data);
+		if (!parsed.success) throw new Error("Unexpected response shape from the ticket API");
+		createdTicket = parsed.data;
 	} catch (err) {
 		errorMessage = err instanceof Error ? err.message : "Failed to create the ticket";
 	} finally {

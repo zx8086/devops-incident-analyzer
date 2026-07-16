@@ -6,11 +6,13 @@ import { resolveAvailableTicketProvider } from "$lib/server/tickets";
 import type { RequestHandler } from "./$types";
 
 export const POST: RequestHandler = async ({ params, request }) => {
-	const provider = await resolveAvailableTicketProvider(params.provider);
-	if (!provider) {
-		return json({ error: `Unknown or unavailable ticket provider: ${params.provider}` }, { status: 404 });
-	}
 	try {
+		// Inside the boundary: ensureMcpConnected() rejections must surface as
+		// JSON 502s, not SvelteKit's non-JSON framework error page.
+		const provider = await resolveAvailableTicketProvider(params.provider);
+		if (!provider) {
+			return json({ error: `Unknown or unavailable ticket provider: ${params.provider}` }, { status: 404 });
+		}
 		const body = CreateTicketRequestSchema.parse(await request.json());
 		return json(await provider.createTicket(body));
 	} catch (err) {

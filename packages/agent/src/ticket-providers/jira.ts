@@ -22,12 +22,16 @@ const PROJECT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_RESULTS = 50;
+// Jira caps project search at 50 per page; follow isLast across pages (this
+// site has 70 create-visible projects) with a hard page ceiling as a backstop.
+const MAX_PROJECT_PAGES = 4;
 
 // Response shapes pinned live against the Rovo upstream (SIO-1124 step 1;
 // trimmed captures in __fixtures__/). z.object strips unknown keys, so upstream
 // additions don't break parsing; missing pinned fields fail loudly instead.
 const VisibleProjectsResponseSchema = z.object({
 	values: z.array(z.object({ id: z.string(), key: z.string(), name: z.string() })),
+	isLast: z.boolean().optional(),
 });
 const LookupAccountResponseSchema = z.object({
 	data: z.object({
@@ -129,15 +133,23 @@ export function createJiraTicketProvider(options: JiraTicketProviderOptions = {}
 			const cacheKey = query ?? "";
 			const cached = fresh(projectsCache.get(cacheKey));
 			if (cached) return cached;
-			const parsed = await call(
-				PROJECTS_TOOL,
-				// action "create" filters to projects the caller may create issues in.
-				{ action: "create", maxResults: MAX_RESULTS, ...(query ? { searchString: query } : {}) },
-				VisibleProjectsResponseSchema,
-				"project list",
-			);
-			projectsCache.set(cacheKey, { at: now(), value: parsed.values });
-			return parsed.values;
+			const projects: TicketProject[] = [];
+			let startAt = 0;
+			for (let page = 0; page < MAX_PROJECT_PAGES; page++) {
+				const parsed = await call(
+					PROJECTS_TOOL,
+					// action "create" filters to projects the caller may create issues in.
+					{ action: "create", maxResults: MAX_RESULTS, startAt, ...(query ? { searchString: query } : {}) },
+					VisibleProjectsResponseSchema,
+					"project list",
+				);
+				projects.push(...parsed.values);
+				// Missing isLast reads as final page; empty pages also terminate.
+				if (parsed.isLast !== false || parsed.values.length === 0) break;
+				startAt += parsed.values.length;
+			}
+			projectsCache.set(cacheKey, { at: now(), value: projects });
+			return projects;
 		},
 		async searchAssignees(query) {
 			const parsed = await call(LOOKUP_TOOL, { searchString: query }, LookupAccountResponseSchema, "assignee lookup");

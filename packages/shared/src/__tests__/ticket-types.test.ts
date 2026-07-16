@@ -23,7 +23,7 @@ describe("CreateTicketRequestSchema", () => {
 		issueTypeName: "Task",
 		summary: "Kafka consumer lag on orders-events",
 		description: "Full incident report markdown",
-		assigneeId: "70121:86ec4ccf-9601-42a5-ab81-d15240b5de71",
+		assigneeId: "70121:00000000-aaaa-bbbb-cccc-000000000001",
 		epicKey: "DEVOPS-1354",
 	};
 

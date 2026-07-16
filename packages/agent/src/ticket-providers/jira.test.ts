@@ -18,18 +18,27 @@ interface RecordedCall {
 	args: Record<string, unknown>;
 }
 
-function fakeInvoker(responses: Record<string, string | Error>, calls: RecordedCall[] = []): McpToolInvoker {
+function fakeInvoker(
+	responses: Record<string, string | Error | Array<string | Error>>,
+	calls: RecordedCall[] = [],
+): McpToolInvoker {
 	return {
 		hasTool: (toolName) => toolName in responses,
 		invoke: (toolName, args) => {
 			calls.push({ toolName, args });
-			const response = responses[toolName];
+			const entry = responses[toolName];
+			const response = Array.isArray(entry) ? entry.shift() : entry;
 			if (response === undefined) return Promise.reject(new Error(`no fake response for ${toolName}`));
 			if (response instanceof Error) return Promise.reject(response);
 			return Promise.resolve(response);
 		},
 	};
 }
+
+const singlePageProjects = JSON.stringify({
+	isLast: true,
+	values: [{ id: "10062", key: "DEVOPS", name: "DevOpsProject" }],
+});
 
 describe("isAvailable", () => {
 	test("true when the create tool is registered on the bridge", () => {
@@ -44,33 +53,51 @@ describe("isAvailable", () => {
 });
 
 describe("listProjects", () => {
-	test("maps the pinned values shape and passes action=create", async () => {
+	test("follows isLast pagination and maps the pinned values shape", async () => {
 		const calls: RecordedCall[] = [];
+		const pageTwo = JSON.stringify({
+			isLast: true,
+			values: [{ id: "10345", key: "JIRA", name: "PVH ECOM JIRA Unification" }],
+		});
 		const provider = createJiraTicketProvider({
-			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: projectsFixture }, calls),
+			// The real fixture is page one (isLast false, 70 total on the site).
+			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: [projectsFixture, pageTwo] }, calls),
 		});
 		const projects = await provider.listProjects();
 		expect(projects).toEqual([
 			{ id: "10062", key: "DEVOPS", name: "DevOpsProject" },
 			{ id: "10115", key: "LRDTP", name: "LRD+ Test Project" },
+			{ id: "10345", key: "JIRA", name: "PVH ECOM JIRA Unification" },
 		]);
-		expect(calls[0]?.args).toEqual({ action: "create", maxResults: 50 });
+		expect(calls).toHaveLength(2);
+		expect(calls[0]?.args).toEqual({ action: "create", maxResults: 50, startAt: 0 });
+		expect(calls[1]?.args).toEqual({ action: "create", maxResults: 50, startAt: 2 });
+	});
+
+	test("stops at a single page when isLast is true", async () => {
+		const calls: RecordedCall[] = [];
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: singlePageProjects }, calls),
+		});
+		const projects = await provider.listProjects();
+		expect(projects).toHaveLength(1);
+		expect(calls).toHaveLength(1);
 	});
 
 	test("passes searchString when a query is given", async () => {
 		const calls: RecordedCall[] = [];
 		const provider = createJiraTicketProvider({
-			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: projectsFixture }, calls),
+			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: singlePageProjects }, calls),
 		});
 		await provider.listProjects("devops");
-		expect(calls[0]?.args).toEqual({ action: "create", maxResults: 50, searchString: "devops" });
+		expect(calls[0]?.args).toEqual({ action: "create", maxResults: 50, startAt: 0, searchString: "devops" });
 	});
 
 	test("caches per query within the TTL and refetches after expiry", async () => {
 		const calls: RecordedCall[] = [];
 		let clock = 1_000;
 		const provider = createJiraTicketProvider({
-			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: projectsFixture }, calls),
+			invoker: fakeInvoker({ atlassian_getVisibleJiraProjects: singlePageProjects }, calls),
 			now: () => clock,
 		});
 		await provider.listProjects();
@@ -89,9 +116,9 @@ describe("searchAssignees", () => {
 		const provider = createJiraTicketProvider({
 			invoker: fakeInvoker({ atlassian_lookupJiraAccountId: lookupFixture }),
 		});
-		const assignees = await provider.searchAssignees("Simon");
+		const assignees = await provider.searchAssignees("Sample");
 		expect(assignees).toEqual([
-			{ id: "70121:86ec4ccf-9601-42a5-ab81-d15240b5de71", displayName: "Simon Owusu" },
+			{ id: "70121:00000000-aaaa-bbbb-cccc-000000000001", displayName: "Sample Admin" },
 			{ id: "557058:00000000-1111-2222-3333-444444444444", displayName: "Sample User" },
 		]);
 	});

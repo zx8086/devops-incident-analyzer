@@ -1,3 +1,4 @@
+// apps/web/src/routes/api/tickets/[provider]/server.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
@@ -60,8 +61,12 @@ mock.module("@devops-agent/agent", () => ({
 	getTicketProvider: (id: string) => (id === "jira" ? mockProvider : undefined),
 	listAvailableTicketProviders: () => [] as unknown[],
 }));
+let mcpConnectError: Error | null = null;
+
 mock.module("$lib/server/agent", () => ({
-	ensureMcpConnected: async () => {},
+	ensureMcpConnected: async () => {
+		if (mcpConnectError) throw mcpConnectError;
+	},
 	invokeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
 	resumeAgent: async () => ({ async *[Symbol.asyncIterator]() {} }),
 	getPendingInterrupt: async () => undefined,
@@ -159,6 +164,18 @@ describe("POST /api/tickets/[provider]", () => {
 		const res = await POST(postEvent("jira", validBody));
 		expect(res.status).toBe(502);
 		expect((await res.json()).error).toContain("assignee not assignable");
+	});
+
+	test("502 JSON when MCP connect fails (resolution sits inside the error boundary)", async () => {
+		mockProvider = baseProvider();
+		mcpConnectError = new Error("connect ECONNREFUSED");
+		try {
+			const res = await POST(postEvent("jira", validBody));
+			expect(res.status).toBe(502);
+			expect((await res.json()).error).toContain("ECONNREFUSED");
+		} finally {
+			mcpConnectError = null;
+		}
 	});
 });
 

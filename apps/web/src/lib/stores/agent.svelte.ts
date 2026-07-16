@@ -1,13 +1,15 @@
 // apps/web/src/lib/stores/agent.svelte.ts
 
-import type {
-	ActionResult,
-	DataSourceContext,
-	PendingAction,
-	StreamEvent,
-	TicketProviderInfo,
+import {
+	type ActionResult,
+	type DataSourceContext,
+	type PendingAction,
+	type StreamEvent,
+	type TicketProviderInfo,
+	TicketProviderInfoSchema,
 } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+import { z } from "zod";
 import {
 	applyStreamEvent,
 	type DataSourceFindings,
@@ -62,6 +64,9 @@ export interface FollowUpContext {
 
 // SIO-608: Frontend polling interval for health status
 const HEALTH_POLL_INTERVAL_MS = 15_000;
+
+// SIO-1124: response boundary for GET /api/tickets/providers.
+const TicketProvidersResponseSchema = z.object({ providers: z.array(TicketProviderInfoSchema) });
 
 // SIO-780: probe state literal-union (mirrors mcp-bridge ProbeState)
 type ProbeState = "ready" | "unready" | "down" | "replaced" | "misidentified";
@@ -413,11 +418,13 @@ function createAgentStore() {
 			availableAwsEstates = [];
 			selectedAwsEstates = [];
 		}
-		// SIO-1124: Best-effort ticket-provider fetch. A failure here just hides the Create-ticket button.
+		// SIO-1124: Best-effort ticket-provider fetch. A failure or malformed
+		// payload just hides the Create-ticket button.
 		try {
 			const res = await fetch("/api/tickets/providers");
-			const data: { providers?: TicketProviderInfo[] } = await res.json();
-			availableTicketProviders = data.providers ?? [];
+			if (!res.ok) throw new Error(`providers fetch failed (${res.status})`);
+			const parsed = TicketProvidersResponseSchema.safeParse(await res.json());
+			availableTicketProviders = parsed.success ? parsed.data.providers : [];
 		} catch {
 			availableTicketProviders = [];
 		}
