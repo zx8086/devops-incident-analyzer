@@ -202,6 +202,9 @@ function createAgentStore() {
 		lastToolsUsed = [];
 		lastRunId = undefined;
 		lastConfidence = undefined;
+		// SIO-1134: a stale requestId would curate the WRONG incident if this turn's
+		// stream dies before its done event; the new turn must re-earn it.
+		lastRequestId = undefined;
 		lastOutcome = "completed";
 		iacPipelineProgress = [];
 		// SIO-882: a new message starts a fresh drift pass (the prompt/report persist

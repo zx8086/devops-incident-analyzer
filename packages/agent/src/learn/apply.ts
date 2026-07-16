@@ -197,17 +197,30 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 			// SIO-1134: applying learnings CURATES the matched incident -- the
 			// confirmed ticket linkage is written so this ticket resolves by exact
 			// lookup forever after, and the incident counts as durable memory.
-			await linkIncidentTicket(store, match.incidentId, ticketKey);
-			curated = true;
-			recordKeyDecision({
-				requestId: state.requestId,
-				decision: `Incident ${match.incidentId} is the canonical record for ${ticketKey} (curated via HIL learning)`,
-				annotations: {
-					kind: "kg-incident-ticket",
-					incident_id: match.incidentId,
-					ticket: ticketKey,
-				},
-			});
+			// Gated on at least one approval: with auto-confirmed matches, "Reject
+			// all" is the user's only escape from a WRONG match, so it must not
+			// persist the link (CodeRabbit, PR #398).
+			const anyApproved = [
+				...(proposal.rootCause ? [proposal.rootCause.id] : []),
+				...proposal.bindings.map((b) => b.id),
+				...proposal.heuristics.map((h) => h.id),
+				...proposal.memoryFacts.map((f) => f.id),
+			].some((id) => approved(decisions, id));
+			if (anyApproved) {
+				await linkIncidentTicket(store, match.incidentId, ticketKey);
+				curated = true;
+				recordKeyDecision({
+					requestId: state.requestId,
+					decision: `Incident ${match.incidentId} is the canonical record for ${ticketKey} (curated via HIL learning)`,
+					annotations: {
+						kind: "kg-incident-ticket",
+						incident_id: match.incidentId,
+						ticket: ticketKey,
+					},
+				});
+			} else {
+				report.skipped.push({ id: "curation", reason: "nothing approved; ticket link not written" });
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL graph writes failed");

@@ -147,8 +147,13 @@ describe("SIO-1126 applyLearnings", () => {
 		);
 
 		expect(calls.some((c) => c.cypher.includes("RootCause"))).toBe(false);
+		// SIO-1134 + CodeRabbit PR #398: a full rejection must NOT curate -- with
+		// auto-confirmed matches, "Reject all" is the escape from a wrong match.
+		expect(calls.some((c) => c.cypher.includes("SET i.ticketKey"))).toBe(false);
 		const summary = String(result.messages?.[0]?.content ?? "");
 		expect(summary).toContain("Skipped rc-1: rejected");
+		expect(summary).not.toContain("canonical record");
+		expect(summary).toContain("Skipped curation: nothing approved; ticket link not written");
 	});
 
 	test("an out-of-catalog runbook is not linked", async () => {
