@@ -62,7 +62,12 @@ function renderTicket(ticket: TicketResolution): string {
 	return lines.join("\n");
 }
 
-export function buildDistillerMessages(input: DistillerInput): BaseMessage[] {
+// SIO-1131: the redacted human text is built ONCE and shared between the prompt
+// and the evidence verifier -- verification must run against EXACTLY the string
+// the model saw. A separate redaction pass over the ticket alone is not
+// byte-identical (and quotes may legitimately come from the context block), so
+// the original per-ticket haystack rejected every honest quote.
+export function buildDistillerHumanText(input: DistillerInput): string {
 	const context = [
 		input.incidentSummary
 			? `Matched stored incident: ${input.incidentSummary}`
@@ -77,10 +82,11 @@ export function buildDistillerMessages(input: DistillerInput): BaseMessage[] {
 
 	// Redact before the LLM call; persistence redacts again (recordKeyDecision),
 	// so PII never depends on a single layer (the skill-learner double guarantee).
-	return [
-		new SystemMessage(DISTILLER_PROMPT),
-		new HumanMessage(redactPiiContent(`${context}\n\n${renderTicket(input.ticket)}`)),
-	];
+	return redactPiiContent(`${context}\n\n${renderTicket(input.ticket)}`);
+}
+
+export function buildDistillerMessages(input: DistillerInput): BaseMessage[] {
+	return [new SystemMessage(DISTILLER_PROMPT), new HumanMessage(buildDistillerHumanText(input))];
 }
 
 export function parseLearningProposal(raw: string): LearningProposal | null {
@@ -122,21 +128,53 @@ async function ticketAlreadyLearned(ticketKey: string): Promise<boolean> {
 }
 
 // Drop proposal items whose "verbatim" evidence quotes do not actually occur in
-// the ticket text the distiller saw -- hallucinated evidence must not reach the
-// review card (CodeRabbit, PR #392). Comparison is whitespace/case-normalized
-// against the SAME redacted rendering handed to the LLM.
+// the text the distiller saw -- hallucinated evidence must not reach the review
+// card (CodeRabbit, PR #392). SIO-1131: the comparison is deliberately tolerant
+// of the ways an HONEST quote diverges from the source string: markdown emphasis
+// the model strips when quoting (**bold**, `code`), unicode punctuation folding
+// (curly quotes, en/em dashes, ellipsis), and "..." elisions inside a quote.
 function normalizeForEvidence(text: string): string {
-	return text.toLowerCase().replace(/\s+/g, " ").trim();
+	return (
+		text
+			.toLowerCase()
+			// Fold unicode punctuation to the ascii the model may emit either way.
+			.replace(/[‘’‚‛]/g, "'")
+			.replace(/[“”„‟]/g, '"')
+			.replace(/[–—−]/g, "-")
+			.replace(/…/g, "...")
+			// Strip markdown emphasis/code markers that quoting usually drops.
+			.replace(/[*_`]/g, "")
+			.replace(/\s+/g, " ")
+			.trim()
+	);
+}
+
+// A quote may elide with "..." -- EVERY non-empty fragment must occur (a short
+// fabricated tail must not ride along on a grounded head -- CodeRabbit, PR #396);
+// the length threshold only requires that at least one fragment is substantial
+// enough to be meaningful grounding.
+const MIN_FRAGMENT_CHARS = 12;
+function quoteGrounded(quote: string, haystack: string): boolean {
+	const normalized = normalizeForEvidence(quote);
+	if (normalized.length === 0) return false;
+	if (!/\.{3,}/.test(normalized)) return haystack.includes(normalized);
+	const fragments = normalized
+		.split(/\.{3,}/)
+		.map((f) => f.trim())
+		.filter(Boolean);
+	return fragments.some((f) => f.length >= MIN_FRAGMENT_CHARS) && fragments.every((f) => haystack.includes(f));
 }
 
 export function verifyProposalEvidence(
 	proposal: LearningProposal,
-	ticket: TicketResolution,
+	promptText: string,
 ): { proposal: LearningProposal; droppedIds: string[] } {
-	const haystack = normalizeForEvidence(redactPiiContent(renderTicket(ticket)));
+	// SIO-1131: promptText is the SAME redacted string handed to the LLM
+	// (buildDistillerHumanText) -- never a re-rendered/re-redacted copy.
+	const haystack = normalizeForEvidence(promptText);
 	const droppedIds: string[] = [];
 	const keep = <T extends { id: string; evidence: string[] }>(item: T): boolean => {
-		const grounded = item.evidence.every((quote) => haystack.includes(normalizeForEvidence(quote)));
+		const grounded = item.evidence.every((quote) => quoteGrounded(quote, haystack));
 		if (!grounded) droppedIds.push(item.id);
 		return grounded;
 	};
@@ -185,12 +223,15 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 	}
 
 	try {
+		// SIO-1131: build the redacted prompt text ONCE; the verifier must check
+		// quotes against exactly what the model saw.
+		const input: DistillerInput = { ticket, incidentSummary, existingRootCause, runbookCatalog: catalog };
+		const humanText = buildDistillerHumanText(input);
 		const llm = createLlm("hilDistiller", LEARNER_AGENT);
-		const result = await invokeWithDeadline(
-			llm as InvokableLlm,
-			"hilDistiller",
-			buildDistillerMessages({ ticket, incidentSummary, existingRootCause, runbookCatalog: catalog }),
-		);
+		const result = await invokeWithDeadline(llm as InvokableLlm, "hilDistiller", [
+			new SystemMessage(DISTILLER_PROMPT),
+			new HumanMessage(humanText),
+		]);
 		const content = typeof result.content === "string" ? result.content : "";
 		const parsed = parseLearningProposal(content);
 		if (!parsed) {
@@ -203,20 +244,26 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 				partialFailures: [{ node: "learnDistill", reason: "proposal-parse-failed" }],
 			};
 		}
-		const { proposal, droppedIds } = verifyProposalEvidence(parsed, ticket);
+		const { proposal, droppedIds } = verifyProposalEvidence(parsed, humanText);
 		if (droppedIds.length > 0) {
 			logger.warn(
 				{ ticket: ticket.key, droppedIds },
-				"HIL proposal items dropped: evidence quotes not found in the ticket text",
+				"HIL proposal items dropped: evidence quotes not found in the distiller prompt text",
 			);
 		}
 		if (!proposal.rootCause && proposal.memoryFacts.length === 0) {
+			// SIO-1131: distinguish "verifier rejected everything" from "the ticket
+			// genuinely has no resolution content" -- the former is our fault and
+			// must not read like a ticket-lookup failure.
+			const message =
+				droppedIds.length > 0
+					? `I read ${ticket.key} and distilled ${droppedIds.length} candidate learning(s), but none survived evidence verification (their quotes could not be matched to the ticket text). Nothing was recorded; please try again or report this if it persists.`
+					: `I read ${ticket.key} but its content contains no human resolution to learn from (no corrected root cause, no durable facts). Nothing was recorded.`;
 			return {
-				messages: [
-					new AIMessage(
-						`I read ${ticket.key} but found no grounded human resolution content to learn from (no corrected root cause, no durable facts with verifiable evidence). Nothing was recorded.`,
-					),
-				],
+				messages: [new AIMessage(message)],
+				...(droppedIds.length > 0
+					? { partialFailures: [{ node: "learnDistill", reason: "evidence-verification-dropped-all" }] }
+					: {}),
 			};
 		}
 		logger.info(
