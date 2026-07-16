@@ -1,5 +1,11 @@
 // agent/src/ticket-providers/jira.ts
-import type { CreateTicketRequest, TicketAssignee, TicketIssueType, TicketProject } from "@devops-agent/shared";
+import type {
+	CreateTicketRequest,
+	TicketAssignee,
+	TicketEpic,
+	TicketIssueType,
+	TicketProject,
+} from "@devops-agent/shared";
 import { z } from "zod";
 import { createBridgeToolInvoker } from "./bridge-invoker.ts";
 import { type McpToolInvoker, type TicketProvider, TicketProviderError } from "./types.ts";
@@ -8,6 +14,11 @@ const CREATE_TOOL = "atlassian_createJiraIssue";
 const PROJECTS_TOOL = "atlassian_getVisibleJiraProjects";
 const LOOKUP_TOOL = "atlassian_lookupJiraAccountId";
 const ISSUE_TYPES_TOOL = "atlassian_getJiraProjectIssueTypesMetadata";
+const SEARCH_TOOL = "atlassian_searchJiraIssuesUsingJql";
+
+// Guard before interpolating into JQL (Jira project keys are letter-led
+// alphanumerics/underscores). Anything else is rejected, not escaped.
+const PROJECT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_RESULTS = 50;
@@ -28,12 +39,20 @@ const LookupAccountResponseSchema = z.object({
 const IssueTypesResponseSchema = z.object({
 	issueTypes: z.array(z.object({ id: z.string(), name: z.string(), subtask: z.boolean() })),
 });
+// SIO-1116 reversal: the live searchJiraIssuesUsingJql schema no longer takes
+// (or requires) searchResultMode -- only jql is required and issues come back
+// directly. Do not send searchResultMode.
+const EpicSearchResponseSchema = z.object({
+	issues: z.array(z.object({ key: z.string(), fields: z.object({ summary: z.string() }) })),
+});
 const CreateIssueResponseSchema = z.object({ key: z.string() });
 
 // Single place that maps the provider-agnostic request onto the pinned
 // atlassian_createJiraIssue schema (required: projectKey, issueTypeName,
 // summary; assignee travels as assignee_account_id; contentFormat "markdown"
-// keeps the description a plain string).
+// keeps the description a plain string; the parent param attaches the issue
+// to an epic -- Task-under-Epic parenting is how DEVOPS-1380 hangs off
+// DEVOPS-1354).
 export function buildCreateIssueArgs(req: CreateTicketRequest): Record<string, unknown> {
 	return {
 		projectKey: req.projectKey,
@@ -42,6 +61,7 @@ export function buildCreateIssueArgs(req: CreateTicketRequest): Record<string, u
 		description: req.description,
 		contentFormat: "markdown",
 		...(req.assigneeId ? { assignee_account_id: req.assigneeId } : {}),
+		...(req.epicKey ? { parent: req.epicKey } : {}),
 	};
 }
 
@@ -63,6 +83,7 @@ export function createJiraTicketProvider(options: JiraTicketProviderOptions = {}
 
 	const projectsCache = new Map<string, CacheEntry<TicketProject[]>>();
 	const issueTypesCache = new Map<string, CacheEntry<TicketIssueType[]>>();
+	const epicsCache = new Map<string, CacheEntry<TicketEpic[]>>();
 
 	function fresh<T>(entry: CacheEntry<T> | undefined): T | undefined {
 		return entry && now() - entry.at < CACHE_TTL_MS ? entry.value : undefined;
@@ -136,6 +157,26 @@ export function createJiraTicketProvider(options: JiraTicketProviderOptions = {}
 				.map((t): TicketIssueType => ({ id: t.id, name: t.name }));
 			issueTypesCache.set(projectKey, { at: now(), value: issueTypes });
 			return issueTypes;
+		},
+		async listEpics(projectKey) {
+			if (!PROJECT_KEY_PATTERN.test(projectKey)) {
+				throw new TicketProviderError(`Invalid project key: ${projectKey.slice(0, 50)}`);
+			}
+			const cached = fresh(epicsCache.get(projectKey));
+			if (cached) return cached;
+			const parsed = await call(
+				SEARCH_TOOL,
+				{
+					jql: `project = ${projectKey} AND issuetype = Epic AND statusCategory != Done ORDER BY created DESC`,
+					fields: ["summary"],
+					maxResults: MAX_RESULTS,
+				},
+				EpicSearchResponseSchema,
+				"epic list",
+			);
+			const epics = parsed.issues.map((i): TicketEpic => ({ key: i.key, summary: i.fields.summary }));
+			epicsCache.set(projectKey, { at: now(), value: epics });
+			return epics;
 		},
 		async createTicket(req) {
 			const parsed = await call(CREATE_TOOL, buildCreateIssueArgs(req), CreateIssueResponseSchema, "issue create");

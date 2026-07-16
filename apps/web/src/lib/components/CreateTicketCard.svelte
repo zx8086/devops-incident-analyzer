@@ -3,6 +3,7 @@
 import type {
 	CreatedTicket,
 	TicketAssignee,
+	TicketEpic,
 	TicketIssueType,
 	TicketProject,
 	TicketProviderInfo,
@@ -32,6 +33,10 @@ let selectedProjectKey = $state("");
 let issueTypes = $state<TicketIssueType[]>([]);
 let issueTypesLoading = $state(false);
 let selectedIssueType = $state("");
+
+let epics = $state<TicketEpic[]>([]);
+let epicsLoading = $state(false);
+let selectedEpicKey = $state("");
 
 let assigneeQuery = $state("");
 let assigneeResults = $state<TicketAssignee[]>([]);
@@ -98,6 +103,22 @@ async function loadIssueTypes(projectKey: string) {
 	}
 }
 
+async function loadEpics(projectKey: string) {
+	if (!provider) return;
+	epicsLoading = true;
+	try {
+		const data = await fetchJson<{ epics: TicketEpic[] }>(
+			`/api/tickets/${provider.id}/epics?projectKey=${encodeURIComponent(projectKey)}`,
+		);
+		epics = data.epics ?? [];
+	} catch {
+		// Best-effort: a failed epic load leaves the picker on "No epic".
+		epics = [];
+	} finally {
+		epicsLoading = false;
+	}
+}
+
 async function loadAssignees(query: string) {
 	if (!provider) return;
 	assigneesLoading = true;
@@ -121,7 +142,12 @@ function onProjectQueryInput() {
 function onProjectChange() {
 	issueTypes = [];
 	selectedIssueType = "";
-	if (selectedProjectKey) loadIssueTypes(selectedProjectKey);
+	epics = [];
+	selectedEpicKey = "";
+	if (selectedProjectKey) {
+		loadIssueTypes(selectedProjectKey);
+		loadEpics(selectedProjectKey);
+	}
 }
 
 function onAssigneeQueryInput() {
@@ -148,6 +174,7 @@ async function submit() {
 				summary: summary.trim(),
 				description,
 				assigneeId: selectedAssignee?.id ?? null,
+				epicKey: selectedEpicKey || null,
 			}),
 		});
 		const data = await res.json();
@@ -235,6 +262,25 @@ $effect(() => {
 					{/if}
 					{#each issueTypes as issueType (issueType.id)}
 						<option value={issueType.name}>{issueType.name}</option>
+					{/each}
+				</select>
+			</div>
+
+			<div>
+				<label for="ticket-epic" class="block text-xs font-medium text-gray-600 mb-1">Epic</label>
+				<select
+					id="ticket-epic"
+					bind:value={selectedEpicKey}
+					disabled={epicsLoading || selectedProjectKey === ""}
+					class="w-full text-sm border border-gray-300 rounded px-2 py-1 bg-white disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-tommy-accent-blue"
+				>
+					{#if selectedProjectKey === ""}
+						<option value="">Select a project first</option>
+					{:else}
+						<option value="">{epicsLoading ? "Loading epics..." : "No epic"}</option>
+					{/if}
+					{#each epics as epic (epic.key)}
+						<option value={epic.key}>{epic.summary} ({epic.key})</option>
 					{/each}
 				</select>
 			</div>

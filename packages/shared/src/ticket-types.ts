@@ -29,12 +29,19 @@ export const TicketIssueTypeSchema = z.object({
 });
 export type TicketIssueType = z.infer<typeof TicketIssueTypeSchema>;
 
+export const TicketEpicSchema = z.object({
+	key: z.string(),
+	summary: z.string(),
+});
+export type TicketEpic = z.infer<typeof TicketEpicSchema>;
+
 export const CreateTicketRequestSchema = z.object({
 	projectKey: z.string().min(1),
 	issueTypeName: z.string().min(1),
 	summary: z.string().min(1).max(255),
 	description: z.string().max(32_000),
 	assigneeId: z.string().min(1).nullable().describe("Provider-native user id; null creates the ticket unassigned"),
+	epicKey: z.string().min(1).nullable().describe("Parent epic key; null creates the ticket without an epic"),
 });
 export type CreateTicketRequest = z.infer<typeof CreateTicketRequestSchema>;
 

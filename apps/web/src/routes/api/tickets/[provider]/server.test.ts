@@ -8,6 +8,7 @@ interface FakeProvider {
 	listProjects: (query?: string) => Promise<unknown[]>;
 	searchAssignees: (query: string) => Promise<unknown[]>;
 	listIssueTypes: (projectKey: string) => Promise<unknown[]>;
+	listEpics: (projectKey: string) => Promise<unknown[]>;
 	createTicket: (req: unknown) => Promise<unknown>;
 }
 
@@ -19,6 +20,7 @@ function baseProvider(overrides: Partial<FakeProvider> = {}): FakeProvider {
 		listProjects: () => Promise.resolve([]),
 		searchAssignees: () => Promise.resolve([]),
 		listIssueTypes: () => Promise.resolve([]),
+		listEpics: () => Promise.resolve([]),
 		createTicket: () => Promise.resolve({ key: "X-1" }),
 		...overrides,
 	};
@@ -84,6 +86,7 @@ const { POST } = await import("./+server.ts");
 const { GET: getProjects } = await import("./projects/+server.ts");
 const { GET: getAssignees } = await import("./assignees/+server.ts");
 const { GET: getIssueTypes } = await import("./issue-types/+server.ts");
+const { GET: getEpics } = await import("./epics/+server.ts");
 
 const validBody = {
 	projectKey: "DEVOPS",
@@ -91,6 +94,7 @@ const validBody = {
 	summary: "Kafka lag",
 	description: "Report body",
 	assigneeId: null,
+	epicKey: null,
 };
 
 function postEvent(provider: string, body: unknown) {
@@ -198,6 +202,27 @@ describe("GET /api/tickets/[provider]/assignees", () => {
 		});
 		const res = await getAssignees(getEvent("jira", "assignees", "?query=simon"));
 		expect(await res.json()).toEqual({ assignees: [{ id: "70121:abc", displayName: "Simon Owusu" }] });
+	});
+});
+
+describe("GET /api/tickets/[provider]/epics", () => {
+	test("400 when projectKey is missing", async () => {
+		mockProvider = baseProvider();
+		const res = await getEpics(getEvent("jira", "epics", ""));
+		expect(res.status).toBe(400);
+	});
+
+	test("returns epics for the project", async () => {
+		const keys: string[] = [];
+		mockProvider = baseProvider({
+			listEpics: (projectKey) => {
+				keys.push(projectKey);
+				return Promise.resolve([{ key: "DEVOPS-1354", summary: "Agentic Investigations" }]);
+			},
+		});
+		const res = await getEpics(getEvent("jira", "epics", "?projectKey=DEVOPS"));
+		expect(await res.json()).toEqual({ epics: [{ key: "DEVOPS-1354", summary: "Agentic Investigations" }] });
+		expect(keys).toEqual(["DEVOPS"]);
 	});
 });
 

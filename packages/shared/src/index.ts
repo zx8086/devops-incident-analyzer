@@ -248,6 +248,8 @@ export {
 	CreateTicketRequestSchema,
 	type TicketAssignee,
 	TicketAssigneeSchema,
+	type TicketEpic,
+	TicketEpicSchema,
 	type TicketIssueType,
 	TicketIssueTypeSchema,
 	type TicketProject,

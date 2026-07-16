@@ -10,6 +10,7 @@ const fixture = (name: string) => Bun.file(join(import.meta.dir, "__fixtures__",
 const projectsFixture = await fixture("visible-projects.json");
 const lookupFixture = await fixture("lookup-account-id.json");
 const issueTypesFixture = await fixture("issue-types.json");
+const epicSearchFixture = await fixture("epic-search.json");
 const createFixture = await fixture("create-issue.json");
 
 interface RecordedCall {
@@ -110,6 +111,42 @@ describe("listIssueTypes", () => {
 	});
 });
 
+describe("listEpics", () => {
+	test("queries open epics via JQL and maps key/summary", async () => {
+		const calls: RecordedCall[] = [];
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_searchJiraIssuesUsingJql: epicSearchFixture }, calls),
+		});
+		const epics = await provider.listEpics("DEVOPS");
+		expect(epics).toEqual([
+			{ key: "DEVOPS-1354", summary: "Agentic Investigations" },
+			{ key: "DEVOPS-1333", summary: "Kafka MCP AgentCore - MSK Integration Infrastructure" },
+		]);
+		expect(calls[0]?.args).toEqual({
+			jql: "project = DEVOPS AND issuetype = Epic AND statusCategory != Done ORDER BY created DESC",
+			fields: ["summary"],
+			maxResults: 50,
+		});
+	});
+
+	test("caches per project within the TTL", async () => {
+		const calls: RecordedCall[] = [];
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_searchJiraIssuesUsingJql: epicSearchFixture }, calls),
+		});
+		await provider.listEpics("DEVOPS");
+		await provider.listEpics("DEVOPS");
+		expect(calls).toHaveLength(1);
+	});
+
+	test("rejects project keys that are not JQL-safe", async () => {
+		const provider = createJiraTicketProvider({ invoker: fakeInvoker({}) });
+		const err = await provider.listEpics('X" OR 1=1').catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(TicketProviderError);
+		expect((err as TicketProviderError).message).toContain("Invalid project key");
+	});
+});
+
 describe("buildCreateIssueArgs", () => {
 	const base = {
 		projectKey: "DEVOPS",
@@ -119,7 +156,7 @@ describe("buildCreateIssueArgs", () => {
 	};
 
 	test("includes assignee_account_id when an assignee is chosen", () => {
-		expect(buildCreateIssueArgs({ ...base, assigneeId: "70121:abc" })).toEqual({
+		expect(buildCreateIssueArgs({ ...base, assigneeId: "70121:abc", epicKey: null })).toEqual({
 			...base,
 			contentFormat: "markdown",
 			assignee_account_id: "70121:abc",
@@ -127,7 +164,18 @@ describe("buildCreateIssueArgs", () => {
 	});
 
 	test("omits assignee_account_id for the unassigned path", () => {
-		expect(buildCreateIssueArgs({ ...base, assigneeId: null })).toEqual({ ...base, contentFormat: "markdown" });
+		expect(buildCreateIssueArgs({ ...base, assigneeId: null, epicKey: null })).toEqual({
+			...base,
+			contentFormat: "markdown",
+		});
+	});
+
+	test("includes parent when an epic is chosen and omits it otherwise", () => {
+		expect(buildCreateIssueArgs({ ...base, assigneeId: null, epicKey: "DEVOPS-1354" })).toEqual({
+			...base,
+			contentFormat: "markdown",
+			parent: "DEVOPS-1354",
+		});
 	});
 });
 
@@ -138,6 +186,7 @@ describe("createTicket", () => {
 		summary: "Kafka lag",
 		description: "Report body",
 		assigneeId: null,
+		epicKey: null,
 	};
 
 	test("returns the created key and a browse URL from ATLASSIAN_SITE_NAME", async () => {

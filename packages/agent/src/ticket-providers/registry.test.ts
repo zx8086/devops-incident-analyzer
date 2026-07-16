@@ -20,6 +20,7 @@ function stubProvider(available: boolean): TicketProvider {
 		listProjects: () => Promise.resolve([]),
 		searchAssignees: () => Promise.resolve([]),
 		listIssueTypes: () => Promise.resolve([]),
+		listEpics: () => Promise.resolve([]),
 		createTicket: () => Promise.resolve({ key: "X-1" }),
 	};
 }

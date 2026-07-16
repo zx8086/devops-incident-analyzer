@@ -22,6 +22,7 @@ describe("CreateTicketCard", () => {
 		expect(body).toContain("Consumer lag detected.");
 		expect(body).toContain("Unassigned");
 		expect(body).toContain("Select a project");
+		expect(body).toContain("Epic");
 	});
 
 	test("renders nothing without a provider", () => {

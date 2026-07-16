@@ -3,6 +3,7 @@ import type {
 	CreatedTicket,
 	CreateTicketRequest,
 	TicketAssignee,
+	TicketEpic,
 	TicketIssueType,
 	TicketProject,
 	TicketProviderId,
@@ -23,6 +24,7 @@ export interface TicketProvider {
 	listProjects(query?: string): Promise<TicketProject[]>;
 	searchAssignees(query: string): Promise<TicketAssignee[]>;
 	listIssueTypes(projectKey: string): Promise<TicketIssueType[]>;
+	listEpics(projectKey: string): Promise<TicketEpic[]>;
 	createTicket(req: CreateTicketRequest): Promise<CreatedTicket>;
 }
 

@@ -1,0 +1,23 @@
+{
+	"isLast": true,
+	"issues": [
+		{
+			"expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+			"id": "836629",
+			"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issue/836629",
+			"key": "DEVOPS-1354",
+			"fields": {
+				"summary": "Agentic Investigations"
+			}
+		},
+		{
+			"expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+			"id": "800001",
+			"self": "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issue/800001",
+			"key": "DEVOPS-1333",
+			"fields": {
+				"summary": "Kafka MCP AgentCore - MSK Integration Infrastructure"
+			}
+		}
+	]
+}

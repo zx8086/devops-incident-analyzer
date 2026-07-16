@@ -24,6 +24,7 @@ describe("CreateTicketRequestSchema", () => {
 		summary: "Kafka consumer lag on orders-events",
 		description: "Full incident report markdown",
 		assigneeId: "70121:86ec4ccf-9601-42a5-ab81-d15240b5de71",
+		epicKey: "DEVOPS-1354",
 	};
 
 	test("accepts a full request", () => {
@@ -36,6 +37,12 @@ describe("CreateTicketRequestSchema", () => {
 
 	test("rejects missing assigneeId (must be explicit null)", () => {
 		const { assigneeId: _assigneeId, ...rest } = valid;
+		expect(CreateTicketRequestSchema.safeParse(rest).success).toBe(false);
+	});
+
+	test("accepts null epicKey (no epic) and rejects missing epicKey", () => {
+		expect(CreateTicketRequestSchema.parse({ ...valid, epicKey: null }).epicKey).toBeNull();
+		const { epicKey: _epicKey, ...rest } = valid;
 		expect(CreateTicketRequestSchema.safeParse(rest).success).toBe(false);
 	});
 
