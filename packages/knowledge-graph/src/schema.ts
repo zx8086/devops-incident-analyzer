@@ -263,7 +263,7 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS Bucket(name STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS AwsAccount(id STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS AwsResource(arn STRING, PRIMARY KEY(arn))",
-	`CREATE NODE TABLE IF NOT EXISTS Incident(id STRING, severity STRING, summary STRING, createdAt STRING, embedding DOUBLE[${EMBEDDING_DIM}], PRIMARY KEY(id))`,
+	`CREATE NODE TABLE IF NOT EXISTS Incident(id STRING, severity STRING, summary STRING, createdAt STRING, ticketKey STRING, embedding DOUBLE[${EMBEDDING_DIM}], PRIMARY KEY(id))`,
 	"CREATE NODE TABLE IF NOT EXISTS Finding(id STRING, kind STRING, summary STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Runbook(filename STRING, PRIMARY KEY(filename))",
 	"CREATE NODE TABLE IF NOT EXISTS WikiPage(slug STRING, PRIMARY KEY(slug))",
@@ -333,6 +333,9 @@ export const MIGRATIONS: readonly string[] = [
 // runs them inside a tolerant try/catch loop (the VECTOR_INDEX_SETUP idiom). A
 // future Neo4jStore skips this array entirely (Neo4j is schema-optional, no ALTER).
 export const ALTER_MIGRATIONS: readonly string[] = [
+	// SIO-1134: curation link -- set when a Jira ticket is created from this
+	// incident's report (or when a learn-from match is confirmed). "" = uncurated.
+	"ALTER TABLE Incident ADD ticketKey STRING DEFAULT ''",
 	"ALTER TABLE ConfigChange ADD outcome STRING DEFAULT 'proposed'",
 	"ALTER TABLE ElasticDeployment ADD ecId STRING DEFAULT ''",
 	"ALTER TABLE ElasticDeployment ADD region STRING DEFAULT ''",

@@ -113,6 +113,26 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(summary).toContain("human-corrected root cause");
 	});
 
+	test("SIO-1134: applying curates the incident (ticketKey written + summary line)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve" },
+			}),
+		);
+
+		const link = calls.find((c) => c.cypher.includes("SET i.ticketKey = $ticketKey"));
+		expect(link?.params?.ticketKey).toBe("DEVOPS-1355");
+		expect(link?.params?.id).toBe("inc-1");
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("canonical record");
+	});
+
 	test("a rejected root cause is skipped and reported", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const calls: RunCall[] = [];
@@ -127,8 +147,13 @@ describe("SIO-1126 applyLearnings", () => {
 		);
 
 		expect(calls.some((c) => c.cypher.includes("RootCause"))).toBe(false);
+		// SIO-1134 + CodeRabbit PR #398: a full rejection must NOT curate -- with
+		// auto-confirmed matches, "Reject all" is the escape from a wrong match.
+		expect(calls.some((c) => c.cypher.includes("SET i.ticketKey"))).toBe(false);
 		const summary = String(result.messages?.[0]?.content ?? "");
 		expect(summary).toContain("Skipped rc-1: rejected");
+		expect(summary).not.toContain("canonical record");
+		expect(summary).toContain("Skipped curation: nothing approved; ticket link not written");
 	});
 
 	test("an out-of-catalog runbook is not linked", async () => {

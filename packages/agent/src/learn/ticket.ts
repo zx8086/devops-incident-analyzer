@@ -260,6 +260,14 @@ export function learnMatchGate(state: AgentStateType): Partial<AgentStateType> {
 	const ticket = state.hilTicket;
 	if (!key || !ticket) return {};
 
+	// SIO-1134: an exact curated link (Incident.ticketKey) is authoritative --
+	// ticketKey is unique per incident, so take it without asking.
+	const linked = state.hilMatchCandidates.find((c) => c.via === "ticket-link");
+	if (linked) {
+		logger.info({ key, incidentId: linked.id }, "HIL match auto-confirmed via curated ticket link");
+		return { hilMatch: { incidentId: linked.id, created: false, auto: true } };
+	}
+
 	const pins = state.hilMatchCandidates.filter((c) => c.via === "ticket-mention");
 	if (pins.length === 1 && pins[0]) {
 		logger.info({ key, incidentId: pins[0].id }, "HIL match auto-confirmed via ticket-mention pin");

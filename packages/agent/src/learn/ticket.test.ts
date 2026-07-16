@@ -174,6 +174,21 @@ describe("SIO-1130 learnMatchGate auto-confirm", () => {
 		via: "vector" as const,
 	});
 
+	test("SIO-1134: a curated ticket-link candidate auto-confirms (strongest signal)", () => {
+		const link = {
+			id: "inc-curated",
+			summary: "canonical investigation",
+			severity: "high",
+			distance: 0,
+			hasRootCause: true,
+			via: "ticket-link" as const,
+		};
+		const result = learnMatchGate(
+			stateWith({ hilLearnTicketKey: "DEVOPS-1353", hilTicket: baseTicket, hilMatchCandidates: [link] }),
+		);
+		expect(result.hilMatch).toEqual({ incidentId: "inc-curated", created: false, auto: true });
+	});
+
 	test("a single ticket-mention pin auto-confirms without interrupting", () => {
 		const result = learnMatchGate(
 			stateWith({

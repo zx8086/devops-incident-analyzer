@@ -80,7 +80,10 @@ describe("graphEnrich", () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
 		store.stub("-[r:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b" }]);
-		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
+		// SIO-1134: enrichment is curated-only -- the fixture incident carries a ticketKey.
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1, ticketKey: "DEVOPS-1355" },
+		]);
 		// SIO-1026: the similar incident has a recorded root cause.
 		store.stub("[r:HAS_ROOT_CAUSE]", [
 			{
@@ -101,11 +104,31 @@ describe("graphEnrich", () => {
 		expect(result.graphContext).toContain("prior root cause: consumer lag > 10K");
 	});
 
+	test("SIO-1134: uncurated incidents (no ticketKey) are excluded from graphContext", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "inc9", summary: "curated kafka outage", severity: "high", distance: 0.1, ticketKey: "DEVOPS-1355" },
+			{ id: "inc10", summary: "uncurated noise run", severity: "low", distance: 0.2, ticketKey: "" },
+			{ id: "inc11", summary: "legacy row without key", severity: "low", distance: 0.3 },
+		]);
+		_setGraphStoreForTesting(store);
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+
+		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag again"));
+		expect(result.graphContext).toContain("curated kafka outage");
+		expect(result.graphContext).not.toContain("uncurated noise run");
+		expect(result.graphContext).not.toContain("legacy row without key");
+	});
+
 	// SIO-1104 (5b): the priorRootCauses graph join surfaces "what resolved it".
 	test("annotates similar incidents with the runbooks that resolved the prior cause class", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
-		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
+		// SIO-1134: enrichment is curated-only -- the fixture incident carries a ticketKey.
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1, ticketKey: "DEVOPS-1355" },
+		]);
 		store.stub("[r:HAS_ROOT_CAUSE]", [
 			{
 				id: "rc1",
@@ -156,7 +179,10 @@ describe("graphEnrich", () => {
 	test("renders the similar-incident line unchanged when no runbook resolved the prior cause", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
-		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
+		// SIO-1134: enrichment is curated-only -- the fixture incident carries a ticketKey.
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1, ticketKey: "DEVOPS-1355" },
+		]);
 		store.stub("[r:HAS_ROOT_CAUSE]", [
 			{
 				id: "rc1",
@@ -196,7 +222,10 @@ describe("graphEnrich", () => {
 			}
 		}
 		const store = new ThrowOnPriorCauses();
-		store.stub("QUERY_VECTOR_INDEX", [{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1 }]);
+		// SIO-1134: enrichment is curated-only -- the fixture incident carries a ticketKey.
+		store.stub("QUERY_VECTOR_INDEX", [
+			{ id: "inc9", summary: "prior kafka outage", severity: "high", distance: 0.1, ticketKey: "DEVOPS-1355" },
+		]);
 		store.stub("[r:HAS_ROOT_CAUSE]", [
 			{
 				id: "rc1",

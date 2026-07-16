@@ -338,6 +338,9 @@ export interface ReducerState {
 	lastResponseTime: number | undefined;
 	lastToolsUsed: string[];
 	lastRunId: string | undefined;
+	// SIO-1134: the turn's requestId (== KG incident id), carried on the done
+	// event; the Create-ticket flow sends it so creation curates the incident.
+	lastRequestId: string | undefined;
 	lastConfidence: number | undefined;
 	// SIO-930: per-turn outcome from the IaC done event ("rejected"/"declined"/etc.); drives the
 	// completion chip color/label. "completed" for the incident agent (which omits the field).
@@ -401,6 +404,7 @@ export function initialReducerState(): ReducerState {
 		lastResponseTime: undefined,
 		lastToolsUsed: [],
 		lastRunId: undefined,
+		lastRequestId: undefined,
 		lastConfidence: undefined,
 		lastOutcome: "completed",
 		lastDataSourceContext: undefined,
@@ -474,6 +478,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				lastResponseTime: event.responseTime,
 				lastToolsUsed: event.toolsUsed ?? [],
 				lastRunId: event.runId,
+				lastRequestId: event.requestId,
 				lastConfidence: event.confidence,
 				lastDataSourceContext: event.dataSourceContext,
 				lastOutcome: event.outcome ?? "completed",

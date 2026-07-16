@@ -24,6 +24,7 @@ import { BindingKindSchema, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 import { type GraphStore, graphPath, isKnowledgeGraphEnabled, LadybugStore } from "./store.ts";
 import {
 	type IncidentRecord,
+	linkIncidentTicket,
 	type RootCauseRecord,
 	recordIncident,
 	recordRootCause,
@@ -85,6 +86,22 @@ export function bindingFromAnnotations(a: AnnotationMap): ServiceBindingRecord |
 // replayed (facts carry no vector; re-embedding is a Bedrock cost gated behind a future
 // --re-embed flag), so a rebuilt incident is recallable by id/service but not vector-
 // similar until re-embedded. AFFECTED_BY is reconstructed from the services list.
+// SIO-1134: curation-link replay record (kg-incident-ticket facts).
+export interface TicketLinkRecord {
+	incidentId: string;
+	ticketKey: string;
+}
+
+export function ticketLinkFromAnnotations(a: AnnotationMap): TicketLinkRecord | null {
+	if (!a.incident_id || !a.ticket) return null;
+	return { incidentId: a.incident_id, ticketKey: a.ticket };
+}
+
+// Adapter to the (store, record) writer shape replayKind expects.
+async function applyTicketLink(store: GraphStore, rec: TicketLinkRecord): Promise<void> {
+	await linkIncidentTicket(store, rec.incidentId, rec.ticketKey);
+}
+
 export function incidentFromAnnotations(a: AnnotationMap): IncidentRecord | null {
 	if (!a.incident_id) return null;
 	return {
@@ -160,6 +177,8 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 	// Replay order matters: incidents first (root-cause + binding provenance MATCH the
 	// Incident node), then root-causes, then bindings.
 	await replayKind(store, "kg-incident", incidentFromAnnotations, recordIncident, opts.dryRun);
+	// SIO-1134: curation links replay AFTER incidents exist.
+	await replayKind(store, "kg-incident-ticket", ticketLinkFromAnnotations, applyTicketLink, opts.dryRun);
 	await replayKind(store, "kg-root-cause", rootCauseFromAnnotations, recordRootCause, opts.dryRun);
 	await replayKind(store, "kg-binding", bindingFromAnnotations, recordServiceBinding, opts.dryRun);
 

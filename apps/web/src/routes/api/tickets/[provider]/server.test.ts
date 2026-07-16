@@ -28,6 +28,9 @@ function baseProvider(overrides: Partial<FakeProvider> = {}): FakeProvider {
 }
 
 let mockProvider: FakeProvider | undefined;
+const curationCalls: Array<{ incidentId: string; ticketKey: string }> = [];
+const keyDecisions: unknown[] = [];
+let curationError: Error | null = null;
 
 // SIO-780/SIO-1045: mock.module is process-global in bun; include every export
 // touched by any sibling web test so the @devops-agent/agent module link
@@ -60,6 +63,16 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: (id: string) => (id === "jira" ? mockProvider : undefined),
 	listAvailableTicketProviders: () => [] as unknown[],
+	// SIO-1134: the tickets POST route curates the KG incident on creation.
+	isKnowledgeGraphEnabled: () => true,
+	getGraphStore: () => Promise.resolve({}),
+	linkIncidentTicket: (_store: unknown, incidentId: string, ticketKey: string) => {
+		curationCalls.push({ incidentId, ticketKey });
+		return curationError ? Promise.reject(curationError) : Promise.resolve();
+	},
+	recordKeyDecision: (entry: unknown) => {
+		keyDecisions.push(entry);
+	},
 }));
 let mcpConnectError: Error | null = null;
 
@@ -175,6 +188,44 @@ describe("POST /api/tickets/[provider]", () => {
 			expect((await res.json()).error).toContain("ECONNREFUSED");
 		} finally {
 			mcpConnectError = null;
+		}
+	});
+
+	test("SIO-1134: a requestId in the body curates the KG incident (ticketKey + mirror fact)", async () => {
+		curationCalls.length = 0;
+		keyDecisions.length = 0;
+		mockProvider = baseProvider({ createTicket: () => Promise.resolve({ key: "DEVOPS-1382" }) });
+		const res = await POST(postEvent("jira", { ...validBody, requestId: "req-abc" }));
+		expect(res.status).toBe(200);
+		expect(curationCalls).toEqual([{ incidentId: "req-abc", ticketKey: "DEVOPS-1382" }]);
+		const fact = keyDecisions[0] as { annotations: Record<string, string> };
+		expect(fact.annotations.kind).toBe("kg-incident-ticket");
+		expect(fact.annotations.incident_id).toBe("req-abc");
+		expect(fact.annotations.ticket).toBe("DEVOPS-1382");
+	});
+
+	test("SIO-1134: no requestId means no curation", async () => {
+		curationCalls.length = 0;
+		keyDecisions.length = 0;
+		mockProvider = baseProvider();
+		const res = await POST(postEvent("jira", validBody));
+		expect(res.status).toBe(200);
+		expect(curationCalls).toEqual([]);
+		expect(keyDecisions).toEqual([]);
+	});
+
+	test("SIO-1134: a curation failure never fails the ticket creation", async () => {
+		curationCalls.length = 0;
+		keyDecisions.length = 0;
+		curationError = new Error("kg store locked");
+		try {
+			mockProvider = baseProvider({ createTicket: () => Promise.resolve({ key: "DEVOPS-1383" }) });
+			const res = await POST(postEvent("jira", { ...validBody, requestId: "req-def" }));
+			expect(res.status).toBe(200);
+			expect((await res.json()).key).toBe("DEVOPS-1383");
+			expect(keyDecisions).toEqual([]);
+		} finally {
+			curationError = null;
 		}
 	});
 });

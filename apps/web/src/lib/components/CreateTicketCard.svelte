@@ -28,10 +28,14 @@ const AssigneesResponseSchema = z.object({ assignees: z.array(TicketAssigneeSche
 
 let {
 	content,
+	requestId,
 	providers,
 	onClose,
 }: {
 	content: string;
+	// SIO-1134: the turn's requestId (== KG incident id); sent with creation so
+	// the new ticket curates the investigation as its canonical record.
+	requestId?: string;
 	providers: TicketProviderInfo[];
 	onClose: () => void;
 } = $props();
@@ -219,6 +223,7 @@ async function submit() {
 				description,
 				assigneeId: selectedAssignee?.id ?? null,
 				epicKey: selectedEpicKey || null,
+				...(requestId ? { requestId } : {}),
 			}),
 		});
 		const data: unknown = await res.json();

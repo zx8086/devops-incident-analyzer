@@ -54,7 +54,11 @@ const selected = $derived(picked === undefined ? (prompt.candidates[0]?.id ?? nu
             <span class="font-medium">{candidate.summary || candidate.id}</span>
             <span class="text-gray-500">
               {#if candidate.severity}({candidate.severity}){/if}
-              {candidate.via === "ticket-mention" ? "mentions this ticket" : `similarity ${candidate.distance.toFixed(3)}`}
+              {candidate.via === "ticket-link"
+                ? "linked to this ticket (curated)"
+                : candidate.via === "ticket-mention"
+                  ? "mentions this ticket"
+                  : `similarity ${candidate.distance.toFixed(3)}`}
               {#if candidate.hasRootCause}-- has a recorded root cause (a correction will replace it){/if}
             </span>
           </span>

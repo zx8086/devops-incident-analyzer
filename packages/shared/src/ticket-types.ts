@@ -42,6 +42,10 @@ export const CreateTicketRequestSchema = z.object({
 	description: z.string().max(32_000),
 	assigneeId: z.string().min(1).nullable().describe("Provider-native user id; null creates the ticket unassigned"),
 	epicKey: z.string().min(1).nullable().describe("Parent epic key; null creates the ticket without an epic"),
+	// SIO-1134: the investigation turn this report came from. When present, a
+	// successful creation links the KG Incident to the returned ticket key --
+	// the human curation signal that marks this run as the canonical record.
+	requestId: z.string().min(1).optional(),
 });
 export type CreateTicketRequest = z.infer<typeof CreateTicketRequestSchema>;
 

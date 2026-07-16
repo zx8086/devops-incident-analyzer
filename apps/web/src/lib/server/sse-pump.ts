@@ -466,7 +466,7 @@ export function emitHilLearningInterrupt(send: SendFn, threadId: string, interru
 							severity: typeof x.severity === "string" ? x.severity : "",
 							distance: typeof x.distance === "number" ? x.distance : 0,
 							hasRootCause: x.hasRootCause === true,
-							via: x.via === "ticket-mention" ? "ticket-mention" : "vector",
+							via: x.via === "ticket-mention" || x.via === "ticket-link" ? x.via : "vector",
 						};
 					})
 			: [];

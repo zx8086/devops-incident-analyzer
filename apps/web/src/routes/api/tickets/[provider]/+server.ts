@@ -1,9 +1,37 @@
 // apps/web/src/routes/api/tickets/[provider]/+server.ts
+import { getGraphStore, isKnowledgeGraphEnabled, linkIncidentTicket, recordKeyDecision } from "@devops-agent/agent";
+import { getLogger } from "@devops-agent/observability";
 import { CreateTicketRequestSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import { resolveAvailableTicketProvider } from "$lib/server/tickets";
 import type { RequestHandler } from "./$types";
+
+const log = getLogger("api.tickets.create");
+
+// SIO-1134: creating a ticket from a report is the human CURATION signal --
+// link the investigation's KG incident to the returned key (best-effort, never
+// fails the creation) so learn-from resolves it by exact lookup and enrichment
+// treats it as durable memory.
+async function curateIncident(requestId: string, ticketKey: string): Promise<void> {
+	try {
+		if (isKnowledgeGraphEnabled()) {
+			const store = await getGraphStore();
+			await linkIncidentTicket(store, requestId, ticketKey);
+		}
+		recordKeyDecision({
+			requestId,
+			decision: `Incident ${requestId} is the canonical record for ${ticketKey} (curated via ticket creation)`,
+			annotations: { kind: "kg-incident-ticket", incident_id: requestId, ticket: ticketKey },
+		});
+		log.info({ requestId, ticketKey }, "incident curated via ticket creation");
+	} catch (err) {
+		log.warn(
+			{ requestId, ticketKey, error: err instanceof Error ? err.message : String(err) },
+			"incident curation failed; ticket creation unaffected",
+		);
+	}
+}
 
 export const POST: RequestHandler = async ({ params, request }) => {
 	try {
@@ -14,7 +42,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			return json({ error: `Unknown or unavailable ticket provider: ${params.provider}` }, { status: 404 });
 		}
 		const body = CreateTicketRequestSchema.parse(await request.json());
-		return json(await provider.createTicket(body));
+		const created = await provider.createTicket(body);
+		if (body.requestId && created.key) {
+			await curateIncident(body.requestId, created.key);
+		}
+		return json(created);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
 			return json({ error: "Invalid request", details: err.issues }, { status: 400 });

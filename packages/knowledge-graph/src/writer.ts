@@ -566,6 +566,15 @@ export async function seedStackInstances(
 	}
 }
 
+// SIO-1134: curation link. The human act of creating a Jira ticket from this
+// incident's report (or confirming a learn-from match against the ticket) marks
+// the incident as the CANONICAL record for that ticket -- learn-from resolves it
+// by exact lookup thereafter, and enrichment surfaces curated incidents only.
+export async function linkIncidentTicket(store: GraphStore, incidentId: string, ticketKey: string): Promise<void> {
+	if (!incidentId || !ticketKey) return;
+	await store.run("MATCH (i:Incident {id: $id}) SET i.ticketKey = $ticketKey", { id: incidentId, ticketKey });
+}
+
 export async function linkResolution(store: GraphStore, incidentId: string, runbookFilenames: string[]): Promise<void> {
 	for (const filename of runbookFilenames) {
 		if (!filename) continue;
