@@ -58,6 +58,32 @@ describe("CouchbaseFindingsCard.svelte", () => {
 		expect(fast).toBeGreaterThan(medium);
 	});
 
+	test("renders unscoped badge and explanatory line when unscoped is true", () => {
+		const { body } = render(CouchbaseFindingsCard, {
+			props: {
+				findings: {
+					unscoped: true,
+					slowQueries: [{ statement: "SELECT v.* FROM `default` v", avgServiceTime: "9.93s" }],
+				},
+			},
+		});
+		expect(body).toContain("Unscoped");
+		expect(body).toContain("No slow query referenced the focus services -- showing top cluster-wide queries.");
+	});
+
+	test("does not render unscoped badge or explanatory line without the flag", () => {
+		const { body } = render(CouchbaseFindingsCard, {
+			props: {
+				findings: {
+					slowQueries: [{ statement: "SELECT v.* FROM `default` v", avgServiceTime: "9.93s" }],
+				},
+			},
+		});
+		expect(body).toContain("Couchbase findings");
+		expect(body).not.toContain("Unscoped");
+		expect(body).not.toContain("No slow query referenced the focus services");
+	});
+
 	test("handles missing avgServiceTime gracefully (em-dash placeholder)", () => {
 		const { body } = render(CouchbaseFindingsCard, {
 			props: {

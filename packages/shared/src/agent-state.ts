@@ -277,6 +277,12 @@ export type CouchbaseSlowQuery = z.infer<typeof CouchbaseSlowQuerySchema>;
 
 export const CouchbaseFindingsSchema = z.object({
 	slowQueries: z.array(CouchbaseSlowQuerySchema).optional(),
+	unscoped: z
+		.boolean()
+		.optional()
+		.describe(
+			"SIO-1138: true when no statement matched the focus services or focus-linked keyspaces and slowQueries is a top-N cluster-wide fallback; rule-engine consumers must skip unscoped rows",
+		),
 });
 export type CouchbaseFindings = z.infer<typeof CouchbaseFindingsSchema>;
 

@@ -526,6 +526,10 @@ function getDatastoreSlowQueries(state: AgentStateType, dataSourceId: "couchbase
 	if (dataSourceId === "konnect") return [];
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "couchbase");
 	if (!result || result.status !== "success") return [];
+	// SIO-1138: unscoped-fallback rows are display-only -- they are NOT linked to
+	// the focus service, so correlating them against MRs would manufacture
+	// contradictions from unrelated cluster-wide slow queries.
+	if (result.couchbaseFindings?.unscoped) return [];
 	return result.couchbaseFindings?.slowQueries ?? [];
 }
 

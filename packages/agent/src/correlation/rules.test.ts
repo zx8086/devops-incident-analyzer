@@ -252,3 +252,45 @@ describe("shared-infra-blast-radius", () => {
 		expect(match?.context.sharedResources as string[]).toContain(`aws-resource:${arn}`);
 	});
 });
+
+// SIO-1138: unscoped-fallback couchbase rows are display-only -- the datastore
+// contradiction rule must never correlate them against MRs.
+describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
+	const rule = findRule("gitlab-deploy-vs-datastore-runtime");
+	const mergedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+	const observedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+	function makeState(unscoped: boolean) {
+		return {
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success" as const,
+					data: "",
+					gitlabFindings: {
+						mergedRequests: [{ id: 42, title: "fix pricelist paging", merged_at: mergedAt }],
+					},
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success" as const,
+					data: "",
+					couchbaseFindings: {
+						slowQueries: [
+							{ statement: "SELECT * FROM pricelist WHERE k = $1 OFFSET 100000", lastExecutionTime: observedAt },
+						],
+						...(unscoped ? { unscoped: true } : {}),
+					},
+				},
+			],
+		} as never;
+	}
+
+	test("fires for scoped couchbase slow queries post-merge", () => {
+		expect(rule.trigger(makeState(false))).not.toBeNull();
+	});
+
+	test("does not fire when couchbase findings are the unscoped fallback", () => {
+		expect(rule.trigger(makeState(true))).toBeNull();
+	});
+});

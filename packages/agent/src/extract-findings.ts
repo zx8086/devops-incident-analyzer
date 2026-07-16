@@ -3,7 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { extractAtlassianFindings } from "./correlation/extractors/atlassian.ts";
 import { extractAwsFindings } from "./correlation/extractors/aws.ts";
-import { extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
+import { collectCouchbaseKeyspaces, extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
 import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
@@ -92,6 +92,10 @@ function countRawConsumerGroups(toolOutputs: DataSourceResult["toolOutputs"]): {
 
 export async function extractFindings(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	const focusServices = collectFocusServices(state);
+	// SIO-1138: statements name keyspaces, not services -- give the couchbase
+	// extractor the resolved scope/collection names (SIO-1084) so it can keep
+	// statements touching a keyspace whose name matches the focus.
+	const couchbaseKeyspaces = collectCouchbaseKeyspaces(state.resolvedIdentifiers);
 	// SIO-1030: every extractor now takes focusServices and strict-drops off-focus
 	// rows. rawCount is measured by re-running the (pure, cheap) extractor with empty
 	// focus (show-all) so the diagnostic reports true before/after without reaching
@@ -141,9 +145,25 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 		},
 		couchbase: (r) => {
 			const outs = r.toolOutputs ?? [];
-			const couchbaseFindings = extractCouchbaseFindings(outs, focusServices);
+			const couchbaseFindings = extractCouchbaseFindings(outs, focusServices, couchbaseKeyspaces);
 			const rawCount = extractCouchbaseFindings(outs).slowQueries?.length ?? 0;
-			logCard("CouchbaseFindingsCard", focusServices, rawCount, couchbaseFindings.slowQueries?.length ?? 0);
+			if (couchbaseFindings.unscoped) {
+				// SIO-1138: fallback engaged -- the card is populated but the rows are
+				// not focus-linked. Distinct info line instead of the droppedAll warn.
+				logger.info(
+					{
+						tag: "CouchbaseFindingsCard",
+						focusServices,
+						rawCount,
+						fallbackCount: couchbaseFindings.slowQueries?.length ?? 0,
+						resolvedKeyspaceCount: couchbaseKeyspaces.length,
+						filterMode: "unscoped-fallback",
+					},
+					"findings card fell back to unscoped top-N",
+				);
+			} else {
+				logCard("CouchbaseFindingsCard", focusServices, rawCount, couchbaseFindings.slowQueries?.length ?? 0);
+			}
 			return { couchbaseFindings };
 		},
 		elastic: (r) => {
