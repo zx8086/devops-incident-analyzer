@@ -380,6 +380,60 @@ describe("validator: anti-hallucination checks", () => {
 		const result = validate(state);
 		expect(result.validationResult).toBe("pass_with_warnings");
 	});
+
+	// SIO-1123: previously the ungrounded-metric warning was logged and discarded --
+	// it never affected confidenceScore or lowConfidence. Build an answer with >3
+	// metric values absent from source data to trigger the new cap.
+	function ungroundedMetricsState(overrides: Record<string, unknown> = {}) {
+		return makeState({
+			// metricPattern requires a trailing word-boundary unit (ms/MB/GB/TB/vCPUs) --
+			// "%" doesn't match (non-word char on both sides of \b), so these fixtures use
+			// ms/MB throughout. 5 distinct answer values vs. source's single unrelated
+			// value = 5 ungrounded (> 3 threshold).
+			finalAnswer:
+				"The elastic cluster latency is 16.8ms, GC pause 2.7ms, queue depth 8.9ms, heap 2.8MB, and cache 3.1MB. elastic queried.",
+			dataSourceResults: [{ dataSourceId: "elastic", data: "cluster healthy, uptime 120ms", status: "success" }],
+			confidenceScore: 0.72,
+			...overrides,
+		});
+	}
+
+	test("ungrounded metrics (>3) cap confidenceScore below the HITL threshold", () => {
+		const result = validate(ungroundedMetricsState());
+		expect(result.validationResult).toBe("pass_with_warnings");
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+
+	test("ungrounded metrics cap sets lowConfidence when capped score is below threshold", () => {
+		const result = validate(ungroundedMetricsState());
+		// default HITL threshold is 0.6; capped score 0.59 falls below it
+		expect(result.lowConfidence).toBe(true);
+	});
+
+	test("ungrounded metrics cap never raises an already-lower confidenceScore", () => {
+		const result = validate(ungroundedMetricsState({ confidenceScore: 0.3 }));
+		expect(result.confidenceScore).toBe(0.3);
+		expect(result.confidenceCap).toBe(0.59);
+		expect(result.lowConfidence).toBe(true);
+	});
+
+	test("datasource-not-referenced warning alone does not cap confidence", () => {
+		const state = makeState({
+			finalAnswer:
+				"The elastic cluster shows errors. The kafka consumers are lagging. Analysis complete with high confidence.",
+			dataSourceResults: [
+				{ dataSourceId: "elastic", data: "errors", status: "success" },
+				{ dataSourceId: "kafka", data: "lag", status: "success" },
+				{ dataSourceId: "couchbase", data: "slow queries", status: "success" },
+			],
+			confidenceScore: 0.72,
+		});
+		const result = validate(state);
+		expect(result.validationResult).toBe("pass_with_warnings");
+		expect(result.confidenceScore).toBeUndefined();
+		expect(result.confidenceCap).toBeUndefined();
+	});
 });
 
 describe("graph: compilation smoke test", () => {

@@ -160,8 +160,12 @@ const DLQ_PATTERNS = [/-dlq$/, /^dlt-/, /-dead-letter$/, /^dead-letter-/, /\.DLQ
 // Number of DLQ topics sampled concurrently per batch to avoid overloading brokers.
 const DLQ_PARALLEL_BATCH_SIZE = 20;
 
-// Duration of the sampling window used to compute recentDelta.
-const DEFAULT_DLQ_DELTA_WINDOW_MS = 30_000;
+// Duration of the sampling window used to compute recentDelta. Kept well under
+// the kafka-mcp client's 30s defaultToolTimeout (mcp-bridge.ts KAFKA_TOOL_TIMEOUT_DEFAULT_MS)
+// so the sleep plus the listTopics()/two sampleDlqOffsets() round trips it wraps
+// still fit inside the call budget -- previously this was 30_000, i.e. equal to the
+// timeout with zero margin, which reliably timed out (-32001) under any real latency.
+export const DEFAULT_DLQ_DELTA_WINDOW_MS = 10_000;
 
 export interface ListDlqTopicsOptions {
 	skipDelta?: boolean;

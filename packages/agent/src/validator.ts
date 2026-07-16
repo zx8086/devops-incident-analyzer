@@ -1,9 +1,22 @@
 // agent/src/validator.ts
 import { getLogger } from "@devops-agent/observability";
+import { getConfidenceThreshold } from "./confidence-gate.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:validator");
 const MAX_VALIDATION_RETRIES = 2;
+
+// SIO-1123: checkConfidence runs BEFORE validate in the graph and is non-blocking/
+// informational only, so a pass_with_warnings result (unlike a hard "fail") never
+// loops back into aggregate -- the ungrounded-metric warning below was previously
+// computed, logged, and discarded, never affecting confidenceScore or the HITL
+// lowConfidence flag. Mirrors aggregator.ts's TOOL_ERROR_CONFIDENCE_CAP: capped
+// strictly below the HITL threshold so a capped run can't read as passing.
+const VALIDATION_WARNING_CONFIDENCE_CAP = 0.59;
+// Only cap on a real hallucination signal, not the softer "datasource not
+// mentioned" warning -- matches the aggregator's own threshold for entering the
+// ungrounded-metrics warning (validator.ts below: ungrounded.length > 3).
+const UNGROUNDED_METRIC_WARNING_PREFIX = /^\d+ metric values in answer not found in source data/;
 
 export function validate(state: AgentStateType): Partial<AgentStateType> {
 	const answer = state.finalAnswer;
@@ -92,6 +105,29 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 
 	if (warnings.length > 0) {
 		logger.warn({ warnings }, "Validation passed with warnings");
+
+		const hasUngroundedMetrics = warnings.some((w) => UNGROUNDED_METRIC_WARNING_PREFIX.test(w));
+		if (hasUngroundedMetrics) {
+			const cappedScore = Math.min(state.confidenceScore, VALIDATION_WARNING_CONFIDENCE_CAP);
+			const threshold = getConfidenceThreshold();
+			const lowConfidence = cappedScore > 0 && cappedScore < threshold;
+			logger.warn(
+				{
+					cap: VALIDATION_WARNING_CONFIDENCE_CAP,
+					originalScore: state.confidenceScore,
+					cappedScore,
+					lowConfidence,
+				},
+				"Ungrounded metrics in answer; capping confidence",
+			);
+			return {
+				validationResult: "pass_with_warnings",
+				confidenceScore: cappedScore,
+				confidenceCap: VALIDATION_WARNING_CONFIDENCE_CAP,
+				lowConfidence,
+			};
+		}
+
 		return { validationResult: "pass_with_warnings" };
 	}
 

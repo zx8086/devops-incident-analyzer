@@ -2,7 +2,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { type Admin, ListOffsetTimestamps } from "@platformatic/kafka";
 import type { KafkaClientManager } from "../../src/services/client-manager.ts";
-import { KafkaService } from "../../src/services/kafka-service.ts";
+import { DEFAULT_DLQ_DELTA_WINDOW_MS, KafkaService } from "../../src/services/kafka-service.ts";
 
 interface ListOffsetsCall {
 	topics: Array<{
@@ -411,6 +411,19 @@ describe("KafkaService.listDlqTopics", () => {
 
 			expect(bad).toBeDefined();
 			expect(bad?.recentDelta).toBeNull();
+		});
+
+		// The kafka-mcp client's per-call tool timeout is 30s (mcp-bridge.ts
+		// KAFKA_TOOL_TIMEOUT_DEFAULT_MS). listDlqTopics sleeps for the full windowMs as
+		// part of its own logic, wrapped by a listTopics() scan and two sampleDlqOffsets()
+		// admin round trips -- so the default window must leave real margin under 30s,
+		// not equal it (equal-with-zero-margin previously caused a guaranteed -32001
+		// timeout under any nonzero network latency).
+		test("default delta window leaves margin under the 30s client tool-call timeout", () => {
+			const KAFKA_TOOL_TIMEOUT_DEFAULT_MS = 30_000;
+			expect(DEFAULT_DLQ_DELTA_WINDOW_MS).toBeLessThan(KAFKA_TOOL_TIMEOUT_DEFAULT_MS);
+			// Require a healthy margin (not just "less than") for the two admin round trips.
+			expect(KAFKA_TOOL_TIMEOUT_DEFAULT_MS - DEFAULT_DLQ_DELTA_WINDOW_MS).toBeGreaterThanOrEqual(15_000);
 		});
 
 		test("multi-partition DLQ sums message count correctly across 3 partitions", async () => {
