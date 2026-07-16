@@ -32,7 +32,9 @@ COPY packages/mcp-server-atlassian/package.json packages/mcp-server-atlassian/
 COPY packages/mcp-server-couchbase/package.json packages/mcp-server-couchbase/
 COPY packages/mcp-server-elastic/package.json packages/mcp-server-elastic/
 COPY packages/mcp-server-gitlab/package.json packages/mcp-server-gitlab/
+COPY packages/mcp-server-elastic-iac/package.json packages/mcp-server-elastic-iac/
 COPY packages/mcp-server-kafka/package.json packages/mcp-server-kafka/
+COPY packages/mcp-server-knowledge-graph/package.json packages/mcp-server-knowledge-graph/
 COPY packages/mcp-server-konnect/package.json packages/mcp-server-konnect/
 COPY packages/observability/package.json packages/observability/
 COPY apps/web/package.json apps/web/
@@ -58,10 +60,11 @@ COPY --chown=65532:65532 packages/shared/ packages/shared/
 COPY --chown=65532:65532 packages/${MCP_SERVER_PACKAGE}/ packages/${MCP_SERVER_PACKAGE}/
 
 # Bake the entrypoint path at build time so CMD uses exec form (no shell needed).
-# SIO-828: per-deployment env (MCP_TRANSPORT, MCP_PORT, MCP_HOST) is NOT baked
-# here -- the image is environment-agnostic. deploy.sh injects MCP_TRANSPORT=agentcore
-# and MCP_PORT=8000 via --environment-variables for the AgentCore runtime path;
-# MCP_HOST defaults to 0.0.0.0 in the Zod schema. The unified index.ts reads
+# per-deployment env (MCP_TRANSPORT, MCP_PORT, MCP_HOST) is NOT baked here --
+# the image is environment-agnostic. deploy.sh injects MCP_TRANSPORT=agentcore,
+# MCP_PORT=8000, and MCP_HOST=0.0.0.0 via --environment-variables for the
+# AgentCore runtime path (the Zod schema defaults are stdio/9081/127.0.0.1,
+# for local/stdio dev use, not AgentCore). The unified index.ts reads
 # MCP_TRANSPORT from env at boot.
 ENV ENTRYPOINT_PATH=packages/${MCP_SERVER_PACKAGE}/src/index.ts
 

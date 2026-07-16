@@ -393,11 +393,12 @@ echo ""
 echo "[4/5] Creating AgentCore Runtime..."
 
 # Build environment variables based on server type
-# SIO-828: AgentCore transport + port are the Zod schema defaults (4-pillar:
-# defaults must produce a working production deployment). deploy.sh does not
-# need to inject them; only the deployment-specific values like AWS_REGION
-# and (for the aws server) AWS_ESTATES go here.
-ENV_VARS="AWS_REGION=${AWS_REGION}"
+# MCP_TRANSPORT/MCP_PORT/MCP_HOST are NOT the Zod schema defaults (those are
+# stdio/9081/127.0.0.1, for local/stdio dev use) -- they must be injected here
+# so the deployed container actually starts the AgentCore HTTP transport
+# instead of falling through to stdio mode, which has no HTTP surface for
+# AgentCore's health check or MCP requests to reach.
+ENV_VARS="AWS_REGION=${AWS_REGION},MCP_TRANSPORT=agentcore,MCP_PORT=8000,MCP_HOST=0.0.0.0"
 case "${MCP_SERVER}" in
   kafka)
     ENV_VARS="${ENV_VARS},KAFKA_PROVIDER=${KAFKA_PROVIDER}"
@@ -571,6 +572,38 @@ RUNTIME_ARN=$(aws bedrock-agentcore-control get-agent-runtime \
 echo "  AgentCore Runtime ready"
 echo "    ID:  ${RUNTIME_ID}"
 echo "    ARN: ${RUNTIME_ARN}"
+
+# Verify the network configuration that was actually applied, not just requested.
+# AgentCore can report READY status even with a broken/empty VPC config, so a
+# status check alone doesn't catch a half-applied networkModeConfig.
+APPLIED_NETWORK_MODE=$(aws bedrock-agentcore-control get-agent-runtime \
+  --agent-runtime-id "${RUNTIME_ID}" \
+  --region "${AWS_REGION}" \
+  --query 'networkConfiguration.networkMode' \
+  --output text)
+
+if [ "${APPLIED_NETWORK_MODE}" = "VPC" ]; then
+  APPLIED_SUBNETS=$(aws bedrock-agentcore-control get-agent-runtime \
+    --agent-runtime-id "${RUNTIME_ID}" \
+    --region "${AWS_REGION}" \
+    --query 'networkConfiguration.networkModeConfig.subnets' \
+    --output text)
+  APPLIED_SGS=$(aws bedrock-agentcore-control get-agent-runtime \
+    --agent-runtime-id "${RUNTIME_ID}" \
+    --region "${AWS_REGION}" \
+    --query 'networkConfiguration.networkModeConfig.securityGroups' \
+    --output text)
+  if [ -z "${APPLIED_SUBNETS}" ] || [ "${APPLIED_SUBNETS}" = "None" ] \
+     || [ -z "${APPLIED_SGS}" ] || [ "${APPLIED_SGS}" = "None" ]; then
+    echo "ERROR: Runtime reports networkMode=VPC but networkModeConfig is incomplete" >&2
+    echo "  (subnets='${APPLIED_SUBNETS}', securityGroups='${APPLIED_SGS}')." >&2
+    echo "  The runtime has no network path and will fail all downstream calls." >&2
+    exit 1
+  fi
+  echo "  Network:      VPC (subnets=${APPLIED_SUBNETS}, sgs=${APPLIED_SGS}) [verified]"
+else
+  echo "  Network:      ${APPLIED_NETWORK_MODE} [verified]"
+fi
 
 # -- Step 5: Output connection info --
 echo ""
