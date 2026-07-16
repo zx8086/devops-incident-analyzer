@@ -64,7 +64,9 @@ describe("SIO-1126 learnMatchIncident", () => {
 		expect(result.hilTicketEmbedding).toEqual([0.1, 0.2, 0.3]);
 	});
 
-	test("soft-fails to zero candidates when the store is unusable", async () => {
+	test("a total matching outage aborts the lane instead of offering create-new", async () => {
+		// Outage != zero matches: minting a duplicate incident on a store/embedder
+		// failure is worse than asking the user to retry (CodeRabbit, PR #392).
 		_setEmbedderForTesting(async () => {
 			throw new Error("bedrock down");
 		});
@@ -78,7 +80,24 @@ describe("SIO-1126 learnMatchIncident", () => {
 		_setGraphStoreForTesting(store);
 
 		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
+		expect(result.hilTicket).toBeUndefined();
+		expect(result.messages).toHaveLength(1);
+		expect(result.partialFailures?.[0]?.reason).toBe("match-unavailable");
+	});
+
+	test("a genuine zero-match result still reaches the gate (create-new allowed)", async () => {
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async () => [],
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
 		expect(result.hilMatchCandidates).toEqual([]);
+		// The lane is NOT aborted: hilTicket is untouched (key absent from the update).
+		expect("hilTicket" in result).toBe(false);
 	});
 
 	test("returns {} without a fetched ticket", async () => {

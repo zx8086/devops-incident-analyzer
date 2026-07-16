@@ -217,9 +217,14 @@ export async function learnFetchTicket(state: AgentStateType): Promise<Partial<A
 		logger.info({ key, comments: ticket.comments.length }, "Fetched ticket for HIL learning");
 		return { hilTicket: capTicketForPrompt(ticket) };
 	} catch (error) {
+		// Log the MCP/Jira detail; keep the chat message generic (no internal
+		// exception text reflected to the user -- CodeRabbit, PR #392).
 		const message = error instanceof Error ? error.message : String(error);
 		logger.warn({ key, error: message }, "HIL ticket fetch failed");
-		return laneAbort("ticket-fetch-failed", `Fetching ${key} from Jira failed (${message}). Nothing was recorded.`);
+		return laneAbort(
+			"ticket-fetch-failed",
+			`Fetching ${key} from Jira failed. Nothing was recorded; please try again.`,
+		);
 	}
 }
 

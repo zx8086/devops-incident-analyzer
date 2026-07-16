@@ -1,7 +1,8 @@
 // agent/src/learn/distill.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { buildDistillerMessages, parseLearningProposal } from "./distill.ts";
+import type { LearningProposal } from "@devops-agent/shared";
+import { buildDistillerMessages, parseLearningProposal, verifyProposalEvidence } from "./distill.ts";
 import type { TicketResolution } from "./ticket.ts";
 
 function ticket(overrides: Partial<TicketResolution> = {}): TicketResolution {
@@ -117,5 +118,38 @@ describe("SIO-1126 parseLearningProposal", () => {
 		const noEvidence = JSON.parse(CANNED_RESPONSE);
 		noEvidence.memoryFacts[0].evidence = [];
 		expect(parseLearningProposal(JSON.stringify(noEvidence))).toBeNull();
+	});
+});
+
+describe("SIO-1126 verifyProposalEvidence", () => {
+	// Hallucinated "verbatim" quotes must not survive to the review card
+	// (CodeRabbit, PR #392). Comparison is whitespace/case-normalized.
+	test("keeps items whose evidence occurs in the ticket text", () => {
+		const proposal = parseLearningProposal(CANNED_RESPONSE);
+		if (!proposal) throw new Error("fixture must parse");
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(proposal, ticket());
+		expect(droppedIds).toEqual([]);
+		expect(verified.rootCause?.causeClass).toBe("route53-resolver-rule-vpc-association-missing");
+		expect(verified.memoryFacts).toHaveLength(1);
+	});
+
+	test("drops items with hallucinated evidence (root cause -> null)", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		if (!parsed.rootCause) throw new Error("fixture must have a root cause");
+		parsed.rootCause.evidence = ["this quote appears nowhere in the ticket"];
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(parsed, ticket());
+		expect(droppedIds).toEqual(["rc-1"]);
+		expect(verified.rootCause).toBeNull();
+		// The grounded memory fact survives.
+		expect(verified.memoryFacts).toHaveLength(1);
+	});
+
+	test("normalizes whitespace and case when matching quotes", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		fact.evidence = ["RESOLVER   associations are\nper-vpc and not transitive over the tgw."];
+		const { droppedIds } = verifyProposalEvidence(parsed, ticket());
+		expect(droppedIds).toEqual([]);
 	});
 });

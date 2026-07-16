@@ -50,6 +50,22 @@ export const POST: RequestHandler = async ({ request }) => {
 	const resumeValue =
 		body.match !== undefined ? { incidentId: body.match.incidentId } : { decisions: body.review?.decisions ?? {} };
 
+	// Bind the request variant to the thread's actual pending gate: a stale or
+	// hand-crafted payload must not resume the wrong interrupt (a match payload
+	// delivered to the review gate would yield an empty decisions map, and vice
+	// versa) -- CodeRabbit, PR #392.
+	const expectedGate = body.match !== undefined ? "hil_learning_match" : "hil_learning_review";
+	const pendingBefore = await getPendingInterrupt(body.threadId);
+	const pendingType = (pendingBefore?.value as { type?: unknown } | undefined)?.type;
+	if (pendingType !== expectedGate) {
+		return json(
+			{
+				error: `No pending ${expectedGate} gate for this thread (found: ${typeof pendingType === "string" ? pendingType : "none"})`,
+			},
+			{ status: 409 },
+		);
+	}
+
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream({
 		async start(controller) {
@@ -86,8 +102,16 @@ export const POST: RequestHandler = async ({ request }) => {
 							// The match gate chains into the review gate; surface it and
 							// keep the thread paused for the next POST.
 							const pending = await getPendingInterrupt(body.threadId);
-							if (pending && emitHilLearningInterrupt(send, body.threadId, pending.value)) {
-								log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.learning.resume.end");
+							if (pending) {
+								if (emitHilLearningInterrupt(send, body.threadId, pending.value)) {
+									log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.learning.resume.end");
+									return;
+								}
+								// A pending interrupt we do not recognize: never finalize
+								// (prune + done) a thread that is still paused -- CodeRabbit,
+								// PR #392. Surface an error and leave the state for resume.
+								log.error({ threadId: body.threadId }, "agent.learning.resume.unrecognized-interrupt");
+								send({ type: "error", message: "The learning flow paused on an unexpected gate; please retry." });
 								return;
 							}
 

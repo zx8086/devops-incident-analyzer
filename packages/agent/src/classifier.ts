@@ -134,13 +134,22 @@ Respond with exactly one word: SIMPLE or COMPLEX`;
 
 export async function classify(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	// Reset per-turn accumulation state so prior results don't bleed into this turn.
-	// SIO-1126: hilLearnTicketKey is cleared here so a prior turn's "learn from X"
-	// command never routes a later, unrelated turn into the learning lane.
+	// SIO-1126: the ENTIRE HIL learning state is cleared here, not just the ticket
+	// key -- the lane's routers gate on hilTicket/hilProposal, so a stale value
+	// from a prior learn turn would let a failed fetch/distill fall through onto
+	// the previous ticket's data (CodeRabbit, PR #392).
 	const turnReset: Partial<AgentStateType> = {
 		dataSourceResults: [],
 		alignmentRetries: 0,
 		alignmentHints: [],
 		hilLearnTicketKey: undefined,
+		hilTicket: undefined,
+		hilMatchCandidates: [],
+		hilTicketEmbedding: undefined,
+		hilMatch: undefined,
+		hilProposal: undefined,
+		hilAlreadyLearned: false,
+		hilDecisions: undefined,
 	};
 
 	const lastMessage = state.messages[state.messages.length - 1];

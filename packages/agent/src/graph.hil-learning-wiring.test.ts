@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { isHilLearningEnabled } from "./learn/config.ts";
 
-// biome-ignore lint/suspicious/noExplicitAny: LangGraph's drawable-graph shape is untyped here; we only read ids.
+// biome-ignore lint/suspicious/noExplicitAny: SIO-1126 - LangGraph's drawable-graph shape is untyped here; we only read ids.
 function edgeList(drawable: any): string[] {
 	return (drawable.edges ?? []).map((e: { source: string; target: string }) => `${e.source}->${e.target}`);
 }

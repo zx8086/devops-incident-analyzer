@@ -101,16 +101,56 @@ export function parseLearningProposal(raw: string): LearningProposal | null {
 
 // Deterministic filter-only lookup: has this ticket already been learned from?
 // A hit does NOT block re-learning -- it surfaces on the review gate and makes
-// applyLearnings skip fact re-writes (immutable facts would double).
+// applyLearnings skip fact re-writes (immutable facts would double). On a thrown
+// lookup error we fail CLOSED (treat as already learned): skipping a fact write
+// is recoverable, doubling an immutable fact is not (CodeRabbit, PR #392).
+// Residual limit: searchAgentMemory itself soft-fails to [] internally, which is
+// indistinguishable from a genuine miss here.
 async function ticketAlreadyLearned(ticketKey: string): Promise<boolean> {
 	try {
 		const hits = await searchAgentMemory(LEARNER_AGENT, "", { kind: "hil-resolution", ticket: ticketKey }, 1, {
 			deterministic: true,
 		});
 		return hits.length > 0;
-	} catch {
-		return false;
+	} catch (error) {
+		logger.warn(
+			{ ticket: ticketKey, error: error instanceof Error ? error.message : String(error) },
+			"HIL dedup lookup failed; failing closed (fact writes will be skipped)",
+		);
+		return true;
 	}
+}
+
+// Drop proposal items whose "verbatim" evidence quotes do not actually occur in
+// the ticket text the distiller saw -- hallucinated evidence must not reach the
+// review card (CodeRabbit, PR #392). Comparison is whitespace/case-normalized
+// against the SAME redacted rendering handed to the LLM.
+function normalizeForEvidence(text: string): string {
+	return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function verifyProposalEvidence(
+	proposal: LearningProposal,
+	ticket: TicketResolution,
+): { proposal: LearningProposal; droppedIds: string[] } {
+	const haystack = normalizeForEvidence(redactPiiContent(renderTicket(ticket)));
+	const droppedIds: string[] = [];
+	const keep = <T extends { id: string; evidence: string[] }>(item: T): boolean => {
+		const grounded = item.evidence.every((quote) => haystack.includes(normalizeForEvidence(quote)));
+		if (!grounded) droppedIds.push(item.id);
+		return grounded;
+	};
+	const rootCause = proposal.rootCause && keep(proposal.rootCause) ? proposal.rootCause : null;
+	return {
+		proposal: {
+			...proposal,
+			rootCause,
+			bindings: proposal.bindings.filter(keep),
+			heuristics: proposal.heuristics.filter(keep),
+			memoryFacts: proposal.memoryFacts.filter(keep),
+		},
+		droppedIds,
+	};
 }
 
 // learnDistill node: LLM call + proposal parse. On failure the lane ends with a
@@ -152,8 +192,8 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 			buildDistillerMessages({ ticket, incidentSummary, existingRootCause, runbookCatalog: catalog }),
 		);
 		const content = typeof result.content === "string" ? result.content : "";
-		const proposal = parseLearningProposal(content);
-		if (!proposal) {
+		const parsed = parseLearningProposal(content);
+		if (!parsed) {
 			return {
 				messages: [
 					new AIMessage(
@@ -163,11 +203,18 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 				partialFailures: [{ node: "learnDistill", reason: "proposal-parse-failed" }],
 			};
 		}
+		const { proposal, droppedIds } = verifyProposalEvidence(parsed, ticket);
+		if (droppedIds.length > 0) {
+			logger.warn(
+				{ ticket: ticket.key, droppedIds },
+				"HIL proposal items dropped: evidence quotes not found in the ticket text",
+			);
+		}
 		if (!proposal.rootCause && proposal.memoryFacts.length === 0) {
 			return {
 				messages: [
 					new AIMessage(
-						`I read ${ticket.key} but found no human resolution content to learn from (no corrected root cause, no durable facts). Nothing was recorded.`,
+						`I read ${ticket.key} but found no grounded human resolution content to learn from (no corrected root cause, no durable facts with verifiable evidence). Nothing was recorded.`,
 					),
 				],
 			};
@@ -178,10 +225,14 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 		);
 		return { hilProposal: { ...proposal, ticketKey: ticket.key }, hilAlreadyLearned: alreadyLearned };
 	} catch (error) {
+		// Log the provider detail; keep the chat message generic (no internal
+		// exception text reflected to the user -- CodeRabbit, PR #392).
 		const message = error instanceof Error ? error.message : String(error);
 		logger.warn({ ticket: ticket.key, error: message }, "HIL distiller invocation failed");
 		return {
-			messages: [new AIMessage(`Distilling learnings from ${ticket.key} failed (${message}). Nothing was recorded.`)],
+			messages: [
+				new AIMessage(`Distilling learnings from ${ticket.key} failed. Nothing was recorded; please try again.`),
+			],
 			partialFailures: [{ node: "learnDistill", reason: "distiller-failed" }],
 		};
 	}

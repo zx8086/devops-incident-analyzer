@@ -241,6 +241,8 @@ describe("emitHilLearningInterrupt", () => {
 			ticketSummary: "MSK Kafka controller election storm",
 			candidates: [
 				{ id: "inc-1", summary: "s", severity: "high", distance: 0.12, hasRootCause: true, via: "vector" },
+				// Malformed checkpoint entries must be filtered, not crash the emit.
+				null,
 				{ id: "inc-2", summary: "s2", severity: "", distance: 0, hasRootCause: false, via: "ticket-mention" },
 			],
 			message: "Pick one",

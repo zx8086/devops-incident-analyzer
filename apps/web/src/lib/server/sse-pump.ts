@@ -442,25 +442,29 @@ export function emitHilLearningInterrupt(send: SendFn, threadId: string, interru
 	};
 
 	if (obj.type === "hil_learning_match") {
+		// Filter non-object entries first: malformed checkpoint data must degrade,
+		// not throw mid-SSE (CodeRabbit, PR #392).
 		const candidates = Array.isArray(obj.candidates)
-			? obj.candidates.map((c) => {
-					const x = c as {
-						id?: unknown;
-						summary?: unknown;
-						severity?: unknown;
-						distance?: unknown;
-						hasRootCause?: unknown;
-						via?: unknown;
-					};
-					return {
-						id: typeof x.id === "string" ? x.id : "",
-						summary: typeof x.summary === "string" ? x.summary : "",
-						severity: typeof x.severity === "string" ? x.severity : "",
-						distance: typeof x.distance === "number" ? x.distance : 0,
-						hasRootCause: x.hasRootCause === true,
-						via: x.via === "ticket-mention" ? "ticket-mention" : "vector",
-					};
-				})
+			? obj.candidates
+					.filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+					.map((c) => {
+						const x = c as {
+							id?: unknown;
+							summary?: unknown;
+							severity?: unknown;
+							distance?: unknown;
+							hasRootCause?: unknown;
+							via?: unknown;
+						};
+						return {
+							id: typeof x.id === "string" ? x.id : "",
+							summary: typeof x.summary === "string" ? x.summary : "",
+							severity: typeof x.severity === "string" ? x.severity : "",
+							distance: typeof x.distance === "number" ? x.distance : 0,
+							hasRootCause: x.hasRootCause === true,
+							via: x.via === "ticket-mention" ? "ticket-mention" : "vector",
+						};
+					})
 			: [];
 		send({
 			type: "hil_learning_match",

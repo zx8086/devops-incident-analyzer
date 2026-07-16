@@ -17,11 +17,12 @@ let {
 
 const proposal = $derived(prompt.proposal);
 
+// Only the classes applyLearnings actually writes in Phase 1 (root cause +
+// memory facts) get decision entries; binding/heuristic items are display-only
+// until SIO-1127 and must not inflate the approved count (CodeRabbit, PR #392).
 const itemIds = $derived(
 	[
 		...(prompt.proposal.rootCause ? [prompt.proposal.rootCause.id] : []),
-		...prompt.proposal.bindings.map((b) => b.id),
-		...prompt.proposal.heuristics.map((h) => h.id),
 		...prompt.proposal.memoryFacts.map((f) => f.id),
 	].filter((id) => id.length > 0),
 );

@@ -38,7 +38,7 @@ The next similar incident then renders the human-corrected cause and "resolved b
 
 New lane inside the main incident-analyzer graph. Not a separate StateGraph and not a plain API route: interrupts, resume, checkpointing, and SSE node pills all key on `agentName ∈ {incident-analyzer, elastic-iac}`, and the command arrives in the incident chat thread — a separate graph would fork the conversation onto a different thread.
 
-```
+```text
 classify --(hilLearnTicketKey && HIL_LEARNING_ENABLED)--> learnFetchTicket
 learnFetchTicket --ok--> learnMatchIncident -> learnMatchGate [interrupt #1: pick incident / none]
              \--fail--> END (soft-fail status event)

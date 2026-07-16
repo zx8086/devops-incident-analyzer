@@ -19,7 +19,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { AIMessage } from "@langchain/core/messages";
-import { recordKeyDecision } from "../memory-writer.ts";
+import { isLiveMemoryEnabled, recordKeyDecision } from "../memory-writer.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
 import type { AgentStateType } from "../state.ts";
 import type { RootCauseCorrection } from "./schema.ts";
@@ -74,8 +74,11 @@ export function buildApplySummary(report: HilApplyReport, ticketKey: string): st
 	return lines.join("\n");
 }
 
+// Explicit approval required: a missing entry (partial/malformed resume payload)
+// must never write an unreviewed learning (CodeRabbit, PR #392). The card always
+// sends the full decisions map, so a gap only occurs on hand-crafted payloads.
 function approved(decisions: Record<string, "approve" | "reject">, id: string): boolean {
-	return decisions[id] !== "reject";
+	return decisions[id] === "approve";
 }
 
 // applyLearnings node: terminal writer for the lane. Appends the apply summary
@@ -203,6 +206,12 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 	if (alreadyLearned) {
 		if (proposal.memoryFacts.length > 0) {
 			report.skipped.push({ id: "facts", reason: `already learned from ${ticketKey}; facts not re-written` });
+		}
+	} else if (!isLiveMemoryEnabled()) {
+		// recordKeyDecision silently no-ops when live memory is off; do not count
+		// (or claim) fact writes that never persisted (CodeRabbit, PR #392).
+		if (proposal.memoryFacts.length > 0) {
+			report.skipped.push({ id: "facts", reason: "live memory disabled (LIVE_MEMORY_ENABLED)" });
 		}
 	} else {
 		try {

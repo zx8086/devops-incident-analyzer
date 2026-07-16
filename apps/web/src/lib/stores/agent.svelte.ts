@@ -255,7 +255,8 @@ function createAgentStore() {
 			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
 			// resumeIac accumulates onto it instead of resetting to just the post-resume nodes.
 			// (A brand-new turn resets these at the top of sendMessage, so nothing bleeds over.)
-			if (!isPausedOnIacInterrupt()) {
+			// SIO-1126: the HIL learning gates pause the same way; keep the first leg's pills.
+			if (!isPausedOnIacInterrupt() && hilLearningMatch === null && hilLearningReview === null) {
 				completedNodes = new Map();
 				iacPipelineProgress = [];
 			}

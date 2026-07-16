@@ -9,6 +9,7 @@
 import { getGraphStore, rootCauseForIncident, similarIncidents } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { truncateForEmbedding } from "@devops-agent/shared";
+import { AIMessage } from "@langchain/core/messages";
 import { getEmbedder } from "../graph-knowledge.ts";
 import type { AgentStateType } from "../state.ts";
 import type { HilMatchCandidate } from "./ticket.ts";
@@ -30,6 +31,8 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 
 	let embedding: number[] = [];
 	const candidates: HilMatchCandidate[] = [];
+	let pinFailed = false;
+	let vectorFailed = false;
 	try {
 		const store = await getGraphStore();
 
@@ -51,6 +54,7 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 				});
 			}
 		} catch (error) {
+			pinFailed = true;
 			logger.warn(
 				{ error: error instanceof Error ? error.message : String(error) },
 				"ticket-mention pin query failed; vector match only",
@@ -72,10 +76,27 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 				});
 			}
 		} catch (error) {
+			vectorFailed = true;
 			logger.warn(
 				{ error: error instanceof Error ? error.message : String(error) },
 				"similarity lookup failed; continuing with pinned candidates only",
 			);
+		}
+
+		// A matching OUTAGE is not a zero-match result: when neither strategy
+		// completed, offering only "create new" would mint a duplicate incident.
+		// Abort the lane instead (CodeRabbit, PR #392). Clearing hilTicket makes
+		// the downstream gates self-skip, so the turn ends with this message.
+		if (pinFailed && vectorFailed && candidates.length === 0) {
+			return {
+				hilTicket: undefined,
+				messages: [
+					new AIMessage(
+						`Matching ${ticket.key} against stored investigations failed (knowledge graph or embedding service unavailable). Nothing was recorded; please try again.`,
+					),
+				],
+				partialFailures: [{ node: "learnMatchIncident", reason: "match-unavailable" }],
+			};
 		}
 
 		const top = candidates.slice(0, MAX_CANDIDATES);
@@ -94,14 +115,19 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 		logger.info({ ticket: ticket.key, candidates: top.length }, "HIL match candidates computed");
 		return { hilMatchCandidates: top, hilTicketEmbedding: embedding };
 	} catch (error) {
+		// Store entirely unavailable: same outage-vs-zero-match rule as above.
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
-			"HIL incident matching failed; offering create-new only",
+			"HIL incident matching failed; aborting the lane",
 		);
 		return {
-			hilMatchCandidates: [],
-			hilTicketEmbedding: embedding,
-			partialFailures: [{ node: "learnMatchIncident", reason: "match-failed" }],
+			hilTicket: undefined,
+			messages: [
+				new AIMessage(
+					`Matching ${ticket.key} against stored investigations failed (knowledge graph unavailable). Nothing was recorded; please try again.`,
+				),
+			],
+			partialFailures: [{ node: "learnMatchIncident", reason: "match-unavailable" }],
 		};
 	}
 }

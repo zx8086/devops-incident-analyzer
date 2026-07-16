@@ -38,12 +38,25 @@ describe("SIO-1126 classify learn-command routing", () => {
 		expect(result.queryComplexity).toBe("complex");
 	});
 
-	test("a normal complex query clears hilLearnTicketKey via turnReset", async () => {
+	test("a normal complex query clears the ENTIRE HIL state via turnReset", async () => {
 		const state = { messages: [new HumanMessage("check kafka consumer lag")] } as unknown as AgentStateType;
 		const result = await classify(state);
-		// The key is explicitly reset so a prior turn's learn command never leaks.
-		expect("hilLearnTicketKey" in result).toBe(true);
-		expect(result.hilLearnTicketKey).toBeUndefined();
+		// Every hil* field is explicitly reset -- the lane's routers gate on
+		// hilTicket/hilProposal, so any stale value from a prior learn turn could
+		// route a failed fetch onto the previous ticket's data (CodeRabbit, PR #392).
+		for (const key of [
+			"hilLearnTicketKey",
+			"hilTicket",
+			"hilMatch",
+			"hilProposal",
+			"hilDecisions",
+			"hilTicketEmbedding",
+		] as const) {
+			expect(key in result).toBe(true);
+			expect(result[key]).toBeUndefined();
+		}
+		expect(result.hilMatchCandidates).toEqual([]);
+		expect(result.hilAlreadyLearned).toBe(false);
 		expect(result.queryComplexity).toBe("complex");
 	});
 });

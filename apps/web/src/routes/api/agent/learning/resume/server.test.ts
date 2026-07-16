@@ -64,7 +64,14 @@ const resumeAgentMock = mock(
 		},
 	}),
 );
-const getPendingInterruptMock = mock(async (): Promise<{ value: unknown } | undefined> => undefined);
+// The endpoint checks the pending gate TWICE: a pre-resume variant check (the
+// stale-payload 409 guard) and a post-pump chained-gate check. `queue` seeds the
+// sequence of answers; when exhausted, undefined (no pending interrupt).
+let pendingQueue: Array<{ value: unknown } | undefined> = [];
+const getPendingInterruptMock = mock(async (): Promise<{ value: unknown } | undefined> => pendingQueue.shift());
+function seedPending(...entries: Array<{ value: unknown } | undefined>) {
+	pendingQueue = entries;
+}
 const getLastAssistantTextMock = mock(async () => "Learned from DEVOPS-1355.");
 
 mock.module("$lib/server/agent", () => ({
@@ -156,12 +163,25 @@ describe("POST /api/agent/learning/resume — validation", () => {
 		const response = await POST(makeRequest({ threadId: "t-1", review: { decisions: { "rc-1": "maybe" } } }));
 		expect(response.status).toBe(400);
 	});
+
+	test("409 when the payload variant does not match the pending gate", async () => {
+		// review payload against a pending MATCH gate.
+		seedPending({ value: { type: "hil_learning_match" } });
+		const mismatched = await POST(makeRequest({ threadId: "t-1", review: { decisions: { "rc-1": "approve" } } }));
+		expect(mismatched.status).toBe(409);
+
+		// match payload with NO pending interrupt at all.
+		seedPending(undefined);
+		const nothingPending = await POST(makeRequest({ threadId: "t-1", match: { incidentId: "inc-1" } }));
+		expect(nothingPending.status).toBe(409);
+	});
 });
 
 describe("POST /api/agent/learning/resume — happy path", () => {
 	test("match resume: clears the card, forwards incidentId, emits final message + done", async () => {
 		resumeAgentMock.mockClear();
-		getPendingInterruptMock.mockImplementation(async () => undefined);
+		// pre-check sees the match gate; post-pump sees no chained interrupt.
+		seedPending({ value: { type: "hil_learning_match" } }, undefined);
 
 		const response = await POST(makeRequest({ threadId: "t-1", match: { incidentId: "inc-1" } }));
 		const events = await collectSse(response);
@@ -177,6 +197,7 @@ describe("POST /api/agent/learning/resume — happy path", () => {
 
 	test("null incidentId (none of these) is forwarded verbatim", async () => {
 		resumeAgentMock.mockClear();
+		seedPending({ value: { type: "hil_learning_match" } }, undefined);
 		const response = await POST(makeRequest({ threadId: "t-1", match: { incidentId: null } }));
 		await collectSse(response);
 		const callArgs = resumeAgentMock.mock.calls as unknown as unknown[][];
@@ -186,6 +207,7 @@ describe("POST /api/agent/learning/resume — happy path", () => {
 
 	test("review resume forwards the decisions map", async () => {
 		resumeAgentMock.mockClear();
+		seedPending({ value: { type: "hil_learning_review" } }, undefined);
 		const response = await POST(
 			makeRequest({ threadId: "t-1", review: { decisions: { "rc-1": "approve", "fact-1": "reject" } } }),
 		);
@@ -196,12 +218,24 @@ describe("POST /api/agent/learning/resume — happy path", () => {
 	});
 
 	test("a chained interrupt (match -> review) re-emits the gate and skips done", async () => {
-		getPendingInterruptMock.mockImplementationOnce(async () => ({ value: { type: "hil_learning_review" } }));
+		seedPending({ value: { type: "hil_learning_match" } }, { value: { type: "hil_learning_review" } });
 		emitHilLearningInterruptMock.mockImplementationOnce(() => true);
 
 		const response = await POST(makeRequest({ threadId: "t-1", match: { incidentId: "inc-1" } }));
 		const events = await collectSse(response);
 
+		expect(events.some((e) => e.type === "done")).toBe(false);
+	});
+
+	test("an unrecognized chained interrupt emits an error and never finalizes", async () => {
+		// pre-check passes (match gate); post-pump finds a foreign interrupt type.
+		seedPending({ value: { type: "hil_learning_match" } }, { value: { type: "topic_shift" } });
+		emitHilLearningInterruptMock.mockImplementationOnce(() => false);
+
+		const response = await POST(makeRequest({ threadId: "t-1", match: { incidentId: "inc-1" } }));
+		const events = await collectSse(response);
+
+		expect(events.some((e) => e.type === "error")).toBe(true);
 		expect(events.some((e) => e.type === "done")).toBe(false);
 	});
 });

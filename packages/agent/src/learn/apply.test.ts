@@ -192,6 +192,44 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(summary).toContain("knowledge graph disabled");
 	});
 
+	test("a MISSING decision entry is rejected, never silently approved", async () => {
+		// Explicit approval required: a partial/malformed resume payload must not
+		// write unreviewed learnings (CodeRabbit, PR #392).
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: {}, // no entries at all
+			}),
+		);
+
+		expect(calls.some((c) => c.cypher.includes("RootCause"))).toBe(false);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Skipped rc-1: rejected");
+	});
+
+	test("facts are not claimed as written when live memory is disabled", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		// LIVE_MEMORY_ENABLED is unset in tests -> recordKeyDecision no-ops.
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve", "fact-1": "approve" },
+			}),
+		);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).not.toContain("durable memory fact");
+		expect(summary).toContain("live memory disabled");
+	});
+
 	test("alreadyLearned skips memory-fact re-writes", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const calls: RunCall[] = [];
