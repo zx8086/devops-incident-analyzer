@@ -9,6 +9,8 @@ import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import Icon from "$lib/components/Icon.svelte";
+import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
+import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
 import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
@@ -385,6 +387,26 @@ function handleSuggestionClick(suggestion: string) {
         </div>
       </div>
     </div>
+  {/if}
+
+  {#if agentStore.hilLearningMatch}
+    <!-- SIO-1126: HIL learning match gate -- pick the stored investigation the ticket
+         corresponds to (or none). The graph is paused on learnMatchGate. -->
+    <LearningMatchCard
+      prompt={agentStore.hilLearningMatch}
+      disabled={agentStore.isStreaming}
+      onPick={(incidentId) => agentStore.resolveHilMatch(incidentId)}
+    />
+  {/if}
+
+  {#if agentStore.hilLearningReview}
+    <!-- SIO-1126: HIL learning review gate -- per-item approve/reject of the distilled
+         proposal. The graph is paused on learnReviewGate. -->
+    <LearningProposalCard
+      prompt={agentStore.hilLearningReview}
+      disabled={agentStore.isStreaming}
+      onApply={(decisions) => agentStore.resolveHilReview(decisions)}
+    />
   {/if}
 
   {#if agentStore.iacClarify}

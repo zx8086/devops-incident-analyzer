@@ -72,6 +72,13 @@ const PIPELINE_NODES = new Set([
 	"detectFleetUpgrade",
 	"fleetUpgradeGate",
 	"applyFleetUpgrade",
+	// SIO-1126: HIL learning lane nodes (incident-analyzer "learn from TICKET-123").
+	"learnFetchTicket",
+	"learnMatchIncident",
+	"learnMatchGate",
+	"learnDistill",
+	"learnReviewGate",
+	"applyLearnings",
 ]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
@@ -100,15 +107,25 @@ function parseFleetVersionCrosstab(
 export interface PumpResult {
 	toolsUsed: string[];
 	responseContent: string;
+	// SIO-1126: true when the turn entered the HIL learning lane. The lane appends
+	// its user-facing output as AIMessages (the iac idiom) instead of streaming an
+	// output node, so the handlers read the final message from state when set.
+	hilLearningTurn: boolean;
 }
+
+const HIL_LEARNING_ENTRY_NODE = "learnFetchTicket";
 
 export async function pumpEventStream(eventStream: EventStream, send: SendFn): Promise<PumpResult> {
 	const nodeStartTimes = new Map<string, number>();
 	const emittedFailures = new Set<string>();
 	let responseContent = "";
+	let hilLearningTurn = false;
 	const toolsUsed = new Set<string>();
 
 	for await (const event of eventStream) {
+		if (event.event === "on_chain_start" && event.name === HIL_LEARNING_ENTRY_NODE) {
+			hilLearningTurn = true;
+		}
 		if (event.event === "on_chat_model_stream") {
 			const chunkContent = event.data?.chunk?.content;
 			if (chunkContent) {
@@ -405,7 +422,79 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		}
 	}
 
-	return { toolsUsed: [...toolsUsed], responseContent };
+	return { toolsUsed: [...toolsUsed], responseContent, hilLearningTurn };
+}
+
+// SIO-1126: surface the HIL learning lane's interrupts. The match gate asks
+// which stored incident the ticket corresponds to; the review gate carries the
+// distilled proposal for per-item approve/reject. The UI POSTs the resume value
+// to /api/agent/learning/resume.
+export function emitHilLearningInterrupt(send: SendFn, threadId: string, interruptValue: unknown): boolean {
+	if (typeof interruptValue !== "object" || interruptValue === null) return false;
+	const obj = interruptValue as {
+		type?: unknown;
+		ticketKey?: unknown;
+		ticketSummary?: unknown;
+		candidates?: unknown;
+		proposal?: unknown;
+		alreadyLearned?: unknown;
+		message?: unknown;
+	};
+
+	if (obj.type === "hil_learning_match") {
+		// Filter non-object entries first: malformed checkpoint data must degrade,
+		// not throw mid-SSE (CodeRabbit, PR #392).
+		const candidates = Array.isArray(obj.candidates)
+			? obj.candidates
+					.filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+					.map((c) => {
+						const x = c as {
+							id?: unknown;
+							summary?: unknown;
+							severity?: unknown;
+							distance?: unknown;
+							hasRootCause?: unknown;
+							via?: unknown;
+						};
+						return {
+							id: typeof x.id === "string" ? x.id : "",
+							summary: typeof x.summary === "string" ? x.summary : "",
+							severity: typeof x.severity === "string" ? x.severity : "",
+							distance: typeof x.distance === "number" ? x.distance : 0,
+							hasRootCause: x.hasRootCause === true,
+							via: x.via === "ticket-mention" ? "ticket-mention" : "vector",
+						};
+					})
+			: [];
+		send({
+			type: "hil_learning_match",
+			threadId,
+			ticketKey: typeof obj.ticketKey === "string" ? obj.ticketKey : "",
+			ticketSummary: typeof obj.ticketSummary === "string" ? obj.ticketSummary : "",
+			candidates,
+			message:
+				typeof obj.message === "string" ? obj.message : "Which prior investigation does this ticket correspond to?",
+		});
+		return true;
+	}
+
+	if (obj.type === "hil_learning_review") {
+		if (typeof obj.proposal !== "object" || obj.proposal === null) return false;
+		send({
+			type: "hil_learning_review",
+			threadId,
+			ticketKey: typeof obj.ticketKey === "string" ? obj.ticketKey : "",
+			proposal: obj.proposal,
+			alreadyLearned: obj.alreadyLearned === true,
+			message:
+				typeof obj.message === "string"
+					? obj.message
+					: "Review the distilled learnings. Approved items are written to the knowledge graph and agent memory.",
+		});
+		return true;
+	}
+
+	return false;
 }
 
 // SIO-751: parse the interrupt payload emitted by detectTopicShift and surface

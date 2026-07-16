@@ -8,6 +8,8 @@ import {
 	type FleetUpgradeChoice,
 	type FleetUpgradePreview,
 	type FleetUpgradeResultRow,
+	type HilLearningMatchPrompt,
+	type HilLearningReviewPrompt,
 	type IacClarifyPrompt,
 	type IacDriftReport,
 	type IacPlanReviewPrompt,
@@ -94,6 +96,9 @@ function createAgentStore() {
 	let actionResults = $state<ActionResult[]>([]);
 	// SIO-751: HITL banner state for cross-turn topic-shift detection.
 	let topicShiftPrompt = $state<TopicShiftPrompt | null>(null);
+	// SIO-1126: HIL learning lane gate cards.
+	let hilLearningMatch = $state<HilLearningMatchPrompt | null>(null);
+	let hilLearningReview = $state<HilLearningReviewPrompt | null>(null);
 	// Which agent the UI is driving; toggled from the robot icon.
 	let currentAgent = $state<AgentId>("incident-analyzer");
 	// elastic-iac HITL banners.
@@ -250,7 +255,8 @@ function createAgentStore() {
 			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
 			// resumeIac accumulates onto it instead of resetting to just the post-resume nodes.
 			// (A brand-new turn resets these at the top of sendMessage, so nothing bleeds over.)
-			if (!isPausedOnIacInterrupt()) {
+			// SIO-1126: the HIL learning gates pause the same way; keep the first leg's pills.
+			if (!isPausedOnIacInterrupt() && hilLearningMatch === null && hilLearningReview === null) {
 				completedNodes = new Map();
 				iacPipelineProgress = [];
 			}
@@ -275,6 +281,8 @@ function createAgentStore() {
 			pendingActions,
 			actionResults,
 			topicShiftPrompt,
+			hilLearningMatch,
+			hilLearningReview,
 			iacClarify,
 			iacPlanReview,
 			iacPipelineProgress,
@@ -306,6 +314,8 @@ function createAgentStore() {
 		pendingActions = next.pendingActions;
 		actionResults = next.actionResults;
 		topicShiftPrompt = next.topicShiftPrompt;
+		hilLearningMatch = next.hilLearningMatch;
+		hilLearningReview = next.hilLearningReview;
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
 		iacPipelineProgress = next.iacPipelineProgress;
@@ -498,6 +508,8 @@ function createAgentStore() {
 		pendingActions = [];
 		actionResults = [];
 		topicShiftPrompt = null;
+		hilLearningMatch = null;
+		hilLearningReview = null;
 		iacClarify = null;
 		iacPlanReview = null;
 		iacPipelineProgress = [];
@@ -626,6 +638,64 @@ function createAgentStore() {
 		return resumeIac({ approve }, fleetUpgradeChoice.threadId);
 	}
 
+	// SIO-1126: POST a HIL learning gate answer to the resume endpoint and pipe
+	// the resulting SSE stream back through handleEvent. The server emits
+	// `hil_learning_resolved` first (clearing the card via the reducer); the
+	// match gate chains into the review gate, so a resume may repopulate a card.
+	async function resumeHilLearning(
+		payload: { match?: { incidentId: string | null }; review?: { decisions: Record<string, "approve" | "reject"> } },
+		threadIdOverride: string,
+	) {
+		if (isStreaming) return;
+		// Keep the gate cards until the resume succeeds (the resolveIac retry idiom):
+		// snapshot, clear optimistically, restore on failure.
+		const pendingMatch = hilLearningMatch;
+		const pendingReview = hilLearningReview;
+		hilLearningMatch = null;
+		hilLearningReview = null;
+		isStreaming = true;
+		try {
+			const response = await fetch("/api/agent/learning/resume", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ threadId: threadIdOverride, ...payload }),
+			});
+			if (!response.ok || !response.body) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			for await (const event of parseSseChunks(response.body)) {
+				handleEvent(event);
+			}
+		} catch (error) {
+			hilLearningMatch = hilLearningMatch ?? pendingMatch;
+			hilLearningReview = hilLearningReview ?? pendingReview;
+			currentContent += `\n\n[Error resuming learning flow: ${error instanceof Error ? error.message : String(error)}]`;
+			lastOutcome = "error";
+		} finally {
+			if (currentContent) {
+				messages = [...messages, buildAssistantMessage(currentContent)];
+				currentContent = "";
+			}
+			isStreaming = false;
+			activeNodes = new Set();
+			// A chained gate (match -> review) means the turn pauses again -- keep the
+			// pipeline building across legs (the SIO-934 idiom).
+			if (hilLearningMatch === null && hilLearningReview === null) {
+				completedNodes = new Map();
+			}
+		}
+	}
+
+	function resolveHilMatch(incidentId: string | null) {
+		if (!hilLearningMatch) return;
+		return resumeHilLearning({ match: { incidentId } }, hilLearningMatch.threadId);
+	}
+
+	function resolveHilReview(decisions: Record<string, "approve" | "reject">) {
+		if (!hilLearningReview) return;
+		return resumeHilLearning({ review: { decisions } }, hilLearningReview.threadId);
+	}
+
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
 	// pipe the resulting SSE stream back through handleEvent. The server emits
 	// `topic_shift_resolved` first (clearing the banner via the reducer) and
@@ -738,6 +808,12 @@ function createAgentStore() {
 		get topicShiftPrompt() {
 			return topicShiftPrompt;
 		},
+		get hilLearningMatch() {
+			return hilLearningMatch;
+		},
+		get hilLearningReview() {
+			return hilLearningReview;
+		},
 		get currentAgent() {
 			return currentAgent;
 		},
@@ -790,6 +866,8 @@ function createAgentStore() {
 		clearChat,
 		endCurrentSession,
 		resolveTopicShift,
+		resolveHilMatch,
+		resolveHilReview,
 		switchAgent,
 		resolveIacPlanReview,
 		submitIacClarify,

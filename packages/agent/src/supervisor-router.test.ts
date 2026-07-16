@@ -69,6 +69,14 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		investigationFocus: undefined,
 		resolvedIdentifiers: undefined,
 		pendingTopicShiftPrompt: undefined,
+		hilLearnTicketKey: undefined,
+		hilTicket: undefined,
+		hilMatchCandidates: [],
+		hilTicketEmbedding: undefined,
+		hilMatch: undefined,
+		hilProposal: undefined,
+		hilAlreadyLearned: false,
+		hilDecisions: undefined,
 		...overrides,
 	};
 }

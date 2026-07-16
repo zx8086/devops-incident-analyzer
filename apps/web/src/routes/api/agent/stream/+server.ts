@@ -16,7 +16,12 @@ import {
 	runPostTurn,
 } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
-import { emitIacInterrupt, emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
+import {
+	emitHilLearningInterrupt,
+	emitIacInterrupt,
+	emitTopicShiftPrompt,
+	pumpEventStream,
+} from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.stream");
@@ -132,7 +137,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								// SIO-751: shared event-routing helper. Both the initial stream
 								// handler (here) and the resume endpoint use the same logic so
 								// resumed graphs surface identical events.
-								const { toolsUsed } = await pumpEventStream(eventStream, send);
+								const { toolsUsed, hilLearningTurn } = await pumpEventStream(eventStream, send);
 
 								await flushLangSmithCallbacks();
 
@@ -169,13 +174,25 @@ export const POST: RequestHandler = async ({ request }) => {
 								// the snapshot still has the interrupt pending and no "done"
 								// event has fired. Surface the prompt to the UI instead of done;
 								// the UI POSTs the user's decision to /api/agent/topic-shift.
+								// SIO-1126: the HIL learning lane pauses the same way (match gate);
+								// the UI POSTs the resume value to /api/agent/learning/resume.
 								const pendingInterrupt = await getPendingInterrupt(threadId);
 								if (pendingInterrupt) {
-									const surfaced = emitTopicShiftPrompt(send, threadId, pendingInterrupt.value);
+									const surfaced =
+										emitTopicShiftPrompt(send, threadId, pendingInterrupt.value) ||
+										emitHilLearningInterrupt(send, threadId, pendingInterrupt.value);
 									if (surfaced) {
 										log.info({ responseTime: Date.now() - startTime, interrupted: true }, "agent.request.end");
 										return;
 									}
+								}
+
+								// SIO-1126: a learn turn that ended WITHOUT an interrupt (fetch or
+								// distill failure) appended its explanation as an AIMessage rather
+								// than streaming an output node -- read it back (the iac idiom).
+								if (hilLearningTurn) {
+									const finalText = await getLastAssistantText(threadId);
+									if (finalText) send({ type: "message", content: finalText });
 								}
 
 								// Build dataSourceContext from the datasources that were actually queried

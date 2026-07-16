@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { detectLearnCommand } from "./learn/detect.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
@@ -132,11 +133,23 @@ When in doubt, classify as COMPLEX.
 Respond with exactly one word: SIMPLE or COMPLEX`;
 
 export async function classify(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
-	// Reset per-turn accumulation state so prior results don't bleed into this turn
+	// Reset per-turn accumulation state so prior results don't bleed into this turn.
+	// SIO-1126: the ENTIRE HIL learning state is cleared here, not just the ticket
+	// key -- the lane's routers gate on hilTicket/hilProposal, so a stale value
+	// from a prior learn turn would let a failed fetch/distill fall through onto
+	// the previous ticket's data (CodeRabbit, PR #392).
 	const turnReset: Partial<AgentStateType> = {
 		dataSourceResults: [],
 		alignmentRetries: 0,
 		alignmentHints: [],
+		hilLearnTicketKey: undefined,
+		hilTicket: undefined,
+		hilMatchCandidates: [],
+		hilTicketEmbedding: undefined,
+		hilMatch: undefined,
+		hilProposal: undefined,
+		hilAlreadyLearned: false,
+		hilDecisions: undefined,
 	};
 
 	const lastMessage = state.messages[state.messages.length - 1];
@@ -148,6 +161,17 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 	const query = extractTextFromContent(lastMessage.content);
 	const trimmed = query.trim();
 	logger.info({ query: trimmed.slice(0, 100) }, "Classifying query");
+
+	// SIO-1126: the HIL learning command routes into its own lane before any
+	// complexity classification. The graph's classify router checks the gate
+	// (HIL_LEARNING_ENABLED) -- when the lane is disabled the key is set but the
+	// router falls through to the normal complex path, where the message reads
+	// like an ordinary query.
+	const learnKey = detectLearnCommand(trimmed);
+	if (learnKey) {
+		logger.info({ ticket: learnKey }, "HIL learn command detected");
+		return { ...turnReset, hilLearnTicketKey: learnKey, queryComplexity: "complex" };
+	}
 
 	// SIO-749: follow-up detection runs in the UI now (apps/web/src/routes/+page.svelte:35-40).
 	// state.isFollowUp arrives set by the inbound request and flows through unchanged via

@@ -66,6 +66,12 @@ function isEnabled(): boolean {
 	return v === "true" || v === "1";
 }
 
+// SIO-1126: exported so callers that REPORT on memory writes (the HIL apply
+// summary) can tell a persisted fact from recordKeyDecision's silent no-op.
+export function isLiveMemoryEnabled(): boolean {
+	return isEnabled();
+}
+
 // SIO-1038: opt-in gate for storing the VERBATIM user prompt as a RAW (unredacted)
 // agent-memory fact. Off by default -- this deliberately bypasses redactPiiContent()
 // (otherwise unconditional on every write path here), landing raw prompts in the

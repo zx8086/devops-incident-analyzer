@@ -1,6 +1,7 @@
 // shared/src/agent-state.ts
 import { z } from "zod";
 import { PendingActionSchema } from "./action-types.ts";
+import { HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
 
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
@@ -635,6 +636,28 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// SIO-751: emitted at the start of a resumed stream so the UI knows to
 	// clear its banner before the resumed graph starts pushing events again.
 	z.object({ type: z.literal("topic_shift_resolved") }),
+	// SIO-1126: HIL learning lane ("learn from TICKET-123"). The match gate asks
+	// which stored incident the ticket corresponds to; the review gate carries the
+	// distilled proposal for per-item approve/reject. The UI POSTs the resume
+	// value to /api/agent/learning/resume; hil_learning_resolved clears the card
+	// at the start of a resumed stream (the topic_shift_resolved idiom).
+	z.object({
+		type: z.literal("hil_learning_match"),
+		threadId: z.string(),
+		ticketKey: z.string(),
+		ticketSummary: z.string(),
+		candidates: z.array(HilMatchCandidateSchema),
+		message: z.string(),
+	}),
+	z.object({
+		type: z.literal("hil_learning_review"),
+		threadId: z.string(),
+		ticketKey: z.string(),
+		proposal: LearningProposalSchema,
+		alreadyLearned: z.boolean(),
+		message: z.string(),
+	}),
+	z.object({ type: z.literal("hil_learning_resolved") }),
 	// elastic-iac maker graph: a one-line clarification the planner needs, or the
 	// plan-review gate. The UI POSTs the resume value to /api/agent/iac/resume.
 	z.object({

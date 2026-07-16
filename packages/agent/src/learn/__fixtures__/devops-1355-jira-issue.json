@@ -1,0 +1,47 @@
+{
+	"id": "836631",
+	"key": "DEVOPS-1355",
+	"self": "https://jira.example.test/rest/api/3/issue/836631",
+	"fields": {
+		"summary": "Kafka controller election storm",
+		"status": { "name": "In Progress" },
+		"resolutiondate": null,
+		"description": "# ksqlDB Error Investigation -- Unified Incident Report\n\n**Generated:** 2026-06-01T14:33:31.857Z\n\n## Executive Summary\n\nThe ksqlDB errors are caused by a 90-minute Kafka controller election storm on cluster shared-services-msk-example.",
+		"comment": {
+			"comments": [
+				{
+					"id": "1335692",
+					"author": { "displayName": "Agent Report" },
+					"created": "2026-07-15T22:24:46.134+0100",
+					"body": "<custom data-type=\"mention\" data-id=\"id-0\">@Ops Engineer</custom>\n\nIncident Report: Persistent Confluent Kafka Bootstrap Broker Disconnections -- example-consumer-service\n\n## Executive Summary\n\nThe example-consumer-service consumer groups have been continuously failing to complete the Kafka bootstrap handshake against the Confluent Cloud broker lkc-example1.dom0example.eu-central-1.aws.confluent.cloud:9092 for 30 days. The broker node ID remains id: -1 on every attempt. The root cause is a Confluent Cloud-layer SASL/TLS authentication failure. The most probable immediate trigger is that the Confluent API key or secret stored in SSM is invalid. A DNS failure would produce Unknown host, not terminated during authentication.\n\nConfidence: 0.87"
+				},
+				{
+					"id": "1335903",
+					"author": { "displayName": "Ops Engineer" },
+					"created": "2026-07-16T12:44:22.929+0100",
+					"body": "Root cause found: it's a DNS/network gap, not credentials.\n\nexample-consumer-service connects directly to Confluent Cloud at lkc-example1.dom0example...:9092. From the workload VPC (vpc-0example1234567890a) that hostname resolves to non-routable Confluent-internal IPs (10.1.x.x), because the VPC has no Confluent Route53 resolver rule associated. Resolver associations are per-VPC and not transitive over the TGW.\n\nThe legacy bootstrap-servers env var pointing at shared-services-msk-example is vestigial. The empty MSK consumer groups are orphans from that retired path. MSK is not in the incident path.\n\nFix: associate resolver rule rslvr-rr-0example000000001 (dom0example) with vpc-0example1234567890a, codified in the infrastructure repo."
+				},
+				{
+					"id": "1335937",
+					"author": { "displayName": "Ops Engineer" },
+					"created": "2026-07-16T13:37:22.460+0100",
+					"body": {
+						"type": "doc",
+						"version": 1,
+						"content": [
+							{
+								"type": "paragraph",
+								"content": [
+									{
+										"type": "text",
+										"text": "Devs confirmed this was parked and never fully tested so the fix I suggested should finish infra part and connection to CC should be possible from the workload accounts"
+									}
+								]
+							}
+						]
+					}
+				}
+			]
+		}
+	}
+}

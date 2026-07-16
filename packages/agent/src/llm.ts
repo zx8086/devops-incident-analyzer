@@ -52,7 +52,9 @@ export type LlmRole =
 	| "iacClassifier"
 	| "iacReader"
 	// SIO-1015: post-turn worthiness judge for the skill-learning subsystem.
-	| "skillLearner";
+	| "skillLearner"
+	// SIO-1126: HIL learning distiller (diff agent diagnosis vs human resolution).
+	| "hilDistiller";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -82,6 +84,9 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	iacReader: { temperature: 0, maxTokens: 4096 },
 	// SIO-1015: deterministic worthiness judgment + a compact skill proposal as JSON.
 	skillLearner: { temperature: 0, maxTokens: 1024 },
+	// SIO-1126: deterministic distillation of a resolved ticket into a structured
+	// LearningProposal (root cause + facts as JSON).
+	hilDistiller: { temperature: 0, maxTokens: 4096 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -112,6 +117,8 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	iacReader: 120_000,
 	// SIO-1015: post-turn, off the critical path; bound it so a slow judge never lingers.
 	skillLearner: 60_000,
+	// SIO-1126: user-facing but interactive (the review gate follows); bound it.
+	hilDistiller: 120_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.

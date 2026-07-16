@@ -162,6 +162,22 @@ export {
 } from "./datasource.ts";
 export { embeddingMaxChars, truncateForEmbedding } from "./embedding-truncate.ts";
 export { matchesFocus, normalize, tokenize } from "./focus-match.ts";
+export {
+	type BindingCorrection,
+	BindingCorrectionSchema,
+	type Heuristic,
+	HeuristicSchema,
+	type HilDecision,
+	type HilDecisions,
+	type HilMatchCandidate,
+	HilMatchCandidateSchema,
+	type LearningProposal,
+	LearningProposalSchema,
+	type MemoryFact,
+	MemoryFactSchema,
+	type RootCauseCorrection,
+	RootCauseCorrectionSchema,
+} from "./hil-learning.ts";
 export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts";
 export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {

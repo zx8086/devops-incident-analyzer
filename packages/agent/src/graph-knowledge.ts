@@ -72,7 +72,9 @@ export function createBedrockEmbedder(): EmbedFn {
 	};
 }
 
-function getEmbedder(): EmbedFn {
+// SIO-1126: exported so the HIL learning lane (learn/match.ts) reuses the same
+// injectable embedder ( _setEmbedderForTesting keeps working for its tests too).
+export function getEmbedder(): EmbedFn {
 	if (!embedder) embedder = createBedrockEmbedder();
 	return embedder;
 }

@@ -114,6 +114,10 @@ mock.module("$lib/server/sse-pump", () => ({
 		return { toolsUsed: [] as string[] };
 	}),
 	emitTopicShiftPrompt: mock(() => false),
+	// SIO-1126: keep the process-global mock link-compatible with routes importing
+	// the HIL learning emit (stream + learning/resume).
+	emitHilLearningInterrupt: mock(() => false),
+	emitIacInterrupt: mock(() => false),
 }));
 
 const { POST } = await import("./+server.ts");
