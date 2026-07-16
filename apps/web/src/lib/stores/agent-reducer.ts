@@ -7,7 +7,9 @@ import type {
 	DataSourceContext,
 	ElasticFindings,
 	GitLabFindings,
+	HilMatchCandidate,
 	KafkaFindings,
+	LearningProposal,
 	PendingAction,
 	StreamEvent,
 } from "@devops-agent/shared";
@@ -18,6 +20,25 @@ export interface TopicShiftPrompt {
 	newFocusSummary: string;
 	oldServices: string[];
 	newServices: string[];
+	message: string;
+}
+
+// SIO-1126: HIL learning lane gates. The match card asks which stored incident
+// the ticket corresponds to; the review card carries the distilled proposal for
+// per-item approve/reject. The UI POSTs to /api/agent/learning/resume.
+export interface HilLearningMatchPrompt {
+	threadId: string;
+	ticketKey: string;
+	ticketSummary: string;
+	candidates: HilMatchCandidate[];
+	message: string;
+}
+
+export interface HilLearningReviewPrompt {
+	threadId: string;
+	ticketKey: string;
+	proposal: LearningProposal;
+	alreadyLearned: boolean;
 	message: string;
 }
 
@@ -330,6 +351,10 @@ export interface ReducerState {
 	// SIO-751: when the graph pauses on detectTopicShift, the SSE handler
 	// emits topic_shift_prompt and the UI shows a banner with two buttons.
 	topicShiftPrompt: TopicShiftPrompt | null;
+	// SIO-1126: HIL learning lane gate cards (mutually exclusive by construction:
+	// the graph pauses on one gate at a time).
+	hilLearningMatch: HilLearningMatchPrompt | null;
+	hilLearningReview: HilLearningReviewPrompt | null;
 	// elastic-iac maker graph interrupts.
 	iacClarify: IacClarifyPrompt | null;
 	iacPlanReview: IacPlanReviewPrompt | null;
@@ -376,6 +401,8 @@ export function initialReducerState(): ReducerState {
 		pendingActions: [],
 		actionResults: [],
 		topicShiftPrompt: null,
+		hilLearningMatch: null,
+		hilLearningReview: null,
 		iacClarify: null,
 		iacPlanReview: null,
 		iacPipelineProgress: [],
@@ -481,6 +508,34 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			};
 		case "topic_shift_resolved":
 			return { ...state, topicShiftPrompt: null };
+		case "hil_learning_match":
+			return {
+				...state,
+				threadId: event.threadId,
+				hilLearningMatch: {
+					threadId: event.threadId,
+					ticketKey: event.ticketKey,
+					ticketSummary: event.ticketSummary,
+					candidates: event.candidates,
+					message: event.message,
+				},
+				hilLearningReview: null,
+			};
+		case "hil_learning_review":
+			return {
+				...state,
+				threadId: event.threadId,
+				hilLearningReview: {
+					threadId: event.threadId,
+					ticketKey: event.ticketKey,
+					proposal: event.proposal,
+					alreadyLearned: event.alreadyLearned,
+					message: event.message,
+				},
+				hilLearningMatch: null,
+			};
+		case "hil_learning_resolved":
+			return { ...state, hilLearningMatch: null, hilLearningReview: null };
 		case "iac_clarify":
 			return {
 				...state,

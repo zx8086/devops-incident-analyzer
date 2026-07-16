@@ -15,6 +15,8 @@ import type {
 	ToolPlanStep,
 } from "@devops-agent/shared";
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
+import type { HilDecisions, LearningProposal } from "./learn/schema.ts";
+import type { HilMatchCandidate, TicketResolution } from "./learn/ticket.ts";
 
 // SIO-681: Union of all specialist sub-agent identifiers
 export type AgentName =
@@ -322,6 +324,41 @@ export const AgentState = Annotation.Root({
 	partialFailures: Annotation<Array<{ node: string; reason: string }>>({
 		reducer: (prev, next) => [...prev, ...next],
 		default: () => [],
+	}),
+
+	// SIO-1126: HIL learning lane. All per-turn replace reducers; classify's
+	// turnReset clears the ticket key so a prior turn's command never leaks.
+	hilLearnTicketKey: Annotation<string | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	hilTicket: Annotation<TicketResolution | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	hilMatchCandidates: Annotation<HilMatchCandidate[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+	hilTicketEmbedding: Annotation<number[] | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	hilMatch: Annotation<{ incidentId: string; created: boolean } | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	hilProposal: Annotation<LearningProposal | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	hilAlreadyLearned: Annotation<boolean>({
+		reducer: (_, next) => next,
+		default: () => false,
+	}),
+	hilDecisions: Annotation<HilDecisions | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
 	}),
 });
 

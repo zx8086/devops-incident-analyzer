@@ -20,6 +20,11 @@ import { extractFindings } from "./extract-findings.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { graphEnrich, recordGraphEntities, recordRootCauseData } from "./graph-knowledge.ts";
 import { initializeLangSmith } from "./langsmith.ts";
+import { applyLearnings } from "./learn/apply.ts";
+import { isHilLearningEnabled } from "./learn/config.ts";
+import { learnDistill, learnReviewGate } from "./learn/distill.ts";
+import { learnMatchIncident } from "./learn/match.ts";
+import { learnFetchTicket, learnMatchGate } from "./learn/ticket.ts";
 import { aggregateMitigation } from "./mitigation.ts";
 import { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 import { normalizeIncident } from "./normalizer.ts";
@@ -91,6 +96,15 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		knowledgeGraphEnabled ? "Knowledge graph nodes enabled" : "Knowledge graph nodes disabled",
 	);
 
+	// SIO-1126: HIL learning lane gate. Same edge-gate idiom: the six lane nodes
+	// are always registered; the classify router only routes into the lane when
+	// enabled AND the turn is an explicit "learn from TICKET-123" command.
+	const hilLearningEnabled = isHilLearningEnabled();
+	graphLogger.info(
+		{ hilLearningEnabled },
+		hilLearningEnabled ? "HIL learning lane enabled" : "HIL learning lane disabled",
+	);
+
 	const graph = new StateGraph(AgentState)
 		.addNode("classify", traceNode("classify", classify))
 		.addNode("normalize", traceNode("normalize", normalizeIncident))
@@ -133,14 +147,48 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// the knowledge graph is enabled. Self-skips (returns {}) unless
 		// KG_BINDINGS_WRITE_ENABLED is also set, so it is inert in shadow mode.
 		.addNode("recordBindings", traceNode("recordBindings", recordConfirmedBindings))
+		// SIO-1126: HIL learning lane. Compute and interrupt are SPLIT across nodes
+		// (learnMatchIncident/learnMatchGate, learnDistill/learnReviewGate) because
+		// LangGraph re-executes an interrupted node from its top on resume -- an
+		// interrupt() inside the compute node would re-run the embed/LLM call on
+		// every resume (the iac reviewPlan/reviewGate split).
+		.addNode("learnFetchTicket", traceNode("learnFetchTicket", learnFetchTicket))
+		.addNode("learnMatchIncident", traceNode("learnMatchIncident", learnMatchIncident))
+		.addNode("learnMatchGate", traceNode("learnMatchGate", learnMatchGate))
+		.addNode("learnDistill", traceNode("learnDistill", learnDistill))
+		.addNode("learnReviewGate", traceNode("learnReviewGate", learnReviewGate))
+		.addNode("applyLearnings", traceNode("applyLearnings", applyLearnings))
 
 		// Entry
 		.addEdge("__start__", "classify")
 
 		// SIO-630: Classify -> normalize (complex) or responder (simple)
-		.addConditionalEdges("classify", (state) => {
-			return state.queryComplexity === "simple" ? "responder" : "normalize";
-		})
+		// SIO-1126: an explicit "learn from TICKET-123" turn routes into the HIL
+		// learning lane instead (when enabled).
+		.addConditionalEdges(
+			"classify",
+			(state) => {
+				if (hilLearningEnabled && state.hilLearnTicketKey) return "learnFetchTicket";
+				return state.queryComplexity === "simple" ? "responder" : "normalize";
+			},
+			["learnFetchTicket", "responder", "normalize"],
+		)
+
+		// SIO-1126: fetch failure ends the lane (learnFetchTicket already appended
+		// a user-facing message); success continues to matching.
+		.addConditionalEdges("learnFetchTicket", (state) => (state.hilTicket ? "learnMatchIncident" : END), [
+			"learnMatchIncident",
+			END,
+		])
+		.addEdge("learnMatchIncident", "learnMatchGate")
+		.addEdge("learnMatchGate", "learnDistill")
+		// Distill failure ends the lane the same way (no proposal -> gates self-skip).
+		.addConditionalEdges("learnDistill", (state) => (state.hilProposal ? "learnReviewGate" : END), [
+			"learnReviewGate",
+			END,
+		])
+		.addEdge("learnReviewGate", "applyLearnings")
+		.addEdge("applyLearnings", END)
 
 		// Simple path: responder -> followUp -> END
 		.addEdge("responder", "followUp")

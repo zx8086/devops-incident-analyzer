@@ -227,3 +227,73 @@ describe("emitIacInterrupt fleet_upgrade_choice", () => {
 		expect(sent).toHaveLength(0);
 	});
 });
+
+// SIO-1126: the HIL learning lane's two interrupt payloads translate to SSE
+// events; the pump flags learn turns so the handlers read the final AIMessage
+// from state (the lane streams no output node).
+describe("emitHilLearningInterrupt", () => {
+	test("translates the match-gate payload", async () => {
+		const { emitHilLearningInterrupt } = await import("./sse-pump.ts");
+		const sent: Array<Record<string, unknown>> = [];
+		const handled = emitHilLearningInterrupt((e) => sent.push(e as Record<string, unknown>), "t-hil", {
+			type: "hil_learning_match",
+			ticketKey: "DEVOPS-1355",
+			ticketSummary: "MSK Kafka controller election storm",
+			candidates: [
+				{ id: "inc-1", summary: "s", severity: "high", distance: 0.12, hasRootCause: true, via: "vector" },
+				{ id: "inc-2", summary: "s2", severity: "", distance: 0, hasRootCause: false, via: "ticket-mention" },
+			],
+			message: "Pick one",
+		});
+		expect(handled).toBe(true);
+		expect(sent[0]).toMatchObject({
+			type: "hil_learning_match",
+			threadId: "t-hil",
+			ticketKey: "DEVOPS-1355",
+			message: "Pick one",
+		});
+		const candidates = sent[0]?.candidates as Array<Record<string, unknown>>;
+		expect(candidates).toHaveLength(2);
+		expect(candidates[0]).toMatchObject({ id: "inc-1", hasRootCause: true, via: "vector" });
+		expect(candidates[1]).toMatchObject({ id: "inc-2", via: "ticket-mention" });
+	});
+
+	test("translates the review-gate payload and passes the proposal through", async () => {
+		const { emitHilLearningInterrupt } = await import("./sse-pump.ts");
+		const sent: Array<Record<string, unknown>> = [];
+		const proposal = { ticketKey: "DEVOPS-1355", rootCause: null, bindings: [], heuristics: [], memoryFacts: [] };
+		const handled = emitHilLearningInterrupt((e) => sent.push(e as Record<string, unknown>), "t-hil", {
+			type: "hil_learning_review",
+			ticketKey: "DEVOPS-1355",
+			proposal,
+			alreadyLearned: true,
+			message: "Review",
+		});
+		expect(handled).toBe(true);
+		expect(sent[0]).toMatchObject({
+			type: "hil_learning_review",
+			threadId: "t-hil",
+			alreadyLearned: true,
+		});
+		expect(sent[0]?.proposal).toEqual(proposal);
+	});
+
+	test("returns false for foreign payloads (topic-shift stays untouched)", async () => {
+		const { emitHilLearningInterrupt } = await import("./sse-pump.ts");
+		const sent: unknown[] = [];
+		expect(emitHilLearningInterrupt((e) => sent.push(e), "t", { type: "topic_shift" })).toBe(false);
+		expect(emitHilLearningInterrupt((e) => sent.push(e), "t", null)).toBe(false);
+		expect(sent).toHaveLength(0);
+	});
+});
+
+describe("pumpEventStream hilLearningTurn flag", () => {
+	test("set when the lane entry node starts; false otherwise", async () => {
+		const send = () => undefined;
+		const learn = await pumpEventStream(fromArray([{ event: "on_chain_start", name: "learnFetchTicket" }]), send);
+		expect(learn.hilLearningTurn).toBe(true);
+
+		const normal = await pumpEventStream(fromArray([{ event: "on_chain_start", name: "classify" }]), send);
+		expect(normal.hilLearningTurn).toBe(false);
+	});
+});

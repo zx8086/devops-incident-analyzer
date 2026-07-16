@@ -250,6 +250,47 @@ describe("applyStreamEvent", () => {
 		expect(cleared.topicShiftPrompt).toBeNull();
 	});
 
+	// SIO-1126: the HIL learning gates drive the match/review cards. The two are
+	// mutually exclusive (one gate at a time); hil_learning_resolved clears both.
+	test("hil_learning_match populates the match card and clears any review card", () => {
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "hil_learning_review",
+			threadId: "t-1",
+			ticketKey: "DEVOPS-1355",
+			proposal: { ticketKey: "DEVOPS-1355", rootCause: null, bindings: [], heuristics: [], memoryFacts: [] },
+			alreadyLearned: false,
+			message: "review",
+		});
+		expect(state.hilLearningReview).not.toBeNull();
+		state = applyStreamEvent(state, {
+			type: "hil_learning_match",
+			threadId: "t-1",
+			ticketKey: "DEVOPS-1355",
+			ticketSummary: "summary",
+			candidates: [{ id: "inc-1", summary: "s", severity: "high", distance: 0.1, hasRootCause: false, via: "vector" }],
+			message: "pick",
+		});
+		expect(state.hilLearningMatch?.candidates).toHaveLength(1);
+		expect(state.hilLearningMatch?.ticketKey).toBe("DEVOPS-1355");
+		expect(state.hilLearningReview).toBeNull();
+		expect(state.threadId).toBe("t-1");
+	});
+
+	test("hil_learning_resolved clears both learning cards", () => {
+		const withMatch = applyStreamEvent(initialReducerState(), {
+			type: "hil_learning_match",
+			threadId: "t-1",
+			ticketKey: "DEVOPS-1355",
+			ticketSummary: "summary",
+			candidates: [],
+			message: "pick",
+		});
+		expect(withMatch.hilLearningMatch).not.toBeNull();
+		const cleared = applyStreamEvent(withMatch, { type: "hil_learning_resolved" });
+		expect(cleared.hilLearningMatch).toBeNull();
+		expect(cleared.hilLearningReview).toBeNull();
+	});
+
 	// SIO-922: the fleet-upgrade gate was emitted by the backend but dropped by the UI; these
 	// pin the report -> choice -> result chain that renders the card and clears it on apply.
 	test("fleet_upgrade_preview_report populates the preview and clears any prior result", () => {
